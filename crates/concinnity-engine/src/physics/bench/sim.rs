@@ -561,22 +561,26 @@ fn assert_deterministic(d: Determinism) {
 }
 
 fn run(pace: Pace) {
+    let f = fixture(pace);
+    bench_steps(pace, &f);
+    bench_sensors_and_contacts(pace, &f);
+    bench_joints_and_terrain(pace, &f);
+    bench_terrain_queries(pace, &f);
+    bench_queries(pace, &f);
+    bench_churn(pace, &f);
+    assert_deterministic(f.determinism);
+}
+
+// The step benches per world size: settling, free fall and swept stacks,
+// each on the pool and serially, plus world build and the settled idle path.
+fn bench_steps(pace: Pace, f: &Fixture) {
     let Fixture {
         sizes,
-        joint_sizes,
         drop_steps,
         settle_steps,
         settled,
-        warmup_steps,
-        query_bodies,
-        terrain_bodies,
-        terrain_side,
-        rays,
-        sweeps,
-        churn,
-        determinism,
-    } = fixture(pace);
-
+        ..
+    } = *f;
     for (n, label) in sizes {
         let body_steps = (n * drop_steps) as u64;
 
@@ -692,7 +696,18 @@ fn run(pace: Pace) {
             );
         }
     }
+}
 
+// Per world size: the sensor stage over settled regions, and the contact
+// drain over stacks held awake.
+fn bench_sensors_and_contacts(pace: Pace, f: &Fixture) {
+    let Fixture {
+        sizes,
+        settle_steps,
+        settled,
+        warmup_steps,
+        ..
+    } = *f;
     for (n, label) in sizes {
         // Settled under regions: every resting body is inside one, which is
         // the sensor stage's worst case rather than a typical world's. The
@@ -789,7 +804,18 @@ fn run(pace: Pace) {
             "the hit queue overflowed"
         );
     }
+}
 
+// Per joint size: motor-driven hinge chains, and bodies settled on terrain.
+fn bench_joints_and_terrain(pace: Pace, f: &Fixture) {
+    let Fixture {
+        joint_sizes,
+        settle_steps,
+        settled,
+        warmup_steps,
+        terrain_side,
+        ..
+    } = *f;
     for (n, label) in joint_sizes {
         // A chain of hinged links never settles while its motors are driving
         // it, so the measured step is a real joint solve every iteration.
@@ -848,151 +874,167 @@ fn run(pace: Pace) {
             "the terrain step gave up on part of the surface"
         );
     }
+}
 
-    {
-        // Terrain queries, on a world stepped once so the sweep order is
-        // current. A ray walks the grid cell by cell and a sweep clips against
-        // the cells its swept box names, so neither allocates.
-        let (mut sim, _handles) = terrain_world(terrain_bodies, terrain_side);
-        sim.step_with(TICK, &POOL);
-        let fan = |sim: &Simulation| {
-            let mut hits = 0u32;
-            for i in 0..rays {
-                let angle = i as f32 * core::f32::consts::TAU / rays as f32;
-                let hit = sim.raycast(
-                    [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
-                    [0.0, -1.0, 0.0],
-                    100.0,
-                    None,
-                    LayerMask::ALL,
-                );
-                hits += u32::from(hit.is_some());
-            }
-            hits
-        };
-        assert!(fan(&sim) > 0, "the fan has to meet the terrain it measures");
-        bench(pace, "physics/terrain_raycast/1k", rays as u64, || {
-            fan(&sim)
-        });
-
-        let capsule = ColliderShape::Capsule {
-            half_height: CHARACTER_HALF_HEIGHT,
-            radius: CHARACTER_RADIUS,
-        };
-        let drops = |sim: &Simulation| {
-            let mut hits = 0u32;
-            for i in 0..sweeps {
-                let angle = i as f32 * core::f32::consts::TAU / sweeps as f32;
-                let hit = sim.shape_cast(&ShapeCast::new(
-                    capsule,
-                    [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
-                    [0.0, -40.0, 0.0],
-                ));
-                hits += u32::from(hit.is_some());
-            }
-            hits
-        };
-        assert!(drops(&sim) > 0, "the sweeps have to meet the terrain");
-        bench(pace, "physics/terrain_sweep/256", sweeps as u64, || {
-            drops(&sim)
-        });
-        assert_eq!(
-            sim.heightfield_overflows(),
-            0,
-            "a measured terrain query gave up on part of the surface"
-        );
-    }
-
-    {
-        // Stepped once so the sweep order is current: that is the state a
-        // query is asked in, and it is what makes the traversal a window over
-        // the sorted proxies rather than a walk over all of them.
-        let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, 1);
-        sim.step_with(TICK, &POOL);
-        let fan = |sim: &Simulation| {
-            let mut hits = 0u32;
-            for i in 0..rays {
-                let angle = i as f32 * core::f32::consts::TAU / rays as f32;
-                let hit = sim.raycast(
-                    [12.0, 6.0, 12.0],
-                    [angle.cos(), -0.6, angle.sin()],
-                    100.0,
-                    None,
-                    LayerMask::ALL,
-                );
-                hits += u32::from(hit.is_some());
-            }
-            hits
-        };
-        assert!(fan(&sim) > 0, "the fan has to meet the world it measures");
-        bench(pace, "physics/raycast/1k", rays as u64, || fan(&sim));
-
-        let capsule = sim
-            .add_kinematic(
-                &ColliderShape::Capsule {
-                    half_height: CHARACTER_HALF_HEIGHT,
-                    radius: CHARACTER_RADIUS,
-                },
-                CHARACTER_CENTER,
-                [0.0; 3],
-                0.8,
+// Ray and shape-cast queries against a height grid.
+fn bench_terrain_queries(pace: Pace, f: &Fixture) {
+    let Fixture {
+        terrain_bodies,
+        terrain_side,
+        rays,
+        sweeps,
+        ..
+    } = *f;
+    // Terrain queries, on a world stepped once so the sweep order is
+    // current. A ray walks the grid cell by cell and a sweep clips against
+    // the cells its swept box names, so neither allocates.
+    let (mut sim, _handles) = terrain_world(terrain_bodies, terrain_side);
+    sim.step_with(TICK, &POOL);
+    let fan = |sim: &Simulation| {
+        let mut hits = 0u32;
+        for i in 0..rays {
+            let angle = i as f32 * core::f32::consts::TAU / rays as f32;
+            let hit = sim.raycast(
+                [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
+                [0.0, -1.0, 0.0],
+                100.0,
+                None,
                 LayerMask::ALL,
-            )
-            .expect("room for the capsule");
-        // Stepped again so the sweep order is current with the capsule in it:
-        // the driver asks for a move between steps, never on a world whose
-        // broad phase has an unsorted body in it.
-        sim.step_with(TICK, &POOL);
-        let shape = Simulation::character_shape(CHARACTER_HALF_HEIGHT, CHARACTER_RADIUS);
-        let walk = |sim: &Simulation| {
-            sim.move_character(
-                &shape,
-                &CharacterMoveInput {
-                    center: CHARACTER_CENTER,
-                    desired: CHARACTER_STEP,
-                    dt: TICK,
-                    exclude: capsule,
-                    mask: LayerMask::ALL,
-                },
-            )
-        };
-        assert!(
-            walk(&sim).grounded,
-            "the move has to find the floor it measures"
-        );
-        bench(pace, "physics/character_move/1", 1, || walk(&sim).grounded);
-    }
+            );
+            hits += u32::from(hit.is_some());
+        }
+        hits
+    };
+    assert!(fan(&sim) > 0, "the fan has to meet the terrain it measures");
+    bench(pace, "physics/terrain_raycast/1k", rays as u64, || {
+        fan(&sim)
+    });
 
-    {
-        // Runtime spawn and despawn: the same bodies added and removed against
-        // a settled world, on a reservation that has room for them. The pool
-        // hands back the slots it just freed, so an iteration ends where it
-        // began and none of it allocates.
-        let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, churn);
-        sim.step_with(TICK, &POOL);
-        let mut churned = Vec::with_capacity(churn);
-        bench(pace, "physics/body_churn/64", churn as u64, || {
-            for i in 0..churn {
-                churned.push(
-                    sim.add_dynamic(
-                        &CUBE,
-                        [80.0 + (i % 8) as f32, 4.0 + (i / 8) as f32 * 1.1, 80.0],
-                        [0.0; 3],
-                        cube_params(0.2, 0.0),
-                        LayerMask::ALL,
-                    )
-                    .expect("room for a churned body"),
-                );
-            }
-            let added = churned.len();
-            for handle in churned.drain(..) {
-                assert!(sim.remove_body(handle), "a churned body has to come out");
-            }
-            added
-        });
-    }
+    let capsule = ColliderShape::Capsule {
+        half_height: CHARACTER_HALF_HEIGHT,
+        radius: CHARACTER_RADIUS,
+    };
+    let drops = |sim: &Simulation| {
+        let mut hits = 0u32;
+        for i in 0..sweeps {
+            let angle = i as f32 * core::f32::consts::TAU / sweeps as f32;
+            let hit = sim.shape_cast(&ShapeCast::new(
+                capsule,
+                [angle.cos() * 60.0, 30.0, angle.sin() * 60.0],
+                [0.0, -40.0, 0.0],
+            ));
+            hits += u32::from(hit.is_some());
+        }
+        hits
+    };
+    assert!(drops(&sim) > 0, "the sweeps have to meet the terrain");
+    bench(pace, "physics/terrain_sweep/256", sweeps as u64, || {
+        drops(&sim)
+    });
+    assert_eq!(
+        sim.heightfield_overflows(),
+        0,
+        "a measured terrain query gave up on part of the surface"
+    );
+}
 
-    assert_deterministic(determinism);
+// Ray and character-move queries against a settled stack world.
+fn bench_queries(pace: Pace, f: &Fixture) {
+    let Fixture {
+        query_bodies, rays, ..
+    } = *f;
+    // Stepped once so the sweep order is current: that is the state a
+    // query is asked in, and it is what makes the traversal a window over
+    // the sorted proxies rather than a walk over all of them.
+    let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, 1);
+    sim.step_with(TICK, &POOL);
+    let fan = |sim: &Simulation| {
+        let mut hits = 0u32;
+        for i in 0..rays {
+            let angle = i as f32 * core::f32::consts::TAU / rays as f32;
+            let hit = sim.raycast(
+                [12.0, 6.0, 12.0],
+                [angle.cos(), -0.6, angle.sin()],
+                100.0,
+                None,
+                LayerMask::ALL,
+            );
+            hits += u32::from(hit.is_some());
+        }
+        hits
+    };
+    assert!(fan(&sim) > 0, "the fan has to meet the world it measures");
+    bench(pace, "physics/raycast/1k", rays as u64, || fan(&sim));
+
+    let capsule = sim
+        .add_kinematic(
+            &ColliderShape::Capsule {
+                half_height: CHARACTER_HALF_HEIGHT,
+                radius: CHARACTER_RADIUS,
+            },
+            CHARACTER_CENTER,
+            [0.0; 3],
+            0.8,
+            LayerMask::ALL,
+        )
+        .expect("room for the capsule");
+    // Stepped again so the sweep order is current with the capsule in it:
+    // the driver asks for a move between steps, never on a world whose
+    // broad phase has an unsorted body in it.
+    sim.step_with(TICK, &POOL);
+    let shape = Simulation::character_shape(CHARACTER_HALF_HEIGHT, CHARACTER_RADIUS);
+    let walk = |sim: &Simulation| {
+        sim.move_character(
+            &shape,
+            &CharacterMoveInput {
+                center: CHARACTER_CENTER,
+                desired: CHARACTER_STEP,
+                dt: TICK,
+                exclude: capsule,
+                mask: LayerMask::ALL,
+            },
+        )
+    };
+    assert!(
+        walk(&sim).grounded,
+        "the move has to find the floor it measures"
+    );
+    bench(pace, "physics/character_move/1", 1, || walk(&sim).grounded);
+}
+
+// Body spawn and despawn against a settled world.
+fn bench_churn(pace: Pace, f: &Fixture) {
+    let Fixture {
+        query_bodies,
+        churn,
+        ..
+    } = *f;
+    // Runtime spawn and despawn: the same bodies added and removed against
+    // a settled world, on a reservation that has room for them. The pool
+    // hands back the slots it just freed, so an iteration ends where it
+    // began and none of it allocates.
+    let (mut sim, _handles) = stacked_world(query_bodies, 0.0, 0.5, true, churn);
+    sim.step_with(TICK, &POOL);
+    let mut churned = Vec::with_capacity(churn);
+    bench(pace, "physics/body_churn/64", churn as u64, || {
+        for i in 0..churn {
+            churned.push(
+                sim.add_dynamic(
+                    &CUBE,
+                    [80.0 + (i % 8) as f32, 4.0 + (i / 8) as f32 * 1.1, 80.0],
+                    [0.0; 3],
+                    cube_params(0.2, 0.0),
+                    LayerMask::ALL,
+                )
+                .expect("room for a churned body"),
+            );
+        }
+        let added = churned.len();
+        for handle in churned.drain(..) {
+            assert!(sim.remove_body(handle), "a churned body has to come out");
+        }
+        added
+    });
 }
 
 #[test]

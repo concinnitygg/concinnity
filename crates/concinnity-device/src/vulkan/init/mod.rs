@@ -16,22 +16,34 @@
 //!   composite.rs     composite pass, pipeline and input sets.
 //!   text.rs          text atlases, pipeline and atlas sets.
 
+use crate::vulkan::atmosphere::{AtmosphereCubes, VkAtmosphere};
+use crate::vulkan::light_cull::VkLightCull;
 use crate::vulkan::particle::ParticleState;
 use crate::vulkan::pipeline_builder::PipelineGate;
+use crate::vulkan::post::bloom::VkBloomPass;
+use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
+use crate::vulkan::post::taa::TaaResources;
+use crate::vulkan::post::upscale::VkUpscaleBackend;
 use crate::vulkan::wireframe::VkWireframe;
 use ash::vk;
 use concinnity_engine::gfx::render_types::PostProcessParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_engine::render::backend::init::{BackendInit, WorldShader};
+use concinnity_engine::render::backend::init::{
+    BackendInit, MediaPayloads, ShadowCadence, WorldShader,
+};
+use concinnity_engine::render::decal::DecalRecord;
+use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
+use concinnity_engine::render::particles::ParticleEmitterRecord;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::settings::ResolvedGraphics;
 use std::cell::Cell;
 
 use super::context::{
-    HDR_FORMAT, ProbeState, StreamState, SwapchainState, VkContext, VkCull, VkDescriptors,
-    VkHardware, VkInstanced, VkShadow, VkSkinned, VkTargets, record_main_thread,
+    CompositeState, HDR_FORMAT, ProbeState, StreamState, SwapchainState, TextState, VkContext,
+    VkCull, VkDescriptors, VkGeometry, VkHardware, VkInstanced, VkSceneAssets, VkShadow, VkSkinned,
+    VkTargets, record_main_thread,
 };
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
@@ -225,21 +237,7 @@ impl VkContext {
                 ssao_enabled: graphics.ssao().is_some(),
             },
         )?;
-        // An atmosphere writes the irradiance and prefiltered cubes every set
-        // takes ambient light and reflections from, so they replace the
-        // environment map's before any set binds them.
-        let atmosphere_cube = match fx.atmosphere {
-            Some(_) => {
-                let (images, cubes) =
-                    crate::vulkan::atmosphere::create_atmosphere_cubes(&gpu.upload())?;
-                scene.env_map.irradiance = images.irradiance;
-                scene.env_map.prefilter = images.prefilter;
-                scene.prefilter_mip_count =
-                    concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
-                Some(cubes)
-            }
-            None => None,
-        };
+        let atmosphere_cube = build_atmosphere_cubes(&gpu, fx.atmosphere.is_some(), &mut scene)?;
         let (geometry, uniforms, light_cull) = scene_data::build_scene_resources(
             &gpu,
             scene_data::SceneInputs {
@@ -250,10 +248,7 @@ impl VkContext {
         )?;
         let shadow = shadow::build_shadow(&gpu, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(&gpu, &shadow, &spot_shadows)?;
-        let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), frames)?;
-        for (frame, records) in probe_gpu.records.iter().enumerate() {
-            light_cull.write_probe_records(&hw.device, frame, records.descriptor());
-        }
+        let probe_gpu = build_probe_set(&gpu, &light_cull)?;
         let globals = GlobalBindings {
             uniforms: &uniforms,
             light_cull: &light_cull,
@@ -320,37 +315,18 @@ impl VkContext {
                 rt_wanted: features.rt_wanted,
             },
         )?;
-        let bloom = bloom::build_bloom(
+        let present = build_present_chain(
             &gpu,
-            bloom::BloomInputs {
-                extent: swapchain.extent,
-                post: &screen.post,
-                scene: &scene,
-                descriptors: &descriptors,
-            },
-        )?;
-        let composite = composite::build_composite(
-            &gpu,
-            composite::CompositeInputs {
+            PresentInputs {
                 swapchain: &swapchain,
-                descriptors: &descriptors,
-                scene: &scene,
-                targets: &targets,
-                sampler: &screen.post.sampler,
-                reflection_composite: rt.composite.as_ref(),
-            },
-        )?;
-        let text = text::build_text(&gpu, &media, &composite, &descriptors)?;
-        let taa = effects::build_taa_and_wire_scene_inputs(
-            &gpu,
-            effects::SceneInputWiring {
                 features: &features,
                 targets: &targets,
                 scene: &scene,
                 descriptors: &descriptors,
-                composite: &composite,
                 screen: &screen,
+                reflection_composite: rt.composite.as_ref(),
                 upscale: upscale.as_deref(),
+                media: &media,
             },
         )?;
         let world_fx = effects::build_world_effects(
@@ -371,10 +347,7 @@ impl VkContext {
         let grass = build_grass(
             &gpu,
             fx.grass,
-            (
-                geometry.vertex_buffer.buffer(),
-                geometry.vertex_buffer_bytes,
-            ),
+            &geometry,
             GrassInit {
                 descriptors: &descriptors,
                 cull: &cull,
@@ -383,62 +356,32 @@ impl VkContext {
             },
         )?;
         let (commands, frame_sync) = commands::build_frame_commands(&gpu, &swapchain)?;
-        let sky = crate::vulkan::sky::VkSky::build(
-            &hw.device,
-            descriptors.global_set_layout.handle(),
-            targets.main_render_pass.handle(),
-            targets.msaa_samples,
-            media.env_map_background,
-            hot_reload,
+        let (sky, atmosphere) = build_sky(
+            &gpu,
+            SkyInputs {
+                targets: &targets,
+                descriptors: &descriptors,
+                env_map_background: media.env_map_background,
+                atmosphere: fx.atmosphere.zip(atmosphere_cube),
+                render_extent,
+            },
         )?;
-
-        let atmosphere = match (fx.atmosphere, atmosphere_cube) {
-            (Some(settings), Some(cube)) => {
-                let hdr_resolve_views: Vec<vk::ImageView> = targets
-                    .hdr_resolve_images
-                    .iter()
-                    .map(|img| img.view)
-                    .collect();
-                let depth_views: Vec<vk::ImageView> =
-                    targets.depth_images.iter().map(|img| img.view).collect();
-                Some(crate::vulkan::atmosphere::VkAtmosphere::new(
-                    &gpu.upload(),
-                    &settings,
-                    cube,
-                    frames,
-                    crate::vulkan::atmosphere::AtmosphereTargets {
-                        hdr_resolve_views: &hdr_resolve_views,
-                        depth_views: &depth_views,
-                        extent: render_extent,
-                        msaa: targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
-                        hdr_format: HDR_FORMAT,
-                    },
-                    crate::vulkan::atmosphere::AtmosphereSky {
-                        global_set_layout: descriptors.global_set_layout.handle(),
-                        main_render_pass: targets.main_render_pass.handle(),
-                        samples: targets.msaa_samples,
-                    },
-                    hot_reload,
-                )?)
-            }
-            _ => None,
-        };
 
         let mut me = Self {
             swapchain,
             targets,
-            composite,
+            composite: present.composite,
             shadow,
             spot_shadow,
             area_light,
             scene,
             cull,
             light_cull,
-            text,
-            bloom: Some(bloom),
+            text: present.text,
+            bloom: Some(present.bloom),
             post_process: features.post_process,
             pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure::UNIT,
-            taa,
+            taa: present.taa,
             post: screen.post,
             upscale,
             upscale_requested,
@@ -498,38 +441,52 @@ impl VkContext {
             world_content_destroyed: false,
             hw,
         };
+        me.finish_init(fx.decals, fx.particles, shadows.cadence, &graphics)?;
+        Ok(me)
+    }
+
+    // The steps that run on the assembled context before its first frame:
+    // world-authored content uploads, gate and binding refreshes, and the
+    // init-time cache and allocator reports.
+    fn finish_init(
+        &mut self,
+        decals: Vec<DecalRecord>,
+        particles: Vec<ParticleEmitterRecord>,
+        cadence: ShadowCadence,
+        graphics: &ResolvedGraphics,
+    ) -> RenderResult<()> {
         // Push every world-authored `DecalRecord` through `add_decal` so
         // its albedo descriptor lands in the reserved slot before the
         // first frame runs.
-        me.upload_initial_decals(fx.decals)?;
+        self.upload_initial_decals(decals)?;
         // Same pattern for particle emitters: each world-authored record
         // routes through `add_particle_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
-        me.upload_initial_particles(fx.particles)?;
-        me.sync_grass_prepass(false);
-        me.state.planner.shadow.cadence = shadows.cadence;
-        me.refresh_gates(&graphics);
-        if me.ssgi.is_some() {
-            me.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
+        self.upload_initial_particles(particles)?;
+        self.sync_grass_prepass(false);
+        self.state.planner.shadow.cadence = cadence;
+        self.refresh_gates(graphics);
+        if self.ssgi.is_some() {
+            self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
         }
         // Every init upload above was synchronous (its one-shot idled the
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.
-        me.hw.alloc.reclaim_idle();
+        self.hw.alloc.reclaim_idle();
         tracing::info!(
             "device allocator: {} ({} allocations allowed)",
-            me.hw.alloc.stats(),
-            me.hw.alloc.max_allocations(),
+            self.hw.alloc.stats(),
+            self.hw.alloc.max_allocations(),
         );
         crate::shader::cache::report_init();
         // Serialize the pipeline cache now that every init-built pipeline has
         // populated it, then write the segment holding it and every shader
         // artifact this init compiled; a crash mid-session then still leaves
         // the next launch warm.
-        super::pipeline_cache::serialize(&me.hw.device);
+        super::pipeline_cache::serialize(&self.hw.device);
         crate::shader::pipeline_cache::report_init(super::pipeline_cache::disk_state());
         crate::shader::runtime_cache::checkpoint();
-        Ok(me)
+        Ok(())
     }
 
     // Rebuild this backend's world content in place on its existing hardware for
@@ -588,6 +545,176 @@ impl VkContext {
     }
 }
 
+// An atmosphere writes the irradiance and prefiltered cubes every set
+// takes ambient light and reflections from, so they replace the
+// environment map's before any set binds them.
+fn build_atmosphere_cubes(
+    gpu: &InitGpu<'_>,
+    wanted: bool,
+    scene: &mut VkSceneAssets,
+) -> RenderResult<Option<AtmosphereCubes>> {
+    if !wanted {
+        return Ok(None);
+    }
+    let (images, cubes) = crate::vulkan::atmosphere::create_atmosphere_cubes(&gpu.upload())?;
+    scene.env_map.irradiance = images.irradiance;
+    scene.env_map.prefilter = images.prefilter;
+    scene.prefilter_mip_count =
+        concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
+    Ok(Some(cubes))
+}
+
+// The light-probe set, with each frame's probe records bound into the
+// clustered light cull.
+fn build_probe_set(
+    gpu: &InitGpu<'_>,
+    light_cull: &VkLightCull,
+) -> RenderResult<crate::vulkan::probe_set::ProbeSetGpu> {
+    let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), gpu.frames)?;
+    for (frame, records) in probe_gpu.records.iter().enumerate() {
+        light_cull.write_probe_records(&gpu.hw.device, frame, records.descriptor());
+    }
+    Ok(probe_gpu)
+}
+
+// What the sky and atmosphere draw into, plus the atmosphere settings paired
+// with the cubes `build_atmosphere_cubes` made for them.
+struct SkyInputs<'a> {
+    targets: &'a VkTargets,
+    descriptors: &'a VkDescriptors,
+    env_map_background: bool,
+    atmosphere: Option<(AtmosphereSettings, AtmosphereCubes)>,
+    render_extent: vk::Extent2D,
+}
+
+// The sky background pass and, for a world with an atmosphere, the atmosphere
+// that renders over it.
+fn build_sky(
+    gpu: &InitGpu<'_>,
+    inputs: SkyInputs<'_>,
+) -> RenderResult<(crate::vulkan::sky::VkSky, Option<VkAtmosphere>)> {
+    let SkyInputs {
+        targets,
+        descriptors,
+        env_map_background,
+        atmosphere,
+        render_extent,
+    } = inputs;
+    let sky = crate::vulkan::sky::VkSky::build(
+        &gpu.hw.device,
+        descriptors.global_set_layout.handle(),
+        targets.main_render_pass.handle(),
+        targets.msaa_samples,
+        env_map_background,
+        gpu.hot_reload,
+    )?;
+    let Some((settings, cube)) = atmosphere else {
+        return Ok((sky, None));
+    };
+    let hdr_resolve_views: Vec<vk::ImageView> = targets
+        .hdr_resolve_images
+        .iter()
+        .map(|img| img.view)
+        .collect();
+    let depth_views: Vec<vk::ImageView> = targets.depth_images.iter().map(|img| img.view).collect();
+    let atmosphere = VkAtmosphere::new(
+        &gpu.upload(),
+        &settings,
+        cube,
+        gpu.frames,
+        crate::vulkan::atmosphere::AtmosphereTargets {
+            hdr_resolve_views: &hdr_resolve_views,
+            depth_views: &depth_views,
+            extent: render_extent,
+            msaa: targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+            hdr_format: HDR_FORMAT,
+        },
+        crate::vulkan::atmosphere::AtmosphereSky {
+            global_set_layout: descriptors.global_set_layout.handle(),
+            main_render_pass: targets.main_render_pass.handle(),
+            samples: targets.msaa_samples,
+        },
+        gpu.hot_reload,
+    )?;
+    Ok((sky, Some(atmosphere)))
+}
+
+// What the passes that turn the shaded scene into the presented image read.
+#[derive(Clone, Copy)]
+struct PresentInputs<'a> {
+    swapchain: &'a SwapchainState,
+    features: &'a Features,
+    targets: &'a VkTargets,
+    scene: &'a VkSceneAssets,
+    descriptors: &'a VkDescriptors,
+    screen: &'a effects::ScreenSpace,
+    reflection_composite: Option<&'a VkReflectionCompositePass>,
+    upscale: Option<&'a dyn VkUpscaleBackend>,
+    media: &'a MediaPayloads<'a>,
+}
+
+struct PresentChain {
+    bloom: VkBloomPass,
+    composite: CompositeState,
+    text: TextState,
+    taa: Option<TaaResources>,
+}
+
+// Bloom, the composite pass, the text overlay, and the TAA stack wired to the
+// scene inputs the composite samples.
+fn build_present_chain(gpu: &InitGpu<'_>, inputs: PresentInputs<'_>) -> RenderResult<PresentChain> {
+    let PresentInputs {
+        swapchain,
+        features,
+        targets,
+        scene,
+        descriptors,
+        screen,
+        reflection_composite,
+        upscale,
+        media,
+    } = inputs;
+    let bloom = bloom::build_bloom(
+        gpu,
+        bloom::BloomInputs {
+            extent: swapchain.extent,
+            post: &screen.post,
+            scene,
+            descriptors,
+        },
+    )?;
+    let composite = composite::build_composite(
+        gpu,
+        composite::CompositeInputs {
+            swapchain,
+            descriptors,
+            scene,
+            targets,
+            sampler: &screen.post.sampler,
+            reflection_composite,
+        },
+    )?;
+    let text = text::build_text(gpu, media, &composite, descriptors)?;
+    let taa = effects::build_taa_and_wire_scene_inputs(
+        gpu,
+        effects::SceneInputWiring {
+            features,
+            targets,
+            scene,
+            descriptors,
+            composite: &composite,
+            screen,
+            upscale,
+        },
+    )?;
+    Ok(PresentChain {
+        bloom,
+        composite,
+        text,
+        taa,
+    })
+}
+
 // The grass field's buffers and pipelines, extending the GPU-driven pass's
 // layouts and reading its Hi-Z pyramid. A world without that pass draws no
 // grass.
@@ -603,7 +730,7 @@ struct GrassInit<'a> {
 fn build_grass(
     gpu: &InitGpu<'_>,
     field: Option<concinnity_engine::render::environment::grass::GrassField>,
-    vertices: (vk::Buffer, u64),
+    geometry: &VkGeometry,
     passes: GrassInit<'_>,
 ) -> RenderResult<Option<super::grass::GrassResources>> {
     let GrassInit {
@@ -637,7 +764,10 @@ fn build_grass(
             shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
         },
         gpu.frames,
-        vertices,
+        (
+            geometry.vertex_buffer.buffer(),
+            geometry.vertex_buffer_bytes,
+        ),
         gpu.hot_reload,
     )
     .map(Some)

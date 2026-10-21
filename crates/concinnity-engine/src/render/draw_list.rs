@@ -597,31 +597,40 @@ pub struct DrawListInputs<'a> {
 /// updates and the GPU-instanced cluster list (one entry per `InstancedProp`).
 /// Returns None if any referenced asset is missing (error already logged).
 pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
-    let DrawListInputs {
-        items,
-        instanced_props,
-        world_mats,
-        model_map,
-        mesh_geometry,
-        room_geometry,
-        terrains,
-        texture_count,
-        material_map,
-    } = inputs;
-    let mut all_vertices: Vec<Vertex> = Vec::new();
-    let mut all_indices: Vec<u32> = Vec::new();
-    let mut draw_objects: Vec<DrawObject> = Vec::new();
-    let mut instanced_clusters: Vec<InstancedCluster> = Vec::new();
-    let mut prop_draw_indices: Vec<Vec<DrawIndex>> = Vec::new();
-    let mut prop_local_bounds: Vec<([f32; 3], [f32; 3])> = Vec::new();
-    // Map every mesh-source handle to the draw slots that received a copy of
-    // its geometry. Hot-reload (`cn debug` only) walks this to know which slots
-    // to overwrite when the source `.glb` changes. The slot list accumulates
-    // every push since a mesh shared by N `Prop`s yields N independent draw
-    // objects.
-    let mut mesh_handle_to_draws: hashbrown::HashMap<usize, Vec<DrawIndex>> =
-        hashbrown::HashMap::new();
+    let mut builder = DrawListBuilder {
+        inputs,
+        out: DrawListData {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            draw_objects: Vec::new(),
+            instanced_clusters: Vec::new(),
+            prop_draw_indices: Vec::new(),
+            // Map every mesh-source handle to the draw slots that received a copy of
+            // its geometry. Hot-reload (`cn debug` only) walks this to know which slots
+            // to overwrite when the source `.glb` changes. The slot list accumulates
+            // every push since a mesh shared by N `Prop`s yields N independent draw
+            // objects.
+            mesh_handle_to_draws: hashbrown::HashMap::new(),
+            prop_local_bounds: Vec::new(),
+        },
+    };
+    for (item_idx, item) in inputs.items.iter().enumerate() {
+        builder.append_prop(item, inputs.world_mats[item_idx])?;
+    }
+    builder.append_instanced_props()?;
+    builder.append_rooms();
+    builder.append_terrains()?;
+    Some(builder.out)
+}
 
+// The draw list under construction, appended to in scene order: props,
+// instanced clusters, rooms, then terrains.
+struct DrawListBuilder<'a> {
+    inputs: DrawListInputs<'a>,
+    out: DrawListData,
+}
+
+impl DrawListBuilder<'_> {
     // append_mesh: add a mesh into the shared buffers by handle, return
     // (vertex_offset, vertex_count, index_offset, index_count, lod_slices,
     // local_bb_min, local_bb_max). `lod_slices` is empty for legacy
@@ -630,8 +639,10 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
     // distance. Every LOD alternate reuses the same `vertex_offset` /
     // `vertex_count` since clustering decimation does not modify the vertex
     // set.
-    let mut append_mesh = |handle: usize| -> Option<AppendedMesh> {
-        let loaded = mesh_geometry.get(handle)?;
+    fn append_mesh(&mut self, handle: usize) -> Option<AppendedMesh> {
+        let loaded = self.inputs.mesh_geometry.get(handle)?;
+        let all_vertices = &mut self.out.vertices;
+        let all_indices = &mut self.out.indices;
         let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
         let index_elem_offset = all_indices.len();
         let base = u32::saturating_from(all_vertices.len());
@@ -640,7 +651,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
             .unwrap_or_else(|| local_bounds(&loaded.vertices));
         all_vertices.extend_from_slice(&loaded.vertices);
         all_indices.extend(loaded.indices.iter().map(|i| u32::from(*i) + base));
-        let lod_slices = append_lod_slices(&mut all_indices, &loaded.lod_alternates, base);
+        let lod_slices = append_lod_slices(all_indices, &loaded.lod_alternates, base);
         // A deferred mesh appended no bytes; its draw record carries the baked
         // counts so the streamed upload's size check matches the real geometry.
         let (vertex_count, index_count) = loaded
@@ -657,10 +668,16 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
             bb_min,
             bb_max,
         ))
-    };
+    }
 
-    for (item_idx, item) in items.iter().enumerate() {
-        let model_mat = world_mats[item_idx];
+    // One placed item: a draw object per sub-mesh of its model, or one for its
+    // single mesh, plus its draw-index and local-bounds table entries.
+    fn append_prop(&mut self, item: &RenderableItem, model_mat: [[f32; 4]; 4]) -> Option<()> {
+        let DrawListInputs {
+            model_map,
+            material_map,
+            ..
+        } = self.inputs;
         let mut prop_idxs: Vec<DrawIndex> = Vec::new();
         // Union of this prop's sub-mesh local bounds (all in the same model
         // space). NaN sentinels from empty meshes fall out of min/max.
@@ -698,7 +715,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
                     lod_alternates,
                     local_min,
                     local_max,
-                )) = append_mesh(sub_mesh)
+                )) = self.append_mesh(sub_mesh)
                 else {
                     tracing::error!(
                         "graphics: Model {} sub-mesh handle {} out of range; add a Mesh or ProceduralMesh asset with that name",
@@ -721,10 +738,14 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
                 let (bb_min, bb_max, local_bounds) =
                     culled_bounds(item, local_min, local_max, model_mat);
                 union_local(local_min, local_max);
-                let slot = DrawIndex::from_usize(draw_objects.len());
+                let slot = DrawIndex::from_usize(self.out.draw_objects.len());
                 prop_idxs.push(slot);
-                mesh_handle_to_draws.entry(sub_mesh).or_default().push(slot);
-                draw_objects.push(DrawObject {
+                self.out
+                    .mesh_handle_to_draws
+                    .entry(sub_mesh)
+                    .or_default()
+                    .push(slot);
+                self.out.draw_objects.push(DrawObject {
                     vertex_offset,
                     vertex_count,
                     index_offset,
@@ -767,7 +788,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
                 lod_alternates,
                 local_min,
                 local_max,
-            )) = append_mesh(mesh_handle)
+            )) = self.append_mesh(mesh_handle)
             else {
                 tracing::error!(
                     "graphics: Prop {:?} references out-of-range mesh handle {}; add a Mesh or ProceduralMesh asset with that name",
@@ -790,13 +811,14 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
             let (bb_min, bb_max, local_bounds) =
                 culled_bounds(item, local_min, local_max, model_mat);
             union_local(local_min, local_max);
-            let slot = DrawIndex::from_usize(draw_objects.len());
+            let slot = DrawIndex::from_usize(self.out.draw_objects.len());
             prop_idxs.push(slot);
-            mesh_handle_to_draws
+            self.out
+                .mesh_handle_to_draws
                 .entry(mesh_handle)
                 .or_default()
                 .push(slot);
-            draw_objects.push(DrawObject {
+            self.out.draw_objects.push(DrawObject {
                 vertex_offset,
                 vertex_count,
                 index_offset,
@@ -819,98 +841,107 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
             });
         }
 
-        prop_draw_indices.push(prop_idxs);
+        self.out.prop_draw_indices.push(prop_idxs);
         let finite = prop_min
             .iter()
             .chain(prop_max.iter())
             .all(|v| v.is_finite());
-        prop_local_bounds.push(if finite {
+        self.out.prop_local_bounds.push(if finite {
             (prop_min, prop_max)
         } else {
             UNCULLED_BB
         });
+        Some(())
     }
 
     // InstancedProp -> one GPU-instanced cluster per InstancedProp.
     // The cluster mesh is appended once; per-instance model matrices are
     // resolved up front and uploaded to the GPU each frame. The cluster's
     // union AABB is used as a single frustum-cull test for the whole batch.
-    for (cluster, inst) in instanced_props.iter().enumerate() {
-        let mesh_handle = match inst.mesh {
-            Some(m) if !inst.instances.is_empty() => m.index(),
-            _ => continue,
-        };
-        // Instanced clusters carry the mesh's LOD alternates; each instance
-        // picks its slice by camera distance in its cull record (see
-        // `lod::for_each_instance_lod`).
-        let Some((
-            vertex_offset,
-            vertex_count,
-            index_offset,
-            index_count,
-            lod_alternates,
-            local_min,
-            local_max,
-        )) = append_mesh(mesh_handle)
-        else {
-            tracing::error!(
-                "graphics: InstancedProp[{}] references out-of-range mesh handle {}",
-                cluster,
-                mesh_handle
-            );
-            return None;
-        };
-        let mat_entry = match resolve_material_slots(inst.material, material_map) {
-            Ok(entry) => entry,
-            Err(mat_id) => {
+    fn append_instanced_props(&mut self) -> Option<()> {
+        let DrawListInputs {
+            instanced_props,
+            material_map,
+            ..
+        } = self.inputs;
+        for (cluster, inst) in instanced_props.iter().enumerate() {
+            let mesh_handle = match inst.mesh {
+                Some(m) if !inst.instances.is_empty() => m.index(),
+                _ => continue,
+            };
+            // Instanced clusters carry the mesh's LOD alternates; each instance
+            // picks its slice by camera distance in its cull record (see
+            // `lod::for_each_instance_lod`).
+            let Some((
+                vertex_offset,
+                vertex_count,
+                index_offset,
+                index_count,
+                lod_alternates,
+                local_min,
+                local_max,
+            )) = self.append_mesh(mesh_handle)
+            else {
                 tracing::error!(
-                    "graphics: InstancedProp[{}] references unknown material {}",
+                    "graphics: InstancedProp[{}] references out-of-range mesh handle {}",
                     cluster,
-                    mat_id.index()
+                    mesh_handle
                 );
                 return None;
-            }
-        };
-        let (texture_slot, normal_map_slot, material) = (
-            mat_entry.albedo_slot,
-            mat_entry.normal_map_slot,
-            mat_entry.uniforms,
-        );
-
-        let mut instance_mats: Vec<[[f32; 4]; 4]> = Vec::with_capacity(inst.instances.len());
-        let mut cluster_min = [f32::INFINITY; 3];
-        let mut cluster_max = [f32::NEG_INFINITY; 3];
-        for i in 0..inst.instances.len() {
-            let Some(model_mat) = inst.instance_model_matrix(i) else {
-                continue;
             };
-            let (bb_min, bb_max) = frustum::transform_aabb(local_min, local_max, model_mat);
-            for k in 0..3 {
-                cluster_min[k] = cluster_min[k].min(bb_min[k]);
-                cluster_max[k] = cluster_max[k].max(bb_max[k]);
-            }
-            instance_mats.push(model_mat);
-        }
-        if instance_mats.is_empty() {
-            continue;
-        }
+            let mat_entry = match resolve_material_slots(inst.material, material_map) {
+                Ok(entry) => entry,
+                Err(mat_id) => {
+                    tracing::error!(
+                        "graphics: InstancedProp[{}] references unknown material {}",
+                        cluster,
+                        mat_id.index()
+                    );
+                    return None;
+                }
+            };
+            let (texture_slot, normal_map_slot, material) = (
+                mat_entry.albedo_slot,
+                mat_entry.normal_map_slot,
+                mat_entry.uniforms,
+            );
 
-        instanced_clusters.push(InstancedCluster {
-            vertex_offset,
-            vertex_count,
-            index_offset,
-            index_count,
-            texture_slot,
-            normal_map_slot,
-            material,
-            cluster_bb_min: cluster_min,
-            cluster_bb_max: cluster_max,
-            local_bb_min: local_min,
-            local_bb_max: local_max,
-            cull_distance: inst.cull_distance,
-            instances: instance_mats,
-            lod_alternates,
-        });
+            let mut instance_mats: Vec<[[f32; 4]; 4]> = Vec::with_capacity(inst.instances.len());
+            let mut cluster_min = [f32::INFINITY; 3];
+            let mut cluster_max = [f32::NEG_INFINITY; 3];
+            for i in 0..inst.instances.len() {
+                let Some(model_mat) = inst.instance_model_matrix(i) else {
+                    continue;
+                };
+                let (bb_min, bb_max) = frustum::transform_aabb(local_min, local_max, model_mat);
+                for k in 0..3 {
+                    cluster_min[k] = cluster_min[k].min(bb_min[k]);
+                    cluster_max[k] = cluster_max[k].max(bb_max[k]);
+                }
+                instance_mats.push(model_mat);
+            }
+            if instance_mats.is_empty() {
+                continue;
+            }
+
+            self.out.instanced_clusters.push(InstancedCluster {
+                vertex_offset,
+                vertex_count,
+                index_offset,
+                index_count,
+                texture_slot,
+                normal_map_slot,
+                material,
+                cluster_bb_min: cluster_min,
+                cluster_bb_max: cluster_max,
+                local_bb_min: local_min,
+                local_bb_max: local_max,
+                cull_distance: inst.cull_distance,
+                instances: instance_mats,
+                lod_alternates,
+            });
+        }
+        Some(())
     }
 
     // Room components placed at the world origin with optional texture.
@@ -918,75 +949,84 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
     // come from camera-to-origin distance per [`crate::gfx::lod::camera_distance`]'s
     // sentinel-AABB fallback, so practical swaps only fire if the camera
     // wanders far from the world origin.
-    for (room, verts, idxs, room_lods) in room_geometry {
-        let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
-        let index_elem_offset = all_indices.len();
-        let base = u32::saturating_from(all_vertices.len());
-        all_vertices.extend_from_slice(verts);
-        all_indices.extend(idxs.iter().map(|i| u32::from(*i) + base));
-        let lod_slices = append_lod_slices(&mut all_indices, room_lods, base);
-        // A room's texture carries its cook-assigned `TextureHandle`, whose
-        // value is the texture's slot in the albedo pool. An out-of-range handle
-        // (an unresolved generator name) falls back to slot 0, as before.
-        let texture_slot = match room.effective_texture() {
-            None => 0,
-            Some(handle) => {
-                let slot = handle.index();
-                if slot < texture_count { slot } else { 0 }
-            }
-        };
-        draw_objects.push(DrawObject {
-            vertex_offset: vertex_byte_offset,
-            vertex_count: verts.len(),
-            index_offset: index_elem_offset,
-            index_count: idxs.len(),
-            planet_tile: None,
-            base_vertex: 0,
-            geometry_generation: 0,
-            model: IDENTITY4,
-            texture_slot,
-            normal_map_slot: NO_NORMAL_MAP_SLOT,
-            material: MaterialUniforms::DEFAULT,
-            shader_bucket: 0,
-            visible: true,
-            resident: true,
-            bb_min: UNCULLED_BB.0,
-            bb_max: UNCULLED_BB.1,
-            local_bounds: None,
-            cull_distance: 0.0,
-            lod_alternates: lod_slices,
-        });
+    fn append_rooms(&mut self) {
+        let DrawListInputs {
+            room_geometry,
+            texture_count,
+            ..
+        } = self.inputs;
+        let DrawListData {
+            vertices: all_vertices,
+            indices: all_indices,
+            draw_objects,
+            ..
+        } = &mut self.out;
+        for (room, verts, idxs, room_lods) in room_geometry {
+            let vertex_byte_offset = all_vertices.len() * size_of::<Vertex>();
+            let index_elem_offset = all_indices.len();
+            let base = u32::saturating_from(all_vertices.len());
+            all_vertices.extend_from_slice(verts);
+            all_indices.extend(idxs.iter().map(|i| u32::from(*i) + base));
+            let lod_slices = append_lod_slices(all_indices, room_lods, base);
+            // A room's texture carries its cook-assigned `TextureHandle`, whose
+            // value is the texture's slot in the albedo pool. An out-of-range handle
+            // (an unresolved generator name) falls back to slot 0, as before.
+            let texture_slot = match room.effective_texture() {
+                None => 0,
+                Some(handle) => {
+                    let slot = handle.index();
+                    if slot < texture_count { slot } else { 0 }
+                }
+            };
+            draw_objects.push(DrawObject {
+                vertex_offset: vertex_byte_offset,
+                vertex_count: verts.len(),
+                index_offset: index_elem_offset,
+                index_count: idxs.len(),
+                planet_tile: None,
+                base_vertex: 0,
+                geometry_generation: 0,
+                model: IDENTITY4,
+                texture_slot,
+                normal_map_slot: NO_NORMAL_MAP_SLOT,
+                material: MaterialUniforms::DEFAULT,
+                shader_bucket: 0,
+                visible: true,
+                resident: true,
+                bb_min: UNCULLED_BB.0,
+                bb_max: UNCULLED_BB.1,
+                local_bounds: None,
+                cull_distance: 0.0,
+                lod_alternates: lod_slices,
+            });
+        }
     }
 
-    for terrain in terrains {
-        let material = match resolve_material_slots(terrain.terrain.material, material_map) {
-            Ok(entry) => entry,
-            Err(mat_id) => {
-                tracing::error!(
-                    "graphics: a Terrain references unknown material {}; add a Material asset with that id",
-                    mat_id.index()
-                );
-                return None;
-            }
-        };
-        crate::render::environment::terrain::append_terrain_draws(
-            terrain,
-            material,
-            &mut all_vertices,
-            &mut all_indices,
-            &mut draw_objects,
-        );
+    fn append_terrains(&mut self) -> Option<()> {
+        for terrain in self.inputs.terrains {
+            let material = match resolve_material_slots(
+                terrain.terrain.material,
+                self.inputs.material_map,
+            ) {
+                Ok(entry) => entry,
+                Err(mat_id) => {
+                    tracing::error!(
+                        "graphics: a Terrain references unknown material {}; add a Material asset with that id",
+                        mat_id.index()
+                    );
+                    return None;
+                }
+            };
+            crate::render::environment::terrain::append_terrain_draws(
+                terrain,
+                material,
+                &mut self.out.vertices,
+                &mut self.out.indices,
+                &mut self.out.draw_objects,
+            );
+        }
+        Some(())
     }
-
-    Some(DrawListData {
-        vertices: all_vertices,
-        indices: all_indices,
-        draw_objects,
-        instanced_clusters,
-        prop_draw_indices,
-        mesh_handle_to_draws,
-        prop_local_bounds,
-    })
 }
 
 #[cfg(test)]

@@ -41,6 +41,7 @@ use crate::gfx::render_types::NUM_SHADOW_CASCADES;
 use crate::render::post::ssgi;
 use concinnity_core::math::SaturatingFrom;
 
+use super::types::BufferHandle;
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
     PixelFormat, ReadStages, TextureDesc, TextureHandle, TextureSize, TextureUsage,
@@ -499,8 +500,8 @@ struct GBufferHandles {
 // state and is its own resource.
 #[derive(Copy, Clone)]
 struct GrassHandles {
-    blades: super::types::BufferHandle,
-    args: super::types::BufferHandle,
+    blades: BufferHandle,
+    args: BufferHandle,
 }
 
 impl GrassHandles {
@@ -557,10 +558,12 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // unconditionally would put two graph resources on one GPU object, and the
     // moment either became graph-driven they would transition it twice from
     // states it was no longer in.
-    let hdr_color = (inputs.hdr_sample_count > 1)
-        .then(|| b.import_texture("hdr_color", hdr_color_desc(inputs)));
-    let hdr_depth = b.import_texture("hdr_depth", hdr_depth_desc(inputs));
-    let hdr_resolve = b.import_texture("hdr_resolve", hdr_resolve_desc(inputs));
+    let hdr = HdrTargets {
+        color: (inputs.hdr_sample_count > 1)
+            .then(|| b.import_texture("hdr_color", hdr_color_desc(inputs))),
+        depth: b.import_texture("hdr_depth", hdr_depth_desc(inputs)),
+        resolve: b.import_texture("hdr_resolve", hdr_resolve_desc(inputs)),
+    };
     // The reactive mask: written beside the scene by the particle and
     // transparent passes, read by TAA or the upscaler. Backend-owned, since the
     // writers' pipelines draw into it whether or not this frame stores it.
@@ -581,11 +584,182 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     let hiz_pyramid = (inputs.hiz_build_enabled || two_pass)
         .then(|| b.import_texture("hiz_pyramid", hiz_pyramid_desc(inputs)));
 
-    // Cull (compute) writes the indirect-draw args buffer Main consumes
-    // through executeCommandsInBuffer. Under two-pass occlusion it also
-    // writes a per-object status buffer (drawn / hi-z-candidate / culled)
-    // that `Cull2` reads to decide which phase-1-occluded objects to
-    // re-test against the rebuilt pyramid.
+    let cull = add_cull_and_grass(&mut b, inputs, two_pass, hiz_pyramid);
+    let prepass = add_prepasses(&mut b, inputs, &cull);
+    let scene_inputs = add_scene_inputs(&mut b, inputs, &cull);
+    let front = FrontEnd {
+        cull,
+        prepass,
+        scene_inputs,
+    };
+
+    let main_out = add_main(&mut b, hdr, &front);
+
+    // Two-pass occlusion phase 2: rebuild the Hi-Z pyramid from phase-1
+    // depth (HizBuild), re-test the objects phase-1 cull marked occluded
+    // (Cull2), and redraw the disoccluded survivors (Main2). Main2 RMWs
+    // hdr_color / hdr_depth / hdr_resolve, so its hdr_resolve write becomes
+    // the head of the post-decoration chain: AutoExposure and every later
+    // RMW pass see the combined phase-1 + phase-2 scene. Without two-pass
+    // the head stays at Main's hdr_resolve_v1.
+    let (hiz_cur, scene_head) = if let (true, Some(hiz)) = (two_pass, hiz_pyramid) {
+        let (hiz_v1, scene) =
+            add_occlusion_phase2(&mut b, hiz, front.cull.cull_status, hdr.color, main_out);
+        (Some(hiz_v1), scene)
+    } else {
+        (hiz_pyramid, main_out)
+    };
+
+    // AutoExposure (compute) reads the post-main scene (hdr_resolve_head:
+    // Main2's output under two-pass, Main's otherwise). The compile pass's
+    // WAR step pins it before the first hdr_resolve writer that bumps the
+    // next version (Raymarch / Decals / Fog / ParticlesDraw), so
+    // AutoExposure samples the un-decorated scene even though the GPU
+    // texture object is the same one those passes later blend-write.
+    if inputs.auto_exposure_enabled {
+        b.add_pass(PassId::AutoExposure, PassKind::Compute)
+            .read_texture(scene_head.resolve);
+    }
+
+    // The motion half of the pre-pass output: TaaResolve / Upscale read it, and
+    // that read edge pins the pre-pass ahead of them in the toposort.
+    let velocity_v1 = front.prepass.gbuffer.map(|g| g.velocity);
+
+    let decorated = add_decorations(&mut b, inputs, scene_head, &front, &mut reactive_mask);
+    let scene_pre_taa_cur =
+        add_reflections_and_transparent(&mut b, inputs, decorated, &front, &mut reactive_mask);
+    let scene_color_cur = add_temporal(
+        &mut b,
+        inputs,
+        scene_pre_taa_cur,
+        front.prepass.gbuffer,
+        reactive_mask,
+    );
+
+    let bloom_top_v1 = if inputs.bloom_enabled {
+        let bloom_top = b.create_texture("bloom_top", bloom_top_desc());
+        Some(
+            b.add_pass(PassId::Bloom, PassKind::Render)
+                .read_texture(scene_color_cur)
+                .write_texture(bloom_top),
+        )
+    } else {
+        None
+    };
+
+    // HizFinal (compute) reduces the frame's final depth into the Hi-Z pyramid
+    // the next frame's phase-1 Cull tests against. Declared last of the
+    // depth consumers so it reads the version every decoration pass has
+    // finished with, which is also what keeps the depth's graph lifetime
+    // honest: without this node the depth would look dead after the last
+    // decoration while a post-graph pass still read it.
+    if let (true, Some(hiz)) = (inputs.hiz_build_enabled, hiz_cur) {
+        let mut hizf = b.add_pass(PassId::HizFinal, PassKind::Compute);
+        hizf.read_texture(decorated.depth);
+        let _ = hizf.write_texture(hiz);
+    }
+
+    // Composite (the presenter) reads scene_color + optional bloom_top,
+    // and writes the swapchain via `presents()`. The occlusion and motion view
+    // modes add an ao_output / velocity read so the pooled transient survives
+    // to the present.
+    {
+        let mut composite = b.add_pass(PassId::Composite, PassKind::Render);
+        composite.read_texture(scene_color_cur);
+        if let Some(h) = bloom_top_v1 {
+            composite.read_texture(h);
+        }
+        if inputs.composite_reads_ao
+            && let Some(h) = front.prepass.ao_output
+        {
+            composite.read_texture(h);
+        }
+        if inputs.composite_reads_motion
+            && let Some(v) = velocity_v1
+        {
+            composite.read_texture(v);
+        }
+        if inputs.composite_reads_reactive
+            && let Some(m) = reactive_mask
+        {
+            composite.read_texture(m);
+        }
+        composite.presents();
+    }
+
+    b.compile()
+}
+
+// The engine-owned HDR imports Main writes into.
+#[derive(Copy, Clone)]
+struct HdrTargets {
+    color: Option<TextureHandle>,
+    depth: TextureHandle,
+    resolve: TextureHandle,
+}
+
+// The current versions of the scene color spine (hdr_resolve) and main depth,
+// walked forward as each pass read-modify-writes them.
+#[derive(Copy, Clone)]
+struct SceneVersions {
+    resolve: TextureHandle,
+    depth: TextureHandle,
+}
+
+// What the GPU cull and the grass kernels produce for the raster passes.
+#[derive(Copy, Clone)]
+struct CullOutputs {
+    draw_args: Option<BufferHandle>,
+    cull_status: Option<BufferHandle>,
+    grass: Option<GrassHandles>,
+    grass_shadow: Option<GrassHandles>,
+}
+
+// The pre-pass outputs: the G-buffer, ambient occlusion, and SSGI's resolve.
+#[derive(Copy, Clone)]
+struct PrepassOutputs {
+    gbuffer: Option<GBufferHandles>,
+    ao_output: Option<TextureHandle>,
+    ssgi_indirect: Option<TextureHandle>,
+}
+
+impl PrepassOutputs {
+    // The normal+depth half of the pre-pass output: SSR marches against it and
+    // SSAO reads the same handle.
+    fn ssr_gbuffer(&self) -> Option<TextureHandle> {
+        self.gbuffer.map(|g| g.normal_depth)
+    }
+}
+
+// The shadow maps and compute outputs Main and the later scene passes read.
+#[derive(Copy, Clone)]
+struct SceneInputs {
+    shadow: Option<TextureHandle>,
+    spot_shadow: Option<TextureHandle>,
+    atmosphere_luts: Option<TextureHandle>,
+    cluster_lists: Option<BufferHandle>,
+    particle_pool: Option<BufferHandle>,
+    water_cascades: Option<TextureHandle>,
+}
+
+// Everything declared ahead of Main that the passes from Main on read.
+struct FrontEnd {
+    cull: CullOutputs,
+    prepass: PrepassOutputs,
+    scene_inputs: SceneInputs,
+}
+
+// Cull (compute) writes the indirect-draw args buffer Main consumes
+// through executeCommandsInBuffer. Under two-pass occlusion it also
+// writes a per-object status buffer (drawn / hi-z-candidate / culled)
+// that `Cull2` reads to decide which phase-1-occluded objects to
+// re-test against the rebuilt pyramid.
+fn add_cull_and_grass(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    two_pass: bool,
+    hiz_pyramid: Option<TextureHandle>,
+) -> CullOutputs {
     let (draw_args_v1, cull_status_v1) = if inputs.bindless_cull_enabled {
         // Import both buffers up front: a live `PassBuilder` holds `&mut b`,
         // so the resource declarations have to happen before `add_pass`.
@@ -658,6 +832,21 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         _ => None,
     };
 
+    CullOutputs {
+        draw_args: draw_args_v1,
+        cull_status: cull_status_v1,
+        grass: grass_v1,
+        grass_shadow: grass_shadow_v1,
+    }
+}
+
+// The G-buffer pre-pass and the screen-space passes that read only it: SSAO and
+// SSGI's resolve.
+fn add_prepasses(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    cull: &CullOutputs,
+) -> PrepassOutputs {
     // Geometry pre-pass: one node writes the view-space normal+depth /
     // roughness / velocity / depth that SSR, SSAO, SSGI, RT, TAA, and the
     // upscaler read. Runs when the backend built the targets and any of those
@@ -676,10 +865,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // output), so it must run after Cull. Reading the cull-produced draw_args
         // buffer pins that ordering in the toposort (a no-op when bindless cull is
         // off, where draw_args_v1 is None). Mirrors the Main pass's edge.
-        if let Some(h) = draw_args_v1 {
+        if let Some(h) = cull.draw_args {
             gb.read_buffer(h);
         }
-        if let Some(g) = grass_v1 {
+        if let Some(g) = cull.grass {
             g.read_into(&mut gb);
         }
         // One draw writes all four attachments; they are separate resources
@@ -694,8 +883,6 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // The normal+depth half of the pre-pass output: SSR marches against it and
-    // SSAO reads the same handle.
     let ssr_gbuffer_v1 = gbuffer_v1.map(|g| g.normal_depth);
 
     // SSAO bundle writes ao_output. PassId::SsaoBlur is the single
@@ -731,6 +918,20 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         resolve.write_texture(indirect)
     });
 
+    PrepassOutputs {
+        gbuffer: gbuffer_v1,
+        ao_output: ao_output_v1,
+        ssgi_indirect: ssgi_indirect_v1,
+    }
+}
+
+// The shadow maps and the compute passes ahead of Main: the atmosphere tables,
+// clustered binning, and the particle and ocean simulations.
+fn add_scene_inputs(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    cull: &CullOutputs,
+) -> SceneInputs {
     // Shadow optionally precedes Main and produces the shadow_map
     // handle Main samples. When off, Main does not declare a shadow_map
     // read, mirroring the encoder's `enable_shadows` shader path.
@@ -744,10 +945,10 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // backend that submits the two queues separately it is what puts a
         // cross-queue wait between an async cull and this pass. A no-op when
         // bindless cull is off, where the cascades draw per-object.
-        if let Some(h) = draw_args_v1 {
+        if let Some(h) = cull.draw_args {
             shadow.read_buffer(h);
         }
-        if let Some(g) = grass_shadow_v1 {
+        if let Some(g) = cull.grass_shadow {
             g.read_into(&mut shadow);
         }
         Some(shadow.write_texture(shadow_map))
@@ -826,7 +1027,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             spot_shadow_map_desc(inputs.spot_shadow_slice_size, inputs.shadowed_spot_count),
         );
         let mut spot = b.add_pass(PassId::SpotShadow, PassKind::Render);
-        if let Some(h) = draw_args_v1 {
+        if let Some(h) = cull.draw_args {
             spot.read_buffer(h);
         }
         Some(spot.write_texture(spot_map))
@@ -834,117 +1035,124 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         None
     };
 
-    // Main pass: reads optional shadow_map / spot_shadow_map / draw_args /
-    // ao_output / cluster lists; writes the three HDR targets. Captures
-    // hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
-    // AutoExposure reads when two-pass is off) and hdr_depth_v1 (the depth
-    // HizBuild reduces under two-pass).
-    let (hdr_resolve_v1, hdr_depth_v1) = {
-        let mut main = b.add_pass(PassId::Main, PassKind::Render);
-        if let Some(h) = shadow_v1 {
-            main.read_texture(h);
-        }
-        if let Some(h) = spot_shadow_v1 {
-            main.read_texture(h);
-        }
-        if let Some(h) = draw_args_v1 {
-            main.read_buffer(h);
-        }
-        if let Some(h) = cluster_lists {
-            main.read_buffer(h);
-        }
-        if let Some(h) = atmosphere_luts {
-            main.read_texture(h);
-        }
-        if let Some(h) = ao_output_v1 {
-            main.read_texture(h);
-        }
-        if let Some(h) = ssgi_indirect_v1 {
-            main.read_texture(h);
-        }
-        if let Some(g) = grass_v1 {
-            g.read_into(&mut main);
-        }
-        if let Some(h) = hdr_color {
-            let _ = main.write_texture(h);
-        }
-        let depth_v1 = main.write_texture(hdr_depth);
-        let resolve_v1 = main.write_texture(hdr_resolve);
-        (resolve_v1, depth_v1)
-    };
-
-    // Two-pass occlusion phase 2: rebuild the Hi-Z pyramid from phase-1
-    // depth (HizBuild), re-test the objects phase-1 cull marked occluded
-    // (Cull2), and redraw the disoccluded survivors (Main2). Main2 RMWs
-    // hdr_color / hdr_depth / hdr_resolve, so its hdr_resolve write becomes
-    // the head of the post-decoration chain: AutoExposure and every later
-    // RMW pass see the combined phase-1 + phase-2 scene. Without two-pass
-    // the head stays at Main's hdr_resolve_v1.
-    let mut hiz_cur = hiz_pyramid;
-    let mut depth_cur = hdr_depth_v1;
-    let hdr_resolve_head = if let (true, Some(hiz)) = (two_pass, hiz_pyramid) {
-        // HizBuild (compute): read phase-1 depth, write the Hi-Z pyramid.
-        // The depth RAW edge pins it after Main; the pyramid write is a WAR
-        // against Cull's read of the previous frame's contents.
-        let mut hizb = b.add_pass(PassId::HizBuild, PassKind::Compute);
-        hizb.read_texture(depth_cur);
-        let hiz_v1 = hizb.write_texture(hiz);
-        hiz_cur = Some(hiz_v1);
-
-        // Cull2 (compute): read the rebuilt pyramid + the phase-1 status
-        // buffer, write a second indirect-draw-args buffer Main2 consumes.
-        let draw_args2 = b.import_buffer("draw_args2", draw_args_desc());
-        let mut cull2 = b.add_pass(PassId::Cull2, PassKind::Compute);
-        cull2.read_texture(hiz_v1);
-        if let Some(cs) = cull_status_v1 {
-            cull2.read_buffer(cs);
-        }
-        let draw_args2_v1 = cull2.write_buffer(draw_args2);
-
-        // Main2 (render): read the phase-2 draw args; RMW hdr_color /
-        // hdr_depth / hdr_resolve. The draw_args2 RAW edge pins it after
-        // Cull2; the hdr_depth write (WAR vs HizBuild's read) pins it after
-        // HizBuild; the hdr_color / hdr_resolve WAW edges pin it after Main.
-        let mut main2 = b.add_pass(PassId::Main2, PassKind::Render);
-        main2.read_buffer(draw_args2_v1);
-        depth_cur = main2.write_texture(depth_cur);
-        if let Some(h) = hdr_color {
-            let _ = main2.write_texture(h);
-        }
-        main2.write_texture(hdr_resolve_v1)
-    } else {
-        hdr_resolve_v1
-    };
-
-    // AutoExposure (compute) reads the post-main scene (hdr_resolve_head:
-    // Main2's output under two-pass, Main's otherwise). The compile pass's
-    // WAR step pins it before the first hdr_resolve writer that bumps the
-    // next version (Raymarch / Decals / Fog / ParticlesDraw), so
-    // AutoExposure samples the un-decorated scene even though the GPU
-    // texture object is the same one those passes later blend-write.
-    if inputs.auto_exposure_enabled {
-        b.add_pass(PassId::AutoExposure, PassKind::Compute)
-            .read_texture(hdr_resolve_head);
+    SceneInputs {
+        shadow: shadow_v1,
+        spot_shadow: spot_shadow_v1,
+        atmosphere_luts,
+        cluster_lists,
+        particle_pool: particle_pool_v1,
+        water_cascades,
     }
+}
 
-    // The motion half of the pre-pass output: TaaResolve / Upscale read it, and
-    // that read edge pins the pre-pass ahead of them in the toposort.
-    let velocity_v1 = gbuffer_v1.map(|g| g.velocity);
+// Main pass: reads optional shadow_map / spot_shadow_map / draw_args /
+// ao_output / cluster lists; writes the three HDR targets. Captures
+// hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
+// AutoExposure reads when two-pass is off) and hdr_depth_v1 (the depth
+// HizBuild reduces under two-pass).
+fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVersions {
+    let mut main = b.add_pass(PassId::Main, PassKind::Render);
+    if let Some(h) = front.scene_inputs.shadow {
+        main.read_texture(h);
+    }
+    if let Some(h) = front.scene_inputs.spot_shadow {
+        main.read_texture(h);
+    }
+    if let Some(h) = front.cull.draw_args {
+        main.read_buffer(h);
+    }
+    if let Some(h) = front.scene_inputs.cluster_lists {
+        main.read_buffer(h);
+    }
+    if let Some(h) = front.scene_inputs.atmosphere_luts {
+        main.read_texture(h);
+    }
+    if let Some(h) = front.prepass.ao_output {
+        main.read_texture(h);
+    }
+    if let Some(h) = front.prepass.ssgi_indirect {
+        main.read_texture(h);
+    }
+    if let Some(g) = front.cull.grass {
+        g.read_into(&mut main);
+    }
+    if let Some(h) = hdr.color {
+        let _ = main.write_texture(h);
+    }
+    let depth_v1 = main.write_texture(hdr.depth);
+    let resolve_v1 = main.write_texture(hdr.resolve);
+    SceneVersions {
+        resolve: resolve_v1,
+        depth: depth_v1,
+    }
+}
 
-    // hdr_resolve post-Main RMW chain: Raymarch → Decals → Fog →
-    // ParticlesDraw, each blend- or opaque-writing on top of the
-    // previous version. The handle walks forward through `h` so each
-    // write picks up the latest version, giving the compile pass clean
-    // WAW edges to derive the chain order. Raymarch slots first so its
-    // depth+color write is visible to every later post-decoration
-    // pass; AutoExposure's WAR-read on hdr_resolve_head pins it before
-    // Raymarch (so SDF brightness doesn't skew exposure for the same
-    // frame), matching the doc's chosen one-frame-lag trade-off.
-    //
-    // Main depth rides the same pattern: Raymarch sphere-traces against it and
-    // writes the hit depth back, so it bumps the depth version, and every later
-    // decoration samples that version rather than the one Main left.
-    let mut h = hdr_resolve_head;
+// The two-pass occlusion phase 2 over Main's output, returning the rebuilt
+// pyramid and Main2's scene versions.
+fn add_occlusion_phase2(
+    b: &mut GraphBuilder,
+    hiz: TextureHandle,
+    cull_status: Option<BufferHandle>,
+    hdr_color: Option<TextureHandle>,
+    main_out: SceneVersions,
+) -> (TextureHandle, SceneVersions) {
+    // HizBuild (compute): read phase-1 depth, write the Hi-Z pyramid.
+    // The depth RAW edge pins it after Main; the pyramid write is a WAR
+    // against Cull's read of the previous frame's contents.
+    let mut hizb = b.add_pass(PassId::HizBuild, PassKind::Compute);
+    hizb.read_texture(main_out.depth);
+    let hiz_v1 = hizb.write_texture(hiz);
+
+    // Cull2 (compute): read the rebuilt pyramid + the phase-1 status
+    // buffer, write a second indirect-draw-args buffer Main2 consumes.
+    let draw_args2 = b.import_buffer("draw_args2", draw_args_desc());
+    let mut cull2 = b.add_pass(PassId::Cull2, PassKind::Compute);
+    cull2.read_texture(hiz_v1);
+    if let Some(cs) = cull_status {
+        cull2.read_buffer(cs);
+    }
+    let draw_args2_v1 = cull2.write_buffer(draw_args2);
+
+    // Main2 (render): read the phase-2 draw args; RMW hdr_color /
+    // hdr_depth / hdr_resolve. The draw_args2 RAW edge pins it after
+    // Cull2; the hdr_depth write (WAR vs HizBuild's read) pins it after
+    // HizBuild; the hdr_color / hdr_resolve WAW edges pin it after Main.
+    let mut main2 = b.add_pass(PassId::Main2, PassKind::Render);
+    main2.read_buffer(draw_args2_v1);
+    let depth = main2.write_texture(main_out.depth);
+    if let Some(h) = hdr_color {
+        let _ = main2.write_texture(h);
+    }
+    let resolve = main2.write_texture(main_out.resolve);
+    (hiz_v1, SceneVersions { resolve, depth })
+}
+
+// hdr_resolve post-Main RMW chain: Raymarch → Decals → Fog →
+// ParticlesDraw, each blend- or opaque-writing on top of the
+// previous version. The handle walks forward through `h` so each
+// write picks up the latest version, giving the compile pass clean
+// WAW edges to derive the chain order. Raymarch slots first so its
+// depth+color write is visible to every later post-decoration
+// pass; AutoExposure's WAR-read on hdr_resolve_head pins it before
+// Raymarch (so SDF brightness doesn't skew exposure for the same
+// frame), matching the doc's chosen one-frame-lag trade-off.
+//
+// Main depth rides the same pattern: Raymarch sphere-traces against it and
+// writes the hit depth back, so it bumps the depth version, and every later
+// decoration samples that version rather than the one Main left.
+fn add_decorations(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    head: SceneVersions,
+    front: &FrontEnd,
+    reactive_mask: &mut Option<TextureHandle>,
+) -> SceneVersions {
+    let SceneVersions {
+        resolve: mut h,
+        depth: mut depth_cur,
+    } = head;
+    let ssr_gbuffer_v1 = front.prepass.ssr_gbuffer();
+    let velocity_v1 = front.prepass.gbuffer.map(|g| g.velocity);
     if inputs.raymarch_enabled {
         let mut rm = b.add_pass(PassId::Raymarch, PassKind::Render);
         rm.read_texture(h);
@@ -975,7 +1183,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         decals.read_texture(depth_cur);
         h = decals.write_texture(h);
     }
-    if let Some(luts) = atmosphere_luts {
+    if let Some(luts) = front.scene_inputs.atmosphere_luts {
         // The air in front of each surface, under the fog: a volumetric fog is
         // the nearer layer, so it blends over the haze rather than under it.
         let mut aerial = b.add_pass(PassId::AerialPerspective, PassKind::Render);
@@ -995,7 +1203,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         // Each slab does a cascade tap, so the kernel is a second reader of the
         // shadow map alongside Main. Declaring it puts the compute stage into the
         // read run's union, which is what makes one transition serve both.
-        if let Some(h) = shadow_v1 {
+        if let Some(h) = front.scene_inputs.shadow {
             froxel.read_texture(h);
         }
         let froxel_v1 = froxel.write_texture(froxel_v0);
@@ -1005,7 +1213,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         fog_pass.read_texture(depth_cur);
         h = fog_pass.write_texture(h);
     }
-    if let Some(pools) = particle_pool_v1 {
+    if let Some(pools) = front.scene_inputs.particle_pool {
         // The billboard vertex shader pulls each particle out of the pool the
         // sim just wrote, so the read is in the VERTEX stage rather than the
         // FRAGMENT one a render pass otherwise implies. Naming it is what makes
@@ -1017,7 +1225,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         particles.read_texture(depth_cur);
         h = particles.write_texture(h);
         // The first writer of the reactive mask clears it.
-        reactive_mask = reactive_mask.map(|m| particles.write_texture(m));
+        *reactive_mask = reactive_mask.map(|m| particles.write_texture(m));
     }
     if inputs.lines_enabled {
         // Last of the hdr_resolve decorations: line geometry draws over the
@@ -1028,7 +1236,35 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         lines.read_texture(depth_cur);
         h = lines.write_texture(h);
     }
-    let hdr_resolve_cur = h;
+    SceneVersions {
+        resolve: h,
+        depth: depth_cur,
+    }
+}
+
+// Planar mirrors, the reflection resolve, and Transparent, returning the
+// pre-TAA scene.
+fn add_reflections_and_transparent(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    decorated: SceneVersions,
+    front: &FrontEnd,
+    reactive_mask: &mut Option<TextureHandle>,
+) -> TextureHandle {
+    let SceneVersions {
+        resolve: hdr_resolve_cur,
+        depth: depth_cur,
+    } = decorated;
+    let SceneInputs {
+        shadow: shadow_v1,
+        spot_shadow: spot_shadow_v1,
+        atmosphere_luts,
+        cluster_lists,
+        water_cascades,
+        ..
+    } = front.scene_inputs;
+    let gbuffer_v1 = front.prepass.gbuffer;
+    let ssr_gbuffer_v1 = front.prepass.ssr_gbuffer();
 
     // Planar mirrors: the scene re-rendered across each reflector plane, lit like
     // Main (so after the shadow maps) from the frame's culled geometry (so after
@@ -1043,7 +1279,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         if let Some(h) = spot_shadow_v1 {
             planar.read_texture(h);
         }
-        if let Some(h) = draw_args_v1 {
+        if let Some(h) = front.cull.draw_args {
             planar.read_buffer(h);
         }
         if let Some(h) = atmosphere_luts {
@@ -1060,7 +1296,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // to `hdr_resolve`, so declaring it here would put two graph resources on
     // one GPU object -- each with its own barrier timeline over the same memory.
     // Threading the upstream handle expresses that binding with one resource.
-    let scene_pre_taa_cur = if inputs.rt_reflections_enabled || inputs.ssr_enabled {
+    if inputs.rt_reflections_enabled || inputs.ssr_enabled {
         let scene_pre_taa = b.import_texture("scene_pre_taa", scene_color_desc(inputs));
         // SsrResolve and RtReflections occupy the same slot: both read the
         // post-decoration hdr_resolve and write scene_pre_taa. Hardware RT
@@ -1130,7 +1366,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             // write produces the blended version downstream passes consume.
             trans.read_texture(current);
             current = trans.write_texture(current);
-            reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
+            *reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
         }
         current
     } else if inputs.transparent_enabled {
@@ -1153,21 +1389,30 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
             trans.read_texture_in_stage(h, ReadStages::VERTEX | ReadStages::FRAGMENT);
         }
         trans.read_texture(hdr_resolve_cur);
-        reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
+        *reactive_mask = reactive_mask.map(|m| trans.write_texture(m));
         trans.write_texture(hdr_resolve_cur)
     } else {
         hdr_resolve_cur
-    };
+    }
+}
 
-    // `scene_color` is the engine-owned output the post-TAA composite stack
-    // consumes, and -- with TAA on -- the history slot next frame samples, which
-    // is why it stays imported rather than becoming a transient. Declared only
-    // when TaaResolve or Upscale writes it, for the same one-object-one-resource
-    // reason as above: with neither, the engine binds the name to the latest
-    // pre-TAA scene texture. The two writers are mutually exclusive -- the
-    // upscaler does its own temporal accumulation, so layering TaaResolve on top
-    // would double-temporal the scene.
-    let scene_color_cur = if inputs.upscale_enabled {
+// `scene_color` is the engine-owned output the post-TAA composite stack
+// consumes, and -- with TAA on -- the history slot next frame samples, which
+// is why it stays imported rather than becoming a transient. Declared only
+// when TaaResolve or Upscale writes it, for the same one-object-one-resource
+// reason as above: with neither, the engine binds the name to the latest
+// pre-TAA scene texture. The two writers are mutually exclusive -- the
+// upscaler does its own temporal accumulation, so layering TaaResolve on top
+// would double-temporal the scene.
+fn add_temporal(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    scene_pre_taa_cur: TextureHandle,
+    gbuffer_v1: Option<GBufferHandles>,
+    reactive_mask: Option<TextureHandle>,
+) -> TextureHandle {
+    let velocity_v1 = gbuffer_v1.map(|g| g.velocity);
+    if inputs.upscale_enabled {
         let scene_color = b.import_texture("scene_color", scene_color_desc(inputs));
         // Compute, not render: the temporal upscaler is a dispatch, so its reads
         // want the non-pixel shader-resource state. Declaring it as a render
@@ -1205,60 +1450,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         taa.write_texture(scene_color)
     } else {
         scene_pre_taa_cur
-    };
-
-    let bloom_top_v1 = if inputs.bloom_enabled {
-        let bloom_top = b.create_texture("bloom_top", bloom_top_desc());
-        Some(
-            b.add_pass(PassId::Bloom, PassKind::Render)
-                .read_texture(scene_color_cur)
-                .write_texture(bloom_top),
-        )
-    } else {
-        None
-    };
-
-    // HizFinal (compute) reduces the frame's final depth into the Hi-Z pyramid
-    // the next frame's phase-1 Cull tests against. Declared last of the
-    // depth consumers so it reads the version every decoration pass has
-    // finished with, which is also what keeps the depth's graph lifetime
-    // honest: without this node the depth would look dead after the last
-    // decoration while a post-graph pass still read it.
-    if let (true, Some(hiz)) = (inputs.hiz_build_enabled, hiz_cur) {
-        let mut hizf = b.add_pass(PassId::HizFinal, PassKind::Compute);
-        hizf.read_texture(depth_cur);
-        let _ = hizf.write_texture(hiz);
     }
-
-    // Composite (the presenter) reads scene_color + optional bloom_top,
-    // and writes the swapchain via `presents()`. The occlusion and motion view
-    // modes add an ao_output / velocity read so the pooled transient survives
-    // to the present.
-    {
-        let mut composite = b.add_pass(PassId::Composite, PassKind::Render);
-        composite.read_texture(scene_color_cur);
-        if let Some(h) = bloom_top_v1 {
-            composite.read_texture(h);
-        }
-        if inputs.composite_reads_ao
-            && let Some(h) = ao_output_v1
-        {
-            composite.read_texture(h);
-        }
-        if inputs.composite_reads_motion
-            && let Some(v) = velocity_v1
-        {
-            composite.read_texture(v);
-        }
-        if inputs.composite_reads_reactive
-            && let Some(m) = reactive_mask
-        {
-            composite.read_texture(m);
-        }
-        composite.presents();
-    }
-
-    b.compile()
 }
 
 fn atmosphere_luts_desc() -> TextureDesc {

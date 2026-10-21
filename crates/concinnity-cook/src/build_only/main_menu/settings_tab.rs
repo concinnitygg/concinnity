@@ -4,7 +4,8 @@
 use super::super::membership::scope_to_screen;
 use super::super::ui_spec::{centered_label, label_value, sprite};
 use super::rows::{
-    BodyRow, SettingsRow, option_select_row, settings_body_rows, settings_tabs, slider_row,
+    BodyRow, GroupSpec, SettingsRow, option_select_row, settings_body_rows, settings_tabs,
+    slider_row,
 };
 use super::{TOP_MARGIN_FRAC, cursor_sprite, opaque};
 use crate::authoring::registry::build_only::MainMenu;
@@ -55,6 +56,36 @@ const SCROLLBAR_WIDTH: f32 = 8.0;
 // the band), in reference pixels.
 const BACK_GAP: f32 = 24.0;
 
+// Layout and naming shared by the pieces of one settings tab screen.
+struct TabLayout<'a> {
+    menu_name: &'a str,
+    screen: &'a str,
+    style: &'a MainMenu,
+    font: &'a str,
+    font_px: f32,
+    // Row 0 top (the tab bar) and the vertical distance between rows.
+    start_y: f32,
+    pitch: f32,
+    center_x: f32,
+    row_x: f32,
+    row_width: f32,
+    row_scale: f32,
+    content_x: f32,
+    content_w: f32,
+    control_x: f32,
+}
+
+impl TabLayout<'_> {
+    fn row_y(&self, i: usize) -> f32 {
+        self.start_y + i as f32 * self.pitch
+    }
+
+    // Centers text of `scale` vertically on a row whose top is `y`.
+    fn text_y_at(&self, y: f32, scale: f32) -> f32 {
+        y + (self.style.button_height - self.font_px * scale) / 2.0
+    }
+}
+
 // Emit one settings tab as its own Screen: a "Settings" heading, the tab bar
 // (this tab highlighted, the others clickable), the tab's setting rows, an
 // optional read-only key reference, and a Back button. Each tab is a separate
@@ -94,8 +125,6 @@ pub(super) fn emit_settings_tab(
     } else {
         style.y
     };
-    let row_y = |i: usize| start_y + i as f32 * pitch;
-    let text_y = |i: usize, scale: f32| row_y(i) + (style.button_height - font_px * scale) / 2.0;
 
     let row_scale = style.text_scale * SETTINGS_ROW_SCALE;
     // A centered tab spans most of the width (leaving a side margin and room for
@@ -120,71 +149,31 @@ pub(super) fn emit_settings_tab(
     let control_x = (content_x + content_w * SETTINGS_CONTROL_FRAC)
         .max(content_x + content_w - SETTINGS_CONTROL_WIDTH);
 
-    // Row 0: tab bar, laid out as a centered horizontal row. The active tab is
-    // accent-colored with an underline marker and has no button (you are
-    // already here); every other tab is a button that switches to its screen.
-    // There is no "Settings" heading -- the tabs already name the screen, and
-    // dropping it gives the body band an extra row of space.
-    let tabs = settings_tabs(style.settings_profile);
-    let tab_scale = style.text_scale * 1.1;
-    let tab_text_y = text_y(0, tab_scale);
-    let tab_gap = font_px * AVG_ADVANCE_RATIO * tab_scale * 1.2;
-    let tab_widths: Vec<f32> = tabs
-        .iter()
-        .map(|&(_, label)| text_width(label, font_px, tab_scale))
-        .collect();
-    let tabs_total: f32 = tab_widths.iter().sum::<f32>() + tab_gap * (tabs.len() as f32 - 1.0);
-    let mut tab_x = center_x - tabs_total / 2.0;
-    for (&(suffix, label), w) in tabs.iter().zip(&tab_widths) {
-        let is_active = suffix == active;
-        let color = if is_active {
-            style.hover_color
-        } else {
-            style.text_color
-        };
-        let label_name = format!("{screen}_tab_{suffix}");
-        out.push(label_value(
-            &label_name,
-            label,
-            font,
-            tab_x,
-            tab_text_y,
-            color,
-            tab_scale,
-        ));
-        if is_active {
-            // Underline marker just below the active tab's text.
-            let mark_h = (font_px * tab_scale * 0.08).max(2.0);
-            out.push(sprite(
-                &format!("{screen}_tabmark"),
-                tab_x,
-                tab_text_y + font_px * tab_scale + mark_h,
-                *w,
-                mark_h,
-                opaque(style.hover_color),
-            ));
-        } else {
-            out.push(spec_to_value(
-                &asset::hit_region(
-                    format!("{screen}_tabbtn_{suffix}"),
-                    [tab_x, row_y(0), *w, style.button_height],
-                    NamedAction::Show((format!("{menu_name}_settings_{suffix}")).into()),
-                )
-                .set("label", label_name)
-                .set("hover_color", style.hover_color)
-                .set("hover_scale", tab_scale * style.hover_scale),
-            ));
-        }
-        tab_x += w + tab_gap;
-    }
+    let layout = TabLayout {
+        menu_name,
+        screen: &screen,
+        style,
+        font,
+        font_px,
+        start_y,
+        pitch,
+        center_x,
+        row_x,
+        row_width,
+        row_scale,
+        content_x,
+        content_w,
+        control_x,
+    };
+
+    emit_tab_bar(&mut out, &layout, active);
 
     // Body band: the rows live in a fixed window starting just below the tab
     // bar. Rows past `VISIBLE_SETTINGS_ROWS` (or revealed by expanding a group)
     // overflow the band and scroll. `text_y_at` centers row text on an absolute
     // row top (the body rows are placed by base_y, not by chrome row index).
-    let band_top = row_y(1);
+    let band_top = layout.row_y(1);
     let band_h = VISIBLE_SETTINGS_ROWS as f32 * pitch;
-    let text_y_at = |y: f32, scale: f32| y + (style.button_height - font_px * scale) / 2.0;
 
     let (body, groups) = settings_body_rows(active, style.settings_profile);
 
@@ -210,132 +199,7 @@ pub(super) fn emit_settings_tab(
                 SETTINGS_ROW_BG
             },
         ));
-        let (mut elements, group): (Vec<String>, i32) = match *row {
-            BodyRow::Option(setting, label, group) => {
-                let name = format!("{}_opt_{}", screen, setting.as_str());
-                out.push(option_select_row(&SettingsRow {
-                    name: &name,
-                    setting,
-                    label,
-                    font,
-                    x: content_x,
-                    y: base_y,
-                    width: content_w,
-                    scale: row_scale,
-                    style,
-                }));
-                (
-                    super::super::option_select::expand::element_names(&name, setting),
-                    group,
-                )
-            }
-            BodyRow::Slider(setting, label, group) => {
-                let name = format!("{}_sld_{}", screen, setting.as_str());
-                out.push(slider_row(&SettingsRow {
-                    name: &name,
-                    setting,
-                    label,
-                    font,
-                    x: content_x,
-                    y: base_y,
-                    width: content_w,
-                    scale: row_scale,
-                    style,
-                }));
-                (super::super::slider::expand::element_names(&name), group)
-            }
-            BodyRow::Key(action_label, key, idx, group) => {
-                let name = format!("{screen}_keyname_{idx}");
-                let val = format!("{screen}_keyval_{idx}");
-                out.push(label_value(
-                    &name,
-                    action_label,
-                    font,
-                    content_x,
-                    text_y_at(base_y, row_scale),
-                    style.text_color,
-                    row_scale,
-                ));
-                out.push(label_value(
-                    &val,
-                    key,
-                    font,
-                    control_x,
-                    text_y_at(base_y, row_scale),
-                    style.text_color,
-                    row_scale,
-                ));
-                (vec![name, val], group)
-            }
-            BodyRow::Rebind(action_label, setting, idx, group) => {
-                let name = format!("{screen}_rebind_name_{idx}");
-                let val = format!("{screen}_rebind_val_{idx}");
-                out.push(label_value(
-                    &name,
-                    action_label,
-                    font,
-                    content_x,
-                    text_y_at(base_y, row_scale),
-                    style.text_color,
-                    row_scale,
-                ));
-                // The value (the bound key) is a placeholder until the client
-                // syncs it to the live key map at init.
-                out.push(label_value(
-                    &val,
-                    "--",
-                    font,
-                    control_x,
-                    text_y_at(base_y, row_scale),
-                    style.text_color,
-                    row_scale,
-                ));
-                // A HitRegion over the control column captures a new key on
-                // click. Its `label` points at the value label so the client can
-                // refresh it; the rebind action is a scroll
-                // content region, so it reflows / clips / gates with its row.
-                let ctrl_w = (content_x + content_w - control_x).max(0.0);
-                out.push(spec_to_value(
-                    &asset::hit_region(
-                        format!("{screen}_rebind_btn_{idx}"),
-                        [control_x, base_y, ctrl_w, style.button_height],
-                        NamedAction::Setting {
-                            key: setting,
-                            verb: SettingVerb::Rebind,
-                        },
-                    )
-                    .set("label", val.clone())
-                    .set("hover_color", style.hover_color)
-                    .set("hover_scale", row_scale * style.hover_scale),
-                ));
-                (vec![name, val], group)
-            }
-            BodyRow::GroupHeader(gid, title) => {
-                let collapsed = groups.iter().any(|g| g.gid == gid && g.collapsed);
-                let header = format!("{screen}_grphdr_{gid}");
-                let header_scale = row_scale * 1.05;
-                out.push(label_value(
-                    &header,
-                    &format!("{} {}", if collapsed { "+" } else { "-" }, title),
-                    font,
-                    content_x,
-                    text_y_at(base_y, header_scale),
-                    style.hover_color,
-                    header_scale,
-                ));
-                out.push(spec_to_value(
-                    &asset::hit_region(
-                        format!("{screen}_grpbtn_{gid}"),
-                        [row_x, base_y, row_width, style.button_height],
-                        NamedAction::GroupToggle(gid),
-                    )
-                    .set("label", header.clone())
-                    .set("hover_color", style.hover_color)
-                    .set("hover_scale", header_scale * style.hover_scale),
-                ));
-                (vec![header], -1)
-            }
-        };
+        let (mut elements, group) = emit_body_row(&mut out, &layout, row, base_y, &groups);
         // The card sits first so it reflows + clips + hides with the row.
         elements.insert(0, bg_name);
         scroll_rows.push(serde_json::json!({
@@ -396,10 +260,246 @@ pub(super) fn emit_settings_tab(
         }
     }));
 
-    // Back button: fixed chrome below the band. Returns to the menu screen by
-    // default, or fires the menu's Back-action override (so a caller that owns
-    // the settings navigation, e.g. a story, can route it).
-    let back_y = band_top + band_h + BACK_GAP;
+    emit_back_button(&mut out, &layout, band_top + band_h + BACK_GAP);
+
+    if style.cursor {
+        out.push(cursor_sprite(&format!("{screen}_cursor"), style));
+    }
+
+    scope_to_screen(&mut out, &screen);
+    out
+}
+
+// Row 0: tab bar, laid out as a centered horizontal row. The active tab is
+// accent-colored with an underline marker and has no button (you are
+// already here); every other tab is a button that switches to its screen.
+// There is no "Settings" heading -- the tabs already name the screen, and
+// dropping it gives the body band an extra row of space.
+fn emit_tab_bar(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, active: &str) {
+    let TabLayout {
+        menu_name,
+        screen,
+        style,
+        font,
+        font_px,
+        ..
+    } = *layout;
+    let tabs = settings_tabs(style.settings_profile);
+    let tab_scale = style.text_scale * 1.1;
+    let tab_text_y = layout.text_y_at(layout.row_y(0), tab_scale);
+    let tab_gap = font_px * AVG_ADVANCE_RATIO * tab_scale * 1.2;
+    let tab_widths: Vec<f32> = tabs
+        .iter()
+        .map(|&(_, label)| text_width(label, font_px, tab_scale))
+        .collect();
+    let tabs_total: f32 = tab_widths.iter().sum::<f32>() + tab_gap * (tabs.len() as f32 - 1.0);
+    let mut tab_x = layout.center_x - tabs_total / 2.0;
+    for (&(suffix, label), w) in tabs.iter().zip(&tab_widths) {
+        let is_active = suffix == active;
+        let color = if is_active {
+            style.hover_color
+        } else {
+            style.text_color
+        };
+        let label_name = format!("{screen}_tab_{suffix}");
+        out.push(label_value(
+            &label_name,
+            label,
+            font,
+            tab_x,
+            tab_text_y,
+            color,
+            tab_scale,
+        ));
+        if is_active {
+            // Underline marker just below the active tab's text.
+            let mark_h = (font_px * tab_scale * 0.08).max(2.0);
+            out.push(sprite(
+                &format!("{screen}_tabmark"),
+                tab_x,
+                tab_text_y + font_px * tab_scale + mark_h,
+                *w,
+                mark_h,
+                opaque(style.hover_color),
+            ));
+        } else {
+            out.push(spec_to_value(
+                &asset::hit_region(
+                    format!("{screen}_tabbtn_{suffix}"),
+                    [tab_x, layout.row_y(0), *w, style.button_height],
+                    NamedAction::Show((format!("{menu_name}_settings_{suffix}")).into()),
+                )
+                .set("label", label_name)
+                .set("hover_color", style.hover_color)
+                .set("hover_scale", tab_scale * style.hover_scale),
+            ));
+        }
+        tab_x += w + tab_gap;
+    }
+}
+
+// Emit one body row's content (not its card) at `base_y`, returning the row's
+// element ids and its group index (-1 for none).
+fn emit_body_row(
+    out: &mut Vec<serde_json::Value>,
+    layout: &TabLayout<'_>,
+    row: &BodyRow,
+    base_y: f32,
+    groups: &[GroupSpec],
+) -> (Vec<String>, i32) {
+    let TabLayout {
+        screen,
+        style,
+        font,
+        row_x,
+        row_width,
+        row_scale,
+        content_x,
+        content_w,
+        control_x,
+        ..
+    } = *layout;
+    let text_y = layout.text_y_at(base_y, row_scale);
+    match *row {
+        BodyRow::Option(setting, label, group) => {
+            let name = format!("{}_opt_{}", screen, setting.as_str());
+            out.push(option_select_row(&SettingsRow {
+                name: &name,
+                setting,
+                label,
+                font,
+                x: content_x,
+                y: base_y,
+                width: content_w,
+                scale: row_scale,
+                style,
+            }));
+            (
+                super::super::option_select::expand::element_names(&name, setting),
+                group,
+            )
+        }
+        BodyRow::Slider(setting, label, group) => {
+            let name = format!("{}_sld_{}", screen, setting.as_str());
+            out.push(slider_row(&SettingsRow {
+                name: &name,
+                setting,
+                label,
+                font,
+                x: content_x,
+                y: base_y,
+                width: content_w,
+                scale: row_scale,
+                style,
+            }));
+            (super::super::slider::expand::element_names(&name), group)
+        }
+        BodyRow::Key(action_label, key, idx, group) => {
+            let name = format!("{screen}_keyname_{idx}");
+            let val = format!("{screen}_keyval_{idx}");
+            out.push(label_value(
+                &name,
+                action_label,
+                font,
+                content_x,
+                text_y,
+                style.text_color,
+                row_scale,
+            ));
+            out.push(label_value(
+                &val,
+                key,
+                font,
+                control_x,
+                text_y,
+                style.text_color,
+                row_scale,
+            ));
+            (vec![name, val], group)
+        }
+        BodyRow::Rebind(action_label, setting, idx, group) => {
+            let name = format!("{screen}_rebind_name_{idx}");
+            let val = format!("{screen}_rebind_val_{idx}");
+            out.push(label_value(
+                &name,
+                action_label,
+                font,
+                content_x,
+                text_y,
+                style.text_color,
+                row_scale,
+            ));
+            // The value (the bound key) is a placeholder until the client
+            // syncs it to the live key map at init.
+            out.push(label_value(
+                &val,
+                "--",
+                font,
+                control_x,
+                text_y,
+                style.text_color,
+                row_scale,
+            ));
+            // A HitRegion over the control column captures a new key on
+            // click. Its `label` points at the value label so the client can
+            // refresh it; the rebind action is a scroll
+            // content region, so it reflows / clips / gates with its row.
+            let ctrl_w = (content_x + content_w - control_x).max(0.0);
+            out.push(spec_to_value(
+                &asset::hit_region(
+                    format!("{screen}_rebind_btn_{idx}"),
+                    [control_x, base_y, ctrl_w, style.button_height],
+                    NamedAction::Setting {
+                        key: setting,
+                        verb: SettingVerb::Rebind,
+                    },
+                )
+                .set("label", val.clone())
+                .set("hover_color", style.hover_color)
+                .set("hover_scale", row_scale * style.hover_scale),
+            ));
+            (vec![name, val], group)
+        }
+        BodyRow::GroupHeader(gid, title) => {
+            let collapsed = groups.iter().any(|g| g.gid == gid && g.collapsed);
+            let header = format!("{screen}_grphdr_{gid}");
+            let header_scale = row_scale * 1.05;
+            out.push(label_value(
+                &header,
+                &format!("{} {}", if collapsed { "+" } else { "-" }, title),
+                font,
+                content_x,
+                layout.text_y_at(base_y, header_scale),
+                style.hover_color,
+                header_scale,
+            ));
+            out.push(spec_to_value(
+                &asset::hit_region(
+                    format!("{screen}_grpbtn_{gid}"),
+                    [row_x, base_y, row_width, style.button_height],
+                    NamedAction::GroupToggle(gid),
+                )
+                .set("label", header.clone())
+                .set("hover_color", style.hover_color)
+                .set("hover_scale", header_scale * style.hover_scale),
+            ));
+            (vec![header], -1)
+        }
+    }
+}
+
+// Back button: fixed chrome below the band. Returns to the menu screen by
+// default, or fires the menu's Back-action override (so a caller that owns
+// the settings navigation, e.g. a story, can route it).
+fn emit_back_button(out: &mut Vec<serde_json::Value>, layout: &TabLayout<'_>, back_y: f32) {
+    let TabLayout {
+        menu_name,
+        screen,
+        style,
+        font,
+        center_x,
+        ..
+    } = *layout;
     let back_label = format!("{screen}_label_back");
     let back_action = style
         .settings_back_action
@@ -410,7 +510,7 @@ pub(super) fn emit_settings_tab(
         "Back",
         font,
         center_x,
-        text_y_at(back_y, style.text_scale),
+        layout.text_y_at(back_y, style.text_scale),
         style.text_color,
         style.text_scale,
     ));
@@ -429,13 +529,6 @@ pub(super) fn emit_settings_tab(
         .set("hover_color", style.hover_color)
         .set("hover_scale", style.text_scale * style.hover_scale),
     ));
-
-    if style.cursor {
-        out.push(cursor_sprite(&format!("{screen}_cursor"), style));
-    }
-
-    scope_to_screen(&mut out, &screen);
-    out
 }
 
 // Estimated rendered width of `text`, from the average glyph advance. The
