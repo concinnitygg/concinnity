@@ -84,6 +84,10 @@ fn runtime(w: &World) -> &StreamingRuntime {
     w.resource::<StreamingRuntime>().expect("runtime published")
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a `ResidentMemory` probe, which returns `None` where unsupported"
+)]
 fn resident_bytes() -> Option<u64> {
     Some(1 << 40)
 }

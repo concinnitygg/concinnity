@@ -55,8 +55,8 @@ impl StorySystem {
 
     pub(super) fn show_ending(&mut self, ctx: &mut PipelineContext<'_>) {
         self.clear_save();
-        self.auto = false;
-        self.skip = false;
+        self.assist.auto = false;
+        self.assist.skip = false;
         let Some(ids) = self.ids.as_ref() else {
             return;
         };

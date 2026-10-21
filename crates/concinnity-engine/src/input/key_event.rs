@@ -16,6 +16,7 @@ use crate::components::InputKey;
     crate::ecs::AssetFields,
 )]
 #[serde(default)]
+#[expect(clippy::struct_excessive_bools, reason = "one flag per modifier key")]
 pub struct KeyMods {
     /// Shift was held.
     pub shift: bool,

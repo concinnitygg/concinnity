@@ -189,6 +189,10 @@ mod tests {
         - [Back](#a)\n- [On](#c \"if seen\")\n\n\
         # c\n\n![left](p.png)\n\nbye\n";
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the image-size callback, which fails on unreadable files"
+    )]
     fn dims(_path: &str) -> Result<(u32, u32), String> {
         Ok((100, 200))
     }

@@ -122,7 +122,11 @@ impl WindowControl for MtlContext {
         fn set_keymap(&mut self, keymap: KeyMap);
         fn logical_size(&self) -> (f32, f32);
         fn top_content_inset(&self) -> f32;
-        fn clipboard(&mut self) -> Option<&mut dyn Clipboard>;
+    }
+
+    fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        debug_assert_main_thread("clipboard");
+        Some(self.window_mut().appkit.clipboard())
     }
 
     forward! { assert = debug_assert_main_thread;

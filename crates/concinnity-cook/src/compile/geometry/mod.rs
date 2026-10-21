@@ -43,10 +43,10 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
 
     let (vertices, indices): (Vec<Vert>, Vec<u16>) = match generator {
-        "room" => room::build_room(args)?,
-        "box" => primitives::build_box(args)?,
+        "room" => room::build_room(args),
+        "box" => primitives::build_box(args),
         "cylinder" => primitives::build_cylinder(args)?,
-        "plane" => primitives::build_plane(args)?,
+        "plane" => primitives::build_plane(args),
         "sphere" => primitives::build_sphere(args)?,
         // The `water_grid` generator stays in the runtime crate (the GPU
         // backends call it directly), so reach it there for the compile branch.

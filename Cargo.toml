@@ -163,13 +163,10 @@ cast_precision_loss = "allow"
 similar_names = "allow"
 many_single_char_names = "allow"
 pub_underscore_fields = "allow"
-struct_excessive_bools = "allow"
 must_use_candidate = "allow"
 missing_errors_doc = "allow"
 # Local items read best beside their only use.
 items_after_statements = "allow"
-# Handlers and callbacks keep the signature their caller expects.
-unnecessary_wraps = "allow"
 # Exact float compares here are change detection, tie-breaks and sentinels; an epsilon changes behavior.
 float_cmp = "allow"
 # Nursery and restriction lints adopted one by one.

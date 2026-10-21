@@ -221,8 +221,7 @@ pub(crate) fn setup_window_and_view(
             config.width,
             config.height,
             config.title_bar,
-        )
-        .map_err(RenderError::Other)?;
+        );
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));

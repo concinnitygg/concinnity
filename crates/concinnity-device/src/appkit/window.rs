@@ -40,6 +40,10 @@ unsafe extern "C" {
 // The window, view, and input state shared by the macOS backends. The backend
 // keeps whatever it additionally needs to present (Metal: the `MTKView` this
 // view upcasts from; Vulkan: the surface built from the view's CAMetalLayer).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent cursor, menu and chrome states of the OS window"
+)]
 pub(crate) struct AppKitWindow {
     // None in embedded mode (no separate NSWindow is created).
     window: Option<Retained<NSWindow>>,
@@ -129,8 +133,8 @@ impl AppKitWindow {
 
     // The general pasteboard, reachable in every window mode: it is the
     // system's, not the window's.
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(&mut self.clipboard)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        &mut self.clipboard
     }
 
     // The view the backend renders into, for the presentation resources it owns

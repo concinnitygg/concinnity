@@ -8,6 +8,10 @@ use crate::components::{FrameInput, InputKey, KeyMods, NavDirection};
 const CURSOR_MOVE_THRESHOLD: f32 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent input pulses derived from one frame"
+)]
 pub(super) struct UiIntent {
     // The mouse moved since last frame, which dismisses the focus cursor.
     pub(super) cursor_moved: bool,

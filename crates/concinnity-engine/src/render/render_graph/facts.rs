@@ -9,6 +9,10 @@ use crate::gfx::render_types::spot_shadow_slice_size;
 /// What the backend has built: targets and the pipelines a pass needs to run.
 /// Changes only at init, on a settings apply, or on a resize.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per resident render feature"
+)]
 pub struct ResidentFeatures {
     /// HDR target width in pixels.
     pub hdr_width: u32,
@@ -62,6 +66,10 @@ pub struct ResidentUpscaler {
 /// state that holds it, with no pipeline test: [`FrameFacts::derive`] pairs
 /// them with [`ResidentFeatures`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per kind of frame content"
+)]
 pub struct FrameContent {
     /// An opaque menu backdrop hides the world.
     pub world_hidden: bool,

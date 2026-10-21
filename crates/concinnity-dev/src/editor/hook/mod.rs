@@ -88,6 +88,10 @@ struct Drag {
     grab: [f32; 2],
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent editor session toggles and held-key state"
+)]
 pub(crate) struct EditorHook {
     // Path to the world.jsonl the edits are written back to.
     world_path: String,

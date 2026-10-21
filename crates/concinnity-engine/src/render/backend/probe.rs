@@ -20,6 +20,10 @@ use alloc::vec::Vec;
 /// memory and re-queried each launch, never persisted, so it is always correct
 /// for the current device + driver.
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent device capability flags"
+)]
 pub struct DeviceCapabilities {
     /// Hardware ray tracing for the RT-reflections pass: DXR 1.1 on DirectX, the
     /// ray-query device extensions on Vulkan, and `MTLDevice::supportsRaytracing`

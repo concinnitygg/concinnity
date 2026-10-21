@@ -77,8 +77,12 @@ impl StorySystem {
         let Some(ids) = self.ids.as_ref() else { return };
         let rows = [
             (ids.log_label, "Log", false),
-            (ids.auto_label, "Auto", self.auto),
-            (ids.skip_label, "Skip", self.skip || self.hold_skip),
+            (ids.auto_label, "Auto", self.assist.auto),
+            (
+                ids.skip_label,
+                "Skip",
+                self.assist.skip || self.assist.hold_skip,
+            ),
             (ids.save_label, "Save", false),
         ];
         for (id, text, active) in rows {
@@ -107,7 +111,7 @@ impl StorySystem {
     pub(super) fn enter_choice(&mut self, ctx: &mut PipelineContext<'_>) {
         let node = self.story.nodes[self.node].clone();
         self.apply_ops(&node.choice_ops);
-        self.skip = false;
+        self.assist.skip = false;
         self.render_choice(ctx);
         for sound in &node.choice_sounds {
             play(ctx, Some(*sound), CueKind::Sound);

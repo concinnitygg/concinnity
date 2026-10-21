@@ -47,14 +47,14 @@ fn record_clone_static(
     slots: &mut RenderSlots,
     src: DrawIndex,
     model: [[f32; 4]; 4],
-) -> Option<DrawIndex> {
+) -> DrawIndex {
     let dst = slots.allocate_draw();
     ops.record(move |backend| {
         if let Err(e) = backend.clone_static_draw_object(src, model, dst) {
             tracing::warn!("SpawnSystem: draw-slot clone of {} failed: {}", src, e);
         }
     });
-    Some(dst.slot())
+    dst.slot()
 }
 
 // Claim a pre-reserved skinned instance and record its reveal: the
@@ -232,7 +232,7 @@ impl SpawnSystem {
                     req.name,
                     req.transform,
                     req.lifetime_secs,
-                    |src, model| record_clone_static(ops, slots, src, model),
+                    |src, model| Some(record_clone_static(ops, slots, src, model)),
                 );
             }
         }
@@ -269,7 +269,7 @@ impl SpawnSystem {
                     None,
                     due.transform,
                     due.lifetime,
-                    |src, model| record_clone_static(ops, slots, src, model),
+                    |src, model| Some(record_clone_static(ops, slots, src, model)),
                 );
             }
         }

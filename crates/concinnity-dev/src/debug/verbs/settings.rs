@@ -156,7 +156,7 @@ fn quality_set(call: &Call<'_>, args: Args) -> Reply {
         send_setting(world, setting, op);
         Ok(())
     })?;
-    queued()
+    Ok(queued())
 }
 
 // `setting` names a movement action (`key_forward`, `key_jump`, ...); `key` is
@@ -176,7 +176,7 @@ fn rebind(call: &Call<'_>, args: Args) -> Reply {
         send_setting(world, SettingKey::KeyRebind(action), SettingOp::Rebind(key));
         Ok(())
     })?;
-    queued()
+    Ok(queued())
 }
 
 fn send_setting(world: &mut World, setting: SettingKey, op: SettingOp) {

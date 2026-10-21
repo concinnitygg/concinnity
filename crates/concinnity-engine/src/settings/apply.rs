@@ -14,6 +14,10 @@ use crate::settings::{ResolvedGraphics, SettingsDiff};
 
 /// The live values a change moved, each pushed to the frame's uniforms.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per independently applied settings change"
+)]
 pub struct LiveChanges {
     /// The composite tunables (bloom, exposure, vignette, LUT, FXAA).
     pub post_process: bool,

@@ -16,7 +16,7 @@ impl Clipboard for GlfwWindow {
 }
 
 impl GlfwWindow {
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(self)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        self
     }
 }

@@ -14,6 +14,10 @@ use objc2_app_kit::{NSEvent, NSEventModifierFlags};
 // Pulse fields are set on KeyDown and cleared after one take_input() call so
 // callers see exactly one true frame per press.
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "an input snapshot: one flag per action or key"
+)]
 pub(super) struct KeyState {
     pub(super) forward: bool,
     pub(super) backward: bool,

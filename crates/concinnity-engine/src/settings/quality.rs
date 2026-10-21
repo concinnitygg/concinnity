@@ -67,6 +67,10 @@ impl QualityPreset {
 /// Each cap's no-ceiling value is the engine maximum, so an authored value
 /// always stands under [`QualityCeiling::NONE`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one ceiling per independent quality feature"
+)]
 pub struct QualityCeiling {
     /// The most expensive anti-aliasing mode permitted, by cost rank (Off <
     /// FXAA < TAA). A lower tier can force TAA to FXAA but never enables a mode

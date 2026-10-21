@@ -116,12 +116,6 @@ pub struct CameraController {
     pub follow: Option<FollowController>,
 }
 
-// A `Camera3D` with no explicit `controller` gets the default inspector
-// controller, so an authored scene is navigable out of the box.
-fn default_controller() -> Option<CameraController> {
-    Some(CameraController::default())
-}
-
 /// Declares the 3D camera. One per scene.
 ///
 /// A camera that jumps rather than travels, as at a shot change or a
@@ -172,7 +166,7 @@ pub struct Camera3DArgs {
     /// Input controller settings, or `null` to leave the camera uncontrolled
     /// (driven by a [`CameraShot`](#camerashot) / [Scene](#scene)
     /// cutscene). Omitted defaults to a free-fly inspector controller.
-    #[asset(default = default_controller())]
+    #[asset(default = Some(CameraController::default()))]
     pub controller: Option<CameraController>,
 }
 

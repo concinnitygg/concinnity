@@ -17,7 +17,7 @@ impl StorySystem {
         if !self.page_mode() {
             return;
         }
-        self.auto = !self.auto;
+        self.assist.auto = !self.assist.auto;
         self.mode_timer = 0.0;
         self.render_quick_row(ctx);
     }
@@ -26,9 +26,9 @@ impl StorySystem {
         if !self.page_mode() {
             return;
         }
-        self.skip = !self.skip;
+        self.assist.skip = !self.assist.skip;
         self.mode_timer = 0.0;
-        if self.skip && !self.typewriter.done() {
+        if self.assist.skip && !self.typewriter.done() {
             self.reveal_all(ctx);
         }
         self.render_quick_row(ctx);
@@ -40,10 +40,10 @@ impl StorySystem {
     // a choice") and resumes if the key is still held once page mode returns.
     pub(super) fn update_hold_skip(&mut self, frame: &FrameInput, ctx: &mut PipelineContext<'_>) {
         let want = frame.ctrl && self.page_mode();
-        if want == self.hold_skip {
+        if want == self.assist.hold_skip {
             return;
         }
-        self.hold_skip = want;
+        self.assist.hold_skip = want;
         self.mode_timer = 0.0;
         // Only touch page furniture while page mode owns the screen: a
         // transition caused by leaving page mode (into a choice / overlay) must
@@ -58,7 +58,7 @@ impl StorySystem {
 
     // Whether a skip run is active (the toggle or the held modifier).
     pub(super) fn skipping(&self) -> bool {
-        self.skip || self.hold_skip
+        self.assist.skip || self.assist.hold_skip
     }
 
     // Per-frame reader-assist work: the waiting marker pulse and the auto /
@@ -85,7 +85,7 @@ impl StorySystem {
                 self.mode_timer = 0.0;
                 self.advance(ctx);
             }
-        } else if self.auto && waiting {
+        } else if self.assist.auto && waiting {
             self.mode_timer += dt;
             let delay = AUTO_BASE_SECS + AUTO_PER_CHAR_SECS * self.typewriter.full.len() as f32;
             if self.mode_timer >= delay {

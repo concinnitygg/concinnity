@@ -92,7 +92,7 @@ impl WindowControl for VkContext {
 
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
         debug_assert_main_thread("clipboard");
-        self.window_mut().clipboard()
+        Some(self.window_mut().clipboard())
     }
 }
 

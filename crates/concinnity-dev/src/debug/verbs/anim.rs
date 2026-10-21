@@ -94,7 +94,7 @@ fn anim_crossfade(call: &Call<'_>, args: Args) -> Reply {
             anim.crossfade(id, weights, duration_secs)
         })
     })?;
-    queued()
+    Ok(queued())
 }
 
 fn anim_param(call: &Call<'_>, args: Args) -> Reply {
@@ -108,7 +108,7 @@ fn anim_param(call: &Call<'_>, args: Args) -> Reply {
             anim.set_param(id, &name, value)
         })
     })?;
-    queued()
+    Ok(queued())
 }
 
 fn anim_state(call: &Call<'_>, args: Args) -> Reply {

@@ -18,6 +18,10 @@ pub struct BackendFacts {
 
 /// The toggle-controlled features the settings want built.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent render feature toggles"
+)]
 pub struct FeaturePlan {
     /// Ray-traced reflections, when the settings ask and the device can.
     pub rt: Option<RtReflectionSettings>,

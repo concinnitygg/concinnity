@@ -24,6 +24,10 @@ use concinnity_engine::window::display_mode::DisplayMode;
 // Created once by GraphicsSystem during init(); polled every step().
 // All GLFW calls must happen on the thread that created this struct -- the
 // world loop guarantees single-threaded system execution.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent cursor and menu states of the OS window"
+)]
 pub(crate) struct GlfwWindow {
     pub glfw: glfw::Glfw,
     pub window: glfw::PWindow,

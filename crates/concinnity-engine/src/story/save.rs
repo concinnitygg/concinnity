@@ -1,6 +1,6 @@
 use super::{
-    Overlay, PipelineContext, SLOT_COUNT, SaveSlot, ScreenCommand, StorySave, StoryStore,
-    StorySystem,
+    Overlay, PipelineContext, ReaderAssist, SLOT_COUNT, SaveSlot, ScreenCommand, StorySave,
+    StoryStore, StorySystem,
 };
 use concinnity_core::math::SaturatingFrom;
 
@@ -9,9 +9,7 @@ impl StorySystem {
         self.started = true;
         self.vars.clear();
         self.history.clear();
-        self.auto = false;
-        self.skip = false;
-        self.hold_skip = false;
+        self.assist = ReaderAssist::default();
         self.overlay = Overlay::None;
         self.exit_choice_ui(ctx);
         let Some(screen) = self.ids.as_ref().map(|i| i.screen) else {

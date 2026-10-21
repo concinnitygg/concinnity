@@ -36,6 +36,10 @@ use crate::window::display_mode;
 /// The parts of an assembled `BackendInit` worth asserting on, captured before
 /// the backend is handed back. `draw_objects` is moved out wholesale so tests
 /// can inspect offsets, texture slots, and bounds.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a snapshot of independent init-time render toggles"
+)]
 pub struct InitSnapshot {
     /// The window's requested width.
     pub window_width: u32,

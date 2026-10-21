@@ -174,7 +174,7 @@ impl MtlContext {
     // re-render alive for it. A device whose Metal compiler rejects the ray
     // query is exactly that failure.
     pub(in crate::metal) fn rt_transparent_active(&self) -> bool {
-        self.reflection_path().rt_trace && self.transparent_rt_pipelines_ready()
+        self.reflection_path().rt_trace() && self.transparent_rt_pipelines_ready()
     }
 
     // Whether every live transparent producer built its ray-traced pipeline,

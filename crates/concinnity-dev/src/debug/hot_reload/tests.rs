@@ -690,6 +690,10 @@ fn apply_skinned_layouts_leaves_entries_without_a_matching_layout_alone() {
 // assert which trait calls a pass made. Failure toggles let the error branches
 // fire without a real GPU.
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one failure toggle per backend call the tests can break"
+)]
 struct RecordingBackend {
     texture_updates: Vec<(usize, u32, u32)>,
     lut_updates: Vec<u32>,

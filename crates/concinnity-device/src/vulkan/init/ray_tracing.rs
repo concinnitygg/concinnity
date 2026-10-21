@@ -196,7 +196,7 @@ pub(super) fn build_rt_reflections(
         rt_opt.is_some(),
         rt_accel_opt.is_some(),
     )
-    .composite
+    .composite()
     {
         Some(build_reflection_composite(
             &shared_post_device(gpu, post_support, scene, descriptors),

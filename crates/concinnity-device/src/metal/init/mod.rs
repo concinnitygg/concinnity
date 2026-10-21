@@ -67,6 +67,10 @@ struct InitGpu<'a> {
 
 // The feature gates every stage agrees on, resolved once from the world's post
 // settings, the drawable and the upscaler.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent render feature gates"
+)]
 struct Features {
     // True when the world has 3D scene content, which builds the GPU-driven main
     // pass and the bloom pipelines.

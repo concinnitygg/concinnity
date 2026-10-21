@@ -1170,7 +1170,7 @@ impl VkContext {
                 // the screen rectangle its reflectors cover (see `planar.rs`).
                 // Recorded ahead of `Transparent` in the frame's submission, and
                 // closed with the barrier that makes the targets readable there.
-                self.encode_planar_reflections(cmd, params)?;
+                self.encode_planar_reflections(cmd, params);
             }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and

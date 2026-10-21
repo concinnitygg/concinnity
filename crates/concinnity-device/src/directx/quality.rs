@@ -211,7 +211,7 @@ impl DxContext {
                     )?;
                 }
             }
-            (Some(settings), None) => self.build_rt_runtime(settings)?,
+            (Some(settings), None) => self.build_rt_runtime(settings),
             (None, Some(_)) => {
                 self.rt_reflections = None;
                 self.rt.accel = None;
@@ -241,7 +241,7 @@ impl DxContext {
         // takes a new blur resolution in place; every consumer reads its targets'
         // descriptors per frame, so the new blur needs no re-bind.
         let refl_composite_needed =
-            ReflectionPath::new(desired_ssr, desired_rt, self.rt.accel.is_some()).composite;
+            ReflectionPath::new(desired_ssr, desired_rt, self.rt.accel.is_some()).composite();
         if refl_composite_needed && self.reflection_composite.is_none() {
             let rc = build_reflection_composite(
                 &self.post_device(0),
@@ -355,10 +355,7 @@ impl DxContext {
     // skinned geometry can join decides whether a scene with no static geometry
     // gets one (a build failure is non-fatal: static geometry still reflects,
     // just without skinned hits).
-    fn build_rt_runtime(
-        &mut self,
-        settings: rt_reflections::RtReflectionSettings,
-    ) -> RenderResult<()> {
+    fn build_rt_runtime(&mut self, settings: rt_reflections::RtReflectionSettings) {
         let hot_reload = self.hot_reload.enabled;
         let slots = self.quality_slots;
         let rt = match super::post::rt_reflections::RtReflectionsResources::new(
@@ -380,13 +377,12 @@ impl DxContext {
             Ok(rt) => rt,
             Err(e) => {
                 tracing::warn!("RT reflections pass build failed (keeping SSR): {e}");
-                return Ok(());
+                return;
             }
         };
         self.rt_reflections = Some(rt);
         self.rt.skin = super::raytrace::build_rt_skin(&self.hw.device, hot_reload);
         self.rebuild_rt_accel();
-        Ok(())
     }
 
     // Rebuild the transient pool with the given gates (which of `ao_output` and

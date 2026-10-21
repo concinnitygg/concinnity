@@ -53,6 +53,10 @@ use super::{
 /// so the conditional-inclusion decisions made here match what the
 /// executor will dispatch.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one enable per render graph pass"
+)]
 pub struct FrameGraphInputs {
     /// `true` when a `ShadowStage` is in the world (i.e. the backend's
     /// shadow pipeline + cascade uniforms are live). Skips the Shadow

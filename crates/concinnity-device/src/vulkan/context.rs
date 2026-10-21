@@ -871,6 +871,10 @@ pub(super) struct VkRayTracing {
 // surface, queues, allocator and window, plus the capabilities and display
 // settings negotiated with them. Declared so the device and allocator handles
 // drop before the window closes.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent device features and the present mode"
+)]
 pub(super) struct VkHardware {
     pub(super) instance: ash::Instance,
     // Owns the logical device: the instance and the entry stay alive for as

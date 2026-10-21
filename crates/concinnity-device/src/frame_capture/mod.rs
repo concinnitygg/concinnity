@@ -164,6 +164,10 @@ mod tests {
 
     static BYTES: [u8; 8] = [0; 8];
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the staging allocator, which can fail"
+    )]
     fn host(_: usize) -> RenderResult<Mapped<()>> {
         Ok(Mapped {
             buffer: (),

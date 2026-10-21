@@ -25,6 +25,10 @@ pub(crate) struct MouseSnapshot {
 
 // Per-key pressed state tracked across Win32 WM_KEYDOWN / WM_KEYUP messages.
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "an input snapshot: one flag per action or key"
+)]
 pub(crate) struct KeyState {
     pub forward: bool,
     pub backward: bool,

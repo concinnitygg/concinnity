@@ -96,6 +96,10 @@ fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUniforms {
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static
 // per-volume cbuffer (uploaded once at init) and the optional
 // shadow-cast PSO.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the SdfVolume asset flags"
+)]
 pub(in crate::directx) struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     pub(in crate::directx) label: String,

@@ -181,6 +181,10 @@ mod imp {
         CLASSES.record_realloc(old_size, new_size);
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the build without `detail` returns `None`"
+    )]
     pub(crate) fn snapshot() -> Option<SizeClasses> {
         Some(CLASSES.snapshot())
     }

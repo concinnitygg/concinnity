@@ -1446,8 +1446,8 @@ mod tests {
     }
 
     // A test action from its text form, with integer targets.
-    fn act(action: serde_json::Value) -> Option<UiAction> {
-        Some(serde_json::from_value(action).unwrap())
+    fn act(action: serde_json::Value) -> UiAction {
+        serde_json::from_value(action).unwrap()
     }
 
     fn make_frame_input(mx: f32, my: f32, clicked: bool) -> FrameInput {
@@ -1625,7 +1625,7 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act(serde_json::json!({"show": 81})),
+            action: Some(act(serde_json::json!({"show": 81}))),
             drag_handle: None,
             screen: Some(Ref::new(menu)),
             disabled: false,
@@ -1705,7 +1705,9 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act(serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "window_mode", "verb": "open"}}),
+            )),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -1800,7 +1802,9 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act(serde_json::json!({"setting": {"key": "resolution", "verb": "open"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "resolution", "verb": "open"}}),
+            )),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -1880,7 +1884,9 @@ mod tests {
             label: Some(Ref::new(AssetId(1))),
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "graphics_api", "verb": "open"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "graphics_api", "verb": "open"}}),
+            )),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -2128,7 +2134,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"scene": 3})),
+            action: Some(act(serde_json::json!({"scene": 3}))),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2158,7 +2164,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!("quit")),
+            action: Some(act(serde_json::json!("quit"))),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2275,7 +2281,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"scene": 7})),
+            action: Some(act(serde_json::json!({"scene": 7}))),
             drag_handle: None,
             screen: Some(Ref::new(screen_id)),
             disabled: false,
@@ -2336,7 +2342,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"scene": 7})),
+            action: Some(act(serde_json::json!({"scene": 7}))),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2373,7 +2379,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!("hide")),
+            action: Some(act(serde_json::json!("hide"))),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2398,7 +2404,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"show": 42})),
+            action: Some(act(serde_json::json!({"show": 42}))),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2421,7 +2427,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"toggle": 43})),
+            action: Some(act(serde_json::json!({"toggle": 43}))),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2449,7 +2455,9 @@ mod tests {
             label: Some(Ref::new(value_label)),
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "vsync", "verb": "next"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            )),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2471,7 +2479,9 @@ mod tests {
         // HitRegion is 100x40, so click within those bounds.
         let mut world = World::new();
         world.add_component(HitRegion {
-            action: act(serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "vsync", "verb": "prev"}}),
+            )),
             ..Default::default()
         });
         start(&mut world);
@@ -2497,9 +2507,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(
+            action: Some(act(
                 serde_json::json!({"setting": {"key": "ray_traced_reflections", "verb": "next"}}),
-            ),
+            )),
             drag_handle: None,
             screen: None,
             disabled: true,
@@ -2531,7 +2541,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "show_fps", "verb": "next"}}),
+            )),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -2565,7 +2577,9 @@ mod tests {
             label: Some(Ref::new(value_label)),
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
+            )),
             drag_handle: Some(Ref::new(AssetId(8))),
             screen: None,
             disabled: false,
@@ -2640,7 +2654,7 @@ mod tests {
             label: Some(Ref::new(header)),
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"group_toggle": 0})),
+            action: Some(act(serde_json::json!({"group_toggle": 0}))),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -2657,7 +2671,9 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "vsync", "verb": "next"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "vsync", "verb": "next"}}),
+            )),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -2822,7 +2838,9 @@ mod tests {
                 label: None,
                 hover_color: None,
                 hover_scale: None,
-                action: act(serde_json::json!({"setting": {"key": key, "verb": "next"}})),
+                action: Some(act(
+                    serde_json::json!({"setting": {"key": key, "verb": "next"}}),
+                )),
                 drag_handle: None,
                 screen: Some(Ref::new(screen)),
                 disabled: false,
@@ -2978,7 +2996,9 @@ mod tests {
             label: Some(Ref::new(value)),
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "key_forward", "verb": "rebind"}}),
+            )),
             drag_handle: None,
             screen: None,
             disabled: false,
@@ -3151,7 +3171,7 @@ mod tests {
         );
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: act(serde_json::json!({"toggle": 50})),
+            action: Some(act(serde_json::json!({"toggle": 50}))),
             ..Default::default()
         });
         start(&mut world);
@@ -3184,7 +3204,7 @@ mod tests {
             let mut world = World::new();
             world.add_component(KeyBinding {
                 key: key.name().to_string(),
-                action: act(serde_json::json!({"story": "advance"})),
+                action: Some(act(serde_json::json!({"story": "advance"}))),
                 ..Default::default()
             });
             start(&mut world);
@@ -3210,7 +3230,7 @@ mod tests {
         let mut world = World::new();
         world.add_component(KeyBinding {
             key: "Space".to_string(),
-            action: act(serde_json::json!({"story": "advance"})),
+            action: Some(act(serde_json::json!({"story": "advance"}))),
             ..Default::default()
         });
         start(&mut world);
@@ -3272,7 +3292,7 @@ mod tests {
         }
         world.add_component(KeyBinding {
             key: "Escape".to_string(),
-            action: act(serde_json::json!({"toggle": 60})),
+            action: Some(act(serde_json::json!({"toggle": 60}))),
             ..Default::default()
         });
         start(&mut world);
@@ -3460,7 +3480,7 @@ mod tests {
         world.push_identified(AssetId(100), Screen::default());
         world.add_component(KeyBinding {
             key: "T".to_string(),
-            action: act(serde_json::json!({"toggle": 100})),
+            action: Some(act(serde_json::json!({"toggle": 100}))),
             ..Default::default()
         });
         let mut field = TextInput {
@@ -3502,13 +3522,13 @@ mod tests {
         let mut world = World::new();
         world.add_component(KeyBinding {
             key: "P".to_string(),
-            action: act(serde_json::json!({"screenshot": 1})),
+            action: Some(act(serde_json::json!({"screenshot": 1}))),
             ..Default::default()
         });
         world.add_component(KeyBinding {
             key: "P".to_string(),
             mods: Some(KeyMods::SHIFT),
-            action: act(serde_json::json!({"screenshot": 8})),
+            action: Some(act(serde_json::json!({"screenshot": 8}))),
             ..Default::default()
         });
         start(&mut world);
@@ -3537,7 +3557,7 @@ mod tests {
         world.push_identified(AssetId(111), Screen::default());
         world.add_component(KeyBinding {
             key: "Space".to_string(),
-            action: act(serde_json::json!({"show": 111})),
+            action: Some(act(serde_json::json!({"show": 111}))),
             screen: Some(Ref::new(AssetId(110))),
             ..Default::default()
         });
@@ -3712,7 +3732,7 @@ mod tests {
                 label: Some(Ref::new(AssetId(id))),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
-                action: act(action),
+                action: Some(act(action)),
                 drag_handle: None,
                 screen: Some(Ref::new(menu)),
                 disabled: false,
@@ -3837,7 +3857,9 @@ mod tests {
                 label: Some(Ref::new(AssetId(1))),
                 hover_color: Some([1.0, 0.85, 0.3]),
                 hover_scale: Some(1.0),
-                action: act(serde_json::json!({"setting": {"key": "vsync", "verb": suffix}})),
+                action: Some(act(
+                    serde_json::json!({"setting": {"key": "vsync", "verb": suffix}}),
+                )),
                 drag_handle: None,
                 screen: Some(Ref::new(screen)),
                 disabled: false,
@@ -3853,7 +3875,9 @@ mod tests {
             label: Some(Ref::new(AssetId(2))),
             hover_color: Some([1.0, 0.85, 0.3]),
             hover_scale: Some(1.0),
-            action: act(serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
+            )),
             drag_handle: None,
             screen: Some(Ref::new(screen)),
             disabled: false,
@@ -3996,7 +4020,7 @@ mod tests {
             label: None,
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"story": "advance"})),
+            action: Some(act(serde_json::json!({"story": "advance"}))),
             drag_handle: None,
             screen: Some(Ref::new(stage)),
             disabled: false,
@@ -4035,7 +4059,9 @@ mod tests {
             label: Some(Ref::new(AssetId(7))),
             hover_color: None,
             hover_scale: None,
-            action: act(serde_json::json!({"setting": {"key": "pad_jump", "verb": "rebind"}})),
+            action: Some(act(
+                serde_json::json!({"setting": {"key": "pad_jump", "verb": "rebind"}}),
+            )),
             drag_handle: None,
             screen: None,
             disabled: false,

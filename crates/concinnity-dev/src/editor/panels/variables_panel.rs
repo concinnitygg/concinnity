@@ -176,6 +176,10 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 }
 
 // The per-frame view the hook assembles.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a per-frame draw snapshot of independent panel states"
+)]
 pub(crate) struct VariablesView<'a> {
     pub rows: &'a [Row],
     pub scroll: usize,

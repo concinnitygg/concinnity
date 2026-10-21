@@ -250,6 +250,10 @@ impl Status {
 }
 
 // The per-frame view the hook assembles.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a per-frame draw snapshot of independent panel states"
+)]
 pub(crate) struct BehaviorView<'a> {
     // The open behavior's name, its place among the world's behaviors, and how
     // many there are (zero shows the empty-world prompt instead of an outline).

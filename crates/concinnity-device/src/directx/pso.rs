@@ -182,6 +182,10 @@ pub(in crate::directx) struct DepthBias {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors independent D3D12 rasterizer toggles"
+)]
 pub(in crate::directx) struct Raster {
     pub cull: Cull,
     pub front_ccw: bool,

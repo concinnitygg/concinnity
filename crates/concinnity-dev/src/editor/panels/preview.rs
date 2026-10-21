@@ -122,6 +122,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
 
 // The panel's row states, in row order.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(clippy::struct_excessive_bools, reason = "independent preview toggles")]
 pub(crate) struct PreviewState {
     pub playing: bool,
     pub fly: bool,

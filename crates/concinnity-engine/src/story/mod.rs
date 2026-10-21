@@ -193,6 +193,18 @@ enum Overlay {
     LoadMenu,
 }
 
+// Reader-assist modes: auto turns fully revealed pages after a reading pause;
+// skip reveals instantly and turns pages rapidly until a menu.
+#[derive(Debug, Default, Clone, Copy)]
+struct ReaderAssist {
+    auto: bool,
+    skip: bool,
+    // Momentary fast-forward while the skip modifier (Control) is held: acts
+    // like `skip` but only for as long as the key is down, and only in page
+    // mode (a choice or overlay stops it, like the toggle).
+    hold_skip: bool,
+}
+
 /// Story playback over a compiled [`Story`] graph and its stage screen.
 pub struct StorySystem {
     story: Story,
@@ -214,14 +226,7 @@ pub struct StorySystem {
     typewriter: Typewriter,
     // Seconds of frame time accumulated since construction, driving the marker pulse.
     elapsed: f32,
-    // Reader-assist modes: auto turns fully revealed pages after a reading
-    // pause; skip reveals instantly and turns pages rapidly until a menu.
-    auto: bool,
-    skip: bool,
-    // Momentary fast-forward while the skip modifier (Control) is held: acts
-    // like `skip` but only for as long as the key is down, and only in page
-    // mode (a choice or overlay stops it, like the toggle).
-    hold_skip: bool,
+    assist: ReaderAssist,
     // Seconds since the current page finished revealing (auto) or turned
     // (skip).
     mode_timer: f32,
@@ -276,9 +281,7 @@ impl StorySystem {
             menu: Vec::new(),
             typewriter: Typewriter::default(),
             elapsed: 0.0,
-            auto: false,
-            skip: false,
-            hold_skip: false,
+            assist: ReaderAssist::default(),
             mode_timer: 0.0,
             overlay: Overlay::None,
             slot_scroll: 0,
@@ -449,8 +452,8 @@ impl System for StorySystem {
                 StoryCommand::Advance if !mode_flipped && !button_tick => {
                     if self.overlay == Overlay::None {
                         // Manual input ends a skip run.
-                        if self.skip {
-                            self.skip = false;
+                        if self.assist.skip {
+                            self.assist.skip = false;
                             self.render_quick_row(ctx);
                         }
                         self.advance(ctx);

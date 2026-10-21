@@ -90,8 +90,8 @@ impl PipelineBuilder for FakeBuilder {
     }
 }
 
-fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
-    Some(Arc::new(FakeBuilder { reject }))
+fn builder(reject: bool) -> Arc<dyn PipelineBuilder> {
+    Arc::new(FakeBuilder { reject })
 }
 
 // Stands in for dxc and records each compile as (name, flags). A field
@@ -350,7 +350,7 @@ fn every_volume_of_a_group_is_handed_its_own_worker_built_pipelines() {
     f.write("cloud.hlsl", "cloud v2");
     f.reload.request(
         &pending(&["cloud_a", "cloud_b", "cloud_caster"]),
-        builder(false).as_ref(),
+        Some(&builder(false)),
     );
     let reports = poll_for(&f.reload, &mut backend, 3);
     assert_eq!(outcomes(&reports).len(), 3);
@@ -384,7 +384,7 @@ fn pipelines_the_builder_refuses_are_never_swapped() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1]);
     f.reload
-        .request(&pending(&["cloud_a", "cloud_b"]), builder(true).as_ref());
+        .request(&pending(&["cloud_a", "cloud_b"]), Some(&builder(true)));
     let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),

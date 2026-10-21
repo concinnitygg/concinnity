@@ -147,18 +147,18 @@ mod tests {
         }
     }
 
-    fn locator() -> Option<PayloadLocator> {
-        Some(PayloadLocator {
+    fn locator() -> PayloadLocator {
+        PayloadLocator {
             blob_index: 0,
             offset: 0,
             len: 0,
-        })
+        }
     }
 
     fn world_with(payload: Vec<u8>, terrains: usize) -> World {
         let mut world = World::from_payloads(Box::new(OnePayload(payload)));
         for _ in 0..terrains {
-            world.push(terrain(locator()));
+            world.push(terrain(Some(locator())));
         }
         world
     }
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn an_unreadable_terrain_is_skipped() {
         let mut world = World::from_payloads(Box::new(OnePayload(vec![1, 2, 3])));
-        world.push(terrain(locator()));
+        world.push(terrain(Some(locator())));
         world.push(terrain(None));
         let mut sim = Simulation::new(SimConfig::default(), 4);
         assert_eq!(

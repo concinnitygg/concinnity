@@ -183,6 +183,10 @@ mod tests {
 
     #[test]
     fn resident_memory_reads_through_the_installed_probe() {
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "a `ResidentMemory` probe, which returns `None` where unsupported"
+        )]
         fn fixed() -> Option<u64> {
             Some(42)
         }

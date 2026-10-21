@@ -349,7 +349,9 @@ fn push_skinned_mesh(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, n: u1
 // the regions are still present (UiInputSystem drains them afterwards).
 fn push_settings_row(b: &mut WorldBuilder, key: &str, verb: &str, label: AssetId) {
     b.push(HitRegion {
-        action: act(serde_json::json!({"setting": {"key": key, "verb": verb}})),
+        action: Some(act(
+            serde_json::json!({"setting": {"key": key, "verb": verb}}),
+        )),
         label: Some(Ref::new(label)),
         ..Default::default()
     });
@@ -374,8 +376,8 @@ fn label_text(world: &mut World, id: AssetId) -> String {
 }
 
 // A test action from its text form, with integer targets.
-fn act(action: serde_json::Value) -> Option<UiAction> {
-    Some(serde_json::from_value(action).unwrap())
+fn act(action: serde_json::Value) -> UiAction {
+    serde_json::from_value(action).unwrap()
 }
 
 // Quality effects at their defaults, adjusted by `f`.

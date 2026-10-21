@@ -360,6 +360,10 @@ fn resolved_text(r: &ResolvedSettings, world: &WorldSettings, two_pass: bool) ->
 // The quality group in the field order the digests were pinned in.
 #[derive(Debug)]
 #[expect(dead_code, reason = "the fields are read only through `Debug`")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors independent post-process settings"
+)]
 struct PostProcessConfig {
     bloom_intensity: f32,
     bloom_threshold: f32,

@@ -101,6 +101,10 @@ pub const SDF_PARAMS_LEN: usize = 32;
     crate::ecs::AssetDefault,
 )]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the serialized SdfVolume asset fields"
+)]
 pub struct SdfVolume {
     /// World-space center of the bounding box.
     pub center: [f32; 3],

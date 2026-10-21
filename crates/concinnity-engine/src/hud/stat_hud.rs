@@ -545,6 +545,10 @@ mod tests {
     // appends the "/ budget MB" tail.
     #[test]
     fn emit_window_writes_ram_chip_with_budget() {
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "a `ResidentMemory` probe, which returns `None` where unsupported"
+        )]
         fn resident() -> Option<u64> {
             Some(300 * 1024 * 1024)
         }

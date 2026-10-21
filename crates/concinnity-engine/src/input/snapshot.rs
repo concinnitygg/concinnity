@@ -6,6 +6,10 @@ use alloc::vec::Vec;
 /// frame by the renderer and converted into a `FrameInput` component for
 /// `Camera3DSystem` to consume.
 #[derive(Default, Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "an input snapshot: one flag per action or key"
+)]
 pub struct InputSnapshot {
     /// Forward movement key held.
     pub forward: bool,

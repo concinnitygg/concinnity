@@ -92,8 +92,8 @@ impl PipelineBuilder for FakeBuilder {
     }
 }
 
-fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
-    Some(Arc::new(FakeBuilder { reject }))
+fn builder(reject: bool) -> Arc<dyn PipelineBuilder> {
+    Arc::new(FakeBuilder { reject })
 }
 
 // Stands in for dxc: a fragment containing "error" fails with an error on its
@@ -402,7 +402,7 @@ fn a_worker_built_pipeline_reaches_the_swap() {
     };
     f.write("lit.hlsl", "lit v2");
     f.write("water.hlsl", "water v2");
-    f.reload.request(&pending(&[1, 2]), builder(false).as_ref());
+    f.reload.request(&pending(&[1, 2]), Some(&builder(false)));
     let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
@@ -428,7 +428,7 @@ fn a_pipeline_the_builder_refuses_is_never_swapped() {
         resident: [1].into(),
         ..Default::default()
     };
-    f.reload.request(&pending(&[2]), builder(true).as_ref());
+    f.reload.request(&pending(&[2]), Some(&builder(true)));
     let reports = poll_for(&f.reload, &mut backend, 1);
     assert!(matches!(
         &reports[0].outcome,

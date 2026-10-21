@@ -24,6 +24,10 @@ enum Fault {
     Mip(u32),
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent backend behaviors the tests toggle"
+)]
 struct Mock {
     book: ProbeBook,
     events: Vec<Event>,

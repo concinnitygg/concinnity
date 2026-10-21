@@ -508,9 +508,9 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
-    ) -> RenderResult<()> {
+    ) {
         let Some(set) = self.planar_reflection.as_ref() else {
-            return Ok(());
+            return;
         };
         let crops =
             params
@@ -518,7 +518,7 @@ impl DxContext {
                 .crops(set.plane_count(), set.width, set.height, PLANAR_CROP_MARGIN);
         let crops = crops.as_slice();
         if crops.is_empty() {
-            return Ok(());
+            return;
         }
 
         // Recover the (jittered) projection from this frame's view-projection so
@@ -644,7 +644,6 @@ impl DxContext {
             );
             set.end_plane(cmd, slot);
         }
-        Ok(())
     }
 }
 

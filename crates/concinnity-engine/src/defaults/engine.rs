@@ -34,6 +34,10 @@
     crate::ecs::AssetDefault,
 )]
 #[serde(default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the serialized engine defaults asset"
+)]
 pub struct EngineDefaults {
     /// Inject the [`StatHud`](#stathud) when the world declares a
     /// [`MainMenu`](#mainmenu) but no `StatHud`, and fill any declared

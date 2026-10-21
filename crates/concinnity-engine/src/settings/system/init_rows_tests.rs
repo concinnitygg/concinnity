@@ -27,8 +27,8 @@ const LIT: [f32; 3] = [0.9, 0.9, 0.9];
 
 const PLACEHOLDER: &str = "<placeholder>";
 
-fn act(action: serde_json::Value) -> Option<UiAction> {
-    Some(serde_json::from_value(action).unwrap())
+fn act(action: serde_json::Value) -> UiAction {
+    serde_json::from_value(action).unwrap()
 }
 
 fn placeholder_label(world: &mut World, id: AssetId) {
@@ -46,7 +46,9 @@ fn placeholder_label(world: &mut World, id: AssetId) {
 // value TextLabel it points at.
 fn push_row(world: &mut World, key: &str, verb: &str, label: AssetId) {
     world.push(HitRegion {
-        action: act(serde_json::json!({"setting": {"key": key, "verb": verb}})),
+        action: Some(act(
+            serde_json::json!({"setting": {"key": key, "verb": verb}}),
+        )),
         label: Some(Ref::new(label)),
         ..Default::default()
     });
@@ -56,7 +58,9 @@ fn push_row(world: &mut World, key: &str, verb: &str, label: AssetId) {
 // A slider row: a drag region spanning x = 0..100 with a 10-wide handle.
 fn push_slider(world: &mut World, key: &str, handle: AssetId, label: AssetId) {
     world.push(HitRegion {
-        action: act(serde_json::json!({"setting": {"key": key, "verb": "drag"}})),
+        action: Some(act(
+            serde_json::json!({"setting": {"key": key, "verb": "drag"}}),
+        )),
         x: 0.0,
         width: 100.0,
         drag_handle: Some(Ref::new(handle)),
@@ -213,7 +217,9 @@ fn slider_rows_sync_their_handle_and_label_to_the_live_value() {
     push_slider(&mut world, "vignette", AssetId(202), AssetId(203));
     // A drag region missing its handle and label is skipped.
     world.push(HitRegion {
-        action: act(serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}})),
+        action: Some(act(
+            serde_json::json!({"setting": {"key": "exposure", "verb": "drag"}}),
+        )),
         ..Default::default()
     });
     let live = synced(&mut world, &Launch::new(effects(|_| {})).stored(stored));
@@ -290,9 +296,9 @@ fn rebind_rows_show_their_bound_keys_at_init() {
     for (i, action) in Bindable::ALL.iter().enumerate() {
         let label = AssetId(400 + u32::saturating_from(i));
         world.push(HitRegion {
-            action: act(
+            action: Some(act(
                 serde_json::json!({"setting": {"key": action.setting_key(), "verb": "rebind"}}),
-            ),
+            )),
             label: Some(Ref::new(label)),
             ..Default::default()
         });

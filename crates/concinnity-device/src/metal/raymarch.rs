@@ -72,6 +72,10 @@ type RaymarchLightsGpu = LightUniforms;
 
 // Per-`SdfVolume` GPU state: the compiled render pipeline (one PSO per
 // volume) plus the static per-volume uniforms.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the SdfVolume asset flags"
+)]
 pub(in crate::metal) struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     pub(in crate::metal) label: String,

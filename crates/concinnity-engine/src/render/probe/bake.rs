@@ -482,6 +482,10 @@ pub enum BakeAction {
 /// signals leaves the other slot's at "nothing happening" rather than spelling
 /// out a row of `false`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent signals the bake transition table reads"
+)]
 pub struct BakeSignals {
     /// Every cube face has been submitted and the GPU has signaled completion.
     pub faces_done: bool,

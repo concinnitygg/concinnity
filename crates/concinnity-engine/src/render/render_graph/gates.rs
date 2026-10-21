@@ -30,6 +30,10 @@ pub struct BackendTraits {
 /// resources exist after the apply. A feature asked for but not built (a
 /// shader that failed to compile, a device that cannot run it) stays off.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per buildable render feature"
+)]
 pub struct BuildStatus {
     /// The TAA resolve.
     pub taa: bool,
@@ -50,6 +54,10 @@ pub struct BuildStatus {
 /// The runtime-switched features that run, from the resolved settings and what
 /// the last apply built. Computed when settings apply, not per frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one gate per runtime-switched render feature"
+)]
 pub struct FeatureGates {
     /// TAA is the anti-aliasing mode.
     pub taa: bool,
@@ -94,6 +102,10 @@ impl FeatureGates {
 /// What the backend holds this frame: target sizes, what launch built, and
 /// what the world's content puts on screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent per-frame render facts"
+)]
 pub struct FrameFacts {
     /// HDR target width in pixels.
     pub hdr_width: u32,
@@ -168,7 +180,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
     let taa = gates.taa && !facts.upscaler;
     let velocity = taa || facts.upscaler || gates.ssgi;
     let bindless = facts.cull_ready && facts.cull_records > 0 && !facts.world_hidden;
-    let rt_transparent = path.rt_trace && facts.rt_transparent_ready;
+    let rt_transparent = path.rt_trace() && facts.rt_transparent_ready;
     let mesh_glass = facts.visible_see_through && rt_transparent;
     FrameGraphInputs {
         shadow_enabled: facts.shadow,
@@ -181,7 +193,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         bloom_enabled: facts.bloom_chain && facts.bloom_intensity > 0.0,
         velocity_enabled: velocity,
         taa_enabled: taa,
-        ssr_enabled: path.ssr_resolve,
+        ssr_enabled: path.ssr_resolve(),
         particles_enabled: facts.particles,
         fog_enabled: facts.fog,
         decals_enabled: facts.decals,
@@ -205,9 +217,9 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         ssgi_enabled: gates.ssgi,
         ssgi_resolve_enabled: gates.ssgi_resolve,
         rt_reflections_enabled: if gates.traits.composite_scene_fixed {
-            path.rt_node
+            path.rt_node()
         } else {
-            path.rt_trace
+            path.rt_trace()
         },
         grass_enabled: facts.grass && bindless,
         grass_shadow_enabled: facts.grass_casts,

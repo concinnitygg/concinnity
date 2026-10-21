@@ -255,7 +255,7 @@ impl VkContext {
             // Already live: take the new trace resolution / shadow choice, which
             // `rebuild_swapchain` below sizes the output target from.
             (Some(settings), Some(rt)) => rt.settings = settings,
-            (Some(settings), None) => self.build_rt_runtime(settings)?,
+            (Some(settings), None) => self.build_rt_runtime(settings),
             (None, Some(_)) => {
                 if let Some(mut rt) = self.rt_reflections.take() {
                     rt.destroy(&self.hw.device);
@@ -312,10 +312,7 @@ impl VkContext {
     // it. The pass samples the unified G-buffer pre-pass, so without one the
     // enable is skipped the same way. The caller has drained the device
     // (`wait_idle`); `rebuild_swapchain` refreshes the output target after.
-    fn build_rt_runtime(
-        &mut self,
-        settings: rt_reflections::RtReflectionSettings,
-    ) -> RenderResult<()> {
+    fn build_rt_runtime(&mut self, settings: rt_reflections::RtReflectionSettings) {
         let hdr_views: Vec<vk::ImageView> = self
             .targets
             .hdr_resolve_images
@@ -327,7 +324,7 @@ impl VkContext {
                 "RT reflections need the unified G-buffer pre-pass, which is missing \
                  (keeping SSR)"
             );
-            return Ok(());
+            return;
         };
         let nd_views = gb.normal_depth_views();
         let rough_views = gb.roughness_views();
@@ -365,7 +362,7 @@ impl VkContext {
             Ok(rt) => rt,
             Err(e) => {
                 tracing::warn!("RT reflections pass build failed (keeping SSR): {e}");
-                return Ok(());
+                return;
             }
         };
         self.rt_reflections = Some(rt);
@@ -376,7 +373,6 @@ impl VkContext {
         );
         self.rt.accel = self.build_scene_accel_or_warn();
         self.forget_wired_accel();
-        Ok(())
     }
 }
 

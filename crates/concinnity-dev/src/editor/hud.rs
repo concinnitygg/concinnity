@@ -74,6 +74,10 @@ const STOP_TINT_ARMED: [f32; 4] = [0.44, 0.22, 0.24, 1.0];
 
 // Per-frame top-bar state the hook hands to `apply_layout` and `hit_test`.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a per-frame snapshot of independent top-bar chip states"
+)]
 pub(crate) struct HudState {
     // Are there unsaved edits (Save active)?
     pub dirty: bool,

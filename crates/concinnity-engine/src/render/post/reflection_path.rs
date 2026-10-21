@@ -8,21 +8,20 @@
 /// The reflection stages a frame runs, from what the world authored and what
 /// is live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ReflectionPath {
-    /// The ray-traced resolve traces a live BVH.
-    pub rt_trace: bool,
-    /// The ray-traced resolve's node runs: tracing a live BVH, or, with no
-    /// authored SSR to cover, writing an empty reflection that leaves the scene
-    /// as it was. A renderer that reads the composite's output as the scene
-    /// every frame needs the composite written every frame, and this is the
-    /// node that does it while the BVH is missing.
-    pub rt_node: bool,
+pub enum ReflectionPath {
+    /// No resolve can feed a composite, so none exists.
+    Off,
     /// The SSR resolve runs: SSR is authored and ray tracing did not take its
     /// slot.
-    pub ssr_resolve: bool,
-    /// The composite exists: some resolve can feed it, so a BVH coming or
-    /// going never rebuilds it.
-    pub composite: bool,
+    Ssr,
+    /// The ray-traced resolve's node runs with no live BVH and no authored SSR
+    /// to cover, writing an empty reflection that leaves the scene as it was. A
+    /// renderer that reads the composite's output as the scene every frame
+    /// needs the composite written every frame, and this is the node that does
+    /// it while the BVH is missing.
+    RtEmpty,
+    /// The ray-traced resolve traces a live BVH.
+    RtTrace,
 }
 
 impl ReflectionPath {
@@ -30,19 +29,40 @@ impl ReflectionPath {
     /// ray-traced reflection pass (`rt_pass`), and has a live BVH to trace
     /// (`bvh_live`).
     pub fn new(ssr_authored: bool, rt_pass: bool, bvh_live: bool) -> Self {
-        let rt_trace = rt_pass && bvh_live;
-        Self {
-            rt_trace,
-            rt_node: rt_trace || (rt_pass && !ssr_authored),
-            ssr_resolve: ssr_authored && !rt_trace,
-            composite: rt_pass || ssr_authored,
+        match (rt_pass, bvh_live, ssr_authored) {
+            (true, true, _) => Self::RtTrace,
+            (true, false, false) => Self::RtEmpty,
+            (_, _, true) => Self::Ssr,
+            (false, _, false) => Self::Off,
         }
+    }
+
+    /// The ray-traced resolve traces a live BVH.
+    pub fn rt_trace(self) -> bool {
+        self == Self::RtTrace
+    }
+
+    /// The ray-traced resolve's node runs, tracing or writing an empty
+    /// reflection.
+    pub fn rt_node(self) -> bool {
+        matches!(self, Self::RtTrace | Self::RtEmpty)
+    }
+
+    /// The SSR resolve runs.
+    pub fn ssr_resolve(self) -> bool {
+        self == Self::Ssr
+    }
+
+    /// The composite exists: some resolve can feed it, so a BVH coming or
+    /// going never rebuilds it.
+    pub fn composite(self) -> bool {
+        self != Self::Off
     }
 
     /// Whether a resolve composites a reflection over the scene this frame,
     /// which is when the forward pass hands it the glossy dielectric specular.
-    pub fn resolves(&self) -> bool {
-        self.rt_trace || self.ssr_resolve
+    pub fn resolves(self) -> bool {
+        matches!(self, Self::RtTrace | Self::Ssr)
     }
 }
 
@@ -53,35 +73,35 @@ mod tests {
     #[test]
     fn a_live_trace_takes_the_resolve_slot_from_authored_ssr() {
         let path = ReflectionPath::new(true, true, true);
-        assert!(path.rt_trace && path.rt_node);
-        assert!(!path.ssr_resolve);
-        assert!(path.composite && path.resolves());
+        assert!(path.rt_trace() && path.rt_node());
+        assert!(!path.ssr_resolve());
+        assert!(path.composite() && path.resolves());
     }
 
     #[test]
     fn authored_ssr_covers_while_the_rt_pass_has_no_bvh() {
         let path = ReflectionPath::new(true, true, false);
-        assert!(!path.rt_trace && !path.rt_node);
-        assert!(path.ssr_resolve);
-        assert!(path.composite && path.resolves());
+        assert!(!path.rt_trace() && !path.rt_node());
+        assert!(path.ssr_resolve());
+        assert!(path.composite() && path.resolves());
     }
 
     #[test]
     fn authored_ssr_resolves_without_rt() {
         for bvh_live in [false, true] {
             let path = ReflectionPath::new(true, false, bvh_live);
-            assert!(!path.rt_trace && !path.rt_node);
-            assert!(path.ssr_resolve);
-            assert!(path.composite && path.resolves());
+            assert!(!path.rt_trace() && !path.rt_node());
+            assert!(path.ssr_resolve());
+            assert!(path.composite() && path.resolves());
         }
     }
 
     #[test]
     fn rt_alone_traces_its_live_bvh() {
         let path = ReflectionPath::new(false, true, true);
-        assert!(path.rt_trace && path.rt_node);
-        assert!(!path.ssr_resolve);
-        assert!(path.composite && path.resolves());
+        assert!(path.rt_trace() && path.rt_node());
+        assert!(!path.ssr_resolve());
+        assert!(path.composite() && path.resolves());
     }
 
     #[test]
@@ -89,9 +109,9 @@ mod tests {
         // The RT node still runs, so the composite stays fed, but it traces
         // nothing and the forward pass keeps its own specular.
         let path = ReflectionPath::new(false, true, false);
-        assert!(!path.rt_trace && path.rt_node);
-        assert!(!path.ssr_resolve);
-        assert!(path.composite && !path.resolves());
+        assert!(!path.rt_trace() && path.rt_node());
+        assert!(!path.ssr_resolve());
+        assert!(path.composite() && !path.resolves());
     }
 
     #[test]
@@ -99,8 +119,8 @@ mod tests {
         // RT off or unsupported without authored SSR, or a SSGI-only world.
         for bvh_live in [false, true] {
             let path = ReflectionPath::new(false, false, bvh_live);
-            assert!(!path.rt_trace && !path.rt_node && !path.ssr_resolve);
-            assert!(!path.composite && !path.resolves());
+            assert!(!path.rt_trace() && !path.rt_node() && !path.ssr_resolve());
+            assert!(!path.composite() && !path.resolves());
         }
     }
 
@@ -108,14 +128,20 @@ mod tests {
     fn at_most_one_resolve_node_runs() {
         for bits in 0..8u8 {
             let path = ReflectionPath::new(bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
-            assert!(!(path.rt_node && path.ssr_resolve), "{bits:03b}: {path:?}");
-            assert!(!(path.rt_trace && path.ssr_resolve), "{bits:03b}: {path:?}");
+            assert!(
+                !(path.rt_node() && path.ssr_resolve()),
+                "{bits:03b}: {path:?}"
+            );
+            assert!(
+                !(path.rt_trace() && path.ssr_resolve()),
+                "{bits:03b}: {path:?}"
+            );
             assert_eq!(
-                path.composite,
-                path.rt_node || path.ssr_resolve,
+                path.composite(),
+                path.rt_node() || path.ssr_resolve(),
                 "{bits:03b}"
             );
-            assert_eq!(path.resolves(), path.rt_trace || path.ssr_resolve);
+            assert_eq!(path.resolves(), path.rt_trace() || path.ssr_resolve());
         }
     }
 
@@ -133,13 +159,17 @@ mod tests {
             ((true, true, true), (true, true, false, true)),
         ];
         for ((ssr, rt, bvh), (rt_trace, rt_node, ssr_resolve, composite)) in rows {
-            let want = ReflectionPath {
-                rt_trace,
-                rt_node,
-                ssr_resolve,
-                composite,
-            };
-            assert_eq!(ReflectionPath::new(ssr, rt, bvh), want, "{ssr} {rt} {bvh}");
+            let path = ReflectionPath::new(ssr, rt, bvh);
+            assert_eq!(
+                (
+                    path.rt_trace(),
+                    path.rt_node(),
+                    path.ssr_resolve(),
+                    path.composite()
+                ),
+                (rt_trace, rt_node, ssr_resolve, composite),
+                "{ssr} {rt} {bvh}"
+            );
         }
     }
 }

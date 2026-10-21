@@ -110,8 +110,8 @@ mod tests {
         command(KeyPress::new(key, mods), platform)
     }
 
-    fn mv(motion: Motion, extend: bool) -> Option<Command> {
-        Some(Command::Move { motion, extend })
+    fn mv(motion: Motion, extend: bool) -> Command {
+        Command::Move { motion, extend }
     }
 
     #[test]
@@ -119,15 +119,15 @@ mod tests {
         for p in [Platform::Mac, Platform::Other] {
             assert_eq!(
                 cmd(InputKey::Left, KeyMods::NONE, p),
-                mv(Motion::Left, false)
+                Some(mv(Motion::Left, false))
             );
             assert_eq!(
                 cmd(InputKey::Down, KeyMods::SHIFT, p),
-                mv(Motion::Down, true)
+                Some(mv(Motion::Down, true))
             );
             assert_eq!(
                 cmd(InputKey::PageUp, KeyMods::NONE, p),
-                mv(Motion::PageUp, false)
+                Some(mv(Motion::PageUp, false))
             );
         }
     }
@@ -136,11 +136,11 @@ mod tests {
     fn word_steps_use_option_on_mac_and_ctrl_elsewhere() {
         assert_eq!(
             cmd(InputKey::Left, KeyMods::ALT, Platform::Mac),
-            mv(Motion::WordLeft, false)
+            Some(mv(Motion::WordLeft, false))
         );
         assert_eq!(
             cmd(InputKey::Right, KeyMods::CTRL.with_shift(), Platform::Other),
-            mv(Motion::WordRight, true)
+            Some(mv(Motion::WordRight, true))
         );
         assert_eq!(
             cmd(InputKey::Backspace, KeyMods::ALT, Platform::Mac),
@@ -161,19 +161,19 @@ mod tests {
         let m = Platform::Mac;
         assert_eq!(
             cmd(InputKey::Left, KeyMods::CMD, m),
-            mv(Motion::LineStart, false)
+            Some(mv(Motion::LineStart, false))
         );
         assert_eq!(
             cmd(InputKey::Right, KeyMods::CMD, m),
-            mv(Motion::LineEnd, false)
+            Some(mv(Motion::LineEnd, false))
         );
         assert_eq!(
             cmd(InputKey::Up, KeyMods::CMD, m),
-            mv(Motion::DocStart, false)
+            Some(mv(Motion::DocStart, false))
         );
         assert_eq!(
             cmd(InputKey::Down, KeyMods::CMD.with_shift(), m),
-            mv(Motion::DocEnd, true)
+            Some(mv(Motion::DocEnd, true))
         );
     }
 
@@ -181,15 +181,15 @@ mod tests {
     fn home_and_end_reach_the_line_or_with_the_shortcut_the_document() {
         assert_eq!(
             cmd(InputKey::Home, KeyMods::NONE, Platform::Other),
-            mv(Motion::LineStart, false)
+            Some(mv(Motion::LineStart, false))
         );
         assert_eq!(
             cmd(InputKey::End, KeyMods::CTRL, Platform::Other),
-            mv(Motion::DocEnd, false)
+            Some(mv(Motion::DocEnd, false))
         );
         assert_eq!(
             cmd(InputKey::Home, KeyMods::CMD, Platform::Mac),
-            mv(Motion::DocStart, false)
+            Some(mv(Motion::DocStart, false))
         );
     }
 

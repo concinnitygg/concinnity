@@ -109,10 +109,18 @@ fn framed(frame: u64, snapshot: &impl Serialize) -> Reply {
     serde_json::to_value(Framed { frame, snapshot }).map_err(|e| e.to_string())
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn ping(_: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "pong": true }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn state(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({
@@ -123,15 +131,27 @@ fn state(call: &Call<'_>, _: Args) -> Reply {
     }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({ "frame": s.frame, "assets": s.assets }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn names(call: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "names": &*call.snapshot().names }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn streaming(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let pools = &s.streaming;
@@ -182,6 +202,10 @@ fn chunk_pool(counts: Option<(usize, usize)>, bytes: Option<(u64, u64)>) -> Valu
 
 // The allocation layer's counters are global rather than snapshot state, so
 // they are read at reply time.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn memory(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(memory::report(
@@ -202,6 +226,10 @@ fn budget(call: &Call<'_>, _: Args) -> Reply {
     framed(s.frame, budget)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn profile(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let r = &s.profile_render;

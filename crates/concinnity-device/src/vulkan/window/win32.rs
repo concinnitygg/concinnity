@@ -63,8 +63,8 @@ impl Win32Window {
         take_input_snapshot(&mut self.win_state)
     }
 
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(&mut *self.win_state)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        &mut *self.win_state
     }
 
     // Arm click-to-capture rather than grabbing the cursor immediately: a

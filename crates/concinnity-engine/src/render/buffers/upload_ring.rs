@@ -136,6 +136,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the GPU buffer allocator, which can fail"
+    )]
     fn make(capacity: u64) -> Result<Recorded, ()> {
         Ok(Recorded {
             capacity,

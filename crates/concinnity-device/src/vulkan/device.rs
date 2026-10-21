@@ -115,6 +115,10 @@ pub(super) fn ray_query_supported(instance: &ash::Instance, pd: vk::PhysicalDevi
 }
 
 // A built logical device and the optional capabilities it was created with.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent device feature toggles"
+)]
 pub(super) struct LogicalDevice {
     pub device: Device,
     // `VK_EXT_memory_budget` was enabled, for the VRAM-residency chip.

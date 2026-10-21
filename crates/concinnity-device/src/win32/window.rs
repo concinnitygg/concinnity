@@ -41,6 +41,10 @@ fn take_parked_window() -> Option<HWND> {
 // state as a raw pointer in the window's GWLP_USERDATA slot so the proc can
 // reach it without unsafe global statics.
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent input, cursor and chrome states of the OS window"
+)]
 pub(crate) struct WindowState {
     // The window this state belongs to. Stored so the DxContext cursor methods
     // (which only hold the WindowState) can reach the client rect for a

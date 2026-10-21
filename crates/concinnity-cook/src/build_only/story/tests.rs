@@ -36,6 +36,10 @@ You walk together toward the morning.
 "#;
 
 // Fixed portrait-shaped dimensions so emission tests need no image files.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "stands in for the image-size callback, which fails on unreadable files"
+)]
 fn stub_dims(_path: &str) -> Result<(u32, u32), String> {
     Ok((456, 700))
 }

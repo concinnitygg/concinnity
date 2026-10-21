@@ -142,9 +142,9 @@ pub(super) const fn optional(name: &'static str, kind: Kind, description: &'stat
 /// A verb's answer: the reply's fields as a JSON object, or why the call failed.
 pub(super) type Reply = Result<Value, String>;
 
-/// The reply every verb that only queues a change answers with.
-pub(super) fn queued() -> Reply {
-    Ok(json!({ "queued": true }))
+/// The reply fields of every verb that only queues a change.
+pub(super) fn queued() -> Value {
+    json!({ "queued": true })
 }
 
 /// One verb the debug server answers.
@@ -264,6 +264,10 @@ impl Args {
 mod tests {
     use super::*;
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "every verb's `run` returns `Reply`"
+    )]
     fn nothing(_: &Call<'_>, _: Args) -> Reply {
         Ok(json!({}))
     }

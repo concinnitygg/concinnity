@@ -1007,7 +1007,7 @@ impl DxContext {
     // `FrameGraphInputs::rt_reflections_enabled` in `record_frame::seed_inputs`
     // and the `scene_srv_for_post` precedence.
     pub(super) fn rt_reflections_active(&self) -> bool {
-        self.reflection_path().rt_trace
+        self.reflection_path().rt_trace()
     }
 
     // Which reflection stages run this frame, from the authored SSR resolve and

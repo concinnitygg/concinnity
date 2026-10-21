@@ -21,6 +21,7 @@ mod tests;
 // applied over the hardcoded default). The `*_enabled` flags carry the
 // `CN_ENABLE_*` opt-outs (true unless the variable is set to "0").
 #[derive(Clone, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "one toggle per optional SDK")]
 pub(crate) struct SdkEnv {
     pub(crate) target_os: String,
     pub(crate) out_dir: Option<PathBuf>,

@@ -203,24 +203,24 @@ mod tests {
     use super::*;
     use crate::physics::sim::math::vec3;
 
-    fn blocked(target: u32, toi: f32) -> Option<Blocked> {
-        Some(Blocked {
+    fn blocked(target: u32, toi: f32) -> Blocked {
+        Blocked {
             target,
             toi,
             normal: vec3(0.0, 1.0, 0.0),
             relative_motion: Vec3::ZERO,
-        })
+        }
     }
 
     #[test]
     fn the_earliest_impact_wins_and_the_slot_breaks_a_tie() {
         assert!(nearer(None, 9, 0.9));
-        assert!(nearer(blocked(3, 0.5).as_ref(), 7, 0.4));
-        assert!(!nearer(blocked(3, 0.5).as_ref(), 7, 0.6));
+        assert!(nearer(Some(&blocked(3, 0.5)), 7, 0.4));
+        assert!(!nearer(Some(&blocked(3, 0.5)), 7, 0.6));
         assert!(
-            nearer(blocked(7, 0.5).as_ref(), 3, 0.5),
+            nearer(Some(&blocked(7, 0.5)), 3, 0.5),
             "the lower slot holds it"
         );
-        assert!(!nearer(blocked(3, 0.5).as_ref(), 7, 0.5));
+        assert!(!nearer(Some(&blocked(3, 0.5)), 7, 0.5));
     }
 }

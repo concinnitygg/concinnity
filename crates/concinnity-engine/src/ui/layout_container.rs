@@ -227,6 +227,10 @@ mod tests {
 
     // A label 10 wide and 20 tall per unit of its id, with no padding, so a
     // placement's x/y is the box corner and widths stay easy to add up.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the label measure, which misses absent labels"
+    )]
     fn box_of(id: AssetId) -> Option<LabelBox> {
         Some(LabelBox {
             w: 10.0 * id.0 as f32,

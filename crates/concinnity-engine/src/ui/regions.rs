@@ -80,6 +80,10 @@ pub(super) struct RegionOutcome {
 
 // Why a region may be unable to hover or fire this frame.
 #[derive(Debug, Default, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent reasons a region may be inert"
+)]
 struct RegionGate {
     thumb_active: bool,
     slider: bool,

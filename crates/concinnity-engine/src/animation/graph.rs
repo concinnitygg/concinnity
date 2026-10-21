@@ -534,6 +534,10 @@ mod tests {
     }
 
     // Maps every clip id to slot 0 of a 1-second looping clip.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the clip resolver, which misses unknown ids"
+    )]
     fn any_clip(_: AssetId) -> Option<(usize, f32, bool)> {
         Some((0, 1.0, true))
     }

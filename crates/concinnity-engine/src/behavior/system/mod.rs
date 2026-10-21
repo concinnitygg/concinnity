@@ -69,6 +69,10 @@ use concinnity_core::fanout::{FanOut, Lent, Pooled};
 /// [`with_pool`](BehaviorSystem::with_pool) and somewhere to keep state
 /// through [`with_store`](BehaviorSystem::with_store).
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent once-per-world latches"
+)]
 pub struct BehaviorSystem {
     programs: Vec<Program>,
     // Parallel to `programs`.

@@ -575,6 +575,10 @@ mod tests {
     // renders the thread + memory line off the live budgets and process RSS.
     #[test]
     fn toggle_reveals_sys_chip_from_budgets() {
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "a `ResidentMemory` probe, which returns `None` where unsupported"
+        )]
         fn resident() -> Option<u64> {
             Some(300 * 1024 * 1024)
         }

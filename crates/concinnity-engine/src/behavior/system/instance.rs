@@ -10,6 +10,10 @@ use crate::components::{Behavior, BehaviorSource, InteractEvent, VolumeEvent};
 use crate::ecs::{Entity, Ref, asset_id::AssetId};
 
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent one-shot latches, one per trigger source"
+)]
 pub(super) struct Instance {
     pub(super) entity: Option<Entity>,
     pub(super) locals: Vec<Val>,

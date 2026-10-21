@@ -7,6 +7,10 @@ use alloc::vec::Vec;
 /// state and read by camera and UI behavior. It is maintained automatically and
 /// is never saved with the world.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "an input snapshot: one flag per action or key"
+)]
 pub struct FrameInput {
     /// True while the move-forward key (W) is held.
     pub forward: bool,

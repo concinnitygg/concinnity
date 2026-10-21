@@ -59,7 +59,7 @@ impl VkContext {
     // The caller rebuilds the swapchain when it did, which re-points every scene
     // reader at the HDR resolve.
     fn release_unfed_reflection_composite(&mut self) -> bool {
-        if self.reflection_path().composite || self.reflection_composite.is_none() {
+        if self.reflection_path().composite() || self.reflection_composite.is_none() {
             return false;
         }
         // The cached framebuffers name the targets about to drop.
@@ -77,7 +77,7 @@ impl VkContext {
         blur_scale: u32,
     ) -> RenderResult<()> {
         self.release_unfed_reflection_composite();
-        if !self.reflection_path().composite {
+        if !self.reflection_path().composite() {
             return Ok(());
         }
         if let Some(mut rc) = self.reflection_composite.take() {
