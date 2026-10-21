@@ -86,9 +86,9 @@ impl DxContext {
         if self.spot_shadow.count() == 0 {
             return;
         }
-        self.set_shadow_raster_state(cmd, self.spot_shadow.slice_size);
+        Self::set_shadow_raster_state(cmd, self.spot_shadow.slice_size);
         for slice in self.spot_shadow.refreshed_slices() {
-            self.clear_shadow_slice(cmd, self.spot_shadow.dsvs[slice as usize]);
+            Self::clear_shadow_slice(cmd, self.spot_shadow.dsvs[slice as usize]);
         }
 
         let Some(indirect) = self.cull.spot_indirect_buffers.get(frame_idx) else {

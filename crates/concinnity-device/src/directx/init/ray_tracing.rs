@@ -136,8 +136,8 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
     DxRayTracing {
         accel,
         dynamic_mode: launch.rt_dynamic,
-        update_streak: Default::default(),
-        retired: Default::default(),
+        update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
+        retired: concinnity_engine::render::buffers::retire_pool::RetirePool::default(),
         retire_tick: 0,
         skinned_geometry: launch.rt_skinned_geometry,
         skin,

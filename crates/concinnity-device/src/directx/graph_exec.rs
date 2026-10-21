@@ -559,6 +559,10 @@ pub(in crate::directx) struct MainPassExtent {
 
 // GPU virtual addresses of this frame's view / light / shadow constant buffers.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the shared suffix names what each field holds: a GPU virtual address"
+)]
 pub(in crate::directx) struct FrameGpuBuffers {
     pub view_gva: u64,
     pub light_gva: u64,

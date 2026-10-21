@@ -466,7 +466,7 @@ impl DxContext {
         );
 
         // Resolve (MSAA) + copy the face into its slice of the capture cube.
-        self.copy_face_to_capture(&cmd, bake, face)?;
+        Self::copy_face_to_capture(&cmd, bake, face)?;
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
         // requires.
@@ -498,7 +498,6 @@ impl DxContext {
     // the hardware cube order (`gfx::cubemap`), so slice `face` is the face a sampler
     // finds looking that way.
     fn copy_face_to_capture(
-        &self,
         cmd: &ID3D12GraphicsCommandList,
         bake: &RenderingBake,
         face: usize,

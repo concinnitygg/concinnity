@@ -604,7 +604,7 @@ impl MtlContext {
         enc.set_vertex_value(main, 0);
         enc.set_vertex_value(gbuffer, prepass_buffers::VIEW);
         enc.set_fragment_value(gbuffer, prepass_buffers::VIEW);
-        self.draw_grass(enc, grass, &grass.pipelines.prepass, frame);
+        Self::draw_grass(enc, grass, &grass.pipelines.prepass, frame);
         enc.popDebugGroup();
         u32::saturating_from(GRASS_REGION_COUNT)
     }
@@ -624,7 +624,7 @@ impl MtlContext {
         enc.pushDebugGroup(ns_string!("grass"));
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.set_vertex_value(view, 0);
-        self.draw_grass(enc, grass, &grass.pipelines.main, frame);
+        Self::draw_grass(enc, grass, &grass.pipelines.main, frame);
         enc.popDebugGroup();
         u32::saturating_from(GRASS_REGION_COUNT)
     }
@@ -633,7 +633,6 @@ impl MtlContext {
     // two-sided, the band's under the pipeline that discards the pixels the
     // canopy shows.
     fn draw_grass(
-        &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         grass: &GrassState,
         pipelines: &GrassDrawPipelines,

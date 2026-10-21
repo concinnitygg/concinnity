@@ -219,6 +219,10 @@ impl AppKitVkWindow {
     }
 
     // Vulkan instance extensions required for surface creation on macOS.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::ext::metal_surface::NAME]
             .into_iter()

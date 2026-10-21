@@ -87,7 +87,7 @@ impl DxContext {
             self.state.planner.shadow.cascade_mask
         };
 
-        self.set_shadow_raster_state(cmd, sm);
+        Self::set_shadow_raster_state(cmd, sm);
 
         // Clear every re-rendered cascade first: with nothing to rasterize the
         // pass is these clears, which is what the raymarched casters below and
@@ -96,7 +96,7 @@ impl DxContext {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            self.clear_shadow_slice(cmd, self.shadow.dsvs[cascade_idx]);
+            Self::clear_shadow_slice(cmd, self.shadow.dsvs[cascade_idx]);
         }
 
         if let Some(indirect) = self.cull.shadow_indirect_buffers.get(frame_idx)
@@ -151,11 +151,7 @@ impl DxContext {
     }
 
     // Viewport + scissor over a square `size` slice, and triangle-list topology.
-    pub(in crate::directx) fn set_shadow_raster_state(
-        &self,
-        cmd: &ID3D12GraphicsCommandList,
-        size: u32,
-    ) {
+    pub(in crate::directx) fn set_shadow_raster_state(cmd: &ID3D12GraphicsCommandList, size: u32) {
         let viewport = D3D12_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
@@ -184,7 +180,6 @@ impl DxContext {
     }
 
     pub(in crate::directx) fn clear_shadow_slice(
-        &self,
         cmd: &ID3D12GraphicsCommandList,
         dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
     ) {

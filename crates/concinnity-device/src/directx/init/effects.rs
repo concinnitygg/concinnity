@@ -497,6 +497,10 @@ pub(super) fn build_auto_exposure(
 // The atmosphere, when the world declares one: its tables in the atmosphere's
 // heap slots, and its irradiance cube's SRV in the environment's irradiance
 // slot, so every pass that reaches the environment's diffuse light reads it.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "handed on to the atmosphere, which stores it"
+)]
 pub(super) fn build_atmosphere(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,

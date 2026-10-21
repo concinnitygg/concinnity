@@ -203,6 +203,10 @@ impl Win32Window {
     }
 
     // Vulkan instance extensions required for surface creation on Windows.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::khr::win32_surface::NAME]
             .into_iter()

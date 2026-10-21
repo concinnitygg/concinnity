@@ -141,7 +141,7 @@ pub(super) fn build_upscale(
         scaler: upscaler,
         scale,
         jitter: UpscaleJitter::default(),
-        reset: Default::default(),
+        reset: concinnity_engine::render::temporal::history_reset::UpscalerResetLatch::default(),
     }
 }
 

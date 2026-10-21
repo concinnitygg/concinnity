@@ -346,7 +346,7 @@ impl DxContext {
     ) {
         // SAFETY: the command list is in the recording state and the root signature is live.
         unsafe { cmd.SetComputeRootSignature(&pipelines.mip_root) };
-        self.dispatch_prefilter(
+        Self::dispatch_prefilter(
             cmd,
             &pipelines.mip0,
             gpu_slot(self, slots.mip0_pair),
@@ -357,7 +357,7 @@ impl DxContext {
         for mip in 1..plan.mips() {
             // Each level reads the one the previous dispatch wrote.
             uav_barrier(cmd, capture);
-            self.dispatch_prefilter(
+            Self::dispatch_prefilter(
                 cmd,
                 &pipelines.downsample,
                 gpu_slot(self, slots.capture_uav_base + (mip - 1) as usize),
@@ -382,7 +382,7 @@ impl DxContext {
     ) {
         // SAFETY: the command list is in the recording state and the root signature is live.
         unsafe { cmd.SetComputeRootSignature(&pipelines.ggx_root) };
-        self.dispatch_prefilter(
+        Self::dispatch_prefilter(
             cmd,
             &pipelines.ggx,
             gpu_slot(self, slots.cube_uav_base + dst_mip as usize),
@@ -397,7 +397,6 @@ impl DxContext {
     // rounded-up remainder returns early. `srv_table` is the GGX kernel's sampled
     // capture; the mip kernels bind none.
     fn dispatch_prefilter(
-        &self,
         cmd: &ID3D12GraphicsCommandList,
         pso: &ID3D12PipelineState,
         uav_table: SrvSlot,

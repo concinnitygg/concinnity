@@ -251,7 +251,7 @@ impl FrameDevice for MtlContext {
             (Some(grass), Some(lod)) => self
                 .state
                 .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
-            _ => Default::default(),
+            _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
         };
         self.canopy_tables.update(
             &self.hw.device,

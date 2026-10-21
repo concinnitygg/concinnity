@@ -286,7 +286,7 @@ impl DxContext {
                 clear_color,
             },
         )?;
-        let uniforms = scene_data::build_uniforms(&gpu, light_uniforms, &local_lights)?;
+        let uniforms = scene_data::build_uniforms(&gpu, &light_uniforms, &local_lights)?;
         let light_cull = scene_data::build_light_cull(&gpu)?;
         let shadow = shadow::build_shadow(&gpu, &descriptors, &targets, &shadows)?;
         let spot_shadow = shadow::build_spot_shadow(
@@ -488,7 +488,7 @@ impl DxContext {
             fog,
             particle,
             grass,
-            grass_lod: Default::default(),
+            grass_lod: std::cell::Cell::default(),
             commands,
             frame_sync,
             frame_capture: crate::frame_capture::FrameCaptures::new(capture),
@@ -503,12 +503,12 @@ impl DxContext {
                 ),
                 clear_color,
             ),
-            graph_scratch: Default::default(),
-            pass_lists: Default::default(),
+            graph_scratch: std::cell::Cell::default(),
+            pass_lists: std::cell::Cell::default(),
             submission: Vec::new(),
             instanced: DxInstanced::new(world.instanced_clusters),
-            wireframe: Default::default(),
-            diagnostics: Default::default(),
+            wireframe: crate::directx::wireframe::DxWireframe::default(),
+            diagnostics: crate::directx::context::Diagnostics::default(),
             timestamps,
             auto_exposure,
             hot_reload: ShaderReload::new(hot_reload),

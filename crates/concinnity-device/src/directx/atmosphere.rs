@@ -426,6 +426,10 @@ fn aerial_pso(
 impl DxAtmosphere {
     // The tables, pipelines and parameter ring, and the irradiance cube,
     // whose SRV replaces the environment's in its slot.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "stored, so a borrow would only add a copy"
+    )]
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,
         settings: AtmosphereSettings,

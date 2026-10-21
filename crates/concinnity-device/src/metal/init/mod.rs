@@ -351,7 +351,7 @@ impl MtlContext {
                 &local_lights,
                 1,
             ),
-            canopy: Default::default(),
+            canopy: concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
             grass_lod: None,
             canopy_tables: CanopyTables::default(),
             shadow,

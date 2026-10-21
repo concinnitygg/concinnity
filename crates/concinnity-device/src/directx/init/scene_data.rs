@@ -16,7 +16,7 @@ use crate::directx::light_cull::{self as lc, LightCullState};
 
 pub(super) fn build_uniforms(
     gpu: &InitGpu<'_>,
-    light_uniforms: LightUniforms,
+    light_uniforms: &LightUniforms,
     local_lights: &[GpuLight],
 ) -> RenderResult<DxUniforms> {
     let hw = gpu.hw;
@@ -156,7 +156,7 @@ pub(super) fn build_uniforms(
         }
     }
     for ptr in &light_ubo_ptrs {
-        upload_light_uniforms(*ptr, &light_uniforms);
+        upload_light_uniforms(*ptr, light_uniforms);
     }
 
     // Per-scene local-light storage buffer: a single UPLOAD resource filled
@@ -183,7 +183,7 @@ pub(super) fn build_uniforms(
         light_ubo_ptrs,
         local_light_buffer,
         lights: concinnity_engine::render::light::state::LightState::new(
-            light_uniforms,
+            *light_uniforms,
             local_lights,
             frames,
         ),
