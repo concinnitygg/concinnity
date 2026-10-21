@@ -466,7 +466,7 @@ impl VkContext {
             pipeline_gate: PipelineGate::default(),
             world_shader: world_programs.cloned(),
             frame_stats: Cell::default(),
-            draw_calls_accum: Default::default(),
+            draw_calls_accum: std::sync::atomic::AtomicU32::default(),
             descriptors,
             instanced: VkInstanced::new(world.instanced_clusters),
             geometry,

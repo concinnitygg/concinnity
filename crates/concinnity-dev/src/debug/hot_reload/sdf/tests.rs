@@ -8,6 +8,7 @@ use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -294,7 +295,7 @@ fn a_request_for_all_reaches_every_volume() {
     f.reload.request(
         &PendingSdfVolumes {
             all: true,
-            ids: Default::default(),
+            ids: BTreeSet::default(),
         },
         None,
     );
@@ -449,7 +450,7 @@ fn an_empty_catalog_reloads_nothing() {
             .request(
                 &PendingSdfVolumes {
                     all: true,
-                    ids: Default::default()
+                    ids: BTreeSet::default()
                 },
                 None
             )

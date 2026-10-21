@@ -1067,7 +1067,7 @@ mod tests {
             model,
             vertex_base: 0,
             radial: [0.0, 1.0],
-            morph: Default::default(),
+            morph: crate::gfx::render_types::GpuTileMorph::default(),
             morph_extent: 0.0,
         };
         let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile));

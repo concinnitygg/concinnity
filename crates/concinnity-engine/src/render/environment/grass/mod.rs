@@ -1948,7 +1948,7 @@ mod tests {
                         model: LocalFrame::AUTHORED.model_at(mesh.origin),
                         vertex_base: 0,
                         radial: mesh.radial,
-                        morph: Default::default(),
+                        morph: crate::gfx::render_types::GpuTileMorph::default(),
                         morph_extent: 0.0,
                     }
                 })

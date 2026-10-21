@@ -172,6 +172,7 @@ mod tests {
     use super::*;
     use crate::behavior::SpawnEffect;
     use crate::behavior::system::test_world::world_with;
+    use crate::camera::camera3d::Camera3DArgs;
     use crate::components::{
         Behavior, BehaviorLiteral, BehaviorLocal, BehaviorSource, Camera3D, CueKind, PropInstance,
         Transform,
@@ -386,7 +387,7 @@ mod tests {
     #[test]
     fn a_transform_write_moves_a_camera_and_a_cut_raises_a_history_reset() {
         let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
-        let camera = world.push(Camera3D::bake(Default::default()));
+        let camera = world.push(Camera3D::bake(Camera3DArgs::default()));
         let mut write = |world: &mut World, x: f32, cut: bool| {
             let transform = Transform {
                 position: [x, 0.0, 0.0],
@@ -424,7 +425,7 @@ mod tests {
     #[test]
     fn a_write_to_a_driven_camera_is_reported_once() {
         let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
-        let camera = world.push(Camera3D::bake(Default::default()));
+        let camera = world.push(Camera3D::bake(Camera3DArgs::default()));
         let write = |sys: &mut BehaviorSystem, world: &mut World| {
             let effect = Effect::SetTransform {
                 entity: camera,

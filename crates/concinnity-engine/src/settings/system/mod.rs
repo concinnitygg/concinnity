@@ -287,7 +287,7 @@ impl SettingsState {
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
         let shadow_cadence = backend::init::ShadowCadence {
-            update: Default::default(),
+            update: crate::components::ShadowUpdate::default(),
             distance: 200,
             cascades: 4,
         };

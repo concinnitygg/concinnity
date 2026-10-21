@@ -579,7 +579,9 @@ fn an_instanced_vertex_shader_payload_reaches_the_backend() {
         ..Default::default()
     });
     b.push_shader(&["vertex_main_bindless", "fragment_main_bindless"]);
-    b.push(Camera3D::bake(Default::default()));
+    b.push(Camera3D::bake(
+        concinnity_engine::components::cook::Camera3D::default(),
+    ));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     b.push_identified(
         AssetId(851),

@@ -198,7 +198,7 @@ mod tests {
                 feedback_tx
                     .send(feedback::FrameFeedback {
                         render_stats,
-                        replay: Default::default(),
+                        replay: concinnity_engine::render::frame::ops::ReplayOutcome::default(),
                         recycled: snapshot,
                         stop,
                         skipped: false,

@@ -131,7 +131,7 @@ fn target_path(entry: &Value, file: Option<&Path>) -> Result<PathBuf, String> {
     let at = |msg: String| format!("Include{}: {msg}", in_file(file));
     let mut args = entry.get("args").cloned().unwrap_or(Value::Null);
     if args.is_null() {
-        args = Value::Object(Default::default());
+        args = Value::Object(serde_json::Map::default());
     }
     if args.get(ID_KEY).is_some() {
         return Err(at(format!(

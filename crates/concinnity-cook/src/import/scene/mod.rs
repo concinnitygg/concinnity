@@ -1450,7 +1450,7 @@ mod tests {
         fn write(self, path: &Path) {
             let sink = self
                 .writer
-                .finalize_and_flush(&Default::default())
+                .finalize_and_flush(&fbxcel::writer::v7400::binary::FbxFooter::default())
                 .expect("finalize fbx");
             std::fs::write(path, sink.into_inner()).expect("write fbx");
         }

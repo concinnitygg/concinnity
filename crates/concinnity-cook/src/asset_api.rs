@@ -71,7 +71,7 @@ fn resolve_args(reg: &Registration, supplied: Option<&serde_json::Value>) -> ser
     let mut base = reg
         .default_args
         .clone()
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
 
     if let Some(serde_json::Value::Object(supplied_map)) = supplied {
         if let serde_json::Value::Object(ref mut base_map) = base {

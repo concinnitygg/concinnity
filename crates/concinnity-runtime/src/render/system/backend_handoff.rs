@@ -115,7 +115,7 @@ impl GraphicsSystem {
         // authority: the draw-slot free list seeded with the build-time draw
         // count, and the skinned instance pool with the pre-reserved copies.
         ctx.insert_resource(ActiveRenderQueues::new(RenderQueues {
-            ops: Default::default(),
+            ops: concinnity_engine::render::frame::ops::RenderOps::default(),
             slots: RenderSlots::new(
                 handoff.draw_object_count,
                 self.caps.reuses_build_slots,

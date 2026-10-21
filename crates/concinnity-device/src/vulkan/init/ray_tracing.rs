@@ -213,7 +213,7 @@ pub(super) fn build_rt_reflections(
             retire_tick: 0,
             dynamic_mode: launch.rt_dynamic,
             skinned_geometry: launch.rt_skinned_geometry,
-            update_streak: Default::default(),
+            update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
             skin: rt_opt
                 .is_some()
                 .then(|| crate::vulkan::raytrace::build_rt_skin(alloc, device, hot_reload))

@@ -9,6 +9,7 @@ use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
 use concinnity_engine::render::world_load::source_maps::ShaderFile;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -327,7 +328,7 @@ fn a_request_for_all_reaches_every_shader() {
     f.reload.request(
         &PendingShaders {
             all: true,
-            ids: Default::default(),
+            ids: BTreeSet::default(),
         },
         None,
     );
@@ -468,7 +469,7 @@ fn an_empty_catalog_reloads_nothing() {
             .request(
                 &PendingShaders {
                     all: true,
-                    ids: Default::default()
+                    ids: BTreeSet::default()
                 },
                 None
             )

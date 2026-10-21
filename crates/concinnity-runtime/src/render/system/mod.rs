@@ -2,6 +2,7 @@
 //! asset); `World::start` constructs one when the run resolved to a windowed
 //! one.
 
+use crate::render::streaming::loaders::StreamWorkers;
 use concinnity_engine::components::Background;
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{PipelineContext, StepResult, System, World};
@@ -65,7 +66,7 @@ pub(crate) struct GraphicsSystem {
     // when the world declares it and the backend supports it. Init scratch:
     // moved into the published `StreamingRuntime` resource at the end of init.
     stream_pools: StreamingPools,
-    stream_workers: crate::render::streaming::loaders::StreamWorkers,
+    stream_workers: StreamWorkers,
     // Which scene exclusively owns each deferred bucket, so scene residency
     // can claim it as a member.
     shader_deferral: ShaderDeferral,
@@ -127,7 +128,7 @@ impl GraphicsSystem {
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             stream_pools: StreamingPools::default(),
-            stream_workers: Default::default(),
+            stream_workers: StreamWorkers::default(),
             shader_deferral: ShaderDeferral::default(),
             clip_rects: maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.

@@ -415,7 +415,7 @@ impl GraphicsSystem {
         let sdf_fields = if capture_sources {
             resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
         } else {
-            Default::default()
+            concinnity_engine::render::world_load::source_maps::SdfFieldMap::default()
         };
         let decal_count = fx.decals.len();
         let particle_count = fx.particles.len();
@@ -514,7 +514,7 @@ impl GraphicsSystem {
                 resolution: quality_ceiling.planar_reflection_resolution,
             },
             fx,
-            requirements: Default::default(),
+            requirements: init::RenderRequirements::default(),
         };
         backend_init.resolve_requirements();
         match self.build_backend(ctx, backend_init) {

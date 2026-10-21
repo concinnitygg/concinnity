@@ -205,7 +205,9 @@ fn max_frames_stops_the_run() {
     let mut b = WorldBuilder::new();
     b.push(Window::default());
     b.push_shaders();
-    b.push(Camera3D::bake(Default::default()));
+    b.push(Camera3D::bake(
+        concinnity_engine::components::cook::Camera3D::default(),
+    ));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
     world.insert_resource(LaunchRequest {
@@ -234,7 +236,9 @@ fn pipelined_max_frames_counts_frames_sent() {
     let mut b = WorldBuilder::new();
     b.push(Window::default());
     b.push_shaders();
-    b.push(Camera3D::bake(Default::default()));
+    b.push(Camera3D::bake(
+        concinnity_engine::components::cook::Camera3D::default(),
+    ));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     let mut world = b.build();
     world.insert_resource(LaunchRequest {

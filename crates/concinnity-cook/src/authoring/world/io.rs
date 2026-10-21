@@ -29,7 +29,7 @@ impl WorldJsonlAsset {
             .get("args")
             .cloned()
             .filter(|a| !a.is_null())
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
         let Some(id) = take_entry_id_from_args(&mut args) else {
             return Err(format!(
                 "asset of type '{}': missing `{ID_KEY}`",

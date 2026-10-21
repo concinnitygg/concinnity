@@ -68,12 +68,13 @@ pub(super) fn drain_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera::camera3d::Camera3DArgs;
     use crate::ecs::World;
 
     #[test]
     fn persisted_choices_override_the_authored_look() {
         let mut world = World::new();
-        world.add_component(Camera3D::bake(Default::default()));
+        world.add_component(Camera3D::bake(Camera3DArgs::default()));
         let mut stored = StoredSettings::default();
         stored.controls.mouse_sensitivity = Some(0.004);
         stored.graphics.fov = Some(80.0);

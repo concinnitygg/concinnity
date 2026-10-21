@@ -280,7 +280,9 @@ fn configured_scene(title: &str, graphics: GraphicsConfig) -> WorldBuilder {
         ..graphics
     });
     b.push_shaders();
-    b.push(Camera3D::bake(Default::default()));
+    b.push(Camera3D::bake(
+        concinnity_engine::components::cook::Camera3D::default(),
+    ));
     b.push_textured_quad(MESH, TEX, MAT, PROP);
     b
 }

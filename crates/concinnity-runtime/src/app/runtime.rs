@@ -1,5 +1,7 @@
 //! The `Runtime` value: a world plus the loop state that drives it.
 
+use crate::app::clock::SimClock;
+use crate::app::pacing::FramePacer;
 use concinnity_core::fanout::FanOut;
 use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
 use concinnity_engine::components::AppConfig;
@@ -42,10 +44,10 @@ pub struct Runtime {
     shutdown: ShutdownToken,
     // FPS-cap pacer, run before each world step so no system pays the sleep
     // inside its own step time (see `app::pacing`).
-    pacer: crate::app::pacing::FramePacer,
+    pacer: FramePacer,
     // Fixed-timestep accumulator; publishes the frame's `SimTiming` and
     // `FrameTime` resources before each world step (see `app::clock`).
-    clock: crate::app::clock::SimClock,
+    clock: SimClock,
     // The pipelined render half's go-ahead, waited on before each step so the
     // tick starts no earlier than its frame can be recorded. `None` when serial.
     frame_gate: Option<crate::app::frame_gate::FrameGate>,
@@ -73,8 +75,8 @@ impl Runtime {
             world: World::new(),
             state: None,
             shutdown: ShutdownToken::new(),
-            pacer: Default::default(),
-            clock: Default::default(),
+            pacer: FramePacer::default(),
+            clock: SimClock::default(),
             frame_gate: None,
             launch: LaunchRequest::default(),
             render_mode: None,

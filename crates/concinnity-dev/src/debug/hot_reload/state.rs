@@ -3,6 +3,7 @@
 //! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
+use crate::debug::hot_reload::passes::ProceduralMeshReloadResult;
 use concinnity_engine::animation::skeleton;
 use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::components::{SkeletonJoint, Story};
@@ -387,7 +388,7 @@ pub(crate) fn run_frame(
         if let Some(path) = path {
             let pm_result = match backend.live_edit() {
                 Some(edit) => reload_procedural_meshes(&path, &mut state.procedural_meshes, edit),
-                None => Default::default(),
+                None => ProceduralMeshReloadResult::default(),
             };
             if pm_result.regenerated > 0 || pm_result.failed > 0 {
                 tracing::info!(

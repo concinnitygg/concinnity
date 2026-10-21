@@ -1,4 +1,5 @@
 use super::*;
+use crate::camera::camera3d::Camera3DArgs;
 use crate::components::{
     Behavior, Camera3D, CameraController, CameraTrack, DebugHud, FollowController, FpsCounter,
     PhysicsConfig, RigidBody, Screen, SkyRotation, StatHud, Story, TextInput,
@@ -51,7 +52,7 @@ fn a_camera_track_gates_the_track_system_only_beside_a_camera() {
     assert!(world.system_manifest(HEADLESS_SYSTEMS).is_empty());
 
     let mut world = World::new();
-    world.add_component(Camera3D::bake(Default::default()));
+    world.add_component(Camera3D::bake(Camera3DArgs::default()));
     assert!(
         !world
             .system_manifest(HEADLESS_SYSTEMS)
@@ -60,7 +61,7 @@ fn a_camera_track_gates_the_track_system_only_beside_a_camera() {
 
     let mut world = World::new();
     world.add_component(CameraTrack::default());
-    world.add_component(Camera3D::bake(Default::default()));
+    world.add_component(Camera3D::bake(Camera3DArgs::default()));
     world.add_component(PhysicsConfig::default());
     assert_eq!(
         world.system_manifest(HEADLESS_SYSTEMS),
@@ -73,7 +74,7 @@ fn a_camera_track_gates_the_track_system_only_beside_a_camera() {
 #[test]
 fn a_camera_track_replaces_the_camera_controller() {
     let mut world = World::new();
-    world.add_component(Camera3D::bake(Default::default()));
+    world.add_component(Camera3D::bake(Camera3DArgs::default()));
     world.add_component(PhysicsConfig::default());
     assert_eq!(
         world.system_manifest(HEADLESS_SYSTEMS),
@@ -84,13 +85,13 @@ fn a_camera_track_replaces_the_camera_controller() {
 // The first controlled camera's `follow` block picks exactly one controller.
 #[test]
 fn camera_controller_gates_are_exclusive() {
-    let mut fly_cam = Camera3D::bake(Default::default());
+    let mut fly_cam = Camera3D::bake(Camera3DArgs::default());
     fly_cam.controller = Some(CameraController::default());
     let mut fly = World::new();
     fly.add_component(fly_cam);
     assert_eq!(fly.system_manifest(HEADLESS_SYSTEMS), ["Camera3DSystem"]);
 
-    let mut follow_cam = Camera3D::bake(Default::default());
+    let mut follow_cam = Camera3D::bake(Camera3DArgs::default());
     follow_cam.controller = Some(CameraController {
         follow: Some(FollowController::default()),
         ..Default::default()

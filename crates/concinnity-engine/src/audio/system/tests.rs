@@ -3,6 +3,7 @@
 // state the system tracks: cue bindings, queued-clip and match counters,
 // emitter bindings, the occlusion probes and the requested mix.
 
+use crate::camera::camera3d::Camera3DArgs;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
@@ -500,7 +501,7 @@ fn step_follows_prop_emitter_and_moves_listener() {
     let mut world = AudioClips::new().seal();
     let entity = {
         let mut ctx = world.context();
-        ctx.push(Camera3D::bake(Default::default()));
+        ctx.push(Camera3D::bake(Camera3DArgs::default()));
         let e = ctx.components.spawn();
         ctx.insert(
             e,

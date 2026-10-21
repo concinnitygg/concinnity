@@ -664,7 +664,7 @@ impl FrameDevice for VkContext {
             (Some(grass), Some(lod)) => self
                 .state
                 .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
-            _ => Default::default(),
+            _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
         };
         self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
         self.uniforms.canopy_tables.update(

@@ -444,7 +444,7 @@ impl EditorHook {
         if let Some(obj) = entries.by_key_mut(entry).and_then(|e| e.as_object_mut()) {
             let args = obj
                 .entry("args".to_string())
-                .or_insert_with(|| serde_json::Value::Object(Default::default()));
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
             if let Some(a) = args.as_object_mut() {
                 a.insert(arg.to_string(), serde_json::json!(value));
             }

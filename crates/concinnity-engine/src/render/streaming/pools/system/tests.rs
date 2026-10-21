@@ -1,5 +1,6 @@
 use super::*;
 use crate::bake::texture::TextureImage;
+use crate::camera::camera3d::Camera3DArgs;
 use crate::render::frame::ops::RenderOps;
 use crate::render::slots::render_slots::RenderSlots;
 use crate::render::streaming::pools::{LoadPool, StreamPool, StreamingPools, StreamingPressure};
@@ -65,7 +66,7 @@ fn world_with_camera(position: [f32; 3], view_matrix: [[f32; 4]; 4]) -> World {
     w.push(Camera3D {
         view_matrix,
         position,
-        ..Camera3D::bake(Default::default())
+        ..Camera3D::bake(Camera3DArgs::default())
     });
     w
 }

@@ -9,6 +9,7 @@ use super::{
     decode_texture_payloads, draw_list, font, font_less_text, media, procedural_mesh_snapshot,
     retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
 };
+use crate::live_edit::shader_overrides::ShaderOverrides;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::environment::terrain::LoadedTerrain;
 use concinnity_engine::render::overlay::maps::{Atlas, AtlasPool};
@@ -88,7 +89,7 @@ pub(super) struct DecodedShaders {
     pub(super) locators: Vec<PayloadLocator>,
     pub(super) source_map: ShaderSourceMap,
     // Hot-reloaded programs shared with the shader warmup, under capture.
-    pub(super) overrides: crate::live_edit::shader_overrides::ShaderOverrides,
+    pub(super) overrides: ShaderOverrides,
     // One entry per world Shader, in drain order == cook handle order, so a
     // baked ShaderHandle value indexes this directly. Entry 0 is the world
     // default pipeline's program.
@@ -131,7 +132,7 @@ impl GraphicsSystem {
                 locators: Vec::new(),
                 shaders: vec![DecodedShader::default()],
                 source_map: ShaderSourceMap::default(),
-                overrides: Default::default(),
+                overrides: ShaderOverrides::default(),
             });
         }
 
@@ -142,7 +143,7 @@ impl GraphicsSystem {
         self.shader_deferral = ShaderDeferral::plan(ctx, streaming, &shader_ids);
         let blob_disk_backed = ctx.blob.disk_backed();
         let mut deferred_sources = Vec::new();
-        let overrides = crate::live_edit::shader_overrides::ShaderOverrides::default();
+        let overrides = ShaderOverrides::default();
 
         let mut locators = Vec::with_capacity(world_shaders.len());
         let mut shaders = Vec::with_capacity(world_shaders.len());
@@ -494,7 +495,7 @@ impl GraphicsSystem {
         let skinned_mesh_source_map = if capture_sources {
             skinned_mesh_source_map(&skinned_geometry, &skinned)
         } else {
-            Default::default()
+            concinnity_engine::render::world_load::source_maps::SourceMap::default()
         };
 
         let deferred_slots =
