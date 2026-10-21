@@ -249,8 +249,8 @@ impl UpscaleBackend for DlssUpscaler {
             // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and each
             // resource is a COM object the frame keeps alive until the list executes.
             unsafe {
-                NVSDK_NGX_Parameter_SetD3d12Resource(params, name.as_ptr(), resource.as_raw())
-            };
+                NVSDK_NGX_Parameter_SetD3d12Resource(params, name.as_ptr(), resource.as_raw());
+            }
         }
         let reset = crate::upscale_reset::consume(&self.reset);
         // SAFETY: `params` is the live bag.
