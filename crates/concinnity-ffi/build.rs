@@ -12,8 +12,8 @@ fn main() {
     generate_header();
 }
 
-// The header is the public API, so it lives beside the libraries an SDK ships
-// rather than in OUT_DIR where a packaging step cannot find it.
+// The header is the public API, so it lives in the workspace's top-level
+// include/ rather than in OUT_DIR where a host or packaging step cannot find it.
 #[expect(
     clippy::disallowed_methods,
     reason = "cargo passes build-script inputs through the environment"
@@ -21,7 +21,7 @@ fn main() {
 fn generate_header() {
     let crate_dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     let source = Path::new(&crate_dir).join("src/ffi.rs");
-    let out_dir = Path::new(&crate_dir).join("include");
+    let out_dir = Path::new(&crate_dir).join("../../include");
     let header = out_dir.join("concinnity.h");
 
     println!("cargo::rerun-if-changed=src/ffi.rs");

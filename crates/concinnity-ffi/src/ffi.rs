@@ -1,4 +1,4 @@
-// The extern "C" surface cbindgen turns into include/concinnity.h.
+// The extern "C" surface cbindgen turns into the workspace's include/concinnity.h.
 //
 // A world's lifecycle inside a view the host owns: open, step, close. That is
 // the shape a platform whose OS owns the run loop needs, because the engine
@@ -20,48 +20,56 @@ use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_host::store::paths::StateTree;
 use concinnity_runtime::{Runtime, StartupError};
 
-/// Why a `cn_` call failed, or [`Ok`](CnError::Ok) when it did not.
+/// Why a `cn_` call failed, or [`CN_SUCCESS`](CnError::CN_SUCCESS) when it did not.
 ///
 /// The engine reports a structured error with a cause chain to its Rust
 /// callers; a C host cannot hold one, so this is what a failure flattens to
 /// here, at the boundary, with the full chain going to the log.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    non_camel_case_types,
+    reason = "the variants are named as the C constants the header publishes"
+)]
 pub enum CnError {
     /// The call succeeded.
-    Ok = 0,
+    CN_SUCCESS = 0,
     /// A pointer argument was null, or a string was not UTF-8.
-    InvalidArgument = 1,
+    CN_INVALID_ARGUMENT = 1,
     /// `cn_init` has not run, so there is no host state to act on.
-    NotInitialized = 2,
+    CN_NOT_INITIALIZED = 2,
     /// The root names nothing a world can be read from.
-    NoWorldData = 3,
+    CN_NO_WORLD_DATA = 3,
     /// The world data is present but did not load.
-    UnreadableWorldData = 4,
+    CN_UNREADABLE_WORLD_DATA = 4,
     /// The world loaded but refused to start.
-    StartFailed = 5,
+    CN_START_FAILED = 5,
 }
 
 /// What one step of a world reports.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    non_camel_case_types,
+    reason = "the variants are named as the C constants the header publishes"
+)]
 pub enum CnStep {
     /// The world is running; step it again next refresh.
-    Continue = 0,
+    CN_CONTINUE = 0,
     /// The world reached its own end.
-    Done = 1,
+    CN_DONE = 1,
     /// The world asked to stop.
-    Stopped = 2,
+    CN_STOPPED = 2,
     /// No world is open, so there was nothing to step.
-    NoWorld = -1,
+    CN_NO_WORLD = -1,
 }
 
 impl From<StepResult> for CnStep {
     fn from(result: StepResult) -> Self {
         match result {
-            StepResult::Continue => Self::Continue,
-            StepResult::Done => Self::Done,
-            StepResult::Stop => Self::Stopped,
+            StepResult::Continue => Self::CN_CONTINUE,
+            StepResult::Done => Self::CN_DONE,
+            StepResult::Stop => Self::CN_STOPPED,
         }
     }
 }
@@ -97,7 +105,7 @@ pub extern "C" fn cn_init() {
 /// step, for a host that does not run an event loop of its own; pass 0 when
 /// the host dispatches input itself, which is the usual case.
 ///
-/// Replaces whatever world was open. Returns [`CnError::Ok`] on success, and
+/// Replaces whatever world was open. Returns [`CnError::CN_SUCCESS`] on success, and
 /// otherwise the code for why it failed, with the full cause chain logged.
 ///
 /// # Safety
@@ -113,18 +121,18 @@ pub unsafe extern "C" fn cn_world_open(
     // SAFETY: the caller's contract above; `ptr_to_string` handles null.
     let Some(root) = (unsafe { ptr_to_string(root) }) else {
         tracing::error!("cn_world_open: root is null or not UTF-8");
-        return CnError::InvalidArgument;
+        return CnError::CN_INVALID_ARGUMENT;
     };
     let Some(view) = NonNull::new(view) else {
         tracing::error!("cn_world_open: view is null");
-        return CnError::InvalidArgument;
+        return CnError::CN_INVALID_ARGUMENT;
     };
     let Some(state) = STATE.get() else {
         tracing::error!("cn_world_open: call cn_init first");
-        return CnError::NotInitialized;
+        return CnError::CN_NOT_INITIALIZED;
     };
     let Ok(mut state) = state.lock() else {
-        return CnError::NotInitialized;
+        return CnError::CN_NOT_INITIALIZED;
     };
 
     // Dropped before the new world is built, so the outgoing world's view is
@@ -138,7 +146,7 @@ pub unsafe extern "C" fn cn_world_open(
     match open_world(&root, surface) {
         Ok(world) => {
             state.world = Some(world);
-            CnError::Ok
+            CnError::CN_SUCCESS
         }
         Err(e) => {
             tracing::error!("cn_world_open: {}", chain(&e));
@@ -151,14 +159,14 @@ pub unsafe extern "C" fn cn_world_open(
 #[unsafe(no_mangle)]
 pub extern "C" fn cn_world_step() -> CnStep {
     let Some(state) = STATE.get() else {
-        return CnStep::NoWorld;
+        return CnStep::CN_NO_WORLD;
     };
     let Ok(mut state) = state.lock() else {
-        return CnStep::NoWorld;
+        return CnStep::CN_NO_WORLD;
     };
     match state.world.as_mut() {
         Some(world) => world.world_step().into(),
-        None => CnStep::NoWorld,
+        None => CnStep::CN_NO_WORLD,
     }
 }
 
@@ -190,12 +198,12 @@ enum OpenError {
 // since only the first is the host's to fix.
 fn code_for(e: &OpenError) -> CnError {
     match e {
-        OpenError::NotADirectory(_) => CnError::InvalidArgument,
+        OpenError::NotADirectory(_) => CnError::CN_INVALID_ARGUMENT,
         OpenError::Load(StartupError::MissingData { .. } | StartupError::NoStateRoot) => {
-            CnError::NoWorldData
+            CnError::CN_NO_WORLD_DATA
         }
-        OpenError::Load(_) => CnError::UnreadableWorldData,
-        OpenError::Start(_) => CnError::StartFailed,
+        OpenError::Load(_) => CnError::CN_UNREADABLE_WORLD_DATA,
+        OpenError::Start(_) => CnError::CN_START_FAILED,
     }
 }
 
@@ -264,32 +272,32 @@ mod tests {
 
     #[test]
     fn every_step_result_has_a_code() {
-        assert_eq!(CnStep::from(StepResult::Continue), CnStep::Continue);
-        assert_eq!(CnStep::from(StepResult::Done), CnStep::Done);
-        assert_eq!(CnStep::from(StepResult::Stop), CnStep::Stopped);
+        assert_eq!(CnStep::from(StepResult::Continue), CnStep::CN_CONTINUE);
+        assert_eq!(CnStep::from(StepResult::Done), CnStep::CN_DONE);
+        assert_eq!(CnStep::from(StepResult::Stop), CnStep::CN_STOPPED);
     }
 
     // A C caller compares against these integers, so they are the contract and
     // not an implementation detail.
     #[test]
     fn the_step_codes_are_the_ones_the_header_publishes() {
-        assert_eq!(CnStep::Continue as i32, 0);
-        assert_eq!(CnStep::Done as i32, 1);
-        assert_eq!(CnStep::Stopped as i32, 2);
-        assert_eq!(CnStep::NoWorld as i32, -1);
+        assert_eq!(CnStep::CN_CONTINUE as i32, 0);
+        assert_eq!(CnStep::CN_DONE as i32, 1);
+        assert_eq!(CnStep::CN_STOPPED as i32, 2);
+        assert_eq!(CnStep::CN_NO_WORLD as i32, -1);
     }
 
     #[test]
     fn stepping_with_no_world_open_says_so_rather_than_failing() {
         let _guard = host();
-        assert_eq!(cn_world_step(), CnStep::NoWorld);
+        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
     }
 
     #[test]
     fn closing_with_nothing_open_is_a_no_op() {
         let _guard = host();
         cn_world_close();
-        assert_eq!(cn_world_step(), CnStep::NoWorld);
+        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
     }
 
     #[test]
@@ -299,7 +307,7 @@ mod tests {
         // SAFETY: the root is the null this asks about; the view is a live
         // pointer, and the call returns before either is used.
         let opened = unsafe { cn_world_open(std::ptr::null(), some_view(&mut byte), 0) };
-        assert_eq!(opened, CnError::InvalidArgument);
+        assert_eq!(opened, CnError::CN_INVALID_ARGUMENT);
     }
 
     #[test]
@@ -310,7 +318,7 @@ mod tests {
         // SAFETY: `root` is a live NUL-terminated string; the null view is
         // what this asks about.
         let opened = unsafe { cn_world_open(root.as_ptr(), std::ptr::null_mut(), 0) };
-        assert_eq!(opened, CnError::InvalidArgument);
+        assert_eq!(opened, CnError::CN_INVALID_ARGUMENT);
     }
 
     #[test]
@@ -322,8 +330,8 @@ mod tests {
         let mut byte = 0u8;
         // SAFETY: both pointers are live for the call.
         let opened = unsafe { cn_world_open(root.as_ptr(), some_view(&mut byte), 0) };
-        assert_eq!(opened, CnError::InvalidArgument);
-        assert_eq!(cn_world_step(), CnStep::NoWorld);
+        assert_eq!(opened, CnError::CN_INVALID_ARGUMENT);
+        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
     }
 
     // A directory with no `data/` in it has no world to load, which fails
@@ -336,8 +344,8 @@ mod tests {
         let mut byte = 0u8;
         // SAFETY: both pointers are live for the call.
         let opened = unsafe { cn_world_open(root.as_ptr(), some_view(&mut byte), 0) };
-        assert_eq!(opened, CnError::NoWorldData);
-        assert_eq!(cn_world_step(), CnStep::NoWorld);
+        assert_eq!(opened, CnError::CN_NO_WORLD_DATA);
+        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
     }
 
     // The refusal carries the load failure's own text, so a host's log says
@@ -355,7 +363,7 @@ mod tests {
         let logged = chain(&error);
         assert!(logged.contains("concinnity build"), "{logged}");
         assert!(logged.contains(&tree.root_path()), "{logged}");
-        assert_eq!(code_for(&error), CnError::NoWorldData);
+        assert_eq!(code_for(&error), CnError::CN_NO_WORLD_DATA);
     }
 
     // A C caller compares against these integers, so they are the contract and
@@ -363,12 +371,12 @@ mod tests {
     // write `if (cn_world_open(...))`.
     #[test]
     fn the_error_codes_are_the_ones_the_header_publishes() {
-        assert_eq!(CnError::Ok as i32, 0);
-        assert_eq!(CnError::InvalidArgument as i32, 1);
-        assert_eq!(CnError::NotInitialized as i32, 2);
-        assert_eq!(CnError::NoWorldData as i32, 3);
-        assert_eq!(CnError::UnreadableWorldData as i32, 4);
-        assert_eq!(CnError::StartFailed as i32, 5);
+        assert_eq!(CnError::CN_SUCCESS as i32, 0);
+        assert_eq!(CnError::CN_INVALID_ARGUMENT as i32, 1);
+        assert_eq!(CnError::CN_NOT_INITIALIZED as i32, 2);
+        assert_eq!(CnError::CN_NO_WORLD_DATA as i32, 3);
+        assert_eq!(CnError::CN_UNREADABLE_WORLD_DATA as i32, 4);
+        assert_eq!(CnError::CN_START_FAILED as i32, 5);
     }
 
     // Data that is absent and data that is present but unusable are different
@@ -385,19 +393,19 @@ mod tests {
 
         assert_eq!(
             code_for(&OpenError::Load(StartupError::MissingData { blob })),
-            CnError::NoWorldData
+            CnError::CN_NO_WORLD_DATA
         );
         assert_eq!(
             code_for(&OpenError::Load(StartupError::NoStateRoot)),
-            CnError::NoWorldData
+            CnError::CN_NO_WORLD_DATA
         );
         assert_eq!(
             code_for(&OpenError::Load(unreadable)),
-            CnError::UnreadableWorldData
+            CnError::CN_UNREADABLE_WORLD_DATA
         );
         assert_eq!(
             code_for(&OpenError::Start(WorldError::AlreadyStarted)),
-            CnError::StartFailed
+            CnError::CN_START_FAILED
         );
     }
 
