@@ -227,6 +227,11 @@ impl WorldBuilder {
     }
 
     /// Compile every declared asset into a runnable [`World`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the declared world fails validation or an asset
+    /// fails to compile.
     pub fn compile(&self) -> Result<World, WorldBuildError> {
         let mut result = self.build()?;
 
@@ -259,6 +264,11 @@ impl WorldBuilder {
     /// Compile every declared asset and write it to the blob file at `path`.
     /// Payloads too large for one blob spill into siblings named by index, so
     /// a world written to `data/0` may also write `data/1`, `data/2`, ...
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the declared world fails validation, an asset fails
+    /// to compile, or a blob file cannot be written.
     pub fn write_blob(&self, path: impl AsRef<Path>) -> Result<(), WorldBuildError> {
         let result = self.build()?;
         write_blobs_to(&result, path.as_ref()).map_err(|e| from_io(&e))?;

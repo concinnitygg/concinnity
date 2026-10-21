@@ -131,6 +131,11 @@ impl<D: PostPassDevice + ?Sized> PostDraw<'_, '_, D> {
     /// Whether the draw hands over exactly the sources and constants `declared`
     /// says its program binds. A mismatch would bind a slot the shader does not
     /// read or leave one it does read unbound.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the draw's sources or constants do not match
+    /// `declared`.
     pub fn check(&self, declared: PostProgramBindings) -> RenderResult<()> {
         if self.binds.len() == declared.textures && self.constants.len() == declared.constants {
             return Ok(());
@@ -195,6 +200,10 @@ pub trait PostPassDevice {
     ///
     /// A program that declares the reflection-probe set gets the backend's own
     /// probe bindings laid out after its declared ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend fails to build the pipeline.
     fn create_pipeline(
         &self,
         program: PostProgram,
@@ -207,6 +216,10 @@ pub trait PostPassDevice {
     /// than pooled because a temporal pass's accumulation buffers must survive
     /// the frame that wrote them, which is exactly what the transient pool's
     /// aliaser is free to break.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend fails to create the target.
     fn create_target(
         &self,
         label: &'static str,
@@ -223,8 +236,11 @@ pub trait PostPassDevice {
     fn target_attachment<'a>(&self, target: &'a Self::Target) -> Self::Attachment<'a>;
 
     /// Bind mip `level` of `target` on its own as a sampled source, so a draw
-    /// can read one level while it writes the next. Fails when the target has
-    /// no such level.
+    /// can read one level while it writes the next.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target has no mip `level`.
     fn target_level_ref<'a>(
         &self,
         target: &'a Self::Target,
@@ -233,8 +249,11 @@ pub trait PostPassDevice {
 
     /// Name mip `level` of `target` as a draw's color attachment, sized to that
     /// level. A [`PostTargetState::Pass`] draw moves only that level into the
-    /// render state and back, so the target's other levels stay readable. Fails
-    /// when the target has no such level.
+    /// render state and back, so the target's other levels stay readable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target has no mip `level`.
     fn target_level_attachment<'a>(
         &self,
         target: &'a Self::Target,
@@ -246,11 +265,20 @@ pub trait PostPassDevice {
     /// When the pipeline's program declares the reflection-probe set, the
     /// device binds the one the world holds this frame: the probe records and
     /// the cube array together, which no pass chooses between.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the draw does not match its program's bindings or
+    /// cannot be recorded.
     fn encode(&self, rec: &Self::Recorder, draw: &PostDraw<'_, '_, Self>) -> RenderResult<()>;
 }
 
 /// Whether a target created with `levels` mip levels has a mip `level`: the one
 /// check every backend's level addressing makes before it indexes a view.
+///
+/// # Errors
+///
+/// Returns an error if the target has no mip `level`.
 pub fn check_level(label: &str, level: u32, levels: u32) -> RenderResult<()> {
     if level < levels.max(1) {
         return Ok(());

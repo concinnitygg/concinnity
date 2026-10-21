@@ -21,8 +21,12 @@ pub struct WorldJsonlAsset {
 
 impl WorldJsonlAsset {
     /// Build a typed entry from a loaded JSON asset object, moving its `$id`
-    /// out of the args. Fails, naming the asset, when it carries no `$id` or
-    /// `type` is not an exact registered name.
+    /// out of the args.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, naming the asset, if it carries no `$id` or `type` is
+    /// not an exact registered name.
     pub fn from_value(v: &serde_json::Value) -> Result<Self, String> {
         let type_str = v.get("type").and_then(|t| t.as_str());
         let mut args = v
@@ -75,6 +79,11 @@ fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
 
 /// Read `src_path`, apply a fallible mutation to the asset list, and write
 /// the result to `dst_path`. src and dst may be the same path or different.
+///
+/// # Errors
+///
+/// Returns an error if `src_path` cannot be read or parsed, `f` fails, or the
+/// result cannot be written to `dst_path`.
 pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>) -> std::io::Result<()>,
@@ -96,20 +105,14 @@ where
     std::fs::write(dst_path, write_world_jsonl(&assets)?)
 }
 
-/// Read world.jsonl at `json_path`, mutate the asset list in-place, write back.
-pub fn patch_world_jsonl<F>(json_path: &str, f: F) -> std::io::Result<()>
-where
-    F: FnOnce(&mut Vec<serde_json::Value>),
-{
-    patch_world_jsonl_to(json_path, json_path, |assets| {
-        f(assets);
-        Ok(())
-    })
-}
-
 /// Read every entry's handle from world.jsonl without a full parse, for error
 /// messages: its `$id`, else its `<Type>#<ordinal>` label, counted over the
 /// world with its includes resolved.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or parsed, or an include does
+/// not resolve.
 pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let content = std::fs::read_to_string(json_path)?;

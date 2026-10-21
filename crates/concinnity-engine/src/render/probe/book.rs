@@ -88,7 +88,7 @@ impl ProbeBook {
     /// Install the probe at `index`, whose cube has finished baking, so the
     /// shaders read its record. Only the next probe in placement order can
     /// install: anything else would pair a record with another probe's cube.
-    pub fn install(&mut self, index: usize) -> RenderResult<ProbeProgress> {
+    pub(crate) fn install(&mut self, index: usize) -> RenderResult<ProbeProgress> {
         let next = self.records.len();
         let placement = self.placements.get(index).filter(|_| index == next);
         let placement = placement.ok_or_else(|| {

@@ -37,15 +37,13 @@ enum AppStatus {
     Started,
 }
 
-/// A world and the headless loop that runs it.
+/// A world and the headless loop that runs it, driven through [`Driver`].
 ///
-/// [`run`](App::run) drives the world until a system stops it or its last
-/// system finishes; [`run_for`](App::run_for) is the bounded form, for a test
-/// or a tool that wants a known number of ticks. Both start the world if the
-/// caller has not.
+/// [`Driver::run`] drives the world until a system stops it or its last system
+/// finishes, starting it first if the caller has not.
 ///
 /// In dev builds the loop holds itself to a steady state of no allocation per
-/// tick, which is asserted rather than assumed. See [`run`](App::run).
+/// tick, which is asserted rather than assumed.
 pub struct App {
     world: World,
     // The systems the world is started with. A host that contributes none runs
@@ -104,7 +102,7 @@ impl App {
     /// Build the world's systems and run their `init`. Runs once: a second
     /// call is [`AlreadyStarted`](WorldError::AlreadyStarted) rather than a
     /// second `init` over the running world.
-    pub fn start(&mut self) -> Result<(), WorldError> {
+    pub(crate) fn start(&mut self) -> Result<(), WorldError> {
         if self.status != AppStatus::Created {
             return Err(WorldError::AlreadyStarted);
         }
@@ -123,7 +121,7 @@ impl App {
     /// counters behind that are process-wide, so the check stands down where it
     /// cannot trust them: where no binary installed the tracking allocator, and
     /// where another thread is allocating alongside the loop.
-    pub fn run(&mut self) -> Result<StepResult, WorldError> {
+    pub(crate) fn run(&mut self) -> Result<StepResult, WorldError> {
         self.start_if_created()?;
         loop {
             let result = self.tick();
@@ -136,7 +134,8 @@ impl App {
     /// Step at most `ticks` times, returning what the last tick reported:
     /// `Continue` when the full count ran, `Stop` or `Done` when the world
     /// ended the run early. The bounded form of [`run`](App::run).
-    pub fn run_for(&mut self, ticks: u64) -> Result<StepResult, WorldError> {
+    #[cfg(test)]
+    pub(crate) fn run_for(&mut self, ticks: u64) -> Result<StepResult, WorldError> {
         self.start_if_created()?;
         let mut result = StepResult::Continue;
         for _ in 0..ticks {

@@ -71,10 +71,18 @@ pub struct PlanetChunk {
 /// nothing to install.
 pub trait DrawStreaming: SceneHost {
     /// Release a texture slot's image, leaving a 1x1 placeholder in the slot so
-    /// a draw still holding the handle has something to sample. `Err` when the
-    /// slot is out of range.
+    /// a draw still holding the handle has something to sample.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the slot is out of range.
     fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
     /// Replace a texture slot's image after a streaming upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the slot is out of range or the image cannot be
+    /// uploaded.
     fn update_texture_slot(
         &mut self,
         slot: usize,
@@ -84,12 +92,22 @@ pub trait DrawStreaming: SceneHost {
     /// Return a streamed mesh's vertex / index regions to the sub-allocators
     /// and mark the draw slot non-resident. The regions are held against
     /// `retire_frame`, so a frame still in flight cannot have them reused
-    /// underneath it. `Err` when the slot is out of range.
+    /// underneath it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if the
+    /// slot is out of range.
     fn evict_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()> {
         self.edit_geometry(&mut |scene, writer| scene.evict_mesh(draw_idx, retire_frame, writer))
             .unwrap_or(Err(RenderError::Unsupported { op: "evict_mesh" }))
     }
     /// Upload a streamed mesh's geometry into a draw slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if the
+    /// slot is out of range or the geometry does not fit the shared buffers.
     fn upload_mesh(
         &mut self,
         draw_idx: DrawIndex,
@@ -125,6 +143,10 @@ pub trait DrawStreaming: SceneHost {
 
     /// Voxel-world chunk streaming: grow the shared geometry buffers by the
     /// chunk headroom. A chunk's material slots ride its own draw record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the geometry buffers cannot be grown.
     fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
@@ -133,6 +155,11 @@ pub trait DrawStreaming: SceneHost {
     /// The destination draw slot comes from the engine's allocator, like
     /// `clone_static_draw_object`; the freed slot is likewise returned to it by
     /// the caller of `remove_chunk_mesh`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if the
+    /// geometry does not fit the shared buffers.
     fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
@@ -144,6 +171,11 @@ pub trait DrawStreaming: SceneHost {
             }))
     }
     /// Free a streamed chunk's geometry, retiring it after `retire_frame`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `draw_idx` names no streamed chunk.
     fn remove_chunk_mesh(&mut self, draw_idx: DrawIndex, retire_frame: u64) -> RenderResult<()> {
         self.edit_geometry(&mut |scene, writer| {
             scene.remove_chunk_mesh(draw_idx, retire_frame, writer)
@@ -153,6 +185,11 @@ pub trait DrawStreaming: SceneHost {
         }))
     }
     /// Move a streamed chunk by replacing its placement matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `draw_idx` is out of range.
     fn set_chunk_model(&mut self, draw_idx: DrawIndex, model: [[f32; 4]; 4]) -> RenderResult<()> {
         match self.scene_mut() {
             Some(scene) => scene.set_chunk_model(draw_idx, model),
@@ -176,6 +213,11 @@ pub trait DrawStreaming: SceneHost {
     /// at runtime; moving copies (the common case) opt out of the static BVH
     /// exactly like streamed chunks and held items. Without a scene this is
     /// [`RenderError::Unsupported`], which the spawn path logs and skips.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `src_draw_idx` names no draw object.
     fn clone_static_draw_object(
         &mut self,
         src_draw_idx: DrawIndex,
@@ -203,6 +245,10 @@ pub trait DrawStreaming: SceneHost {
     /// Default no-op-with-Ok: a backend that renders every draw with the world
     /// default program has no per-bucket pipeline to build, and the bucket is
     /// resident as far as scene loading is concerned.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pipeline fails to build.
     fn install_world_shader(
         &mut self,
         bucket: u32,

@@ -36,7 +36,7 @@ struct AppMeta {
 
 /// How an exported bundle is written to the output directory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BundleFormat {
+pub(crate) enum BundleFormat {
     /// The bundle archived to a `.zip`.
     #[default]
     Zip,
@@ -46,7 +46,7 @@ pub enum BundleFormat {
 
 /// What [`export`] packages and where it writes the result.
 #[derive(Clone, Debug, Default)]
-pub struct ExportOptions {
+pub(crate) struct ExportOptions {
     /// The world JSONL to build; discovered from `worlds/` when `None`.
     pub world: Option<String>,
     /// Overrides the application name the world's `AppConfig` declares.
@@ -65,7 +65,7 @@ pub struct ExportOptions {
 
 /// Package a built world into a distributable bundle: the player binary and the
 /// blob, written to `options.out` as a zip or a directory.
-pub fn export(options: &ExportOptions) -> io::Result<()> {
+pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
     let ExportOptions {
         world,
         name,

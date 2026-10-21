@@ -23,7 +23,7 @@ pub struct DensityMask {
 impl DensityMask {
     /// A mask of `texels`, or an error when it is empty, past
     /// [`MAX_MASK_SIZE`], or the wrong size.
-    pub fn new(width: u32, height: u32, texels: Vec<u8>) -> Result<Self, String> {
+    pub(crate) fn new(width: u32, height: u32, texels: Vec<u8>) -> Result<Self, String> {
         if width == 0 || height == 0 {
             return Err("a density mask needs at least one texel".into());
         }
@@ -47,6 +47,11 @@ impl DensityMask {
     }
 
     /// The red channel of a decoded RGBA8 image as a mask.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the image is empty, too short for its dimensions, or
+    /// past [`MAX_MASK_SIZE`].
     pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Self, String> {
         Self::new(width, height, red_channel(width, height, rgba)?)
     }

@@ -226,6 +226,11 @@ impl WorldBuilder {
     }
 
     /// Compile every declared asset into a runnable [`World`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the declared world fails validation or an asset
+    /// fails to compile.
     pub fn compile(&self) -> Result<World, crate::Error> {
         self.0
             .compile()
@@ -237,6 +242,11 @@ impl WorldBuilder {
     /// Payloads too large for one blob spill into siblings named by index, so
     /// a world written to `data/0` may also write `data/1`, `data/2`, ...
     /// [`App::from_blob`](crate::App::from_blob) reads that layout back.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the declared world fails validation, an asset fails
+    /// to compile, or a blob file cannot be written.
     pub fn write_blob(&self, path: impl AsRef<Path>) -> Result<(), crate::Error> {
         self.0.write_blob(path).map_err(error::from_cook)
     }

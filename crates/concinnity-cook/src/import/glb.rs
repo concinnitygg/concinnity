@@ -97,6 +97,11 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
 /// a path with a directory component is read as written. Shared by the skinned
 /// and static importers; the desugar pass uses this directly so it can memoize
 /// one document across many primitive/material/image lookups.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, is not a valid glTF, or a
+/// buffer cannot be resolved.
 pub fn parse_glb(source: &str, assets_dir: Option<&Path>) -> Result<GltfDoc, String> {
     GltfDoc::parse_file(&resolve_source(source, assets_dir))
 }
@@ -612,6 +617,11 @@ pub(crate) fn import_glb_animations_from_doc(
 /// `animation_index`. Used by the asset hot-reload pass to mirror the
 /// desugar pass's selection logic exactly so a reload picks the same clip
 /// the build chose at compile time.
+///
+/// # Errors
+///
+/// Returns an error if the document's animations cannot be imported, or no clip
+/// matches the name or index.
 pub fn import_glb_animation_from_doc(
     doc: &GltfDoc,
     source: &str,

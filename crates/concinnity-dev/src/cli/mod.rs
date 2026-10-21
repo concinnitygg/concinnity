@@ -43,6 +43,10 @@ impl Invocation {
     }
 
     /// Run the command the arguments named, against `tree`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error the command failed with.
     pub fn dispatch(&self, tree: &concinnity_host::store::paths::StateTree) -> std::io::Result<()> {
         dispatch::dispatch(&self.0, tree)
     }

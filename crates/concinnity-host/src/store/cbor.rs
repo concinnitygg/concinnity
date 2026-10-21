@@ -19,12 +19,16 @@ pub fn read<T: serde::de::DeserializeOwned>(path: &Path, what: &str) -> Option<T
 }
 
 /// Write `value` to `path` as CBOR, creating the parent directory as needed.
+///
+/// # Errors
+///
+/// Returns an error if `value` does not encode or the file cannot be written.
 pub fn write<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     super::atomic::replace_durable(path, &encode(value)?)
 }
 
 /// `value` as the CBOR bytes `write` stores, for a caller that writes elsewhere.
-pub fn encode<T: serde::Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
+pub(crate) fn encode<T: serde::Serialize>(value: &T) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     ciborium::into_writer(value, &mut bytes).map_err(std::io::Error::other)?;
     Ok(bytes)

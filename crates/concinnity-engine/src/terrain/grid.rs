@@ -25,6 +25,10 @@ impl TerrainGrid {
     /// A grid of `heights` over `extent`, or an error naming what does not fit:
     /// a resolution under one cell, a non-positive extent, the wrong number of
     /// heights, or a height that is not a finite number.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming what does not fit.
     pub fn new(resolution: u32, extent: [f32; 2], heights: Vec<f32>) -> Result<Self, String> {
         if resolution == 0 {
             return Err("a terrain grid needs at least one cell".into());

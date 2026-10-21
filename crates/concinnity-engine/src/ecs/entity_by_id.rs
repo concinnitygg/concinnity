@@ -149,7 +149,7 @@ impl PipelineContext<'_> {
     }
 
     /// The next id from the world's shared minted counter.
-    pub fn mint_id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
+    pub(crate) fn mint_id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
         #[cfg(debug_assertions)]
         crate::ecs::access_check::touch(crate::ecs::access_check::Touch::Structural {
             op: "mint_id",

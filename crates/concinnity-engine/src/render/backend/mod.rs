@@ -197,6 +197,11 @@ pub trait RenderBackend:
     /// away from the draw.
     fn pump_events(&mut self) {}
     /// Per-frame drive. See [`FrameParams`] for the inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if recording, submitting, or presenting the frame
+    /// fails.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
     /// Block until every frame capture asked of [`Self::draw_frame`] so far is
     /// written to disk or has failed. Waits for the GPU first.

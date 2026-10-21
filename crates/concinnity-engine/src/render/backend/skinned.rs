@@ -38,6 +38,10 @@ pub trait SkinnedDraws: SceneHost {
     /// Upload the world's skinned geometry and draw objects, once at load. The
     /// skinned pipelines pair the world default Shader's programs where the
     /// world declares one, which the backend kept from init.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the skinned buffers or pipelines cannot be created.
     fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
@@ -64,6 +68,10 @@ pub trait SkinnedDraws: SceneHost {
     /// `upload_skinned`: `morphs[i]` belongs to draw object `i` (instance
     /// copies share their template's data via the `Arc`). Default: nothing to
     /// attach, for a backend without a morph deformation path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the morph buffers cannot be created.
     fn upload_skinned_morphs(
         &mut self,
         _morphs: &[Option<alloc::sync::Arc<crate::gfx::mesh_payload::PayloadMorphs>>],

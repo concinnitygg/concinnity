@@ -72,8 +72,12 @@ pub struct RepackedGeometry {
 
 /// Repack the shared static vertex and index buffers, replacing the geometry
 /// of each draw named in `changes` and copying every other draw from the old
-/// buffers. Errors when a draw's recorded region lies outside the old buffers,
-/// or when the result would leave either buffer empty.
+/// buffers.
+///
+/// # Errors
+///
+/// Returns an error if a draw's recorded region lies outside the old buffers,
+/// or the result would leave either buffer empty.
 pub fn repack_static_geometry(
     objects: &[DrawObject],
     old_vertices: &[Vertex],

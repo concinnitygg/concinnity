@@ -81,6 +81,11 @@ pub struct RunOptions {
 /// `tree`'s `data/`, written by a prior `cn build`. No debug server, no
 /// command channel: a shipped run is neither remotely inspectable nor
 /// remotely driven.
+///
+/// # Errors
+///
+/// Returns an error if the world in `data/` cannot be loaded or the runtime
+/// fails to start.
 pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
     init_logging();
 
@@ -128,6 +133,11 @@ fn load_world(runtime: &mut Runtime, source: &BlobSource) -> Result<(), StartupE
 /// missing blob is a hard error rather than a silent no-op -- a packaged app
 /// without its data cannot do anything useful. The concinnity-run binary
 /// calls this.
+///
+/// # Errors
+///
+/// Returns an error if the world in `blob` cannot be loaded or the runtime
+/// fails to start.
 pub fn run_from(tree: &StateTree, blob: &BlobSource) -> std::io::Result<()> {
     init_logging();
 

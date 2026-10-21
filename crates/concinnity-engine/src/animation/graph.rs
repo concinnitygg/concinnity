@@ -317,7 +317,7 @@ impl AnimationGraph {
     /// problems (unknown names, missing clips, non-positive rates) are
     /// reported as errors; the build validates the same rules earlier, so a
     /// runtime failure here means the world blob and the clip list disagree.
-    pub fn compile(
+    pub(crate) fn compile(
         &self,
         resolve_clip: impl Fn(AssetId) -> Option<(usize, f32, bool)>,
     ) -> Result<CompiledGraph, String> {

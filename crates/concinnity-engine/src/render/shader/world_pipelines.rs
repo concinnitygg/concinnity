@@ -59,9 +59,12 @@ pub struct BucketPlan<'a> {
 
 impl<'a> BucketPlan<'a> {
     /// The plan for `shaders`, indexed by `ShaderHandle` value with the world
-    /// default at 0. Fails when the buckets exceed what a cull dispatch can
-    /// route between: [`MAX_SHADER_BUCKETS`], the default's two twins counted
-    /// as one.
+    /// default at 0.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the buckets exceed what a cull dispatch can route
+    /// between: [`MAX_SHADER_BUCKETS`], the default's two twins counted as one.
     pub fn new(shaders: &[WorldShader<'a>]) -> RenderResult<Self> {
         let mut sources: Vec<BucketSource<'a>> = shaders
             .iter()
@@ -140,6 +143,10 @@ impl<P> WorldPipelines<P> {
 
     /// The table for `plan`, each bucket past the default built by `build`
     /// unless its Shader is deferred.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error `build` returns.
     pub fn build<E>(
         plan: &BucketPlan<'_>,
         mut build: impl FnMut(usize, &BucketSource<'_>) -> Result<P, E>,
@@ -192,6 +199,10 @@ impl<P> WorldPipelines<P> {
     /// The slot holding `bucket`'s pipeline. A bucket outside the table is a
     /// scene-authoring mistake, not a device failure, so it errors as
     /// [`RenderError::Other`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Other`] if `bucket` is 0 or past the table.
     pub fn slot(&self, bucket: u32) -> RenderResult<usize> {
         let slot = (bucket as usize).checked_sub(1).ok_or_else(|| {
             RenderError::Other("shader bucket 0 is the world default program".to_string())
@@ -222,6 +233,10 @@ impl<P> WorldPipelines<P> {
     }
 
     /// Install `pipeline` for `bucket`, handing back the one it displaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bucket` is 0 or past the table.
     pub fn install(&mut self, bucket: u32, pipeline: P) -> RenderResult<Option<P>> {
         let slot = self.slot(bucket)?;
         Ok(self.slots[slot].replace(pipeline))
@@ -249,6 +264,11 @@ impl<P> WorldPipelines<P> {
 /// shading without one, so a rebuild that also lacks it replaces it; a rebuild
 /// that would drop a pre-pass the bucket draws with is refused, so the caller
 /// keeps the live pair.
+///
+/// # Errors
+///
+/// Returns [`RenderError::ShaderCompile`] if the rebuild would drop a pre-pass
+/// the live bucket draws with.
 pub fn check_rebuild(bucket: usize, live_prepass: bool, fresh_prepass: bool) -> RenderResult<()> {
     if fresh_prepass || !live_prepass {
         Ok(())
@@ -262,6 +282,11 @@ pub fn check_rebuild(bucket: usize, live_prepass: bool, fresh_prepass: bool) -> 
 /// The pair that replaces a live shader bucket's: `prepared` when it passes
 /// [`check_rebuild`], otherwise one from `build`, which must pass it too.
 /// `has_prepass` reads whether a pair has its G-buffer pre-pass.
+///
+/// # Errors
+///
+/// Returns an error if `build` fails or its pair does not pass
+/// [`check_rebuild`].
 pub fn replace_bucket<P>(
     bucket: usize,
     live_prepass: bool,

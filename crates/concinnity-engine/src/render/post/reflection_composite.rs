@@ -81,6 +81,10 @@ pub struct ReflectionCompositePipelines<Pipeline> {
 }
 
 /// Build both pipelines on their own, without touching the targets.
+///
+/// # Errors
+///
+/// Returns an error if a pipeline fails to build.
 pub fn build_pipelines<D: PostPassDevice>(
     device: &D,
 ) -> RenderResult<ReflectionCompositePipelines<D::Pipeline>> {
@@ -114,6 +118,10 @@ pub struct ReflectionCompositePass<Pipeline, Target> {
 impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
     /// Build both pipelines and both targets for a render resolution of
     /// `extent`, with the blur divided by `blur_scale`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a pipeline or target cannot be created.
     pub fn new<D>(device: &D, blur_scale: u32, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -140,6 +148,10 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
 
     /// Recreate both targets for a new render resolution, keeping the old pair
     /// if either fails. The caller has already idled the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either target cannot be created.
     pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -160,6 +172,10 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
     /// keeping the old blur if creation fails. Returns whether it was recreated,
     /// which is only when [`Self::blur_scale_differs`]. The caller has already
     /// idled the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new blur target cannot be created.
     pub fn set_blur_scale<D>(
         &mut self,
         device: &D,
@@ -185,6 +201,10 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
     }
 
     /// Encode the blur, then the composite into [`Self::output`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode<'t, D>(
         &'t self,
         device: &D,

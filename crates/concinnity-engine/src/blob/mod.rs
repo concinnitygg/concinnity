@@ -45,7 +45,8 @@ mod schema;
 pub use cache::{CACHE_MAGIC, CACHE_SEGMENT_VERSION, CacheEntry, CacheEntryKind, CacheMeta};
 pub use encode::{encode_cnb, encode_cnb_prefix};
 pub use error::BlobError;
-pub use frame::{FrameError, decode_exact};
+pub use frame::FrameError;
+pub(crate) use frame::decode_exact;
 pub use kind::BlobKind;
 pub use parse::{parse_cnb, parse_payload_section_start, payload_section};
 pub use schema::{

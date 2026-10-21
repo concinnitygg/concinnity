@@ -56,6 +56,11 @@ impl App {
     /// App::from_blob("data/0")?.run()
     /// # }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no blob exists at `path`, it does not load, or it is
+    /// a single-file package of a world that needs overflow blobs.
     #[cfg(feature = "std")]
     pub fn from_blob(path: impl AsRef<Path>) -> Result<Self, Error> {
         concinnity_runtime::Runtime::from_blob(path.as_ref())
@@ -147,6 +152,8 @@ impl App {
     /// A world with nothing to draw, or a machine that cannot render, has no
     /// window to close and no clock to follow: the world steps on a fixed
     /// virtual timestep, as fast as the host can step it.
+    ///
+    /// # Errors
     ///
     /// Returns an error when a world meant to be seen could not build its
     /// renderer on a machine that has a GPU.

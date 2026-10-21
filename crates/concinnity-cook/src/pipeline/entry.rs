@@ -27,6 +27,11 @@ use crate::authoring::world::WorldJsonlAsset;
 /// in its `data/`. The whole-tree entry point; a host that builds against
 /// unrelated directories calls
 /// [`prepare_world`](crate::build_only::prepare_world) + [`build_compiled`].
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, the world fails validation, or
+/// compiling or writing it fails.
 pub fn build_from_path(
     tree: &crate::paths::StateTree,
     json_path: &str,
@@ -71,6 +76,11 @@ pub struct ThumbnailReport {
 /// [`prepare_world`](crate::build_only::prepare_world) against the tree's
 /// `assets/`, and write its blobs and lock into `tree`. The tail of
 /// [`build_from_path`], for a host that reports validation errors itself.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to compile or the outputs cannot be
+/// written.
 pub fn build_loaded(
     tree: &crate::paths::StateTree,
     loaded: crate::build_only::LoadedWorld,
@@ -89,7 +99,7 @@ pub fn build_loaded(
 /// Every overflow payload blob is written as its sibling named by index, which
 /// is the layout the runtime reads back. No lock file and no thumbnails: this
 /// is the blob output alone.
-pub fn write_blobs_to(
+pub(crate) fn write_blobs_to(
     result: &PipelineResult,
     primary: &Path,
 ) -> std::io::Result<crate::blob::PackResult> {
@@ -111,6 +121,10 @@ pub fn write_blobs_to(
 /// editor. The lock records each asset under its real name plus every
 /// injected default with its full args. The report's `injected` is left for
 /// the caller, which holds the loaded world.
+///
+/// # Errors
+///
+/// Returns an error if a blob or the lock file cannot be written.
 pub fn write_build_outputs(
     tree: &crate::paths::StateTree,
     result: &PipelineResult,
@@ -170,6 +184,10 @@ pub fn write_build_outputs(
 /// blobs. Loads, expands, and validates the world (`crate::build_only::prepare_world`),
 /// then compiles it. `assets_dir` is the asset search root a bare `source`
 /// filename is searched under.
+///
+/// # Errors
+///
+/// Returns an error if the world fails validation or an asset fails to compile.
 pub fn build_pipeline_from_str(
     content: &str,
     assets_dir: Option<&Path>,
@@ -185,6 +203,10 @@ pub fn build_pipeline_from_str(
 /// the assets have passed `crate::build_only::prepare_world`, which should have been
 /// given the same `assets_dir`: an asset resolves its source the same way in
 /// both halves.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to import or compile.
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
@@ -195,6 +217,10 @@ pub fn build_compiled(
 
 /// [`build_compiled`] reporting the import and compile stages through
 /// `progress`.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to import or compile.
 pub fn build_compiled_with_progress(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,

@@ -39,6 +39,11 @@ type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 /// id either indexes a `Some(slot)` (solid) or `None` (air). The chunk origin
 /// is at the local-space origin (`0,0,0` corner); the far corner is at
 /// `(dx*block_size, dy*block_size, dz*block_size)`.
+///
+/// # Errors
+///
+/// Returns an error if `blocks` does not match `dim` or a block id is outside
+/// `palette`.
 pub fn build_voxel_mesh(
     dim: [u32; 3],
     block_size: f32,

@@ -107,6 +107,10 @@ impl SystemTable {
     /// table nor `order` holds, an entry with no gate description, an
     /// `init_first` name that is no entry, or entries of `order` held out of
     /// their relative order here. A table may hold a subset of `order`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the first problem found.
     #[cfg(any(test, feature = "test-support"))]
     pub fn check(&self, order: &[SystemEntry]) -> Result<(), alloc::string::String> {
         use alloc::format;
@@ -175,6 +179,11 @@ impl SystemTable {
 
     /// [`check`](Self::check), and every entry of `order` is held: what a
     /// host table owes the full core list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the first problem [`check`](Self::check) finds
+    /// or the first entry of `order` the table drops.
     #[cfg(any(test, feature = "test-support"))]
     pub fn check_complete(&self, order: &[SystemEntry]) -> Result<(), alloc::string::String> {
         self.check(order)?;

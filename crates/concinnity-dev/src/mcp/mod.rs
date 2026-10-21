@@ -34,7 +34,7 @@ pub(crate) use app::AppServer;
 
 /// Serve MCP over stdin and stdout until the client closes stdin, forwarding
 /// tool calls to the app on `port`.
-pub fn run(port: u16) -> std::io::Result<()> {
+pub(crate) fn run(port: u16) -> std::io::Result<()> {
     eprintln!("[mcp] forwarding tool calls to {}", remote::endpoint(port));
     let server = server::Server::new(bridge::Forward::new(port));
     let stdin = std::io::stdin();

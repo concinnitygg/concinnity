@@ -48,6 +48,10 @@ pub enum DeferredMeshPayload {
 
 /// Decode a compiled mesh payload into LOD0 geometry (streamed draws strip
 /// their LOD alternates, so only LOD0 is ever uploaded).
+///
+/// # Errors
+///
+/// Returns an error if the payload does not deserialize.
 pub fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
     let (vertices, indices, _) = mesh_payload::deserialize_with_lods(bytes)?;
     Ok(DecodedMesh { vertices, indices })
@@ -81,6 +85,10 @@ pub fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {
 /// Inverse of [`encode_mesh`]: decode one scratch record. Errors rather than
 /// panics on a truncated record, so a corrupt scratch file fails the load
 /// loudly instead of reading out of bounds.
+///
+/// # Errors
+///
+/// Returns an error if the record is truncated.
 pub fn decode_mesh(bytes: &[u8]) -> Result<DecodedMesh, String> {
     const VERTEX_BYTES: usize = size_of::<Vertex>();
 

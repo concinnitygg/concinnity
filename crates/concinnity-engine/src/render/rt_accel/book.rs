@@ -167,6 +167,11 @@ impl<B, I> AccelBook<B, I> {
     /// The book over `blas`, built from `seed`: one per seed object, then one per
     /// seed cluster. `albedo_count` is the shared texture pool's real-texture
     /// count the geometry table resolves texture indices against.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `blas` does not hold one BLAS per seed object and
+    /// cluster.
     pub fn new(
         seed: &SeedSet<'_>,
         blas: Vec<B>,
@@ -536,6 +541,11 @@ impl<B, I> AccelBook<B, I> {
     /// Whether `fresh` holds a BLAS for every slot `refresh` builds, and the plan
     /// still matches the head, so [`Self::commit_refresh`] will apply it. Call it
     /// before recording builds the commit must follow.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `fresh` does not match the plan or the plan no
+    /// longer matches the head.
     pub fn check_refresh(&self, refresh: &HeadRefresh, fresh: &[Option<B>]) -> RenderResult<()> {
         let old_draw_count = self.object_indices.len();
         let mismatch = || RenderError::Other("topology refresh: BLAS do not match the plan".into());

@@ -93,6 +93,10 @@ pub struct SsgiPipelines<Pipeline> {
 }
 
 /// Build every pipeline on its own, without touching the targets.
+///
+/// # Errors
+///
+/// Returns an error if a pipeline fails to build.
 pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<SsgiPipelines<D::Pipeline>> {
     let depth = PixelFormat::Rg32Float;
     let color = PixelFormat::Rgba16Float;
@@ -213,6 +217,10 @@ pub struct SsgiPass<Pipeline, Target> {
 
 impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
     /// Build every pipeline and target for a render resolution of `extent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a pipeline or target cannot be created.
     pub fn new<D>(device: &D, gi_scale: u32, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -266,6 +274,10 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
     /// Recreate every target for a new render resolution and forget the
     /// accumulation, which was rendered at a resolution this one cannot
     /// reproject from. The caller has already idled the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a target cannot be created.
     pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -292,6 +304,10 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
     /// accumulation reprojected onto this frame's G-buffer, with `occlusion`,
     /// into the target [`Self::indirect`] names. Without a history to reproject
     /// it holds the occlusion and no bounce.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode_resolve<'t, D>(
         &'t self,
         device: &D,
@@ -333,6 +349,11 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
     /// through the pyramid, sampling the scene where they hit, accumulated into
     /// this frame's fast slot, which then bounds and feeds the long
     /// accumulation in this frame's slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a ring slot cannot be addressed or the device fails
+    /// to encode a draw.
     pub fn encode<'t, D>(
         &'t self,
         device: &D,

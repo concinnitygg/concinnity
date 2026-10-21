@@ -19,6 +19,12 @@ use concinnity_core::math::{acos, atan2, cos, sin, sqrt, tan};
 /// Extrude `profile` (an `[x, z]` polygon of at least 3 points, either
 /// winding) by `height` along Y, optionally rounding convex corners with
 /// `corner_radius` sampled at `corner_segments` arc points per corner.
+///
+/// # Errors
+///
+/// Returns an error if `profile` has fewer than 3 points or does not
+/// triangulate, `height` is not positive, `corner_radius` is negative, or the
+/// mesh exceeds the u16 index limit.
 pub fn build_extrude(
     profile: &[[f32; 2]],
     height: f32,

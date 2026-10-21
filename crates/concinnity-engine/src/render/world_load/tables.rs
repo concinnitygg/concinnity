@@ -82,6 +82,10 @@ impl core::fmt::Display for TableError {
 }
 
 /// The texture pool `table` describes.
+///
+/// # Errors
+///
+/// Returns an error if a texture has no payload or a malformed record.
 pub fn texture_pool(table: &TextureTable) -> Result<TexturePool, TableError> {
     let locators = table
         .0
@@ -101,6 +105,11 @@ pub fn texture_pool(table: &TextureTable) -> Result<TexturePool, TableError> {
 /// Every material in `table` (dense by `MaterialHandle`) against a texture
 /// pool of `texture_count` entries. Materials have no payload; all their data
 /// lives in the baked `data_bytes`.
+///
+/// # Errors
+///
+/// Returns an error if a material does not decode or names a texture past the
+/// pool.
 pub fn decode_materials(
     table: &MaterialTable,
     texture_count: usize,

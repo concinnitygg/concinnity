@@ -518,6 +518,10 @@ impl GrassHandles {
 
 /// Compile the frame graph for `inputs`: the pass list above, gated down to the
 /// passes this frame actually runs.
+///
+/// # Errors
+///
+/// Returns an error if the gated pass list does not compile into a graph.
 pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
     // When an opaque menu backdrop hides the scene, every world pass is wasted:
     // nothing it produces is visible. Force every gated world pass off so the

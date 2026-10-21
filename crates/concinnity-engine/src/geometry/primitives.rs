@@ -107,6 +107,10 @@ pub fn build_box(half_extents: [f32; 3]) -> (Vec<Vert>, Vec<u16>) {
 /// Centered on the origin: bottom cap at y = -height/2, top cap at y = +height/2.
 /// Sides use cylindrical UV projection; caps use planar UV. `segments` is
 /// clamped to at least 3; a tessellation past the u16 index limit is refused.
+///
+/// # Errors
+///
+/// Returns an error if the tessellation exceeds the u16 index limit.
 pub fn build_cylinder(
     radius: f32,
     height: f32,
@@ -232,6 +236,10 @@ pub fn build_plane(half_width: f32, half_depth: f32) -> (Vec<Vert>, Vec<u16>) {
 /// the normal at every point equals `normalize(pos)`. `rings` is clamped to at
 /// least 2 and `segments` to at least 3; a tessellation past the u16 index
 /// limit is refused.
+///
+/// # Errors
+///
+/// Returns an error if the tessellation exceeds the u16 index limit.
 pub fn build_sphere(
     radius: f32,
     rings: u32,

@@ -75,6 +75,11 @@ impl PayloadMorphs {
     /// Build the sparse block from dense target-major deltas
     /// (`deltas[t * vertex_count + v]`), keeping every delta with a component
     /// above [`MORPH_DELTA_EPSILON`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `deltas` does not hold one delta per vertex for
+    /// every target.
     pub fn from_dense(
         names: Vec<String>,
         vertex_count: usize,
@@ -140,7 +145,7 @@ impl PayloadMorphs {
 
     /// Check the tables agree: offsets start at 0, never decrease, end at the
     /// entry count, and every entry names a declared target.
-    pub fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if self.is_empty() {
             if !self.offsets.is_empty() || !self.entries.is_empty() {
                 return Err("morph block has entries but no targets".to_string());

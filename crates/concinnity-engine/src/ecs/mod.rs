@@ -102,9 +102,8 @@ pub use tick_accumulator::TickAccumulator;
 
 // The runtime-facing component contract and the metadata enums the registry and
 // the blob format are built from.
-pub use component::{
-    AssetOrigin, AssetPayload, Component, ResourceAsset, RuntimeComponent, decode_baked,
-};
+pub(crate) use component::decode_baked;
+pub use component::{AssetOrigin, AssetPayload, Component, ResourceAsset, RuntimeComponent};
 
 // Typed asset references and the authoring tables derived from field types.
 pub use asset_fields::{ActionField, AssetFields, EnumField, FieldTable, RefField, ReferenceField};

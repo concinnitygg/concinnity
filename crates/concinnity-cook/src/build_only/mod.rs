@@ -66,6 +66,11 @@ pub struct LoadedWorld {
 /// `Include` in it should resolve beside that file. `assets_dir` is the asset
 /// search root the expansion passes resolve bare source filenames and preset
 /// names against; `None` leaves them unresolved.
+///
+/// # Errors
+///
+/// Returns every error found if the world fails to parse, validate
+/// structurally, expand, or pass semantic validation.
 pub fn prepare_world<'a>(
     source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&std::path::Path>,

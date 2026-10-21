@@ -26,7 +26,7 @@ pub enum FrameError {
 
 /// Decode `bytes` as a postcard frame of `T`, requiring `T` to consume every
 /// byte of it.
-pub fn decode_exact<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T, FrameError> {
+pub(crate) fn decode_exact<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T, FrameError> {
     let (value, rest) = postcard::take_from_bytes(bytes).map_err(FrameError::Decode)?;
     match rest.len() {
         0 => Ok(value),

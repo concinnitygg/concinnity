@@ -139,6 +139,11 @@ payload! {
 
 /// Bake a [`ProceduralMesh`]'s generator into its geometry payload, for
 /// [`World::add_mesh`](crate::World::add_mesh).
+///
+/// # Errors
+///
+/// Returns [`Error::Bake`](crate::Error::Bake) if the generator is missing or
+/// unknown, or its arguments do not build valid geometry.
 pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, crate::Error> {
     concinnity_engine::bake::payload::procedural_mesh(mesh).map_err(crate::Error::Bake)
 }
@@ -147,6 +152,12 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, crate::Error
 /// [`World::add_mesh`](crate::World::add_mesh). Normals and tangents are
 /// derived from the triangles; a `source` naming a model file needs the cook
 /// module's importer.
+///
+/// # Errors
+///
+/// Returns [`Error::Bake`](crate::Error::Bake) if the mesh names a `source`
+/// file, has no vertices or indices, or its indices do not form whole
+/// triangles.
 pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
     concinnity_engine::bake::payload::mesh(mesh).map_err(crate::Error::Bake)
 }
@@ -157,6 +168,11 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, crate::Error> {
 /// This is the expensive bake -- hundreds of millions of float operations at
 /// default sizes. On the std tier the convolutions are spread over the
 /// engine's job pool; without it they run on the calling thread.
+///
+/// # Errors
+///
+/// Returns [`Error::Bake`](crate::Error::Bake) if the map names a `source`
+/// file, its generator is missing or unknown, or its sizes are out of range.
 #[cfg(feature = "std")]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
     concinnity_engine::bake::payload::environment_map(map, concinnity_host::thread::jobs::pool())
@@ -167,6 +183,11 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, cr
 /// Convolve an [`EnvironmentMap`]'s generator into its image-based-lighting
 /// payload, for [`World::add_environment_map`](crate::World::add_environment_map),
 /// on the calling thread.
+///
+/// # Errors
+///
+/// Returns [`Error::Bake`](crate::Error::Bake) if the map names a `source`
+/// file, its generator is missing or unknown, or its sizes are out of range.
 #[cfg(not(feature = "std"))]
 pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, crate::Error> {
     concinnity_engine::bake::payload::environment_map(map, &concinnity_core::fanout::Inline)
@@ -177,6 +198,11 @@ pub fn environment_map(map: &EnvironmentMap) -> Result<EnvironmentMapPayload, cr
 /// Rasterize a [`Font`] into its glyph-atlas payload, for
 /// [`World::add_font`](crate::World::add_font). Only the built-in face bakes;
 /// a `path` naming a TTF file needs the cook module's importer.
+///
+/// # Errors
+///
+/// Returns [`Error::Bake`](crate::Error::Bake) if the font names a `path`, or
+/// the built-in face cannot be rasterized at its size.
 pub fn font(font: &Font) -> Result<FontPayload, crate::Error> {
     concinnity_engine::bake::payload::font(font)
         .map(FontPayload)

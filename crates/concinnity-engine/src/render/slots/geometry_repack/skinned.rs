@@ -30,10 +30,14 @@ pub struct SkinnedSlotWrite {
 
 /// Place a size-matched update of slot `skinned_index`: `vertex_count`
 /// vertices written at `vertex_base` and `indices` over the slot's own index
-/// region. Errors when the slot does not exist, when the index count differs
-/// from the slot's (a size change needs [`repack_skinned_geometry`]), or when
-/// the vertices would overrun the `vertex_buffer_bytes` the shared vertex
-/// buffer holds and corrupt a neighboring slot.
+/// region.
+///
+/// # Errors
+///
+/// Returns an error if the slot does not exist, the index count differs from
+/// the slot's (a size change needs [`repack_skinned_geometry`]), or the
+/// vertices would overrun the `vertex_buffer_bytes` the shared vertex buffer
+/// holds and corrupt a neighboring slot.
 pub fn place_skinned_update(
     objects: &[SkinnedDrawObject],
     skinned_index: SkinnedIndex,
@@ -129,9 +133,13 @@ impl RepackedSkinnedGeometry {
 
 /// Repack the shared skinned vertex and index buffers, replacing the geometry
 /// of each slot named in `changes` and copying every other slot from the old
-/// buffers, rebased onto its new vertex region. Errors when a slot's recorded
-/// region lies outside the old buffers, when an old index lies below its
-/// slot's `vertex_base`, or when the result would leave either buffer empty.
+/// buffers, rebased onto its new vertex region.
+///
+/// # Errors
+///
+/// Returns an error if a slot's recorded region lies outside the old buffers,
+/// an old index lies below its slot's `vertex_base`, or the result would leave
+/// either buffer empty.
 pub fn repack_skinned_geometry(
     objects: &[SkinnedDrawObject],
     old_vertices: &[SkinnedVertex],

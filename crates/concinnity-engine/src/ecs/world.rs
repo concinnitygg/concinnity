@@ -189,7 +189,10 @@ impl World {
     /// [`ProceduralMesh`](crate::components::ProceduralMesh) also adds that
     /// mesh, carrying the minted id, as the record of what was generated.
     ///
-    /// Errors once the world has minted [`AssetId::MINTED_CAPACITY`] names.
+    /// # Errors
+    ///
+    /// Returns an error once the world has minted [`AssetId::MINTED_CAPACITY`]
+    /// names.
     pub fn add_mesh(
         &mut self,
         payload: crate::bake::payload::MeshPayload,
@@ -547,6 +550,11 @@ impl World {
 
     /// Build the systems `table` gates in for this world's content and run
     /// their `init`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if two systems share a name or the host's completion
+    /// pass fails.
     pub fn start(&mut self, table: &SystemTable) -> Result<(), WorldError> {
         // The host's completion pass, before the gates read the world: an
         // injected component brings its own system into the schedule. Guarded

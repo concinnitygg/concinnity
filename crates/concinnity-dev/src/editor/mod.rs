@@ -139,7 +139,7 @@ const SEED_WINDOW: &str = "[\"Window\",{\"$id\":\"editor_default_window\"}]";
 /// Editor entry point (`cn editor`). Compiles the authored world in memory,
 /// injects the editor HUD, and runs the world loop driven by the editor hook
 /// (plus the debug server when a port is given).
-pub fn run_editor(
+pub(crate) fn run_editor(
     launch: LaunchRequest,
     json_path: Option<&str>,
     debug_port: Option<u16>,

@@ -39,21 +39,21 @@ mod run;
 pub mod cli;
 /// The implementations behind each `cn` subcommand, and the only place in this
 /// crate that writes to stdout.
-pub mod command;
+pub(crate) mod command;
 /// The asset reference pages, generated from the engine's own schema sources.
-pub mod docs;
+pub(crate) mod docs;
 /// Packaging a built world into a distributable bundle.
-pub mod export;
+pub(crate) mod export;
 pub mod project;
 
 // Process-global test serialization lock; test builds only.
 #[cfg(test)]
 mod test_support;
 
-// Dev-session entry points, consumed by the `concinnity` binary: the debug
+// Dev-session entry points, dispatched by `cli`: the debug
 // server + interpreted run (`cn debug`), the in-engine editor (`cn editor`),
 // and the MCP stdio bridge that forwards an agent's tool calls to a running
 // app (`cn mcp`).
-pub use editor::run_editor;
-pub use mcp::run as run_mcp;
-pub use run::run_debug;
+pub(crate) use editor::run_editor;
+pub(crate) use mcp::run as run_mcp;
+pub(crate) use run::run_debug;

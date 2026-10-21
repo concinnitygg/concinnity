@@ -87,11 +87,19 @@ impl DecalSet {
     /// Place `record` in a slot and return its id, reusing a tombstoned slot
     /// before growing the table so a spawn / despawn cycle stays bounded. The
     /// new slot is marked stale for every frame in flight.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AtCapacity` if the table has no free slot and cannot grow.
     pub fn insert(&mut self, record: DecalRecord) -> Result<usize, AtCapacity> {
         self.slots.insert(Slot::new(record, self.frames))
     }
 
     /// Tombstone the slot at `id`, freeing it for the next [`Self::insert`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `id` was never handed out or is already removed.
     pub fn remove(&mut self, id: usize) -> Result<(), RemoveError> {
         self.slots.remove(id).map(drop)
     }

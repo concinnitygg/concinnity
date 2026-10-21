@@ -11,9 +11,12 @@ use crate::error::PayloadError;
 /// A source of compiled payload bytes addressed by `PayloadLocator`.
 pub trait PayloadStore {
     /// Read the bytes a locator points at. `&mut self` because a disk-backed
-    /// store may load an overflow section lazily on first access. Errors when
-    /// the payload was released, the locator is out of range, or a lazy load
-    /// fails.
+    /// store may load an overflow section lazily on first access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload was released, the locator is out of
+    /// range, or a lazy load fails.
     fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError>;
 
     /// Release an entire blob's in-memory payload once every system that needs

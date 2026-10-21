@@ -18,6 +18,10 @@ use crate::blob::kind::BlobKind;
 /// parse. What it means belongs to the kind: for the cooked world's
 /// [`BlobMeta`](crate::blob::BlobMeta) it is a schema version, and runtime
 /// callers pass `concinnity_engine::SCHEMA_VERSION`.
+///
+/// # Errors
+///
+/// Returns [`BlobError::Encode`] if `meta` does not serialize.
 pub fn encode_cnb<K: BlobKind>(
     validity: u32,
     meta: &K,
@@ -37,6 +41,10 @@ pub fn encode_cnb<K: BlobKind>(
 /// hundreds of megabytes, most of them copied from the segment it replaces, so
 /// the bytes go to the file as they are produced and only this prefix is built
 /// as a value.
+///
+/// # Errors
+///
+/// Returns [`BlobError::Encode`] if `meta` does not serialize.
 pub fn encode_cnb_prefix<K: BlobKind>(validity: u32, meta: &K) -> Result<Vec<u8>, BlobError> {
     let meta_bytes: Vec<u8> = postcard::to_allocvec(meta).map_err(|_| BlobError::Encode)?;
 

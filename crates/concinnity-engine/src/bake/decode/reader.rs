@@ -30,6 +30,11 @@ impl<'a> ByteReader<'a> {
     /// header and that it opens with `magic`, then position the reader just
     /// past the magic. Lets a decoder report a short buffer once rather than
     /// once per header field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is shorter than `header_bytes` or does not
+    /// open with `magic`.
     pub fn open_payload(
         bytes: &'a [u8],
         magic: u32,
@@ -75,6 +80,10 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Consume `n` bytes and return them, or report where the buffer ran out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fewer than `n` bytes remain.
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
         let end = self.pos.checked_add(n).ok_or_else(|| {
             format!(
@@ -96,48 +105,58 @@ impl<'a> ByteReader<'a> {
     }
 
     /// Consume exactly `N` bytes as an owned array, ready for `from_le_bytes`.
-    pub fn array<const N: usize>(&mut self) -> Result<[u8; N], String> {
+    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], String> {
         let mut out = [0u8; N];
         out.copy_from_slice(self.take(N)?);
         Ok(out)
     }
 
     /// Read one byte.
-    pub fn u8(&mut self) -> Result<u8, String> {
+    #[cfg(test)]
+    pub(crate) fn u8(&mut self) -> Result<u8, String> {
         Ok(u8::from_le_bytes(self.array::<1>()?))
     }
 
     /// Read a little-endian `u16`.
-    pub fn u16(&mut self) -> Result<u16, String> {
+    pub(crate) fn u16(&mut self) -> Result<u16, String> {
         Ok(u16::from_le_bytes(self.array::<2>()?))
     }
 
     /// Read a little-endian `u32`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fewer than four bytes remain.
     pub fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.array::<4>()?))
     }
 
     /// Read a little-endian `u64`.
-    pub fn u64(&mut self) -> Result<u64, String> {
+    #[cfg(test)]
+    pub(crate) fn u64(&mut self) -> Result<u64, String> {
         Ok(u64::from_le_bytes(self.array::<8>()?))
     }
 
     /// Read a little-endian `i32`.
-    pub fn i32(&mut self) -> Result<i32, String> {
+    pub(crate) fn i32(&mut self) -> Result<i32, String> {
         Ok(i32::from_le_bytes(self.array::<4>()?))
     }
 
     /// Read a little-endian `f32`.
-    pub fn f32(&mut self) -> Result<f32, String> {
+    pub(crate) fn f32(&mut self) -> Result<f32, String> {
         Ok(f32::from_le_bytes(self.array::<4>()?))
     }
 
     /// Advance past `n` bytes without returning them.
-    pub fn skip(&mut self, n: usize) -> Result<(), String> {
+    pub(crate) fn skip(&mut self, n: usize) -> Result<(), String> {
         self.take(n).map(|_| ())
     }
 
     /// Move the cursor to an absolute offset, which must lie within the buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `pos` is past the end of the buffer.
     pub fn seek(&mut self, pos: usize) -> Result<(), String> {
         if pos > self.bytes.len() {
             return Err(format!(

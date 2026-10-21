@@ -20,18 +20,18 @@ pub struct AssetRequest {
 
 /// Validate an `AssetRequest` and produce a `BlobAssetDef`
 ///
-/// Returns Err if:
-/// - The type name is unknown
-/// - The type's origin is not External (not addable)
-/// - The type is a resource asset (External, but compiles into the resource
-///   stream and has no component discriminant)
-/// - The resolved args do not deserialize into the type's args, or the baked
-///   component cannot be serialized
-///
 /// Does not perform payload compilation (shaders, images, etc.). The cook
 /// pipeline (entry, pack, and validate) calls this first, then runs its
 /// compilation pass over the resulting defs; concinnity-dev's asset-adding path
 /// (`cn add` and its FFI entry) calls it to validate each entry before writing it.
+///
+/// # Errors
+///
+/// Returns an error if: - The type name is unknown - The type's origin is not
+/// External (not addable) - The type is a resource asset (External, but
+/// compiles into the resource   stream and has no component discriminant) - The
+/// resolved args do not deserialize into the type's args, or the baked
+/// component cannot be serialized
 pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, AuthoringError> {
     if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();

@@ -103,6 +103,11 @@ impl<B> BlockPool<B> {
 
     /// Place `size` bytes at `align` in an existing block, or in a block
     /// `open` creates at the size it is given when none can host them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `open` fails, a block opened to the request's size
+    /// cannot host it, or the placement names a released block.
     pub fn reserve<E>(
         &mut self,
         size: u64,

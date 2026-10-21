@@ -55,6 +55,10 @@ pub enum LutFormat {
 }
 
 /// Classify a `ColorLut` source path by extension.
+///
+/// # Errors
+///
+/// Returns an error if the extension is neither `.cube` nor `.png`.
 pub fn classify_source(source: &str) -> Result<LutFormat, String> {
     let ext = source
         .rsplit_once('.')
@@ -71,6 +75,10 @@ pub fn classify_source(source: &str) -> Result<LutFormat, String> {
 /// Validate a LUT edge length against the accepted range. Shared by the
 /// runtime [`deserialize`], the `.cube` parser, and the build crate's PNG-strip
 /// parser so all three reject the same out-of-range sizes.
+///
+/// # Errors
+///
+/// Returns an error if `size` is outside the accepted range.
 pub fn validate_size(size: u32) -> Result<(), String> {
     if !(MIN_LUT_SIZE..=MAX_LUT_SIZE).contains(&size) {
         return Err(format!(
@@ -85,6 +93,12 @@ pub fn validate_size(size: u32) -> Result<(), String> {
 /// Parse an Adobe Cube LUT into `(size, RGBA8 data)`. Data lines list red,
 /// green, blue floats in `[0, 1]` with red varying fastest: exactly the
 /// payload texel order, so triplets are converted and appended verbatim.
+///
+/// # Errors
+///
+/// Returns an error if a line does not parse, the LUT is 1D or has no
+/// `LUT_3D_SIZE`, its size is out of range, or its entry count does not fill
+/// the cube.
 pub fn parse_cube(text: &str) -> Result<(u32, Vec<u8>), String> {
     let mut size: Option<u32> = None;
     let mut data: Vec<u8> = Vec::new();
@@ -161,6 +175,10 @@ pub fn serialize(size: u32, strength: f32, data: &[u8]) -> Vec<u8> {
 }
 
 /// The blend strength a LUT payload carries, clamped to `[0, 1]`.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` is not a LUT payload or is too short.
 pub fn strength(bytes: &[u8]) -> Result<f32, String> {
     let mut r = ByteReader::open_payload(
         bytes,
@@ -175,6 +193,11 @@ pub fn strength(bytes: &[u8]) -> Result<f32, String> {
 /// Deserialize a LUT payload back into `(size, RGBA8 bytes)`. The byte slice
 /// is borrowed from the input. Called by the Metal, Vulkan, and DirectX
 /// backends at upload time.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` is not an RGBA8 LUT payload, its size is out of
+/// range, or it is too short for its cube.
 pub fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
     let mut r = ByteReader::open_payload(
         bytes,

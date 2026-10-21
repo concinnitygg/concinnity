@@ -227,6 +227,10 @@ pub struct PoolGates {
 /// A planning graph that does not compile is a hard error rather than an empty
 /// pool: every consumer reads its target back out by label, so silently pooling
 /// nothing would fail later and further from the cause.
+///
+/// # Errors
+///
+/// Returns an error if the planning graph does not compile.
 pub fn plan_pool_slots(
     gates: PoolGates,
     render_extent: (u32, u32),

@@ -90,6 +90,10 @@ impl TextureFormat {
     /// Dimensions are read out of the file being decoded, so a footprint that
     /// overflows `usize` is reported rather than wrapped into a small length
     /// that would pass the caller's bounds check.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the footprint overflows `usize`.
     pub fn mip_byte_len(self, width: u32, height: u32) -> Result<usize, String> {
         match self.block_bytes() {
             None => checked_product("texture mip", &[width as usize, height as usize, 4]),
@@ -179,6 +183,11 @@ impl TextureImage {
 
     /// Check the image is uploadable: at least one level, and every level holds
     /// the bytes its dimensions need in the image's format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the image has no level, or a level holds fewer bytes
+    /// than its dimensions need.
     pub fn validate(&self) -> Result<(), String> {
         if self.mips.is_empty() {
             return Err("texture image has no mip level".into());
@@ -206,6 +215,10 @@ impl TextureImage {
     /// Recover the base RGBA8 pixels, or an error if the image is block
     /// compressed. Used by the sprite / glyph-atlas paths, which upload RGBA8
     /// only.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the image is block compressed or has no level.
     pub fn into_rgba8(self) -> Result<(u32, u32, Vec<u8>), String> {
         if self.format != TextureFormat::Rgba8 {
             return Err(format!(
@@ -244,6 +257,11 @@ pub fn serialize(image: &TextureImage) -> Vec<u8> {
 ///
 /// Called by the renderer at runtime to recover texture format, dimensions,
 /// and mip data before uploading to the GPU.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` is not a texture payload, declares an unknown
+/// format or an invalid mip count, or is too short for its mips.
 pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
     let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
     let format_id = r.u32()?;

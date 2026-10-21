@@ -16,6 +16,11 @@ pub trait SceneEffects {
     /// index the caller hands to [`Self::remove_decal`] later. Lets a
     /// gameplay system stamp bullet holes, footprints, or other ad-hoc
     /// decals after the world has built.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without runtime
+    /// decals, or an error if the record cannot be stored.
     fn add_decal(&mut self, record: crate::render::decal::DecalRecord) -> RenderResult<usize> {
         let _ = record;
         Err(RenderError::Unsupported { op: "add_decal" })
@@ -23,6 +28,11 @@ pub trait SceneEffects {
 
     /// Tombstone a runtime decal slot. The id returned by
     /// [`Self::add_decal`] becomes invalid; the next add may reuse it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without runtime
+    /// decals, or an error if `decal_id` names no live decal.
     fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
         let _ = decal_id;
         Err(RenderError::Unsupported { op: "remove_decal" })
@@ -32,6 +42,11 @@ pub trait SceneEffects {
     /// index. The backend allocates the per-emitter GPU pool + atomic
     /// spawn counter (matching the init-time path) so the compute kernel
     /// can begin ticking on the next frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without runtime
+    /// emitters, or an error if the emitter's GPU pool cannot be allocated.
     fn add_emitter(
         &mut self,
         record: crate::render::particles::ParticleEmitterRecord,
@@ -43,6 +58,11 @@ pub trait SceneEffects {
     /// Tombstone a runtime emitter slot and release its GPU pool +
     /// counter buffers (the GPU keeps them alive via its own refcount
     /// until any in-flight command buffer that referenced them completes).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without runtime
+    /// emitters, or an error if `emitter_id` names no live emitter.
     fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
         let _ = emitter_id;
         Err(RenderError::Unsupported {

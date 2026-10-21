@@ -216,6 +216,10 @@ impl FramePlanner {
     }
 
     /// Plan the frame `view` shows from `inputs`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the frame graph does not compile.
     pub fn plan(&mut self, view: &SceneView, inputs: &PlanInputs<'_>) -> RenderResult<FramePlan> {
         let r = &inputs.resident;
         let c = &inputs.content;

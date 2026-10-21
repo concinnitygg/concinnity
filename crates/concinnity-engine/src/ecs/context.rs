@@ -308,8 +308,12 @@ impl PipelineContext<'_> {
     /// Read the compiled payload bytes for a locator.
     ///
     /// Takes `&mut self` because an overflow blob is read from disk lazily on
-    /// first access. Returns an error if the blob was released, the locator is
-    /// out of range, or the on-demand load fails.
+    /// first access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blob was released, the locator is out of range,
+    /// or the on-demand load fails.
     pub fn read_payload(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         #[cfg(debug_assertions)]
         access_check::touch(access_check::Touch::Blob { op: "read_payload" });

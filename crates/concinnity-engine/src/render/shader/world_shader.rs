@@ -254,11 +254,19 @@ impl ShaderPrograms {
     }
 
     /// Serialize the payload for the blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload does not serialize.
     pub fn encode(&self) -> Result<Vec<u8>, postcard::Error> {
         postcard::to_allocvec(self)
     }
 
     /// Read a payload back out of the blob.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` do not decode as a payload.
     pub fn decode(bytes: &[u8]) -> Result<Self, postcard::Error> {
         postcard::from_bytes(bytes)
     }

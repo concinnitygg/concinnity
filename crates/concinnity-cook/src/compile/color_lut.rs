@@ -80,6 +80,11 @@ fn color_lut_strength(args: &serde_json::Value) -> f32 {
 /// (`cn debug` only); production reads the compiled payload via
 /// `concinnity_engine::bake::color_lut::deserialize` instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or does not decode as a `.cube`
+/// or PNG-strip LUT.
 pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), String> {
     decode(path)
 }

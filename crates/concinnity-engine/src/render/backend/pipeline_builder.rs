@@ -49,6 +49,10 @@ impl fmt::Debug for PreparedPipelines {
 /// pipeline itself when the two no longer match.
 pub trait PipelineBuilder: Send + Sync {
     /// Build shader bucket `bucket`'s main-pass pipeline from `programs`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a pipeline fails to build from `programs`.
     fn world_shader(
         &self,
         bucket: u32,
@@ -57,6 +61,11 @@ pub trait PipelineBuilder: Send + Sync {
 
     /// Build every pipeline a volume with `flags` draws with from `programs`.
     /// `label` names the volume in an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, naming the volume by `label`, if a pipeline fails to
+    /// build from `programs`.
     fn sdf_volume(
         &self,
         programs: &SdfPrograms,

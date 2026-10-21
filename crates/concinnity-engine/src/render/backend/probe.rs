@@ -279,6 +279,11 @@ pub trait BackendProbe {
     /// path. Driven by the `screenshot` debug tool call for headless
     /// on-GPU render verification. Default [`RenderError::Unsupported`]; all
     /// current backends override this.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without capture, or an
+    /// error if no frame was presented or the PNG cannot be written.
     fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         let _ = path;
         Err(RenderError::Unsupported { op: "screenshot" })
@@ -295,6 +300,11 @@ pub trait BackendProbe {
     /// `cull-status` debug tool call; synchronous (it idles the device).
     ///
     /// Default [`RenderError::Unsupported`]: a backend with no GPU-driven cull.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a GPU-driven
+    /// cull, or an error if the readback fails.
     fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         Err(RenderError::Unsupported {
             op: "read_cull_status",

@@ -15,7 +15,7 @@ use crate::command::discover_world_path;
 /// Tries `worlds/` first, then `world.jsonl` in the working
 /// directory; when neither exists and the target is a 3D scene, the world is
 /// scaffolded at the fallback location.
-pub fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn add(name: Option<&str>, target: &str, template: Option<&str>) -> std::io::Result<()> {
     let world_path = match discover_world_path() {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => WORLD_JSONL.to_string(),

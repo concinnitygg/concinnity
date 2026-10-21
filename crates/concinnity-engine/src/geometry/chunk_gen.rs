@@ -25,7 +25,7 @@ use hashbrown::HashMap;
 /// The public, `geometry`-external counterpart of the private
 /// `voxel::PaletteSlot`. The streaming subsystem resolves a `VoxelWorld`'s
 /// `BlockType` palette into a `Vec<ChunkBlockType>` and hands it to
-/// [`super::build_chunk_mesh`].
+/// `build_chunk_mesh`.
 #[derive(Clone, Copy, Debug)]
 pub struct ChunkBlockType {
     /// When false the block is air -- emits no geometry, occludes nothing.

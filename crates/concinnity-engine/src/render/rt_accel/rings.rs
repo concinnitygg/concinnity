@@ -106,6 +106,10 @@ impl<S: Default> FrameRing<S> {
     /// Lend out frame `frame_idx`'s slot on update tick `now`, leaving a default
     /// in its place. `None` while a frame still in flight may trace the slot (see
     /// [`SlotLiveness`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `frame_idx` is out of range.
     pub fn take(&mut self, frame_idx: usize, now: u64) -> RenderResult<Option<S>> {
         let len = self.slots.len();
         if !self.liveness.writable(frame_idx, now) {
@@ -228,6 +232,10 @@ struct Sized<B> {
 impl<B> ScratchRing<B> {
     /// One slot per frame in flight (at least one), each allocated at
     /// `capacity` bytes by `alloc`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `alloc` fails.
     pub fn filled(
         frames_in_flight: usize,
         capacity: u64,
@@ -246,6 +254,10 @@ impl<B> ScratchRing<B> {
     /// Frame `frame_idx`'s scratch, holding at least `capacity` bytes. The slot
     /// is reallocated through `alloc` only when it is smaller; a failed
     /// allocation leaves the old one in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `frame_idx` is out of range or `alloc` fails.
     pub fn ensure(
         &mut self,
         frame_idx: usize,

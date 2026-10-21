@@ -33,6 +33,10 @@ use parse::parse_story;
 /// graph-validation pass `expand_stories` runs, minus asset emission. Lets an
 /// authoring front end (the editor's Story panel) reject a broken story before
 /// writing it to disk.
+///
+/// # Errors
+///
+/// Returns an error if the story does not parse or its graph is invalid.
 pub fn validate_story_source(src: &str) -> Result<(), String> {
     parse_story(src).map(|_| ())
 }

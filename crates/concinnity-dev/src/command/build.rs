@@ -1,12 +1,12 @@
 use crate::command::resolve_world_path;
 
-pub use crate::build_status::Verbosity;
+pub(crate) use crate::build_status::Verbosity;
 
 /// Compile a world to binary blobs and write `world-lock.json`, showing each
 /// step's progress as it runs and the warnings the build raises.
 ///
 /// `json_path` names the world explicitly and must exist; `None` discovers it.
-pub fn build(json_path: Option<&str>, verbosity: Verbosity) -> std::io::Result<()> {
+pub(crate) fn build(json_path: Option<&str>, verbosity: Verbosity) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
     crate::authoring::build_world_file_as(&json_path, &json_path, verbosity)
 }

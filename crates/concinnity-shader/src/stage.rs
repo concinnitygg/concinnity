@@ -41,8 +41,11 @@ impl Stage {
 
 /// The stage `entry` declares in `source`.
 ///
-/// Errs when the entry point carries no `[shader("...")]` attribute, which is
-/// the only way a program table can name an entry the source does not export.
+/// # Errors
+///
+/// Returns an error if the entry point carries no `[shader("...")]` attribute,
+/// which is the only way a program table can name an entry the source does not
+/// export.
 pub fn stage_of(source: &str, entry: &str) -> Result<Stage, String> {
     for (stage, name) in declared_stages(source) {
         if name == entry {

@@ -105,6 +105,11 @@ impl Resolution {
 
     /// The mode a world starts in, or why it cannot start: it has something
     /// to draw and nothing here can draw it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming why when the world has something to draw and
+    /// nothing here can draw it.
     pub fn startable(self) -> Result<RenderMode, RenderError> {
         match self {
             Self::Unavailable(why) => Err(RenderError::Other(why.message().into())),

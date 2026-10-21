@@ -66,6 +66,11 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
     /// serialized runtime component (cook already ran the asset -> component
     /// translation). The default rejects: runtime-only components are never
     /// stored in a blob, so only loadable types provide an implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bytes do not decode; the default always errs
+    /// with [`AssetError::NotStored`].
     fn from_baked(_bytes: &[u8]) -> Result<Self, AssetError> {
         Err(AssetError::NotStored { asset: Self::NAME })
     }
@@ -78,7 +83,7 @@ pub trait Component: Sized + Send + core::fmt::Debug + 'static {
 
 /// Decode a component from its baked blob record, naming the component in the
 /// failure. What every stored type's [`Component::from_baked`] is.
-pub fn decode_baked<'a, C>(bytes: &'a [u8]) -> Result<C, AssetError>
+pub(crate) fn decode_baked<'a, C>(bytes: &'a [u8]) -> Result<C, AssetError>
 where
     C: Component + serde::Deserialize<'a>,
 {

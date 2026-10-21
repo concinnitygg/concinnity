@@ -60,6 +60,10 @@ pub(crate) const ENVMAP_PAYLOAD_HEADER_BYTES: usize = 24;
 /// the reflection clamp must be a finite non-negative gain. Shared by the cook
 /// pipeline and the [`bake`](crate::bake) builder so a world is refused the
 /// same way whichever declared it.
+///
+/// # Errors
+///
+/// Returns an error naming the field that is out of range.
 pub fn check_sizes(map: &crate::components::EnvironmentMap) -> Result<(), String> {
     let prefilter_face = map.prefilter_face_size;
     if !(16..=1024).contains(&prefilter_face) || !prefilter_face.is_power_of_two() {
@@ -84,6 +88,10 @@ pub fn check_sizes(map: &crate::components::EnvironmentMap) -> Result<(), String
 
 /// Bytes mip `mip` of an RGBA32F cube with `face_size`-texel faces holds across
 /// its six faces, or an error when the mip would have no texels.
+///
+/// # Errors
+///
+/// Returns an error if mip `mip` would have no texels or its size overflows.
 pub fn cube_mip_byte_len(face_size: u32, mip: usize) -> Result<usize, String> {
     let face = face_size
         .checked_shr(u32::saturating_from(mip))
@@ -167,6 +175,11 @@ fn cube_face_bytes(label: &str, edge: u32) -> Result<usize, String> {
 }
 
 /// Read a packed payload back as byte-range views into `bytes`.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` is not an RGBA32F environment-map payload,
+/// declares an invalid mip count, or is too short for its faces.
 pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
     let mut r = ByteReader::open_payload(
         bytes,

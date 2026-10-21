@@ -28,6 +28,10 @@ impl TextureRecord {
 
     /// Decode a resource record's `data_bytes`. A record with no runtime
     /// fields holds the defaults.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` do not decode exactly.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, FrameError> {
         match bytes {
             [] => Ok(Self::default()),
@@ -37,17 +41,8 @@ impl TextureRecord {
 }
 
 impl TextureTable {
-    /// The runtime fields of the texture at `handle`; the defaults when there
-    /// is no such texture.
-    pub fn record(&self, handle: usize) -> Result<TextureRecord, FrameError> {
-        self.0.get(handle).map_or_else(
-            || Ok(TextureRecord::default()),
-            |e| TextureRecord::from_bytes(&e.data_bytes),
-        )
-    }
-
     /// The handles of every texture only the cook reads.
-    pub fn cook_only_slots(&self) -> Result<BTreeSet<usize>, FrameError> {
+    pub(crate) fn cook_only_slots(&self) -> Result<BTreeSet<usize>, FrameError> {
         let mut slots = BTreeSet::new();
         for (slot, entry) in self.0.iter().enumerate() {
             if TextureRecord::from_bytes(&entry.data_bytes)?.cook_only {
@@ -147,8 +142,6 @@ mod tests {
             entry(cook_only),
         ]);
         assert_eq!(table.cook_only_slots(), Ok(BTreeSet::from([1, 3])));
-        assert!(table.record(1).unwrap().cook_only);
-        assert!(!table.record(9).unwrap().cook_only);
     }
 
     #[test]

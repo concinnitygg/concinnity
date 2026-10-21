@@ -79,6 +79,10 @@ impl<B: UploadBuffer> StagingUploads<B> {
     /// Make room ahead of need for a stream whose single frame may stage up to
     /// `expected` bytes, replacing the buffer with one `create` makes when the
     /// ring is smaller.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `create` when it fails.
     pub fn reserve<E>(
         &mut self,
         expected: u64,
@@ -97,6 +101,11 @@ impl<B: UploadBuffer> StagingUploads<B> {
 
     /// Stage `bytes`, growing the ring through `create` when it has no room.
     /// `None` for an empty upload, which stages nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `create` fails or the grown ring still refuses the
+    /// upload.
     pub fn stage<E>(
         &mut self,
         bytes: &[u8],

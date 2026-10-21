@@ -18,6 +18,11 @@ use super::grid::Grid;
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 
 /// Build a flat water grid of `subdivisions` quads per axis.
+///
+/// # Errors
+///
+/// Returns an error if the grid would exceed the u16 index limit, which the
+/// clamp on `subdivisions` rules out.
 pub fn build_water_grid(
     half_width: f32,
     half_depth: f32,

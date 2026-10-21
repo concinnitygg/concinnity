@@ -31,9 +31,10 @@ mod validate;
 #[cfg(test)]
 mod fixtures;
 
+pub(crate) use entry::write_blobs_to;
 pub use entry::{
     BuildReport, ThumbnailReport, build_compiled, build_compiled_with_progress, build_from_path,
-    build_loaded, build_pipeline_from_str, write_blobs_to, write_build_outputs,
+    build_loaded, build_pipeline_from_str, write_build_outputs,
 };
 pub use progress::{BuildProgress, BuildStage, ProgressFn};
 pub(crate) use progress::{Progress, StageProgress};

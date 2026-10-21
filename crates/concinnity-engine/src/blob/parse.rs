@@ -19,6 +19,12 @@ use concinnity_core::math::SaturatingFrom;
 /// readable by this build. What it means belongs to the kind: for
 /// [`BlobMeta`](crate::blob::BlobMeta) it is a schema version, and runtime
 /// callers pass `concinnity_engine::SCHEMA_VERSION`.
+///
+/// # Errors
+///
+/// Returns an error if the header is short or carries the wrong magic or
+/// validity token, or the metadata block is truncated, does not decode, or has
+/// trailing bytes.
 pub fn parse_cnb<K: BlobKind>(validity: u32, data: &[u8]) -> Result<(K, usize), BlobError> {
     let meta_len = usize::saturating_from(parse_header::<K>(data)?);
 
@@ -43,6 +49,10 @@ pub fn parse_cnb<K: BlobKind>(validity: u32, data: &[u8]) -> Result<(K, usize), 
 /// Payload-section offset read from the header alone, so a caller holding only
 /// the first `HEADER_SIZE` bytes can turn a `PayloadLocator` offset into an
 /// absolute file offset without loading the image.
+///
+/// # Errors
+///
+/// Returns an error if `header` is short or carries the wrong magic.
 pub fn parse_payload_section_start<K: BlobKind>(header: &[u8]) -> Result<u64, BlobError> {
     Ok(HEADER_SIZE as u64 + parse_header::<K>(header)?)
 }

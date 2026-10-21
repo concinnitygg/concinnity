@@ -104,6 +104,11 @@ pub trait LiveEdit: SceneHost {
 
     /// Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
     /// Driven by asset hot-reload (`cn debug` only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without LUT reload, or
+    /// an error if the payload does not fit a LUT or cannot be uploaded.
     fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         let _ = (size, data);
         Err(RenderError::Unsupported {
@@ -142,6 +147,12 @@ pub trait LiveEdit: SceneHost {
     /// size-changing `.glb` re-export means the existing
     /// [`Self::update_mesh_geometry`] in-place write no longer fits.
     /// `wait_idle` first; the rebuild swaps the GPU buffers wholesale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if a change names no draw or the new buffers cannot be
+    /// allocated.
     fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
         let _ = changes;
         Err(RenderError::Unsupported {
@@ -158,6 +169,12 @@ pub trait LiveEdit: SceneHost {
     /// untouched, only the bytes change. `vertex_base` is the init-time
     /// vertex offset (in vertex units) into the shared buffer; indices are
     /// rebased onto it before writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without in-place
+    /// skinned writes, or an error if the slot is unknown or the new geometry
+    /// does not match its layout.
     fn update_skinned_mesh_geometry(
         &mut self,
         skinned_index: SkinnedIndex,
@@ -188,6 +205,12 @@ pub trait LiveEdit: SceneHost {
     /// (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
     /// all stay untouched; only the `index_offset` / `index_count` on each
     /// `SkinnedDrawObject` (and the buffers themselves) move.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if a change names no slot or the new buffers cannot be
+    /// allocated.
     fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
@@ -209,6 +232,11 @@ pub trait LiveEdit: SceneHost {
     /// pipeline or shader rebuild is required for a joint-count change;
     /// only the CPU-side per-slot buffer and `SkinnedDrawObject.joint_count`
     /// change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `skinned_index` names no slot.
     fn update_skinned_skeleton(
         &mut self,
         skinned_index: SkinnedIndex,
@@ -236,6 +264,11 @@ pub trait LiveEdit: SceneHost {
     /// can queue [`Self::rebuild_static_geometry`]. `switch_distance` is
     /// re-stored per LOD so a JSON-side tweak to `lod_distances` propagates
     /// without a process restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if the
+    /// slot is unknown or the new geometry or LOD layout does not match it.
     fn update_mesh_geometry(
         &mut self,
         draw_idx: DrawIndex,
@@ -257,6 +290,12 @@ pub trait LiveEdit: SceneHost {
     /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
     /// share a single byte format. Driven by asset hot-reload (`cn debug`
     /// only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without
+    /// environment-map reload, or an error if the payload does not decode or
+    /// cannot be uploaded.
     fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let _ = payload;
         Err(RenderError::Unsupported {
@@ -312,6 +351,11 @@ pub trait LiveEdit: SceneHost {
     /// already built from `programs`; the backend swaps it in rather than
     /// building, unless it was built against targets the backend no longer
     /// draws into.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without shader reload,
+    /// or an error if the replacement pipeline fails to build.
     fn update_world_shader(
         &mut self,
         bucket: u32,
@@ -339,6 +383,11 @@ pub trait LiveEdit: SceneHost {
     /// already built from `programs`, taken on the same terms as in
     /// [`Self::update_world_shader`] and also only when it was built for the
     /// volume's own flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without SDF reload, or
+    /// an error if a replacement pipeline fails to build.
     fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
@@ -374,6 +423,11 @@ pub trait LiveEdit: SceneHost {
     /// reported a config matching `init.swapchain_config()`, so the swapchain
     /// (pixel format / frames-in-flight / EDR) is guaranteed unchanged. Default
     /// [`RenderError::Unsupported`], which routes the swap to a full rebuild.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend that cannot reload in
+    /// place, or an error if rebuilding the world's GPU content fails.
     fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         let _ = init;
         Err(RenderError::Unsupported { op: "reload_world" })

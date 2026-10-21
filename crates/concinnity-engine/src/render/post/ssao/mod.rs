@@ -50,6 +50,10 @@ pub struct SsaoPipelines<Pipeline> {
 }
 
 /// Build every pipeline on its own, without touching the targets.
+///
+/// # Errors
+///
+/// Returns an error if a pipeline fails to build.
 pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<SsaoPipelines<D::Pipeline>> {
     let build = |program, format| device.create_pipeline(program, format, PostBlend::Replace);
     Ok(SsaoPipelines {
@@ -94,6 +98,10 @@ pub struct SsaoPass<Pipeline, Target> {
 
 impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
     /// Build every pipeline and target for a render resolution of `extent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a pipeline or target cannot be created.
     pub fn new<D>(device: &D, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -106,6 +114,10 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
 
     /// Recreate the targets for a new render resolution. The caller has already
     /// idled the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a target cannot be created.
     pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -122,6 +134,10 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
 
     /// Encode the depth copy, the kernel into the raw occlusion, then the blur
     /// into `inputs.output`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode<'t, D>(
         &'t self,
         device: &D,

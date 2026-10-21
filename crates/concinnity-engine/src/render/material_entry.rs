@@ -40,7 +40,7 @@ impl MaterialEntry {
 /// The entry the `Material` at `handle` bakes to against a texture pool of
 /// `texture_count` entries. `Err` names the reference that points past the
 /// pool, which cook validated and so marks a corrupt build.
-pub fn of(
+pub(crate) fn of(
     handle: MaterialHandle,
     mat: &Material,
     texture_count: usize,
@@ -89,7 +89,7 @@ pub fn of(
 /// Resolve the material a draw object binds. A material handle must resolve in
 /// `material_map`; an unresolved one comes back as `Err(handle)` so the caller
 /// can log its own context. A draw naming no material binds `UNTEXTURED`.
-pub fn resolve_material_slots(
+pub(crate) fn resolve_material_slots(
     material: Option<MaterialHandle>,
     material_map: &hashbrown::HashMap<MaterialHandle, MaterialEntry>,
 ) -> Result<MaterialEntry, MaterialHandle> {

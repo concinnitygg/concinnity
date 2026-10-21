@@ -38,8 +38,11 @@ impl AnimationSystem {
     /// Crossfade the flat clip weights of the `SkinnedMesh` named `target`
     /// to `weights` (one per registered clip) over `duration_secs`, starting
     /// at the current clip clock. A zero duration snaps on the next step.
-    /// Fails when the target is unknown, graph-driven, or the weight count
-    /// misses its clips.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is unknown or graph-driven, or the weight
+    /// count does not match its clips.
     pub fn crossfade(
         &mut self,
         target: AssetId,
@@ -52,12 +55,21 @@ impl AnimationSystem {
 
     /// Write the graph parameter `name` on the `SkinnedMesh` named `target`.
     /// The value lands in the target's `AnimationParams` on the next step.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is unknown, has no animation graph, or
+    /// the graph declares no parameter `name`.
     pub fn set_param(&mut self, target: AssetId, name: &str, value: f32) -> Result<(), String> {
         let target = self.name_index.get(target);
         self.queue_param(target, name, value)
     }
 
     /// Report the live graph state of the `SkinnedMesh` named `target`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target is unknown or has no animation graph.
     pub fn graph_state(&mut self, target: AssetId) -> Result<GraphStateReport, String> {
         let target = self.name_index.get(target);
         self.graph_report(target)

@@ -76,7 +76,7 @@ pub fn payload_joints_to_defs(
 /// chunk's already-generated block array and resolved palette and returns
 /// interleaved `Vertex` geometry directly, with no on-disk payload in between.
 /// Chunk streaming (`app::chunk_stream`) calls this on its background thread.
-pub fn build_chunk_mesh(
+pub(crate) fn build_chunk_mesh(
     dim: [u32; 3],
     block_size: f32,
     blocks: &[u32],
@@ -132,7 +132,7 @@ pub fn build_chunk_mesh(
 /// samples those heights from [`ChunkGenerator::surface_height_world`] at the
 /// matching world columns, which keeps neighboring impostors watertight.
 /// `top_uv` / `side_uv` are the surface block's atlas rects.
-pub fn build_chunk_impostor_mesh(
+pub(crate) fn build_chunk_impostor_mesh(
     dim: [u32; 3],
     block_size: f32,
     step: u32,

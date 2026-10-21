@@ -53,6 +53,10 @@ fn payload() -> Result<&'static [u8], WorldError> {
 ///
 /// A host that draws HUD text of its own before the world starts (the editor's
 /// panels) reaches it here, so one atlas serves both.
+///
+/// # Errors
+///
+/// Returns an error if the built-in face does not bake.
 pub fn hud_font(ctx: &mut PipelineContext<'_>) -> Result<FontHandle, WorldError> {
     if let Some(HudFont(handle)) = ctx.resource::<HudFont>().copied() {
         return Ok(handle);

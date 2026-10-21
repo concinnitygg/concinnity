@@ -97,6 +97,10 @@ pub struct BloomPipelines<Pipeline> {
 }
 
 /// Build every pipeline on its own, without touching the octaves.
+///
+/// # Errors
+///
+/// Returns an error if a pipeline fails to build.
 pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<BloomPipelines<D::Pipeline>> {
     let format = PixelFormat::Rgba16Float;
     Ok(BloomPipelines {
@@ -136,6 +140,10 @@ pub struct BloomPass<Pipeline, Target> {
 
 impl<Pipeline, Target> BloomPass<Pipeline, Target> {
     /// Build every pipeline and the octaves for an output of `extent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a pipeline or the octave chain cannot be created.
     pub fn new<D>(device: &D, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -155,6 +163,10 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
 
     /// Recreate the octaves for an output of `extent`. The caller has already
     /// idled the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the octave chain cannot be created.
     pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -172,6 +184,10 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
     }
 
     /// Encode the whole chain: on return `inputs.top` holds the glow.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode<'t, D>(
         &'t self,
         device: &D,
@@ -188,6 +204,10 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
     }
 
     /// Encode the prefilter: `scene` thresholded into the top octave.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode_prefilter<'t, D>(
         &'t self,
         device: &D,
@@ -219,6 +239,11 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
     /// Encode every downsample from `top` and every upsample back to the octave
     /// below the top: on return that octave holds the glow of every octave
     /// under it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a chain level cannot be addressed or the device
+    /// fails to encode a draw.
     pub fn encode_chain<'t, D>(
         &'t self,
         device: &D,
@@ -263,6 +288,10 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
     }
 
     /// Encode the last upsample: the octave below the top added into `top`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode_last_upsample<'t, D>(
         &'t self,
         device: &D,

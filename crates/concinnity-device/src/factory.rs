@@ -45,6 +45,11 @@ pub fn probe_device(platform: Platform) -> Option<backend::DeviceProbe> {
 
 /// Route the assembled `BackendInit` to the backend its `platform` names.
 /// Construction inputs are documented on `BackendInit` itself.
+///
+/// # Errors
+///
+/// Returns an error if this build has no backend for the platform, or that
+/// backend fails to initialize.
 pub fn init_backend(init: init::BackendInit<'_>) -> RenderResult<Box<dyn backend::RenderBackend>> {
     match init.platform {
         #[cfg(backend_dx)]

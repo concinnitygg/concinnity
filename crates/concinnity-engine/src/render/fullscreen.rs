@@ -163,6 +163,11 @@ pub trait CompositeEncoder {
     /// geometry was uploaded before the pass and is addressed by that position
     /// (Metal). A backend that appends here ignores it. Every call is offered in
     /// order, including one a backend then skips, so the position always matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the geometry cannot be uploaded or the draw cannot
+    /// be recorded.
     fn text_draw(
         &self,
         rec: &Self::Rec,
@@ -186,6 +191,10 @@ pub trait CompositeEncoder {
 /// way, but a backend is never left holding an open pass or a mis-stated target
 /// (Metal rejects a command buffer committed with an encoder still open, which
 /// is what kept it off this driver while the error path skipped the end).
+///
+/// # Errors
+///
+/// Returns the first text draw's error, after ending the pass.
 pub fn encode_composite_chain<E: CompositeEncoder>(
     enc: &E,
     rec: &E::Rec,

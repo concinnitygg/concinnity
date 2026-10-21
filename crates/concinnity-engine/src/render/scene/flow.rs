@@ -205,7 +205,7 @@ pub fn tick_transitions<B: SceneControl + ?Sized>(
 
 /// Why [`jump_to_scene`] refused a jump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SceneJumpRejected {
+pub(crate) enum SceneJumpRejected {
     /// The world declares no scenes.
     NoFlow,
     /// The target scene is not declared in the world.
@@ -215,7 +215,7 @@ pub enum SceneJumpRejected {
 /// Imperatively jump to a named scene. Jumping to the active scene is a no-op;
 /// a jump with no scenes declared or to an undeclared scene returns the
 /// rejection and changes nothing.
-pub fn jump_to_scene<B: SceneControl + ?Sized>(
+pub(crate) fn jump_to_scene<B: SceneControl + ?Sized>(
     flow_opt: &mut Option<SceneFlow>,
     visibility: &SceneVisibility,
     elapsed: f32,

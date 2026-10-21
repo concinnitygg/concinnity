@@ -14,7 +14,7 @@ impl GraphCache {
     /// The graph for `inputs`: the cached one when its inputs match, else a
     /// fresh build. Taken out of the cache so the frame can execute it while
     /// the backend is borrowed mutably; [`Self::put`] returns it.
-    pub fn take(&mut self, inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
+    pub(crate) fn take(&mut self, inputs: &FrameGraphInputs) -> Result<CompiledGraph, GraphError> {
         self.take_or_build(inputs, build_frame_graph)
     }
 

@@ -19,6 +19,10 @@ pub(crate) type DecodedFont = (u32, u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
 
 /// Deserialize a font payload back into atlas dimensions, the atlas supersample
 /// factor, the rasterization size, RGBA pixels, and metrics.
+///
+/// # Errors
+///
+/// Returns an error if the payload is truncated or its sizes overflow.
 pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, String> {
     let mut r = ByteReader::new(bytes, "font payload");
     let atlas_w = r.u32()?;
@@ -62,6 +66,10 @@ pub type FontAtlas = (u32, u32, Vec<u8>);
 
 /// A font payload as the face text lays out with, drawn from atlas slot
 /// `slot`, and the atlas that slot uploads.
+///
+/// # Errors
+///
+/// Returns an error if the payload does not deserialize (see [`deserialize`]).
 pub fn load_face(slot: usize, bytes: &[u8]) -> Result<(LoadedFont, FontAtlas), String> {
     let (atlas_w, atlas_h, supersample, size_px, rgba, metrics) = deserialize(bytes)?;
     let metrics: FontMetrics = metrics.into_iter().map(|m| (m.char_code, m)).collect();

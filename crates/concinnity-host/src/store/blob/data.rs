@@ -95,7 +95,7 @@ impl BlobData {
     /// An `Unloaded` overflow blob is read from its file on first access and
     /// becomes `Loaded`. Errors if the locator is out of range, the blob was
     /// released, or the on-demand load fails.
-    pub fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
+    pub(crate) fn read(&mut self, locator: &PayloadLocator) -> Result<&[u8], PayloadError> {
         let index = locator.blob_index;
         let count = u32::saturating_from(self.slots.len());
         let idx = index as usize;

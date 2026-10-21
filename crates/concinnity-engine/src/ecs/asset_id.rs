@@ -63,7 +63,7 @@ impl MintedIds {
     /// Errors once the world has minted [`AssetId::MINTED_CAPACITY`] of them:
     /// the range ends at [`u32::MAX`], so a counter past it would name a
     /// declared asset instead.
-    pub fn next_id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
+    pub(crate) fn next_id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
         if self.next >= AssetId::MINTED_CAPACITY {
             return Err(AssetIdsExhausted);
         }

@@ -65,6 +65,10 @@ impl ProceduralChunks {
     /// The geometry for chunk `coord` at `detail`: full voxel geometry
     /// (`ChunkDetail::Near`) or a coarse distant impostor
     /// (`ChunkDetail::Far`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the chunk's geometry cannot be built.
     pub fn generate(&self, coord: ChunkCoord, detail: ChunkDetail) -> Result<DecodedMesh, String> {
         let (vertices, indices) = match detail {
             ChunkDetail::Near => {

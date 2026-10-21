@@ -101,7 +101,11 @@ pub fn tally(raw: &[u32]) -> CullStatusCounts {
 /// truncating to `count` objects. The backends map their status buffer as raw
 /// bytes; the trailing capacity past the live object count holds whatever the
 /// last resize left there, so the caller's live cull count is the length that
-/// matters. Returns `Err` when the mapping is too short for `count`.
+/// matters.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` is too short for `count`.
 pub fn decode(bytes: &[u8], count: usize) -> Result<Vec<u32>, &'static str> {
     if bytes.len() < count * size_of::<u32>() {
         return Err("cull-status readback is shorter than the live object count");

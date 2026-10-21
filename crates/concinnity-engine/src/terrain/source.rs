@@ -60,6 +60,10 @@ fn noise(s: f32, t: f32, offset: [u32; 2]) -> f32 {
 /// Heights of a `resolution`-cell grid from a decoded `width` x `height` RGBA8
 /// image: the red channel, bilinearly sampled with the image's corner texels
 /// on the grid's corners, mapped from [0, 255] onto `[min, max]`.
+///
+/// # Errors
+///
+/// Returns an error if the image is empty or too short for its dimensions.
 pub fn heightmap_heights(
     resolution: u32,
     width: u32,

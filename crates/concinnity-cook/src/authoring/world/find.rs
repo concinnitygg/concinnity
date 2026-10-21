@@ -8,6 +8,11 @@ pub const WORLD_JSONL: &str = "world.jsonl";
 /// directories: a supported location for an ad hoc world beside `worlds/`,
 /// searched after it, and the whole search when the caller has no `worlds/` to
 /// offer.
+///
+/// # Errors
+///
+/// Returns an error if the world `name` names does not exist, or no world is
+/// found by the search.
 pub fn find_world_jsonl(
     worlds_dir: Option<&std::path::Path>,
     name: Option<&str>,

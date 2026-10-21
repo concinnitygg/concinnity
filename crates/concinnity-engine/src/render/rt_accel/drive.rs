@@ -41,10 +41,18 @@ pub trait RtAccelSteps {
     fn book(&mut self) -> &mut AccelBook<Self::Blas, Self::Instance>;
 
     /// Bring the draw BLAS head in line with the current draw set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a BLAS build fails.
     fn refresh_topology(&mut self, refresh: RefreshStep) -> RenderResult<()>;
 
     /// Rebuild the TLAS and geometry table over the head from current
     /// transforms.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TLAS or geometry table cannot be rebuilt.
     fn rebuild_tlas(&mut self) -> RenderResult<()>;
 
     /// Stop publishing the skinned tail: nothing static is left and no skinned
@@ -53,6 +61,11 @@ pub trait RtAccelSteps {
 
     /// Re-skin, update the skinned BLAS, and rebuild the TLAS over the head
     /// plus the skinned BLAS, from scratch when `full_build`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if re-skinning, the skinned BLAS update, or the TLAS
+    /// rebuild fails.
     fn rebuild_skinned(&mut self, full_build: bool) -> RenderResult<RtUpdate>;
 }
 
@@ -74,6 +87,11 @@ pub struct RtDriveInputs<'a> {
 /// the step after it run. A refresh on the skinned path leaves the TLAS to the
 /// skinned step, so a skinned step that did not finish keeps the refresh owed.
 /// When both fail, the refresh's error is the one reported.
+///
+/// # Errors
+///
+/// Returns an error if the topology refresh or the frame's TLAS or skinned step
+/// fails.
 pub fn drive_update<D: RtAccelSteps>(
     device: &mut D,
     inputs: RtDriveInputs<'_>,

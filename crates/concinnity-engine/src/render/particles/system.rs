@@ -81,6 +81,10 @@ impl<G> ParticleSystem<G> {
 
     /// Place `record` with its GPU state in a slot and return the id, reusing a
     /// tombstoned slot before growing. The emitter starts with an empty pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AtCapacity` if the table has no free slot and cannot grow.
     pub fn insert(&mut self, record: ParticleEmitterRecord, gpu: G) -> Result<usize, AtCapacity> {
         let (aabb_min, aabb_max) = record.aabb();
         self.emitters.insert(Emitter {
@@ -95,6 +99,10 @@ impl<G> ParticleSystem<G> {
 
     /// Tombstone the emitter at `id`, handing its GPU state back so the backend
     /// can release it on its own terms.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `id` was never handed out or is already removed.
     pub fn remove(&mut self, id: usize) -> Result<G, RemoveError> {
         self.emitters.remove(id).map(|e| e.gpu)
     }

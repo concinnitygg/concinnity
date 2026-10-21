@@ -164,7 +164,6 @@ similar_names = "allow"
 many_single_char_names = "allow"
 pub_underscore_fields = "allow"
 must_use_candidate = "allow"
-missing_errors_doc = "allow"
 # Local items read best beside their only use.
 items_after_statements = "allow"
 # Exact float compares here are change detection, tie-breaks and sentinels; an epsilon changes behavior.

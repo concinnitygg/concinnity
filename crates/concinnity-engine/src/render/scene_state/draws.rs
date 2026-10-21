@@ -61,7 +61,7 @@ impl SceneState {
     /// source's geometry, LOD slices, textures, material and cull distance, and
     /// carries a sentinel AABB so the cull draws it every frame. `Err` when the
     /// source is out of range or the runtime reserve is full.
-    pub fn clone_static_draw_object(
+    pub(crate) fn clone_static_draw_object(
         &mut self,
         src: DrawIndex,
         model: [[f32; 4]; 4],
@@ -131,7 +131,11 @@ impl SceneState {
     }
 
     /// Replace a streamed chunk's placement matrix.
-    pub fn set_chunk_model(&mut self, index: DrawIndex, model: [[f32; 4]; 4]) -> RenderResult<()> {
+    pub(crate) fn set_chunk_model(
+        &mut self,
+        index: DrawIndex,
+        model: [[f32; 4]; 4],
+    ) -> RenderResult<()> {
         draw_slot::set_chunk_model(&mut self.draw.objects, index, model).map_err(RenderError::Other)
     }
 
@@ -160,7 +164,7 @@ impl SceneState {
 
     /// Resize a skinned slot's palette to a reloaded skeleton; see
     /// `SkinnedSlots::update_skeleton`.
-    pub fn update_skinned_skeleton(
+    pub(crate) fn update_skinned_skeleton(
         &mut self,
         index: SkinnedIndex,
         new_joint_count: usize,

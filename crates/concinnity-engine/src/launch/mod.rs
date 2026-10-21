@@ -50,6 +50,11 @@ impl LaunchArgs {
     /// The launch `args` ask for, each a flag from [`LAUNCH_FLAGS`] as
     /// `--name`, `--name value` or `--name=value`. `--help` is answered with
     /// [`LaunchArgsError::Help`]. Takes `std::env::args().skip(1)` as it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchArgsError::Help`] for `--help`, or an error naming an
+    /// unknown flag or a missing, unexpected, or malformed value.
     pub fn parse<I>(args: I) -> Result<Self, LaunchArgsError>
     where
         I: IntoIterator,
@@ -91,6 +96,11 @@ impl LaunchArgs {
 
     /// Apply the flag `name` (without its `--`), with its value when it takes
     /// one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `name` is unknown, or `value` is missing,
+    /// unexpected, or malformed.
     pub fn set(&mut self, name: &str, value: Option<&str>) -> Result<(), LaunchArgsError> {
         let flag = flag(name).ok_or_else(|| LaunchArgsError::Unknown(name.to_string()))?;
         let bad = |value: &str| LaunchArgsError::BadValue {

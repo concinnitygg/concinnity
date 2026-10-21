@@ -54,7 +54,10 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             dmg: args.dmg,
         }),
         Commands::Mcp(args) => crate::run_mcp(args.debug_port),
-        Commands::Version => command::version(),
+        Commands::Version => {
+            command::version();
+            Ok(())
+        }
     }
 }
 

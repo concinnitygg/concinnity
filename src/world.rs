@@ -209,9 +209,10 @@ impl World {
     /// packed from a raw [`bake::Mesh`](crate::bake::Mesh)'s vertices.
     /// Handles count up in the order meshes are added.
     ///
-    /// Errors once the world has minted
-    /// [`AssetId::MINTED_CAPACITY`](crate::AssetId::MINTED_CAPACITY)
-    /// names.
+    /// # Errors
+    ///
+    /// Returns an error once the world has minted
+    /// [`AssetId::MINTED_CAPACITY`](crate::AssetId::MINTED_CAPACITY) names.
     pub fn add_mesh(&mut self, payload: MeshPayload) -> Result<MeshHandle, WorldError> {
         self.inner.add_mesh(payload)
     }

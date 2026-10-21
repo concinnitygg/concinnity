@@ -54,6 +54,11 @@ pub struct SkinnedGeometry {
 /// Decode every `SkinnedMesh` in the world's table, with the blob each payload
 /// came from, and publish the name, skin and morph-name indices animation reads
 /// at init. The first mesh that fails to decode fails the load.
+///
+/// # Errors
+///
+/// Returns an error naming the first mesh whose record or payload fails to
+/// decode.
 pub fn decode_skinned(
     ctx: &mut PipelineContext<'_>,
 ) -> Result<(Vec<SkinnedGeometry>, Vec<u32>), String> {
@@ -207,6 +212,10 @@ impl SkinnedAssembly {
 /// deformed buffer by global vertex index, so two live instances sharing one
 /// would clobber each other's pose. A mesh naming an unknown material fails
 /// the load.
+///
+/// # Errors
+///
+/// Returns an error naming a mesh that references an unknown material.
 pub fn assemble_skinned(
     geometry: &[SkinnedGeometry],
     material_map: &HashMap<MaterialHandle, MaterialEntry>,

@@ -19,8 +19,11 @@ type VertT = ([f32; 3], [f32; 3], [f32; 3], [f32; 3], [f32; 2]);
 /// Derive the generator-form vertices of raw `Mesh` geometry: each vertex
 /// takes the normalized sum of the face normals of the triangles that share
 /// it, so a vertex the triangles of one flat face own is flat-shaded and one
-/// shared across a curve is smooth. A triangle that indexes past the vertex
-/// list is an error.
+/// shared across a curve is smooth.
+///
+/// # Errors
+///
+/// Returns an error if a triangle indexes past the vertex list.
 pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Vert>, String> {
     let mut normals = alloc::vec![[0.0f32; 3]; data.len()];
     for (t, tri) in indices.chunks_exact(3).enumerate() {
@@ -51,6 +54,11 @@ pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Ve
 /// either gives explicit thresholds or, when empty, a default doubling
 /// sequence derived from the bounding-sphere radius. `lod_levels = 1` (the
 /// default) produces no trailer and emits the single-LOD payload.
+///
+/// # Errors
+///
+/// Returns an error if `lod_distances` is non-empty and does not hold one
+/// distance per LOD alternate.
 pub fn finish_mesh_payload(
     vertices: Vec<Vert>,
     indices: &[u16],

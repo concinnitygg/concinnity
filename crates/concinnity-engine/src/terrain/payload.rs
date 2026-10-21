@@ -47,6 +47,11 @@ impl TerrainPayload {
     }
 
     /// Read a payload cooked for a terrain spanning `extent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is not a terrain payload, is truncated, or
+    /// holds an out-of-range resolution, grid, or mask.
     pub fn decode(bytes: &[u8], extent: [f32; 2]) -> Result<Self, String> {
         let mut r = Reader { bytes, at: 0 };
         if r.take(4)? != MAGIC {

@@ -27,7 +27,7 @@ const FRAME: Duration = Duration::from_millis(80);
 
 /// How much of what a build logs its status shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Verbosity {
+pub(crate) enum Verbosity {
     /// Warnings and errors.
     #[default]
     Normal,

@@ -53,9 +53,17 @@ pub trait ProbeBakeDevice {
     fn capture_ready(&self, prefilter_in_flight: bool) -> bool;
 
     /// Make room in the cube array for `count` probes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cube array cannot grow to `count` probes.
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()>;
 
     /// Build the capture of the probe at `index`, submitting no face yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the capture's resources cannot be created.
     fn start_capture(
         &mut self,
         frame: &Self::Frame<'_>,
@@ -64,6 +72,10 @@ pub trait ProbeBakeDevice {
     ) -> RenderResult<Self::Capture>;
 
     /// Record and submit cube face `face` of `capture`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face cannot be recorded or submitted.
     fn render_face(
         &mut self,
         frame: &Self::Frame<'_>,
@@ -76,6 +88,10 @@ pub trait ProbeBakeDevice {
 
     /// Turn a retired capture of the probe at `index` into its convolution,
     /// releasing the capture's draw resources. Submits nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the convolution's resources cannot be created.
     fn begin_prefilter(
         &mut self,
         index: usize,
@@ -84,6 +100,10 @@ pub trait ProbeBakeDevice {
 
     /// Record and submit convolution step `mip`: mip 0 is the clamped copy of
     /// the capture plus its source pyramid, each later mip one GGX convolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the step cannot be recorded or submitted.
     fn prefilter_mip(&mut self, prefilter: &mut Self::Prefilter, mip: u32) -> RenderResult<()>;
 
     /// Whether every convolution step is done with as far as installing the
@@ -163,6 +183,10 @@ impl<C, P> ProbeBake<C, P> {
     /// Replace the placements: abandon whatever is in flight, make room for
     /// every placement and queue them all. When the cube array cannot grow,
     /// no probe is placed and reflections read the sky.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from growing the cube array when it cannot grow.
     pub fn place<D>(&mut self, device: &mut D, placements: Vec<ProbePlacement>) -> RenderResult<()>
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,

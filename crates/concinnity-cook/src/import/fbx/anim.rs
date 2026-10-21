@@ -45,6 +45,11 @@ pub(crate) fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
 /// `animation_index`, baked at `sample_rate` keys per second and resolved
 /// against the `skin_index`-th skinned mesh's skeleton. Curves targeting nodes
 /// that are not skeleton joints are dropped, mirroring the glTF importer.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be parsed, has no matching skin or
+/// animation, or its curves cannot be resolved.
 pub fn import_fbx_animation(
     path: &str,
     animation_index: u32,

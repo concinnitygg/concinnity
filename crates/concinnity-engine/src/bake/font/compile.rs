@@ -49,6 +49,10 @@ pub const BUILTIN_FONT_BYTES: &[u8] = include_bytes!("fonts/Questrial-Regular.tt
 
 /// Rasterize `ttf_bytes` at `size_px` and encode the atlas as a blob payload.
 /// `source` names the face in error messages.
+///
+/// # Errors
+///
+/// Returns an error if `ttf_bytes` is not a face fontdue can parse.
 pub fn compile(ttf_bytes: &[u8], size_px: u32, source: &str) -> Result<Vec<u8>, String> {
     let logical_size_px = size_px as f32;
     // The whole pipeline (rasterize, SDF, pack) runs at the supersampled size, so

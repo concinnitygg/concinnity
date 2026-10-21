@@ -218,6 +218,10 @@ fn needs_gbuffer(g: &ResolvedGraphics) -> bool {
 /// it once; [`apply_plan`] decides what runs and in which order.
 pub trait SettingsTarget {
     /// Reallocate the runtime-switched features to match `graphics`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a feature's GPU resources cannot be reallocated.
     fn rebuild_features(&mut self, graphics: &ResolvedGraphics) -> RenderResult<()>;
     /// Push the per-feature sub-quality scalars of the live features.
     fn push_feature_params(&mut self, graphics: &ResolvedGraphics);
@@ -234,6 +238,11 @@ pub trait SettingsTarget {
 /// Carry `plan` out on `target`: reallocate first, so the live pushes that
 /// follow land on the rebuilt features (a static exposure once auto-exposure
 /// is off, the sub-quality scalars of a feature just turned on).
+///
+/// # Errors
+///
+/// Returns an error if reallocating the features fails; the live pushes still
+/// apply.
 pub fn apply_plan<T: SettingsTarget + ?Sized>(
     target: &mut T,
     graphics: &ResolvedGraphics,

@@ -39,7 +39,7 @@ impl EnvironmentMapRecord {
 
     /// Decode a resource record's `data_bytes`. A record with no runtime
     /// fields holds the defaults.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, FrameError> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, FrameError> {
         match bytes {
             [] => Ok(Self::default()),
             _ => decode_exact(bytes),
@@ -50,6 +50,10 @@ impl EnvironmentMapRecord {
 impl EnvironmentMapTable {
     /// The runtime fields of the map at `handle`; the defaults when there is
     /// no such map.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record's bytes do not decode.
     pub fn record(&self, handle: usize) -> Result<EnvironmentMapRecord, FrameError> {
         self.0.get(handle).map_or_else(
             || Ok(EnvironmentMapRecord::default()),

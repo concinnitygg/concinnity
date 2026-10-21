@@ -189,6 +189,11 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 /// edited file, so a texture that builds also reloads. Only a `.glb` / `.gltf`
 /// source is searched for under `assets_dir`; the flat image formats read the
 /// path the world declared.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or does not decode in the format
+/// its extension names.
 pub fn decode_source(
     source: &str,
     image_index: u32,
@@ -447,6 +452,11 @@ fn load_gltf_image(
 /// single asset hot-reload pass: the worker thread keeps a
 /// `HashMap<String, gltf::Gltf>` and calls this entry point per texture
 /// instead of re-parsing the file 43+ times.
+///
+/// # Errors
+///
+/// Returns an error if the image cannot be read from `doc`, is not PNG or JPEG,
+/// or does not decode.
 pub fn decode_glb_image_from_doc(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,

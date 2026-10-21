@@ -63,6 +63,10 @@ impl<B: UploadBuffer> UploadRing<B> {
     /// replacing its buffer with one `create` makes at the grown capacity when
     /// it is too small. The fence for `frame` has retired, so the old buffer
     /// can go.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from `create` when it fails.
     pub fn reserve<E>(
         &self,
         frame: usize,
@@ -81,6 +85,11 @@ impl<B: UploadBuffer> UploadRing<B> {
 
     /// Copy `bytes` into frame `frame`'s slot at the next aligned offset, and
     /// hand `locate` the slot's buffer and that offset for the bind.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RingOverflow`] if `bytes` does not fit the room reserved for
+    /// the frame.
     pub fn push<T>(
         &self,
         frame: usize,

@@ -364,6 +364,11 @@ macro_rules! define_registered_type {
             /// type the args ARE the component; a divergent type (`args:`
             /// metadata) routes through its `bake` translation in
             /// `bake_divergent`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if `args` do not deserialize into the type's
+            /// args or the component cannot be encoded.
             pub fn reserialize_args(
                 self,
                 args: &serde_json::Value,
@@ -404,6 +409,11 @@ macro_rules! define_registered_type {
             /// JSON with defaults filled and references resolved. Authoring
             /// tools (`cn add`, the editor form) write this into world.jsonl;
             /// the baked postcard bytes cannot round-trip to JSON.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if `args` do not deserialize into the type's
+            /// args or the result cannot be serialized back to JSON.
             pub fn normalized_args(
                 self,
                 args: &serde_json::Value,
@@ -603,7 +613,7 @@ for_each_authored_type!(__authored_component);
 
 /// The world entry that declares one authored asset under the `$id` `id`, as
 /// a `{"type", "args"}` object. The caller never names a JSON type.
-pub fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_json::Value> {
+pub(crate) fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_json::Value> {
     let args = serde_json::to_value(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
     let mut entry = serde_json::json!({ "type": T::TYPE, "args": args });
@@ -619,7 +629,7 @@ pub fn asset_entry<T: Authored>(id: &str, value: &T) -> std::io::Result<serde_js
 /// A dotted `field` reaches into nested objects, so `on.enter` names the
 /// volume a behavior's `enter` source watches, and a numeric step indexes a
 /// list, so `layers.0.grass` names a planet's first layer's grass.
-pub fn set_reference(
+pub(crate) fn set_reference(
     entry: &mut serde_json::Value,
     field: &str,
     target: &str,
@@ -737,6 +747,11 @@ mod authored_tests {
 /// `bake` translation at build time and serialize the component itself, which
 /// the type's `from_baked` deserializes at load. Pass-through types return
 /// `None`; cook reserializes their args (which ARE the component).
+///
+/// # Errors
+///
+/// Returns an error if `args` do not deserialize into the type's authored args
+/// or the baked component cannot be encoded.
 pub fn bake_divergent(
     ct: RegisteredType,
     args: &serde_json::Value,

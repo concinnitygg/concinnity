@@ -125,6 +125,10 @@ fn target_desc() -> TextureDesc {
 
 /// Build the resolve pipeline on its own, without touching the targets. What
 /// shader hot reload rebuilds and hands to [`TaaPass::swap_pipeline`].
+///
+/// # Errors
+///
+/// Returns an error if the pipeline fails to build.
 pub fn build_pipeline<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline> {
     device.create_pipeline(
         PostProgram::TaaResolve,
@@ -135,6 +139,10 @@ pub fn build_pipeline<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline
 
 impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     /// Build the resolve pipeline and the accumulation targets at `extent`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pipeline or a target cannot be created.
     pub fn new<D>(device: &D, ring: TaaRing, extent: PostExtent) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -184,6 +192,10 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     /// Recreate the accumulation targets at a new extent and forget the
     /// accumulated history, which was rendered at a resolution this one cannot
     /// reproject from. The caller has already idled the device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a target cannot be created.
     pub fn resize<D>(&mut self, device: &D, extent: PostExtent) -> RenderResult<()>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
@@ -210,6 +222,10 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
     /// whose consumers are pre-bound per frame in flight has no choice about
     /// which target a frame writes; it reports the frame slot and the ring
     /// depth matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode<'t, D>(
         &'t self,
         device: &D,

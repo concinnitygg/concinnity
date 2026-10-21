@@ -22,6 +22,10 @@ pub trait FrameDevice {
 
     /// Work owed ahead of the frame: rebuilds requested since the last one,
     /// and the world's content carried into a rebased frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a rebuild or the rebased content fails to apply.
     fn prepare(&mut self, params: &FrameParams<'_>) -> RenderResult<()>;
 
     /// Drop the temporal history this backend keeps itself: its
@@ -30,12 +34,25 @@ pub trait FrameDevice {
 
     /// Wait for the frame's slot and acquire its target, or `None` to skip a
     /// frame nothing can be drawn into.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if waiting for the slot or acquiring the target fails.
     fn begin(&mut self, params: &FrameParams<'_>) -> RenderResult<Option<Self::Frame>>;
 
     /// Plan the frame `frame` draws.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the frame cannot be planned.
     fn plan(&mut self, frame: &Self::Frame, params: &FrameParams<'_>) -> RenderResult<FramePlan>;
 
     /// Record, submit and present `plan` into `frame`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if recording, submitting, or presenting the frame
+    /// fails.
     fn execute(
         &mut self,
         frame: Self::Frame,
@@ -60,6 +77,10 @@ pub fn camera_inputs(scene: &SceneState, params: &FrameParams<'_>) -> CameraInpu
 }
 
 /// Run one frame on `device`.
+///
+/// # Errors
+///
+/// Returns an error if any of the device's steps fails.
 pub fn drive_frame<D: FrameDevice>(device: &mut D, params: FrameParams<'_>) -> RenderResult<()> {
     let atmosphere = device.draws_atmosphere();
     let view = &mut device.frame_scene().view;

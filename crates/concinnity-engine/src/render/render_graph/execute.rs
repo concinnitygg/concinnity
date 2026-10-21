@@ -18,6 +18,10 @@ pub trait PassRecorder: Sync {
     /// A recorded, not yet submitted, command buffer.
     type Recorded: Send;
     /// Record graph pass `index`, its barriers included. Never the presenter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pass cannot be recorded.
     fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<Self::Recorded>;
 }
 
@@ -75,6 +79,10 @@ pub fn presenter_index(graph: &CompiledGraph) -> Option<usize> {
 /// Record every pass of `graph` except the presenter through `recorder`, fanned
 /// out over `fan`, one job per pass. The first failure in compiled order is returned and every
 /// recorded buffer is dropped with it.
+///
+/// # Errors
+///
+/// Returns the first pass's recording error, in compiled order.
 pub fn execute_passes<'s, R: PassRecorder, F: FanOut>(
     graph: &CompiledGraph,
     recorder: &R,

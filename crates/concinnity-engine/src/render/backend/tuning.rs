@@ -33,6 +33,12 @@ pub trait RenderTuning {
     /// Default: a plan with nothing to reallocate is a no-op, and one with
     /// something is [`RenderError::Unsupported`], for a backend with no live
     /// rebuild path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] for a plan that reallocates on a
+    /// backend with no live rebuild path, or an error if reallocating a feature
+    /// fails.
     fn apply_settings(
         &mut self,
         graphics: &ResolvedGraphics,
@@ -65,9 +71,13 @@ pub trait RenderTuning {
     /// and directions differ. `uniforms` supplies the point array world shader
     /// hooks read; its other fields are ignored. This is how a world that
     /// moves to another simulated frame carries its lights. The spot shadow
-    /// slices re-render from their first refresh. Default:
-    /// [`RenderError::Unsupported`]; an `Err` also reports a count that does
-    /// not match the lights built at init.
+    /// slices re-render from their first refresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend that cannot move
+    /// lights in place, or an error if the light count does not match the
+    /// lights built at init.
     fn move_local_lights(
         &mut self,
         lights: &crate::render::light::lights::LightData,

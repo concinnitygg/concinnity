@@ -7,6 +7,10 @@ use alloc::format;
 use alloc::string::String;
 
 /// Product of `factors`, or an error naming `label` if it overflows `usize`.
+///
+/// # Errors
+///
+/// Returns an error naming `label` if the product overflows `usize`.
 pub fn checked_product(label: &str, factors: &[usize]) -> Result<usize, String> {
     let mut acc: usize = 1;
     for f in factors {

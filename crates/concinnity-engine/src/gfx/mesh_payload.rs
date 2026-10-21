@@ -338,6 +338,11 @@ pub fn serialize_skinned_with_lods(
 /// The returned skeleton lives in the payload; the args JSON no longer needs
 /// to carry it. The optional LOD trailer is parsed and discarded; callers
 /// who need LOD alternates should use [`deserialize_skinned_with_lods`].
+///
+/// # Errors
+///
+/// Returns an error if the payload is malformed (see
+/// [`deserialize_skinned_with_lods`]).
 pub fn deserialize_skinned(bytes: &[u8]) -> Result<DeserializedSkinned, String> {
     let p = deserialize_skinned_with_lods(bytes)?;
     Ok((p.vertices, p.indices, p.joints))
@@ -347,6 +352,10 @@ pub fn deserialize_skinned(bytes: &[u8]) -> Result<DeserializedSkinned, String> 
 /// LOD trailer. Mirrors [`deserialize_with_lods`] for static meshes:
 /// legacy single-LOD payloads have no trailer and produce an empty
 /// alternates vec.
+///
+/// # Errors
+///
+/// Returns an error if the payload lacks its magic header or is truncated.
 pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, String> {
     if bytes.len() < 8 || &bytes[0..4] != SKINNED_MAGIC {
         return Err("skinned mesh payload missing SKMV magic header".to_string());
@@ -448,6 +457,10 @@ pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
 /// LOD0 indices and return one entry per additional level. The order is
 /// preserved: `alternates[i]` is LOD `i + 1` and applies at camera
 /// distance ≥ `alternates[i].0`.
+///
+/// # Errors
+///
+/// Returns an error if the payload is truncated.
 pub fn deserialize_with_lods(bytes: &[u8]) -> Result<DeserializedStatic, String> {
     let mut cur = ByteReader::new(bytes, "mesh payload");
 
@@ -522,7 +535,7 @@ fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, 
 /// Deserialize a packed payload back into typed vertex and index vecs (static),
 /// ignoring any LOD trailer.
 #[cfg(test)]
-pub fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
+pub(crate) fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
     let (vertices, indices, _) = deserialize_with_lods(bytes)?;
     Ok((vertices, indices))
 }

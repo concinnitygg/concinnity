@@ -63,7 +63,7 @@ fn pages(docs: &[AssetDoc]) -> BTreeMap<String, String> {
 /// `root` is the directory the pages go under; `None` uses the working
 /// directory. Unchanged pages are left alone, so running this on an
 /// up-to-date tree touches nothing.
-pub fn docs(root: Option<&str>) -> io::Result<()> {
+pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
     let pages = pages(&reference::build(&reference::registry_assets()));
     let dir = PathBuf::from(root.unwrap_or(".")).join(PAGES_DIR);
     let (written, removed) = write_pages(&dir, &pages)?;

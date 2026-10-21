@@ -210,6 +210,11 @@ macro_rules! define_components {
             /// deserialize the runtime component via `Component::from_baked`
             /// (every record is baked -- cook already ran the asset -> component
             /// translation).
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if the tag names no component or its bytes do
+            /// not decode.
             pub fn from_baked(def: &BlobAssetDef) -> Result<Self, AssetError> {
                 $(
                     if def.discriminant == ComponentTag::$variant as u8 {

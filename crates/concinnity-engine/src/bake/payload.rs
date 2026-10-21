@@ -1,8 +1,7 @@
 //! Baking an asset's payload from its typed value.
 //!
 //! Every bake here is pure computation over the value's fields: a generator's
-//! geometry, an IBL convolution, the built-in face's glyph atlas, a material's
-//! clamped parameters. An asset whose payload needs a file read, an image
+//! geometry, an IBL convolution, the built-in face's glyph atlas. An asset whose payload needs a file read, an image
 //! decode, or a shader compiler is refused with an error naming the cook
 //! module, which is where the importers live.
 //!
@@ -16,7 +15,7 @@ use alloc::vec::Vec;
 use crate::bake::environment_map::source::{HdrImage, bake_payload, generate_sky_equirect};
 use crate::bake::environment_map::stars::generate_stars_equirect;
 use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
-use crate::components::{EnvironmentMap, Font, Material, Mesh, ProceduralMesh, validate};
+use crate::components::{EnvironmentMap, Font, Mesh, ProceduralMesh};
 use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
     water_grid,
@@ -68,6 +67,11 @@ impl core::fmt::Debug for MeshPayload {
 }
 
 /// Bake a `ProceduralMesh`'s geometry into its payload.
+///
+/// # Errors
+///
+/// Returns an error if the generator is missing or unknown, or its arguments do
+/// not build valid geometry.
 pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
     let (vertices, indices): (Vec<Vert>, Vec<u16>) = match mesh.generator.as_str() {
         "room" => build_room_geometry(mesh.half_width, mesh.half_depth, 0.0, mesh.ceiling_height),
@@ -112,6 +116,11 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
 
 /// Bake a raw `Mesh`'s vertices and indices into its payload. Normals and
 /// tangents are derived here; a `source` naming a file needs an importer.
+///
+/// # Errors
+///
+/// Returns an error if the mesh names a `source` file, has no vertices or
+/// indices, or its indices do not form whole triangles.
 pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
     if !mesh.source.is_empty() {
         return Err(
@@ -143,6 +152,11 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
 
 /// Bake an `EnvironmentMap`'s IBL cubemaps into its blob payload, spreading
 /// each convolution's rows over `rows`.
+///
+/// # Errors
+///
+/// Returns an error if the map names a `source` file, its generator is missing
+/// or unknown, or its sizes are out of range.
 pub fn environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
     if !map.source.is_empty() {
         return Err(
@@ -169,6 +183,11 @@ pub fn environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<
 }
 
 /// Rasterize a `Font` into its glyph-atlas payload.
+///
+/// # Errors
+///
+/// Returns an error if the font names a `path`, or the built-in face cannot be
+/// rasterized at its size.
 pub fn font(font: &Font) -> Result<Vec<u8>, String> {
     if !font.path.is_empty() {
         return Err(
@@ -180,13 +199,6 @@ pub fn font(font: &Font) -> Result<Vec<u8>, String> {
         font.size_px,
         "<built-in>",
     )
-}
-
-/// Bake a `Material` into the runtime bytes its resource record carries. A
-/// material has no blob payload: the clamped parameters are the whole of it.
-pub fn material(material: Material) -> Result<Vec<u8>, String> {
-    postcard::to_allocvec(&validate::material(material))
-        .map_err(|e| alloc::format!("Material serialize: {e}"))
 }
 
 #[cfg(test)]
@@ -360,20 +372,5 @@ mod tests {
         })
         .expect_err("a file face");
         assert!(err.contains("cook module"), "{err}");
-    }
-
-    // A material's bytes are its clamped parameters, the same clamps the
-    // authored path applies on its way into the blob.
-    #[test]
-    fn a_material_bakes_its_clamped_parameters() {
-        let bytes = material(Material {
-            roughness: 4.0,
-            see_through: true,
-            ..Default::default()
-        })
-        .expect("a material bakes");
-        let read: Material = postcard::from_bytes(&bytes).expect("the bytes read back");
-        assert_eq!(read.roughness, 1.0);
-        assert!(read.transparent, "see-through implies transparent");
     }
 }

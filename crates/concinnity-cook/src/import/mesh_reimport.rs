@@ -39,6 +39,11 @@ type SkinnedImport = (
 /// import; `lod_levels` and `lod_distances` mirror the asset declaration so the
 /// reload produces a byte-identical payload to the build pass. The third
 /// component of the result is empty for `lod_levels <= 1`.
+///
+/// # Errors
+///
+/// Returns an error if the primitive cannot be imported or its payload does not
+/// compile.
 pub fn decode_mesh_from_parsed_glb(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
@@ -88,6 +93,10 @@ pub struct InlineSkinnedImport {
 /// inline asset form, morph targets included and nothing compiled. The
 /// editor's glTF-export round-trip check reads an exported `.glb` back through
 /// this so the comparison sees exactly what the build pipeline would import.
+///
+/// # Errors
+///
+/// Returns an error if the skinned mesh cannot be imported from `doc`.
 pub fn decode_skinned_inline_from_parsed_glb(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
@@ -116,6 +125,11 @@ pub fn decode_skinned_inline_from_parsed_glb(
 /// skeleton is returned in the same `SkeletonJoint` form the `SkinnedMesh`
 /// asset args carry; the reload helper checks it against the init-time joint
 /// count before pushing to the GPU.
+///
+/// # Errors
+///
+/// Returns an error if the skinned mesh cannot be imported or its payload does
+/// not compile.
 pub fn decode_skinned_from_parsed_glb(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,

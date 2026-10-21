@@ -191,6 +191,11 @@ pub(crate) fn compile_environment_map_payload(
 /// values from the declared `EnvironmentMap` asset so the decode produces the
 /// same texture sizes as the build pass. The convolutions are CPU-bound and
 /// take seconds at default sizes: the caller pays this on the render thread.
+///
+/// # Errors
+///
+/// Returns an error if the source cannot be read or decoded as an
+/// equirectangular image.
 pub fn decode_source(
     path: &str,
     prefilter_face: u32,

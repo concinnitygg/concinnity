@@ -113,7 +113,7 @@ pub struct ChunkRegion {
 /// pre-pass still diffs against the origin the chunk was last rendered with:
 /// the rebase is exact, so a stationary chunk shows zero motion across an
 /// origin shift.
-pub fn set_chunk_model(
+pub(crate) fn set_chunk_model(
     objects: &mut [DrawObject],
     draw_idx: DrawIndex,
     model: [[f32; 4]; 4],
@@ -130,7 +130,7 @@ pub fn set_chunk_model(
 /// index keeps its meaning; every pass skips it. The caller returns the region
 /// to its own vertex / index allocators, which is where the retire frame that
 /// keeps an in-flight submission from reading a reused range belongs.
-pub fn retire_chunk_slot(
+pub(crate) fn retire_chunk_slot(
     objects: &mut [DrawObject],
     draw_idx: DrawIndex,
 ) -> Result<ChunkRegion, String> {

@@ -36,11 +36,19 @@ pub enum GeometryBuffer {
 pub trait GeometryWriter {
     /// Write `bytes` into `buffer` at byte `offset`. The region was placed
     /// where no in-flight frame reads it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the write cannot be staged or recorded.
     fn write(&mut self, buffer: GeometryBuffer, offset: usize, bytes: &[u8]) -> RenderResult<()>;
 
     /// A region of `buffer` the scene no longer draws from. Default: nothing,
     /// since every pass skips a non-resident draw and a later placement
     /// overwrites the bytes in full.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot release the region.
     fn release(&mut self, buffer: GeometryBuffer, offset: usize, len: usize) -> RenderResult<()> {
         let _ = (buffer, offset, len);
         Ok(())
@@ -141,7 +149,7 @@ impl SceneState {
     /// allocators find room, write it, and point the slot at it. `frame`
     /// reclaims the frees that have retired by then. The counts must match the
     /// slot's build-time `vertex_count` / `index_count`.
-    pub fn upload_mesh(
+    pub(crate) fn upload_mesh(
         &mut self,
         draw_idx: DrawIndex,
         vertices: &[Vertex],
@@ -202,7 +210,7 @@ impl SceneState {
     /// Make a streamed mesh non-resident and return its regions to the mesh
     /// allocators, held until `retire_frame` so no frame still in flight has
     /// them reused underneath it.
-    pub fn evict_mesh(
+    pub(crate) fn evict_mesh(
         &mut self,
         draw_idx: DrawIndex,
         retire_frame: u64,
@@ -256,7 +264,7 @@ impl SceneState {
     ///
     /// No fence orders this against frames in flight, which suits a
     /// human-paced live edit and nothing on a steady-state path.
-    pub fn update_mesh_geometry(
+    pub(crate) fn update_mesh_geometry(
         &mut self,
         draw_idx: DrawIndex,
         vertices: &[Vertex],
@@ -309,7 +317,7 @@ impl SceneState {
     /// Place one streamed chunk in the chunk headroom and write its draw at
     /// `dst`. A chunk with `bounds` is culled by its box placed at its model;
     /// one without is never culled.
-    pub fn add_chunk_mesh(
+    pub(crate) fn add_chunk_mesh(
         &mut self,
         mesh: ChunkMesh<'_>,
         dst: SlotAlloc,
@@ -391,7 +399,7 @@ impl SceneState {
 
     /// Hide a streamed chunk and return its regions to the chunk allocators,
     /// held until `retire_frame`.
-    pub fn remove_chunk_mesh(
+    pub(crate) fn remove_chunk_mesh(
         &mut self,
         draw_idx: DrawIndex,
         retire_frame: u64,

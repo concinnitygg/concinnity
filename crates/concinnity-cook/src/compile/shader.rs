@@ -29,17 +29,20 @@ pub struct CompiledShader {
 
 /// Compile every program `platform` consumes from a Shader's files.
 ///
-/// A failure names the Shader and the entries and carries the compiler's own
-/// diagnostics: a file with a syntax error, or one missing its hook, has to
-/// fail the build here, where the message can point at it, rather than at a
-/// renderer's init on someone else's machine.
-///
 /// Each file's text is fenced by `#line` directives naming its
 /// [`SourceFile::path`], so a diagnostic in a Shader's own file carries that
 /// path verbatim, and one in the engine's template carries the template's file
 /// name (`main_bindless.hlsl`). A caller matches a diagnostic to a file by
 /// comparing it with the path it passed here. The path is part of the
 /// assembled text and so of every artifact's source digest.
+///
+/// # Errors
+///
+/// Returns an error if an entry fails to compile. The error names the Shader
+/// and the entries and carries the compiler's own diagnostics: a file with a
+/// syntax error, or one missing its hook, has to fail the build here, where the
+/// message can point at it, rather than at a renderer's init on someone else's
+/// machine.
 pub fn compile_world_shader(
     name: &str,
     sources: &Sources<'_>,
@@ -94,6 +97,10 @@ fn hook_hint(diagnostic: &str) -> &'static str {
 }
 
 /// Read one of a Shader's files, naming the path on failure.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read.
 pub fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(source_path).map_err(|e| {
         std::io::Error::new(

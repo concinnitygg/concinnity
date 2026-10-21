@@ -59,6 +59,10 @@ pub fn target_desc() -> TextureDesc {
 
 /// Build the resolve pipeline on its own. What shader hot reload rebuilds and
 /// hands to [`SsrPass::swap_pipeline`].
+///
+/// # Errors
+///
+/// Returns an error if the pipeline fails to build.
 pub fn build_pipeline<D: PostPassDevice>(device: &D) -> RenderResult<D::Pipeline> {
     device.create_pipeline(
         PostProgram::SsrResolve,
@@ -74,6 +78,10 @@ pub struct SsrPass<Pipeline> {
 
 impl<Pipeline> SsrPass<Pipeline> {
     /// Build the resolve pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pipeline fails to build.
     pub fn new<D>(device: &D) -> RenderResult<Self>
     where
         D: PostPassDevice<Pipeline = Pipeline>,
@@ -90,6 +98,10 @@ impl<Pipeline> SsrPass<Pipeline> {
     }
 
     /// Encode the resolve into `inputs.target` with this frame's `params`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device fails to encode a draw.
     pub fn encode<D>(
         &self,
         device: &D,

@@ -44,8 +44,11 @@ where
     Res: Send + 'static,
 {
     /// `threads` threads named `name-N` (or `name` alone for one), each
-    /// answering a request with `load`; a request is its own key. Fails when
-    /// the OS refuses a thread.
+    /// answering a request with `load`; a request is its own key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the OS refuses a thread.
     pub fn spawn(
         name: &str,
         threads: usize,
@@ -63,6 +66,10 @@ where
 {
     /// As [`Worker::spawn`], with `key` naming what a panicked request
     /// answers with.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the OS refuses a thread.
     pub fn spawn_keyed(
         name: &str,
         threads: usize,
@@ -107,6 +114,10 @@ where
 
     /// Queue one request on the next live thread, handing it back when every
     /// thread is gone.
+    ///
+    /// # Errors
+    ///
+    /// Hands `request` back if every thread is gone.
     pub fn send(&mut self, request: Req) -> Result<(), Req> {
         let mut request = request;
         for _ in 0..self.threads.len() {

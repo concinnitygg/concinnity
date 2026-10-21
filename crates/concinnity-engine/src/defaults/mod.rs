@@ -34,8 +34,10 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 
 /// Complete `world`'s content with the engine defaults it does not opt out of.
 ///
-/// Errors when the world declares more than one `EngineDefaults` (which one
-/// applies would be arbitrary), or when baking an injected payload fails.
+/// # Errors
+///
+/// Returns an error if the world declares more than one `EngineDefaults` (which
+/// one applies would be arbitrary), or baking an injected payload fails.
 pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
     let toggles = take_toggles(ctx)?;
     let mut minter = Minter::resume(ctx);

@@ -79,6 +79,11 @@ fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
 
 /// Read and deserialize a blob's metadata section (component defs + resource
 /// records). Returns (meta, `payload_start_offset`).
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or its header and metadata do
+/// not parse.
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
     let data = read_file(path)?;
     parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data)
@@ -90,6 +95,11 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
 /// `PayloadLocator` offset into an absolute file offset.
 /// Used only by the Metal-driven disk-backed streaming source for now
 /// (Vulkan/DirectX streaming catch-up is a follow-up).
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened, or its header cannot be read
+/// or does not parse.
 pub fn payload_section_start(path: &str) -> Result<u64, BlobLoadError> {
     let mut file = fs::File::open(path).map_err(|source| BlobLoadError::io(path, source))?;
     let mut header = [0u8; HEADER_SIZE];
@@ -120,6 +130,11 @@ fn read_file(path: &str) -> Result<Vec<u8>, BlobLoadError> {
 /// each from disk the first time a locator needs it. Defs are not resolved into
 /// runtime `Asset`s: that resolution depends on the component registry, so it
 /// lives with the caller that builds the `World` (concinnity-runtime's `blob`).
+///
+/// # Errors
+///
+/// Returns an error if no state root is set, or a blob file cannot be read or
+/// does not parse.
 pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), BlobLoadError> {
     anchor(primary);
     load_raw_from(blob_path)

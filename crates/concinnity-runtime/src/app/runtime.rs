@@ -126,6 +126,11 @@ impl Runtime {
     /// the directory it was launched from. A caller with a tree of its own
     /// builds the runtime with [`in_tree`](Self::in_tree) instead. The world's own
     /// `AppConfig.home` overrides either at `start`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blob at `path` or one of its overflow siblings
+    /// cannot be read or decoded.
     pub fn from_blob(path: &Path) -> Result<Self, StartupError> {
         let mut runtime = Self::new();
         runtime.load_blob_from(path)?;
@@ -135,7 +140,12 @@ impl Runtime {
 
     /// Load assets and blob payload data from the primary blob under this runtime's
     /// state tree, and populate the world. Replaces any previously loaded
-    /// world. `NoStateRoot` when the runtime has no tree to read from.
+    /// world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StartupError::NoStateRoot`] when the runtime has no tree to
+    /// read from, or an error if the blob cannot be read or decoded.
     pub fn load_blob(&mut self) -> Result<(), StartupError> {
         let primary = self.primary_blob().ok_or(StartupError::NoStateRoot)?;
         self.load_blob_from(&primary)?;
@@ -215,6 +225,11 @@ impl Runtime {
 
     /// Build the world's systems and run their `init`. Must run once, before
     /// the first step.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has already started, no renderer can
+    /// serve the resolved render mode, or a system's `init` fails.
     pub fn start(&mut self) -> Result<(), WorldError> {
         if self.status != RuntimeStatus::Created {
             return Err(WorldError::AlreadyStarted);
@@ -458,6 +473,11 @@ impl Runtime {
     }
 
     /// Run this on the run loop with default options, consuming it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime fails to start (see
+    /// [`start`](Self::start)).
     pub fn run(self) -> Result<(), WorldError> {
         self.run_with(crate::app::run::RunOptions::default())
     }

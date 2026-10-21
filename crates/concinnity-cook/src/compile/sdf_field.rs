@@ -31,17 +31,20 @@ pub struct CompiledField {
 
 /// Compile every entry a volume with these flags draws with, from `field`.
 ///
-/// A failure names the volume and the entries and carries the compiler's own
-/// diagnostics: a field with a syntax error, or one missing a function the
-/// template calls, has to fail the build here, where the message can point at
-/// it, rather than at a renderer's init on someone else's machine.
-///
 /// The field's text is fenced by `#line` directives naming its
 /// [`SourceFile::path`], so a diagnostic in the field carries that path
 /// verbatim and one in the engine's template carries `raymarch.hlsl`. A
 /// function the template calls with the wrong signature errors in the
 /// template, and the note under it names the field's own line. The path is
 /// part of the assembled text and so of every artifact's source digest.
+///
+/// # Errors
+///
+/// Returns an error if an entry fails to compile. The error names the volume
+/// and the entries and carries the compiler's own diagnostics: a field with a
+/// syntax error, or one missing a function the template calls, has to fail the
+/// build here, where the message can point at it, rather than at a renderer's
+/// init on someone else's machine.
 pub fn compile_sdf_field(
     name: &str,
     field: SourceFile<'_>,

@@ -12,7 +12,11 @@ use crate::frame_hook::FrameHook;
 /// The `cn debug` server path: start the localhost debug server on `port`,
 /// then run interpreted with it as the per-frame hook. This is the entry point
 /// the CLI binary calls; the hook assembly stays inside this crate.
-pub fn run_debug(launch: LaunchRequest, json_path: Option<&str>, port: u16) -> std::io::Result<()> {
+pub(crate) fn run_debug(
+    launch: LaunchRequest,
+    json_path: Option<&str>,
+    port: u16,
+) -> std::io::Result<()> {
     concinnity_runtime::init_logging();
     let world_path = resolve_world_path(json_path)?;
     let hook: Box<dyn FrameHook> = match crate::debug::DebugServer::start(port) {

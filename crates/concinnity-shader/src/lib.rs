@@ -294,6 +294,11 @@ pub(crate) fn stdout_line(cmd: &mut Command) -> Option<String> {
 
 /// Compile `job` under `work_dir`, returning the artifact bytes. A warning
 /// fails the compile.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the source fails to compile or warns.
 pub fn compile(job: &HlslJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     with_scratch(work_dir, |dxc, scratch| {
         produce(job, dxc, scratch, Warnings::Deny)
@@ -304,6 +309,11 @@ pub fn compile(job: &HlslJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
 /// Compile `job` under `work_dir`, returning the artifact with any warnings
 /// dxc printed. The artifact is byte-identical to what
 /// [`compile`] emits for a source that warns of nothing.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the source fails to compile.
 pub fn compile_with_warnings(job: &HlslJob<'_>, work_dir: &Path) -> Result<Compiled, String> {
     with_scratch(work_dir, |dxc, scratch| {
         produce(job, dxc, scratch, Warnings::Report)
@@ -470,6 +480,11 @@ fn translate_to_msl(
 /// which is the only reading of them that matches what a compile sees: a
 /// declaration behind an inactive `#if` is not a declaration, and a register
 /// spelled as a macro is not a register until it is expanded.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the preprocessor rejects `source`.
 pub fn preprocessed_declarations(
     source: &str,
     file_name: &str,

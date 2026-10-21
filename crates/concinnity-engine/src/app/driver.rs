@@ -25,9 +25,19 @@ use crate::error::WorldError;
 /// wants the world back instead of run.
 pub trait Driver {
     /// Build the world's systems and run their `init`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the world was already started or a system's `init`
+    /// fails.
     fn start(&mut self) -> Result<(), WorldError>;
 
     /// Run the world until it ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the world fails to start, or the host's loop fails
+    /// while running it.
     fn run(self: Box<Self>) -> Result<(), WorldError>;
 
     /// Take the world back instead of running it.
