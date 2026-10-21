@@ -20,7 +20,8 @@ use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_host::store::paths::StateTree;
 use concinnity_runtime::{Runtime, StartupError};
 
-/// The outcome of a `cn_` call: [`CN_SUCCESS`](CnResult::CN_SUCCESS), or why it failed.
+/// The outcome of a `cn_` call: [`CN_SUCCESS`](CnResult::CN_SUCCESS), a positive
+/// status a call succeeded with, or a negative error.
 ///
 /// The engine reports a structured error with a cause chain to its Rust
 /// callers; a C host cannot hold one, so this is what a failure flattens to
@@ -32,42 +33,31 @@ use concinnity_runtime::{Runtime, StartupError};
     reason = "the variants are named as the C constants the header publishes"
 )]
 pub enum CnResult {
-    /// The call succeeded.
+    /// The call succeeded. From `cn_world_step`, the world is running; step it
+    /// again next refresh.
     CN_SUCCESS = 0,
-    /// A pointer argument was null, or a string was not UTF-8.
-    CN_ERROR_INVALID_ARGUMENT = 1,
-    /// `cn_init` has not run, so there is no host state to act on.
-    CN_ERROR_NOT_INITIALIZED = 2,
-    /// The root names nothing a world can be read from.
-    CN_ERROR_NO_WORLD_DATA = 3,
-    /// The world data is present but did not load.
-    CN_ERROR_UNREADABLE_WORLD_DATA = 4,
-    /// The world loaded but refused to start.
-    CN_ERROR_START_FAILED = 5,
-}
-
-/// What one step of a world reports.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    non_camel_case_types,
-    reason = "the variants are named as the C constants the header publishes"
-)]
-pub enum CnStep {
-    /// The world is running; step it again next refresh.
-    CN_CONTINUE = 0,
-    /// The world reached its own end.
+    /// The stepped world reached its own end.
     CN_DONE = 1,
-    /// The world asked to stop.
+    /// The stepped world asked to stop.
     CN_STOPPED = 2,
+    /// A pointer argument was null, or a string was not UTF-8.
+    CN_ERROR_INVALID_ARGUMENT = -1,
+    /// `cn_init` has not run, so there is no host state to act on.
+    CN_ERROR_NOT_INITIALIZED = -2,
+    /// The root names nothing a world can be read from.
+    CN_ERROR_NO_WORLD_DATA = -3,
+    /// The world data is present but did not load.
+    CN_ERROR_UNREADABLE_WORLD_DATA = -4,
+    /// The world loaded but refused to start.
+    CN_ERROR_START_FAILED = -5,
     /// No world is open, so there was nothing to step.
-    CN_NO_WORLD = -1,
+    CN_ERROR_NO_WORLD = -6,
 }
 
-impl From<StepResult> for CnStep {
+impl From<StepResult> for CnResult {
     fn from(result: StepResult) -> Self {
         match result {
-            StepResult::Continue => Self::CN_CONTINUE,
+            StepResult::Continue => Self::CN_SUCCESS,
             StepResult::Done => Self::CN_DONE,
             StepResult::Stop => Self::CN_STOPPED,
         }
@@ -105,8 +95,9 @@ pub extern "C" fn cn_init() {
 /// step, for a host that does not run an event loop of its own; pass 0 when
 /// the host dispatches input itself, which is the usual case.
 ///
-/// Replaces whatever world was open. Returns [`CnResult::CN_SUCCESS`] on success, and
-/// otherwise the code for why it failed, with the full cause chain logged.
+/// Replaces whatever world was open. Returns [`CnResult::CN_SUCCESS`] on
+/// success, and otherwise the error for why it failed, with the full cause
+/// chain logged.
 ///
 /// # Safety
 ///
@@ -155,18 +146,20 @@ pub unsafe extern "C" fn cn_world_open(
     }
 }
 
-/// Step the open world once. Returns a [`CnStep`].
+/// Step the open world once. Returns [`CnResult::CN_SUCCESS`] while it runs,
+/// [`CnResult::CN_DONE`] or [`CnResult::CN_STOPPED`] when it ends, and an error
+/// when there is nothing to step.
 #[unsafe(no_mangle)]
-pub extern "C" fn cn_world_step() -> CnStep {
+pub extern "C" fn cn_world_step() -> CnResult {
     let Some(state) = STATE.get() else {
-        return CnStep::CN_NO_WORLD;
+        return CnResult::CN_ERROR_NOT_INITIALIZED;
     };
     let Ok(mut state) = state.lock() else {
-        return CnStep::CN_NO_WORLD;
+        return CnResult::CN_ERROR_NOT_INITIALIZED;
     };
     match state.world.as_mut() {
         Some(world) => world.world_step().into(),
-        None => CnStep::CN_NO_WORLD,
+        None => CnResult::CN_ERROR_NO_WORLD,
     }
 }
 
@@ -272,32 +265,22 @@ mod tests {
 
     #[test]
     fn every_step_result_has_a_code() {
-        assert_eq!(CnStep::from(StepResult::Continue), CnStep::CN_CONTINUE);
-        assert_eq!(CnStep::from(StepResult::Done), CnStep::CN_DONE);
-        assert_eq!(CnStep::from(StepResult::Stop), CnStep::CN_STOPPED);
-    }
-
-    // A C caller compares against these integers, so they are the contract and
-    // not an implementation detail.
-    #[test]
-    fn the_step_codes_are_the_ones_the_header_publishes() {
-        assert_eq!(CnStep::CN_CONTINUE as i32, 0);
-        assert_eq!(CnStep::CN_DONE as i32, 1);
-        assert_eq!(CnStep::CN_STOPPED as i32, 2);
-        assert_eq!(CnStep::CN_NO_WORLD as i32, -1);
+        assert_eq!(CnResult::from(StepResult::Continue), CnResult::CN_SUCCESS);
+        assert_eq!(CnResult::from(StepResult::Done), CnResult::CN_DONE);
+        assert_eq!(CnResult::from(StepResult::Stop), CnResult::CN_STOPPED);
     }
 
     #[test]
-    fn stepping_with_no_world_open_says_so_rather_than_failing() {
+    fn stepping_with_no_world_open_is_an_error() {
         let _guard = host();
-        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
+        assert_eq!(cn_world_step(), CnResult::CN_ERROR_NO_WORLD);
     }
 
     #[test]
     fn closing_with_nothing_open_is_a_no_op() {
         let _guard = host();
         cn_world_close();
-        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
+        assert_eq!(cn_world_step(), CnResult::CN_ERROR_NO_WORLD);
     }
 
     #[test]
@@ -331,7 +314,7 @@ mod tests {
         // SAFETY: both pointers are live for the call.
         let opened = unsafe { cn_world_open(root.as_ptr(), some_view(&mut byte), 0) };
         assert_eq!(opened, CnResult::CN_ERROR_INVALID_ARGUMENT);
-        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
+        assert_eq!(cn_world_step(), CnResult::CN_ERROR_NO_WORLD);
     }
 
     // A directory with no `data/` in it has no world to load, which fails
@@ -345,7 +328,7 @@ mod tests {
         // SAFETY: both pointers are live for the call.
         let opened = unsafe { cn_world_open(root.as_ptr(), some_view(&mut byte), 0) };
         assert_eq!(opened, CnResult::CN_ERROR_NO_WORLD_DATA);
-        assert_eq!(cn_world_step(), CnStep::CN_NO_WORLD);
+        assert_eq!(cn_world_step(), CnResult::CN_ERROR_NO_WORLD);
     }
 
     // The refusal carries the load failure's own text, so a host's log says
@@ -367,16 +350,19 @@ mod tests {
     }
 
     // A C caller compares against these integers, so they are the contract and
-    // not an implementation detail. Zero is success, which is what lets a host
-    // write `if (cn_world_open(...))`.
+    // not an implementation detail. Every error is negative, which is what lets
+    // a host write `if (cn_world_step() < 0)`.
     #[test]
-    fn the_error_codes_are_the_ones_the_header_publishes() {
+    fn the_result_codes_are_the_ones_the_header_publishes() {
         assert_eq!(CnResult::CN_SUCCESS as i32, 0);
-        assert_eq!(CnResult::CN_ERROR_INVALID_ARGUMENT as i32, 1);
-        assert_eq!(CnResult::CN_ERROR_NOT_INITIALIZED as i32, 2);
-        assert_eq!(CnResult::CN_ERROR_NO_WORLD_DATA as i32, 3);
-        assert_eq!(CnResult::CN_ERROR_UNREADABLE_WORLD_DATA as i32, 4);
-        assert_eq!(CnResult::CN_ERROR_START_FAILED as i32, 5);
+        assert_eq!(CnResult::CN_DONE as i32, 1);
+        assert_eq!(CnResult::CN_STOPPED as i32, 2);
+        assert_eq!(CnResult::CN_ERROR_INVALID_ARGUMENT as i32, -1);
+        assert_eq!(CnResult::CN_ERROR_NOT_INITIALIZED as i32, -2);
+        assert_eq!(CnResult::CN_ERROR_NO_WORLD_DATA as i32, -3);
+        assert_eq!(CnResult::CN_ERROR_UNREADABLE_WORLD_DATA as i32, -4);
+        assert_eq!(CnResult::CN_ERROR_START_FAILED as i32, -5);
+        assert_eq!(CnResult::CN_ERROR_NO_WORLD as i32, -6);
     }
 
     // Data that is absent and data that is present but unusable are different

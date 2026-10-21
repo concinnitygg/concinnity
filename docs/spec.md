@@ -2814,11 +2814,12 @@ static and a dynamic library with a generated header:
 | --------------- | ------------------------------------------------------------------------------------- |
 | `cn_init`       | Initialize the process-wide engine state.                                             |
 | `cn_world_open` | Open a world from a state root into a host-owned native view (an `NSView` or `UIView`), optionally pumping events. |
-| `cn_world_step` | Advance one frame; returns continue, done, stopped, or no world.                      |
+| `cn_world_step` | Advance one frame; returns success while running, done or stopped when it ends.      |
 | `cn_world_close`| Tear the world down.                                                                  |
 
-Errors are a flat code (`Ok` is zero): invalid argument, not initialized, no world
-data, unreadable world data, start failed. The surface is single-threaded, called
+Every call reports a flat `CnResult`: `CN_SUCCESS` is zero, positive codes are
+statuses (done, stopped), and errors are negative (invalid argument, not
+initialized, no world data, unreadable world data, start failed, no world). The surface is single-threaded, called
 from the view's thread, and guarded against re-entry. Authoring is deliberately not
 part of it. This is the route by which the engine runs on iOS.
 
