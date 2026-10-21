@@ -1878,6 +1878,8 @@ impl Drop for VkContext {
         // dropped, before the device teardown below. On a reload the successor
         // shares this allocator, so only a context that still owns it drains.
         if !self.reused_by_successor {
+            // SAFETY: `wait_idle` above left the GPU idle.
+            unsafe { self.frame_capture.close() };
             self.hw.alloc.destroy();
         }
 

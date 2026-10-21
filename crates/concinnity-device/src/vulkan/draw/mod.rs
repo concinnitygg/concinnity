@@ -729,24 +729,6 @@ impl FrameDevice for VkContext {
         self.finish_frame_stats();
 
         // End-of-frame timestamp for the profiler overlay. Pairs with the
-        // TOP_OF_PIPE write near the top of the function (the block's first pair).
-        if let Some(pool) = self.hw.timestamp_query_pool {
-            let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_write_timestamp(
-                    cmd,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    pool,
-                    wf_end,
-                );
-            }
-        }
-
-        self.finish_frame_stats();
-
-        // End-of-frame timestamp for the profiler overlay. Pairs with the
         // TOP_OF_PIPE write in the start buffer (the block's first pair).
         if let Some(pool) = self.hw.timestamp_query_pool {
             let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
