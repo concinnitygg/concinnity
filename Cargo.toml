@@ -158,7 +158,8 @@ invalid_rust_codeblocks = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# Pedantic lints that fight the domain: GPU math, padded repr(C) fields, settings structs.
+# Pedantic lints that fight the domain: GPU math and its notation, padded repr(C) fields, and
+# pure helpers, where a `#[must_use]` on each adds noise without catching misuse.
 cast_precision_loss = "allow"
 similar_names = "allow"
 many_single_char_names = "allow"
