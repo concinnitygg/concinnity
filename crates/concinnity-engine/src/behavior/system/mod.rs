@@ -59,7 +59,7 @@ use crate::behavior::{Program, Val, VarTable};
 use crate::components::{
     Behavior, BehaviorSource, Identity, InteractEvent, Variables, VolumeEvent,
 };
-use concinnity_core::fanout::{Fanout, Lent, Pooled};
+use concinnity_core::fanout::{FanOut, Lent, Pooled};
 
 /// Runs a world's [`Behavior`] components: their firing rules, their bodies,
 /// and the effects those produce.
@@ -158,7 +158,7 @@ impl BehaviorSystem {
     /// Fan a tick's evaluation out on `pool` once its runs cost enough to pay
     /// for it.
     #[must_use]
-    pub fn with_pool<P: Fanout>(self, pool: Lent<P>) -> Self {
+    pub fn with_pool<P: FanOut>(self, pool: Lent<P>) -> Self {
         self.with_scheduler(Box::new(pool))
     }
 

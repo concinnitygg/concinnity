@@ -1,6 +1,6 @@
 // How a step reaches the threads a host lends.
 //
-// `concinnity_core::fanout::Fanout` is generic in the item and the body, so a system
+// `concinnity_core::fanout::FanOut` is generic in the item and the body, so a system
 // holding one as a trait object cannot be. The seam is drawn one level up: the
 // system holds "advance this simulation by dt", and the fan-out it reaches for
 // on the way is monomorphized inside that answer.
@@ -11,7 +11,7 @@
 
 use crate::ecs::ScheduleMode;
 use crate::physics::Simulation;
-use concinnity_core::fanout::{Fanout, Inline, Lent};
+use concinnity_core::fanout::{FanOut, Inline, Lent};
 
 // Where a system's steps run.
 pub(crate) trait PhysicsFanout: core::fmt::Debug + Send {
@@ -34,7 +34,7 @@ impl PhysicsFanout for Inline {
     }
 }
 
-impl<P: Fanout> PhysicsFanout for Lent<P> {
+impl<P: FanOut> PhysicsFanout for Lent<P> {
     fn worker_count(&self, mode: ScheduleMode) -> usize {
         self.pool(mode).workers()
     }

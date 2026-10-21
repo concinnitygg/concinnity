@@ -54,12 +54,12 @@ pub(crate) fn vertex_normals(positions: &[[f32; 3]], indices: &[u16]) -> Vec<[f3
         if a >= positions.len() || b >= positions.len() || c >= positions.len() {
             continue;
         }
-        let n = vec3::vec3_face_normal(positions[a], positions[b], positions[c]);
-        vec3::vec3_add(&mut normals[a], n);
-        vec3::vec3_add(&mut normals[b], n);
-        vec3::vec3_add(&mut normals[c], n);
+        let n = vec3::face_normal(positions[a], positions[b], positions[c]);
+        vec3::add_assign(&mut normals[a], n);
+        vec3::add_assign(&mut normals[b], n);
+        vec3::add_assign(&mut normals[c], n);
     }
-    normals.iter().map(|n| vec3::vec3_normalize(*n)).collect()
+    normals.iter().map(|n| vec3::normalize(*n)).collect()
 }
 
 // Dense deltas for a displacement: the positions as given, the normals as

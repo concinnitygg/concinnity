@@ -20,7 +20,7 @@ use concinnity_core::math::sqrt;
 
 use concinnity_core::memory::Pool;
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 
 use super::body::Body;
 use super::broadphase::Pair;
@@ -76,7 +76,7 @@ impl Narrow {
     }
 
     /// Build this step's manifolds from the candidate pairs, in pair order.
-    pub(crate) fn build(&mut self, work: Work<'_>, fanout: &impl Fanout, workers: usize) {
+    pub(crate) fn build(&mut self, work: Work<'_>, fanout: &impl FanOut, workers: usize) {
         let Work {
             bodies,
             fields,

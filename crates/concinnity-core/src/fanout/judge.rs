@@ -59,11 +59,11 @@ impl Cost {
 /// # use concinnity_core::fanout::{FanOutJudge, FanOutTiming};
 /// let timing = |wall: u32, work: u32| FanOutTiming { wall_us: wall, job_sum_us: work, ..Default::default() };
 /// let mut judge = FanOutJudge::<300_000>::default();
-/// assert!(!judge.fans_out(10_000, 8), "inline is measured first");
+/// assert!(!judge.decide(10_000, 8), "inline is measured first");
 /// judge.observe(10_000, false, timing(1_000, 1_000));
-/// assert!(judge.fans_out(10_000, 8), "then the split is tried");
+/// assert!(judge.decide(10_000, 8), "then the split is tried");
 /// judge.observe(10_000, true, timing(300, 1_200));
-/// assert!(judge.fans_out(10_000, 8), "faster and not much more work");
+/// assert!(judge.decide(10_000, 8), "faster and not much more work");
 /// ```
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct FanOutJudge<const MIN_WORK_NS: u64> {
@@ -78,7 +78,7 @@ pub struct FanOutJudge<const MIN_WORK_NS: u64> {
 impl<const MIN_WORK_NS: u64> FanOutJudge<MIN_WORK_NS> {
     /// Whether to split `units` of work across `workers`. Counts toward the
     /// next re-measurement of a split that lost, so call it once per run.
-    pub fn fans_out(&mut self, units: usize, workers: usize) -> bool {
+    pub fn decide(&mut self, units: usize, workers: usize) -> bool {
         if workers < 2 || units < 2 {
             return false;
         }
@@ -154,20 +154,20 @@ mod tests {
 
     #[test]
     fn unmeasured_work_runs_inline() {
-        assert!(!Judge::default().fans_out(UNITS, 8));
+        assert!(!Judge::default().decide(UNITS, 8));
     }
 
     #[test]
     fn small_work_runs_inline_and_is_never_split() {
         let mut judge = measured_inline(200);
         for _ in 0..2 * PROBE_INTERVAL {
-            assert!(!judge.fans_out(UNITS, 8));
+            assert!(!judge.decide(UNITS, 8));
         }
     }
 
     #[test]
     fn large_work_tries_the_split_once_measured_inline() {
-        assert!(measured_inline(1_000).fans_out(UNITS, 8));
+        assert!(measured_inline(1_000).decide(UNITS, 8));
     }
 
     // Mac at 32k records: a quarter of the wait for about the same work.
@@ -176,7 +176,7 @@ mod tests {
         let mut judge = measured_inline(1_094);
         judge.observe(UNITS, true, run(274, 992));
         for _ in 0..2 * PROBE_INTERVAL {
-            assert!(judge.fans_out(UNITS, 8));
+            assert!(judge.decide(UNITS, 8));
         }
     }
 
@@ -186,14 +186,14 @@ mod tests {
     fn a_split_that_multiplies_the_work_loses() {
         let mut judge = measured_inline(810);
         judge.observe(UNITS, true, run(576, 3_180));
-        assert!(!judge.fans_out(UNITS, 8));
+        assert!(!judge.decide(UNITS, 8));
     }
 
     #[test]
     fn a_split_that_barely_shortens_the_wait_loses() {
         let mut judge = measured_inline(1_000);
         judge.observe(UNITS, true, run(800, 1_100));
-        assert!(!judge.fans_out(UNITS, 8));
+        assert!(!judge.decide(UNITS, 8));
     }
 
     #[test]
@@ -201,7 +201,7 @@ mod tests {
         let mut judge = measured_inline(1_000);
         judge.observe(UNITS, true, run(900, 9_000));
         let probes = (0..3 * PROBE_INTERVAL)
-            .filter(|_| judge.fans_out(UNITS, 8))
+            .filter(|_| judge.decide(UNITS, 8))
             .count();
         assert_eq!(probes, 3);
     }
@@ -214,7 +214,7 @@ mod tests {
             judge.observe(UNITS, true, run(300, 1_100));
         }
         judge.observe(UNITS, true, run(1_500, 1_500));
-        assert!(judge.fans_out(UNITS, 8));
+        assert!(judge.decide(UNITS, 8));
     }
 
     // The machine got busy: the split keeps measuring slower, and the work
@@ -223,9 +223,9 @@ mod tests {
     fn a_split_that_stops_paying_returns_inline() {
         let mut judge = measured_inline(1_000);
         judge.observe(UNITS, true, run(300, 1_100));
-        assert!(judge.fans_out(UNITS, 8));
+        assert!(judge.decide(UNITS, 8));
         let mut runs = 0;
-        while judge.fans_out(UNITS, 8) {
+        while judge.decide(UNITS, 8) {
             judge.observe(UNITS, true, run(950, 1_100));
             runs += 1;
             assert!(runs < 20, "the split never lost");
@@ -240,21 +240,21 @@ mod tests {
         let mut judge = measured_inline(1_000);
         judge.observe(UNITS, true, run(900, 9_000));
         for _ in 0..PROBE_INTERVAL {
-            if judge.fans_out(UNITS, 8) {
+            if judge.decide(UNITS, 8) {
                 break;
             }
             judge.observe(UNITS, false, run(1_000, 1_000));
         }
         judge.observe(UNITS, true, run(300, 1_100));
-        assert!(judge.fans_out(UNITS, 8));
+        assert!(judge.decide(UNITS, 8));
     }
 
     #[test]
     fn one_worker_or_one_unit_never_splits() {
         let mut judge = measured_inline(1_000);
         judge.observe(UNITS, true, run(100, 1_000));
-        assert!(!judge.fans_out(UNITS, 1));
-        assert!(!judge.fans_out(1, 8));
+        assert!(!judge.decide(UNITS, 1));
+        assert!(!judge.decide(1, 8));
     }
 
     #[test]

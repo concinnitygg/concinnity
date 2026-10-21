@@ -41,10 +41,14 @@ pub fn length(v: DVec3) -> f64 {
     libm::sqrt(dot(v, v))
 }
 
+// The shortest length with a finite reciprocal, so any representable direction
+// survives normalizing.
+const MIN_DIRECTION_LEN: f64 = 1e-300;
+
 /// `v` scaled to unit length, or `fallback` when it has no direction.
 pub fn normalize_or(v: DVec3, fallback: DVec3) -> DVec3 {
     let len = length(v);
-    if len > 1e-300 && len.is_finite() {
+    if len > MIN_DIRECTION_LEN && len.is_finite() {
         scale(v, 1.0 / len)
     } else {
         fallback

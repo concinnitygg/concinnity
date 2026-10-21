@@ -36,10 +36,10 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
             break;
         };
         for (p, d) in mesh.positions.iter_mut().zip(block) {
-            vec3::vec3_add(p, vec3::scale(d.position, *w));
+            vec3::add_assign(p, vec3::scale(d.position, *w));
         }
         for (nrm, d) in mesh.normals.iter_mut().zip(block) {
-            vec3::vec3_add(nrm, vec3::scale(d.normal, *w));
+            vec3::add_assign(nrm, vec3::scale(d.normal, *w));
         }
     }
     for nrm in &mut mesh.normals {
@@ -73,12 +73,12 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
             let Some(m) = skin.get(mesh.joints[v][k] as usize) else {
                 continue;
             };
-            vec3::vec3_add(
+            vec3::add_assign(
                 &mut pos,
                 vec3::scale(mat4_transform_point(m, mesh.positions[v]), w),
             );
             if let Some(base) = mesh.normals.get(v) {
-                vec3::vec3_add(&mut nrm, vec3::scale(transform_direction(m, *base), w));
+                vec3::add_assign(&mut nrm, vec3::scale(transform_direction(m, *base), w));
             }
         }
         mesh.positions[v] = pos;

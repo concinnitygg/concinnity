@@ -140,6 +140,28 @@ mod tests {
         }
     }
 
+    // The system allocator, except that every resize fails.
+    struct FixedSize;
+
+    // SAFETY: `alloc` and `dealloc` forward to the system allocator unchanged,
+    // and `realloc` returns the null `GlobalAlloc` defines as failure, leaving
+    // the original block live and owned by the caller.
+    unsafe impl GlobalAlloc for FixedSize {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: forwarded unchanged from a caller upholding the contract.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarded unchanged from a caller upholding the contract.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, _ptr: *mut u8, _layout: Layout, _new_size: usize) -> *mut u8 {
+            ptr::null_mut()
+        }
+    }
+
     // Drives the real wrapper against the real system allocator, counting into
     // a block of this test's own. The process-global counters are a net figure
     // that a free on any other test thread moves between two reads, so they
@@ -250,5 +272,30 @@ mod tests {
         // SAFETY: as above.
         assert!(unsafe { alloc.alloc_zeroed(layout(SIZE)) }.is_null());
         assert_eq!(BLOCK.snapshot(), None, "a failed allocation was counted");
+    }
+
+    // A failed resize leaves the original block live at its old size.
+    #[test]
+    fn a_failed_realloc_counts_nothing() {
+        static BLOCK: Counters = Counters::new();
+        let alloc = TrackingAlloc::with_counters(FixedSize, &BLOCK);
+
+        // SAFETY: the layout has a non-zero size, and the block is freed below
+        // through the same allocator and layout.
+        let ptr = unsafe { alloc.alloc(layout(SIZE)) };
+        assert!(!ptr.is_null(), "system allocator returned null for 4 KiB");
+        let before = BLOCK.snapshot().expect("the wrapper just allocated");
+
+        // SAFETY: `ptr` came from `alloc.alloc` with `layout(SIZE)`, and
+        // `GROWN` is a non-zero size valid for that layout's alignment.
+        assert!(unsafe { alloc.realloc(ptr, layout(SIZE), GROWN) }.is_null());
+        assert_eq!(
+            BLOCK.snapshot(),
+            Some(before),
+            "a failed resize was counted"
+        );
+
+        // SAFETY: the failed resize left `ptr` live at `layout(SIZE)`.
+        unsafe { alloc.dealloc(ptr, layout(SIZE)) };
     }
 }

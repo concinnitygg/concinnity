@@ -15,7 +15,7 @@ mod json_args;
 mod primitives;
 mod room;
 
-use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
+use concinnity_core::math::vec3::{add_assign, face_normal, normalize};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::bake::mesh::{bounding_sphere_radius, vertices_from_data};
 use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
@@ -154,19 +154,19 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         let ia = indices[t * 3] as usize;
         let ib = indices[t * 3 + 1] as usize;
         let ic = indices[t * 3 + 2] as usize;
-        let n = vec3_face_normal(
+        let n = face_normal(
             vertex_data[ia].pos,
             vertex_data[ib].pos,
             vertex_data[ic].pos,
         );
-        vec3_add(&mut normals[ia], n);
-        vec3_add(&mut normals[ib], n);
-        vec3_add(&mut normals[ic], n);
+        add_assign(&mut normals[ia], n);
+        add_assign(&mut normals[ib], n);
+        add_assign(&mut normals[ic], n);
     }
     let pnt: Vec<Vert> = vertex_data
         .iter()
         .enumerate()
-        .map(|(i, v)| (v.pos, vec3_normalize(normals[i]), v.color, v.uv))
+        .map(|(i, v)| (v.pos, normalize(normals[i]), v.color, v.uv))
         .collect();
     let tangents = compute_tangents(&pnt, indices);
 

@@ -6,6 +6,8 @@
 //! stores a frame and is what lets one readout break device memory down by what
 //! is holding it, beside the process RAM the tracking allocator counts.
 
+use core::num::NonZeroU64;
+
 use concinnity_core::memory::{Ledger, MemTag, Realm};
 
 // One pool's device footprint.
@@ -23,7 +25,11 @@ pub(super) struct PoolReport {
 pub(super) fn publish(ledger: &Ledger, reports: impl IntoIterator<Item = PoolReport>) {
     for report in reports {
         ledger.set(report.tag, Realm::Device, report.resident_bytes);
-        ledger.set_budget(report.tag, Realm::Device, report.byte_budget);
+        ledger.set_budget(
+            report.tag,
+            Realm::Device,
+            report.byte_budget.and_then(NonZeroU64::new),
+        );
     }
 }
 
@@ -80,7 +86,7 @@ mod tests {
 
         let textures = ledger.usage(MemTag::Textures, Realm::Device);
         assert_eq!(textures.bytes, 4_096);
-        assert_eq!(textures.budget, Some(8_192));
+        assert_eq!(textures.budget, NonZeroU64::new(8_192));
 
         let meshes = ledger.usage(MemTag::Meshes, Realm::Device);
         assert_eq!(meshes.bytes, 1_024);

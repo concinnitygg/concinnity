@@ -195,7 +195,7 @@ pub(crate) fn tag_rows(snap: &HealthSnapshot) -> Vec<TagRow> {
                 Some(budget) => format!(
                     "{} / {}",
                     bytes_text(Some(usage.bytes as f64)),
-                    bytes_text(Some(budget as f64))
+                    bytes_text(Some(budget.get() as f64))
                 ),
                 None => bytes_text(Some(usage.bytes as f64)),
             },
@@ -397,6 +397,7 @@ fn pool_bytes(world: &World) -> Option<u64> {
 mod tests {
     use super::*;
     use concinnity_engine::budget::drift::DriftVerdict;
+    use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -561,7 +562,7 @@ mod tests {
     fn tagged_snapshot() -> HealthSnapshot {
         let ledger = concinnity_core::memory::Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 3 * GB / 2);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(2 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(2 * GB));
         ledger.set(MemTag::Meshes, Realm::Device, GB / 4);
         ledger.set(MemTag::Scratch, Realm::Host, 64 * 1024);
         HealthSnapshot {
@@ -595,7 +596,7 @@ mod tests {
     fn a_row_past_its_budget_is_flagged() {
         let ledger = concinnity_core::memory::Ledger::new();
         ledger.set(MemTag::Chunks, Realm::Device, 3 * GB);
-        ledger.set_budget(MemTag::Chunks, Realm::Device, Some(GB));
+        ledger.set_budget(MemTag::Chunks, Realm::Device, NonZeroU64::new(GB));
         let snap = HealthSnapshot {
             tags: ledger.snapshot(),
             ..Default::default()

@@ -2,7 +2,7 @@
 //!
 //! The crate is `no_std` and owns no scheduler, so work it can split is offered
 //! rather than taken: a caller says what it holds that is independent, and the
-//! [`Fanout`] it was handed decides whether that runs on one thread or several.
+//! [`FanOut`] it was handed decides whether that runs on one thread or several.
 //! A host implements it once on its pool; physics steps, behavior evaluation,
 //! pose sampling, bake rows and render-graph recording all reach the same pool
 //! through it. A caller that lends nothing gets [`Inline`].
@@ -42,14 +42,14 @@ pub enum ScheduleMode {
 /// # Examples
 ///
 /// ```
-/// use concinnity_core::fanout::{Fanout, Inline};
+/// use concinnity_core::fanout::{FanOut, Inline};
 ///
 /// let mut work = [1u32, 2, 3];
 /// Inline.for_each(&mut work, |item| *item *= 10);
 /// assert_eq!(work, [10, 20, 30]);
 /// assert_eq!(Inline.workers(), 1);
 /// ```
-pub trait Fanout: Sync {
+pub trait FanOut: Sync {
     /// Units of work this fan-out can run at once. One means the work runs on
     /// the calling thread.
     fn workers(&self) -> usize;
@@ -122,7 +122,7 @@ pub struct Since<'a, F: ?Sized> {
     start: u64,
 }
 
-impl<F: Fanout + ?Sized> FanOutClock for Since<'_, F> {
+impl<F: FanOut + ?Sized> FanOutClock for Since<'_, F> {
     fn elapsed_ns(&self) -> u64 {
         self.fanout.clock_ns().saturating_sub(self.start)
     }
@@ -133,7 +133,7 @@ impl<F: Fanout + ?Sized> FanOutClock for Since<'_, F> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Inline;
 
-impl Fanout for Inline {
+impl FanOut for Inline {
     fn workers(&self) -> usize {
         1
     }
@@ -151,7 +151,7 @@ impl Fanout for Inline {
 
 #[cfg(test)]
 mod tests {
-    use super::{FanOutTiming, Fanout, Inline};
+    use super::{FanOut, FanOutTiming, Inline};
     use alloc::vec::Vec;
     use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -183,7 +183,7 @@ mod tests {
     // A clock that advances 1 us on every read.
     struct Ticking(AtomicU64);
 
-    impl Fanout for Ticking {
+    impl FanOut for Ticking {
         fn workers(&self) -> usize {
             1
         }

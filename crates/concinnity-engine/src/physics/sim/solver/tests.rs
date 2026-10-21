@@ -24,7 +24,7 @@ fn run_with(
     capacity: usize,
     manifolds: &mut [Manifold],
     joints: &mut [Joint],
-    fanout: &impl Fanout,
+    fanout: &impl FanOut,
     workers: usize,
 ) {
     let mut islands = Islands::with_capacity(capacity);

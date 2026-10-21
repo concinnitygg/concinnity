@@ -104,7 +104,7 @@ impl LocalFrame {
         let inverse: DMat3 = core::array::from_fn(|c| core::array::from_fn(|r| turn[r][c]));
         let shift = dmat3::mul_vec(&inverse, dvec3::from_f32(at));
         let rebase = Rebase {
-            rotation: dmat3::quat_of(&inverse),
+            rotation: dmat3::quat_from_mat(&inverse),
             translation: dvec3::to_f32(dvec3::scale(shift, -1.0)),
         };
         (frame, rebase)
@@ -117,7 +117,7 @@ impl LocalFrame {
     #[must_use]
     pub fn followed(&self, rebase: &Rebase) -> Self {
         // new = R old + t, so old = R^T (new - t).
-        let r = dmat3::mat_of_quat(rebase.rotation);
+        let r = dmat3::mat_from_quat(rebase.rotation);
         let back: DMat3 = core::array::from_fn(|c| core::array::from_fn(|row| r[row][c]));
         let basis = dmat3::orthonormalize(&dmat3::mul(&self.basis, &back));
         let shift = dmat3::mul_vec(&basis, dvec3::from_f32(rebase.translation));

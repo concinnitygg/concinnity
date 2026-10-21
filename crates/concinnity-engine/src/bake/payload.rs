@@ -21,7 +21,7 @@ use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
     water_grid,
 };
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 
 // Fallbacks for the generator arguments a `ProceduralMesh` leaves unset. Each
 // matches what the authored path uses for the same absent argument.
@@ -143,7 +143,7 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
 
 /// Bake an `EnvironmentMap`'s IBL cubemaps into its blob payload, spreading
 /// each convolution's rows over `rows`.
-pub fn environment_map<S: Fanout>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
+pub fn environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
     if !map.source.is_empty() {
         return Err(
             "an EnvironmentMap with a `source` reads a panorama file; compile it with the \

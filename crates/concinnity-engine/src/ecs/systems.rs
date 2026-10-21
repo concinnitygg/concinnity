@@ -34,14 +34,14 @@ use crate::sky::SkyRotationSystem;
 use crate::spawn::SpawnSystem;
 use crate::story::{StoryStore, StorySystem};
 use crate::ui::UiInputSystem;
-use concinnity_core::fanout::{Fanout, Inline, Lent};
+use concinnity_core::fanout::{FanOut, Inline, Lent};
 
 /// What a host lends this crate's systems when their gates build them: always
 /// a pool (a host with no threads lends [`Inline`]), and seams that default to
 /// none, so a system persists nothing and reports nowhere.
 pub trait SystemHost: 'static {
     /// The thread pool the host lends.
-    type Pool: Fanout;
+    type Pool: FanOut;
 
     /// The host's pool, as each schedule mode picks it.
     const POOL: Lent<Self::Pool>;

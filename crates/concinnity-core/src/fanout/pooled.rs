@@ -1,7 +1,7 @@
 use core::fmt;
 
 use super::ScheduleMode;
-use super::{Fanout, Inline, Lent};
+use super::{FanOut, Inline, Lent};
 use crate::fanout::FanOutTiming;
 
 /// A pool as a system holds it: erased over the host's pool type, typed by the
@@ -33,7 +33,7 @@ impl<T: Send> Pooled<T> for Inline {
         items: &mut [T],
         body: &(dyn Fn(&mut T) + Send + Sync),
     ) {
-        Fanout::for_each(self, items, body);
+        FanOut::for_each(self, items, body);
     }
 
     fn for_each_timed(
@@ -42,11 +42,11 @@ impl<T: Send> Pooled<T> for Inline {
         items: &mut [T],
         body: &(dyn Fn(&mut T) + Send + Sync),
     ) -> FanOutTiming {
-        Fanout::for_each_timed(self, items, body)
+        FanOut::for_each_timed(self, items, body)
     }
 }
 
-impl<P: Fanout, T: Send> Pooled<T> for Lent<P> {
+impl<P: FanOut, T: Send> Pooled<T> for Lent<P> {
     fn workers(&self, mode: ScheduleMode) -> usize {
         self.pool(mode).workers()
     }

@@ -3,7 +3,7 @@
 
 use crate::math::dvec3::DVec3;
 use crate::math::dvec3::{cross, dot, normalize_or, scale, sub};
-use crate::math::narrow_f32;
+use crate::math::{Quat, narrow_f32};
 
 /// A column-major double-precision 3x3 matrix, `m[col][row]`.
 pub type DMat3 = [[f64; 3]; 3];
@@ -59,10 +59,10 @@ pub fn arc_from_up(to: DVec3) -> DMat3 {
 }
 
 /// The rotation the unit quaternion `[x, y, z, w]` describes.
-pub fn mat_of_quat(q: [f32; 4]) -> DMat3 {
+pub fn mat_from_quat(q: Quat) -> DMat3 {
     let [x, y, z, w] = q.map(f64::from);
     let n = libm::sqrt(x * x + y * y + z * z + w * w);
-    let [x, y, z, w] = if n > 0.0 {
+    let [x, y, z, w] = if n >= 1e-12 {
         [x / n, y / n, z / n, w / n]
     } else {
         [0.0, 0.0, 0.0, 1.0]
@@ -87,7 +87,7 @@ pub fn mat_of_quat(q: [f32; 4]) -> DMat3 {
 }
 
 /// The unit quaternion `[x, y, z, w]` of the rotation `m`.
-pub fn quat_of(m: &DMat3) -> [f32; 4] {
+pub fn quat_from_mat(m: &DMat3) -> Quat {
     let (m00, m11, m22) = (m[0][0], m[1][1], m[2][2]);
     let trace = m00 + m11 + m22;
     let q = if trace > 0.0 {
@@ -130,6 +130,7 @@ pub fn quat_of(m: &DMat3) -> [f32; 4] {
 mod tests {
     use super::*;
     use crate::math::dvec3::{length, to_f32};
+    use crate::math::quat_from_axis_angle;
 
     fn close(a: DVec3, b: DVec3, tol: f64) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < tol)
@@ -178,7 +179,7 @@ mod tests {
     #[test]
     fn the_quaternion_rotates_like_its_matrix() {
         let r = arc_from_up(normalize_or([0.4, 0.7, -0.3], [0.0, 1.0, 0.0]));
-        let q = quat_of(&r);
+        let q = quat_from_mat(&r);
         let v = [0.25, -1.0, 0.5];
         let by_q = crate::math::quat_rotate(q, to_f32(v));
         let by_m = to_f32(mul_vec(&r, v));
@@ -191,5 +192,28 @@ mod tests {
         let v = [3.0, -2.0, 7.5];
         assert!(close(mul_transpose_vec(&r, mul_vec(&r, v)), v, 1e-12));
         assert!(close(mul(&r, &DMAT3_IDENTITY)[2], r[2], 1e-15));
+    }
+
+    #[test]
+    fn a_matrix_round_trips_through_its_quaternion() {
+        let r = arc_from_up(normalize_or([-0.5, 0.3, 0.8], [0.0, 1.0, 0.0]));
+        let back = mat_from_quat(quat_from_mat(&r));
+        for (a, b) in r.iter().zip(&back) {
+            assert!(close(*a, *b, 1e-6), "{a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_quaternion_is_normalized_and_a_null_one_is_the_identity() {
+        let doubled = quat_from_axis_angle([0.0, 1.0, 0.0], 0.7).map(|c| c * 2.0);
+        let m = mat_from_quat(doubled);
+        assert!((length(m[0]) - 1.0).abs() < 1e-6);
+        assert_eq!(mat_from_quat([0.0; 4]), DMAT3_IDENTITY);
+    }
+
+    #[test]
+    fn scale_mat_scales_every_entry() {
+        let m = scale_mat(&DMAT3_IDENTITY, 2.5);
+        assert_eq!(m, [[2.5, 0.0, 0.0], [0.0, 2.5, 0.0], [0.0, 0.0, 2.5]]);
     }
 }

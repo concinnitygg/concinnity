@@ -13,7 +13,7 @@ use super::{
     DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, max_mip_count,
     prefilter_roughness, serialize_payload,
 };
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3::normalize_clamped;
 use concinnity_core::math::{acos, atan2, exp, floor, lerp, powi};
 
@@ -111,7 +111,7 @@ fn fetch_wrap(hdr: &HdrImage, x: i32, y: i32) -> [f32; 3] {
 /// can diverge from the built asset; `rows` spreads each convolution's
 /// independent output rows over whatever the caller has
 /// ([`Inline`](concinnity_core::fanout::Inline) without a pool).
-pub fn bake_payload<S: Fanout>(
+pub fn bake_payload<S: FanOut>(
     hdr: &HdrImage,
     prefilter_face: u32,
     irradiance_face: u32,

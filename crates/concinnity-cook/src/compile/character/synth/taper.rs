@@ -20,7 +20,7 @@ pub(crate) fn displace(input: &SynthInput<'_>) -> Vec<[f32; 3]> {
                     t = 1.0 - t;
                 }
                 if let Some(r) = try_normalize(frame.radial(v.pos), 1e-6) {
-                    vec3::vec3_add(&mut d, vec3::scale(r, w * t * input.params.amplitude));
+                    vec3::add_assign(&mut d, vec3::scale(r, w * t * input.params.amplitude));
                 }
             }
             d

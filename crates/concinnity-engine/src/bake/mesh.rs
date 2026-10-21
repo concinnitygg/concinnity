@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use crate::components::VertexData;
 use crate::geometry::{Vert, compute_tangents};
 use concinnity_core::math::sqrt;
-use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
+use concinnity_core::math::vec3::{add_assign, face_normal, normalize};
 
 // Tangent-bearing vertex form the payload serializer packs:
 // position, normal, tangent, color, uv.
@@ -31,15 +31,15 @@ pub fn vertices_from_data(data: &[VertexData], indices: &[u16]) -> Result<Vec<Ve
                 data.len()
             ));
         }
-        let n = vec3_face_normal(data[ia].pos, data[ib].pos, data[ic].pos);
-        vec3_add(&mut normals[ia], n);
-        vec3_add(&mut normals[ib], n);
-        vec3_add(&mut normals[ic], n);
+        let n = face_normal(data[ia].pos, data[ib].pos, data[ic].pos);
+        add_assign(&mut normals[ia], n);
+        add_assign(&mut normals[ib], n);
+        add_assign(&mut normals[ic], n);
     }
     Ok(data
         .iter()
         .zip(normals)
-        .map(|(v, n)| (v.pos, vec3_normalize(n), v.color, v.uv))
+        .map(|(v, n)| (v.pos, normalize(n), v.color, v.uv))
         .collect())
 }
 

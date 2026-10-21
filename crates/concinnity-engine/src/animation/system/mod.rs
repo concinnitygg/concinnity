@@ -34,7 +34,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use concinnity_core::fanout::{Fanout, Inline, Lent, Pooled};
+use concinnity_core::fanout::{FanOut, Inline, Lent, Pooled};
 use graph::GraphTarget;
 use hashbrown::HashMap;
 
@@ -166,7 +166,7 @@ impl AnimationSystem {
 
     /// Sample the poses on `pool`.
     #[must_use]
-    pub fn with_pool<P: Fanout>(mut self, pool: Lent<P>) -> Self {
+    pub fn with_pool<P: FanOut>(mut self, pool: Lent<P>) -> Self {
         self.poses = Box::new(pool);
         self
     }

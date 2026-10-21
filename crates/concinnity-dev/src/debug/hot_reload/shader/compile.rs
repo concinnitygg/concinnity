@@ -1,7 +1,7 @@
 //! A Shader's files as a save left them, and the compile a worker runs on them.
 
 use concinnity_cook::compile::shader::CompiledShader;
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_engine::components::{ShaderSource, ShaderStage};
 use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_engine::render::shader::programs::surface::Sources;

@@ -35,7 +35,7 @@ pub use room::build_room_geometry;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
-use concinnity_core::math::vec3::{cross, dot, scale, sub, vec3_add, vec3_normalize};
+use concinnity_core::math::vec3::{add_assign, cross, dot, normalize, scale, sub};
 
 pub use chunk_gen::{ChunkBlockType, ChunkGenerator};
 // Shared with the cook crate's `compile_voxel_chunk_payload`, which builds the
@@ -317,15 +317,15 @@ pub fn compute_tangents(vertices: &[Vert], indices: &[u16]) -> Vec<[f32; 3]> {
             ]
         };
 
-        vec3_add(&mut accum[ia], tangent);
-        vec3_add(&mut accum[ib], tangent);
-        vec3_add(&mut accum[ic], tangent);
+        add_assign(&mut accum[ia], tangent);
+        add_assign(&mut accum[ib], tangent);
+        add_assign(&mut accum[ic], tangent);
     }
 
     vertices
         .iter()
         .zip(accum)
-        .map(|((_, normal, _, _), raw)| vec3_normalize(sub(raw, scale(*normal, dot(raw, *normal)))))
+        .map(|((_, normal, _, _), raw)| normalize(sub(raw, scale(*normal, dot(raw, *normal)))))
         .collect()
 }
 
@@ -338,7 +338,7 @@ fn arbitrary_tangent(normal: [f32; 3]) -> [f32; 3] {
     } else {
         [0.0, 0.0, 1.0]
     };
-    vec3_normalize(cross(up, normal))
+    normalize(cross(up, normal))
 }
 
 #[cfg(test)]

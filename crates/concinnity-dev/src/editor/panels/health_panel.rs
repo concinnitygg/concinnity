@@ -315,6 +315,7 @@ mod tests {
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
     use concinnity_engine::budget::drift::{DriftVerdict, MemoryDrift};
     use concinnity_engine::components::{Sprite, TextLabel};
+    use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -346,7 +347,7 @@ mod tests {
     fn tagged_snapshot() -> HealthSnapshot {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 2 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
         ledger.set(MemTag::Meshes, Realm::Device, GB / 2);
         ledger.set(MemTag::Scratch, Realm::Host, 1024);
         HealthSnapshot {
@@ -628,7 +629,7 @@ mod tests {
     fn a_row_past_its_budget_is_colored_as_a_warning() {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 8 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
         let snap = HealthSnapshot {
             tags: ledger.snapshot(),
             ..snapshot()

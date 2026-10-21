@@ -19,6 +19,7 @@ use alloc::collections::BTreeSet;
 
 use crate::physics::{BodyHandle, ContactHit, SensorCrossing, Simulation};
 use concinnity_core::memory::{Ledger, MemTag, Realm};
+use core::num::NonZeroU64;
 
 use crate::components::{
     BodyDynamics, Camera3D, CharacterRig, Collider, PhysicsJoint, Prop, Transform, TriggerVolume,
@@ -213,7 +214,7 @@ pub(crate) fn publish_reservation(ledger: &Ledger, budget: &PhysicsBudget, world
     ledger.set(MemTag::Physics, Realm::Host, bytes);
     // Both sides are reserved from the budget at init, so the reservation is
     // both what is held and the ceiling it is held against.
-    ledger.set_budget(MemTag::Physics, Realm::Host, Some(bytes));
+    ledger.set_budget(MemTag::Physics, Realm::Host, NonZeroU64::new(bytes));
 }
 
 #[cfg(test)]
@@ -325,7 +326,7 @@ mod tests {
         );
         assert_eq!(
             usage.budget,
-            Some(usage.bytes),
+            NonZeroU64::new(usage.bytes),
             "everything is reserved at init, so usage is the ceiling"
         );
     }

@@ -75,7 +75,7 @@ pub(crate) fn morphed_positions(mesh: &SkinnedMesh, weights: &[f32]) -> Vec<[f32
             break;
         };
         for (p, d) in out.iter_mut().zip(block) {
-            vec3::vec3_add(p, vec3::scale(d.position, *w));
+            vec3::add_assign(p, vec3::scale(d.position, *w));
         }
     }
     out
@@ -151,7 +151,7 @@ pub(crate) fn bake(
                 let Some(m) = bind.skin.get(v.joints[k] as usize) else {
                     continue;
                 };
-                vec3::vec3_add(&mut out, vec3::scale(mat4_transform_point(m, p), w));
+                vec3::add_assign(&mut out, vec3::scale(mat4_transform_point(m, p), w));
             }
             out
         };

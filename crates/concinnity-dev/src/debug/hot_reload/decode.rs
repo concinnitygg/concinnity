@@ -3,7 +3,7 @@
 //! completed work on a later frame and push it through the backend `update_*`
 //! calls. Keeps the (seconds-long) decode off the render thread.
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::components::build_skeleton_from_joint_defs;
 use concinnity_engine::gfx::render_types;

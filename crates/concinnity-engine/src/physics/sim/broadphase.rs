@@ -35,7 +35,7 @@
 use alloc::vec::Vec;
 
 use crate::physics::LayerMask;
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 
 use super::aabb::Aabb;
 
@@ -264,7 +264,7 @@ impl SweepPrune {
 
     /// Sweep the current proxies and return the overlapping pairs, sorted by
     /// slot.
-    pub(crate) fn sweep(&mut self, fanout: &impl Fanout, workers: usize) -> Pairs<'_> {
+    pub(crate) fn sweep(&mut self, fanout: &impl FanOut, workers: usize) -> Pairs<'_> {
         if self.dirty {
             self.choose_axis();
             self.sort();
@@ -345,7 +345,7 @@ impl SweepPrune {
         }
     }
 
-    fn collect_pairs(&mut self, fanout: &impl Fanout, workers: usize) {
+    fn collect_pairs(&mut self, fanout: &impl FanOut, workers: usize) {
         self.pairs.clear();
         self.sensor_pairs.clear();
         let count = self.order.len();

@@ -1,7 +1,7 @@
 //! Running a compiled graph's passes: every pass but the presenter recorded
 //! into its own command buffer, possibly in parallel, then handed back in
 //! compiled order. A backend supplies the recording ([`PassRecorder`]) and the
-//! host the parallelism ([`Fanout`]); the walk itself is written once.
+//! host the parallelism ([`FanOut`]); the walk itself is written once.
 
 use alloc::vec::Vec;
 use core::sync::atomic::AtomicU32;
@@ -9,8 +9,8 @@ use core::sync::atomic::AtomicU32;
 use super::{CompiledGraph, CompiledPass, PassId};
 use crate::profile::MAX_PASS_TIMINGS;
 use crate::render::backend::error::RenderResult;
+use concinnity_core::fanout::FanOut;
 use concinnity_core::fanout::FanOutTiming;
-use concinnity_core::fanout::Fanout;
 
 /// Records one pass of a compiled graph into a command buffer of its own.
 /// Called from several threads at once, one pass each.
@@ -75,7 +75,7 @@ pub fn presenter_index(graph: &CompiledGraph) -> Option<usize> {
 /// Record every pass of `graph` except the presenter through `recorder`, fanned
 /// out over `fan`, one job per pass. The first failure in compiled order is returned and every
 /// recorded buffer is dropped with it.
-pub fn execute_passes<'s, R: PassRecorder, F: Fanout>(
+pub fn execute_passes<'s, R: PassRecorder, F: FanOut>(
     graph: &CompiledGraph,
     recorder: &R,
     fan: &F,

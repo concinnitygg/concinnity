@@ -12,7 +12,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::{cos, floor, sin, sin_cos, sqrt};
 
 use crate::gfx::cubemap;
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3::{cross as cross3, dot as dot3, normalize_clamped};
 
 /// Default azimuthal samples per irradiance texel.
@@ -290,7 +290,7 @@ impl<'a> CubeBake<'a> {
     /// Convolve the source into six output faces, handing the independent rows
     /// to `rows`. A caller with a thread pool gets the fan-out for free; one
     /// without uses [`Inline`](concinnity_core::fanout::Inline).
-    pub fn bake<S: Fanout>(&self, rows: &S) -> [Vec<f32>; 6] {
+    pub fn bake<S: FanOut>(&self, rows: &S) -> [Vec<f32>; 6] {
         let mut faces = self.output_faces();
         let mut face_rows = face_rows(&mut faces, self.output_face_size());
         rows.for_each(&mut face_rows, |row| self.compute_row(row));

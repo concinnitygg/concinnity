@@ -1,6 +1,6 @@
 use core::fmt;
 
-use super::Fanout;
+use super::FanOut;
 use super::ScheduleMode;
 
 /// A host's pool as a system holds it: the pool each schedule mode runs on.
@@ -11,7 +11,7 @@ pub struct Lent<P: 'static> {
     pick: fn(ScheduleMode) -> &'static P,
 }
 
-impl<P: Fanout> Lent<P> {
+impl<P: FanOut> Lent<P> {
     /// Lend the pool `pick` names for each schedule mode.
     pub const fn new(pick: fn(ScheduleMode) -> &'static P) -> Self {
         Self { pick }

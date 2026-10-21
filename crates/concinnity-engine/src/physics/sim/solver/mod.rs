@@ -40,7 +40,7 @@ mod partition;
 
 use alloc::vec::Vec;
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 
 use super::config::{SimConfig, Softness};
 use super::contact::Manifold;
@@ -167,7 +167,7 @@ impl Solver {
 
     /// Advance every active body and resolve every contact and joint, offering
     /// the islands to `fanout`.
-    pub(crate) fn run(&mut self, work: Work<'_>, fanout: &impl Fanout, workers: usize) {
+    pub(crate) fn run(&mut self, work: Work<'_>, fanout: &impl FanOut, workers: usize) {
         let Work {
             manifolds,
             joints,

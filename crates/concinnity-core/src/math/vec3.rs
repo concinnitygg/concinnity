@@ -79,7 +79,7 @@ pub fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 
 /// Accumulate `src` into `dst` in place. Used by the smooth-normal passes, which
 /// sum every incident face normal per vertex before normalizing once.
-pub fn vec3_add(dst: &mut [f32; 3], src: [f32; 3]) {
+pub fn add_assign(dst: &mut [f32; 3], src: [f32; 3]) {
     dst[0] += src[0];
     dst[1] += src[1];
     dst[2] += src[2];
@@ -87,14 +87,14 @@ pub fn vec3_add(dst: &mut [f32; 3], src: [f32; 3]) {
 
 /// Unit-length `n`, falling back to `+Y` when it is too short to have a
 /// direction.
-pub fn vec3_normalize(n: [f32; 3]) -> [f32; 3] {
+pub fn normalize(n: [f32; 3]) -> [f32; 3] {
     normalize_or(n, MIN_DIRECTION_LEN, [0.0, 1.0, 0.0])
 }
 
 /// Newell-style face normal from three CCW positions. Shared with the cook
 /// generators' smooth-normal pass.
-pub fn vec3_face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
-    vec3_normalize(cross(sub(b, a), sub(c, a)))
+pub fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+    normalize(cross(sub(b, a), sub(c, a)))
 }
 
 #[cfg(test)]
@@ -155,20 +155,20 @@ mod tests {
     #[test]
     fn vec3_add_accumulates_in_place() {
         let mut acc = [1.0, 1.0, 1.0];
-        vec3_add(&mut acc, [1.0, 2.0, 3.0]);
-        vec3_add(&mut acc, [1.0, 2.0, 3.0]);
+        add_assign(&mut acc, [1.0, 2.0, 3.0]);
+        add_assign(&mut acc, [1.0, 2.0, 3.0]);
         assert_eq!(acc, [3.0, 5.0, 7.0]);
     }
 
     #[test]
     fn normalize_falls_back_on_a_degenerate_vector() {
-        assert_eq!(vec3_normalize([0.0, 0.0, 0.0]), [0.0, 1.0, 0.0]);
-        assert_eq!(vec3_normalize([0.0, 0.0, 2.0]), [0.0, 0.0, 1.0]);
+        assert_eq!(normalize([0.0, 0.0, 0.0]), [0.0, 1.0, 0.0]);
+        assert_eq!(normalize([0.0, 0.0, 2.0]), [0.0, 0.0, 1.0]);
     }
 
     #[test]
     fn face_normal_of_a_ccw_triangle_points_up() {
-        let n = vec3_face_normal([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+        let n = face_normal([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
         assert!(n[1] > 0.99, "expected +Y, got {n:?}");
     }
 }

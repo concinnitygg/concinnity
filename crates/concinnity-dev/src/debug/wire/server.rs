@@ -4,7 +4,7 @@
 //! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
 //! MCP message it carried from the verb table in `super::super::catalog`.
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_engine::components::Camera3D;
 use concinnity_engine::ecs::World;
 use concinnity_engine::render::streaming::pools::{StreamingPressure, StreamingRuntime};

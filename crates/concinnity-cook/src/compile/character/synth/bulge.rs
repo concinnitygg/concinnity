@@ -27,7 +27,7 @@ pub(crate) fn displace(input: &SynthInput<'_>) -> Vec<[f32; 3]> {
                     Some(dir) => (dir, vec3::dot(radial, dir).max(0.0)),
                     None => (radial, 1.0),
                 };
-                vec3::vec3_add(&mut d, vec3::scale(push, w * g * facing * p.amplitude));
+                vec3::add_assign(&mut d, vec3::scale(push, w * g * facing * p.amplitude));
             }
             d
         })

@@ -18,7 +18,7 @@ use crate::physics::{
     Simulation,
 };
 use alloc::vec::Vec;
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_core::fanout::test_pools::Threads;
 use concinnity_core::math::SaturatingFrom;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -47,7 +47,7 @@ impl Counted {
     }
 }
 
-impl Fanout for Counted {
+impl FanOut for Counted {
     fn workers(&self) -> usize {
         self.threads.workers()
     }

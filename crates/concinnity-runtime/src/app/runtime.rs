@@ -1,6 +1,6 @@
 //! The `Runtime` value: a world plus the loop state that drives it.
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
 use concinnity_engine::components::AppConfig;
 use concinnity_engine::ecs::{StepResult, World};

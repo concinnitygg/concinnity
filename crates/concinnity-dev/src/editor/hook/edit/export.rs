@@ -3,7 +3,7 @@
 //! named skinned mesh as `<name>.glb` beside the project's world file, and
 //! reports through the log sink and a toast.
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::atomic::Ordering;

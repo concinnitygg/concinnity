@@ -196,7 +196,7 @@ impl PlanetFrame {
         let right = dvec3::cross(forward, up);
         let local = |d: DVec3| dvec3::from_f32(self.frame.dir_to_local(d));
         let basis = [local(right), local(up), local(dvec3::scale(forward, -1.0))];
-        (self.frame.to_local(world), dmat3::quat_of(&basis))
+        (self.frame.to_local(world), dmat3::quat_from_mat(&basis))
     }
 
     /// The yaw that, at local point `p` and about the planet's up there (as

@@ -10,7 +10,7 @@ use crate::physics::sim::joint::Joint;
 use crate::physics::sim::narrow;
 use crate::physics::sim::scene::Scene;
 use crate::physics::sim::solver::{self, Solver, SolverBody};
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::memory::Pool;
 
@@ -67,7 +67,7 @@ impl Simulation {
     /// sim.step_with(1.0 / 60.0, &Inline);
     /// assert!(sim.body_pose_quat(ball).expect("a live body").0[1] < 10.0, "it fell");
     /// ```
-    pub fn step_with(&mut self, dt: f32, fanout: &impl Fanout) {
+    pub fn step_with(&mut self, dt: f32, fanout: &impl FanOut) {
         if !dt.is_finite() || dt <= 0.0 {
             return;
         }
@@ -121,7 +121,7 @@ impl Simulation {
 
     /// Everything a step does once the bounds are current and the workers, if
     /// any, have been gathered.
-    pub(super) fn advance(&mut self, dt: f32, fanout: &impl Fanout, workers: usize) {
+    pub(super) fn advance(&mut self, dt: f32, fanout: &impl FanOut, workers: usize) {
         let Self {
             config,
             bodies,

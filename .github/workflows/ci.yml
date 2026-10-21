@@ -71,6 +71,9 @@ jobs:
         timeout-minutes: 20
         run: cargo test --locked --all-features --doc --workspace
 
+      - name: Test Core Default Features
+        run: cargo test --locked -p concinnity-core
+
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
 

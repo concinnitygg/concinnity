@@ -34,7 +34,7 @@ use super::interp::PointInterp;
 use super::layers::{LAYER_CHARACTER, LAYER_PROP, LAYER_TRIGGER, LAYER_WORLD, LayerTable};
 use super::props::{PropBodies, PropCollSnap, STATIC_FRICTION};
 use super::terrain::build_terrain_colliders;
-use concinnity_core::fanout::{Fanout, Inline, Lent};
+use concinnity_core::fanout::{FanOut, Inline, Lent};
 
 // Reach distance for picking up a Prop, in world units.
 const PICKUP_REACH: f32 = 3.0;
@@ -185,7 +185,7 @@ impl PhysicsSystem {
     /// are the simulation's; a pool decides only where the work runs, so this
     /// cannot change the state a tick lands on.
     #[must_use]
-    pub fn with_pool<P: Fanout>(mut self, pool: Lent<P>) -> Self {
+    pub fn with_pool<P: FanOut>(mut self, pool: Lent<P>) -> Self {
         self.fanout = Box::new(pool);
         self
     }

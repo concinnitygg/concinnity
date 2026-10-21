@@ -270,7 +270,7 @@ impl CameraTrack {
             let seconds = travel_seconds(leg);
             end_seconds += seconds;
             travel.push(CameraTravelKey {
-                delta: vec3::scale(vec3::vec3_normalize(leg.direction), leg.distance),
+                delta: vec3::scale(vec3::normalize(leg.direction), leg.distance),
                 end_seconds,
                 ease: leg.ease,
                 cut: leg.cut || (seconds == 0.0 && leg.distance > 0.0),

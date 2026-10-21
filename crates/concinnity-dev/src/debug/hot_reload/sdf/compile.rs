@@ -2,7 +2,7 @@
 //! and the compile and pipeline builds a worker runs.
 
 use concinnity_cook::compile::sdf_field::CompiledField;
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_engine::components::ShaderSource;
 use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
