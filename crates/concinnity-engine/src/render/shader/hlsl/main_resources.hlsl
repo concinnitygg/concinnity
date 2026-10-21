@@ -63,8 +63,9 @@ struct CanopyLayer
 #define CANOPY_MAX_LAYERS 16
 
 // Mirrors `CanopyParams` in concinnity-engine/src/render/uniforms/canopy.rs
-// (1488 B): every far field's layers, the planet's axes in the frame, the
-// noise its height is summed from, and where the blades hand the field to it.
+// (1568 B): every far field's layers, the planet's axes in the frame, the
+// noise its height is summed from, its coasts, and where the blades hand the
+// field to it.
 struct CanopyParams
 {
     float4 planet_rows[3];
@@ -79,6 +80,19 @@ struct CanopyParams
     float ground_height_scale;
     float ground_cell;
     uint ground_octaves;
+    uint4 continent_salts[2];
+    float continent_frequency;
+    float continent_scale;
+    float continent_offset;
+    uint continent_octaves;
+    float beach_width;
+    float beach_rise;
+    float hill_rise;
+    float ocean_depth;
+    float shelf_length;
+    float seabed_lift;
+    float _pad0;
+    float _pad1;
     // x = where the blades start handing the field over, y = where they end,
     // z = the hand-off's phase (see grass_crossfade_shows_blades); w unused.
     float4 band;

@@ -7,9 +7,7 @@ use std::num::NonZeroU32;
 use concinnity_engine::gfx::view_modes::ShowFlags;
 
 use super::launch_args::LaunchArgsArg;
-use super::value_enums::{
-    BundleFormatArg, DlssPresetArg, GraphicsApiArg, RtDynamicArg, ShowFlagArg,
-};
+use super::value_enums::{BundleFormatArg, DlssPresetArg, RtDynamicArg, ShowFlagArg};
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -117,18 +115,14 @@ pub(crate) enum Commands {
 // into every command that launches a world (`run` / `debug` / `editor`).
 #[derive(Debug, Default, clap::Args)]
 pub(crate) struct RenderArgs {
-    /// Render with this graphics API instead of the native one
-    // Outranks the settings-menu choice, unpersisted. One the build did not
-    // compile in (Vulkan needs `--features vulkan` on macOS and Windows), or
-    // one with no usable device, falls back to the native API with a warning.
-    // Chosen before the world cooks, so its shaders are built for the API that
-    // draws them.
-    #[arg(long, value_enum)]
-    pub(crate) graphics_api: Option<GraphicsApiArg>,
-
     // The flags an app's own command line also takes (`--benchmark`,
-    // `--vsync`, `--fps-cap`, `--quality-preset`, `--frames`), described in
-    // the engine's table. `--quality-preset` outranks the settings-menu choice;
+    // `--vsync`, `--fps-cap`, `--quality-preset`, `--graphics-api`,
+    // `--frames`), described in the engine's table. `--graphics-api` outranks
+    // the settings-menu choice, unpersisted; one the build did not compile in
+    // (Vulkan needs `--features vulkan` on macOS and Windows), or one with no
+    // usable device, falls back to the native API with a warning. It is chosen
+    // before the world cooks, so its shaders are built for the API that draws
+    // them. `--quality-preset` outranks the settings-menu choice;
     // only the `ultra` ceiling permits ray-traced reflections, so an RT probe
     // that omits it measures a frame with RT clamped off.
     #[command(flatten)]
@@ -170,9 +164,9 @@ impl RenderArgs {
     // player's settings-menu choice in `tree`. Runs before anything cooks or
     // probes the device.
     pub(crate) fn select_graphics_api(&self, tree: &concinnity_host::store::paths::StateTree) {
-        match self.graphics_api {
+        match self.launch.0.graphics_api {
             Some(api) => {
-                concinnity_runtime::platform::select(Some(api.into()));
+                concinnity_runtime::platform::select(Some(api));
             }
             None => {
                 concinnity_runtime::platform::select_persisted(Some(tree));
@@ -186,7 +180,7 @@ impl RenderArgs {
         LaunchRequest {
             capture: false,
             dev_loop,
-            args: self.launch.0,
+            args: self.launch.0.clone(),
             validation,
             rt_dynamic: self.rt_dynamic.map(Into::into),
             rt_skinned_geometry: self.rt_skinned_geometry,
@@ -431,7 +425,6 @@ mod tests {
                 Commands::Editor(a) => &a.render,
                 _ => panic!("expected a launch command for {argv:?}"),
             };
-            assert!(render.graphics_api.is_none(), "{argv:?}");
             assert_eq!(render.launch, LaunchArgsArg::NONE, "{argv:?}");
             assert!(render.rt_dynamic.is_none(), "{argv:?}");
             assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
@@ -526,8 +519,8 @@ mod tests {
                 _ => panic!("expected a launch command for {command}"),
             };
             assert_eq!(
-                render.graphics_api,
-                Some(GraphicsApiArg::Vulkan),
+                render.launch.0.graphics_api,
+                Some(concinnity_engine::platform::Platform::Vulkan),
                 "{command}"
             );
             assert_eq!(

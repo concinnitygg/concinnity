@@ -14,6 +14,7 @@ use core::fmt::{self, Write};
 use crate::benchmark::BenchmarkRun;
 use crate::camera::track::CameraTrackStatus;
 use crate::components::FrameCapture;
+use crate::launch::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest, screenshot_path};
 use crate::planet::FrameRebases;
 use crate::profile::RenderStats;
 
@@ -254,7 +255,11 @@ impl System for FrameReportSystem {
             if unseen {
                 self.hidden_captures.push(capture);
             } else {
-                ctx.insert_resource(FrameCaptureRequest(capture.path));
+                let dir = ctx
+                    .resource::<LaunchRequest>()
+                    .map_or(DEFAULT_SCREENSHOTS_DIR, LaunchRequest::screenshots_dir);
+                let path = screenshot_path(dir, &capture.path);
+                ctx.insert_resource(FrameCaptureRequest(path));
             }
         }
 
@@ -603,7 +608,7 @@ mod tests {
         system.step(&mut world.context());
         system.step(&mut world.context());
         let request = world.remove_resource::<FrameCaptureRequest>();
-        assert_eq!(request.map(|r| r.0).as_deref(), Some("a.png"));
+        assert_eq!(request.map(|r| r.0).as_deref(), Some("screenshots/a.png"));
 
         // Each frame is recorded once the next step closes it: the capture's
         // and the one after it are both in.
@@ -611,6 +616,38 @@ mod tests {
         system.step(&mut world.context());
         assert_eq!(system.run().recorded.len(), 2);
         assert!(world.resource::<FrameCaptureRequest>().is_none());
+    }
+
+    // A capture lands under the screenshot directory the launch names.
+    #[test]
+    fn a_capture_lands_under_the_launch_s_screenshot_directory() {
+        use crate::components::FrameCapture;
+        use crate::launch::LaunchArgs;
+
+        let mut world = World::new();
+        world.insert_resource(LaunchRequest {
+            args: LaunchArgs {
+                screenshots_dir: Some("shots/vulkan".to_string()),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
+        let mut system = report(&configured(BenchmarkConfig {
+            warmup_seconds: 0.0,
+            captures: vec![FrameCapture {
+                seconds: 0.0,
+                path: "benchmark/a.png".to_string(),
+            }],
+            ..Default::default()
+        }));
+        system.init(&mut world.context());
+        system.step(&mut world.context());
+        system.step(&mut world.context());
+        let request = world.remove_resource::<FrameCaptureRequest>();
+        assert_eq!(
+            request.map(|r| r.0).as_deref(),
+            Some("shots/vulkan/benchmark/a.png")
+        );
     }
 
     #[test]

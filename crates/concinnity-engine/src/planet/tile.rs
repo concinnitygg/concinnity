@@ -188,8 +188,8 @@ pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
             (lo.min(h), hi.max(h))
         });
-    let lo = (lo - slack).max(0.0);
-    let hi = (hi + slack).min(shape.amplitude.max(0.0));
+    let lo = (lo - slack).max(shape.lowest_height());
+    let hi = (hi + slack).min(shape.highest_height());
 
     let center = dvec3::add(
         shape.center,
@@ -350,6 +350,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 3,
+            continents: crate::planet::Continents::NONE,
         }
     }
 
@@ -410,6 +411,50 @@ mod tests {
         // A deep tile's bounds hug its own ground, not the planet's whole
         // relief.
         assert!(b.radius < b.width, "{} vs {}", b.radius, b.width);
+    }
+
+    // Tiles across a coast, from a whole face down to a few meters, hold
+    // their ground between the sea floor and the hills.
+    #[test]
+    fn the_bounds_hold_every_vertex_across_coasts() {
+        let s = PlanetShape {
+            continents: crate::planet::Continents::new(50_000.0, 3, 20_000.0, 0.4, 60.0, 60.0),
+            ..shape()
+        };
+        let side = TILE_CELLS as usize + 1;
+        let face = CubeFace(2);
+        // Walk the face's middle row for the first change from sea to land.
+        let coast = (0..4_000)
+            .map(|i| -0.9 + f64::from(i) * 4.5e-4)
+            .find(|&fs| {
+                (s.height(face.direction(fs, 0.0)) > 0.0)
+                    != (s.height(face.direction(fs + 4.5e-4, 0.0)) > 0.0)
+            })
+            .expect("a coast crosses the face");
+        let (mut seen_sea, mut seen_land) = (false, false);
+        for level in [0u8, 4, 8, 11, 14] {
+            let n = 1u32 << level;
+            let cell = |c: f64| {
+                u32::saturating_from(libm::floor((c + 1.0) * 0.5 * f64::from(n))).min(n - 1)
+            };
+            let t = TileId {
+                face,
+                level,
+                x: cell(coast),
+                y: cell(0.0),
+            };
+            let b = tile_bounds(&s, t);
+            let mesh = tile_mesh(&s, t);
+            for v in &mesh.vertices[..side * side] {
+                let p = dvec3::add(mesh.origin, dvec3::from_f32(v.pos));
+                let gap = dvec3::length(dvec3::sub(p, b.center)) - b.radius;
+                assert!(gap <= 1e-3 * (1.0 + b.radius * 1e-4), "{t:?} {gap}");
+                let h = dvec3::length(dvec3::sub(p, s.center)) - s.radius;
+                seen_sea |= h < 0.0;
+                seen_land |= h > 0.0;
+            }
+        }
+        assert!(seen_sea && seen_land);
     }
 
     // Across a side, the neighbor at the same level shares the side's ends,

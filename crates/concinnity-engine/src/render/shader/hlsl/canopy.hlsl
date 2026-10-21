@@ -308,9 +308,9 @@ float ground_lattice(int3 c, uint salt)
     return float(h & 0xffffu) / 65535.0;
 }
 
-// The gradient of one height octave's trilinear value noise at lattice
-// position `p`, along the lattice axes.
-float3 ground_noise_gradient(float3 p, uint salt)
+// One octave of the ground's trilinear value noise at lattice position `p`:
+// xyz = its gradient along the lattice axes, w = its value.
+float4 ground_noise(float3 p, uint salt)
 {
     float3 cell = floor(p);
     float3 t = p - cell;
@@ -332,9 +332,79 @@ float3 ground_noise_gradient(float3 p, uint salt)
     float k5 = a - d0 - e + g;
     float k6 = a - b - e + f;
     float k7 = -a + b + d0 - d1 + e - f - g + h;
-    return ds * float3(k1 + k4 * s.y + k6 * s.z + k7 * s.y * s.z,
-                       k2 + k5 * s.z + k4 * s.x + k7 * s.z * s.x,
-                       k3 + k6 * s.x + k5 * s.y + k7 * s.x * s.y);
+    float value = a + k1 * s.x + k2 * s.y + k3 * s.z + k4 * s.x * s.y + k5 * s.y * s.z
+                + k6 * s.z * s.x + k7 * s.x * s.y * s.z;
+    return float4(ds * float3(k1 + k4 * s.y + k6 * s.z + k7 * s.y * s.z,
+                              k2 + k5 * s.z + k4 * s.x + k7 * s.z * s.x,
+                              k3 + k6 * s.x + k5 * s.y + k7 * s.x * s.y),
+                  value);
+}
+
+// A sum of `octaves` noise octaves at unit direction `dir`, the broadest
+// `frequency` cells per unit of direction and `cell` meters wide, octave `o`
+// salted by `salts[o / 4][o % 4]`, each octave faded to its mean as its cells
+// shrink below two pixels of `footprint` meters: xyz = the sum's gradient
+// over directions, w = the sum.
+float4 ground_octaves(float3 dir, float frequency, float cell, uint octaves, uint4 salts[4],
+                      float footprint)
+{
+    float3x3 turn = float3x3(CANOPY.ground_turn[0].xyz, CANOPY.ground_turn[1].xyz,
+                             CANOPY.ground_turn[2].xyz);
+    float3x3 to_lattice = turn * frequency;
+    float weight = 1.0;
+    float4 sum = (float4)(0.0);
+    for (uint o = 0u; o < octaves; o++)
+    {
+        float fade = saturate(log2(cell / max(2.0 * footprint, 1e-4)));
+        if (fade <= 0.0)
+        {
+            // This octave and every finer one sit at their mean, and the
+            // weights left sum to twice this one's, less the last's.
+            sum.w += weight * (2.0 - exp2(1.0 - float(octaves - o))) * 0.5;
+            break;
+        }
+        uint salt = salts[o >> 2u][o & 3u];
+        float3 offset = float3(uint3(salt, salt >> 10u, salt >> 20u) & 0x3ffu) / 1024.0;
+        float4 n = ground_noise(mul(to_lattice, dir) + offset, salt);
+        sum.xyz += mul(n.xyz, to_lattice) * (weight * fade);
+        sum.w += (n.w * fade + 0.5 * (1.0 - fade)) * weight;
+        to_lattice = mul(turn, to_lattice) * 2.0;
+        weight *= 0.5;
+        cell *= 0.5;
+    }
+    return sum;
+}
+
+// PlanetShape's coast (planet/coast.rs `shore`): how the ground's height
+// changes per meter `inland` of the coast (x) and per meter of the hills
+// standing `hill` high there (y).
+float2 ground_shore(float inland, float hill)
+{
+    float rise = max(CANOPY.hill_rise, 1e-3);
+    if (inland >= 0.0)
+    {
+        float w = CANOPY.beach_width;
+        float t = min(inland / w, 1.0);
+        float x = saturate((inland - w) / rise);
+        float fade = x * x * (3.0 - 2.0 * x);
+        float fade_d = 6.0 * x * (1.0 - x);
+        return float2(CANOPY.beach_rise * 2.0 * (1.0 - t) / w + hill * fade_d / rise, fade);
+    }
+    if (CANOPY.ocean_depth <= 0.0)
+    {
+        return (float2)(0.0);
+    }
+    float out_m = -inland;
+    float e = exp(-out_m / CANOPY.shelf_length);
+    float fall = 1.0 - e;
+    float fall_d = e / CANOPY.shelf_length;
+    float x = saturate(out_m / rise);
+    float fade = x * x * (3.0 - 2.0 * x);
+    float fade_d = 6.0 * x * (1.0 - x);
+    float lift = CANOPY.seabed_lift;
+    float d_out = -CANOPY.ocean_depth * fall_d
+                + lift * hill * (fall_d * fade + fall * fade_d / rise);
+    return float2(-d_out, lift * fall * fade);
 }
 
 // The planet ground's normal at unit direction `dir`, both in the planet's
@@ -343,29 +413,21 @@ float3 ground_noise_gradient(float3 p, uint salt)
 // averages away rather than aliasing, whatever tile the pixel lies on.
 float3 ground_normal_at(float3 dir, float footprint)
 {
-    float3x3 turn = float3x3(CANOPY.ground_turn[0].xyz, CANOPY.ground_turn[1].xyz,
-                             CANOPY.ground_turn[2].xyz);
-    float3x3 to_lattice = turn * CANOPY.ground_frequency;
-    float cell = CANOPY.ground_cell;
-    float weight = 1.0;
-    float3 gradient = (float3)(0.0);
-    uint octaves = min(CANOPY.ground_octaves, 16u);
-    for (uint o = 0u; o < octaves; o++)
+    float4 hills = ground_octaves(dir, CANOPY.ground_frequency, CANOPY.ground_cell,
+                                  min(CANOPY.ground_octaves, 16u), CANOPY.ground_salts, footprint)
+                 * CANOPY.ground_height_scale;
+    float3 gradient = hills.xyz;
+    if (CANOPY.continent_octaves > 0u)
     {
-        float fade = saturate(log2(cell / max(2.0 * footprint, 1e-4)));
-        if (fade <= 0.0)
-        {
-            break;
-        }
-        uint salt = CANOPY.ground_salts[o >> 2u][o & 3u];
-        float3 offset = float3(uint3(salt, salt >> 10u, salt >> 20u) & 0x3ffu) / 1024.0;
-        float3 g = ground_noise_gradient(mul(to_lattice, dir) + offset, salt);
-        gradient += mul(g, to_lattice) * (weight * fade);
-        to_lattice = mul(turn, to_lattice) * 2.0;
-        weight *= 0.5;
-        cell *= 0.5;
+        uint4 salts[4] = { CANOPY.continent_salts[0], CANOPY.continent_salts[1], (uint4)(0u),
+                           (uint4)(0u) };
+        float4 field = ground_octaves(dir, CANOPY.continent_frequency,
+                                      CANOPY.planet_radius / CANOPY.continent_frequency,
+                                      min(CANOPY.continent_octaves, 8u), salts, footprint)
+                     * CANOPY.continent_scale;
+        float2 shore = ground_shore(field.w - CANOPY.continent_offset, hills.w);
+        gradient = field.xyz * shore.x + hills.xyz * shore.y;
     }
-    gradient *= CANOPY.ground_height_scale;
     float3 along = gradient - dir * dot(dir, gradient);
     return normalize(dir - along / CANOPY.planet_radius);
 }

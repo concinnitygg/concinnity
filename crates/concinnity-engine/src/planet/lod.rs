@@ -224,7 +224,7 @@ impl TileLod {
     pub fn drift(&self, view: &TileView) -> f64 {
         let height = dvec3::length(dvec3::sub(view.eye, self.shape.center))
             - self.shape.radius
-            - self.shape.amplitude;
+            - self.shape.highest_height();
         REPLAN_DRIFT * height.max(self.range(self.max_level, view))
     }
 
@@ -361,6 +361,7 @@ mod tests {
                 feature_size: 2_000.0,
                 octaves: 8,
                 seed: 1,
+                continents: crate::planet::Continents::NONE,
             },
             1.0,
         )

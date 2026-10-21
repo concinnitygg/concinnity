@@ -23,7 +23,7 @@ use super::planet::PlanetGrass;
 use super::planet::density::meadow_density;
 use super::planet::tiles::{DrawnPlanetTile, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
-use crate::planet::{OCTAVE_TURN, PlanetShape};
+use crate::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
 use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS};
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
@@ -492,6 +492,26 @@ fn set_ground_noise(params: &mut CanopyParams, shape: &PlanetShape) {
     params.ground_height_scale = narrow_f32(shape.noise_scale());
     params.ground_cell = narrow_f32(shape.radius / shape.base_frequency());
     params.ground_octaves = octaves;
+    let c = &shape.continents;
+    if !c.divides() {
+        params.continent_octaves = 0;
+        return;
+    }
+    const { assert!(CONTINENT_OCTAVES <= 8) };
+    for octave in 0..CONTINENT_OCTAVES {
+        params.continent_salts[octave as usize / 4][octave as usize % 4] = c.octave_salt(octave);
+    }
+    let per_sum = c.coast_scale() / octave_weight_sum(CONTINENT_OCTAVES);
+    params.continent_frequency = narrow_f32(c.base_frequency(shape.radius));
+    params.continent_scale = narrow_f32(per_sum);
+    params.continent_offset = narrow_f32(c.threshold() * c.coast_scale());
+    params.continent_octaves = CONTINENT_OCTAVES;
+    params.beach_width = narrow_f32(c.beach_width());
+    params.beach_rise = narrow_f32(c.beach_rise());
+    params.hill_rise = narrow_f32(shape.hill_rise());
+    params.ocean_depth = narrow_f32(c.ocean_depth());
+    params.shelf_length = narrow_f32(c.shelf_length());
+    params.seabed_lift = narrow_f32(c.seabed_lift(shape.hill_height()));
 }
 
 // The meadow's mean density over the sphere for `seeds`, sampled on a
@@ -1020,6 +1040,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 1,
+            continents: crate::planet::Continents::NONE,
         };
         let grass =
             PlanetGrass::resolve(shape, &vec![Grass::default(); MAX_CANOPY_LAYERS + 4]).unwrap();
@@ -1040,6 +1061,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 1,
+            continents: crate::planet::Continents::NONE,
         };
         let grass = PlanetGrass::resolve(shape, &[Grass::default()]).unwrap();
         let (field, range) = CanopyField::for_planet(&grass, 0.0);
@@ -1093,6 +1115,49 @@ mod tests {
 
     // The shader's `ground_normal_at`, line for line, over the block's noise.
     fn shader_ground_normal(p: &CanopyParams, dir: [f32; 3], footprint: f32) -> [f32; 3] {
+        let octaves = p.ground_octaves.min(16);
+        let hills = shader_octaves(
+            p,
+            dir,
+            p.ground_frequency,
+            p.ground_cell,
+            octaves,
+            &p.ground_salts,
+            footprint,
+        )
+        .map(|v| v * p.ground_height_scale);
+        let mut gradient = [hills[0], hills[1], hills[2]];
+        if p.continent_octaves > 0 {
+            let salts = [p.continent_salts[0], p.continent_salts[1], [0; 4], [0; 4]];
+            let field = shader_octaves(
+                p,
+                dir,
+                p.continent_frequency,
+                p.planet_radius / p.continent_frequency,
+                p.continent_octaves.min(8),
+                &salts,
+                footprint,
+            )
+            .map(|v| v * p.continent_scale);
+            let shore = shader_shore(p, field[3] - p.continent_offset, hills[3]);
+            gradient = core::array::from_fn(|i| field[i] * shore[0] + hills[i] * shore[1]);
+        }
+        let d = dot(dir, gradient);
+        unit(core::array::from_fn(|i| {
+            dir[i] - (gradient[i] - dir[i] * d) / p.planet_radius
+        }))
+    }
+
+    // The shader's `ground_octaves`, line for line.
+    fn shader_octaves(
+        p: &CanopyParams,
+        dir: [f32; 3],
+        frequency: f32,
+        mut cell: f32,
+        octaves: u32,
+        salts: &[[u32; 4]; 4],
+        footprint: f32,
+    ) -> [f32; 4] {
         let row = |r: usize| {
             [
                 p.ground_turn[r][0],
@@ -1107,36 +1172,62 @@ mod tests {
                 core::array::from_fn(|c| (0..3).map(|k| a[r][k] * b[k][c]).sum())
             })
         };
-        let mut to_lattice: [[f32; 3]; 3] = turn.map(|r| r.map(|v| v * p.ground_frequency));
-        let mut cell = p.ground_cell;
+        let mut to_lattice: [[f32; 3]; 3] = turn.map(|r| r.map(|v| v * frequency));
         let mut weight = 1.0;
-        let mut gradient = [0.0f32; 3];
-        for o in 0..p.ground_octaves.min(16) as usize {
+        let mut sum = [0.0f32; 4];
+        for o in 0..octaves as usize {
             let fade = ((cell / (2.0 * footprint).max(1e-4)).log2()).clamp(0.0, 1.0);
             if fade <= 0.0 {
+                let left = (octaves as usize - o) as f32;
+                sum[3] += weight * (2.0 - 2f32.powf(1.0 - left)) * 0.5;
                 break;
             }
-            let salt = p.ground_salts[o / 4][o % 4];
+            let salt = salts[o / 4][o % 4];
             let offset = [salt, salt >> 10, salt >> 20].map(|b| (b & 0x3ff) as f32 / 1024.0);
             let q = mul_mv(&to_lattice, dir);
-            let g = shader_noise_gradient(core::array::from_fn(|i| q[i] + offset[i]), salt);
+            let n = shader_noise(core::array::from_fn(|i| q[i] + offset[i]), salt);
             for c in 0..3 {
-                let back: f32 = (0..3).map(|r| g[r] * to_lattice[r][c]).sum();
-                gradient[c] += back * weight * fade;
+                let back: f32 = (0..3).map(|r| n[r] * to_lattice[r][c]).sum();
+                sum[c] += back * weight * fade;
             }
+            sum[3] += (n[3] * fade + 0.5 * (1.0 - fade)) * weight;
             to_lattice = mul_mm(&turn, &to_lattice).map(|r: [f32; 3]| r.map(|v| v * 2.0));
             weight *= 0.5;
             cell *= 0.5;
         }
-        let gradient = gradient.map(|g| g * p.ground_height_scale);
-        let d = dot(dir, gradient);
-        unit(core::array::from_fn(|i| {
-            dir[i] - (gradient[i] - dir[i] * d) / p.planet_radius
-        }))
+        sum
     }
 
-    // The shader's `ground_noise_gradient`, line for line.
-    fn shader_noise_gradient(p: [f32; 3], salt: u32) -> [f32; 3] {
+    // The shader's `ground_shore`, line for line.
+    fn shader_shore(p: &CanopyParams, inland: f32, hill: f32) -> [f32; 2] {
+        let rise = p.hill_rise.max(1e-3);
+        if inland >= 0.0 {
+            let w = p.beach_width;
+            let t = (inland / w).min(1.0);
+            let x = ((inland - w) / rise).clamp(0.0, 1.0);
+            let fade = x * x * (3.0 - 2.0 * x);
+            let fade_d = 6.0 * x * (1.0 - x);
+            return [
+                p.beach_rise * 2.0 * (1.0 - t) / w + hill * fade_d / rise,
+                fade,
+            ];
+        }
+        if p.ocean_depth <= 0.0 {
+            return [0.0; 2];
+        }
+        let out = -inland;
+        let e = exp(-out / p.shelf_length);
+        let (fall, fall_d) = (1.0 - e, e / p.shelf_length);
+        let x = (out / rise).clamp(0.0, 1.0);
+        let fade = x * x * (3.0 - 2.0 * x);
+        let fade_d = 6.0 * x * (1.0 - x);
+        let lift = p.seabed_lift;
+        let d_out = -p.ocean_depth * fall_d + lift * hill * (fall_d * fade + fall * fade_d / rise);
+        [-d_out, lift * fall * fade]
+    }
+
+    // The shader's `ground_noise`, line for line.
+    fn shader_noise(p: [f32; 3], salt: u32) -> [f32; 4] {
         use concinnity_core::math::noise::lcg_hash;
         let lattice = |c: [i32; 3]| {
             let h = lcg_hash(
@@ -1163,10 +1254,19 @@ mod tests {
         let k5 = a - d0 - e + g;
         let k6 = a - b - e + f;
         let k7 = -a + b + d0 - d1 + e - f - g + h;
+        let value = a
+            + k1 * s[0]
+            + k2 * s[1]
+            + k3 * s[2]
+            + k4 * s[0] * s[1]
+            + k5 * s[1] * s[2]
+            + k6 * s[2] * s[0]
+            + k7 * s[0] * s[1] * s[2];
         [
             ds[0] * (k1 + k4 * s[1] + k6 * s[2] + k7 * s[1] * s[2]),
             ds[1] * (k2 + k5 * s[2] + k4 * s[0] + k7 * s[2] * s[0]),
             ds[2] * (k3 + k6 * s[0] + k5 * s[1] + k7 * s[0] * s[1]),
+            value,
         ]
     }
 
@@ -1178,6 +1278,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 4,
+            continents: crate::planet::Continents::NONE,
         }
     }
 
@@ -1203,6 +1304,38 @@ mod tests {
             let got = shader_ground_normal(&p, concinnity_core::math::dvec3::to_f32(dir), 0.01);
             assert!(dot(got, want) > 1.0 - 1e-6, "{got:?} {want:?}");
         }
+    }
+
+    // On a planet of seas, a fine pixel near a coast shades with the
+    // ground's exact normal too: the beach's, the shelf's, the hills rising
+    // in behind.
+    #[test]
+    fn a_fine_pixel_near_a_coast_shades_with_the_exact_ground_normal() {
+        let shape = PlanetShape {
+            continents: crate::planet::Continents::new(50_000.0, 4, 20_000.0, 0.4, 60.0, 60.0),
+            ..ground_shape()
+        };
+        let mut p = CanopyParams {
+            planet_radius: 50_000.0,
+            ..CanopyParams::default()
+        };
+        set_ground_noise(&mut p, &shape);
+        assert_eq!(p.continent_octaves, CONTINENT_OCTAVES);
+        let face = CubeFace(2);
+        let mut checked = 0;
+        for i in 0..20_000 {
+            let dir = face.direction(-0.9 + 9e-5 * f64::from(i), 0.31);
+            if shape.height(dir).abs() > 20.0 {
+                continue;
+            }
+            let want = concinnity_core::math::dvec3::to_f32(shape.normal(dir));
+            let got = shader_ground_normal(&p, concinnity_core::math::dvec3::to_f32(dir), 0.01);
+            assert!(dot(got, want) > 1.0 - 1e-5, "{got:?} {want:?}");
+            checked += 1;
+        }
+        assert!(checked > 100, "{checked}");
+        set_ground_noise(&mut p, &ground_shape());
+        assert_eq!(p.continent_octaves, 0);
     }
 
     // As a pixel widens, octaves fade out finest first, by the meters it

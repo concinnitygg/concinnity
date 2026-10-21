@@ -247,6 +247,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 9,
+            continents: crate::planet::Continents::NONE,
         }
     }
 

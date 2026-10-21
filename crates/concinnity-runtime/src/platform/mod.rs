@@ -23,6 +23,10 @@ use concinnity_host::store::paths::StateTree;
 
 static SELECTED: OnceLock<Platform> = OnceLock::new();
 
+// What the call that chose `SELECTED` asked for, so a later call repeating it
+// passes quietly.
+static REQUESTED: OnceLock<Option<Platform>> = OnceLock::new();
+
 // The step this process's launch took on the persisted graphics API trial. The
 // first launch decision of a process is the one that stands.
 static LAUNCH_STEP: OnceLock<Step> = OnceLock::new();
@@ -66,8 +70,25 @@ pub fn current() -> Platform {
 ///
 /// The choice is made once per process: call this before anything cooks or
 /// renders. A later call, or one after [`current`] was read, keeps the earlier
-/// answer and warns when it differs.
+/// answer without probing again, and warns when it asks for another API.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the first call of a process is the one that stands"
+)]
 pub fn select(requested: Option<Platform>) -> Platform {
+    if let Some(&chosen) = SELECTED.get() {
+        if let Some(asked) = requested
+            && asked != chosen
+            && REQUESTED.get() != Some(&requested)
+        {
+            tracing::warn!(
+                "graphics API {} was already fixed for this process; keeping it over {}",
+                chosen.key(),
+                asked.key()
+            );
+        }
+        return chosen;
+    }
     let selection = resolve(requested, native(), compiled(), |platform| {
         device::probe_device_on(platform).is_some()
     });
@@ -75,14 +96,8 @@ pub fn select(requested: Option<Platform>) -> Platform {
         tracing::warn!("{fallback}; rendering with {}", selection.platform.key());
     }
     let chosen = *SELECTED.get_or_init(|| selection.platform);
+    let _ = REQUESTED.set(requested);
     crate::crash::note("backend", chosen.key());
-    if chosen != selection.platform {
-        tracing::warn!(
-            "graphics API {} was already fixed for this process; keeping it over {}",
-            chosen.key(),
-            selection.platform.key()
-        );
-    }
     chosen
 }
 

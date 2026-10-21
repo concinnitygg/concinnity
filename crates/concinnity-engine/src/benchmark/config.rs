@@ -187,8 +187,10 @@ pub struct CameraPose {
 pub struct FrameCapture {
     /// How many seconds after the warm-up the frame is taken.
     pub seconds: f32,
-    /// Where the PNG is written. A relative path is taken from the working
-    /// directory the run was started in.
+    /// Where the PNG is written. A relative path is taken from the run's
+    /// screenshot directory (`screenshots` under the working directory the run
+    /// started in, unless the launch names another); an absolute one is used
+    /// as given.
     pub path: String,
 }
 

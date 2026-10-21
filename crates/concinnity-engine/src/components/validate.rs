@@ -255,6 +255,11 @@ pub fn planet(mut args: Planet) -> Planet {
         .octaves
         .clamp(crate::planet::MIN_OCTAVES, crate::planet::MAX_OCTAVES);
     args.gravity = finite_at_least(args.gravity, 0.0, defaults.gravity);
+    args.land_share = finite_or(args.land_share, defaults.land_share).clamp(0.0, 1.0);
+    args.continent_size = finite_at_least(args.continent_size, 100.0, defaults.continent_size);
+    args.ocean_depth =
+        finite_at_least(args.ocean_depth, 0.0, defaults.ocean_depth).min(args.radius * 0.25);
+    args.beach_width = finite_at_least(args.beach_width, 1.0, defaults.beach_width);
     args
 }
 
@@ -496,6 +501,29 @@ mod tests {
             });
             assert_eq!(w.whitecaps, clamped, "{authored}");
         }
+    }
+
+    #[test]
+    fn planet_clamps_its_continents() {
+        let p = planet(Planet {
+            land_share: 1.5,
+            continent_size: 3.0,
+            ocean_depth: f32::NAN,
+            beach_width: -2.0,
+            ..Planet::default()
+        });
+        assert_eq!(p.land_share, 1.0);
+        assert_eq!(p.continent_size, 100.0);
+        assert_eq!(p.ocean_depth, Planet::default().ocean_depth);
+        assert_eq!(p.beach_width, 1.0);
+        let deep = planet(Planet {
+            radius: 1_000.0,
+            land_share: f32::NAN,
+            ocean_depth: 900.0,
+            ..Planet::default()
+        });
+        assert_eq!(deep.land_share, 1.0);
+        assert_eq!(deep.ocean_depth, 250.0);
     }
 
     // A planet sea's height is never below the planet's radius, and it

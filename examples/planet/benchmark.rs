@@ -1,7 +1,8 @@
-//! The benchmark run: a short run over the meadow, then a climb that speeds
-//! up until the camera leaves the air, a pass over the planet from orbit, and
-//! a descent to skim the ground far to the north, timed frame by frame and
-//! reported when the camera reaches the end of its path.
+//! The benchmark run: a short run over the meadow and across the coast out
+//! over the sea, then a climb that speeds up until the camera leaves the air,
+//! a pass over the planet from orbit, and a descent to skim the ground far
+//! round the planet, timed frame by frame and reported when the camera reaches
+//! the end of its path.
 //!
 //! A planet is simulated in a frame that moves with the camera, every
 //! kilometer, and draws its ground as tiles that refine and coarsen as the
@@ -11,8 +12,9 @@
 //! orbit, where the whole planet is in view.
 //!
 //! The path follows one great circle round the planet from where the world
-//! starts, setting out a little east of north, each point a fixed height over
-//! the ground the planet's own shape puts there: the camera rides the hills
+//! starts, setting out east toward the nearest shore, each point a fixed
+//! height over the ground the planet's own shape puts there, or over the sea
+//! where the ground lies under it: the camera rides the hills and the waves
 //! rather than cutting through them. Height and speed change by a constant
 //! ratio at the fastest point of the climb and the descent, so a kilometer is
 //! crossed as gently at the top as a meter at the bottom. The camera looks down
@@ -22,7 +24,8 @@
 //!
 //! The run is declared as the world's `BenchmarkConfig`: the camera's start,
 //! its legs, the phases the report is cut into and the frames it saves under
-//! `screenshots/benchmark/`. It changes nothing until the app is benchmarked. The world's own sky turns as it always does, through the
+//! `benchmark/` in the run's screenshot directory (`screenshots/` unless
+//! `--screenshots-dir` names another). It changes nothing until the app is benchmarked. The world's own sky turns as it always does, through the
 //! warm-up too; the camera's start and its track come from the planet's shape
 //! and where that sky carries the sun.
 
@@ -45,10 +48,11 @@ const WARMUP_SECONDS: f32 = 2.5;
 
 // The frames the run saves: the file name and the moment, in seconds of the
 // run as the HUD's `TRACK` chip counts them (the warm-up included). Day over
-// the meadow and climbing out of it, the planet from high up and from orbit,
-// then the night skimmed low and back on the ground.
-const CAPTURES: [(&str, f32); 7] = [
+// the meadow and out over the sea, climbing out of it, the planet from high
+// up and from orbit, then the night skimmed low and back on the ground.
+const CAPTURES: [(&str, f32); 8] = [
     ("ground-day", 13.3),
+    ("sea-day", 22.0),
     ("climb-6m", 31.93),
     ("climb-30m", 34.65),
     ("climb-600m", 38.5),
@@ -57,13 +61,11 @@ const CAPTURES: [(&str, f32); 7] = [
     ("ground-night", 132.0),
 ];
 
-// Where the captures are written, from the directory the run starts in.
-const CAPTURE_DIR: &str = "screenshots/benchmark";
-
-// What the world declares that the run reads: the planet its path rides, and
-// the sky and light it aims by.
+// What the world declares that the run reads: the planet and sea its path
+// rides, and the sky and light it aims by.
 struct Declared {
     planet: Planet,
+    sea_level: Option<f64>,
     sky: SkyRotation,
     sun: DirectionalLight,
 }
@@ -76,13 +78,16 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
         // The planet's references are names, which its shape does not need.
         planet: serde_json::from_value(read(world, "Planet", &["material", "layers"])?)
             .map_err(|e| e.to_string())?,
+        sea_level: sea_level(world),
         sky: serde_json::from_value(read(world, "SkyRotation", &[])?).map_err(|e| e.to_string())?,
         sun: serde_json::from_value(read(world, "DirectionalLight", &[])?)
             .map_err(|e| e.to_string())?,
     };
     // The path starts when the warm-up ends, by which time the sky has turned.
     let warmup = f64::from(WARMUP_SECONDS);
-    let path = Path::new(&declared.planet, |seconds| sun(&declared, warmup + seconds));
+    let path = Path::new(&declared.planet, declared.sea_level, |seconds| {
+        sun(&declared, warmup + seconds)
+    });
     builder.add(
         "benchmark",
         &BenchmarkConfig {
@@ -105,7 +110,7 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
                 .iter()
                 .map(|&(name, track_seconds)| FrameCapture {
                     seconds: track_seconds - WARMUP_SECONDS,
-                    path: format!("{CAPTURE_DIR}/{name}.png"),
+                    path: format!("benchmark/{name}.png"),
                 })
                 .collect(),
             ..Default::default()
@@ -135,6 +140,24 @@ fn read(world: &str, ty: &str, unnamed: &[&str]) -> Result<serde_json::Value, St
         }
     }
     Err(format!("the world declares no {ty}"))
+}
+
+// The level of the first planet sea `world` declares, in meters above the
+// planet's radius.
+fn sea_level(world: &str) -> Option<f64> {
+    world.lines().find_map(|line| {
+        let serde_json::Value::Array(columns) = serde_json::from_str(line).ok()? else {
+            return None;
+        };
+        let [serde_json::Value::String(ty), args] = &columns[..] else {
+            return None;
+        };
+        (ty == "WaterSurface" && args.get("shape")?.as_str()? == "planet_sea").then(|| {
+            args.get("sea_level")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0)
+        })
+    })
 }
 
 // The unit direction toward the sun `seconds` into the run.

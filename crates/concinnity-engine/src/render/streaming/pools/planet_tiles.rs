@@ -82,12 +82,7 @@ fn plan(
     let mut keep = selection.retained;
     keep.sort_unstable();
     let (mut drawn, mut keep) = (Sorted::new(&drawn), Sorted::new(&keep));
-    let horizon = Horizon::new(
-        camera,
-        lod.shape.center,
-        lod.shape.radius,
-        HORIZON_SHADOW_REACH,
-    );
+    let horizon = Horizon::of_planet(camera, &lod.shape, HORIZON_SHADOW_REACH);
 
     let mut out = TilePlan::default();
     for (&id, tile) in tiles {
@@ -405,10 +400,7 @@ impl PlanetTiles {
         }
         if self.occluder_in != Some(planet.frame) {
             self.occluder_in = Some(planet.frame);
-            let occluder = HorizonOccluder {
-                center: planet.center(),
-                radius: narrow_f32(planet.shape.radius),
-            };
+            let occluder = HorizonOccluder::of(planet);
             ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
         }
         self.add_finished(planet, ops, slots, frame);
@@ -576,6 +568,7 @@ mod tests {
                 feature_size: 2_000.0,
                 octaves: 6,
                 seed: 5,
+                continents: crate::planet::Continents::NONE,
             },
             crate::planet::FINEST_CELL_SIZE,
         )
@@ -721,7 +714,7 @@ mod tests {
             .map(|(i, &t)| (t, resident(u32::saturating_from(i), false)))
             .collect();
         let p = plan(&l, &tiles, &BTreeSet::new(), &view(camera), &mut bounds);
-        let horizon = Horizon::new(camera, l.shape.center, l.shape.radius, 0.0).unwrap();
+        let horizon = Horizon::of_planet(camera, &l.shape, 0.0).unwrap();
         let mut hidden = 0;
         for t in sel.draw.iter().map(|d| d.id) {
             let b = bounds.get(t);
@@ -816,7 +809,7 @@ mod tests {
     #[test]
     fn a_plan_serves_until_the_camera_drifts_or_the_ranges_change() {
         let l = lod();
-        let top = l.shape.radius + l.shape.amplitude;
+        let top = l.shape.radius + l.shape.highest_height();
         let at = |height: f64| view([0.0, top - 50_000.0 + height, 0.0]);
         let ground = at(2.0);
         let finest = l.range(l.max_level, &ground);

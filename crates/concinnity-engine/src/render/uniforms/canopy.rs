@@ -45,8 +45,8 @@ pub struct CanopyLayerGpu {
 }
 
 /// The canopy block: every far field's layers, the frame a planet's ground is
-/// laid out in, the noise its height is summed from, and where the blades hand
-/// the field to it. 1488 bytes.
+/// laid out in, the noise its height is summed from, its coasts, and where the
+/// blades hand the field to it. 1568 bytes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CanopyParams {
@@ -77,6 +77,33 @@ pub struct CanopyParams {
     pub ground_cell: f32,
     /// Height octaves summed; 0 off a planet.
     pub ground_octaves: u32,
+    /// Each continent octave's hash salt, four to a row.
+    pub continent_salts: [[u32; 4]; 2],
+    /// Lattice cells of the broadest continent octave per unit of direction.
+    pub continent_frequency: f32,
+    /// Meters inland per unit of the continent octaves' weighted sum.
+    pub continent_scale: f32,
+    /// Meters inland at a weighted sum of 0, negated: the coast lies where the
+    /// sum times `continent_scale` reaches it.
+    pub continent_offset: f32,
+    /// Continent octaves summed; 0 on a planet without seas.
+    pub continent_octaves: u32,
+    /// Width of the rise from the waterline before the hills, in meters.
+    pub beach_width: f32,
+    /// How high that rise climbs, in meters.
+    pub beach_rise: f32,
+    /// How far past the beach the hills take to reach their full height, in
+    /// meters.
+    pub hill_rise: f32,
+    /// Deepest the sea floor lies below sea level, in meters.
+    pub ocean_depth: f32,
+    /// How far past the waterline the sea floor takes to fall most of the way
+    /// to the ocean depth, in meters.
+    pub shelf_length: f32,
+    /// The sea floor's lift per meter of hill under it.
+    pub seabed_lift: f32,
+    /// Keeps the record a whole number of rows.
+    pub _pad: [f32; 2],
     /// This frame's hand-off from the blades
     /// ([`GrassLodView`](crate::render::environment::grass::GrassLodView)): where it
     /// starts, where the blades end, and its phase
@@ -130,8 +157,20 @@ mod tests {
         assert_eq!(offset_of!(CanopyParams, ground_height_scale), 1460);
         assert_eq!(offset_of!(CanopyParams, ground_cell), 1464);
         assert_eq!(offset_of!(CanopyParams, ground_octaves), 1468);
-        assert_eq!(offset_of!(CanopyParams, band), 1472);
-        assert_eq!(size_of::<CanopyParams>(), 1488);
+        assert_eq!(offset_of!(CanopyParams, continent_salts), 1472);
+        assert_eq!(offset_of!(CanopyParams, continent_frequency), 1504);
+        assert_eq!(offset_of!(CanopyParams, continent_scale), 1508);
+        assert_eq!(offset_of!(CanopyParams, continent_offset), 1512);
+        assert_eq!(offset_of!(CanopyParams, continent_octaves), 1516);
+        assert_eq!(offset_of!(CanopyParams, beach_width), 1520);
+        assert_eq!(offset_of!(CanopyParams, beach_rise), 1524);
+        assert_eq!(offset_of!(CanopyParams, hill_rise), 1528);
+        assert_eq!(offset_of!(CanopyParams, ocean_depth), 1532);
+        assert_eq!(offset_of!(CanopyParams, shelf_length), 1536);
+        assert_eq!(offset_of!(CanopyParams, seabed_lift), 1540);
+        assert_eq!(offset_of!(CanopyParams, _pad), 1544);
+        assert_eq!(offset_of!(CanopyParams, band), 1552);
+        assert_eq!(size_of::<CanopyParams>(), 1568);
         // Metal sets the block inline, which caps it at 4 KiB.
         const { assert!(size_of::<CanopyParams>() <= 4096) };
         assert_eq!(CanopyParams::default().layer_count, 0);

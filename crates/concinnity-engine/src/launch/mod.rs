@@ -11,17 +11,20 @@ mod pipeline;
 mod request;
 
 pub use error::LaunchArgsError;
-pub use flags::{LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, flag, usage};
+pub use flags::{
+    GRAPHICS_API_VALUES, LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, flag, usage,
+};
 pub use pipeline::PipelineMode;
-pub use request::LaunchRequest;
+pub use request::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest, screenshot_path};
 
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 
+use crate::platform::Platform;
 use crate::settings::QualityPreset;
 
 /// What a launch asks of the run. Each field left at its default leaves the
 /// run as the world and the saved settings make it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LaunchArgs {
     /// Benchmark the world: arm its `BenchmarkConfig`, or the default one, and
     /// report what the frames cost when its last phase ends.
@@ -33,6 +36,12 @@ pub struct LaunchArgs {
     pub fps_cap: Option<u32>,
     /// Force the graphics-quality preset for this run, unsaved.
     pub quality_preset: Option<QualityPreset>,
+    /// Render with this graphics API, over the one chosen in the saved
+    /// settings, without saving it.
+    pub graphics_api: Option<Platform>,
+    /// The directory screenshots and benchmark captures are written under,
+    /// instead of [`DEFAULT_SCREENSHOTS_DIR`].
+    pub screenshots_dir: Option<String>,
     /// Stop after this many frames.
     pub frames: Option<u64>,
 }
@@ -44,6 +53,8 @@ impl LaunchArgs {
         vsync: false,
         fps_cap: None,
         quality_preset: None,
+        graphics_api: None,
+        screenshots_dir: None,
         frames: None,
     };
 
@@ -120,6 +131,15 @@ impl LaunchArgs {
                         .ok_or_else(|| bad(value))?,
                 );
             }
+            ("screenshots-dir", Some(value)) => {
+                if value.is_empty() {
+                    return Err(bad(value));
+                }
+                self.screenshots_dir = Some(value.to_string());
+            }
+            ("graphics-api", Some(value)) => {
+                self.graphics_api = Some(Platform::from_key(value).ok_or_else(|| bad(value))?);
+            }
             (_, None) => return Err(LaunchArgsError::MissingValue(flag.name)),
             (_, Some(_)) => return Err(LaunchArgsError::UnexpectedValue(flag.name)),
         }
@@ -150,6 +170,9 @@ mod tests {
             "--fps-cap",
             "144",
             "--quality-preset=ultra",
+            "--graphics-api",
+            "vulkan",
+            "--screenshots-dir=shots/vk",
             "--frames",
             "600",
         ])
@@ -161,6 +184,8 @@ mod tests {
                 vsync: true,
                 fps_cap: Some(144),
                 quality_preset: Some(QualityPreset::Ultra),
+                graphics_api: Some(Platform::Vulkan),
+                screenshots_dir: Some("shots/vk".into()),
                 frames: Some(600),
             }
         );
@@ -206,12 +231,37 @@ mod tests {
             })
         );
         assert_eq!(
+            parse(&["--screenshots-dir="]),
+            Err(LaunchArgsError::BadValue {
+                flag: "screenshots-dir",
+                value: String::new()
+            })
+        );
+        assert_eq!(
+            parse(&["--graphics-api", "opengl"]),
+            Err(LaunchArgsError::BadValue {
+                flag: "graphics-api",
+                value: "opengl".into()
+            })
+        );
+        assert_eq!(
             parse(&["--quality-preset", "max"]),
             Err(LaunchArgsError::BadValue {
                 flag: "quality-preset",
                 value: "max".into()
             })
         );
+    }
+
+    // The flag names every platform by its key, and only those.
+    #[test]
+    fn every_graphics_api_is_named_by_its_key() {
+        let keys: alloc::vec::Vec<&str> = Platform::ALL.iter().map(|p| p.key()).collect();
+        assert_eq!(keys, GRAPHICS_API_VALUES);
+        for platform in Platform::ALL {
+            let args = parse(&["--graphics-api", platform.key()]).unwrap();
+            assert_eq!(args.graphics_api, Some(platform));
+        }
     }
 
     #[test]

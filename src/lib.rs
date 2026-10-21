@@ -224,8 +224,8 @@ mod tests {
         let mut world = World::new();
         world.add_component(PhysicsConfig::default());
 
-        let mut app = super::App::from_world(world);
-        app.driver_mut().start().expect("the world starts");
+        let mut driver = super::App::from_world(world).into_driver();
+        driver.start().expect("the world starts");
     }
 
     // The opt-out, which is what a world authored to be seen uses to stay off
@@ -239,8 +239,8 @@ mod tests {
             ..Default::default()
         });
 
-        let mut app = super::App::from_world(world);
-        app.driver_mut().start().expect("the world starts");
+        let mut driver = super::App::from_world(world).into_driver();
+        driver.start().expect("the world starts");
     }
 
     // Without `std` the same app runs to completion in process: the headless

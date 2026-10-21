@@ -91,7 +91,7 @@ pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
 
     let mut runtime = Runtime::new()
         .in_tree(tree.clone())
-        .with_launch(options.launch);
+        .with_launch(options.launch.clone());
     let data_dir = tree.data_dir();
     if let Err(error) = load_world(&mut runtime, &BlobSource::Directory(data_dir)) {
         return Err(report_startup_error(&error));

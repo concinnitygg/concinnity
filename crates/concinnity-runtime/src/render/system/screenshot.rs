@@ -2,23 +2,25 @@
 // schedules starts here, with its directory made and its time stamp taken.
 
 use concinnity_engine::ecs::{PipelineContext, ScreenshotRequest};
+use concinnity_engine::launch::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest};
 use concinnity_engine::render::frame::extract::{FrameExtractor, ScreenshotBurst};
 
 use crate::crash::utc_now;
 
-// Where screenshots land, relative to the working directory.
-const SCREENSHOT_DIR: &str = "screenshots";
-
-// Start the burst a `screenshot` action asked for; the frames extracted from
-// here on capture it.
+// Start the burst a `screenshot` action asked for, in the run's screenshot
+// directory; the frames extracted from here on capture it.
 pub(super) fn start_requested(ctx: &mut PipelineContext<'_>, extractor: &mut FrameExtractor) {
-    start_requested_in(SCREENSHOT_DIR, ctx, extractor);
-}
-
-fn start_requested_in(dir: &str, ctx: &mut PipelineContext<'_>, extractor: &mut FrameExtractor) {
     let Some(ScreenshotRequest(frames)) = ctx.resources.remove::<ScreenshotRequest>() else {
         return;
     };
+    let dir = ctx
+        .resource::<LaunchRequest>()
+        .map_or(DEFAULT_SCREENSHOTS_DIR, LaunchRequest::screenshots_dir)
+        .to_string();
+    start_in(&dir, frames, extractor);
+}
+
+fn start_in(dir: &str, frames: u32, extractor: &mut FrameExtractor) {
     if let Err(e) = std::fs::create_dir_all(dir) {
         tracing::warn!("screenshot: cannot create {dir}: {e}");
     }
@@ -33,14 +35,23 @@ mod tests {
 
     #[test]
     fn a_request_captures_its_frames_in_a_row_into_a_made_directory() {
+        use concinnity_engine::launch::LaunchArgs;
+
         let tree = concinnity_testing::TempTree::new();
         let dir = tree.join("shots");
         let dir = dir.to_str().unwrap();
         let mut world = World::new();
+        world.insert_resource(LaunchRequest {
+            args: LaunchArgs {
+                screenshots_dir: Some(dir.to_string()),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
         let mut extractor = FrameExtractor::default();
-        start_requested_in(dir, &mut world.context(), &mut extractor);
+        start_requested(&mut world.context(), &mut extractor);
         world.insert_resource(ScreenshotRequest(2));
-        start_requested_in(dir, &mut world.context(), &mut extractor);
+        start_requested(&mut world.context(), &mut extractor);
         assert!(world.resource::<ScreenshotRequest>().is_none());
         assert!(std::path::Path::new(dir).is_dir());
         let prefix = format!("{dir}/");

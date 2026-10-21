@@ -49,7 +49,7 @@
 - [ParticleEmitter](ParticleEmitter.md) - A billboard particle emitter.
 - [PhysicsConfig](PhysicsConfig.md) - Configures the world's physics: the floor, collision layers, and how many bodies to reserve.
 - [PhysicsJoint](PhysicsJoint.md) - A physics constraint connecting two [Prop](Prop.md)s that own a `collider`.
-- [Planet](Planet.md) - A whole world to stand on: a sphere of ground `radius` meters around `center`, raised into hills, rendered with `material`, and pulling every body toward its center.
+- [Planet](Planet.md) - A whole world to stand on: a sphere of ground around `center`, raised into hills and continents and sunk into ocean basins, rendered with `material`, and pulling every body toward its center.
 - [PointLight](PointLight.md) - A spherical point light with quadratic distance attenuation.
 - [Prefab](Prefab.md) - A reusable template of [Prop](Prop.md)s, [PointLight](PointLight.md)s, and nested prefabs.
 - [ProceduralMesh](ProceduralMesh.md) - Geometry built by a named generator at compile time. Use for standard shapes.

@@ -25,6 +25,10 @@ pub struct LaunchFlag {
 /// [`QualityPreset::ALL`]: crate::settings::QualityPreset::ALL
 pub const QUALITY_PRESET_VALUES: &[&str] = &["auto", "low", "medium", "high", "ultra", "custom"];
 
+/// The graphics APIs `--graphics-api` names, by
+/// [`Platform::key`](crate::platform::Platform::key).
+pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
+
 /// Every flag a launch accepts.
 pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
     LaunchFlag {
@@ -50,6 +54,18 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         value: Some("PRESET"),
         values: QUALITY_PRESET_VALUES,
         description: "Force the graphics-quality preset for this run, unsaved",
+    },
+    LaunchFlag {
+        name: "graphics-api",
+        value: Some("API"),
+        values: GRAPHICS_API_VALUES,
+        description: "Render with this graphics API, over the saved settings' choice, unsaved",
+    },
+    LaunchFlag {
+        name: "screenshots-dir",
+        value: Some("DIR"),
+        values: &[],
+        description: "Write screenshots and benchmark captures under DIR (default `screenshots`)",
     },
     LaunchFlag {
         name: "frames",

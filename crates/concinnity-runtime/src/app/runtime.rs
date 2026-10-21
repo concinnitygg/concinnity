@@ -20,7 +20,8 @@ use crate::lend::SYSTEMS;
 use crate::render::system::RenderInitFailure;
 use concinnity_engine::ecs::ActiveRenderBackend;
 use concinnity_engine::input::mailbox::InputMailbox;
-use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::render_mode::{RenderMode, Resolution};
 use concinnity_engine::shutdown::ShutdownToken;
@@ -279,13 +280,29 @@ impl Runtime {
     pub fn render_resolution(&mut self) -> Resolution {
         if self.render_mode.is_none() {
             // Before the first probe, which runs on the graphics API this
-            // process renders with: the player's choice, from the settings the
-            // world's home holds.
-            crate::platform::select_persisted(self.writable_tree().as_ref());
+            // process renders with: the launch's, else the player's choice
+            // from the settings the world's home holds.
+            match self.launch_graphics_api() {
+                Some(api) => {
+                    crate::platform::select(Some(api));
+                }
+                None => {
+                    crate::platform::select_persisted(self.writable_tree().as_ref());
+                }
+            }
         }
         *self
             .render_mode
             .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))
+    }
+
+    // The graphics API the launch asks for: the world's own launch arguments
+    // when it holds any, replacing the request's whole, as
+    // `LaunchRequest::publish` takes them.
+    fn launch_graphics_api(&self) -> Option<Platform> {
+        self.world
+            .resource::<LaunchArgs>()
+            .map_or(self.launch.args.graphics_api, |args| args.graphics_api)
     }
 
     // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the

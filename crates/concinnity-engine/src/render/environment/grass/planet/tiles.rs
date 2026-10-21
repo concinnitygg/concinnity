@@ -77,7 +77,7 @@ pub fn planet_center(shape: &PlanetShape, tile: &DrawnPlanetTile) -> [f32; 3] {
 // How far from its origin any point of a tile at `level` can lie, in meters.
 fn tile_reach(shape: &PlanetShape, grid: &PlanetGrassGrid, level: u8) -> f64 {
     let width = shape.radius * core::f64::consts::FRAC_PI_2 / f64::from(1u32 << level);
-    width * libm::sqrt(grid.max_stretch) * 0.8 + shape.amplitude
+    width * libm::sqrt(grid.max_stretch) * 0.8 + shape.highest_height() - shape.lowest_height()
 }
 
 // How far a blade's root may sit from the ground its tile draws, in meters:
@@ -313,6 +313,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 4,
+            continents: crate::planet::Continents::NONE,
         }
     }
 
@@ -573,6 +574,7 @@ mod tests {
                 feature_size: 2_000.0,
                 octaves: 8,
                 seed: 4,
+                continents: crate::planet::Continents::NONE,
             };
             let grid = PlanetGrassGrid::new(&s);
             let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);

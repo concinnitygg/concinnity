@@ -22,9 +22,9 @@ const GROUND_HEIGHT: f64 = 2.5;
 const ORBIT_HEIGHT: f64 = 150_000.0;
 const LOW_HEIGHT: f64 = 100.0;
 
-// A held settle, a run over the meadow, a climb that speeds up out of the air,
-// a pass in orbit, a descent to skim the ground far to the north, and a
-// landing back to the meadow's height and pace to watch the sun rise. The
+// A held settle, a run over the meadow and across the shore out to sea, a
+// climb that speeds up out of the air, a pass in orbit, a descent to skim the
+// ground far round the planet, and a landing back to the meadow's height and pace to watch the sun rise. The
 // climb and the descent change height and speed by a constant ratio at their
 // fastest, the way a lift-off or a landing feels even.
 pub(super) const PHASES: [Phase; 7] = [

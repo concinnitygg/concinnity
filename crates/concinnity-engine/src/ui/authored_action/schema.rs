@@ -53,7 +53,8 @@ pub(super) static ACTION: TypeSchema = TypeSchema {
         keyed(
             "screenshot",
             "Save this many consecutive presented frames, starting with the next, as lossless PNG images \
-             in a `screenshots` folder under the working directory. A burst of several frames \
+             in the run's screenshot folder: `screenshots` under the working directory, unless \
+             the app was launched with another (`--screenshots-dir`). A burst of several frames \
              follows something that moves from frame to frame.",
             || FieldType::Integer,
         ),

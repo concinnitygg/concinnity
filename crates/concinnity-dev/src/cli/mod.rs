@@ -77,7 +77,6 @@ static DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
     debug_port: None,
     validation: None,
     render: RenderArgs {
-        graphics_api: None,
         launch: launch_args::LaunchArgsArg::NONE,
         rt_dynamic: None,
         rt_skinned_geometry: None,

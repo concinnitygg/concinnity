@@ -3,6 +3,9 @@
 
 use concinnity_core::math::dvec3;
 use concinnity_core::math::dvec3::DVec3;
+use concinnity_core::math::narrow_f32;
+
+use super::{PlanetFrame, PlanetShape};
 
 /// The planet's lowest ground seen from one eye: a sphere that hides whatever
 /// lies wholly inside the cone it subtends past the circle where the eye's
@@ -46,6 +49,11 @@ impl Horizon {
         })
     }
 
+    /// The horizon of `shape`'s lowest ground seen from authored point `eye`.
+    pub fn of_planet(eye: DVec3, shape: &PlanetShape, keep_within: f64) -> Option<Self> {
+        Self::new(eye, shape.center, shape.lowest_radius(), keep_within)
+    }
+
     /// Whether the sphere of `radius` around `center` lies wholly behind the
     /// horizon.
     pub fn hides_sphere(&self, center: DVec3, radius: f64) -> bool {
@@ -79,6 +87,14 @@ pub struct HorizonOccluder {
 }
 
 impl HorizonOccluder {
+    /// The lowest ground of `planet`'s shape, in its simulated frame.
+    pub fn of(planet: &PlanetFrame) -> Self {
+        Self {
+            center: planet.center(),
+            radius: narrow_f32(planet.shape.lowest_radius()),
+        }
+    }
+
     /// The horizon seen from local point `eye`, keeping everything within
     /// [`HORIZON_SHADOW_REACH`](super::HORIZON_SHADOW_REACH) of it.
     pub fn seen_from(&self, eye: [f32; 3]) -> Option<Horizon> {
@@ -94,7 +110,7 @@ impl HorizonOccluder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::math::narrow_f32;
+    use crate::planet::{Continents, LocalFrame};
 
     const R: f64 = 50_000.0;
     const CENTER: DVec3 = [0.0, -R, 0.0];
@@ -172,6 +188,33 @@ mod tests {
         assert!(!eye.hides_sphere(round((reach - 10.0) / R, 0.0), 1.0));
         assert!(eye.hides_sphere(round((reach + 900.0) / R, 0.0), 1.0));
         assert!(occluder.seen_from([0.0, -1.0, 0.0]).is_none());
+    }
+
+    // A planet with seas hides only what its sea floor hides: ground just
+    // past the sea level sphere's horizon still shows over the basins.
+    #[test]
+    fn a_planet_s_horizon_is_its_lowest_ground() {
+        let shape = PlanetShape {
+            center: CENTER,
+            radius: R,
+            amplitude: 40.0,
+            feature_size: 2_000.0,
+            octaves: 8,
+            seed: 4,
+            continents: Continents::new(R, 4, 20_000.0, 0.4, 60.0, 60.0),
+        };
+        let eye = [0.0, 2.0, 0.0];
+        let past = round(1_000.0 / R, 0.0);
+        assert!(standing(2.0).hides_sphere(past, 1.0));
+        let planet = Horizon::of_planet(eye, &shape, 0.0).unwrap();
+        assert!(!planet.hides_sphere(past, 1.0));
+        assert!(planet.hides_sphere(round(5_000.0 / R, -60.0), 1.0));
+        let frame = PlanetFrame {
+            shape,
+            frame: LocalFrame::AUTHORED,
+        };
+        let occluder = HorizonOccluder::of(&frame);
+        assert!((f64::from(occluder.radius) - (R - 60.0)).abs() < 1e-2);
     }
 
     #[test]

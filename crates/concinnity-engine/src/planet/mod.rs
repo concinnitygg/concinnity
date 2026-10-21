@@ -5,7 +5,8 @@
 //! The pieces are pure and independent of any thread or device:
 //!
 //! - [`PlanetShape`]: the ground as one function of direction, the single
-//!   source every tile mesh and collider is built from.
+//!   source every tile mesh and collider is built from, its land and seas
+//!   laid out by [`Continents`].
 //! - [`TileId`], [`tile_mesh`] and [`TileLod`]: the cube-sphere quadtree, one
 //!   tile's mesh, and which tiles a camera wants and can draw, each
 //!   level reaching as far as its cells look a set size on screen.
@@ -22,6 +23,7 @@
 //!   the camera, building ground on a host's [`GroundBuilder`].
 
 mod carry;
+mod coast;
 mod follow;
 mod frame;
 mod geo;
@@ -39,6 +41,7 @@ use crate::components::TerrainLayer;
 use crate::ecs::MaterialHandle;
 use alloc::vec::Vec;
 pub use carry::carry_world;
+pub use coast::{BEACH_SLOPE, CONTINENT_OCTAVES, Continents, HILL_RISE, SEABED_RELIEF};
 pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
 pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_patch, next_patch};
@@ -53,8 +56,8 @@ pub use lod::{
 pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use seams::{DrawnTile, TileSeams};
-pub(crate) use shape::OCTAVE_TURN;
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
+pub(crate) use shape::{OCTAVE_TURN, octave_weight_sum};
 pub use system::{
     GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetSystem, StartBuilder,
     inline_ground,
@@ -128,9 +131,9 @@ pub struct PlanetGround {
     pub patch: GroundPatch,
 }
 
-/// A whole world to stand on: a sphere of ground `radius` meters around
-/// `center`, raised into hills, rendered with `material`, and pulling every
-/// body toward its center.
+/// A whole world to stand on: a sphere of ground around `center`, raised
+/// into hills and continents and sunk into ocean basins, rendered with
+/// `material`, and pulling every body toward its center.
 ///
 /// The ground is generated from `seed`: hills up to `amplitude` meters above
 /// the radius, the broadest about `feature_size` meters across, with
@@ -139,6 +142,19 @@ pub struct PlanetGround {
 /// Nothing about the ground is stored: it is built around the camera as it
 /// moves, finer near it and coarser toward the horizon, so a planet costs the
 /// same to load whatever its size.
+///
+/// With a `land_share` under 1, the planet divides into land and sea around
+/// its `radius`, which becomes sea level: continents about `continent_size`
+/// meters across rise above it over `land_share` of the surface, and ocean
+/// basins up to `ocean_depth` meters deep sink below it over the rest. The
+/// coasts are gentle: from the waterline a beach `beach_width` meters wide
+/// rises a few meters, the hills grow in behind it over half their width,
+/// and out to sea the floor falls away at the beach's slope across a shallow
+/// shelf before it levels off toward the ocean depth. The ground then spans
+/// from `ocean_depth` below the radius to `amplitude` above it, or to the top
+/// of the beach where the hills are lower than that. The water
+/// itself is a [`WaterSurface`](#watersurface) whose `shape` is `planet_sea`,
+/// with a `sea_level` of 0 to fill the basins to the coasts.
 ///
 /// Gravity points at the center from wherever a body is, `gravity` meters per
 /// second squared, so a first-person camera with a [`RigidBody`](#rigidbody)
@@ -156,9 +172,6 @@ pub struct PlanetGround {
 /// longitude grows eastward, toward `+X`. Altitude is measured above
 /// `radius`, height above the ground above the hills.
 ///
-/// A [`WaterSurface`](#watersurface) whose `shape` is `planet_sea` floods the
-/// planet to its `sea_level`.
-///
 /// ```rust
 /// # use concinnity_engine::components::Planet;
 /// Planet {
@@ -166,6 +179,7 @@ pub struct PlanetGround {
 ///     center: [0.0, -20_000.0, 0.0],
 ///     amplitude: 35.0,
 ///     seed: 4,
+///     land_share: 0.4,
 ///     ..Default::default()
 /// };
 /// ```
@@ -183,7 +197,8 @@ pub struct Planet {
     /// default radius at the origin.
     #[asset(default = [0.0, -50_000.0, 0.0])]
     pub center: [f32; 3],
-    /// Radius of the lowest ground, in meters. At least 100.
+    /// Radius of sea level, or of the lowest ground on a planet that is all
+    /// land, in meters. At least 100.
     #[asset(default = 50_000.0)]
     pub radius: f32,
     /// Highest hilltop above `radius`, in meters. An `amplitude` of 0 gives a
@@ -198,6 +213,20 @@ pub struct Planet {
     pub octaves: u32,
     /// Shapes the ground: each seed gives a different planet.
     pub seed: u32,
+    /// Share of the surface that is land, in [0, 1]; the rest lies under sea
+    /// level. 1 makes the whole planet land.
+    #[asset(default = 1.0)]
+    pub land_share: f32,
+    /// Width of the broadest continents and oceans, in meters. At least 100.
+    #[asset(default = 20_000.0)]
+    pub continent_size: f32,
+    /// Deepest the sea floor lies below sea level, in meters.
+    #[asset(default = 60.0)]
+    pub ocean_depth: f32,
+    /// Width of the gentle rise from the waterline to where the hills begin,
+    /// in meters. At least 1.
+    #[asset(default = 60.0)]
+    pub beach_width: f32,
     /// The [Material](#material) the ground renders with.
     pub material: Option<MaterialHandle>,
     /// Pull toward the center, in meters per second squared.
@@ -214,13 +243,22 @@ pub struct Planet {
 impl Planet {
     /// The surface this planet's args describe.
     pub fn shape(&self) -> PlanetShape {
+        let radius = f64::from(self.radius);
         PlanetShape {
             center: concinnity_core::math::dvec3::from_f32(self.center),
-            radius: f64::from(self.radius),
+            radius,
             amplitude: f64::from(self.amplitude),
             feature_size: f64::from(self.feature_size),
             octaves: self.octaves,
             seed: self.seed,
+            continents: Continents::new(
+                radius,
+                self.seed,
+                f64::from(self.continent_size),
+                f64::from(self.land_share),
+                f64::from(self.ocean_depth),
+                f64::from(self.beach_width),
+            ),
         }
     }
 }

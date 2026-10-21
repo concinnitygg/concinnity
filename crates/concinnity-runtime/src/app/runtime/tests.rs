@@ -98,7 +98,7 @@ fn the_launch_request_survives_a_world_load_and_restart() {
         dev_loop: true,
         ..Default::default()
     };
-    let mut runtime = Runtime::new().with_launch(launch);
+    let mut runtime = Runtime::new().with_launch(launch.clone());
     runtime.start().unwrap();
     assert_eq!(runtime.world().resource::<LaunchRequest>(), Some(&launch));
 
@@ -153,7 +153,7 @@ fn an_apps_args_replace_the_launchs() {
         frames: Some(9),
         ..LaunchArgs::NONE
     };
-    world.insert_resource(args);
+    world.insert_resource(args.clone());
     let mut runtime = Runtime::from_world(world).with_launch(LaunchRequest {
         args: LaunchArgs {
             frames: Some(1),
@@ -162,10 +162,38 @@ fn an_apps_args_replace_the_launchs() {
         ..Default::default()
     });
     runtime.start().unwrap();
-    let launch = runtime.world().resource::<LaunchRequest>().copied();
+    let launch = runtime.world().resource::<LaunchRequest>().cloned();
     assert_eq!(launch.map(|l| l.args), Some(args));
     assert!(runtime.world().resource::<LaunchArgs>().is_none());
     assert!(runtime.world().resource::<BenchmarkRun>().is_some());
+}
+
+// An app's own args replace the launch's whole, as `publish` takes them, so
+// the API chosen before start is the one the run publishes.
+#[test]
+fn an_apps_args_choose_the_graphics_api_whole() {
+    let launch = |api| LaunchRequest {
+        args: LaunchArgs {
+            graphics_api: api,
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    };
+    let mut world = World::new();
+    world.insert_resource(LaunchArgs {
+        graphics_api: Some(Platform::Vulkan),
+        ..LaunchArgs::NONE
+    });
+    let runtime = Runtime::from_world(world).with_launch(launch(Some(Platform::Metal)));
+    assert_eq!(runtime.launch_graphics_api(), Some(Platform::Vulkan));
+    let mut world = World::new();
+    world.insert_resource(LaunchArgs::NONE);
+    let runtime = Runtime::from_world(world).with_launch(launch(Some(Platform::Metal)));
+    assert_eq!(runtime.launch_graphics_api(), None);
+    let runtime = Runtime::from_world(World::new()).with_launch(launch(Some(Platform::DirectX)));
+    assert_eq!(runtime.launch_graphics_api(), Some(Platform::DirectX));
+    let runtime = Runtime::from_world(World::new());
+    assert_eq!(runtime.launch_graphics_api(), None);
 }
 
 // from_world hands the runtime a world that is already populated, in the

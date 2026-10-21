@@ -82,6 +82,7 @@ mod tests {
         feature_size: 1_000.0,
         octaves: 4,
         seed: 1,
+        continents: crate::planet::Continents::NONE,
     };
 
     fn frame() -> PlanetFrame {

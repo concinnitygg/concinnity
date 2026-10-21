@@ -7,18 +7,61 @@ use concinnity_engine::ecs::HEADLESS_SYSTEMS;
 
 use crate::world::Inner;
 
-// The loop a world runs on unless the caller asks for another: the engine's
-// windowed one where there is an operating system to drive, the headless one
-// where there is not. This is the whole of what the two tiers disagree about;
-// everything above holds the result behind the trait.
-#[cfg(feature = "std")]
-pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
-    adopt(concinnity_runtime::Runtime::from_world(world))
+// The loop an app's world runs on, chosen when the app runs rather than when
+// it is built, so what the app adds first is in the world by then: its launch
+// arguments name the graphics API the choice probes the machine with.
+pub(crate) enum Loop {
+    #[cfg(feature = "std")]
+    Unchosen(Box<concinnity_runtime::Runtime>),
+    Chosen(Box<dyn Driver>),
 }
 
-#[cfg(not(feature = "std"))]
-pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
-    headless(world)
+impl Loop {
+    // The loop a world runs on unless the caller asks for another: the
+    // engine's windowed one where there is an operating system to drive, the
+    // headless one where there is not. This is the whole of what the two tiers
+    // disagree about; everything above holds the result behind the trait.
+    #[cfg(feature = "std")]
+    pub(crate) fn new(world: Inner) -> Self {
+        Self::runtime(concinnity_runtime::Runtime::from_world(world))
+    }
+
+    #[cfg(not(feature = "std"))]
+    pub(crate) fn new(world: Inner) -> Self {
+        Self::Chosen(headless(world))
+    }
+
+    // The loop an already-loaded engine runtime runs on, chosen as `adopt`
+    // chooses it once the app runs.
+    #[cfg(feature = "std")]
+    pub(crate) fn runtime(runtime: concinnity_runtime::Runtime) -> Self {
+        Self::Unchosen(Box::new(runtime))
+    }
+
+    pub(crate) fn world_mut(&mut self) -> &mut Inner {
+        match self {
+            #[cfg(feature = "std")]
+            Self::Unchosen(runtime) => runtime.world_mut(),
+            Self::Chosen(driver) => driver.world_mut(),
+        }
+    }
+
+    pub(crate) fn into_world(self) -> Inner {
+        match self {
+            #[cfg(feature = "std")]
+            Self::Unchosen(runtime) => runtime.into_world(),
+            Self::Chosen(driver) => driver.into_world(),
+        }
+    }
+
+    // Choose the loop now.
+    pub(crate) fn chosen(self) -> Box<dyn Driver> {
+        match self {
+            #[cfg(feature = "std")]
+            Self::Unchosen(runtime) => adopt(*runtime),
+            Self::Chosen(driver) => driver,
+        }
+    }
 }
 
 // The loop an already-loaded engine runtime runs on, which is the runtime's own
@@ -26,7 +69,7 @@ pub(crate) fn select(world: Inner) -> Box<dyn Driver> {
 // headless. Anything else keeps the engine's loop, whose start refuses a world
 // with something to draw on a build or machine that cannot draw it.
 #[cfg(feature = "std")]
-pub(crate) fn adopt(mut runtime: concinnity_runtime::Runtime) -> Box<dyn Driver> {
+fn adopt(mut runtime: concinnity_runtime::Runtime) -> Box<dyn Driver> {
     use concinnity_engine::render::backend::render_mode::Resolution;
     match runtime.render_resolution() {
         Resolution::Headless(_) => headless(runtime.into_world()),
@@ -92,8 +135,8 @@ mod tests {
     // never-ending system never does.
     fn assert_default_loop_is_headless(world: World) {
         concinnity_testing::forbid_windows();
-        let mut app = App::from_world(world);
-        app.driver_mut().start().expect("the world starts");
+        let mut driver = App::from_world(world).into_driver();
+        driver.start().expect("the world starts");
     }
 
     // The opt-out, through the default selection rather than `into_headless`: a

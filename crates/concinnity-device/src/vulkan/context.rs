@@ -1818,6 +1818,10 @@ impl VkContext {
             transparent.destroy(device);
         }
 
+        // The ocean cascades and FFT kernels the water draws sampled; their
+        // images and buffers retire through the allocator.
+        self.water_sim = None;
+
         // Auto-exposure resources (pipelines + histogram + per-frame readbacks).
         if let Some(mut ae) = self.auto_exposure.resources.take() {
             ae.destroy(device);

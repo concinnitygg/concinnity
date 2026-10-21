@@ -1,12 +1,12 @@
 //! The application: a world plus the loop that runs it.
 
-use alloc::boxed::Box;
-
 #[cfg(feature = "std")]
 use std::path::Path;
 
-use concinnity_engine::Driver;
+#[cfg(all(test, not(feature = "std")))]
+use alloc::boxed::Box;
 
+use crate::driver::Loop;
 use crate::{Error, World, driver};
 
 /// A runnable application.
@@ -19,7 +19,7 @@ use crate::{Error, World, driver};
 /// App::from_world(World::new()).run().expect("the app runs");
 /// ```
 pub struct App {
-    driver: Box<dyn Driver>,
+    driver: Loop,
 }
 
 impl core::fmt::Debug for App {
@@ -32,7 +32,7 @@ impl App {
     /// An app that runs `world`.
     pub fn from_world(world: World) -> Self {
         Self {
-            driver: driver::select(world.into_inner()),
+            driver: Loop::new(world.into_inner()),
         }
     }
 
@@ -65,7 +65,7 @@ impl App {
     pub fn from_blob(path: impl AsRef<Path>) -> Result<Self, Error> {
         concinnity_runtime::Runtime::from_blob(path.as_ref())
             .map(|runtime| Self {
-                driver: driver::adopt(runtime),
+                driver: Loop::runtime(runtime),
             })
             .map_err(crate::error::from_startup)
     }
@@ -103,7 +103,8 @@ impl App {
     }
 
     /// The same app, run as `args` ask: benchmarked, with vsync, under a
-    /// frame-rate cap or a quality preset, or for a fixed number of frames.
+    /// frame-rate cap or a quality preset, on a chosen graphics API, or for a
+    /// fixed number of frames.
     /// Parse them from the command line with
     /// [`LaunchArgs::parse`](crate::launch::LaunchArgs::parse).
     ///
@@ -142,7 +143,7 @@ impl App {
     #[must_use]
     pub fn into_headless(self) -> Self {
         Self {
-            driver: driver::headless(self.driver.into_world()),
+            driver: Loop::Chosen(driver::headless(self.driver.into_world())),
         }
     }
 
@@ -158,12 +159,12 @@ impl App {
     /// Returns an error when a world meant to be seen could not build its
     /// renderer on a machine that has a GPU.
     pub fn run(self) -> Result<(), Error> {
-        self.driver.run().map_err(Error::from)
+        self.driver.chosen().run().map_err(Error::from)
     }
 
     #[cfg(test)]
-    pub(crate) fn driver_mut(&mut self) -> &mut dyn Driver {
-        &mut *self.driver
+    pub(crate) fn into_driver(self) -> Box<dyn concinnity_engine::Driver> {
+        self.driver.chosen()
     }
 }
 

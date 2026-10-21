@@ -330,7 +330,7 @@ impl GraphicsSystem {
 
     // Run init, marking the system failed when any step of it fails.
     pub(super) fn try_init(&mut self, ctx: &mut PipelineContext<'_>) -> Option<()> {
-        let launch = ctx.resource::<LaunchRequest>().copied().unwrap_or_default();
+        let launch = ctx.resource::<LaunchRequest>().cloned().unwrap_or_default();
         let persisted = ctx
             .resource::<concinnity_engine::settings::StoredSettings>()
             .cloned()

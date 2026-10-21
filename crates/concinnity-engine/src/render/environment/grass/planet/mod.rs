@@ -93,6 +93,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 4,
+            continents: crate::planet::Continents::NONE,
         }
     }
 

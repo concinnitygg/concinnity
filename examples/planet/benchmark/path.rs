@@ -8,8 +8,8 @@ use super::flight::{self, Fix, PHASES, smoothstep};
 use concinnity::math::dvec3::{DVec3, add, cross, dot, length, scale, sub};
 
 /// Degrees clockwise from north the course sets out on from where the world
-/// starts.
-const HEADING_DEG: f64 = 24.0;
+/// starts: across the shore a couple of hundred meters east, out to sea.
+const HEADING_DEG: f64 = 96.0;
 /// How often the path is pinned to the flight: often enough that a leg over
 /// the meadow strays from the ground under it by centimeters.
 const STEP_SECONDS: f64 = 0.2;
@@ -63,21 +63,23 @@ pub(super) struct Path {
 }
 
 impl Path {
-    pub(super) fn new(planet: &Planet, sun: impl Fn(f64) -> DVec3) -> Self {
+    /// The path over `planet`, flooded to `sea_level` meters above its
+    /// radius when it has a sea, aimed by the sun's direction `sun` seconds
+    /// into the run.
+    pub(super) fn new(planet: &Planet, sea_level: Option<f64>, sun: impl Fn(f64) -> DVec3) -> Self {
         let shape = planet.shape();
         let course = Course::new(HEADING_DEG);
         let fixes = flight::fixes(shape.radius, STEP_SECONDS);
+        let floor = sea_level.unwrap_or(f64::NEG_INFINITY);
+        let surface = |up: DVec3| shape.radius + shape.height(up).max(floor);
         let points: Vec<DVec3> = fixes
             .iter()
             .map(|fix| {
                 let up = course.up(fix.arc);
-                add(
-                    shape.center,
-                    scale(up, shape.radius + shape.height(up) + fix.height),
-                )
+                add(shape.center, scale(up, surface(up) + fix.height))
             })
             .collect();
-        let views = views(&fixes, &course, sun, |up| shape.radius + shape.height(up));
+        let views = views(&fixes, &course, sun, surface);
 
         let mut travel = Vec::with_capacity(fixes.len() - 1);
         let mut turn = Vec::with_capacity(fixes.len() - 1);

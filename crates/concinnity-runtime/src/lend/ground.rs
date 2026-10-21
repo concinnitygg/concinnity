@@ -53,6 +53,7 @@ mod tests {
             feature_size: 200.0,
             octaves: 3,
             seed: 2,
+            continents: concinnity_engine::planet::Continents::NONE,
         };
         let mut worker = start_ground_worker(shape).expect("thread");
         let request = PatchRequest {

@@ -5,7 +5,7 @@ use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use concinnity_engine::launch::{LAUNCH_FLAGS, LaunchArgs};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct LaunchArgsArg(pub(crate) LaunchArgs);
 
 impl LaunchArgsArg {
@@ -101,6 +101,10 @@ mod tests {
             "ultra",
             "--frames",
             "5",
+            "--graphics-api",
+            "directx",
+            "--screenshots-dir",
+            "shots",
         ])
         .unwrap();
         assert_eq!(
@@ -110,6 +114,8 @@ mod tests {
                 vsync: true,
                 fps_cap: Some(90),
                 quality_preset: Some(QualityPreset::Ultra),
+                graphics_api: Some(concinnity_engine::platform::Platform::DirectX),
+                screenshots_dir: Some("shots".into()),
                 frames: Some(5),
             }
         );

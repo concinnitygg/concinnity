@@ -1,29 +1,10 @@
 // The argv mirrors of engine types. The value-enum derives live here so no
 // layer below the command line carries a clap dependency.
 use concinnity_engine::gfx::view_modes::ShowFlags;
-use concinnity_engine::platform::Platform;
 use concinnity_engine::render::output::dlss::DlssPreset;
 use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
 
 use crate::export::BundleFormat;
-
-// The argv face of the graphics API a launch renders with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub(crate) enum GraphicsApiArg {
-    Metal,
-    Directx,
-    Vulkan,
-}
-
-impl From<GraphicsApiArg> for Platform {
-    fn from(api: GraphicsApiArg) -> Self {
-        match api {
-            GraphicsApiArg::Metal => Self::Metal,
-            GraphicsApiArg::Directx => Self::DirectX,
-            GraphicsApiArg::Vulkan => Self::Vulkan,
-        }
-    }
-}
 
 // The argv face of the export `BundleFormat`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -123,12 +104,6 @@ mod tests {
     #[test]
     fn the_render_value_enums_map_onto_the_engine_types() {
         use clap::ValueEnum;
-
-        let apis: Vec<Platform> = GraphicsApiArg::value_variants()
-            .iter()
-            .map(|&a| a.into())
-            .collect();
-        assert_eq!(apis, Platform::ALL.to_vec());
 
         let modes: Vec<RtDynamicMode> = RtDynamicArg::value_variants()
             .iter()

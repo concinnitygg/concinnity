@@ -11,6 +11,6 @@
 // harness cannot end.
 pub(crate) fn assert_starts_headless(app: crate::App) {
     concinnity_testing::forbid_windows();
-    let mut app = app.into_headless();
-    app.driver_mut().start().expect("the world starts");
+    let mut driver = app.into_headless().into_driver();
+    driver.start().expect("the world starts");
 }

@@ -1,5 +1,5 @@
-// A planet's surface: a sphere of `radius` around `center`, raised by a seeded
-// noise field sampled on the sphere itself, so the surface is one function of
+// A planet's surface: a sphere of `radius` around `center`, shaped by seeded
+// noise fields sampled on the sphere itself, so the surface is one function of
 // direction with no seams. Every consumer (render tiles, colliders) reads it
 // from here, so they cannot disagree about where the ground is.
 
@@ -8,6 +8,8 @@ use concinnity_core::math::dmat3::{self, DMat3};
 use concinnity_core::math::dvec3;
 use concinnity_core::math::dvec3::DVec3;
 use concinnity_core::math::noise::lcg_hash;
+
+use super::coast::{Continents, HILL_RISE};
 
 /// Fewest octaves a planet's height noise sums.
 pub const MIN_OCTAVES: u32 = 1;
@@ -20,7 +22,8 @@ pub const MAX_OCTAVES: u32 = 16;
 pub struct PlanetShape {
     /// The center, in authored coordinates.
     pub center: DVec3,
-    /// The radius of the lowest ground, in meters.
+    /// The radius of the datum heights are measured from, in meters: mean sea
+    /// level when the planet has seas, the lowest ground when it has none.
     pub radius: f64,
     /// The highest ground above `radius`, in meters.
     pub amplitude: f64,
@@ -30,6 +33,8 @@ pub struct PlanetShape {
     pub octaves: u32,
     /// Picks the landscape.
     pub seed: u32,
+    /// Where the ground lies above the datum and where below it.
+    pub continents: Continents,
 }
 
 /// The turn from one octave's noise lattice to the next, column-major: about a
@@ -45,27 +50,60 @@ pub(crate) const OCTAVE_TURN: DMat3 = [
 
 impl PlanetShape {
     /// The ground's height above `radius` in direction `dir` (unit length),
-    /// in `[0, amplitude]`.
+    /// in `[lowest_height, highest_height]`.
     pub fn height(&self, dir: DVec3) -> f64 {
         self.height_gradient(dir).0
+    }
+
+    /// The lowest the ground gets, in meters above `radius`: the ocean depth
+    /// below it on a planet with seas, 0 on one without.
+    pub fn lowest_height(&self) -> f64 {
+        if self.continents.divides() {
+            -self.continents.ocean_depth()
+        } else {
+            0.0
+        }
+    }
+
+    /// The radius of the sphere of the lowest ground, in meters: the one
+    /// nothing on the planet lies under.
+    pub fn lowest_radius(&self) -> f64 {
+        self.radius + self.lowest_height()
+    }
+
+    /// The highest the ground gets, in meters above `radius`: the hilltops,
+    /// or the top of the beach on a planet with seas whose hills are lower.
+    pub fn highest_height(&self) -> f64 {
+        self.amplitude.max(self.continents.beach_rise()).max(0.0)
     }
 
     /// The ground's height in direction `dir` (unit length) and its gradient
     /// over directions: how fast the height grows, in meters per unit of
     /// direction, along each authored axis.
     fn height_gradient(&self, dir: DVec3) -> (f64, DVec3) {
-        if self.amplitude <= 0.0 {
+        let (hill, hill_gradient) = self.hills(dir);
+        if !self.continents.divides() {
+            return (hill, hill_gradient);
+        }
+        let (inland, inland_gradient) = self.continents.inland(self.radius, dir);
+        let shore = self
+            .continents
+            .shore(inland, hill, self.amplitude, self.hill_rise());
+        let gradient = dvec3::add(
+            dvec3::scale(inland_gradient, shore.per_meter_inland),
+            dvec3::scale(hill_gradient, shore.per_hill_meter),
+        );
+        (shore.height, gradient)
+    }
+
+    // The hills' height in direction `dir` and its gradient over directions.
+    fn hills(&self, dir: DVec3) -> (f64, DVec3) {
+        if self.hill_height() <= 0.0 {
             return (0.0, [0.0; 3]);
         }
-        let mut sum = 0.0;
-        let mut gradient = [0.0; 3];
-        for octave in self.octave_lattices() {
-            let p = dvec3::add(dmat3::mul_vec(&octave.to_lattice, dir), octave.offset);
-            let (value, grad) = value_noise(p, octave.salt);
-            sum += value * octave.weight;
-            let along = dmat3::mul_transpose_vec(&octave.to_lattice, grad);
-            gradient = dvec3::add(gradient, dvec3::scale(along, octave.weight));
-        }
+        let (sum, gradient) = fbm(dir, self.base_frequency(), self.octave_count(), |o| {
+            self.octave_salt(o)
+        });
         let k = self.noise_scale();
         (sum * k, dvec3::scale(gradient, k))
     }
@@ -100,14 +138,19 @@ impl PlanetShape {
     /// The steepest the ground can rise along it anywhere, in meters per
     /// meter: a bound from each octave's lattice spacing, not a measurement.
     pub fn max_slope(&self) -> f64 {
-        if self.amplitude <= 0.0 {
-            return 0.0;
-        }
         // Each octave's weight halves as its frequency doubles, so every
         // octave bounds the same, and a value noise's gradient is at most
         // 1.5 along each lattice axis.
         let per_octave = self.noise_scale() * self.base_frequency() * 1.5 * libm::sqrt(3.0);
-        per_octave * f64::from(self.octave_count()) / self.radius
+        let hills = per_octave * f64::from(self.octave_count());
+        if !self.continents.divides() {
+            return hills / self.radius;
+        }
+        let (per_inland, per_hill) = self
+            .continents
+            .shore_bounds(self.amplitude, self.hill_rise());
+        let inland = self.continents.inland_slope_bound(self.radius);
+        (per_inland * inland + per_hill * hills) / self.radius
     }
 
     /// The direction from the center to authored point `p`.
@@ -125,35 +168,69 @@ impl PlanetShape {
         self.octaves.clamp(MIN_OCTAVES, MAX_OCTAVES)
     }
 
-    // Meters of height per unit of the octaves' weighted sum: the amplitude
-    // over the weights, each octave half the last.
+    // The tallest the hills get, in meters: the amplitude, less the beach
+    // they stand on when the planet has seas.
+    pub(crate) fn hill_height(&self) -> f64 {
+        self.continents.hill_height(self.amplitude)
+    }
+
+    // How far past the beach the hills take to rise to their full height.
+    pub(crate) fn hill_rise(&self) -> f64 {
+        self.feature_size.max(1e-3) * HILL_RISE
+    }
+
+    // Meters of height per unit of the octaves' weighted sum: the hills'
+    // height over the weights, each octave half the last.
     pub(crate) fn noise_scale(&self) -> f64 {
-        let weight_sum = 2.0 * (1.0 - libm::pow(0.5, f64::from(self.octave_count())));
-        self.amplitude / weight_sum
+        self.hill_height() / octave_weight_sum(self.octave_count())
     }
 
     // Octave `octave`'s hash salt.
     pub(crate) fn octave_salt(&self, octave: u32) -> u32 {
         lcg_hash(self.seed ^ octave.wrapping_mul(0x9e37_79b9))
     }
+}
 
-    fn octave_lattices(&self) -> impl Iterator<Item = OctaveLattice> {
-        let base = self.base_frequency();
-        let mut to_lattice = dmat3::scale_mat(&OCTAVE_TURN, base);
-        let mut weight = 1.0;
-        (0..self.octave_count()).map(move |octave| {
-            let salt = self.octave_salt(octave);
-            let lattice = OctaveLattice {
-                to_lattice,
-                offset: lattice_offset(salt),
-                salt,
-                weight,
-            };
-            to_lattice = dmat3::scale_mat(&dmat3::mul(&OCTAVE_TURN, &to_lattice), 2.0);
-            weight *= 0.5;
-            lattice
-        })
+// The sum of `octaves` octave weights, each half the last, from 1.
+pub(crate) fn octave_weight_sum(octaves: u32) -> f64 {
+    2.0 * (1.0 - libm::pow(0.5, f64::from(octaves)))
+}
+
+// The weighted sum of `octaves` octaves of value noise in direction `dir`, the
+// broadest `base` lattice cells per unit of direction, octave `o` salted by
+// `salt(o)`, and its gradient over directions.
+pub(crate) fn fbm(dir: DVec3, base: f64, octaves: u32, salt: impl Fn(u32) -> u32) -> (f64, DVec3) {
+    let mut sum = 0.0;
+    let mut gradient = [0.0; 3];
+    for octave in octave_lattices(base, octaves, salt) {
+        let p = dvec3::add(dmat3::mul_vec(&octave.to_lattice, dir), octave.offset);
+        let (value, grad) = value_noise(p, octave.salt);
+        sum += value * octave.weight;
+        let along = dmat3::mul_transpose_vec(&octave.to_lattice, grad);
+        gradient = dvec3::add(gradient, dvec3::scale(along, octave.weight));
     }
+    (sum, gradient)
+}
+
+fn octave_lattices(
+    base: f64,
+    count: u32,
+    salt: impl Fn(u32) -> u32,
+) -> impl Iterator<Item = OctaveLattice> {
+    let mut to_lattice = dmat3::scale_mat(&OCTAVE_TURN, base);
+    let mut weight = 1.0;
+    (0..count).map(move |octave| {
+        let salt = salt(octave);
+        let lattice = OctaveLattice {
+            to_lattice,
+            offset: lattice_offset(salt),
+            salt,
+            weight,
+        };
+        to_lattice = dmat3::scale_mat(&dmat3::mul(&OCTAVE_TURN, &to_lattice), 2.0);
+        weight *= 0.5;
+        lattice
+    })
 }
 
 // One octave of the height noise: the map from a direction into its lattice,
@@ -296,6 +373,65 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 7,
+            continents: Continents::NONE,
+        }
+    }
+
+    // A planet of seas and continents, 40% land.
+    fn coast_shape() -> PlanetShape {
+        PlanetShape {
+            continents: Continents::new(50_000.0, 7, 20_000.0, 0.4, 60.0, 60.0),
+            ..shape()
+        }
+    }
+
+    // Directions spread over the whole sphere.
+    fn everywhere(n: usize) -> impl Iterator<Item = DVec3> {
+        (0..n).map(move |i| super::super::coast::fibonacci_direction(i, n))
+    }
+
+    #[test]
+    fn coast_heights_are_bounded_deterministic_and_seeded() {
+        let s = coast_shape();
+        assert_eq!((s.lowest_height(), s.highest_height()), (-60.0, 60.0));
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for dir in everywhere(3_000) {
+            let h = s.height(dir);
+            assert!((-60.0..=60.0).contains(&h), "{h}");
+            assert_eq!(h, s.height(dir));
+            lo = lo.min(h);
+            hi = hi.max(h);
+        }
+        assert!(lo < -50.0 && hi > 30.0, "{lo}..{hi}");
+        let other = PlanetShape {
+            seed: 8,
+            continents: Continents::new(50_000.0, 8, 20_000.0, 0.4, 60.0, 60.0),
+            ..shape()
+        };
+        assert!(everywhere(64).any(|d| (s.height(d) > 0.0) != (other.height(d) > 0.0)));
+        let flat = PlanetShape {
+            amplitude: 0.0,
+            ..coast_shape()
+        };
+        assert!((flat.highest_height() - 2.4).abs() < 1e-12);
+        for dir in everywhere(500) {
+            assert!((-60.0..=2.4 + 1e-9).contains(&flat.height(dir)));
+        }
+    }
+
+    // The sea covers the share of the planet the continents leave it, for
+    // every share asked for.
+    #[test]
+    fn the_sea_covers_the_share_asked_for() {
+        for share in [0.2, 0.4, 0.7] {
+            let s = PlanetShape {
+                continents: Continents::new(50_000.0, 3, 15_000.0, share, 60.0, 60.0),
+                ..shape()
+            };
+            let n = 20_000;
+            let land = everywhere(n).filter(|&d| s.height(d) > 0.0).count();
+            let got = land as f64 / n as f64;
+            assert!((got - share).abs() < 0.03, "{share}: {got}");
         }
     }
 
@@ -378,11 +514,22 @@ mod tests {
     // The analytic gradient is the height's own slope.
     #[test]
     fn the_gradient_matches_the_height_s_slope() {
-        let s = shape();
         let e = 1e-7;
-        for i in 0..50 {
+        let spots = (0..50).map(|i| {
             let a = 0.3 + f64::from(i) * 0.0011;
-            let dir = dvec3::normalize_or([libm::sin(a), 1.0, libm::cos(a * 3.0) * 0.4], [0.0; 3]);
+            dvec3::normalize_or([libm::sin(a), 1.0, libm::cos(a * 3.0) * 0.4], [0.0; 3])
+        });
+        let coast = coast_shape();
+        let near_coast: alloc::vec::Vec<DVec3> = everywhere(4_000)
+            .filter(|&d| coast.height(d).abs() < 3.0)
+            .collect();
+        assert!(near_coast.len() > 20, "{}", near_coast.len());
+        let cases = spots
+            .clone()
+            .map(|d| (shape(), d))
+            .chain(spots.map(|d| (coast, d)))
+            .chain(near_coast.into_iter().map(|d| (coast, d)));
+        for (s, dir) in cases {
             let (_, g) = s.height_gradient(dir);
             for axis in 0..3 {
                 let mut hi = dir;
@@ -422,6 +569,22 @@ mod tests {
             ..shape()
         };
         assert_eq!(flat.max_slope(), 0.0);
+    }
+
+    // The bound holds across coasts too: two meters apart, anywhere on a
+    // planet of seas.
+    #[test]
+    fn the_slope_bound_holds_across_coasts() {
+        let s = coast_shape();
+        let bound = s.max_slope();
+        let mut steepest: f64 = 0.0;
+        for a in everywhere(20_000) {
+            let side = dvec3::normalize_or(dvec3::cross(a, [0.3, 0.5, 0.8]), [1.0, 0.0, 0.0]);
+            let b = dvec3::normalize_or(dvec3::add(a, dvec3::scale(side, 2.0 / 50_000.0)), a);
+            let run = 50_000.0 * libm::acos(dvec3::dot(a, b).min(1.0));
+            steepest = steepest.max((s.height(a) - s.height(b)).abs() / run);
+        }
+        assert!(steepest > 0.0 && steepest <= bound, "{steepest} > {bound}");
     }
 
     // A cube point found in front of a face lies at its own face

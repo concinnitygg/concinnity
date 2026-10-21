@@ -399,7 +399,7 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "auto_exposure.rs",
                 ".ResourceBarrier(",
-                4,
+                3,
                 Reason::Ungraphed,
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),

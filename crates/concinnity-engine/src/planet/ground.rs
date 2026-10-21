@@ -74,7 +74,7 @@ fn ground_y(
     z: f64,
 ) -> Option<f64> {
     let (dx, dz) = (x - center[0], z - center[2]);
-    let mut radius = shape.radius + shape.amplitude * 0.5;
+    let mut radius = shape.radius + (shape.lowest_height() + shape.highest_height()) * 0.5;
     let mut y = 0.0;
     for _ in 0..REFINEMENTS {
         let under = radius * radius - dx * dx - dz * dz;
@@ -102,6 +102,7 @@ mod tests {
             feature_size: 1_500.0,
             octaves: 6,
             seed: 9,
+            continents: crate::planet::Continents::NONE,
         }
     }
 
@@ -140,6 +141,33 @@ mod tests {
         let drop = 1_000.0_f32 * 1_000.0 / (2.0 * 50_000.0);
         let mid = patch.center[1] + patch.grid.heights()[2 * 5 + 2];
         assert!((mid + drop).abs() < 0.05, "{mid}");
+    }
+
+    // On a planet with seas the first guess is the middle of the relief, and
+    // the columns from the shore out over the basin still land on the ground,
+    // tens of meters under the datum.
+    #[test]
+    fn columns_land_on_the_sea_floor_too() {
+        let s = PlanetShape {
+            amplitude: 40.0,
+            feature_size: 2_000.0,
+            octaves: 8,
+            seed: 95,
+            continents: crate::planet::Continents::new(50_000.0, 95, 20_000.0, 0.4, 60.0, 60.0),
+            ..shape()
+        };
+        let frame = LocalFrame::AUTHORED;
+        let mut deepest: f64 = 0.0;
+        for i in 0..40 {
+            let x = f64::from(i) * 100.0;
+            let y = ground_y(&s, &frame, s.center, x, 0.0).expect("on the planet");
+            let world = frame.to_world([narrow_f32(x), narrow_f32(y), 0.0]);
+            let r = dvec3::length(dvec3::sub(world, s.center));
+            let height = s.height(s.up_at(world));
+            assert!((r - s.radius - height).abs() < 0.01, "{x}: {r} vs {height}");
+            deepest = deepest.min(height);
+        }
+        assert!(deepest < -30.0, "{deepest}");
     }
 
     #[test]
