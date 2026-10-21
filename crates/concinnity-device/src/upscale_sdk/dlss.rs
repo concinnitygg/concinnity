@@ -166,15 +166,16 @@ unsafe fn get_ui(params: *mut c_void, name: &[u8]) -> Option<u32> {
 ///
 /// `params` must be the live capability bag NGX returned.
 pub(crate) unsafe fn supersampling_unavailable(params: *mut c_void) -> Option<String> {
-    // SAFETY: the caller guarantees the bag.
-    let (needs_driver, major, minor, available) = unsafe {
-        (
-            get_ui(params, P_NEEDS_UPDATED_DRIVER),
-            get_ui(params, P_MIN_DRIVER_MAJOR),
-            get_ui(params, P_MIN_DRIVER_MINOR),
-            get_ui(params, P_SUPERSAMPLING_AVAILABLE),
-        )
-    };
+    let [needs_driver, major, minor, available] = [
+        P_NEEDS_UPDATED_DRIVER,
+        P_MIN_DRIVER_MAJOR,
+        P_MIN_DRIVER_MINOR,
+        P_SUPERSAMPLING_AVAILABLE,
+    ]
+    .map(|name| {
+        // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
+        unsafe { get_ui(params, name) }
+    });
     unavailable_reason(
         needs_driver.unwrap_or(0) != 0,
         major.zip(minor),
@@ -211,20 +212,28 @@ pub(crate) unsafe fn set_create_parameters(
     let quality = dlss_perf_quality(UpscaleQuality::nearest(extent.scale));
     let flags = dlss_create_flags(CAMERA_DEPTH);
     let preset = render_preset(preset);
-    // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
-    unsafe {
-        NVSDK_NGX_Parameter_SetUI(params, P_WIDTH.as_ptr(), rw);
-        NVSDK_NGX_Parameter_SetUI(params, P_HEIGHT.as_ptr(), rh);
-        NVSDK_NGX_Parameter_SetUI(params, P_OUT_WIDTH.as_ptr(), ow);
-        NVSDK_NGX_Parameter_SetUI(params, P_OUT_HEIGHT.as_ptr(), oh);
-        NVSDK_NGX_Parameter_SetI(params, P_PERF_QUALITY.as_ptr(), quality);
-        NVSDK_NGX_Parameter_SetI(params, P_CREATE_FLAGS.as_ptr(), flags);
-        NVSDK_NGX_Parameter_SetI(params, P_ENABLE_OUTPUT_SUBRECTS.as_ptr(), 0);
-        NVSDK_NGX_Parameter_SetUI(params, P_CREATION_NODE_MASK.as_ptr(), 1);
-        NVSDK_NGX_Parameter_SetUI(params, P_VISIBILITY_NODE_MASK.as_ptr(), 1);
-        for name in P_PRESETS {
-            NVSDK_NGX_Parameter_SetUI(params, name.as_ptr(), preset);
-        }
+    let unsigned = [
+        (P_WIDTH, rw),
+        (P_HEIGHT, rh),
+        (P_OUT_WIDTH, ow),
+        (P_OUT_HEIGHT, oh),
+        (P_CREATION_NODE_MASK, 1),
+        (P_VISIBILITY_NODE_MASK, 1),
+    ]
+    .into_iter()
+    .chain(P_PRESETS.map(|name| (name, preset)));
+    for (name, value) in unsigned {
+        // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
+        unsafe { NVSDK_NGX_Parameter_SetUI(params, name.as_ptr(), value) };
+    }
+    let signed = [
+        (P_PERF_QUALITY, quality),
+        (P_CREATE_FLAGS, flags),
+        (P_ENABLE_OUTPUT_SUBRECTS, 0),
+    ];
+    for (name, value) in signed {
+        // SAFETY: as above.
+        unsafe { NVSDK_NGX_Parameter_SetI(params, name.as_ptr(), value) };
     }
 }
 
@@ -243,20 +252,26 @@ pub(crate) unsafe fn set_evaluate_parameters(
     extent: UpscaleExtent,
 ) {
     let (rw, rh) = extent.render;
-    // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
-    unsafe {
-        NVSDK_NGX_Parameter_SetF(params, P_JITTER_X.as_ptr(), jitter[0]);
-        NVSDK_NGX_Parameter_SetF(params, P_JITTER_Y.as_ptr(), jitter[1]);
+    let floats = [
+        (P_JITTER_X, jitter[0]),
+        (P_JITTER_Y, jitter[1]),
         // Motion vectors are `prev_uv - cur_uv` in UV space; DLSS takes them
         // in render pixels.
-        NVSDK_NGX_Parameter_SetF(params, P_MV_SCALE_X.as_ptr(), rw as f32);
-        NVSDK_NGX_Parameter_SetF(params, P_MV_SCALE_Y.as_ptr(), rh as f32);
-        NVSDK_NGX_Parameter_SetF(params, P_PRE_EXPOSURE.as_ptr(), pre_exposure);
-        NVSDK_NGX_Parameter_SetI(params, P_RESET.as_ptr(), i32::from(reset));
-        NVSDK_NGX_Parameter_SetUI(params, P_SUBRECT_WIDTH.as_ptr(), rw);
-        NVSDK_NGX_Parameter_SetUI(params, P_SUBRECT_HEIGHT.as_ptr(), rh);
-        NVSDK_NGX_Parameter_SetF(params, P_SHARPNESS.as_ptr(), 0.0);
+        (P_MV_SCALE_X, rw as f32),
+        (P_MV_SCALE_Y, rh as f32),
+        (P_PRE_EXPOSURE, pre_exposure),
+        (P_SHARPNESS, 0.0),
+    ];
+    for (name, value) in floats {
+        // SAFETY: the caller guarantees the bag, and every name is a NUL-terminated constant.
+        unsafe { NVSDK_NGX_Parameter_SetF(params, name.as_ptr(), value) };
     }
+    for (name, value) in [(P_SUBRECT_WIDTH, rw), (P_SUBRECT_HEIGHT, rh)] {
+        // SAFETY: as above.
+        unsafe { NVSDK_NGX_Parameter_SetUI(params, name.as_ptr(), value) };
+    }
+    // SAFETY: as above.
+    unsafe { NVSDK_NGX_Parameter_SetI(params, P_RESET.as_ptr(), i32::from(reset)) };
 }
 
 /// A Windows file version, `major.minor.patch.build`.

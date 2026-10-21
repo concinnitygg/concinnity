@@ -145,18 +145,17 @@ impl NgxSession {
         if self.device == vk::Device::null() {
             return;
         }
-        // SAFETY: the feature and the bag are each released at most once (only when non-null), and
-        // the shutdown names the live device NGX was initialized on, cleared straight after so it
-        // runs once.
-        unsafe {
-            if !self.feature.is_null() {
-                NVSDK_NGX_VULKAN_ReleaseFeature(self.feature);
-            }
-            if !self.params.is_null() {
-                NVSDK_NGX_VULKAN_DestroyParameters(self.params);
-            }
-            NVSDK_NGX_VULKAN_Shutdown1(self.device);
+        if !self.feature.is_null() {
+            // SAFETY: the feature is non-null and nulled straight after, so it is released once.
+            unsafe { NVSDK_NGX_VULKAN_ReleaseFeature(self.feature) };
         }
+        if !self.params.is_null() {
+            // SAFETY: the bag is non-null and nulled straight after, so it is destroyed once.
+            unsafe { NVSDK_NGX_VULKAN_DestroyParameters(self.params) };
+        }
+        // SAFETY: the shutdown names the live device NGX was initialized on, cleared straight
+        // after so it runs once.
+        unsafe { NVSDK_NGX_VULKAN_Shutdown1(self.device) };
         self.feature = ptr::null_mut();
         self.params = ptr::null_mut();
         self.device = vk::Device::null();
@@ -353,18 +352,21 @@ impl VkUpscaleBackend for DlssUpscaler {
             ),
         ];
         let params = self.ngx.params;
-        // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and every
-        // resource description points at an element of `resources`, which outlives the evaluate.
+        for (name, resource) in &mut resources {
+            let resource: *mut NVSDK_NGX_Resource_VK = resource;
+            // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and every
+            // resource description points at an element of `resources`, which outlives the
+            // evaluate.
+            unsafe { NVSDK_NGX_Parameter_SetVoidPointer(params, name.as_ptr(), resource.cast()) };
+        }
+        let reset = crate::upscale_reset::consume(&self.reset);
+        // SAFETY: `params` is the live bag.
         unsafe {
-            for (name, resource) in &mut resources {
-                let resource: *mut NVSDK_NGX_Resource_VK = resource;
-                NVSDK_NGX_Parameter_SetVoidPointer(params, name.as_ptr(), resource.cast());
-            }
             set_evaluate_parameters(
                 params,
                 camera.jitter_offset,
                 camera.pre_exposure,
-                crate::upscale_reset::consume(&self.reset),
+                reset,
                 self.extent,
             );
         }
