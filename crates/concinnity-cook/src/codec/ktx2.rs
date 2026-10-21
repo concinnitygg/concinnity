@@ -261,7 +261,7 @@ fn decompress_level(
 // Decompress a zstd frame into its raw bytes.
 fn inflate_zstd(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let mut decoder = ruzstd::StreamingDecoder::new(data)
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(data)
         .map_err(|e| format!("zstd frame header invalid: {e}"))?;
     let mut out = Vec::new();
     decoder
