@@ -707,7 +707,7 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) reflection_divisor: u32,
     pub(super) planar_slots: &'a [Option<usize>],
     pub(super) glass_panels: &'a [GlassPanel],
-    pub(super) water_surfaces: &'a [concinnity_engine::render::environment::water::WaterBody],
+    pub(super) water_surfaces: &'a [WaterBody],
     pub(super) draw_objects: &'a [DrawObject],
 }
 
