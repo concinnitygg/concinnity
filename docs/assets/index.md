@@ -123,6 +123,8 @@
 - [FrameCapture](FrameCapture.md) - One frame a [BenchmarkConfig](BenchmarkConfig.md) saves as an image.
 - [FramePacing](FramePacing.md) - How the render loop paces its frames: how many may be in flight, whether presentation waits for the display refresh, and the frame-rate cap. The `frame_pacing` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.
 - [FramePriority](FramePriority.md) - Whether the threads every frame waits on run above normal priority, ahead of the other applications on the machine.
+- [GroundCover](GroundCover.md) - A look a [Planet](Planet.md)'s ground takes where its `rule` holds: sand on a beach, a duller seabed under deeper water, rock on steep slopes.
+- [GroundRule](GroundRule.md) - Where on the ground something belongs: between two altitudes and between two slopes, fading in and out over soft edges.
 - [IndirectLighting](IndirectLighting.md) - Indirect (ambient) lighting: how strong the environment's ambient term is, and whether a screen-space bounce lets nearby lit surfaces bleed color onto one another. The `indirect_lighting` section of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default below.
 - [IndirectTechnique](IndirectTechnique.md) - Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl` is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space global-illumination bounce on top.
 - [InstanceTransform](InstanceTransform.md) - Per-instance transform within an `InstancedProp`.

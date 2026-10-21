@@ -61,6 +61,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // TILE_MORPH_TYPES trails OBJECT_COMMON, which carries its marker; the
     // grass kernel's tile record carries it too, behind a guard.
     ("{TILE_MORPH_TYPES}", "tile_morph_types.hlsl"),
+    // GROUND_RULE_TYPES trails MAIN_RESOURCES, which carries its marker; the
+    // grass kernel's block carries it too, behind a guard.
+    ("{GROUND_RULE_TYPES}", "ground_rule_types.hlsl"),
     ("{PROBE_TYPES}", "probe_types.hlsl"),
     // TRANSPARENT_PROBES leads PROBE_COMMON because it carries that marker:
     // the transparent producers' environment fallback reads the probe set.

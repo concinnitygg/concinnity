@@ -174,6 +174,7 @@ mod tests {
                 layers: vec![TerrainLayer {
                     grass: Ref::new(GRASS),
                     density_mask: None,
+                    ..TerrainLayer::default()
                 }],
                 ..Default::default()
             },

@@ -13,8 +13,10 @@ use concinnity_core::math::SaturatingFrom;
 
 use super::GrassBladeLook;
 use super::canopy::{CanopyField, CanopyRange};
-use crate::components::Grass;
+use crate::components::{Grass, GroundRule};
 use crate::planet::PlanetShape;
+use crate::render::environment::ground::GroundCovers;
+use crate::render::uniforms::ground::GroundRuleGpu;
 use cells::PlanetGrassGrid;
 use concinnity_core::math::noise::lcg_hash;
 
@@ -31,6 +33,8 @@ pub struct PlanetGrassLayer {
     pub cell_size: f32,
     /// Salts the layer's placement and its meadow.
     pub seed: u32,
+    /// Where on the planet the layer grows.
+    pub rule: GroundRuleGpu,
 }
 
 /// A planet's grass: its surface, the cells its faces divide into, and the
@@ -45,15 +49,23 @@ pub struct PlanetGrass {
     pub layers: Vec<PlanetGrassLayer>,
     /// Lattice cells of the meadow noise per unit of direction.
     pub meadow_scale: f32,
+    /// The covers laid over the ground the grass grows on, which the ground
+    /// under it and its far field shade with.
+    pub covers: GroundCovers,
 }
 
 impl PlanetGrass {
-    /// The grass `layers` grow on `shape`; `None` when no visible layer places
-    /// a blade.
-    pub fn resolve(shape: PlanetShape, layers: &[Grass]) -> Option<Self> {
+    /// The grass `layers` grow on `shape`, each where its rule holds, over
+    /// ground laid with `covers`; `None` when no visible layer places a
+    /// blade.
+    pub fn resolve(
+        shape: PlanetShape,
+        layers: &[(Grass, GroundRule)],
+        covers: GroundCovers,
+    ) -> Option<Self> {
         let grid = PlanetGrassGrid::new(&shape);
         let mut out = Vec::new();
-        for grass in layers.iter().filter(|g| g.visible) {
+        for (grass, rule) in layers.iter().filter(|(g, _)| g.visible) {
             let grass = crate::components::validate::grass(grass.clone());
             let Some(cells) = grid.cells_per_tile(grass.density) else {
                 continue;
@@ -64,6 +76,7 @@ impl PlanetGrass {
                 cells,
                 cell_size: grid.cell_size(cells),
                 seed: lcg_hash(u32::saturating_from(out.len()) ^ 0x5bd1_e995),
+                rule: GroundRuleGpu::of(rule),
             });
         }
         (!out.is_empty()).then(|| Self {
@@ -71,7 +84,18 @@ impl PlanetGrass {
             grid,
             layers: out,
             meadow_scale: density::meadow_scale(shape.radius),
+            covers,
         })
+    }
+
+    /// The grass `layers` grow everywhere on bare `shape`.
+    #[cfg(test)]
+    pub(crate) fn everywhere(shape: PlanetShape, layers: &[Grass]) -> Option<Self> {
+        let layers: Vec<_> = layers
+            .iter()
+            .map(|g| (g.clone(), GroundRule::EVERYWHERE))
+            .collect();
+        Self::resolve(shape, &layers, GroundCovers::default())
     }
 
     /// The run of the canopy block's layers the planet's far field shades
@@ -108,10 +132,10 @@ mod tests {
             ..Grass::default()
         };
         assert_eq!(
-            PlanetGrass::resolve(shape(), &[hidden.clone(), sparse.clone()]),
+            PlanetGrass::everywhere(shape(), &[hidden.clone(), sparse.clone()]),
             None
         );
-        let g = PlanetGrass::resolve(
+        let g = PlanetGrass::everywhere(
             shape(),
             &[hidden, Grass::default(), sparse, Grass::default()],
         )

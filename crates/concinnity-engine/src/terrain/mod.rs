@@ -12,6 +12,7 @@ mod grid;
 mod mask;
 mod mesh;
 pub mod payload;
+mod rule;
 mod source;
 
 use crate::components::Grass;
@@ -21,6 +22,7 @@ use alloc::vec::Vec;
 pub use grid::TerrainGrid;
 pub use mask::{DensityMask, MAX_MASK_SIZE};
 pub use mesh::{TERRAIN_CHUNK_CELLS, TerrainChunk, terrain_chunks, terrain_chunks_colored};
+pub use rule::{GroundRule, MIN_ALTITUDE_EDGE, MIN_SLOPE_EDGE};
 pub use source::{heightmap_heights, noise_heights};
 
 /// Fewest grid cells along a terrain's side.
@@ -47,7 +49,9 @@ pub fn clamp_resolution(resolution: u32) -> u32 {
 /// its first column along `-X`.
 ///
 /// On a [Planet](#planet) a layer grows over the planet's own meadow instead,
-/// and `density_mask` is not supported.
+/// and `density_mask` is not supported. There the layer grows only where its
+/// `rule` holds, thinning out over the rule's soft edges, so a meadow can end
+/// above a beach. A terrain does not read `rule`.
 #[derive(
     Debug,
     Clone,
@@ -65,6 +69,8 @@ pub struct TerrainLayer {
     /// A [Texture](#texture) whose red channel scales the density across the
     /// terrain. Unset grows the grass everywhere.
     pub density_mask: Option<TextureHandle>,
+    /// Where on a planet the grass grows. The default grows it everywhere.
+    pub rule: GroundRule,
 }
 
 /// A rectangle of ground shaped by a height grid: rendered as a mesh with

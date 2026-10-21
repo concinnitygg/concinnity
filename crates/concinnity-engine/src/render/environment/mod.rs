@@ -3,6 +3,7 @@
 
 pub mod atmosphere;
 pub mod grass;
+pub mod ground;
 pub(crate) mod night_sky;
 pub mod sky;
 pub mod terrain;

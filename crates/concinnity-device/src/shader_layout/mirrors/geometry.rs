@@ -126,6 +126,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             wind_map,
             bend_prev_map,
             planet_density,
+            planet_rules,
             layers,
         })),
         everywhere(mirror!(PlanetGrassTileGpu => "PlanetGrassTile" {
@@ -134,7 +135,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             face_level,
             tile,
             grass_tiles,
-            _pad,
+            origin_altitude,
             radial,
             tile_morph,
         })),

@@ -431,6 +431,7 @@ fn one_shot_world_fx_reach_the_backend_at_init() {
         layers: vec![TerrainLayer {
             grass: Ref::new(AssetId(834)),
             density_mask: None,
+            ..TerrainLayer::default()
         }],
         locator: Some(ground),
         ..Default::default()

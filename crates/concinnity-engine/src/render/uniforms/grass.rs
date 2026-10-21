@@ -5,6 +5,7 @@
 //! / `GrassBlade` / `GrassBendParams` / `PlanetGrassTile` in
 //! `shaders/grass.hlsl`.
 
+use super::ground::GroundRuleGpu;
 use crate::render::environment::grass::lod::GRASS_REGION_COUNT;
 #[cfg(test)]
 use crate::render::environment::grass::lod::{
@@ -196,6 +197,8 @@ pub struct GrassParams {
     pub bend_prev_map: [[f32; 4]; 2],
     /// Each layer's density on a planet, in blades per square meter.
     pub planet_density: [f32; MAX_GRASS_LAYERS],
+    /// Where on a planet each layer grows.
+    pub planet_rules: [GroundRuleGpu; MAX_GRASS_LAYERS],
     /// The layers this frame grows.
     pub layers: [GrassLayerGpu; MAX_GRASS_LAYERS],
 }
@@ -266,8 +269,8 @@ pub struct PlanetGrassTileGpu {
     pub tile: [u32; 2],
     /// Grass tiles of level 0 along each side of the whole tile.
     pub grass_tiles: u32,
-    /// Keeps `radial` in the row's second half.
-    pub _pad: u32,
+    /// How high the tile's origin lies above the planet's radius, in meters.
+    pub origin_altitude: f32,
     /// The lowest and highest the tile's surface lies along the up at its
     /// origin, in meters from the origin.
     pub radial: [f32; 2],
@@ -354,7 +357,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 592 + 128 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 1104 + 128 * MAX_GRASS_LAYERS);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -391,7 +394,8 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, wind_map), 464);
         assert_eq!(offset_of!(GrassParams, bend_prev_map), 496);
         assert_eq!(offset_of!(GrassParams, planet_density), 528);
-        assert_eq!(offset_of!(GrassParams, layers), 592);
+        assert_eq!(offset_of!(GrassParams, planet_rules), 592);
+        assert_eq!(offset_of!(GrassParams, layers), 1104);
         // Metal sets the block inline, which caps it at 4 KiB.
         assert!(size_of::<GrassParams>() <= 4096);
     }
@@ -433,7 +437,7 @@ mod tests {
         assert_eq!(offset_of!(PlanetGrassTileGpu, face_level), 52);
         assert_eq!(offset_of!(PlanetGrassTileGpu, tile), 56);
         assert_eq!(offset_of!(PlanetGrassTileGpu, grass_tiles), 64);
-        assert_eq!(offset_of!(PlanetGrassTileGpu, _pad), 68);
+        assert_eq!(offset_of!(PlanetGrassTileGpu, origin_altitude), 68);
         assert_eq!(offset_of!(PlanetGrassTileGpu, radial), 72);
         assert_eq!(offset_of!(PlanetGrassTileGpu, tile_morph), 80);
     }

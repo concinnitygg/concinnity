@@ -21,10 +21,12 @@ use concinnity_core::math::{SaturatingFrom, atan2, cos, exp, narrow_f32, powf, s
 use super::canopy_table::canopy_table;
 use super::planet::PlanetGrass;
 use super::planet::density::meadow_density;
-use super::planet::tiles::{DrawnPlanetTile, planet_center};
+use super::planet::tiles::{DrawnPlanetTile, ground_reference, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
 use crate::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
+use crate::render::environment::ground::GroundCovers;
 use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS};
+use crate::render::uniforms::ground::GroundRuleGpu;
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
 /// layer's density per channel.
@@ -299,6 +301,7 @@ impl CanopyLayerGpu {
             _pad: [0.0; 2],
             litter_color: look.litter_color,
             clumping: look.clumping,
+            rule: GroundRuleGpu::EVERYWHERE,
         }
     }
 }
@@ -340,6 +343,7 @@ struct PlanetCanopy {
     shape: PlanetShape,
     meadow_scale: f32,
     meadow_mean: f32,
+    covers: GroundCovers,
 }
 
 /// The cosine from the blades' up the sky is taken to reach the ground along,
@@ -404,7 +408,10 @@ impl CanopyField {
             .layers
             .iter()
             .take(MAX_CANOPY_LAYERS)
-            .map(|l| CanopyLayerGpu::of(&l.look, l.density, l.seed, wind_speed))
+            .map(|l| CanopyLayerGpu {
+                rule: l.rule,
+                ..CanopyLayerGpu::of(&l.look, l.density, l.seed, wind_speed)
+            })
             .collect();
         let seeds: Vec<u32> = layers.iter().map(|l| l.seed).collect();
         let range = CanopyRange {
@@ -416,6 +423,7 @@ impl CanopyField {
             shape: grass.shape,
             meadow_scale: grass.meadow_scale,
             meadow_mean: meadow_mean(grass.meadow_scale, &seeds),
+            covers: grass.covers,
         };
         (Self::new(layers, Some(planet)), range)
     }
@@ -466,6 +474,9 @@ impl CanopyField {
             params.planet_radius = narrow_f32(planet.shape.radius);
             params.meadow_scale = planet.meadow_scale;
             params.meadow_mean = planet.meadow_mean;
+            params.covers = planet.covers.covers;
+            params.cover_count = planet.covers.count;
+            [params.ground_origin, params.ground_up] = ground_reference(&planet.shape, tile);
             set_ground_noise(&mut params, &planet.shape);
         }
         params
@@ -1043,7 +1054,7 @@ mod tests {
             continents: crate::planet::Continents::NONE,
         };
         let grass =
-            PlanetGrass::resolve(shape, &vec![Grass::default(); MAX_CANOPY_LAYERS + 4]).unwrap();
+            PlanetGrass::everywhere(shape, &vec![Grass::default(); MAX_CANOPY_LAYERS + 4]).unwrap();
         assert!(grass.layers.len() > MAX_CANOPY_LAYERS);
         let (field, range) = CanopyField::for_planet(&grass, 0.0);
         assert_eq!(range.count as usize, MAX_CANOPY_LAYERS);
@@ -1063,7 +1074,7 @@ mod tests {
             seed: 1,
             continents: crate::planet::Continents::NONE,
         };
-        let grass = PlanetGrass::resolve(shape, &[Grass::default()]).unwrap();
+        let grass = PlanetGrass::everywhere(shape, &[Grass::default()]).unwrap();
         let (field, range) = CanopyField::for_planet(&grass, 0.0);
         assert_eq!(range.count, 1);
         assert!(range.planet);
@@ -1089,6 +1100,7 @@ mod tests {
             model,
             vertex_base: 0,
             radial: [0.0, 1.0],
+            origin_altitude: 0.0,
             morph: crate::gfx::render_types::GpuTileMorph::default(),
             morph_extent: 0.0,
         };
@@ -1111,6 +1123,99 @@ mod tests {
         for i in 0..3 {
             assert!((got[i] - want[i]).abs() < 1e-5, "{got:?} {want:?}");
         }
+    }
+
+    // Each planet layer's rule and the planet's covers ride the block, so the
+    // ground under the grass and its far field place them as the kernel does.
+    #[test]
+    fn the_block_carries_layer_rules_and_covers() {
+        use crate::components::{GroundCover, GroundRule, Planet};
+        let shape = PlanetShape {
+            center: [0.0, -50_000.0, 0.0],
+            radius: 50_000.0,
+            amplitude: 40.0,
+            feature_size: 2_000.0,
+            octaves: 6,
+            seed: 1,
+            continents: crate::planet::Continents::NONE,
+        };
+        let above = GroundRule {
+            altitude: [Some(2.0), None],
+            ..GroundRule::default()
+        };
+        let sand = GroundCover {
+            rule: GroundRule {
+                altitude: [None, Some(2.0)],
+                ..GroundRule::default()
+            },
+            ..GroundCover::default()
+        };
+        let planet = Planet {
+            covers: vec![sand.clone()],
+            ..Planet::default()
+        };
+        let covers = GroundCovers::of(&planet, |_| None, 1);
+        let grass = PlanetGrass::resolve(
+            shape,
+            &[
+                (Grass::default(), GroundRule::default()),
+                (Grass::default(), above),
+            ],
+            covers,
+        )
+        .unwrap();
+        let (field, _) = CanopyField::for_planet(&grass, 0.0);
+        let id = TileId {
+            face: CubeFace(2),
+            level: 10,
+            x: 512,
+            y: 511,
+        };
+        let tile_mesh = crate::planet::tile_mesh(&shape, id);
+        let tile = DrawnPlanetTile {
+            id,
+            model: crate::planet::LocalFrame::AUTHORED.model_at(tile_mesh.origin),
+            vertex_base: 0,
+            radial: tile_mesh.radial,
+            origin_altitude: tile_mesh.origin_altitude,
+            morph: crate::gfx::render_types::GpuTileMorph::default(),
+            morph_extent: 0.0,
+        };
+        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile));
+        assert_eq!(p.layers[0].rule, GroundRuleGpu::EVERYWHERE);
+        assert_eq!(p.layers[1].rule, GroundRuleGpu::of(&above));
+        assert_eq!(p.cover_count, 1);
+        assert_eq!(p.covers[0].rule, GroundRuleGpu::of(&sand.rule));
+        // The block's reference gives each corner of the tile its height.
+        let mesh = tile_mesh;
+        let center = planet_center(&shape, &tile);
+        for v in mesh.vertices.iter().step_by(97) {
+            let at: [f32; 3] = core::array::from_fn(|i| p.ground_origin[i] + v.pos[i]);
+            let off: [f32; 3] = core::array::from_fn(|i| at[i] - p.ground_origin[i]);
+            let rel: [f32; 3] = core::array::from_fn(|i| at[i] - center[i]);
+            let up = [p.ground_up[0], p.ground_up[1], p.ground_up[2]];
+            let got = crate::render::environment::ground::ground_altitude(
+                p.ground_origin[3],
+                p.ground_up[3],
+                dot(up, off),
+                dot(off, off),
+                concinnity_core::math::vec3::length(rel),
+            );
+            let world = concinnity_core::math::dvec3::add(
+                mesh.origin,
+                concinnity_core::math::dvec3::from_f32(v.pos),
+            );
+            let dir = concinnity_core::math::dvec3::normalize_or(
+                concinnity_core::math::dvec3::sub(world, shape.center),
+                [0.0, 1.0, 0.0],
+            );
+            let want = shape.height(dir);
+            assert!((f64::from(got) - want).abs() < 0.01, "{got} {want}");
+        }
+        // Off a planet nothing is laid.
+        let (terrain, _) = CanopyField::for_terrains(&[], 0.0);
+        let t = terrain.params((&GrassLodView::new(1000.0, 0.5), 0.0), None);
+        assert_eq!(t.cover_count, 0);
     }
 
     // The shader's `ground_normal_at`, line for line, over the block's noise.

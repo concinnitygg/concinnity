@@ -14,6 +14,7 @@ pub mod canopy;
 pub mod directx;
 pub mod geometry;
 pub mod grass;
+pub mod ground;
 pub mod metal;
 pub mod ocean;
 pub mod post;

@@ -260,6 +260,13 @@ pub fn planet(mut args: Planet) -> Planet {
     args.ocean_depth =
         finite_at_least(args.ocean_depth, 0.0, defaults.ocean_depth).min(args.radius * 0.25);
     args.beach_width = finite_at_least(args.beach_width, 1.0, defaults.beach_width);
+    args.covers.truncate(crate::planet::MAX_GROUND_COVERS);
+    for cover in &mut args.covers {
+        cover.rule = cover.rule.validated();
+    }
+    for layer in &mut args.layers {
+        layer.rule = layer.rule.validated();
+    }
     args
 }
 
@@ -524,6 +531,35 @@ mod tests {
         });
         assert_eq!(deep.land_share, 1.0);
         assert_eq!(deep.ocean_depth, 250.0);
+    }
+
+    // At most four covers survive, and every cover's and layer's rule is
+    // validated: bands in order, non-finite bounds open.
+    #[test]
+    fn planet_caps_its_covers_and_validates_their_rules() {
+        use crate::components::{GroundCover, GroundRule, TerrainLayer};
+        let inverted = GroundRule {
+            altitude: [Some(3.0), Some(-1.0)],
+            slope: [Some(f32::NAN), None],
+            ..GroundRule::default()
+        };
+        let cover = GroundCover {
+            rule: inverted,
+            ..GroundCover::default()
+        };
+        let p = planet(Planet {
+            covers: alloc::vec![cover; crate::planet::MAX_GROUND_COVERS + 2],
+            layers: alloc::vec![TerrainLayer {
+                rule: inverted,
+                ..TerrainLayer::default()
+            }],
+            ..Planet::default()
+        });
+        assert_eq!(p.covers.len(), crate::planet::MAX_GROUND_COVERS);
+        for rule in p.covers.iter().map(|c| c.rule).chain([p.layers[0].rule]) {
+            assert_eq!(rule.altitude, [Some(-1.0), Some(3.0)]);
+            assert_eq!(rule.slope, [None, None]);
+        }
     }
 
     // A planet sea's height is never below the planet's radius, and it

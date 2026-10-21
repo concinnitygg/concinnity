@@ -533,6 +533,7 @@ impl PlanetTiles {
                             tile: id,
                             radial: mesh.radial,
                             morph_extent: mesh.morph_extent,
+                            origin_altitude: mesh.origin_altitude,
                         }),
                         bounds: Some(mesh.bounds),
                     },

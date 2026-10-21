@@ -6,12 +6,13 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 
 use crate::components::{
-    Camera3D, DebugHud, Grass, HitRegion, KeyBinding, Planet, Screen, StatHud, TextInput,
-    TextLabel, UiAction,
+    Camera3D, DebugHud, Grass, GroundRule, HitRegion, KeyBinding, Planet, Screen, StatHud,
+    TextInput, TextLabel, UiAction,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{MenuOverride, PipelineContext, Ref};
 use crate::render::environment::grass::PlanetGrass;
+use crate::render::environment::ground::GroundCovers;
 use crate::resource::ColorLutTable;
 
 /// How a world holds the cursor from its first frame.
@@ -107,11 +108,17 @@ pub fn declares_frame_captures(ctx: &PipelineContext<'_>) -> bool {
 }
 
 /// The grass `planet`'s layers grow, each layer's `Grass` looked up in `grass`
-/// by id; `None` when no layer grows anything. A layer naming no known
-/// `Grass` grows nothing. A density mask is not applied on a planet, whose
-/// density comes from its meadow alone; one is reported and left unused.
-pub fn planet_grass(planet: &Planet, grass: &HashMap<AssetId, Grass>) -> Option<PlanetGrass> {
-    let layers: Vec<Grass> = planet
+/// by id and grown where its rule holds, over ground laid with `covers`;
+/// `None` when no layer grows anything, which leaves the covers undrawn (and
+/// is reported when there are any). A layer naming no known `Grass` grows
+/// nothing. A density mask is not applied on a planet, whose density comes
+/// from its meadow alone; one is reported and left unused.
+pub fn planet_grass(
+    planet: &Planet,
+    grass: &HashMap<AssetId, Grass>,
+    covers: GroundCovers,
+) -> Option<PlanetGrass> {
+    let layers: Vec<(Grass, GroundRule)> = planet
         .layers
         .iter()
         .enumerate()
@@ -122,10 +129,19 @@ pub fn planet_grass(planet: &Planet, grass: &HashMap<AssetId, Grass>) -> Option<
                      support; the layer grows over the planet's meadow without it"
                 );
             }
-            grass.get(&layer.grass.id()).cloned()
+            grass
+                .get(&layer.grass.id())
+                .map(|g| (g.clone(), layer.rule))
         })
         .collect();
-    PlanetGrass::resolve(planet.shape(), &layers)
+    let grown = PlanetGrass::resolve(planet.shape(), &layers, covers);
+    if grown.is_none() && covers.count > 0 {
+        tracing::warn!(
+            "the Planet's covers are drawn only where its grass grows, and none of its layers \
+             grows any; the ground shows its material alone"
+        );
+    }
+    grown
 }
 
 #[cfg(test)]
@@ -172,20 +188,22 @@ mod tests {
         let layer = |id: u32| TerrainLayer {
             grass: Ref::new(AssetId(id)),
             density_mask: None,
+            ..TerrainLayer::default()
         };
         let planet = Planet {
             layers: vec![layer(0), layer(1)],
             ..Planet::default()
         };
-        let resolved = planet_grass(&planet, &grass).expect("one layer grows");
+        let resolved =
+            planet_grass(&planet, &grass, GroundCovers::default()).expect("one layer grows");
         assert_eq!(resolved.layers.len(), 1);
         assert_eq!(resolved.shape, planet.shape());
         let bare = Planet {
             layers: vec![layer(1)],
             ..Planet::default()
         };
-        assert!(planet_grass(&bare, &grass).is_none());
-        assert!(planet_grass(&Planet::default(), &grass).is_none());
+        assert!(planet_grass(&bare, &grass, GroundCovers::default()).is_none());
+        assert!(planet_grass(&Planet::default(), &grass, GroundCovers::default()).is_none());
     }
 
     // Text without a Font needs the fallback face; text naming one does not.

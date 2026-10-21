@@ -116,6 +116,7 @@ impl SceneState {
                 model: obj.model,
                 vertex_base: obj.base_vertex.cast_unsigned(),
                 radial: chunk.radial,
+                origin_altitude: chunk.origin_altitude,
                 morph_extent: chunk.morph_extent,
                 morph: self
                     .tile_morph

@@ -270,6 +270,83 @@ float3 grass_ground_variation(float3 p, float footprint)
                   smoothstep(0.55, 0.7, dry));
 }
 
+// Matches GROUND_RULE_OPEN and GROUND_RULE_WANDER in
+// render::environment::ground.
+static const float GROUND_RULE_OPEN = 3.0;
+static const float GROUND_RULE_WANDER = 1.5;
+
+// Matches NOISE_SCALES and NOISE_SALTS in render::environment::ground.
+static const float2 GROUND_RULE_NOISE_SCALES = float2(16.0, 4.7);
+static const uint GROUND_RULE_SALT_BROAD = 0x510e527fu;
+static const uint GROUND_RULE_SALT_FINE = 0x9b05688cu;
+
+// Meters above sea level of a point `v` from a reference point lying
+// `reference_altitude` above sea level and `reference_radius` from the
+// planet's center, `up_v` being `v` along the up there and `distance` the
+// point's own distance from the center. Only the large terms divide, so it
+// keeps its precision at any radius. Mirrors
+// render::environment::ground::ground_altitude.
+float ground_altitude(float reference_altitude, float reference_radius, float up_v, float v_v,
+                      float distance)
+{
+    return reference_altitude + (2.0 * reference_radius * up_v + v_v) / (reference_radius + distance);
+}
+
+// How steep ground is whose normal makes cosine `cosine` with up: the
+// measure slope rules ramp over. Mirrors render::environment::ground::steepness.
+float ground_steepness(float cosine)
+{
+    return sqrt(saturate(1.0 - cosine));
+}
+
+// Rule `r`'s ramps at `altitude` meters above sea level on ground of
+// steepness `steep`, before the edge noise.
+float4 ground_rule_ramps(GroundRule r, float altitude, float steep)
+{
+    return float4(altitude, altitude, steep, steep) * float4(r.altitude.xz, r.slope.xz)
+         + float4(r.altitude.yw, r.slope.yw);
+}
+
+// Whether the edge noise can move rule `r`'s weight at `altitude` and `steep`.
+bool ground_rule_near_edge(GroundRule r, float altitude, float steep)
+{
+    float4 ramps = ground_rule_ramps(r, altitude, steep);
+    return any(abs(ramps - 0.5) < 0.5 + GROUND_RULE_WANDER);
+}
+
+// How fully rule `r` holds at `altitude` and `steep`, the edge noise there
+// being `noise`, which moves every bound the same way along its measure (an
+// open bound stays put). Mirrors GroundRuleGpu::weight.
+float ground_rule_weight(GroundRule r, float altitude, float steep, float noise)
+{
+    float4 k = float4(r.altitude.xz, r.slope.xz);
+    float4 t = saturate(ground_rule_ramps(r, altitude, steep) + noise * float4(sign(k)));
+    float4 s = t * t * (3.0 - 2.0 * t);
+    return s.x * s.y * s.z * s.w;
+}
+
+// Matches GROUND_RULE_SHORTENING in render::environment::ground.
+static const float GROUND_RULE_SHORTENING = 0.65;
+
+// How tall grass stands, as a share of its full height, where its rule holds
+// with `weight`: shorter toward the rule's edge, as it thins.
+float ground_rule_stature(float weight)
+{
+    return 1.0 - (1.0 - weight) * GROUND_RULE_SHORTENING;
+}
+
+// The edge noise every ground rule's ramps shift by at fixed ground point
+// `p` (meters), under a pixel covering `footprint` meters. Mirrors
+// render::environment::ground::edge_noise.
+float ground_rule_noise(float3 p, float footprint)
+{
+    float broad = grass_patch_noise(p, GROUND_RULE_NOISE_SCALES.x, GROUND_RULE_SALT_BROAD,
+                                    footprint);
+    float fine = grass_patch_noise(p, GROUND_RULE_NOISE_SCALES.y, GROUND_RULE_SALT_FINE,
+                                   footprint);
+    return (broad * 0.65 + fine * 0.35 - 0.5) * (2.0 * GROUND_RULE_WANDER);
+}
+
 // The unit direction through face coordinates (s, t) of cube face `face`.
 // Mirrors render::grass::planet::cells::face_direction and
 // planet::CubeFace::direction.

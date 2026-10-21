@@ -8,6 +8,7 @@ use concinnity_engine::gfx::render_types::{
 };
 use concinnity_engine::render::uniforms::ViewUniforms;
 use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams};
+use concinnity_engine::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
@@ -110,7 +111,11 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             ocean_depth,
             shelf_length,
             seabed_lift,
-            [_pad] => ["_pad0", "_pad1"],
+            cover_count,
+            [_pad] => ["_pad0"],
+            ground_origin,
+            ground_up,
+            covers,
             band,
         })),
         everywhere(mirror!(CanopyLayerGpu => "CanopyLayer" {
@@ -121,6 +126,19 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             sky_projection,
             [_pad] => ["_pad0", "_pad1"],
             [litter_color, clumping] => ["litter_clumping"],
+            rule,
+        })),
+        everywhere(mirror!(GroundRuleGpu => "GroundRule" {
+            altitude,
+            slope,
+        })),
+        everywhere(mirror!(GroundCoverGpu => "GroundCover" {
+            rule,
+            tint,
+            albedo_index,
+            roughness,
+            metallic,
+            [_pad] => ["_pad0", "_pad1"],
         })),
     ]
 }

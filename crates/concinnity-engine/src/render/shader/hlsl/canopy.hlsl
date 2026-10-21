@@ -450,28 +450,134 @@ float3 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float f
                      + CANOPY.planet_rows[2].xyz * n.z);
 }
 
-// The ground and the canopy at `pos` on surface `od` of albedo `albedo`, the
-// vertex color `color` carrying a terrain's layer densities and `normal` the
-// ground's, seen along `V` from a pixel covering `footprint` meters of ground.
-// Every pixel of a surface growing grass takes its ground from here: litter
-// strewn by each layer's density share, broken up by patches of earth and
-// dry litter, and how much of the sky the leaf above lets reach it. Only a
-// pixel past where the blades start handing the field over (`far`), `dist`
-// meters from the camera at screen pixel `pixel`, goes on to the canopy, and
-// only where that pixel shows the canopy rather than the blades.
-CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color, float3 albedo,
-                      float3 V, float footprint, float2 pixel, float dist, bool far)
+// Whether surface `od` is a planet's ground, and the block holds the planet.
+bool canopy_on_planet(GpuObjectData od)
 {
-    // A block not filled this frame (no grass resolved, or no planet tile
-    // drawn) holds no layers and no planet, and the canopy is bare ground.
+    return ((od.far_canopy >> 16u) & 1u) != 0u && CANOPY.planet_radius > 0.0;
+}
+
+// The canopy block's layers surface `od` grows: the first (x) and how many
+// (y). A block not filled this frame (no grass resolved, or no planet tile
+// drawn) holds no layers and no planet, and the canopy is bare ground.
+uint2 canopy_layers(GpuObjectData od)
+{
     uint first = min(od.far_canopy & 0xffu, CANOPY.layer_count);
     uint count = min((od.far_canopy >> 8u) & 0xffu, CANOPY.layer_count - first);
-    bool planet = ((od.far_canopy >> 16u) & 1u) != 0u;
-    if (planet && CANOPY.planet_radius <= 0.0)
+    bool planet_ground = ((od.far_canopy >> 16u) & 1u) != 0u;
+    return uint2(first, planet_ground && !canopy_on_planet(od) ? 0u : count);
+}
+
+// Where on a planet a pixel of ground lies, for its ground rules: its
+// direction from the center in the planet's axes, up there in the frame, its
+// altitude above sea level, the steepness of its ground normal, the
+// edge noise the rules' ramps shift by (0 where no rule is near an edge), and
+// how much of the ground the covers hold.
+struct GroundPlace
+{
+    float3 dir;
+    float3 up;
+    float altitude;
+    float steepness;
+    float noise;
+    float covered;
+};
+
+// The place of planet ground point `pos`, its ground normal `normal`, under a
+// pixel covering `footprint` meters, where the canopy block's layers
+// `layers` (first, count) grow.
+GroundPlace ground_place(float3 pos, float3 normal, float footprint, uint2 layers)
+{
+    GroundPlace g = (GroundPlace)0;
+    float4 p = float4(pos, 1.0);
+    float3 rel = float3(dot(CANOPY.planet_rows[0], p), dot(CANOPY.planet_rows[1], p),
+                        dot(CANOPY.planet_rows[2], p));
+    float dist = length(rel);
+    g.dir = rel / max(dist, 1e-6);
+    g.up = normalize(CANOPY.planet_rows[0].xyz * g.dir.x + CANOPY.planet_rows[1].xyz * g.dir.y
+                     + CANOPY.planet_rows[2].xyz * g.dir.z);
+    float3 v = pos - CANOPY.ground_origin.xyz;
+    g.altitude = ground_altitude(CANOPY.ground_origin.w, CANOPY.ground_up.w,
+                                 dot(CANOPY.ground_up.xyz, v), dot(v, v), dist);
+    g.steepness = ground_steepness(dot(normalize(normal), g.up));
+    // The noise costs two patch noises, so only a pixel near some rule's edge
+    // pays for it.
+    bool near = false;
+    uint covers = min(CANOPY.cover_count, GROUND_MAX_COVERS);
+    for (uint i = 0u; i < covers; i++)
     {
-        count = 0u;
-        planet = false;
+        near = near || ground_rule_near_edge(CANOPY.covers[i].rule, g.altitude, g.steepness);
     }
+    for (uint k = 0u; k < layers.y; k++)
+    {
+        near = near || ground_rule_near_edge(CANOPY.layers[layers.x + k].rule, g.altitude,
+                                             g.steepness);
+    }
+    if (near)
+    {
+        g.noise = ground_rule_noise(g.dir * CANOPY.planet_radius, footprint);
+    }
+    return g;
+}
+
+// The covers laid over a planet's ground at `place`: how much of the
+// surface's own look is left (`keep`), and the covers' albedo and roughness
+// and metallic, weighted in over it in order.
+struct GroundCoverMix
+{
+    float keep;
+    float3 albedo;
+    float2 roughness_metallic;
+};
+
+GroundCoverMix ground_no_covers()
+{
+    GroundCoverMix m;
+    m.keep = 1.0;
+    m.albedo = (float3)(0.0);
+    m.roughness_metallic = (float2)(0.0);
+    return m;
+}
+
+// The covers at `place`, their textures read at `uv`.
+GroundCoverMix ground_covers_at(GroundPlace place, float2 uv)
+{
+    GroundCoverMix m = ground_no_covers();
+    uint covers = min(CANOPY.cover_count, GROUND_MAX_COVERS);
+    for (uint i = 0u; i < covers; i++)
+    {
+        GroundCover c = CANOPY.covers[i];
+        float3 albedo = c.tint;
+        // Uniform across the draw, so the sample keeps its derivatives.
+        if (c.albedo_index != GROUND_COVER_UNTEXTURED)
+        {
+            albedo *= pool_sample(c.albedo_index, uv).rgb;
+        }
+        float w = ground_rule_weight(c.rule, place.altitude, place.steepness, place.noise);
+        m.keep *= 1.0 - w;
+        m.albedo = lerp(m.albedo, albedo, w);
+        m.roughness_metallic = lerp(m.roughness_metallic, float2(c.roughness, c.metallic), w);
+    }
+    return m;
+}
+
+// The ground and the canopy at `pos` on surface `od` of albedo `albedo`, the
+// vertex color `color` carrying a terrain's layer densities and `normal` the
+// ground's, seen along `V` from a pixel covering `footprint` meters of ground;
+// on a planet, `place` is where the pixel lies. Every pixel of a surface
+// growing grass takes its ground from here: litter strewn by each layer's
+// density share (on a planet, where its rule holds), broken up by patches of
+// earth and dry litter, and how much of the sky the leaf above lets reach it.
+// Only a pixel past where the blades start handing the field over (`far`),
+// `dist` meters from the camera at screen pixel `pixel`, goes on to the
+// canopy, and only where that pixel shows the canopy rather than the blades.
+CanopyShade canopy_at(GpuObjectData od, GroundPlace place, float3 pos, float3 normal,
+                      float3 color, float3 albedo, float3 V, float footprint, float2 pixel,
+                      float dist, bool far)
+{
+    uint2 layers = canopy_layers(od);
+    uint first = layers.x;
+    uint count = layers.y;
+    bool planet = canopy_on_planet(od);
 
     CanopyShade c = (CanopyShade)0;
     float3 dir = float3(0.0, 1.0, 0.0);
@@ -482,12 +588,8 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     c.ground_albedo = albedo;
     if (planet)
     {
-        float4 p = float4(pos, 1.0);
-        float3 rel = float3(dot(CANOPY.planet_rows[0], p), dot(CANOPY.planet_rows[1], p),
-                            dot(CANOPY.planet_rows[2], p));
-        dir = normalize(rel);
-        c.up = normalize(CANOPY.planet_rows[0].xyz * dir.x + CANOPY.planet_rows[1].xyz * dir.y
-                         + CANOPY.planet_rows[2].xyz * dir.z);
+        dir = place.dir;
+        c.up = place.up;
         uint face;
         float2 st = grass_face_coords(dir, face);
         plane = (st + 1.0) * (0.25 * PI * CANOPY.planet_radius);
@@ -517,6 +619,9 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
     {
         CanopyLayer L = CANOPY.layers[first + i];
         float share = i == 0u ? color.r : (i == 1u ? color.g : color.b);
+        // Shorter blades toward the edge of a planet layer's rule hold less
+        // leaf, as the blades there do.
+        float stature = 1.0;
         if (planet)
         {
             share = CANOPY.meadow_mean;
@@ -525,6 +630,9 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
                 share = lerp(share, grass_meadow_density(dir, CANOPY.meadow_scale, L.seed),
                              meadow_detail);
             }
+            float placed = ground_rule_weight(L.rule, place.altitude, place.steepness, place.noise);
+            share *= placed;
+            stature = ground_rule_stature(placed);
         }
         litter += share * L.litter_clumping.rgb;
         litter_weight += share;
@@ -545,7 +653,7 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
             height = lerp(height, grass_clump_height(ch, L.shape.y), clump_detail);
             crowd = lerp(crowd, grass_gathered_density(spot, L.litter_clumping.w), clump_detail);
         }
-        float area = L.shape.z * share * height * crowd;
+        float area = L.shape.z * share * height * crowd * stature;
         c.leaf_area += area;
         // Every layer weighs in a little even where it is bare, so the colors
         // stay defined where nothing grows.
@@ -589,7 +697,9 @@ CanopyShade canopy_at(GpuObjectData od, float3 pos, float3 normal, float3 color,
         float3 v = grass_ground_variation(ground_point, footprint);
         float3 shed = litter / max(litter_weight, 1e-6);
         shed *= lerp((float3)(1.0), GRASS_LITTER_DRY, v.z);
-        c.ground_albedo = lerp(albedo * v.y, shed, (1.0 - open_ground) * v.x);
+        // The earth's dark patches are the base ground's; a cover has none.
+        float earth = lerp(v.y, 1.0, place.covered);
+        c.ground_albedo = lerp(albedo * earth, shed, (1.0 - open_ground) * v.x);
     }
     if (!far)
     {

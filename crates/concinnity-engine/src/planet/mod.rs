@@ -24,6 +24,7 @@
 
 mod carry;
 mod coast;
+mod cover;
 mod follow;
 mod frame;
 mod geo;
@@ -44,6 +45,7 @@ pub use carry::carry_world;
 pub use coast::{BEACH_SLOPE, CONTINENT_OCTAVES, Continents, HILL_RISE, SEABED_RELIEF};
 pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
+pub use cover::{GroundCover, MAX_GROUND_COVERS};
 pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_patch, next_patch};
 pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
@@ -165,6 +167,12 @@ pub struct PlanetGround {
 /// near it: the world is simulated around the camera, wherever on the planet
 /// it is. A world has at most one planet.
 ///
+/// The ground takes the look of `material`, overlaid in order by each of
+/// `covers` where its rule holds, at most 4 of them: sand along the coasts,
+/// rock on cliffs. The covers are drawn on a planet that grows grass in its
+/// `layers`; one growing none shows its `material` alone. Each layer's own
+/// rule keeps its blades off the covers they should not grow on.
+///
 /// Places on the planet are named by latitude and longitude, in degrees.
 /// Latitude 0, longitude 0 is straight up from the center, where a world
 /// whose center is below the origin starts; the north pole lies toward `-Z`
@@ -229,6 +237,9 @@ pub struct Planet {
     pub beach_width: f32,
     /// The [Material](#material) the ground renders with.
     pub material: Option<MaterialHandle>,
+    /// Looks laid over `material` in order, each where its rule holds. At
+    /// most 4; later ones are dropped.
+    pub covers: Vec<GroundCover>,
     /// Pull toward the center, in meters per second squared.
     #[asset(default = crate::physics::GRAVITY)]
     pub gravity: f32,

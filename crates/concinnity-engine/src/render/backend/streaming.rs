@@ -57,6 +57,8 @@ pub struct PlanetChunk {
     /// The farthest any of its corners moves when it morphs all the way into
     /// its parent's mesh, in meters.
     pub morph_extent: f32,
+    /// How high its origin lies above the planet's radius, in meters.
+    pub origin_altitude: f32,
 }
 
 /// Slot residency: the mesh, texture and chunk uploads and evictions a
@@ -165,7 +167,7 @@ pub trait DrawStreaming: SceneHost {
         mesh: ChunkMesh<'_>,
         dst: crate::render::slots::draw_slot::SlotAlloc,
     ) -> RenderResult<()> {
-        self.edit_geometry(&mut |scene, writer| scene.add_chunk_mesh(mesh, dst, writer))
+        self.edit_geometry(&mut |scene, writer| scene.add_chunk_mesh(&mesh, dst, writer))
             .unwrap_or(Err(RenderError::Unsupported {
                 op: "add_chunk_mesh",
             }))

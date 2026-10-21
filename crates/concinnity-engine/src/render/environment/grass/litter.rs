@@ -61,6 +61,18 @@ fn patch_noise(p: [f32; 3], salt: u32) -> f32 {
     lerp(lerp(x00, x10, f[1]), lerp(x01, x11, f[1]), f[2])
 }
 
+/// [`patch_noise`] over patches `scale` meters across at ground point `p`,
+/// faded toward its mean where a pixel covering `footprint` meters cannot
+/// hold them: the shaders' `grass_patch_noise`.
+#[cfg(test)]
+pub(crate) fn faded_patch_noise(p: [f32; 3], scale: f32, salt: u32, footprint: f32) -> f32 {
+    let detail = 1.0 - smoothstep(scale * 0.5, scale * 2.0, footprint);
+    if detail <= 0.0 {
+        return 0.5;
+    }
+    0.5 + (patch_noise(p.map(|c| c / scale), salt) - 0.5) * detail
+}
+
 fn luminance(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
 }
@@ -82,12 +94,8 @@ pub fn litter_color(root_color: [f32; 3]) -> [f32; 3] {
 /// Patches a pixel cannot hold fade to their mean.
 #[cfg(test)]
 fn ground_variation(p: [f32; 3], footprint: f32) -> [f32; 3] {
-    let [fine, mid, broad] = core::array::from_fn(|i| {
-        let scale = LITTER_SCALES[i];
-        let detail = 1.0 - smoothstep(scale * 0.5, scale * 2.0, footprint);
-        let n = patch_noise(p.map(|c| c / scale), SALTS[i]);
-        0.5 + (n - 0.5) * detail
-    });
+    let [fine, mid, broad] =
+        core::array::from_fn(|i| faded_patch_noise(p, LITTER_SCALES[i], SALTS[i], footprint));
     let patch = fine * 0.25 + mid * 0.35 + broad * 0.4;
     let dry = fine * 0.6 + (1.0 - mid) * 0.4;
     [

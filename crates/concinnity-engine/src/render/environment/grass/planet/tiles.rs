@@ -28,6 +28,8 @@ pub struct DrawnPlanetTile {
     /// The lowest and highest its surface lies along the up at its origin, in
     /// meters from the origin.
     pub radial: [f32; 2],
+    /// How high its origin lies above the planet's radius, in meters.
+    pub origin_altitude: f32,
     /// How its vertices morph toward its parent's mesh.
     pub morph: GpuTileMorph,
     /// The farthest any of its corners moves when it morphs all the way, in
@@ -62,6 +64,33 @@ fn rotate(model: &Mat4, v: [f64; 3]) -> [f64; 3] {
 
 fn translation(model: &Mat4) -> [f64; 3] {
     core::array::from_fn(|r| f64::from(model[3][r]))
+}
+
+/// The point ground altitudes are measured from in the frame `tile` is drawn
+/// in: its origin there and that origin's altitude (`w`), and the up there
+/// with the origin's distance from the planet's center (`w`). See
+/// [`ground_altitude`](crate::render::environment::ground::ground_altitude).
+pub fn ground_reference(shape: &PlanetShape, tile: &DrawnPlanetTile) -> [[f32; 4]; 2] {
+    let up = dvec3::normalize_or(
+        rotate(&tile.model, tile.id.direction(0.5, 0.5)),
+        [0.0, 1.0, 0.0],
+    );
+    let o = translation(&tile.model);
+    let altitude = f64::from(tile.origin_altitude);
+    [
+        [
+            narrow_f32(o[0]),
+            narrow_f32(o[1]),
+            narrow_f32(o[2]),
+            tile.origin_altitude,
+        ],
+        [
+            narrow_f32(up[0]),
+            narrow_f32(up[1]),
+            narrow_f32(up[2]),
+            narrow_f32(shape.radius + altitude),
+        ],
+    ]
 }
 
 /// The planet's center in the frame `tile` is drawn in.
@@ -280,7 +309,7 @@ fn block(
         face_level: u32::from(tile.id.face.0) | (u32::from(tile.id.level) << 8),
         tile: [tile.id.x, tile.id.y],
         grass_tiles: n,
-        _pad: 0,
+        origin_altitude: tile.origin_altitude,
         radial: tile.radial,
         tile_morph: tile.morph,
     };
@@ -324,6 +353,7 @@ mod tests {
             model: frame.model_at(mesh.origin),
             vertex_base: 0,
             radial: mesh.radial,
+            origin_altitude: mesh.origin_altitude,
             morph: GpuTileMorph::default(),
             morph_extent: 0.0,
         }
@@ -585,6 +615,7 @@ mod tests {
                 model: frame.model_at(s.surface(id.direction(0.5, 0.5))),
                 vertex_base: 0,
                 radial: [0.0; 2],
+                origin_altitude: 0.0,
                 morph: GpuTileMorph::default(),
                 morph_extent: 0.0,
             };

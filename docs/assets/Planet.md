@@ -36,6 +36,12 @@ Far from where the world started, positions stay as precise as they were
 near it: the world is simulated around the camera, wherever on the planet
 it is. A world has at most one planet.
 
+The ground takes the look of `material`, overlaid in order by each of
+`covers` where its rule holds, at most 4 of them: sand along the coasts,
+rock on cliffs. The covers are drawn on a planet that grows grass in its
+`layers`; one growing none shows its `material` alone. Each layer's own
+rule keeps its blades off the covers they should not grow on.
+
 Places on the planet are named by latitude and longitude, in degrees.
 Latitude 0, longitude 0 is straight up from the center, where a world
 whose center is below the origin starts; the north pole lies toward `-Z`
@@ -56,5 +62,6 @@ longitude grows eastward, toward `+X`. Altitude is measured above
 - `ocean_depth`: A float. Deepest the sea floor lies below sea level, in meters. Defaults to `60.0`.
 - `beach_width`: A float. Width of the gentle rise from the waterline to where the hills begin, in meters. At least 1. Defaults to `60.0`.
 - `material`: A string. The [Material](Material.md) the ground renders with. Optional.
+- `covers`: An array of [GroundCover](GroundCover.md) objects. Looks laid over `material` in order, each where its rule holds. At most 4; later ones are dropped. Defaults to `[]`.
 - `gravity`: A float. Pull toward the center, in meters per second squared. Defaults to `20.0`.
 - `layers`: An array of [TerrainLayer](TerrainLayer.md) objects. The grass that grows on the planet, one entry per look. Each grows over the whole planet as a meadow: soft-edged bare patches a couple of dozen meters across are laid over the ground, different for every layer, and the same every run. A layer's `density_mask` is not supported on a planet: a world that sets one fails validation. Defaults to `[]`.

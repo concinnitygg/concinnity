@@ -275,14 +275,17 @@ mod tests {
             TerrainLayer {
                 grass: Ref::new(meadow),
                 density_mask: None,
+                ..TerrainLayer::default()
             },
             TerrainLayer {
                 grass: Ref::new(meadow),
                 density_mask: None,
+                ..TerrainLayer::default()
             },
             TerrainLayer {
                 grass: Ref::new(AssetId(99)),
                 density_mask: None,
+                ..TerrainLayer::default()
             },
         ];
         let t = loaded(4, layers);

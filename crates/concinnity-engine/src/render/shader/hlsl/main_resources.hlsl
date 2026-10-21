@@ -43,8 +43,10 @@ struct GpuMaterialParams
     float4 values[2];
 };
 
+{GROUND_RULE_TYPES}
+
 // Mirrors `CanopyLayerGpu` in concinnity-engine/src/render/uniforms/canopy.rs
-// (64 B): one grass layer as the far field past its blades reads it.
+// (112 B): one grass layer as the far field past its blades reads it.
 struct CanopyLayer
 {
     float4 root_color_variation;
@@ -57,15 +59,20 @@ struct CanopyLayer
     float _pad1;
     // xyz = linear RGB of the litter under the blades, w = clumping.
     float4 litter_clumping;
+    // Where on a planet the layer grows.
+    GroundRule rule;
 };
 
 // Matches MAX_CANOPY_LAYERS in render::uniforms::canopy.
 #define CANOPY_MAX_LAYERS 16
 
+// Matches MAX_GROUND_COVERS in planet::cover.
+#define GROUND_MAX_COVERS 4
+
 // Mirrors `CanopyParams` in concinnity-engine/src/render/uniforms/canopy.rs
-// (1568 B): every far field's layers, the planet's axes in the frame, the
-// noise its height is summed from, its coasts, and where the blades hand the
-// field to it.
+// (2368 B): every far field's layers, the planet's axes in the frame, the
+// noise its height is summed from, its coasts, the covers laid over it, and
+// where the blades hand the field to it.
 struct CanopyParams
 {
     float4 planet_rows[3];
@@ -91,8 +98,13 @@ struct CanopyParams
     float ocean_depth;
     float shelf_length;
     float seabed_lift;
+    uint cover_count;
     float _pad0;
-    float _pad1;
+    // xyz = where ground altitudes are measured from, w = its altitude.
+    float4 ground_origin;
+    // xyz = the up there, w = its distance from the planet's center.
+    float4 ground_up;
+    GroundCover covers[GROUND_MAX_COVERS];
     // x = where the blades start handing the field over, y = where they end,
     // z = the hand-off's phase (see grass_crossfade_shows_blades); w unused.
     float4 band;

@@ -393,9 +393,15 @@ impl GraphicsSystem {
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
         let planet_grass = planet.as_ref().and_then(|p| {
+            let covers = concinnity_engine::render::environment::ground::GroundCovers::of(
+                p,
+                |h| world.materials.map.get(&h).copied(),
+                u32::saturating_from(world.texture_count),
+            );
             concinnity_engine::render::world_load::world_scan::planet_grass(
                 p,
                 &concinnity_engine::render::environment::terrain::grass_by_id(ctx),
+                covers,
             )
         });
         let planet_far_field = planet_grass

@@ -226,6 +226,8 @@ pub struct TileMesh {
     /// The lowest and highest the surface's corners lie along the up at
     /// `origin`, in meters from it: every point of the surface lies between.
     pub radial: [f32; 2],
+    /// How high `origin` lies above the planet's radius, in meters.
+    pub origin_altitude: f32,
     /// The box around every vertex, relative to `origin` with authored axes.
     pub bounds: ([f32; 3], [f32; 3]),
 }
@@ -314,6 +316,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         indices,
         morph_extent,
         radial,
+        origin_altitude: narrow_f32(dvec3::length(dvec3::sub(origin, shape.center)) - shape.radius),
         bounds,
     }
 }
@@ -411,6 +414,60 @@ mod tests {
         // A deep tile's bounds hug its own ground, not the planet's whole
         // relief.
         assert!(b.radius < b.width, "{} vs {}", b.radius, b.width);
+    }
+
+    // The normal blades read, a tile's corner normals interpolated across a
+    // cell as the grass kernel does, tilts within a tenth of a degree of the ground's
+    // exact normal on the tiles blades grow on, coasts included, so a slope rule
+    // places blades and the ground under them alike.
+    #[test]
+    fn interpolated_corner_normals_follow_the_exact_normal() {
+        let s = PlanetShape {
+            octaves: 8,
+            continents: crate::planet::Continents::new(50_000.0, 95, 20_000.0, 0.4, 60.0, 60.0),
+            ..shape()
+        };
+        let n = TILE_CELLS as usize;
+        let side = n + 1;
+        let mut worst = 0.0f64;
+        for level in [12u8, 13, 14] {
+            let count = 1u32 << level;
+            for k in 0..24u32 {
+                let tile = TileId {
+                    face: CubeFace((k % 6) as u8),
+                    level,
+                    x: (count / 2 + k * 37) % count,
+                    y: (count / 3 + k * 53) % count,
+                };
+                let mesh = tile_mesh(&s, tile);
+                for q in 0..16usize {
+                    let (i, j) = ((q * 7) % n, (q * 11) % n);
+                    let (rx, ry) = (0.3 + 0.03 * q as f64, 0.6 - 0.025 * q as f64);
+                    let at =
+                        |a: usize, b: usize| dvec3::from_f32(mesh.vertices[b * side + a].normal);
+                    let lerp = |a: DVec3, b: DVec3, t: f64| {
+                        dvec3::add(a, dvec3::scale(dvec3::sub(b, a), t))
+                    };
+                    let normal = dvec3::normalize_or(
+                        lerp(
+                            lerp(at(i, j), at(i + 1, j), rx),
+                            lerp(at(i, j + 1), at(i + 1, j + 1), rx),
+                            ry,
+                        ),
+                        [0.0, 1.0, 0.0],
+                    );
+                    let dir =
+                        tile.direction((i as f64 + rx) / n as f64, (j as f64 + ry) / n as f64);
+                    let exact = s.normal(dir);
+                    let angle = dvec3::dot(normal, exact)
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                        .to_degrees();
+                    worst = worst.max(angle);
+                }
+            }
+        }
+        assert!(worst < 0.1, "{worst} degrees");
     }
 
     // Tiles across a coast, from a whole face down to a few meters, hold

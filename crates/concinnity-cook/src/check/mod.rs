@@ -31,6 +31,8 @@ pub(crate) mod shader;
 pub use shader::is_shader_extension;
 use std::collections::HashSet;
 pub(crate) mod shape;
+/// `Terrain` argument checks.
+pub(crate) mod terrain;
 /// `TextLabel` argument checks.
 pub(crate) mod text_label;
 pub(crate) mod texture;
@@ -54,6 +56,10 @@ fn check_authored_asset(
         RegisteredType::Shader => shader::check(name, args),
         RegisteredType::Prop => prop::check(name, args),
         RegisteredType::Planet => planet::check(name, args),
+        RegisteredType::Terrain => {
+            terrain::warn(name, args);
+            Ok(())
+        }
         RegisteredType::SdfVolume => sdf_volume::check(name, args),
         RegisteredType::VoxelChunk => voxel_chunk::check(name, args),
         RegisteredType::VoxelWorld => voxel_world::check(name, args),

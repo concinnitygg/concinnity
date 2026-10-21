@@ -301,6 +301,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
     CanopyShade canopy = (CanopyShade)0;
     float3 ground_normal = v.normal;
+    // A planet's ground takes its covers' look where their rules hold.
+    GroundCoverMix covers = ground_no_covers();
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
     ground_normal = canopy_ground_normal(od, v.world_pos, v.normal, footprint);
 #ifdef SURFACE_CANOPY
@@ -308,8 +310,17 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 #else
     const float far_w = 0.0;
 #endif
-    canopy = canopy_at(od, v.world_pos, ground_normal, v.color, albedo, V_far / max(far_dist, 1e-4),
-                       footprint, v.position.xy, far_dist, far_w > 0.0);
+    GroundPlace place = (GroundPlace)0;
+    if (canopy_on_planet(od))
+    {
+        place = ground_place(v.world_pos, ground_normal, footprint, canopy_layers(od));
+        covers = ground_covers_at(place, v.uv);
+        place.covered = 1.0 - covers.keep;
+        albedo = albedo * covers.keep + covers.albedo;
+    }
+    canopy = canopy_at(od, place, v.world_pos, ground_normal, v.color, albedo,
+                       V_far / max(far_dist, 1e-4), footprint, v.position.xy, far_dist,
+                       far_w > 0.0);
     albedo = canopy.ground_albedo;
 #else
     const float far_w = 0.0;
@@ -329,7 +340,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         emissive *= pool_sample(od.emissive_map_index, v.uv).rgb;
     }
 
-    float2 roughness_metallic = surface_roughness_metallic(od, v.uv);
+    float2 roughness_metallic = surface_roughness_metallic(od, v.uv) * covers.keep
+                              + covers.roughness_metallic;
     float roughness = roughness_metallic.x;
     float metallic  = roughness_metallic.y;
 

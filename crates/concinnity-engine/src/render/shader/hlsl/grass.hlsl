@@ -130,6 +130,8 @@ struct GrassLayer
 // Matches GRASS_NEST_LEVELS in render::grass::nest.
 #define GRASS_NEST_LEVELS 5
 
+{GROUND_RULE_TYPES}
+
 // Mirrors `GrassParams` in render::uniforms::grass.
 struct GrassParams
 {
@@ -195,6 +197,8 @@ struct GrassParams
     float4 bend_prev_map[2];
     // Each layer's density on a planet, four layers to a row.
     float4 planet_density[4];
+    // Where on a planet each layer grows.
+    GroundRule planet_rules[GRASS_MAX_LAYERS];
     GrassLayer layers[GRASS_MAX_LAYERS];
 };
 
@@ -216,7 +220,8 @@ struct PlanetGrassTile
     uint2 tile;
     // Grass tiles of level 0 along each side of the whole tile.
     uint grass_tiles;
-    uint _pad;
+    // How high the tile's origin lies above the planet's radius, in meters.
+    float origin_altitude;
     // The lowest and highest the surface lies along the up at the origin.
     float2 radial;
     // How the tile's vertices morph, as its draw's object record carries it.
@@ -619,6 +624,9 @@ struct GrassSite
     float leaf_area;
     // The hash distance thinning compares (see grass_nested_hash).
     float thin;
+    // How much shorter than its look the blade grows: toward the edge of a
+    // planet layer's rule.
+    float shortening;
 };
 
 // The ground under world `xz` on layer `L`'s terrain: the unit normal (xyz)
@@ -962,11 +970,11 @@ bool grass_planet_tile_visible(PlanetGrassTile T, uint2 g, uint level, float rea
 }
 
 // The site of cell `cell` of grass tile `g` of planet tile `T` for layer `L`,
-// the layer's density on the planet being `density`, its blade ranking `rank`
-// (see grass_nest_rank). Mirrors PlanetGrassGrid::face_cell for the cell's
-// place on its face.
+// the layer's density on the planet being `density` where its `rule` holds,
+// its blade ranking `rank` (see grass_nest_rank). Mirrors
+// PlanetGrassGrid::face_cell for the cell's place on its face.
 GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell, float density,
-                            uint rank)
+                            GroundRule rule, uint rank)
 {
     GrassSite site = (GrassSite)0;
     uint k = L.cells_per_side;
@@ -1021,8 +1029,22 @@ GrassSite grass_planet_site(GrassLayer L, PlanetGrassTile T, uint2 g, uint2 cell
     float2 st = (float2(face_cell) + jitter) / face_cells * 2.0 - 1.0;
     float3 dir = grass_face_direction(face, st.x, st.y);
     site.ground_point = dir * grass.planet_radius;
+    float3 origin = float3(T.model[0].w, T.model[1].w, T.model[2].w);
+    float3 origin_up = normalize(origin - grass.planet_center_scale.xyz);
+    float3 v = site.root - origin;
+    float altitude = ground_altitude(T.origin_altitude, grass.planet_radius + T.origin_altitude,
+                                     dot(origin_up, v), dot(v, v),
+                                     length(site.root - grass.planet_center_scale.xyz));
+    float steepness = ground_steepness(dot(site.normal, site.up));
+    float noise = 0.0;
+    if (ground_rule_near_edge(rule, altitude, steepness))
+    {
+        noise = ground_rule_noise(site.ground_point, 0.0);
+    }
+    float placed_weight = ground_rule_weight(rule, altitude, steepness, noise);
     site.density = saturate(density * area)
-                 * grass_meadow_density(dir, grass.planet_center_scale.w, L.seed);
+                 * grass_meadow_density(dir, grass.planet_center_scale.w, L.seed) * placed_weight;
+    site.shortening = 1.0 - ground_rule_stature(placed_weight);
     site.leaf_area = grass_site_leaf_area(L, site.density / max(area, 1e-6), crowding);
     return site;
 }
@@ -1065,7 +1087,7 @@ bool grass_grow(GrassLayer L, uint slot, GrassSite site, out GrassBlade blade, o
     float clump_r = grass_unit(ch, 6u);
     float height = L.height
                  * (1.0 + L.height_variance * ((clump_r - 0.5) * 1.2 + (grass_unit(h, 7u) - 0.5) * 0.8));
-    height = max(height, L.height * 0.1);
+    height = max(height, L.height * 0.1) * (1.0 - site.shortening);
     // The survivors widen by the coverage thinning took, so the field's
     // coverage and color hold steady with distance.
     float width = L.width * (0.75 + 0.5 * grass_unit(h, 13u)) * shrink / grass_coverage(thin);
@@ -1191,6 +1213,7 @@ void grass_generate(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             int2 fine = grass_nest_representative(face_cell, level, salt);
             uint2 local = uint2(fine - int2(T.tile * T.grass_tiles) * int(n));
             site = grass_planet_site(L, T, local / n, local % n, grass_planet_density(layer_slot),
+                                     grass.planet_rules[layer_slot],
                                      grass_nest_rank(face_cell, level, salt));
             grows = true;
         }

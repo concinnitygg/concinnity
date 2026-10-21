@@ -319,7 +319,7 @@ impl SceneState {
     /// one without is never culled.
     pub(crate) fn add_chunk_mesh(
         &mut self,
-        mesh: ChunkMesh<'_>,
+        mesh: &ChunkMesh<'_>,
         dst: SlotAlloc,
         writer: &mut dyn GeometryWriter,
     ) -> RenderResult<()> {
@@ -333,7 +333,7 @@ impl SceneState {
             frame,
             planet_tile,
             bounds,
-        } = mesh;
+        } = *mesh;
         if verts.is_empty() || idxs.is_empty() {
             return Err(RenderError::Other(
                 "add_chunk_mesh: empty chunk geometry".into(),
@@ -824,7 +824,7 @@ mod tests {
         let mut w = Recorder::default();
         scene
             .add_chunk_mesh(
-                chunk(&vertices(3), &[0, 1, 2]),
+                &chunk(&vertices(3), &[0, 1, 2]),
                 SlotAlloc::Append(DrawIndex(0)),
                 &mut w,
             )
@@ -853,7 +853,7 @@ mod tests {
             ..chunk(&verts, &[0, 1, 2])
         };
         scene
-            .add_chunk_mesh(mesh, SlotAlloc::Append(DrawIndex(0)), &mut w)
+            .add_chunk_mesh(&mesh, SlotAlloc::Append(DrawIndex(0)), &mut w)
             .expect("room for the chunk");
         let obj = &scene.draw.objects[0];
         assert!(obj.cullable());
@@ -890,15 +890,16 @@ mod tests {
                 tile,
                 radial: [-1.0, 2.0],
                 morph_extent: 0.5,
+                origin_altitude: 3.0,
             }),
             ..chunk(&verts, &[0, 1, 2])
         };
         scene
-            .add_chunk_mesh(mesh, SlotAlloc::Append(DrawIndex(0)), &mut w)
+            .add_chunk_mesh(&mesh, SlotAlloc::Append(DrawIndex(0)), &mut w)
             .expect("room for the chunk");
         scene
             .add_chunk_mesh(
-                chunk(&vertices(3), &[0, 1, 2]),
+                &chunk(&vertices(3), &[0, 1, 2]),
                 SlotAlloc::Append(DrawIndex(1)),
                 &mut w,
             )
@@ -942,7 +943,7 @@ mod tests {
         let mut w = Recorder::default();
         scene
             .add_chunk_mesh(
-                chunk(&vertices(3), &[0, 1, 2]),
+                &chunk(&vertices(3), &[0, 1, 2]),
                 SlotAlloc::Append(DrawIndex(0)),
                 &mut w,
             )
@@ -963,7 +964,7 @@ mod tests {
         assert!(
             scene
                 .add_chunk_mesh(
-                    chunk(&vertices(3), &[0, 1, 2]),
+                    &chunk(&vertices(3), &[0, 1, 2]),
                     SlotAlloc::Append(DrawIndex(0)),
                     &mut w
                 )
@@ -981,7 +982,7 @@ mod tests {
         let mut scene = chunked(3, 3);
         scene
             .add_chunk_mesh(
-                chunk(&vertices(3), &[0, 1, 2]),
+                &chunk(&vertices(3), &[0, 1, 2]),
                 SlotAlloc::Append(DrawIndex(0)),
                 &mut WriteOnly,
             )
@@ -1004,7 +1005,7 @@ mod tests {
         let mut scene = chunked(8, 8);
         let err = scene
             .add_chunk_mesh(
-                chunk(&[], &[0]),
+                &chunk(&[], &[0]),
                 SlotAlloc::Append(DrawIndex(0)),
                 &mut WriteOnly,
             )
@@ -1017,7 +1018,7 @@ mod tests {
         let mut scene = chunked(3, 3);
         scene
             .add_chunk_mesh(
-                chunk(&vertices(3), &[0, 1, 2]),
+                &chunk(&vertices(3), &[0, 1, 2]),
                 SlotAlloc::Append(DrawIndex(0)),
                 &mut WriteOnly,
             )

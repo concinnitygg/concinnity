@@ -56,6 +56,7 @@ use crate::render::uniforms::grass::{
     GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
     MAX_GRASS_TILE_RECORDS, PlanetGrassTileGpu,
 };
+use crate::render::uniforms::ground::GroundRuleGpu;
 use crate::terrain::{DensityMask, TerrainGrid};
 use crate::transform::Mat4;
 use bend::{BendStep, GRASS_BEND_CELL_SIZE, GRASS_BEND_RESOLUTION};
@@ -817,6 +818,7 @@ impl GrassField {
             wind_map,
             bend_prev_map,
             planet_density: [0.0; MAX_GRASS_LAYERS],
+            planet_rules: [GroundRuleGpu::EVERYWHERE; MAX_GRASS_LAYERS],
             layers: [GrassLayerGpu::default(); MAX_GRASS_LAYERS],
         }
     }
@@ -1075,6 +1077,7 @@ fn place_planet(
         let gpu = planet_layer_gpu(layer, wind_speed, lod_height);
         params.layers[slot] = gpu;
         params.planet_density[slot] = layer.density;
+        params.planet_rules[slot] = layer.rule;
         groups = groups.max((layer.cells * layer.cells).div_ceil(GRASS_GROUP_SIZE));
         for (record, &(index, origin, count)) in run.blocks.iter().enumerate() {
             visited.clear();
@@ -1922,7 +1925,7 @@ mod tests {
         }
 
         fn field() -> GrassField {
-            let grass = PlanetGrass::resolve(shape(), &[Grass::default(), grass(30.0)]).unwrap();
+            let grass = PlanetGrass::everywhere(shape(), &[Grass::default(), grass(30.0)]).unwrap();
             GrassField::resolve_planet(grass, None)
         }
 
@@ -1949,6 +1952,7 @@ mod tests {
                         model: LocalFrame::AUTHORED.model_at(mesh.origin),
                         vertex_base: 0,
                         radial: mesh.radial,
+                        origin_altitude: mesh.origin_altitude,
                         morph: crate::gfx::render_types::GpuTileMorph::default(),
                         morph_extent: 0.0,
                     }
@@ -2002,6 +2006,40 @@ mod tests {
             assert_eq!(view.dispatch[0], (cells * cells).div_ceil(GRASS_GROUP_SIZE));
             let c = view.params.planet_center;
             assert!((c[1] + 50_000.0).abs() < 0.05, "{c:?}");
+        }
+
+        // Each layer's rule rides the kernel's block in its slot.
+        #[test]
+        fn each_layer_takes_its_rule() {
+            use crate::components::GroundRule;
+            use crate::render::environment::ground::GroundCovers;
+            let above = GroundRule {
+                altitude: [Some(2.0), None],
+                ..GroundRule::default()
+            };
+            let grass = PlanetGrass::resolve(
+                shape(),
+                &[
+                    (Grass::default(), GroundRule::default()),
+                    (grass(30.0), above),
+                ],
+                GroundCovers::default(),
+            )
+            .unwrap();
+            let mut f = GrassField::resolve_planet(grass, None);
+            resize(&mut f, [1600, 900]);
+            let (tiles, cam) = standing();
+            let mut history = GrassHistory::default();
+            let frame = f.frame(
+                &GrassFrameInputs {
+                    planet_tiles: &tiles,
+                    ..inputs(cam)
+                },
+                &mut history,
+            );
+            let rules = frame.view.params.planet_rules;
+            assert_eq!(rules[0], GroundRuleGpu::EVERYWHERE);
+            assert_eq!(rules[1], GroundRuleGpu::of(&above));
         }
 
         // Before any tile is drawn, nothing grows, but the frame still runs.

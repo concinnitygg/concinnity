@@ -85,7 +85,7 @@ pub use crate::physics::rigid_body::RigidBody;
 pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
 pub use crate::physics::volume_event::VolumeEvent;
 pub use crate::physics::wake_request::WakeRequest;
-pub use crate::planet::Planet;
+pub use crate::planet::{GroundCover, Planet};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::grass::Grass;
@@ -160,7 +160,7 @@ pub use crate::story::definition::{
     Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
-pub use crate::terrain::{Terrain, TerrainLayer};
+pub use crate::terrain::{GroundRule, Terrain, TerrainLayer};
 pub use crate::ui::authored_action::{AuthoredAction, NamedAction};
 pub use crate::ui::hit_region::HitRegion;
 pub use crate::ui::layout_container::{

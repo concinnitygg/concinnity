@@ -48,10 +48,13 @@ const WARMUP_SECONDS: f32 = 2.5;
 
 // The frames the run saves: the file name and the moment, in seconds of the
 // run as the HUD's `TRACK` chip counts them (the warm-up included). Day over
-// the meadow and out over the sea, climbing out of it, the planet from high
-// up and from orbit, then the night skimmed low and back on the ground.
-const CAPTURES: [(&str, f32); 8] = [
+// the meadow, across the beach and out over the sea, climbing out of it, the
+// planet from high up and from orbit, then the night skimmed low and back on
+// the ground.
+const CAPTURES: [(&str, f32); 10] = [
     ("ground-day", 13.3),
+    ("shore-day", 14.5),
+    ("beach-day", 15.5),
     ("sea-day", 22.0),
     ("climb-6m", 31.93),
     ("climb-30m", 34.65),
@@ -76,7 +79,7 @@ struct Declared {
 pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), String> {
     let declared = Declared {
         // The planet's references are names, which its shape does not need.
-        planet: serde_json::from_value(read(world, "Planet", &["material", "layers"])?)
+        planet: serde_json::from_value(read(world, "Planet", &["material", "covers", "layers"])?)
             .map_err(|e| e.to_string())?,
         sea_level: sea_level(world),
         sky: serde_json::from_value(read(world, "SkyRotation", &[])?).map_err(|e| e.to_string())?,
