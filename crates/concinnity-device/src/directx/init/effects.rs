@@ -10,6 +10,8 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::{PlanarBudget, SdfVolumeSource, WorldFx};
 use concinnity_engine::render::decal::{self, DecalRecord};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
+use concinnity_engine::render::environment::water::WaterBody;
+use concinnity_engine::render::environment::water::ocean::OceanPlan;
 use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleSystem};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::post::device::PostExtent;
@@ -313,6 +315,30 @@ pub(super) fn build_gbuffer(
 // Projected decals: pipeline + unit-cube buffers + per-frame uniform rings.
 // Always built so runtime `add_decal` works from a world that started with
 // none; pre-authored decals get their albedo SRV written here.
+// The simulated oceans, whose arrays every water draw binds.
+pub(super) fn build_water_sim(
+    gpu: &InitGpu<'_>,
+    descriptors: &DxDescriptors,
+    water_surfaces: &[WaterBody],
+    ocean: &OceanPlan,
+) -> RenderResult<Option<crate::directx::water_sim::DxOceanSim>> {
+    if water_surfaces.is_empty() {
+        return Ok(None);
+    }
+    let base = descriptors.layout.ocean_base_slot;
+    crate::directx::water_sim::DxOceanSim::new(
+        &gpu.hw.alloc,
+        ocean,
+        &crate::directx::water_sim::OceanSlots {
+            cpu: |i| descriptors.slot_cpu(base + i),
+            gpu: descriptors.slot_gpu(base),
+            stride: descriptors.srv_descriptor_size,
+        },
+        gpu.hot_reload,
+    )
+    .map(Some)
+}
+
 pub(super) fn build_decals(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,

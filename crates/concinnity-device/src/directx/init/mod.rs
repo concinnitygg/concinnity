@@ -20,6 +20,7 @@
 //! `heap_layout.rs` holds every heap's slot layout, `pipelines.rs` the main-pass
 //! root signature and PSO builders, and `adapter.rs` the adapter selection.
 
+use concinnity_engine::components::Window;
 use concinnity_engine::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
@@ -195,30 +196,7 @@ impl DxContext {
         // rests on the context being touched from this thread alone.
         record_main_thread();
 
-        // The swapchain config the caller's reload gate compares against.
-        let swapchain_config = init::SwapchainConfig {
-            frames_in_flight: graphics.frames_in_flight(),
-            hdr_display: graphics.display.hdr,
-            hdr_pq: graphics.display.pq,
-        };
-        // A live editor reload hands over the hardware and swapchain (HDR was
-        // already negotiated on the unchanged swapchain, so `setup` is skipped).
-        // Otherwise `setup` negotiates HDR: a capable adapter + a `true` toggle
-        // yields a `RGBA16Float` scRGB swapchain, else `hw.hdr_mode` is `Sdr`.
-        let (hw, swapchain) = match reuse {
-            Some(reuse) => reuse,
-            None => bootstrap::setup(
-                bootstrap::WindowConfig {
-                    title: window.title.as_str(),
-                    width: output.0,
-                    height: output.1,
-                    title_bar: window.title_bar,
-                },
-                validation,
-                vsync,
-                swapchain_config,
-            )?,
-        };
+        let (hw, swapchain) = open_hardware(reuse, window, &graphics, validation)?;
         // Persisted pipeline library: seeded from disk when a blob for this
         // adapter exists, consulted by every PSO creation below. No-op on the
         // reload path, where it is already installed.
@@ -228,18 +206,8 @@ impl DxContext {
             hot_reload,
         };
 
-        // A mirror renders the culled scene, so a world with no cull records
-        // has nothing to mirror: its reflectors keep the probe / sky path.
         let plan = cull::plan_cull(&world);
-        let planar = if plan.n_cull == 0 {
-            PlanarBudget {
-                planes: 0,
-                ..planar
-            }
-        } else {
-            planar
-        };
-        let planar = effects::plan_planar(&fx, planar);
+        let planar = effects::plan_planar(&fx, mirror_budget(planar, plan.n_cull));
         let planar_slots = planar.assignment.slots.clone();
         let rtv = RtvHeapLayout::compute(Features::msaa_samples(&hw, hdr_samples));
         let swapchain = heaps::build_swapchain(&gpu, swapchain, &rtv, vsync)?;
@@ -392,22 +360,8 @@ impl DxContext {
             plan.n_cull,
             clear_color,
         )?;
-        // The simulated oceans, whose arrays every water draw binds.
-        let water_sim = (!fx.water_surfaces.is_empty())
-            .then(|| {
-                let base = descriptors.layout.ocean_base_slot;
-                super::water_sim::DxOceanSim::new(
-                    &gpu.hw.alloc,
-                    &fx.ocean,
-                    &super::water_sim::OceanSlots {
-                        cpu: |i| descriptors.slot_cpu(base + i),
-                        gpu: descriptors.slot_gpu(base),
-                        stride: descriptors.srv_descriptor_size,
-                    },
-                    hot_reload,
-                )
-            })
-            .transpose()?;
+        let water_sim =
+            effects::build_water_sim(&gpu, &descriptors, &fx.water_surfaces, &fx.ocean)?;
         let transparent = effects::build_transparent(
             &gpu,
             effects::TransparentInputs {
@@ -432,22 +386,7 @@ impl DxContext {
             },
         );
 
-        crate::shader::cache::report_init();
-        // Serialize the pipeline library now that every init-built PSO has
-        // populated it, then write the segment holding it and every shader
-        // artifact this init compiled; a crash mid-session then still leaves
-        // the next launch warm.
-        super::pso_library::serialize();
-        crate::shader::pipeline_cache::report_init(super::pso_library::disk_state());
-        crate::shader::runtime_cache::checkpoint();
-
-        let pooled = hw.alloc.stats();
-        tracing::info!(
-            "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
-            pooled.block_count,
-            pooled.reserved_bytes / 1024,
-            pooled.in_use_bytes / 1024,
-        );
+        report_init(&hw);
 
         let mut ctx = Self {
             post: post_descriptors,
@@ -521,6 +460,70 @@ impl DxContext {
         ctx.refresh_gates(&graphics);
         Ok(ctx)
     }
+}
+
+// A live editor reload hands over the hardware and swapchain (HDR was already
+// negotiated on the unchanged swapchain, so `setup` is skipped). Otherwise
+// `setup` negotiates HDR: a capable adapter + a `true` toggle yields a
+// `RGBA16Float` scRGB swapchain, else `hw.hdr_mode` is `Sdr`.
+fn open_hardware(
+    reuse: Option<(DxHardware, bootstrap::DxgiSwapchain)>,
+    window: &Window,
+    graphics: &ResolvedGraphics,
+    validation: bool,
+) -> RenderResult<(DxHardware, bootstrap::DxgiSwapchain)> {
+    if let Some(reuse) = reuse {
+        return Ok(reuse);
+    }
+    // The swapchain config the caller's reload gate compares against.
+    let swapchain_config = init::SwapchainConfig {
+        frames_in_flight: graphics.frames_in_flight(),
+        hdr_display: graphics.display.hdr,
+        hdr_pq: graphics.display.pq,
+    };
+    bootstrap::setup(
+        bootstrap::WindowConfig {
+            title: window.title.as_str(),
+            width: window.width,
+            height: window.height,
+            title_bar: window.title_bar,
+        },
+        validation,
+        graphics.frame_pacing.vsync,
+        swapchain_config,
+    )
+}
+
+// A mirror renders the culled scene, so a world with no cull records has
+// nothing to mirror: its reflectors keep the probe / sky path.
+fn mirror_budget(planar: PlanarBudget, n_cull: usize) -> PlanarBudget {
+    if n_cull == 0 {
+        PlanarBudget {
+            planes: 0,
+            ..planar
+        }
+    } else {
+        planar
+    }
+}
+
+// Report the shader caches, and serialize the pipeline library now that every
+// init-built PSO has populated it, then write the segment holding it and every
+// shader artifact this init compiled; a crash mid-session then still leaves the
+// next launch warm.
+fn report_init(hw: &DxHardware) {
+    crate::shader::cache::report_init();
+    super::pso_library::serialize();
+    crate::shader::pipeline_cache::report_init(super::pso_library::disk_state());
+    crate::shader::runtime_cache::checkpoint();
+
+    let pooled = hw.alloc.stats();
+    tracing::info!(
+        "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
+        pooled.block_count,
+        pooled.reserved_bytes / 1024,
+        pooled.in_use_bytes / 1024,
+    );
 }
 
 impl DxContext {

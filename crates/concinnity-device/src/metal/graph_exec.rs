@@ -524,40 +524,7 @@ impl MtlContext {
     ) -> RenderResult<u32> {
         Ok(match pass_id {
             PassId::Cull => {
-                let object_buffer =
-                    pass_input(params.object_buffer, PassId::Cull, "object_buffer")?;
-                let draw_args_buffer =
-                    pass_input(params.draw_args_buffer, PassId::Cull, "draw_args_buffer")?;
-                // Skinned fold: pre-skin into this frame's deformed
-                // buffer in the Cull command buffer (before the cull dispatch).
-                // Committed before Main, so Metal hazard-tracks the deformed
-                // write ahead of the main pass's vertex read. Only when the fold
-                // is active (deformed buffer supplied).
-                if let Some(deformed) = params.deformed_skinned {
-                    self.encode_main_skin(
-                        cmd_buf,
-                        deformed,
-                        super::raytrace::MainSkinBuffers {
-                            joints: params.skinned_joint_bufs,
-                            morph_weights: params.skinned_morph_weight_bufs,
-                        },
-                    )?;
-                }
-                self.encode_cull(
-                    cmd_buf,
-                    object_buffer,
-                    draw_args_buffer,
-                    params.frustum,
-                    params.cam_pos,
-                    self.draw_record_counts(),
-                )?;
-                // GPU-driven shadow views: fill the cascade and spot-slice ICBs
-                // in this same Cull command buffer (committed before the Shadow
-                // and SpotShadow render passes' command buffers), so the
-                // cross-command-buffer FIFO order makes them ready when those
-                // passes read them -- the same ordering the main cull -> Main ICB
-                // relies on. A no-op when the shadow-bindless path is inactive.
-                self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
+                self.encode_cull_stage(cmd_buf, params)?;
                 0
             }
             PassId::HizBuild | PassId::HizFinal => {
@@ -846,59 +813,7 @@ impl MtlContext {
                     pass_input(params.scene_pre_taa, PassId::Upscale, "scene_pre_taa")?;
                 self.encode_upscale(cmd_buf, scene_pre_taa, params.reactive.readable)?
             }
-            PassId::Transparent => {
-                let scene_pre_taa =
-                    pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
-                let view = concinnity_engine::render::uniforms::TransparentView::new(
-                    &self.pass_camera(params),
-                    self.lights.uniforms(),
-                );
-                // The mirrors `PlanarReflection` rendered this frame, if the pass
-                // samples mirrors at all (the same gate that put the node in the
-                // graph). A reflector whose slot was not rendered keeps its probe
-                // path.
-                let mirrors = if self.planar_mirrors_needed() {
-                    params.planar
-                } else {
-                    PlanarFramePlan::default()
-                };
-
-                // Gather every translucent producer's draws, then let the
-                // shared encoder sort them back-to-front and issue them.
-                let mut draws = Vec::new();
-                self.collect_water_transparent_draws(
-                    &view,
-                    params.elapsed,
-                    params.bindless_tex_args.is_some(),
-                    &mirrors,
-                    &mut draws,
-                );
-                self.collect_glass_transparent_draws(
-                    &view,
-                    params.bindless_tex_args.is_some(),
-                    &mirrors,
-                    &mut draws,
-                );
-                // Transparent glass MESHES (Layer 2): imported `transparent`
-                // materials traced per-pixel when RT is live. Inert otherwise
-                // (those meshes render opaque in the main pass).
-                self.collect_mesh_transparent_draws(
-                    &view,
-                    params.bindless_tex_args.is_some(),
-                    &mut draws,
-                );
-                self.encode_transparent(
-                    cmd_buf,
-                    scene_pre_taa,
-                    &draws,
-                    super::transparent::TransparentFrame {
-                        view: &view,
-                        rt_params: params.rt_reflection_params,
-                        bindless_tex_args: params.bindless_tex_args,
-                        reactive: params.reactive.transparent,
-                    },
-                )?
-            }
+            PassId::Transparent => self.encode_transparent_stage(cmd_buf, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
@@ -911,6 +826,102 @@ impl MtlContext {
                 self.encode_raymarch(cmd_buf, &view, params.frustum)?
             }
         })
+    }
+
+    // The Cull pass: the skinned pre-skin fold, the main cull, and the shadow-view culls.
+    fn encode_cull_stage(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        params: &GraphFrameParams<'_>,
+    ) -> RenderResult<()> {
+        let object_buffer = pass_input(params.object_buffer, PassId::Cull, "object_buffer")?;
+        let draw_args_buffer =
+            pass_input(params.draw_args_buffer, PassId::Cull, "draw_args_buffer")?;
+        // Skinned fold: pre-skin into this frame's deformed
+        // buffer in the Cull command buffer (before the cull dispatch).
+        // Committed before Main, so Metal hazard-tracks the deformed
+        // write ahead of the main pass's vertex read. Only when the fold
+        // is active (deformed buffer supplied).
+        if let Some(deformed) = params.deformed_skinned {
+            self.encode_main_skin(
+                cmd_buf,
+                deformed,
+                super::raytrace::MainSkinBuffers {
+                    joints: params.skinned_joint_bufs,
+                    morph_weights: params.skinned_morph_weight_bufs,
+                },
+            )?;
+        }
+        self.encode_cull(
+            cmd_buf,
+            object_buffer,
+            draw_args_buffer,
+            params.frustum,
+            params.cam_pos,
+            self.draw_record_counts(),
+        )?;
+        // GPU-driven shadow views: fill the cascade and spot-slice ICBs
+        // in this same Cull command buffer (committed before the Shadow
+        // and SpotShadow render passes' command buffers), so the
+        // cross-command-buffer FIFO order makes them ready when those
+        // passes read them -- the same ordering the main cull -> Main ICB
+        // relies on. A no-op when the shadow-bindless path is inactive.
+        self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
+        Ok(())
+    }
+
+    // The Transparent pass: every translucent producer's draws, sorted and issued.
+    fn encode_transparent_stage(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        params: &GraphFrameParams<'_>,
+    ) -> RenderResult<u32> {
+        let scene_pre_taa = pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
+        let view = concinnity_engine::render::uniforms::TransparentView::new(
+            &self.pass_camera(params),
+            self.lights.uniforms(),
+        );
+        // The mirrors `PlanarReflection` rendered this frame, if the pass
+        // samples mirrors at all (the same gate that put the node in the
+        // graph). A reflector whose slot was not rendered keeps its probe
+        // path.
+        let mirrors = if self.planar_mirrors_needed() {
+            params.planar
+        } else {
+            PlanarFramePlan::default()
+        };
+
+        // Gather every translucent producer's draws, then let the
+        // shared encoder sort them back-to-front and issue them.
+        let mut draws = Vec::new();
+        self.collect_water_transparent_draws(
+            &view,
+            params.elapsed,
+            params.bindless_tex_args.is_some(),
+            &mirrors,
+            &mut draws,
+        );
+        self.collect_glass_transparent_draws(
+            &view,
+            params.bindless_tex_args.is_some(),
+            &mirrors,
+            &mut draws,
+        );
+        // Transparent glass MESHES (Layer 2): imported `transparent`
+        // materials traced per-pixel when RT is live. Inert otherwise
+        // (those meshes render opaque in the main pass).
+        self.collect_mesh_transparent_draws(&view, params.bindless_tex_args.is_some(), &mut draws);
+        self.encode_transparent(
+            cmd_buf,
+            scene_pre_taa,
+            &draws,
+            super::transparent::TransparentFrame {
+                view: &view,
+                rt_params: params.rt_reflection_params,
+                bindless_tex_args: params.bindless_tex_args,
+                reactive: params.reactive.transparent,
+            },
+        )
     }
 }
 
