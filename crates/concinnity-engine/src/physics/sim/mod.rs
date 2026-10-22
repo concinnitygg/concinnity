@@ -40,6 +40,7 @@ mod collide;
 mod config;
 mod contact;
 mod coupling;
+mod fluid;
 mod impact;
 mod island;
 mod joint;
@@ -54,6 +55,7 @@ mod world;
 
 pub use character::CharacterCapsule;
 pub use config::SimConfig;
+pub use fluid::{FluidLoad, FluidPiece, FluidShape, MAX_FLUID_PIECES, Submerged, submerged};
 pub(crate) use query::ray_hit_distance;
 pub use query::{ShapeCast, ShapeCastHit};
 pub use world::Simulation;

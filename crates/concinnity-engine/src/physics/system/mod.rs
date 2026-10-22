@@ -21,7 +21,11 @@ use crate::ecs::{
     Entity, EventCursor, MenuActive, PipelineContext, SimTiming, StepResult, System, World,
     WorldPhysicsBudget,
 };
-use crate::planet::{FrameRebases, PlanetGravity, PlanetGround, RebaseCursor};
+use crate::planet::{
+    FrameRebases, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround, RebaseCursor,
+};
+use crate::render::environment::water::query::WaterQuery;
+use crate::render::environment::wind::WindField;
 use concinnity_core::math::vec3::{add, normalize_or, scale, sub};
 use concinnity_core::math::{cos, sin, sqrt};
 
@@ -107,6 +111,8 @@ pub struct PhysicsSystem {
     off_ground: super::off_ground::OffGroundBodies,
     // Gravity's strength: the engine's, or the planet's.
     gravity: f32,
+    // The world's water, read by its buoyant bodies; `None` without water.
+    water: Option<WaterQuery>,
 }
 
 // Runtime physics state for the player camera capsule.
@@ -177,7 +183,15 @@ impl PhysicsSystem {
             planet_ground: None,
             off_ground: super::off_ground::OffGroundBodies::default(),
             gravity: GRAVITY,
+            water: None,
         }
+    }
+
+    // Float buoyant bodies in `water`.
+    #[must_use]
+    fn with_water(mut self, water: Option<WaterQuery>) -> Self {
+        self.water = water.filter(|w| !w.is_empty());
+        self
     }
 
     /// Run the step's independent work on `pool` rather than on the calling
@@ -261,7 +275,7 @@ impl PhysicsSystem {
     /// character capsule. A world with content but no config (one built
     /// directly rather than cooked) gets the flat-floor default.
     pub fn for_world(world: &World) -> Option<Self> {
-        Self::config_for(world).map(|config| Self::new(&config))
+        Self::config_for(world).map(|config| Self::new(&config).with_water(water_of(world)))
     }
 
     fn config_for(world: &World) -> Option<PhysicsConfig> {
@@ -331,9 +345,8 @@ impl PhysicsSystem {
             let bodies = self
                 .props
                 .iter()
-                .filter(|p| p.dynamic)
-                .map(|p| p.handle)
-                .filter(move |h| Some(*h) != carried);
+                .filter(|p| p.dynamic && Some(p.handle) != carried)
+                .map(|p| (p.handle, p.float.is_some_and(|f| f.afloat())));
             self.off_ground.update(
                 world,
                 bodies,
@@ -358,6 +371,20 @@ fn prop_snap(
         pickup: ctx.get::<Pickup>(entity).is_some(),
         dynamics: ctx.get::<BodyDynamics>(entity).copied(),
     }
+}
+
+// The world's water as its buoyant bodies read it, from the same surfaces,
+// wind and planet the renderer resolves; `None` without water.
+fn water_of(world: &World) -> Option<WaterQuery> {
+    use crate::components::{Planet, WaterSurface, Wind};
+    world.query::<WaterSurface>().next()?;
+    let wind = WindField::new(world.query::<Wind>().next());
+    let planet = world.query::<Planet>().next().map(Planet::shape);
+    Some(WaterQuery::new(
+        world.query::<WaterSurface>(),
+        &wind,
+        planet.as_ref(),
+    ))
 }
 
 // Up at `p`: away from the pull, which is `+Y` without a planet.
@@ -390,6 +417,15 @@ impl System for PhysicsSystem {
             budget.body_cap() as usize,
         );
         self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
+        // Room for a water load per buoyant body, and per spawn that might be
+        // one.
+        if self.water.is_some() {
+            let buoyant = ctx
+                .query::<BodyDynamics>()
+                .filter(|d| d.buoyancy.is_some())
+                .count();
+            world.reserve_fluid_loads(buoyant + self.spawn_headroom as usize);
+        }
         world.set_contact_min_impulse(self.contact_min_impulse, SimTiming::TICK_DT);
         // The step's per-worker scratch, reserved from the schedule this world
         // will run under. A serial schedule reserves one worker's worth, which
@@ -622,6 +658,9 @@ impl System for PhysicsSystem {
         let mode = crate::ecs::schedule_mode(ctx.resources);
 
         let world = self.world.as_mut().expect("world checked above");
+        let frame = ctx
+            .resource::<PlanetFrame>()
+            .map_or(LocalFrame::AUTHORED, |p| p.frame);
 
         // Reap bodies whose entity was despawned before the step, keeping
         // self.held a valid index into the compacted list.
@@ -785,6 +824,15 @@ impl System for PhysicsSystem {
                 self.gravity,
                 self.layers.mask(LAYER_CHARACTER),
             );
+
+            // the water's push on whatever floats in it
+            if let Some(water) = self.water.as_mut() {
+                let time = timing.tick_start(tick);
+                water.prepare(time);
+                for (handle, floater) in self.props.floaters_mut() {
+                    floater.push(handle, world, water, &frame, time, dt);
+                }
+            }
 
             // advance the simulation
             self.fanout.step(world, dt, mode);

@@ -503,6 +503,7 @@ impl FrameExtractor {
 
         FrameScalars {
             elapsed: self.render_secs,
+            water_time: crate::render::environment::water::frame::water_time(&timing),
             fov_y_radians: camera.fov_y_radians,
             near: camera.near,
             view_distance: camera.view_distance,

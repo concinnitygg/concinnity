@@ -20,6 +20,7 @@ pub fn frame_params(
     FrameParams {
         input_sampled_us: None,
         elapsed,
+        water_time: 0.0,
         fov_y_radians: 1.0,
         near: 0.1,
         view_distance: None,

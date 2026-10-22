@@ -15,7 +15,7 @@
 
 use core::marker::PhantomData;
 
-use crate::physics::sim::body::Body;
+use crate::physics::sim::body::{Body, NO_FLUID};
 use crate::physics::sim::math::{Mat3, Quat, Vec3};
 
 /// One body's state for the duration of a step.
@@ -36,6 +36,9 @@ pub(crate) struct SolverBody {
     pub(crate) inv_inertia: Mat3,
     pub(crate) gravity_scale: f32,
     pub(crate) damping: f32,
+    /// The water load each substep reads, an index into the step's loads;
+    /// `NO_FLUID` without one.
+    pub(crate) fluid: u32,
     /// Whether this step moves the body at all. A static or sleeping body is
     /// present so contacts can reference its pose, and immovable to the solve.
     pub(crate) simulated: bool,
@@ -57,6 +60,7 @@ impl SolverBody {
         inv_inertia: Mat3::ZERO,
         gravity_scale: 0.0,
         damping: 0.0,
+        fluid: NO_FLUID,
         simulated: false,
     };
 
@@ -84,6 +88,7 @@ impl SolverBody {
             },
             gravity_scale: body.gravity_scale,
             damping: body.damping,
+            fluid: if simulated { body.fluid } else { NO_FLUID },
             simulated,
         }
     }

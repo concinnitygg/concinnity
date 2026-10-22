@@ -23,12 +23,14 @@ use super::character::{CharacterCapsule, CharacterConfig};
 use super::collide::heightfield::Heightfields;
 use super::config::SimConfig;
 use super::contact::ContactCache;
+use super::fluid::FluidLoad;
 use super::impact::Impacts;
 use super::island::Islands;
 use super::joint::JointSet;
 use super::narrow::Narrow;
 use super::sensor::Sensors;
 use super::solver::{self, Solver};
+use alloc::vec::Vec;
 
 /// A rigid-body simulation: bodies fall under gravity, collide, and come to
 /// rest.
@@ -90,6 +92,9 @@ pub struct Simulation {
     sensors: Sensors,
     impacts: Impacts,
     ccd: Ccd,
+    /// The water loads the next step reads, each named by its body's
+    /// `fluid`; emptied by the step. Reserved by `reserve_fluid_loads`.
+    fluids: Vec<FluidLoad>,
     /// Workers the per-worker scratch was reserved for. One until a caller
     /// says otherwise, which is what makes the serial path the default.
     workers: usize,
@@ -109,6 +114,7 @@ impl core::fmt::Debug for Simulation {
 
 mod build;
 mod control;
+mod external;
 mod queries;
 mod step;
 #[cfg(test)]
@@ -146,6 +152,7 @@ impl Simulation {
             sensors: Sensors::with_capacity(capacity),
             impacts: Impacts::with_capacity(capacity * 2),
             ccd: Ccd::with_capacity(capacity),
+            fluids: Vec::new(),
             workers: 1,
             worker_overflows: 0,
         }

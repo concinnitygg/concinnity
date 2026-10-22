@@ -1579,6 +1579,7 @@ impl FrameDevice for DxContext {
     ) -> RenderResult<()> {
         let FrameParams {
             elapsed: elapsed_f64,
+            water_time,
             fov_y_radians,
             near,
             cam_pos,
@@ -1642,6 +1643,7 @@ impl FrameDevice for DxContext {
             },
             crate::directx::draw::RecordFrameView {
                 elapsed: elapsed_f64,
+                water_time,
                 fov_y_radians,
                 near,
                 cam_pos,

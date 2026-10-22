@@ -13,8 +13,8 @@
 //! `PropBody`'s owner) resolve through `EntityById`, which the loader filled.
 
 use crate::components::{
-    BodyDynamics, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer, Parent,
-    Pickup, Prop, PropBody, PropInstance, SceneMember, Transform,
+    BodyDynamics, Buoyancy, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer,
+    Parent, Pickup, Prop, PropBody, PropInstance, SceneMember, Transform,
 };
 use crate::ecs::{Entity, PipelineContext};
 use alloc::collections::BTreeMap;
@@ -95,6 +95,7 @@ pub fn run(ctx: &mut PipelineContext<'_>) {
                 impact_clip: body.impact_clip,
                 impact_volume: body.impact_volume,
                 asleep: body.asleep,
+                buoyancy: body.buoyancy.map(Buoyancy::validated),
             },
         );
     }

@@ -1,7 +1,7 @@
 // Stepping the world: cost estimates, the solver pass, and sleep.
 
 use super::{Simulation, proxy_for};
-use crate::physics::sim::body::Body;
+use crate::physics::sim::body::{Body, NO_FLUID};
 use crate::physics::sim::ccd;
 use crate::physics::sim::config::SimConfig;
 use crate::physics::sim::contact::{Manifold, carry_impulses};
@@ -135,6 +135,7 @@ impl Simulation {
             sensors,
             impacts,
             ccd,
+            fluids,
             ..
         } = self;
         let sweeping = ccd::enabled(config);
@@ -165,6 +166,7 @@ impl Simulation {
                 joints: joints.as_mut_slice(),
                 islands,
                 config,
+                fluids: fluids.as_slice(),
                 dt,
             },
             fanout,
@@ -186,6 +188,7 @@ impl Simulation {
             body.angular_velocity = solved.angular_velocity;
             body.position = solved.position;
             body.orientation = solved.rotation;
+            body.fluid = NO_FLUID;
             // A position-driven body lands exactly where it was sent, not
             // wherever the substeps' arithmetic left it.
             if let Some(target) = body.kinematic_target.take() {
@@ -195,6 +198,9 @@ impl Simulation {
                 ccd.observe(slot, body, began_at, config.ccd_motion_ratio);
             }
         }
+
+        // Every load was read; the next step takes only what is set for it.
+        fluids.clear();
 
         // After the write-back, so a mover is swept along the path the step
         // actually took it on, and before sleep, so what it ran into is awake

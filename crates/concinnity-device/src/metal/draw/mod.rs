@@ -192,6 +192,7 @@ impl FrameDevice for MtlContext {
     ) -> error::RenderResult<()> {
         let FrameParams {
             elapsed: elapsed_f64,
+            water_time,
             cam_pos,
             text_calls,
             lines,
@@ -251,7 +252,7 @@ impl FrameDevice for MtlContext {
             (Some(grass), Some(lod)) => self.state.canopy_params(
                 &grass.field.canopy,
                 (lod, grass.crossfade_phase()),
-                elapsed_f64,
+                water_time,
             ),
             _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
         };
@@ -298,6 +299,7 @@ impl FrameDevice for MtlContext {
             ring_slot,
             world_hidden,
             elapsed: elapsed_f64,
+            water_time,
             vp: plan.camera.vp,
             inv_vp: plan.camera.inv_vp,
             frustum: &plan.camera.frustum,

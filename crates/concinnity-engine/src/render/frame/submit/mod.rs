@@ -120,6 +120,7 @@ pub fn submit(
     let mut skipped = false;
     match backend.draw_frame(FrameParams {
         elapsed: snap.frame.elapsed,
+        water_time: snap.frame.water_time,
         fov_y_radians: snap.frame.fov_y_radians,
         near: snap.frame.near,
         view_distance: snap.frame.view_distance,

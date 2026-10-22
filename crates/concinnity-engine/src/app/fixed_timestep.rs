@@ -34,6 +34,7 @@ impl FixedTimestep {
             ticks: 1,
             tick_dt: self.dt,
             alpha: 1.0,
+            time: self.ticks as f64 * f64::from(self.dt),
         }
     }
 

@@ -14,6 +14,7 @@
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 physics::bench
 
+mod float;
 mod pen;
 mod sim;
 

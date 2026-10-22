@@ -52,8 +52,10 @@ pub(super) struct RecordFrameTargets<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct RecordFrameView<'a> {
     // Seconds since the world started, narrowed to f32 where a pass needs no
-    // more; the water's motion takes it whole.
+    // more.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     pub fov_y_radians: f32,
     pub near: f32,
     pub cam_pos: [f32; 3],
@@ -183,6 +185,7 @@ impl DxContext {
         } = targets;
         let RecordFrameView {
             elapsed,
+            water_time,
             fov_y_radians,
             near,
             cam_pos,
@@ -231,7 +234,7 @@ impl DxContext {
                 ),
             )
         }));
-        self.upload_canopy(frame_idx, elapsed);
+        self.upload_canopy(frame_idx, water_time);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skin fold reads them. No-op when no SkinnedMesh is
@@ -333,6 +336,7 @@ impl DxContext {
             frustum: &plan.camera.frustum,
             fov_y_radians,
             elapsed,
+            water_time,
             near,
             prime_model_history,
             grass_benders,

@@ -11,6 +11,7 @@
 //! repeat period. Per frame it only wraps time and the camera's position into
 //! small numbers ([`clock`]).
 
+pub(crate) mod band;
 pub mod cascades;
 pub mod clock;
 #[cfg(test)]
@@ -64,8 +65,9 @@ impl OceanQuality {
         size: 256,
         cascades: 3,
     };
-    /// The smallest cascade side.
-    const MIN_SIZE: u32 = 64;
+    /// The smallest cascade side: the first cascade then holds every wave of
+    /// the band the CPU reads ([`band::BAND_REACH`] of its steps).
+    pub const MIN_SIZE: u32 = 128;
     /// The largest cascade side. Mirrors `WATER_FFT_MAX_SIZE` in
     /// `shaders/water_fft.hlsl`.
     pub const MAX_SIZE: u32 = 256;

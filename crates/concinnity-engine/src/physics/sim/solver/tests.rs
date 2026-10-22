@@ -34,6 +34,7 @@ fn run_with(
             joints,
             islands: &mut islands,
             config: &config(),
+            fluids: &[],
             dt: TICK,
         },
         fanout,

@@ -63,28 +63,33 @@ impl OffGroundBodies {
 
     /// Hold every body in `bodies` that has strayed off `footprint`, and let
     /// go of every held one it covers again. `bodies` are the freely
-    /// simulated bodies the caller tracks; a held body no longer among them
-    /// is forgotten.
+    /// simulated bodies the caller tracks, each with whether water holds it
+    /// up: a floating body needs no ground, so it is never held, and a held
+    /// one the water reaches is let go. A held body no longer among them is
+    /// forgotten.
     pub(super) fn update(
         &mut self,
         world: &mut Simulation,
-        bodies: impl Iterator<Item = BodyHandle>,
+        bodies: impl Iterator<Item = (BodyHandle, bool)>,
         footprint: &Footprint,
     ) {
         self.keep.clear();
         self.keep.resize(self.held.len(), false);
         self.newly_held.clear();
-        for handle in bodies {
+        for (handle, afloat) in bodies {
             let Some((position, _)) = world.body_pose_quat(handle) else {
                 continue;
             };
             match self.held.binary_search(&handle) {
-                Ok(_) if footprint.covers(position, RELEASE_INSET) => {
+                Ok(_) if afloat || footprint.covers(position, RELEASE_INSET) => {
                     world.make_dynamic(handle, [0.0; 3]);
                 }
                 Ok(i) => self.keep[i] = true,
                 Err(_) => {
-                    if !footprint.covers(position, HOLD_INSET) && world.make_kinematic(handle) {
+                    if !afloat
+                        && !footprint.covers(position, HOLD_INSET)
+                        && world.make_kinematic(handle)
+                    {
                         self.newly_held.push(handle);
                     }
                 }
@@ -161,7 +166,11 @@ mod tests {
         bodies: &[BodyHandle],
         at: &GroundPatch,
     ) {
-        held.update(world, bodies.iter().copied(), &Footprint::of(at));
+        held.update(
+            world,
+            bodies.iter().map(|&b| (b, false)),
+            &Footprint::of(at),
+        );
         world.step(TICK);
     }
 
@@ -257,5 +266,21 @@ mod tests {
         assert!(f.covers([10.0 + 13.0, 0.0, -5.0], HOLD_INSET));
         assert!(!f.covers([10.0 + 13.0, 0.0, -5.0], RELEASE_INSET));
         assert!(!f.covers([10.0, 0.0, -5.0 - 15.0], HOLD_INSET));
+    }
+
+    // A floating body needs no ground: one the water holds up is never held
+    // off the patch, and a held one the water reaches is let go.
+    #[test]
+    fn the_water_holds_up_what_the_ground_does_not() {
+        let (mut world, _ground, balls) = world_on([0.0; 3], &[[0.0, 0.6, 0.0]]);
+        let mut held = OffGroundBodies::default();
+        let away = Footprint::of(&patch([100.0, 0.0, 0.0]));
+        held.update(&mut world, balls.iter().map(|&b| (b, true)), &away);
+        assert!(!held.is_held(balls[0]), "afloat");
+        held.update(&mut world, balls.iter().map(|&b| (b, false)), &away);
+        assert!(held.is_held(balls[0]), "aground, off the patch");
+        held.update(&mut world, balls.iter().map(|&b| (b, true)), &away);
+        assert!(!held.is_held(balls[0]), "the water reached it");
+        assert!(world.body_state(balls[0]).is_some(), "simulated again");
     }
 }

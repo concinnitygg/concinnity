@@ -213,6 +213,7 @@ mod tests {
     fn params(history_reset: bool) -> FrameParams<'static> {
         FrameParams {
             elapsed: 1.0,
+            water_time: 1.0,
             fov_y_radians: 1.0,
             near: 0.25,
             view_distance: Some(90.0),

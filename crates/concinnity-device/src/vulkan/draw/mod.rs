@@ -621,6 +621,7 @@ impl FrameDevice for VkContext {
     ) -> RenderResult<()> {
         let FrameParams {
             elapsed,
+            water_time,
             fov_y_radians,
             near,
             cam_pos,
@@ -664,7 +665,7 @@ impl FrameDevice for VkContext {
             (Some(grass), Some(lod)) => self.state.canopy_params(
                 &grass.field.canopy,
                 (lod, grass.crossfade_phase()),
-                elapsed,
+                water_time,
             ),
             _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
         };
@@ -704,6 +705,7 @@ impl FrameDevice for VkContext {
             cur_vp: plan.camera.cur_vp,
             fov_y_radians,
             elapsed,
+            water_time,
             near,
             grass_benders,
             planar: self

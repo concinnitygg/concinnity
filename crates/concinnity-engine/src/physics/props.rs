@@ -18,6 +18,7 @@ use crate::ecs::Entity;
 
 use super::capacity::DriverCapacities;
 use super::convert::dynamic_params;
+use super::float::Floater;
 use super::index::{SortedMap, SortedSet};
 use super::interp::PoseInterp;
 use super::layers::{LAYER_PROP, LAYER_WORLD, LayerTable};
@@ -43,6 +44,8 @@ pub(crate) struct PropPhysics {
     // Whether the Transform already holds the pose the body is resting at, so
     // writing it again would change nothing.
     rest_written: bool,
+    // How the body floats, when it is buoyant.
+    pub(super) float: Option<Floater>,
 }
 
 // A collider-bearing entity's physics description, snapshotted from its
@@ -125,6 +128,12 @@ impl PropBodies {
         if snap.dynamics.is_some_and(|d| d.asleep) {
             world.sleep_body(handle);
         }
+        // Spread over the spot's life so bodies loaded together refresh apart.
+        let stagger = concinnity_core::math::fract(self.bodies.len() as f32 * 0.618_034);
+        let float = snap
+            .dynamics
+            .and_then(|d| d.buoyancy)
+            .map(|b| Floater::new(&snap.shape, b, stagger));
         self.bodies.push(PropPhysics {
             entity,
             handle,
@@ -133,6 +142,7 @@ impl PropBodies {
             pose,
             written: (snap.position, snap.rotation_deg),
             rest_written: false,
+            float,
         });
         self.by_handle.insert(handle, entity);
         self.by_entity.insert(entity, handle);
@@ -235,6 +245,13 @@ impl PropBodies {
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &PropPhysics> + Clone {
         self.bodies.iter()
+    }
+
+    // Every buoyant prop's floating state with its body.
+    pub(super) fn floaters_mut(&mut self) -> impl Iterator<Item = (BodyHandle, &mut Floater)> {
+        self.bodies
+            .iter_mut()
+            .filter_map(|p| Some((p.handle, p.float.as_mut()?)))
     }
 
     // Adopt externally written prop transforms before the frame's ticks run: a

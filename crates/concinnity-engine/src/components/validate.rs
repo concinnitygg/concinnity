@@ -163,6 +163,8 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.subdivisions = args.subdivisions.clamp(8, 255);
     args.fetch_meters = finite_at_least(args.fetch_meters, 1.0, 1000.0);
     args.wind_response = finite_at_least(args.wind_response, 0.0, 1.0);
+    args.density = finite_at_least(args.density, 1.0, 1025.0);
+    args.depth_meters = finite_at_least(args.depth_meters, 0.0, 10.0);
     args.whitecaps = finite_at_least(args.whitecaps, 0.0, 0.0).min(1.0);
     args.sea_level = finite_at_least(args.sea_level, 0.0, 0.0);
     if args.shape == WaterShape::PlanetSea {
@@ -486,6 +488,8 @@ mod tests {
             subdivisions: 3,
             fetch_meters: f32::NAN,
             wind_response: -2.0,
+            density: f32::NAN,
+            depth_meters: -3.0,
             whitecaps: 3.0,
             waves: alloc::vec![swell; 6],
             ..WaterSurface::default()
@@ -493,6 +497,8 @@ mod tests {
         assert_eq!(w.subdivisions, 8);
         assert_eq!(w.fetch_meters, 1000.0);
         assert_eq!(w.wind_response, 0.0);
+        assert_eq!(w.density, 1025.0);
+        assert_eq!(w.depth_meters, 0.0);
         assert_eq!(w.whitecaps, 1.0);
         assert_eq!(w.waves.len(), MAX_WATER_WAVES);
         let s = w.waves[0];

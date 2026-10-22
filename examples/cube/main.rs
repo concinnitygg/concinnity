@@ -216,6 +216,8 @@ fn cube_world() -> Result<World, concinnity::Error> {
         subdivisions: 240,
         fetch_meters: 2.0 * WATER_HALF_EXTENT,
         wind_response: 1.0,
+        density: 1000.0,
+        depth_meters: 10.0,
         waves: Vec::new(),
         deep_color: [0.004, 0.005, 0.016],
         shallow_color: [0.012, 0.017, 0.032],

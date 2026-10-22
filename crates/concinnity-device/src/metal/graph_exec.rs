@@ -148,8 +148,10 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // every geometry sub-path so nothing of the world draws behind the menu.
     pub world_hidden: bool,
     // Seconds since the world started, which each pass narrows to f32 where
-    // it needs no more; the water's motion takes it whole.
+    // it needs no more.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     pub vp: [[f32; 4]; 4],
     // Inverse of `vp`, computed once in `draw_frame` and shared by every pass
     // that reconstructs world-space position from depth (fog / decals /
@@ -741,7 +743,7 @@ impl MtlContext {
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd_buf)?,
             PassId::WaterSim => {
-                self.encode_water_sim(cmd_buf, params.elapsed)?;
+                self.encode_water_sim(cmd_buf, params.water_time)?;
                 0
             }
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd_buf)?,
@@ -896,7 +898,7 @@ impl MtlContext {
         let mut draws = Vec::new();
         self.collect_water_transparent_draws(
             &view,
-            params.elapsed,
+            params.water_time,
             params.bindless_tex_args.is_some(),
             &mirrors,
             &mut draws,

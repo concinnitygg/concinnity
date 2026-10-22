@@ -319,7 +319,7 @@ impl WaterSeaGpu {
     pub fn new(sphere: &SeaSphere, motion: &SeaMotion, wind_map: [[f32; 4]; 2]) -> Self {
         let [tu, tv] = motion.tangents;
         let r = sphere.radius;
-        let blend = r / (2.0 * core::f64::consts::SQRT_2 * sphere.blend_half_width());
+        let blend = sphere.blend_rate();
         Self {
             up: [motion.up[0], motion.up[1], motion.up[2], narrow_f32(r)],
             tangent_u: [tu[0], tu[1], tu[2], motion.grid_scale],

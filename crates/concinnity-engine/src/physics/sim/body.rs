@@ -82,7 +82,14 @@ pub(crate) struct Body {
     pub(crate) bounds: Aabb,
     pub(crate) sleep_timer: f32,
     pub(crate) sleeping: bool,
+
+    /// The water load the next step reads, an index into the simulation's
+    /// loads; `NO_FLUID` without one. Cleared by the step.
+    pub(crate) fluid: u32,
 }
+
+/// A body's `fluid` when no water acts on it.
+pub(crate) const NO_FLUID: u32 = u32::MAX;
 
 impl Body {
     pub(crate) fn fixed(
@@ -116,6 +123,7 @@ impl Body {
             bounds: Aabb::EMPTY,
             sleep_timer: 0.0,
             sleeping: false,
+            fluid: NO_FLUID,
         }
     }
 
@@ -201,6 +209,7 @@ impl Body {
             bounds: Aabb::EMPTY,
             sleep_timer: 0.0,
             sleeping: false,
+            fluid: NO_FLUID,
         }
     }
 

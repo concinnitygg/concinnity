@@ -77,6 +77,7 @@ pub use crate::input::input_key::InputKey;
 pub use crate::input::key_binding::KeyBinding;
 pub use crate::input::key_event::{KeyEvent, KeyMods, KeyPress};
 pub use crate::input::nav_direction::NavDirection;
+pub use crate::physics::buoyancy::Buoyancy;
 pub use crate::physics::config::PhysicsConfig;
 pub use crate::physics::contact_event::ContactEvent;
 pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};

@@ -19,6 +19,9 @@ type Mat4 = [[f32; 4]; 4];
 pub struct FrameScalars {
     /// Seconds since the world started, in f64 so it stays exact over hours.
     pub elapsed: f64,
+    /// The simulated instant the water is drawn at
+    /// ([`water_time`](crate::render::environment::water::frame::water_time)).
+    pub water_time: f64,
     /// Vertical field of view in radians.
     pub fov_y_radians: f32,
     /// Near clip distance in world units.
@@ -63,6 +66,7 @@ impl Default for FrameScalars {
     fn default() -> Self {
         Self {
             elapsed: 0.0,
+            water_time: 0.0,
             fov_y_radians: core::f32::consts::FRAC_PI_4,
             near: 0.05,
             view_distance: None,

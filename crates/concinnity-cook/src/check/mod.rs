@@ -67,7 +67,10 @@ fn check_authored_asset(
         RegisteredType::TriggerVolume => physics::check(name, args),
         RegisteredType::AudioEmitter => audio::check_emitter(name, args),
         RegisteredType::AudioCue => audio::check_cue(name, args),
-        RegisteredType::PropBody => audio::check_prop_body(name, args),
+        RegisteredType::PropBody => {
+            physics::warn_prop_body(name, args);
+            audio::check_prop_body(name, args)
+        }
         RegisteredType::TextLabel => text_label::check(name, args),
         RegisteredType::WaterSurface => water_surface::check(name, args),
         _ => Ok(()),

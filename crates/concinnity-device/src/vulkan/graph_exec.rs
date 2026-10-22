@@ -561,9 +561,10 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // Frame-global elapsed seconds. The particle encoder needs it to
     // derive `dt` from the last-frame snapshot it stashed in a `Cell`;
     // the compute kernel multiplies dt against `spawn_rate` and the
-    // integration step. Narrowed at each use; the water's motion takes it
-    // whole.
+    // integration step. Narrowed at each use.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     // Camera near-plane in view units. The FogFroxel kernel needs it to map
     // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
     // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
@@ -1121,7 +1122,7 @@ impl VkContext {
                 self.encode_fog(rec, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
-            PassId::WaterSim => self.encode_water_sim(rec, params.elapsed),
+            PassId::WaterSim => self.encode_water_sim(rec, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);
@@ -1187,7 +1188,7 @@ impl VkContext {
                     narrow_f32(params.elapsed),
                 );
                 let write = params.reactive.transparent;
-                self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
+                self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
                 let drew = self.encode_transparent(
                     cmd,
                     params.frame_idx,

@@ -38,6 +38,9 @@ sky's light scatter back out of the water, off a reflectance that blends
 from `shallow_color` to `deep_color` as the water deepens. Shoreline foam
 and whitecaps are a lit white surface.
 
+A [`PropBody`](PropBody.md) with `buoyancy` floats in the water on the waves
+it draws, buoyed by the water's `density`.
+
 A `rectangle` surface is positioned by `center` and sized by `extent` (XZ
 half-widths). The mesh itself is flat; all height variation comes from the
 animated waves.
@@ -82,6 +85,8 @@ keep their history, which holds distant waves still.
 - `subdivisions`: An integer. Grid subdivisions across a rectangle. Higher gives smoother waves. Clamped to [8, 255]. Defaults to `64`.
 - `fetch_meters`: A float. The open water the wind blows across, in meters: how large a sea it can build. A pond is tens of meters, a lake one to a few thousand, an open sea a hundred thousand or more. At least 1. Defaults to `1000.0`.
 - `wind_response`: A float. How strongly the wind moves this surface, at least 0. 0 is sheltered water the wind never touches, 1 the full wind; above 1 exaggerates it. Defaults to `1.0`.
+- `density`: A float. The water's density, in kilograms per cubic meter, at least 1: how strongly it buoys what floats in it. Seawater by default; fresh water is 1000.
+- `depth_meters`: A float. How deep a rectangle's water is, in meters below its rest, at least 0: anything lower is out of the water, so a cave under a pond stays dry. Defaults to `10.0`.
 - `waves`: An array of [WaterWave](WaterWave.md) objects. Extra swell rolling over the wind's waves, up to 4. None by default, and none on a planet sea.
 - `deep_color`: An array of 3 floats. Linear-space RGB reflectance of deep water's body, each channel in [0, 1]: the share of the light reaching the surface that a deep column scatters back out. Values outside [0, 1] are clamped. Defaults to `[0.02, 0.05, 0.15]`.
 - `shallow_color`: An array of 3 floats. Linear-space RGB reflectance of shallow water's body near the shore, each channel in [0, 1]. The seabed seen through the shallows is filtered by it too. Values outside [0, 1] are clamped. Defaults to `[0.2, 0.5, 0.55]`.

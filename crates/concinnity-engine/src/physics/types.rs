@@ -39,6 +39,24 @@ pub struct DynamicParams {
     pub linear_damping: f32,
 }
 
+/// A dynamic body's state between steps, for whatever acts on it from outside
+/// the solver.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BodyState {
+    /// Center of mass, in world units.
+    pub position: [f32; 3],
+    /// Orientation as an `[x, y, z, w]` quaternion.
+    pub rotation: [f32; 4],
+    /// Linear velocity, in world units per second.
+    pub linear_velocity: [f32; 3],
+    /// Angular velocity, in radians per second.
+    pub angular_velocity: [f32; 3],
+    /// Mass, in kilograms.
+    pub mass: f32,
+    /// Whether the body is asleep, held still until something wakes it.
+    pub sleeping: bool,
+}
+
 /// A 1 kg body with moderate friction, no bounce, full gravity, and no drag.
 impl Default for DynamicParams {
     fn default() -> Self {

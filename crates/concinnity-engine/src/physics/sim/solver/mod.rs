@@ -38,6 +38,7 @@ mod chunk;
 mod contact;
 mod partition;
 
+use crate::physics::sim::fluid::FluidLoad;
 use alloc::vec::Vec;
 
 use concinnity_core::fanout::FanOut;
@@ -173,6 +174,7 @@ impl Solver {
             joints,
             islands,
             config,
+            fluids,
             dt,
         } = work;
         let substeps = config.substep_count();
@@ -223,6 +225,7 @@ impl Solver {
             soft,
             joint_biased: push(joint_soft, true),
             joint_rigid: push(Softness::RIGID, false),
+            fluids,
         };
         let mut chunks: [Chunk<'_>; MAX_WORKERS] = core::array::from_fn(|_| Chunk::default());
         let cut = share_out(
@@ -269,6 +272,7 @@ pub(crate) struct Work<'a> {
     pub(crate) joints: &'a mut [Joint],
     pub(crate) islands: &'a mut Islands,
     pub(crate) config: &'a SimConfig,
+    pub(crate) fluids: &'a [FluidLoad],
     pub(crate) dt: f32,
 }
 

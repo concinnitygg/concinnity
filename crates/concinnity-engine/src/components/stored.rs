@@ -35,6 +35,7 @@ pub use crate::hud::loading_overlay::LoadingOverlay;
 pub use crate::hud::stat_hud::StatHud;
 pub use crate::input::key_binding::KeyBinding;
 pub use crate::input::key_event::{KeyEvent, KeyMods, KeyPress};
+pub use crate::physics::buoyancy::Buoyancy;
 pub use crate::physics::config::PhysicsConfig;
 pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};
 pub use crate::physics::prop_body::PropBody;

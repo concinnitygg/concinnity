@@ -66,6 +66,12 @@ impl SeaSphere {
     pub fn blend_half_width(&self) -> f64 {
         FACE_BLEND_METERS.min(FACE_BLEND_RADII * self.radius)
     }
+
+    /// How fast a face's share grows per unit of its margin (see
+    /// [`SeaFace::shares`]): from 0 to 1 across the blend band.
+    pub fn blend_rate(&self) -> f64 {
+        self.radius / (2.0 * core::f64::consts::SQRT_2 * self.blend_half_width())
+    }
 }
 
 /// A planet sea's share of a body: the sphere it lies on and the grid it is

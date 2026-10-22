@@ -275,6 +275,7 @@ fn zero_tick_frames_blend_between_the_last_two_ticks() {
         ticks,
         tick_dt: SimTiming::TICK_DT,
         alpha,
+        ..Default::default()
     };
     world.insert_resource(tick(1, 1.0));
     physics.step(&mut world.context());
@@ -321,6 +322,7 @@ fn tick_grouping_does_not_change_the_outcome() {
                 ticks,
                 tick_dt: SimTiming::TICK_DT,
                 alpha: 1.0,
+                ..Default::default()
             });
             physics.step(&mut world.context());
         }
@@ -1048,4 +1050,50 @@ fn a_player_volume_ignores_a_prop_crossing_it() {
         crossings.is_empty(),
         "a prop is not the player: {crossings:?}"
     );
+}
+
+// A buoyant prop in a world's pond floats at its draft: a ball half as
+// dense as the water rides with its center at the waterline, and one with no
+// buoyancy sinks to the floor beneath.
+#[test]
+fn a_buoyant_prop_floats_in_the_worlds_water() {
+    use crate::components::{Buoyancy, WaterSurface};
+    let mut world = World::new();
+    world.push(WaterSurface {
+        center: [0.0, 2.0, 0.0],
+        extent: [20.0, 20.0],
+        density: 1000.0,
+        ..Default::default()
+    });
+    let volume = 4.0 / 3.0 * core::f32::consts::PI * 0.125;
+    let floats = spawn_prop(&mut world, AssetId(1), [0.0, 2.3, 0.0], false);
+    world.insert(
+        floats,
+        BodyDynamics {
+            mass: 500.0 * volume,
+            linear_damping: 0.0,
+            buoyancy: Some(Buoyancy::default()),
+            ..Default::default()
+        },
+    );
+    let sinks = spawn_prop(&mut world, AssetId(2), [4.0, 2.3, 0.0], false);
+    world.insert(
+        sinks,
+        BodyDynamics {
+            mass: 500.0 * volume,
+            ..Default::default()
+        },
+    );
+    let mut physics = PhysicsSystem::new(&PhysicsConfig::default()).with_water(water_of(&world));
+    physics.init(&mut world.context());
+    for n in 1..=900 {
+        world.insert_resource(SimTiming {
+            time: f64::from(n) * f64::from(SimTiming::TICK_DT),
+            ..Default::default()
+        });
+        physics.step(&mut world.context());
+    }
+    let y = |e: Entity| world.get::<Transform>(e).unwrap().position[1];
+    assert!((y(floats) - 2.0).abs() < 0.02, "{}", y(floats));
+    assert!((y(sinks) - 0.5).abs() < 0.05, "{}", y(sinks));
 }

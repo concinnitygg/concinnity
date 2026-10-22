@@ -17,6 +17,8 @@ pub struct TickAccumulator {
     accumulator: f32,
     // Seconds since the first frame, kept wide so a long session stays precise.
     elapsed: f64,
+    // Whole ticks run since the first frame.
+    ticks_run: u64,
 }
 
 impl TickAccumulator {
@@ -65,10 +67,12 @@ impl TickAccumulator {
             u32::saturating_from(self.accumulator / tick_dt)
         };
         self.accumulator -= ticks as f32 * tick_dt;
+        self.ticks_run += u64::from(ticks);
         SimTiming {
             ticks,
             tick_dt,
             alpha: (self.accumulator / tick_dt).clamp(0.0, 1.0),
+            time: self.ticks_run as f64 * f64::from(tick_dt),
         }
     }
 }
@@ -95,6 +99,24 @@ mod tests {
     }
 
     const DT: f32 = SimTiming::TICK_DT;
+
+    // The simulated time counts whole ticks only: it holds through a pause
+    // and through the time a hitch drops, and each tick starts where the one
+    // before it ended.
+    #[test]
+    fn simulated_time_counts_the_ticks_run() {
+        let mut clock = TickAccumulator::default();
+        let t = clock.advance(DT * 2.5, false).0;
+        assert_eq!(t.time, 2.0 * f64::from(DT));
+        assert_eq!(t.tick_start(0), 0.0);
+        assert_eq!(t.tick_start(1), f64::from(DT));
+        assert!((t.drawn_time() - 1.5 * f64::from(DT)).abs() < 1e-6);
+        let paused = clock.advance(1.0, true).0;
+        assert_eq!(paused.time, t.time);
+        let hitch = clock.advance(10.0, false).0;
+        let cap = f64::from(SimTiming::MAX_TICKS_PER_FRAME);
+        assert!((hitch.time - t.time - cap * f64::from(DT)).abs() < 1e-9);
+    }
 
     #[test]
     fn accumulates_whole_ticks_and_keeps_the_remainder() {

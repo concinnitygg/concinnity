@@ -12,6 +12,7 @@
 - [Behavior](Behavior.md) - A unit of world logic: an event source, the entities it runs against, its state, the world it reads, and the nodes it runs.
 - [BenchmarkConfig](BenchmarkConfig.md) - Customizes how a world is benchmarked.
 - [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
+- [Buoyancy](Buoyancy.md) - Makes a [`PropBody`](PropBody.md) float in water.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
 - [CameraShot](CameraShot.md) - A reusable [Camera3D](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
 - [CameraTrack](CameraTrack.md) - Drives the world's [Camera3D](Camera3D.md) along a scripted path, so a fly-through visits the same poses on every machine that runs it.

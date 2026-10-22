@@ -55,6 +55,9 @@ pub struct SimTiming {
     pub tick_dt: f32,
     /// Accumulator remainder as a fraction of `tick_dt`.
     pub alpha: f32,
+    /// Seconds simulated once this frame's ticks have run: tick `i` of the
+    /// frame starts at `time - (ticks - i) * tick_dt`.
+    pub time: f64,
 }
 
 impl SimTiming {
@@ -63,6 +66,17 @@ impl SimTiming {
     /// Most fixed steps one frame may run. Time past this is dropped, so a
     /// long hitch degrades to slow motion instead of a catch-up spiral.
     pub const MAX_TICKS_PER_FRAME: u32 = 5;
+
+    /// The simulated instant tick `i` of this frame starts at.
+    pub fn tick_start(&self, i: u32) -> f64 {
+        self.time - f64::from(self.ticks.saturating_sub(i)) * f64::from(self.tick_dt)
+    }
+
+    /// The simulated instant the frame's blended poses show: `alpha` of the
+    /// way from the state before the last tick to the state after it.
+    pub fn drawn_time(&self) -> f64 {
+        self.time - f64::from(1.0 - self.alpha) * f64::from(self.tick_dt)
+    }
 }
 
 impl Default for SimTiming {
@@ -71,6 +85,7 @@ impl Default for SimTiming {
             ticks: 1,
             tick_dt: Self::TICK_DT,
             alpha: 1.0,
+            time: 0.0,
         }
     }
 }

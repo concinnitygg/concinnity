@@ -224,6 +224,49 @@ mod tests {
         }
     }
 
+    // The CPU reads the sea where the shader does: at any point near the
+    // camera, each face's share and the first cascade's place on its tile
+    // come out of the planet-fixed direction alone (`SeaFace::shares`, the
+    // face's projection), with no anchor, as the shader's anchored reads.
+    #[test]
+    fn the_planet_fixed_layout_is_the_shaders() {
+        let body = sea();
+        let (center, r) = sphere(&body);
+        let mut motion = WaterMotion::new(&body, false);
+        let frame = LocalFrame::AUTHORED;
+        let camera = [3.0, 30.0, -995.0];
+        let up = dvec3::normalize_or(dvec3::sub(frame.to_world(camera), center), [0.0, 1.0, 0.0]);
+        let (_, rebase) = frame.recentered(camera, up);
+        motion.rebase(&rebase);
+        let moved = frame.followed(&rebase);
+        let p = motion.params_at(77.0, rebase.apply_point(camera));
+        let rate = body.sea.as_ref().unwrap().sphere.blend_rate();
+        let length = 1.0 / p.ocean.inv_lengths[0];
+        let top = frame.to_world([camera[0], 0.0, camera[2]]);
+        for meters in [0.5, 40.0, 900.0, 4_000.0] {
+            for heading in [0.3, 2.1, 4.4] {
+                let q = on_sea(&body, top, heading, meters);
+                let gpu = read(&p, &moved, q);
+                let d = dvec3::normalize_or(dvec3::sub(q, center), [0.0, 1.0, 0.0]);
+                for (f, (face, w)) in super::super::SeaFace::shares(d, rate).iter().enumerate() {
+                    assert!(
+                        (gpu.weights[f] - narrow_f32(*w)).abs() < 1e-4,
+                        "{meters}: {f}"
+                    );
+                    if *w == 0.0 {
+                        continue;
+                    }
+                    for (axis, s) in face.project(r, d).into_iter().enumerate() {
+                        let t = s / f64::from(length);
+                        let cpu = narrow_f32(t - libm::floor(t));
+                        let err = wrapped(gpu.uvs[f][0][axis], cpu, 1.0) * length;
+                        assert!(err < 5e-3, "{meters} m: face {f} off {err} m");
+                    }
+                }
+            }
+        }
+    }
+
     // Walking from the +Y face onto the +X face the shares hand over
     // smoothly across a band at the edge, their squares always summing to
     // one, and a sea laid on each face blends without a step: the blended

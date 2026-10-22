@@ -181,6 +181,8 @@ pub struct ShorePoint {
     pub phases: [f64; SHORE_TRAINS],
     /// Each train's wavenumber here, in radians per meter.
     pub wavenumbers: [f64; SHORE_TRAINS],
+    /// How much each train has grown since deep water.
+    pub shoaling: [f64; SHORE_TRAINS],
     /// The unit direction along the sea toward the land; zero where it is
     /// unclear.
     pub landward: DVec3,
@@ -210,6 +212,38 @@ pub struct ShoreSurface {
     pub slope: DVec3,
     /// How much of the surface breaking crests have whitened, in `[0, 1]`.
     pub foam: f64,
+    /// The crests' velocity along the sea, in meters per second.
+    pub celerity: DVec3,
+}
+
+// The shore's trains summed at one point: the group's height above rest
+// and its phase, and the energy the trains carry.
+struct Group {
+    envelope: f64,
+    carrier: f64,
+    energy: f64,
+}
+
+// How a group breaks in the water under it: the height its crest is held to,
+// how far it leans forward, and how close to breaking it stands.
+struct Breaker {
+    cap: f64,
+    ratio: f64,
+    held: f64,
+    lean: f64,
+}
+
+impl Breaker {
+    fn of(point: &ShorePoint, g: &Group) -> Self {
+        let cap = BREAKER_INDEX * point.depth;
+        let ratio = 2.0 * g.envelope / cap.max(1e-6);
+        Self {
+            cap,
+            ratio,
+            held: g.envelope.min(0.5 * cap),
+            lean: MAX_LEAN * smoothstep(0.5, 1.0, ratio),
+        }
+    }
 }
 
 /// A planet sea's shore waves.
@@ -395,6 +429,26 @@ impl ShoreWaves {
     /// The point `inland` meters inland of the datum's coast, the distance
     /// inland growing at `gradient` meters per meter along the sea.
     pub fn point(&self, inland: f64, gradient: DVec3) -> ShorePoint {
+        let mut point = self.located(inland, gradient);
+        let shallow = point.depth.max(SHALLOWEST);
+        point.shoaling = core::array::from_fn(|i| {
+            shoaling_at(self.trains[i].omega, point.wavenumbers[i], shallow)
+        });
+        point
+    }
+
+    /// The point `inland` meters inland, a few meters from `near`, taking its
+    /// shoaling from there: it changes over the shelf's tens of meters, and
+    /// is the dear part of a point.
+    pub fn point_beside(&self, near: &ShorePoint, inland: f64, gradient: DVec3) -> ShorePoint {
+        ShorePoint {
+            shoaling: near.shoaling,
+            ..self.located(inland, gradient)
+        }
+    }
+
+    // Everything of the point at `inland` but its shoaling.
+    fn located(&self, inland: f64, gradient: DVec3) -> ShorePoint {
         let depth = self.coast.depth(inland);
         let offshore = self.coast.waterline - inland;
         let g = dvec3::length(gradient);
@@ -414,6 +468,7 @@ impl ShoreWaves {
             weight,
             phases: phases.map(|p| p * per_meter),
             wavenumbers,
+            shoaling: [1.0; SHORE_TRAINS],
             landward: if g > 1e-9 {
                 dvec3::scale(gradient, 1.0 / g)
             } else {
@@ -470,59 +525,110 @@ impl ShoreWaves {
         noise: &ShoreNoise,
         phases: [f64; SHORE_TRAINS],
     ) -> ShoreSurface {
-        if point.weight <= 0.0 {
+        let Some((g, toward, k)) = self.group(point, noise, phases) else {
             return ShoreSurface::default();
+        };
+        let b = Breaker::of(point, &g);
+        let (sc, cc) = libm::sincos(g.carrier);
+        let du = 1.0 + b.lean * sc;
+        let pinch = MAX_PINCH * smoothstep(0.4, 1.0, b.ratio) / (1.0 + b.lean);
+        let (su, cu) = libm::sincos(g.carrier + b.lean * (1.0 - cc));
+        let rise = -b.held * su * du * k;
+        let spread = -pinch * cu * du;
+        let since = wrap_phase(-g.carrier);
+        let trail = libm::exp(-since / (TAU * FOAM_TRAIL));
+        let lead = smoothstep(TAU - FOAM_LEAD, TAU, since);
+        let crest = smoothstep(0.85, 1.15, b.ratio) * trail.max(lead);
+        let rms = 2.0 * libm::sqrt(g.energy) / b.cap.max(1e-6);
+        ShoreSurface {
+            height: b.held * cu,
+            shift: dvec3::scale(toward, -pinch * su / k),
+            slope: dvec3::scale(toward, rise / (1.0 + spread)),
+            foam: crest.max(RESIDUAL_FOAM * smoothstep(0.8, 1.5, rms)),
+            celerity: dvec3::scale(toward, self.trains[0].omega / k),
         }
-        let shallow = point.depth.max(SHALLOWEST);
+    }
+
+    /// Only the height of [`ShoreWaves::surface`], summed in single
+    /// precision as the shader sums it: the phases are wrapped first, so
+    /// nothing is lost.
+    pub fn height(
+        &self,
+        point: &ShorePoint,
+        noise: &ShoreNoise,
+        phases: [f64; SHORE_TRAINS],
+    ) -> f64 {
+        if point.weight <= 0.0 {
+            return 0.0;
+        }
+        let (mut re, mut im, mut total, mut k_sum) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for (i, t) in self.trains.iter().enumerate() {
+            let a = narrow(point.weight * noise.swell * t.amplitude * point.shoaling[i]);
+            let p = narrow(-wrap_phase(phases[i] + point.phases[i] + noise.phase));
+            let (s, c) = concinnity_core::math::sin_cos(p);
+            re += a * c;
+            im += a * s;
+            total += a;
+            k_sum += a * narrow(point.wavenumbers[i]);
+        }
+        let travel = dvec3::sub(
+            dvec3::scale(point.landward, f64::from(k_sum / total.max(1e-12))),
+            noise.gradient,
+        );
+        if dvec3::length(travel) <= 1e-9 {
+            return 0.0;
+        }
+        let group = Group {
+            envelope: f64::from(concinnity_core::math::hypot(re, im)),
+            carrier: f64::from(concinnity_core::math::atan2(im, re)),
+            energy: 0.0,
+        };
+        let b = Breaker::of(point, &group);
+        let carrier = narrow(group.carrier);
+        let lean = narrow(b.lean);
+        let u = carrier + lean * (1.0 - concinnity_core::math::cos(carrier));
+        b.held * f64::from(concinnity_core::math::cos(u))
+    }
+
+    // The trains summed at `point` into one group, its direction of travel
+    // and its wavenumber; `None` where no train runs.
+    fn group(
+        &self,
+        point: &ShorePoint,
+        noise: &ShoreNoise,
+        phases: [f64; SHORE_TRAINS],
+    ) -> Option<(Group, DVec3, f64)> {
+        if point.weight <= 0.0 {
+            return None;
+        }
         let mut re = 0.0;
         let mut im = 0.0;
         let mut total = 0.0;
         let mut energy = 0.0;
         let mut k_sum = 0.0;
         for (i, t) in self.trains.iter().enumerate() {
-            let a = point.weight
-                * noise.swell
-                * t.amplitude
-                * shoaling_at(t.omega, point.wavenumbers[i], shallow);
-            let p = -(phases[i] + point.phases[i] + noise.phase);
-            re += a * libm::cos(p);
-            im += a * libm::sin(p);
+            let a = point.weight * noise.swell * t.amplitude * point.shoaling[i];
+            let (s, c) = libm::sincos(-wrap_phase(phases[i] + point.phases[i] + noise.phase));
+            re += a * c;
+            im += a * s;
             total += a;
             energy += a * a;
             k_sum += a * point.wavenumbers[i];
         }
-        let envelope = libm::hypot(re, im);
-        let carrier = libm::atan2(im, re);
         let travel = dvec3::sub(
             dvec3::scale(point.landward, k_sum / total.max(1e-12)),
             noise.gradient,
         );
         let k = dvec3::length(travel);
         if k <= 1e-9 {
-            return ShoreSurface::default();
+            return None;
         }
-        let toward = dvec3::scale(travel, 1.0 / k);
-        let cap = BREAKER_INDEX * point.depth;
-        let ratio = 2.0 * envelope / cap.max(1e-6);
-        let held = envelope.min(0.5 * cap);
-        let lean = MAX_LEAN * smoothstep(0.5, 1.0, ratio);
-        let u = carrier + lean * (1.0 - libm::cos(carrier));
-        let du = 1.0 + lean * libm::sin(carrier);
-        let pinch = MAX_PINCH * smoothstep(0.4, 1.0, ratio) / (1.0 + lean);
-        let (su, cu) = (libm::sin(u), libm::cos(u));
-        let rise = -held * su * du * k;
-        let spread = -pinch * cu * du;
-        let since = wrap_phase(-carrier);
-        let trail = libm::exp(-since / (TAU * FOAM_TRAIL));
-        let lead = smoothstep(TAU - FOAM_LEAD, TAU, since);
-        let crest = smoothstep(0.85, 1.15, ratio) * trail.max(lead);
-        let rms = 2.0 * libm::sqrt(energy) / cap.max(1e-6);
-        ShoreSurface {
-            height: held * cu,
-            shift: dvec3::scale(toward, -pinch * su / k),
-            slope: dvec3::scale(toward, rise / (1.0 + spread)),
-            foam: crest.max(RESIDUAL_FOAM * smoothstep(0.8, 1.5, rms)),
-        }
+        let group = Group {
+            envelope: libm::hypot(re, im),
+            carrier: libm::atan2(im, re),
+            energy,
+        };
+        Some((group, dvec3::scale(travel, 1.0 / k), k))
     }
 
     /// The shore waves in unit direction `dir` of `planet` (the one the sea

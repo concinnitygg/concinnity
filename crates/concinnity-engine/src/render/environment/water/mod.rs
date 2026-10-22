@@ -6,6 +6,7 @@
 pub mod frame;
 pub mod motion;
 pub mod ocean;
+pub(crate) mod query;
 pub mod ripples;
 pub mod sea;
 pub mod spectrum;
@@ -469,6 +470,9 @@ pub enum WaterShape {
 /// from `shallow_color` to `deep_color` as the water deepens. Shoreline foam
 /// and whitecaps are a lit white surface.
 ///
+/// A [`PropBody`](#propbody) with `buoyancy` floats in the water on the waves
+/// it draws, buoyed by the water's `density`.
+///
 /// A `rectangle` surface is positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
 /// animated waves.
@@ -546,6 +550,15 @@ pub struct WaterSurface {
     /// water the wind never touches, 1 the full wind; above 1 exaggerates it.
     #[asset(default = 1.0)]
     pub wind_response: f32,
+    /// The water's density, in kilograms per cubic meter, at least 1: how
+    /// strongly it buoys what floats in it. Seawater by default; fresh water
+    /// is 1000.
+    #[asset(default = 1025.0)]
+    pub density: f32,
+    /// How deep a rectangle's water is, in meters below its rest, at least 0:
+    /// anything lower is out of the water, so a cave under a pond stays dry.
+    #[asset(default = 10.0)]
+    pub depth_meters: f32,
     /// Extra swell rolling over the wind's waves, up to 4. None by default,
     /// and none on a planet sea.
     pub waves: Vec<WaterWave>,

@@ -1,3 +1,4 @@
+use crate::components::Buoyancy;
 use crate::ecs::AudioClipHandle;
 
 /// Dynamic-body parameters attached to an entity with a `Collider`.
@@ -28,4 +29,6 @@ pub struct BodyDynamics {
     pub impact_volume: f32,
     /// Whether the body starts asleep, holding its pose until woken.
     pub asleep: bool,
+    /// How the body floats in water; `None` sinks.
+    pub buoyancy: Option<Buoyancy>,
 }

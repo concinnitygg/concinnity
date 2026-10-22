@@ -5,10 +5,10 @@
 //! `h0(k) e^(-i w t) + conj(h0(-k)) e^(i w t)`, which keeps the height field
 //! real and carries each wave along `k`.
 
-use super::OceanSea;
 use super::cascades::Cascades;
 use super::clock::omega_steps;
-use crate::render::environment::water::spectrum::{GRAVITY, unit_hash};
+use super::{OceanQuality, OceanSea};
+use crate::render::environment::water::spectrum::{GRAVITY, SeaShape, unit_hash};
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, cos, exp, ln, sin, sqrt};
 use core::f32::consts::{PI, TAU};
@@ -37,37 +37,80 @@ pub fn frequency_index(i: u32, size: u32) -> i32 {
 /// Nyquist row and column hold nothing.
 pub fn initial_spectrum(sea: &OceanSea, cascades: &Cascades, c: usize) -> Vec<SpectrumTexel> {
     let size = cascades.size();
-    let Some(shape) = sea.shape() else {
-        return alloc::vec![[0.0; 4]; (size * size) as usize];
-    };
-    let length = cascades.lengths()[c];
-    let dk = TAU / length;
-    let [lo, hi] = cascades.band(c);
-    let wind = sea.wind_angle();
+    let band = SpectrumBand::new(sea, cascades, c);
     let half = i32::saturating_from(size) / 2;
     let mut texels = Vec::with_capacity((size * size) as usize);
     for y in 0..size {
         for x in 0..size {
             let (fx, fy) = (frequency_index(x, size), frequency_index(y, size));
-            let k = [fx as f32 * dk, fy as f32 * dk];
-            let kl = sqrt(k[0] * k[0] + k[1] * k[1]);
             let nyquist = fx == -half || fy == -half;
-            if nyquist || kl <= 0.0 || kl < lo || kl >= hi {
-                texels.push([0.0; 4]);
-                continue;
-            }
-            let omega = sqrt(GRAVITY * kl);
-            let heading = wrap_angle(concinnity_core::math::atan2(k[1], k[0]) - wind);
-            let sigma = shape.spread(omega);
-            let spread = exp(-0.5 * heading * heading / (sigma * sigma)) / (sqrt(TAU) * sigma);
-            // S(k) = S(w) D(theta) (dw/dk) / k, with dw/dk = g / (2 w).
-            let density = shape.density(omega) * spread * GRAVITY / (2.0 * omega * kl);
-            let rms = 0.5 * sqrt(density * dk * dk);
-            let [gr, gi] = gaussian_pair(u32::saturating_from(c) * size * size + y * size + x);
-            texels.push([gr * rms, gi * rms, omega_steps(omega), 0.0]);
+            texels.push(match &band {
+                Some(band) if !nyquist => band.texel(fx, fy),
+                _ => [0.0; 4],
+            });
         }
     }
     texels
+}
+
+/// One cascade's band of a sea's spectrum, which fills any texel from its
+/// signed frequencies alone. A texel's random amplitude is keyed by the
+/// cascade and its frequencies, not by where it sits in a grid, so a wave is
+/// the same at every simulation size that holds it.
+#[derive(Debug, Clone, Copy)]
+pub struct SpectrumBand {
+    shape: SeaShape,
+    wind: f32,
+    dk: f32,
+    band: [f32; 2],
+    cascade: u32,
+}
+
+impl SpectrumBand {
+    /// Cascade `c` of `cascades` for `sea`; `None` when the wind raises no
+    /// sea.
+    pub fn new(sea: &OceanSea, cascades: &Cascades, c: usize) -> Option<Self> {
+        Some(Self {
+            shape: sea.shape()?,
+            wind: sea.wind_angle(),
+            dk: TAU / cascades.lengths()[c],
+            band: cascades.band(c),
+            cascade: u32::saturating_from(c),
+        })
+    }
+
+    /// Radians per meter between neighboring frequencies.
+    pub fn dk(&self) -> f32 {
+        self.dk
+    }
+
+    /// The texel of signed frequencies `(fx, fy)`: empty at the constant
+    /// term and outside the band.
+    pub fn texel(&self, fx: i32, fy: i32) -> SpectrumTexel {
+        let k = [fx as f32 * self.dk, fy as f32 * self.dk];
+        let kl = sqrt(k[0] * k[0] + k[1] * k[1]);
+        let [lo, hi] = self.band;
+        if kl <= 0.0 || kl < lo || kl >= hi {
+            return [0.0; 4];
+        }
+        let omega = sqrt(GRAVITY * kl);
+        let heading = wrap_angle(concinnity_core::math::atan2(k[1], k[0]) - self.wind);
+        let sigma = self.shape.spread(omega);
+        let spread = exp(-0.5 * heading * heading / (sigma * sigma)) / (sqrt(TAU) * sigma);
+        // S(k) = S(w) D(theta) (dw/dk) / k, with dw/dk = g / (2 w).
+        let density = self.shape.density(omega) * spread * GRAVITY / (2.0 * omega * kl);
+        let rms = 0.5 * sqrt(density * self.dk * self.dk);
+        let [gr, gi] = gaussian_pair(frequency_key(self.cascade, fx, fy));
+        [gr * rms, gi * rms, omega_steps(omega), 0.0]
+    }
+}
+
+// A texel's random key from its cascade and signed frequencies, each held
+// to the largest simulation's range.
+fn frequency_key(cascade: u32, fx: i32, fy: i32) -> u32 {
+    let span = i32::saturating_from(OceanQuality::MAX_SIZE);
+    let index = |f: i32| u32::saturating_from((f + span / 2).clamp(0, span - 1));
+    (cascade * OceanQuality::MAX_SIZE + index(fy)) * OceanQuality::MAX_SIZE + index(fx)
 }
 
 /// The variance, in square meters, of the height a cascade's spectrum
@@ -191,6 +234,35 @@ mod tests {
         let (_, a) = all(OceanQuality::FULL);
         let (_, b) = all(OceanQuality::FULL);
         assert_eq!(a, b);
+    }
+
+    // A wave both simulation sizes hold is the same wave in each: the long
+    // band the CPU reads does not depend on the quality preset.
+    #[test]
+    fn the_long_waves_do_not_depend_on_the_quality() {
+        let low = OceanQuality {
+            size: 128,
+            cascades: 2,
+        };
+        let (fine, fine_spectra) = all(OceanQuality::FULL);
+        let (coarse, coarse_spectra) = all(low);
+        assert_eq!(fine.lengths()[0], coarse.lengths()[0]);
+        let at = |spectrum: &[SpectrumTexel], size: u32, fx: i32, fy: i32| {
+            let wrap = |f: i32| u32::saturating_from(f.rem_euclid(i32::saturating_from(size)));
+            spectrum[(wrap(fy) * size + wrap(fx)) as usize]
+        };
+        let mut filled = 0;
+        for fy in -31..32 {
+            for fx in -31..32 {
+                if fx * fx + fy * fy >= 32 * 32 {
+                    continue;
+                }
+                let a = at(&fine_spectra[0], 256, fx, fy);
+                assert_eq!(a, at(&coarse_spectra[0], 128, fx, fy), "{fx} {fy}");
+                filled += usize::from(a[0] != 0.0);
+            }
+        }
+        assert!(filled > 2000, "{filled}");
     }
 
     #[test]

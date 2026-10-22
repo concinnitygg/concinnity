@@ -89,6 +89,9 @@ pub struct FrameParams<'a> {
     /// a backend can derive phases that stay exact over hours of uptime; the
     /// shaders take it rounded to f32.
     pub elapsed: f64,
+    /// The simulated instant the water is drawn at, in seconds: it stands
+    /// still while the simulation does.
+    pub water_time: f64,
     /// Vertical field of view in radians.
     pub fov_y_radians: f32,
     /// Near clip distance in world units.

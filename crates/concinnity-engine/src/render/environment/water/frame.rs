@@ -3,6 +3,7 @@
 //! frame's copy of the surface's params.
 
 use super::WaterBody;
+use crate::ecs::SimTiming;
 use crate::planet::{LocalFrame, Rebase};
 use crate::render::environment::grass::map_then;
 use crate::render::uniforms::WaterParams;
@@ -62,6 +63,13 @@ impl WaterMotion {
         }
         params
     }
+}
+
+/// The instant the world's water is drawn at: the simulated instant the
+/// frame's blended poses show. Whatever floats is drawn on the surface it was
+/// simulated against, and the water moves only while the simulation does.
+pub fn water_time(timing: &SimTiming) -> f64 {
+    timing.drawn_time()
 }
 
 #[cfg(test)]

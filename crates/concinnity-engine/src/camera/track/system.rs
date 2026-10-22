@@ -748,6 +748,7 @@ mod tests {
             ticks,
             tick_dt: SimTiming::TICK_DT,
             alpha,
+            ..Default::default()
         });
         system.step(&mut world.context());
     }

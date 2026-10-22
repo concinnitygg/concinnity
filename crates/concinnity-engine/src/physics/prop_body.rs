@@ -1,6 +1,6 @@
 // Dynamic physics body schema for a companion Prop.
 
-use crate::components::Prop;
+use crate::components::{Buoyancy, Prop};
 use crate::ecs::{AudioClipHandle, Ref};
 
 /// Makes a companion [Prop](#prop) a dynamic physics body.
@@ -51,4 +51,7 @@ pub struct PropBody {
     /// until something strikes it or a [Behavior](#behavior)'s `wake` node
     /// wakes it. A body leaning on an awake one wakes with it.
     pub asleep: bool,
+    /// Makes the body float in water, as [`Buoyancy`](#buoyancy) describes.
+    /// Unset, it sinks.
+    pub buoyancy: Option<Buoyancy>,
 }

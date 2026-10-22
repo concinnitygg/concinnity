@@ -33,6 +33,8 @@ pub(crate) mod entity_ray;
 mod events;
 // Where a step's independent work runs.
 mod fanout;
+// Buoyant bodies pushed by the water they float in.
+mod float;
 // The opaque body identity a caller addresses the simulation by.
 mod handle;
 // The sorted lookup containers the driver's indices are kept in.
@@ -68,6 +70,7 @@ mod tests;
 // Per-instance components an entity is composed from: its placement, render
 // description, collision, hierarchy, and gameplay tags.
 pub(crate) mod body_dynamics;
+pub(crate) mod buoyancy;
 pub(crate) mod collider;
 pub(crate) mod config;
 pub(crate) mod contact_event;
@@ -84,9 +87,12 @@ pub use events::{ContactHit, RayHit, SensorCrossing};
 pub use handle::BodyHandle;
 pub use joints::{JointMotor, JointSpec};
 pub use layers::LayerMask;
-pub use sim::{CharacterCapsule, ShapeCast, ShapeCastHit, SimConfig, Simulation};
+pub use sim::{
+    CharacterCapsule, FluidLoad, FluidPiece, FluidShape, MAX_FLUID_PIECES, ShapeCast, ShapeCastHit,
+    SimConfig, Simulation, Submerged, submerged,
+};
 pub use system::PhysicsSystem;
-pub use types::{ColliderShape, DynamicParams};
+pub use types::{BodyState, ColliderShape, DynamicParams};
 
 /// Acceleration due to gravity in world units per second squared. Shared with
 /// the third-person controller so its jump takeoff matches the rig's fall.

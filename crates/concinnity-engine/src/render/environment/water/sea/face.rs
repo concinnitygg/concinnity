@@ -103,6 +103,26 @@ impl SeaFace {
         let gv = dvec3::sub(dvec3::scale(v_axis, 1.0 + n), dvec3::scale(n_axis, z));
         [along(gu), along(gv)]
     }
+
+    /// The faces around the cube corner nearest unit direction `d`, one per
+    /// axis, with each one's share of the sea there: whole well inside its
+    /// face, blending with its neighbor across a band at their edge, the
+    /// squares summing to one. `rate` is the sea's
+    /// [`SeaSphere::blend_rate`](super::SeaSphere::blend_rate). Mirrors
+    /// `water_sea_weights` in `water.hlsl`.
+    pub fn shares(d: DVec3, rate: f64) -> [(Self, f64); 3] {
+        let mut out: [(Self, f64); 3] = core::array::from_fn(|axis| {
+            let face = Self::of_axis(axis, d[axis] >= 0.0);
+            let [u, n, v] = face.coords(d);
+            let margin = n - u.abs().max(v.abs());
+            (face, (0.5 + margin * rate).clamp(0.0, 1.0))
+        });
+        let norm = libm::sqrt(out.iter().map(|(_, w)| w * w).sum::<f64>()).max(1e-12);
+        for (_, w) in &mut out {
+            *w /= norm;
+        }
+        out
+    }
 }
 
 #[cfg(test)]

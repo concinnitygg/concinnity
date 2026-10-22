@@ -645,8 +645,10 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Seconds since the engine started. Consumed by ParticlesDraw's
     // bundled compute sim (delta-time computed against the last
     // per-emitter elapsed snapshot stored on `DxContext`).
-    // Narrowed at each use; the water's motion takes it whole.
+    // Narrowed at each use.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     // Camera near-plane in view units. Consumed by `FogFroxel` to map the
     // front edge of the froxel volume onto view-space depth, and by
     // `Upscale` (FSR3 dispatch's `cameraNear`).
@@ -1265,7 +1267,7 @@ impl DxContext {
                 self.encode_fog(cmd, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
-            PassId::WaterSim => self.encode_water_sim(cmd, params.elapsed),
+            PassId::WaterSim => self.encode_water_sim(cmd, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
             PassId::ParticlesSim => {
                 // Integrates each live emitter's persistent pool. The graph's only
@@ -1352,7 +1354,7 @@ impl DxContext {
                     .reactive_mask
                     .clear(cmd, params.reactive.transparent);
                 let view = self.build_transparent_view(params);
-                self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
+                self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
                 self.encode_transparent(
                     cmd,
                     params.frame_idx,
