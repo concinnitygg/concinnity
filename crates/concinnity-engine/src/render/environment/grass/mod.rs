@@ -50,7 +50,6 @@ use alloc::vec::Vec;
 use crate::components::Wind;
 use crate::gfx::frustum::Frustum;
 use crate::planet::Rebase;
-use crate::render::environment::wind::WindField;
 use crate::render::uniforms::grass::{
     GRASS_ARGS_SLOTS, GRASS_GROUND_PLANET, GRASS_GROUND_TERRAIN, GRASS_IDENTITY_MAP,
     GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
@@ -59,6 +58,7 @@ use crate::render::uniforms::grass::{
 use crate::render::uniforms::ground::GroundRuleGpu;
 use crate::terrain::{DensityMask, TerrainGrid};
 use crate::transform::Mat4;
+use crate::wind::WindField;
 use bend::{BendStep, GRASS_BEND_CELL_SIZE, GRASS_BEND_RESOLUTION};
 use concinnity_core::math::noise::lcg_hash;
 use lod::{

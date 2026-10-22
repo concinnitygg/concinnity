@@ -22,7 +22,9 @@ use alloc::vec::Vec;
 pub use grid::TerrainGrid;
 pub use mask::{DensityMask, MAX_MASK_SIZE};
 pub use mesh::{TERRAIN_CHUNK_CELLS, TerrainChunk, terrain_chunks, terrain_chunks_colored};
-pub use rule::{GroundRule, MIN_ALTITUDE_EDGE, MIN_SLOPE_EDGE};
+pub use rule::{
+    GROUND_RULE_OPEN, GROUND_RULE_WANDER, GroundRule, MIN_ALTITUDE_EDGE, MIN_SLOPE_EDGE, steepness,
+};
 pub use source::{heightmap_heights, noise_heights};
 
 /// Fewest grid cells along a terrain's side.

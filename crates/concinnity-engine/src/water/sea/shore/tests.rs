@@ -1,14 +1,14 @@
 use super::*;
 use crate::components::Planet;
-use crate::render::environment::water::ocean::OceanQuality;
+use crate::water::ocean::OceanQuality;
 use alloc::vec::Vec;
 
-pub(super) fn coast_planet() -> PlanetShape {
+pub(crate) fn coast_planet() -> PlanetShape {
     coast_planet_of(50_000.0)
 }
 
 // The coast planet's continents and coasts on a planet `radius` meters round.
-pub(super) fn coast_planet_of(radius: f32) -> PlanetShape {
+pub(crate) fn coast_planet_of(radius: f32) -> PlanetShape {
     Planet {
         radius,
         amplitude: 40.0,
@@ -46,7 +46,7 @@ pub(super) fn shore() -> ShoreWaves {
 // A direction on the planet's coast and the unit direction along the
 // ground toward the land there, found walking out from the top (or, where
 // that walk stalls on a ridge of the field, from the next of a few starts).
-pub(super) fn coast_point(planet: &PlanetShape) -> (DVec3, DVec3) {
+pub(crate) fn coast_point(planet: &PlanetShape) -> (DVec3, DVec3) {
     let starts = [
         [0.0, 1.0, 0.0],
         [1.0, 0.0, 0.0],

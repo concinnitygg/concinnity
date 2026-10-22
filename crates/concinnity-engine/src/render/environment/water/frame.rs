@@ -2,12 +2,12 @@
 //! frame. Every backend keeps one per surface and writes `params_at` into the
 //! frame's copy of the surface's params.
 
-use super::WaterBody;
 use crate::ecs::SimTiming;
 use crate::planet::{LocalFrame, Rebase};
 use crate::render::environment::grass::map_then;
 use crate::render::uniforms::WaterParams;
 use crate::render::uniforms::grass::GRASS_IDENTITY_MAP;
+use crate::water::WaterBody;
 
 /// A surface's params as built at init, and the body whose waves, ripples
 /// and ocean tiles move them each frame. A planet sea also keeps where the
@@ -76,8 +76,8 @@ pub fn water_time(timing: &SimTiming) -> f64 {
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, Wind};
-    use crate::render::environment::water::ocean::OceanQuality;
-    use crate::render::environment::wind::WindField;
+    use crate::water::ocean::OceanQuality;
+    use crate::wind::WindField;
 
     // A pond moves the same wherever the camera is; an ocean's anchor
     // follows the camera.

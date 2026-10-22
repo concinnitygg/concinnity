@@ -15,10 +15,10 @@ use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::environment::grass::{GrassField, PlanetGrass};
 use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
-use crate::render::environment::water::WaterBody;
-use crate::render::environment::water::ocean::OceanQuality;
-use crate::render::environment::wind::WindField;
 use crate::render::{decal, environment::volumetric_fog, particles};
+use crate::water::WaterBody;
+use crate::water::ocean::OceanQuality;
+use crate::wind::WindField;
 
 /// Drain every effect component into the backend's effect inputs. Each record
 /// is resolved once here (texture slots, inverted decal matrices, clamped

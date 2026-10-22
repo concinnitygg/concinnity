@@ -225,9 +225,9 @@ impl<P, R> TransparentProducers<P, R> {
 mod tests {
     use super::*;
     use crate::components::WaterSurface;
-    use crate::render::environment::water::WaterBody;
-    use crate::render::environment::water::sea::{SeaBody, SeaSphere};
-    use crate::render::environment::wind::WindField;
+    use crate::water::WaterBody;
+    use crate::water::sea::{SeaBody, SeaSphere};
+    use crate::wind::WindField;
     use concinnity_core::math::SaturatingFrom;
     use core::cell::Cell;
 

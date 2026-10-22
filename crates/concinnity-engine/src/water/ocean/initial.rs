@@ -8,7 +8,7 @@
 use super::cascades::Cascades;
 use super::clock::omega_steps;
 use super::{OceanQuality, OceanSea};
-use crate::render::environment::water::spectrum::{GRAVITY, SeaShape, unit_hash};
+use crate::water::spectrum::{GRAVITY, SeaShape, unit_hash};
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, cos, exp, ln, sin, sqrt};
 use core::f32::consts::{PI, TAU};

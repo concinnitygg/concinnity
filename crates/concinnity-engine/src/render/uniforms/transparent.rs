@@ -7,12 +7,13 @@ use super::shore::WaterShoreGpu;
 use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::render::environment::water::motion::BodyMotion;
-use crate::render::environment::water::ocean::foam::FOAM_CASCADES;
-use crate::render::environment::water::ocean::{BodyOcean, MAX_OCEAN_CASCADES};
-use crate::render::environment::water::ripples::{RIPPLES, Ripple};
-use crate::render::environment::water::sea::{SEA_FACES, SeaFaceMotion, SeaMotion, SeaSphere};
-use crate::render::environment::water::{BodyWave, WaterBody};
+use crate::render::environment::water::sea::{SEA_FACES, SeaFaceMotion, SeaMotion};
 use crate::render::light::lights::glint_sun;
+use crate::water::ocean::foam::FOAM_CASCADES;
+use crate::water::ocean::{BodyOcean, MAX_OCEAN_CASCADES};
+use crate::water::ripples::{RIPPLES, Ripple};
+use crate::water::sea::SeaSphere;
+use crate::water::{BodyWave, WaterBody};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
@@ -151,7 +152,7 @@ pub struct GlassMeshParams {
 
 /// Maximum waves summed per `WaterParams`: the wind sea plus the authored
 /// swell. Mirrors `WATER_MAX_WAVES` in `shaders/water.hlsl`.
-pub const WATER_MAX_WAVES: usize = crate::render::environment::water::MAX_WAVES;
+pub const WATER_MAX_WAVES: usize = crate::water::MAX_WAVES;
 
 /// One wave of the sum, packed into two `float4` lanes so the layout is
 /// identical on every target. Matches `WaterWave` in `shaders/water.hlsl`.
@@ -533,8 +534,8 @@ fn anchor_lane(motion: &BodyMotion) -> [f32; 4] {
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, WaterWave, Wind};
-    use crate::render::environment::water::spectrum::Wave;
-    use crate::render::environment::wind::WindField;
+    use crate::water::spectrum::Wave;
+    use crate::wind::WindField;
     use alloc::vec;
     use core::mem::{offset_of, size_of};
 
@@ -692,9 +693,9 @@ mod tests {
     // a body without whitecaps.
     #[test]
     fn an_ocean_block_names_its_whitecapping_cascades() {
-        use crate::render::environment::water::ocean::cascades::Cascades;
-        use crate::render::environment::water::ocean::grid::OceanGrid;
-        use crate::render::environment::water::ocean::{OceanQuality, foam::FOAM_CASCADES};
+        use crate::water::ocean::cascades::Cascades;
+        use crate::water::ocean::grid::OceanGrid;
+        use crate::water::ocean::{OceanQuality, foam::FOAM_CASCADES};
         let body = |cascades: u32| BodyOcean {
             simulation: 0,
             cascades: Cascades::new(

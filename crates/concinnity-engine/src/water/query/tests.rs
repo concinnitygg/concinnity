@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{Planet, WaterShape, Wind};
-use crate::render::environment::water::sea::shore::ShoreWaves;
+use crate::water::sea::shore::ShoreWaves;
 use concinnity_core::math::{dvec3, narrow_f32};
 
 // The planet example's world: a coast east of the start, its sea in a

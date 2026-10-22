@@ -3,7 +3,7 @@
 
 use crate::planet::{CONTINENT_OCTAVES, octave_weight_sum};
 use crate::render::environment::water::sea::SeaShoreMotion;
-use crate::render::environment::water::sea::shore::{
+use crate::water::sea::shore::{
     PHASE_NOISE_RADIANS, SHORE_NODES, SHORE_OCTAVES, SHORE_TRAINS, SURF_LACE_PERIOD,
     SWELL_VARIATION, ShoreWaves,
 };
@@ -36,7 +36,7 @@ pub struct WaterShoreGpu {
     /// radius, 1 / sea radius]`.
     pub noise: [f32; 4],
     /// `[sea level, waterline, ocean depth, shelf]`, in meters
-    /// ([`CoastProfile`](crate::render::environment::water::sea::shore::CoastProfile)).
+    /// ([`CoastProfile`](crate::water::sea::shore::CoastProfile)).
     pub coast: [f32; 4],
     /// `[beach width, beach rise, table reach, peak wavelength]`, in meters.
     pub beach: [f32; 4],

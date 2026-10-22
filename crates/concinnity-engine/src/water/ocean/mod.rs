@@ -14,8 +14,6 @@
 pub(crate) mod band;
 pub mod cascades;
 pub mod clock;
-#[cfg(test)]
-mod fields;
 pub mod foam;
 pub mod grid;
 pub mod initial;

@@ -17,10 +17,10 @@ use crate::platform::Platform;
 use crate::render::backend::RenderBackend;
 use crate::render::decal::DecalRecord;
 use crate::render::environment::volumetric_fog::FogSettings;
-use crate::render::environment::water::ocean::OceanQuality;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::ResolvedGraphics;
+use crate::water::ocean::OceanQuality;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -172,9 +172,9 @@ pub struct WorldFx {
     /// Volumetric fog settings, or `None` when the world declares none.
     pub fog: Option<FogSettings>,
     /// Transparent water surfaces, each resolved against the world's wind.
-    pub water_surfaces: Vec<crate::render::environment::water::WaterBody>,
+    pub water_surfaces: Vec<crate::water::WaterBody>,
     /// The simulated oceans the large surfaces share.
-    pub ocean: crate::render::environment::water::ocean::OceanPlan,
+    pub ocean: crate::water::ocean::OceanPlan,
     /// Refractive glass panels declared by the world.
     pub glass_panels: Vec<GlassPanel>,
     /// Raymarched SDF volumes, each paired with its compiled payload.
@@ -408,9 +408,7 @@ impl<'a> BackendInit<'a> {
                 particles: Vec::new(),
                 fog: None,
                 water_surfaces: Vec::new(),
-                ocean: crate::render::environment::water::ocean::OceanPlan::new(
-                    OceanQuality::default(),
-                ),
+                ocean: crate::water::ocean::OceanPlan::new(OceanQuality::default()),
                 glass_panels: Vec::new(),
                 sdf_volumes: Vec::new(),
                 grass: None,
@@ -479,7 +477,7 @@ fn minimal_graphics() -> ResolvedGraphics {
 mod tests {
     use super::*;
     use crate::components::WaterSurface;
-    use crate::render::environment::water::ocean::OceanQuality;
+    use crate::water::ocean::OceanQuality;
 
     fn empty_scene() -> SceneData<'static> {
         SceneData {
@@ -499,7 +497,7 @@ mod tests {
             particles: Vec::new(),
             fog: None,
             water_surfaces: Vec::new(),
-            ocean: crate::render::environment::water::ocean::OceanPlan::new(OceanQuality::default()),
+            ocean: crate::water::ocean::OceanPlan::new(OceanQuality::default()),
             glass_panels: Vec::new(),
             sdf_volumes: Vec::new(),
             grass: None,
@@ -611,11 +609,10 @@ mod tests {
         // renders into the HDR scene chain).
         let scene = empty_scene();
         let mut fx = empty_fx();
-        fx.water_surfaces
-            .push(crate::render::environment::water::WaterBody::resolve(
-                &WaterSurface::default(),
-                &crate::render::environment::wind::WindField::STILL,
-            ));
+        fx.water_surfaces.push(crate::water::WaterBody::resolve(
+            &WaterSurface::default(),
+            &crate::wind::WindField::STILL,
+        ));
         assert!(RenderRequirements::derive(&scene, &fx, false).scene);
 
         let mut fx = empty_fx();

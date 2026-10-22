@@ -14,9 +14,9 @@ use alloc::string::{String, ToString};
 
 use crate::components::{AaMode, PassResolution, ShadowUpdate, UpscaleQuality};
 use crate::render::backend::{GpuProfile, GpuTier};
-use crate::render::environment::water::ocean::OceanQuality;
 use crate::render::planar_reflection;
 use crate::settings::levels::{AA_MODE, RENDER_SCALE};
+use crate::water::ocean::OceanQuality;
 
 /// The master graphics-quality choice. `Auto` resolves from the detected GPU
 /// tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`

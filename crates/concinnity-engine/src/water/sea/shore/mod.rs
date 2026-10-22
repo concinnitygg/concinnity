@@ -15,12 +15,10 @@
 //! frame moves, and the CPU reads the same sea the shader draws.
 
 mod dispersion;
-#[cfg(test)]
-mod mirror;
 mod swash;
 mod table;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use dispersion::{group_speed, shoaling, shoaling_at, wavenumber};
 pub use swash::{
@@ -30,12 +28,12 @@ pub use swash::{
 };
 pub use table::{PhaseTable, node};
 
-use super::super::ocean::MAX_OCEAN_CASCADES;
-use super::super::ocean::cascades::Cascades;
-use super::super::spectrum::{SeaShape, unit_hash};
 use crate::planet::{
     CONTINENT_OCTAVES, Continents, DVec3, PlanetShape, fbm, octave_cells, octave_weight_sum,
 };
+use crate::water::ocean::MAX_OCEAN_CASCADES;
+use crate::water::ocean::cascades::Cascades;
+use crate::water::spectrum::{SeaShape, unit_hash};
 use concinnity_core::math::noise::lcg_hash;
 use concinnity_core::math::{SaturatingFrom, dvec3};
 use core::f64::consts::TAU;

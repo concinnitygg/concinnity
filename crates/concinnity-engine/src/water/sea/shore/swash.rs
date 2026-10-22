@@ -7,8 +7,8 @@
 //! slope at the waterline and the sea's height and length.
 
 use super::{SHORE_TRAINS, SWELL_VARIATION, ShoreNoise, ShoreWaves, smoothstep, wrap_phase};
-use crate::render::environment::ground::GROUND_RULE_WANDER;
-use crate::render::environment::water::spectrum::GRAVITY;
+use crate::terrain::GROUND_RULE_WANDER;
+use crate::water::spectrum::GRAVITY;
 use concinnity_core::math::SaturatingFrom;
 use core::f64::consts::TAU;
 

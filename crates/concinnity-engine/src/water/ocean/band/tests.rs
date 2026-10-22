@@ -1,6 +1,6 @@
 use super::*;
-use crate::render::environment::water::ocean::OceanQuality;
-use crate::render::environment::water::ocean::initial::{
+use crate::water::ocean::OceanQuality;
+use crate::water::ocean::initial::{
     SpectrumTexel, frequency_index, height_variance, initial_spectrum,
 };
 use concinnity_core::math::narrow_f32;

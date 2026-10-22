@@ -78,6 +78,8 @@ pub mod terrain;
 mod test_support;
 pub mod transform;
 pub(crate) mod ui;
+pub mod water;
+pub(crate) mod wind;
 pub mod window;
 
 // The headless driver over a world and the trait any loop that runs one

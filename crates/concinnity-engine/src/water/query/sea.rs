@@ -5,12 +5,10 @@
 
 use super::{PatchShift, ShoreSpot, WaterPatch, WaterSample, WaterSpot, unit};
 use crate::planet::{DVec3, LocalFrame, PlanetShape};
-use crate::render::environment::water::WaterBody;
-use crate::render::environment::water::ocean::band::OceanBand;
-use crate::render::environment::water::sea::SeaFace;
-use crate::render::environment::water::sea::shore::{
-    FOAM_RIDE, ShoreNoise, ShorePoint, ShoreWaves,
-};
+use crate::water::WaterBody;
+use crate::water::ocean::band::OceanBand;
+use crate::water::sea::SeaFace;
+use crate::water::sea::shore::{FOAM_RIDE, ShoreNoise, ShorePoint, ShoreWaves};
 use concinnity_core::math::{dvec3, narrow_f32};
 
 // How many times the rest point under a place is refined against the

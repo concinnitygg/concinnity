@@ -7,8 +7,8 @@ use crate::render::uniforms::{WaterParams, WaterShoreGpu};
 use concinnity_core::math::narrow_f32;
 use core::f32::consts::TAU;
 
-use super::{PHASE_NOISE_OCTAVES, SHORE_TRAINS};
 use crate::planet::{CONTINENT_OCTAVES, octave_weight_sum};
+use crate::water::sea::shore::{FOAM_RIDE, PHASE_NOISE_OCTAVES, SHORE_TRAINS};
 const SHORE_NODES: u32 = 32;
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -337,7 +337,7 @@ pub(super) fn phase_noise(p: &WaterParams, at: Place) -> [f32; 4] {
 /// `water_surf_drift`.
 pub(super) fn surf_drift(age: f32, k: f32) -> f32 {
     let a = age.clamp(0.0, 1.0);
-    narrow_f32(super::FOAM_RIDE) * TAU / k.max(1e-4) * a * (1.0 - a) * (1.0 - a)
+    narrow_f32(FOAM_RIDE) * TAU / k.max(1e-4) * a * (1.0 - a) * (1.0 - a)
 }
 
 /// `water_shore_surface`: height, shift and slope in the planet's axes, foam.
@@ -413,20 +413,20 @@ pub(super) fn surface(p: &WaterParams, pt: &Point, n: [f32; 4], swell: f32) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{coast_planet, coast_planet_of, coast_point};
     use super::*;
     use crate::components::{WaterShape, WaterSurface, Wind};
     use crate::planet::PlanetShape;
     use crate::planet::{DVec3, LocalFrame};
-    use crate::render::environment::water::WaterBody;
     use crate::render::environment::water::frame::WaterMotion;
-    use crate::render::environment::water::ocean::OceanQuality;
-    use crate::render::environment::water::sea::shore::{
+    use crate::water::WaterBody;
+    use crate::water::ocean::OceanQuality;
+    use crate::water::sea::shore::tests::{coast_planet, coast_planet_of, coast_point};
+    use crate::water::sea::shore::{
         BREAKER_INDEX, FOAM_LEAD, FOAM_RIDE, FOAM_TRAIL, GRADIENT_FADE, MAX_LEAN, MAX_PINCH,
         RESIDUAL_FOAM, SHALLOWEST, SHORE_OCTAVES,
     };
-    use crate::render::environment::water::spectrum::GRAVITY;
-    use crate::render::environment::wind::WindField;
+    use crate::water::spectrum::GRAVITY;
+    use crate::wind::WindField;
     use alloc::format;
     use concinnity_core::math::dvec3;
 
@@ -743,7 +743,7 @@ mod tests {
         for k in [0.05_f32, 0.2, 0.6] {
             for step in 0..=200 {
                 let age = step as f32 / 200.0;
-                let want = super::super::foam_drift(f64::from(age), f64::from(k));
+                let want = crate::water::sea::shore::foam_drift(f64::from(age), f64::from(k));
                 assert!((f64::from(surf_drift(age, k)) - want).abs() < 1e-4 * (1.0 + want));
             }
             let toward = [0.6, 0.0, 0.8];

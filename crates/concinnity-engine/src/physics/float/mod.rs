@@ -15,7 +15,7 @@ use crate::physics::{
     BodyHandle, ColliderShape, FluidLoad, MAX_FLUID_PIECES, Simulation, submerged,
 };
 use crate::planet::LocalFrame;
-use crate::render::environment::water::query::{WaterQuery, WaterSpot};
+use crate::water::query::{WaterQuery, WaterSpot};
 use concinnity_core::math::quat_rotate;
 use forces::drag;
 use samples::Samples;

@@ -5,7 +5,7 @@
 /// (altitude in meters, or the ground's steepness: `sqrt(1 - cos)` of the
 /// angle between its normal and up),
 /// rising from 0 outside the bound to 1 inside it. An open bound has `k` 0 and
-/// `c` [`GROUND_RULE_OPEN`](crate::render::environment::ground::GROUND_RULE_OPEN).
+/// `c` [`GROUND_RULE_OPEN`](crate::terrain::GROUND_RULE_OPEN).
 /// The default holds everywhere. 32 bytes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]

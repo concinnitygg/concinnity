@@ -13,8 +13,8 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::environment::water::WaterBody;
 use concinnity_engine::render::environment::water::frame::WaterMotion;
+use concinnity_engine::water::WaterBody;
 
 use concinnity_engine::render::shader::programs::ShaderProgram;
 

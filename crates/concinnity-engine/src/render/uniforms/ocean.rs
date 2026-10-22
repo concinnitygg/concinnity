@@ -3,8 +3,8 @@
 //! whitecap and how much of last frame's foam survives, and, for the mip
 //! reduction, which level it writes.
 
-use crate::render::environment::water::ocean::clock::time_fraction;
-use crate::render::environment::water::ocean::{OCEAN_CHOPPINESS, OceanSimulation};
+use crate::water::ocean::clock::time_fraction;
+use crate::water::ocean::{OCEAN_CHOPPINESS, OceanSimulation};
 use concinnity_core::math::SaturatingFrom;
 
 /// Threads in one FFT group: one butterfly per pair of points of the largest
@@ -26,7 +26,7 @@ pub struct OceanFftParams {
     /// Each cascade's side, in meters; zero past the cascades.
     pub lengths: [f32; 4],
     /// The Jacobian below which each cascade injects foam
-    /// ([`FoamCalibration`](crate::render::environment::water::ocean::foam::FoamCalibration)).
+    /// ([`FoamCalibration`](crate::water::ocean::foam::FoamCalibration)).
     pub foam_thresholds: [f32; 4],
     /// One over the Jacobian span each cascade's injection ramps over; zero
     /// for a cascade that never foams.
@@ -39,7 +39,7 @@ pub struct OceanFftParams {
     /// The side of the mip level a reduction writes; unused by the FFT.
     pub mip_size: u32,
     /// The share of last frame's foam that survives this one
-    /// ([`FoamClock::advance`](crate::render::environment::water::ocean::foam::FoamClock::advance));
+    /// ([`FoamClock::advance`](crate::water::ocean::foam::FoamClock::advance));
     /// zero restarts it from clear water.
     pub foam_keep: f32,
 }
@@ -91,10 +91,10 @@ pub fn ocean_mip_groups(mip_size: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::environment::water::ocean::cascades::Cascades;
-    use crate::render::environment::water::ocean::clock::OCEAN_REPEAT_SECONDS;
-    use crate::render::environment::water::ocean::foam::FoamCalibration;
-    use crate::render::environment::water::ocean::{OceanQuality, OceanSea};
+    use crate::water::ocean::cascades::Cascades;
+    use crate::water::ocean::clock::OCEAN_REPEAT_SECONDS;
+    use crate::water::ocean::foam::FoamCalibration;
+    use crate::water::ocean::{OceanQuality, OceanSea};
     use core::mem::{offset_of, size_of};
 
     #[test]

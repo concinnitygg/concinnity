@@ -11,10 +11,10 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::{PlanarBudget, SdfVolumeSource};
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
-use concinnity_engine::render::environment::water::WaterBody;
-use concinnity_engine::render::environment::water::ocean::OceanPlan;
 use concinnity_engine::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::water::WaterBody;
+use concinnity_engine::water::ocean::OceanPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{

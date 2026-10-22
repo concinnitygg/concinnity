@@ -9,9 +9,9 @@ use crate::components::{Buoyancy, Planet, WaterShape, WaterSurface, Wind};
 use crate::physics::float::Floater;
 use crate::physics::{BodyHandle, ColliderShape, DynamicParams, LayerMask, SimConfig, Simulation};
 use crate::planet::LocalFrame;
-use crate::render::environment::water::query::WaterQuery;
-use crate::render::environment::wind::WindField;
 use crate::test_support::{Pace, bench};
+use crate::water::query::WaterQuery;
+use crate::wind::WindField;
 
 const TICK: f32 = 1.0 / 60.0;
 const SIDE: usize = 10;

@@ -25,11 +25,11 @@ use super::planet::tiles::{DrawnPlanetTile, ground_reference, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
 use crate::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
 use crate::render::environment::ground::GroundCovers;
-use crate::render::environment::water::sea::shore::ShoreWaves;
 use crate::render::uniforms::canopy::{
     CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS, ShoreSwashGpu,
 };
 use crate::render::uniforms::ground::GroundRuleGpu;
+use crate::water::sea::shore::ShoreWaves;
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
 /// layer's density per channel.
@@ -1145,8 +1145,8 @@ mod tests {
     #[test]
     fn the_block_carries_the_shores_wash() {
         use crate::components::Planet;
-        use crate::render::environment::water::spectrum::SeaShape;
         use crate::render::uniforms::canopy::ShoreSwashGpu;
+        use crate::water::spectrum::SeaShape;
         let planet = Planet {
             land_share: 0.4,
             ..Planet::default()

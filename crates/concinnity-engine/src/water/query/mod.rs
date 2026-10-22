@@ -18,11 +18,11 @@ mod tests;
 
 use crate::components::WaterSurface;
 use crate::planet::{DVec3, LocalFrame, PlanetShape};
-use crate::render::environment::water::WaterBody;
-use crate::render::environment::water::ocean::OceanQuality;
-use crate::render::environment::water::ocean::band::OceanBand;
-use crate::render::environment::water::sea::shore::{ShoreNoise, ShorePoint};
-use crate::render::environment::wind::WindField;
+use crate::water::WaterBody;
+use crate::water::ocean::OceanQuality;
+use crate::water::ocean::band::OceanBand;
+use crate::water::sea::shore::{ShoreNoise, ShorePoint};
+use crate::wind::WindField;
 use alloc::vec::Vec;
 
 /// The water at one point and instant.

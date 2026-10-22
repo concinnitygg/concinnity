@@ -1,7 +1,7 @@
 use super::*;
 use crate::components::{WaterSurface, WaterWave};
 use crate::physics::{DynamicParams, LayerMask, SimConfig};
-use crate::render::environment::wind::WindField;
+use crate::wind::WindField;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 

@@ -18,7 +18,7 @@
 
 use super::cascades::Cascades;
 use super::{MAX_OCEAN_CASCADES, OCEAN_CHOPPINESS, OceanSea};
-use crate::render::environment::water::spectrum::{GRAVITY, SeaShape};
+use crate::water::spectrum::{GRAVITY, SeaShape};
 use concinnity_core::math::{exp, ln, narrow_f32, powf, sqrt};
 use core::f32::consts::TAU;
 
@@ -181,11 +181,11 @@ fn below(z: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::fields::evolve;
     use super::super::initial::{SpectrumTexel, frequency_index, initial_spectrum};
     use super::super::{OceanQuality, OceanSea};
     use super::*;
-    use crate::render::environment::water::ocean::clock::time_fraction;
+    use crate::render::environment::water::fields::evolve;
+    use crate::water::ocean::clock::time_fraction;
     use alloc::vec;
     use alloc::vec::Vec;
     use concinnity_core::math::SaturatingFrom;

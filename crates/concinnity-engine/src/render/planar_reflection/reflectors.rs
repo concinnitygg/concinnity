@@ -7,9 +7,9 @@ use super::visibility::{PlanarFramePlan, PlanarReflector, ReflectorHull};
 use crate::components::{GlassPanel, PassResolution, WaterSurface};
 use crate::geometry::glass_quad::plane_basis;
 use crate::render::backend::init::PlanarBudget;
-use crate::render::environment::water::WaterBody;
 use crate::render::uniforms::WaterParams;
 use crate::transform::Mat4;
+use crate::water::WaterBody;
 use alloc::vec::Vec;
 use concinnity_core::math::vec3::normalize_or;
 
@@ -140,8 +140,8 @@ mod tests {
     use super::*;
     use crate::components::WaterWave;
     use crate::render::depth::camera_projection;
-    use crate::render::environment::wind::WindField;
     use crate::transform::mat4_mul;
+    use crate::wind::WindField;
     use alloc::vec;
 
     fn looking_down_z_from(eye: [f32; 3]) -> Mat4 {
@@ -195,7 +195,7 @@ mod tests {
         let (mut water, _) = WaterBody::resolve_all(
             [&sea],
             &WindField::STILL,
-            crate::render::environment::water::ocean::OceanQuality::FULL,
+            crate::water::ocean::OceanQuality::FULL,
             Some(&planet),
         );
         water.push(pool([0.0, 2.0, 0.0]));

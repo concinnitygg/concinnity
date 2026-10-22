@@ -23,21 +23,21 @@ fn times_i(z: Complex) -> Complex {
 /// One texel's field spectra, as the shader packs them before the inverse
 /// FFT.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct TexelFields {
+pub(crate) struct TexelFields {
     height: Complex,
     /// Horizontal displacement per unit choppiness, along X and Z.
     dx: Complex,
     dz: Complex,
     /// The displacement's derivatives per unit choppiness: d dx / dx,
     /// d dz / dz and d dx / dz.
-    pub(super) jxx: Complex,
-    pub(super) jzz: Complex,
+    pub(crate) jxx: Complex,
+    pub(crate) jzz: Complex,
     jxz: Complex,
 }
 
 /// The fields of the texel at wavenumber `k` holding `texel`, whose mirror
 /// texel at `-k` holds `mirror`, `time_fraction` into the repeat.
-pub(super) fn evolve(
+pub(crate) fn evolve(
     texel: [f32; 4],
     mirror: [f32; 4],
     time_fraction: f32,

@@ -12,8 +12,8 @@
 //! inline ray query, the base pair 6.0.
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::environment::water::WaterBody;
 use concinnity_engine::render::environment::water::frame::WaterMotion;
+use concinnity_engine::water::WaterBody;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;

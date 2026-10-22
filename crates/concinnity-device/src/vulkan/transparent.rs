@@ -1239,7 +1239,7 @@ pub(in crate::vulkan) struct TransparentSceneTargets<'a> {
 pub(in crate::vulkan) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [concinnity_engine::render::environment::water::WaterBody],
+    pub water_surfaces: &'a [concinnity_engine::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // The simulated oceans' arrays, `None` for a world with no water.
     pub ocean: Option<OceanViews>,

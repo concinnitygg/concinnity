@@ -2,7 +2,7 @@
 //! travels and carries its energy at a depth, and how its height grows as
 //! the water shallows under it.
 
-use super::super::super::spectrum::GRAVITY;
+use crate::water::spectrum::GRAVITY;
 
 const G: f64 = GRAVITY as f64;
 

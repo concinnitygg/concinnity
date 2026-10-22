@@ -47,8 +47,6 @@ pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::grass::Grass;
 pub use crate::render::environment::night_sky::NightSky;
 pub use crate::render::environment::volumetric_fog::VolumetricFog;
-pub use crate::render::environment::water::{WaterShape, WaterSurface, WaterWave};
-pub use crate::render::environment::wind::Wind;
 pub use crate::render::instanced_prop::{InstanceTransform, InstancedProp};
 pub use crate::render::light::directional::DirectionalLight;
 pub use crate::render::light::point::PointLight;
@@ -103,6 +101,8 @@ pub use crate::ui::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use crate::ui::sprite::{Sprite, SpriteFit};
 pub use crate::ui::text_input::TextInput;
 pub use crate::ui::text_label::{TextAlign, TextLabel};
+pub use crate::water::{WaterShape, WaterSurface, WaterWave};
+pub use crate::wind::Wind;
 pub use crate::window::{Window, WindowMode};
 
 pub use super::{

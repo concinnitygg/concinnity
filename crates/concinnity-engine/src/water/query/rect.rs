@@ -4,8 +4,8 @@
 //! simulated frame, as it is drawn.
 
 use super::{PatchShift, WaterPatch, WaterSample, unit};
-use crate::render::environment::water::ocean::band::OceanBand;
-use crate::render::environment::water::{BodyWave, WaterBody};
+use crate::water::ocean::band::OceanBand;
+use crate::water::{BodyWave, WaterBody};
 use concinnity_core::math::narrow_f32;
 
 // How many times the rest point under a place is refined against the

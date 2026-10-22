@@ -24,8 +24,8 @@ use crate::ecs::{
 use crate::planet::{
     FrameRebases, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround, RebaseCursor,
 };
-use crate::render::environment::water::query::WaterQuery;
-use crate::render::environment::wind::WindField;
+use crate::water::query::WaterQuery;
+use crate::wind::WindField;
 use concinnity_core::math::vec3::{add, normalize_or, scale, sub};
 use concinnity_core::math::{cos, sin, sqrt};
 

@@ -10,20 +10,13 @@
 //! the noise here are the shaders' `ground_rule_weight` and
 //! `ground_rule_noise` line for line.
 
-use concinnity_core::math::{cos, sqrt};
-
 use crate::components::GroundRule;
 use crate::gfx::render_types::{MaterialUniforms, NO_ALBEDO_SLOT, albedo_pool_index};
 use crate::render::material_entry::MaterialEntry;
 use crate::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
-
-/// An open bound's ramp offset, so the ramp is always full. Matches
-/// `GROUND_RULE_OPEN` in the shaders.
-pub const GROUND_RULE_OPEN: f32 = 3.0;
-
-/// The most the edge noise shifts a ramp, in units of its edge. Matches
-/// `GROUND_RULE_WANDER` in the shaders.
-pub const GROUND_RULE_WANDER: f32 = 1.5;
+use crate::terrain::GROUND_RULE_OPEN;
+#[cfg(test)]
+use crate::terrain::{GROUND_RULE_WANDER, steepness};
 
 /// How much shorter than its look grass grows where its rule fades to
 /// nothing: its height scales by `1 - (1 - weight) * GROUND_RULE_SHORTENING`.
@@ -45,49 +38,6 @@ const NOISE_SALTS: [u32; 2] = [0x510e_527f, 0x9b05_688c];
 /// `GROUND_COVER_UNTEXTURED` in the shaders.
 pub const GROUND_COVER_UNTEXTURED: u32 = u32::MAX;
 
-const OPEN: [f32; 2] = [0.0, GROUND_RULE_OPEN];
-const NOWHERE: [f32; 2] = [0.0, -GROUND_RULE_OPEN];
-
-// The ramp over a measure in meters that rises across `bound` toward the
-// inside, `rising` for a lower bound, over `edge` meters.
-fn altitude_ramp(bound: Option<f32>, edge: f32, rising: bool) -> [f32; 2] {
-    let Some(b) = bound else {
-        return OPEN;
-    };
-    let k = if rising { 1.0 } else { -1.0 } / edge;
-    [k, 0.5 - b * k]
-}
-
-// The ramp over the steepness across a slope `bound` in degrees, `gentlest`
-// for the lower bound, over `edge` degrees. A bound at level ground
-// (gentlest) or at a cliff (steepest) leaves the band open; one at the other
-// end (gentlest at a cliff, steepest at level) closes it.
-fn slope_ramp(bound: Option<f32>, edge: f32, gentlest: bool) -> [f32; 2] {
-    let Some(b) = bound else {
-        return OPEN;
-    };
-    if (gentlest && b <= 0.0) || (!gentlest && b >= 90.0) {
-        return OPEN;
-    }
-    if (gentlest && b >= 90.0) || (!gentlest && b <= 0.0) {
-        return NOWHERE;
-    }
-    // Half weight at the bound itself, narrowed near level ground or a cliff
-    // so the fade stays within [0, 90] degrees.
-    let half = (edge * 0.5).min(b).min(90.0 - b);
-    let width = steepness(b + half) - steepness(b - half);
-    let k = if gentlest { 1.0 } else { -1.0 } / width;
-    [k, 0.5 - steepness(b) * k]
-}
-
-/// How steep ground `degrees` from level is, the measure slope rules ramp
-/// over: `sqrt(1 - cos)`, from 0 on level ground to 1 on a cliff, close to
-/// proportional to the angle. The shaders take it from the cosine between the
-/// ground's normal and up.
-pub fn steepness(degrees: f32) -> f32 {
-    sqrt((1.0 - cos(degrees.to_radians())).max(0.0))
-}
-
 impl GroundRuleGpu {
     /// The rule that holds everywhere.
     pub const EVERYWHERE: Self = Self {
@@ -97,15 +47,8 @@ impl GroundRuleGpu {
 
     /// `rule` as ramps, validated first.
     pub fn of(rule: &GroundRule) -> Self {
-        let r = rule.validated();
-        let [a0, a1] = altitude_ramp(r.altitude[0], r.altitude_edge, true);
-        let [a2, a3] = altitude_ramp(r.altitude[1], r.altitude_edge, false);
-        let [s0, s1] = slope_ramp(r.slope[0], r.slope_edge, true);
-        let [s2, s3] = slope_ramp(r.slope[1], r.slope_edge, false);
-        Self {
-            altitude: [a0, a1, a2, a3],
-            slope: [s0, s1, s2, s3],
-        }
+        let [altitude, slope] = rule.ramps();
+        Self { altitude, slope }
     }
 
     // Every bound's ramp at `altitude` meters above sea level, on ground of
@@ -258,6 +201,7 @@ mod tests {
     use super::*;
     use crate::components::{GroundCover, Planet};
     use crate::ecs::MaterialHandle;
+    use concinnity_core::math::cos;
 
     fn band(lo: Option<f32>, hi: Option<f32>, edge: f32) -> GroundRuleGpu {
         GroundRuleGpu::of(&GroundRule {

@@ -773,7 +773,7 @@ pub(in crate::directx) struct TransparentSceneTargets {
 pub(in crate::directx) struct TransparentContent<'a> {
     pub glass_panels: &'a [GlassPanel],
     pub glass_planar_slots: &'a [Option<usize>],
-    pub water_surfaces: &'a [concinnity_engine::render::environment::water::WaterBody],
+    pub water_surfaces: &'a [concinnity_engine::water::WaterBody],
     pub water_planar_slots: &'a [Option<usize>],
     // Indices into the context's draw objects of every see-through material.
     // Empty when no material opted in; those meshes then render opaque.
