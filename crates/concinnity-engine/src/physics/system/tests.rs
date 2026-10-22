@@ -179,6 +179,111 @@ fn a_walker_on_a_planet_stands_through_a_frame_move() {
     );
 }
 
+// A frame move between two frames whose camera another system posed: the
+// capsule takes the carried pose rather than writing back its own from
+// before the pose.
+#[test]
+fn a_camera_posed_from_outside_keeps_its_pose_through_a_frame_move() {
+    use crate::planet::{FrameRebases, Rebase};
+    let mut world = World::new();
+    world.push(Camera3D {
+        controller: None,
+        ..controlled_camera()
+    });
+    world.insert_resource(FrameRebases::default());
+    let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
+    physics.init(&mut world.context());
+    physics.step(&mut world.context());
+
+    let rebase = Rebase {
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        translation: [-900.0, 0.0, 0.0],
+    };
+    for camera in world.context().query_mut::<Camera3D>() {
+        camera.position = rebase.apply_point([900.0, 1.0, 0.0]);
+    }
+    let mut rebases = FrameRebases::default();
+    rebases.push(rebase);
+    world.insert_resource(rebases);
+    physics.step(&mut world.context());
+    let eye = world.query::<Camera3D>().next().unwrap().position;
+    assert_eq!(eye, [0.0, 1.0, 0.0]);
+}
+
+// A camera flown along a track through many frame moves, with the simulation
+// colliding it as a capsule, ends where the track's legs add up to however
+// the frames group and drop their ticks: no frame move costs it travel.
+#[test]
+fn a_tracked_camera_reaches_the_end_of_its_track_through_frame_moves() {
+    use crate::camera::track::{CameraTrackStatus, CameraTrackSystem};
+    use crate::components::{CameraTrack, CameraTrackArgs, CameraTravel};
+    use crate::planet::{FrameRebases, Rebase, needs_rebase};
+    const LEGS: usize = 40;
+    const LEG: f32 = 1_000.0;
+    let mut world = World::new();
+    world.push(Camera3D {
+        controller: None,
+        position: [0.0, 50.0, 0.0],
+        ..controlled_camera()
+    });
+    let track = CameraTrack::bake(CameraTrackArgs {
+        travel: (0..LEGS)
+            .map(|_| CameraTravel {
+                direction: [1.0, 0.0, 0.0],
+                distance: LEG,
+                speed: 3_000.0,
+                ..Default::default()
+            })
+            .collect(),
+        turn: vec![],
+    });
+    let mut track_system = CameraTrackSystem::new(&track);
+    world.push(track);
+    world.insert_resource(FrameRebases::default());
+    let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
+    physics.init(&mut world.context());
+    track_system.init(&mut world.context());
+
+    // Frames that run several ticks, none, and as many as the cap allows.
+    const FRAMES: [(u32, f32); 5] = [(1, 0.3), (2, 0.9), (0, 0.95), (5, 0.1), (1, 0.5)];
+    let mut rebases = FrameRebases::default();
+    let mut origin = 0.0_f64;
+    for (ticks, alpha) in FRAMES.into_iter().cycle() {
+        let at = world.query::<Camera3D>().next().unwrap().position;
+        if needs_rebase(at, LEG) {
+            let rebase = Rebase {
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                translation: [-at[0], 0.0, 0.0],
+            };
+            origin += f64::from(at[0]);
+            for camera in world.context().query_mut::<Camera3D>() {
+                camera.position = rebase.apply_point(camera.position);
+            }
+            rebases.push(rebase);
+            world.insert_resource(rebases.clone());
+        }
+        world.insert_resource(SimTiming {
+            ticks,
+            alpha,
+            ..Default::default()
+        });
+        physics.step(&mut world.context());
+        track_system.step(&mut world.context());
+        if world
+            .resource::<CameraTrackStatus>()
+            .is_some_and(|s| s.pose_seconds >= s.duration_seconds)
+        {
+            break;
+        }
+    }
+    assert!(rebases.count() >= 30, "{}", rebases.count());
+    let end = world.query::<Camera3D>().next().unwrap().position;
+    let reached = origin + f64::from(end[0]);
+    let expected = f64::from(LEG) * LEGS as f64;
+    assert!((reached - expected).abs() < 0.05, "{reached} vs {expected}");
+    assert!((end[1] - 50.0).abs() < 1e-3, "{end:?}");
+}
+
 fn ball_dynamics() -> BodyDynamics {
     BodyDynamics {
         mass: 1.0,

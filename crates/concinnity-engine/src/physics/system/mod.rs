@@ -310,7 +310,9 @@ impl PhysicsSystem {
             });
             if let Some(player) = self.player.as_mut() {
                 player.center.rebase(&rebase);
-                player.written_eye = ctx.query::<Camera3D>().next().map(|c| c.position);
+                // Carried like the camera, so a camera another system posed
+                // since is still seen as moved from outside.
+                player.written_eye = player.written_eye.map(|eye| rebase.apply_point(eye));
             }
             // The authored regions, whose sensor bodies the move just carried.
             for volume in ctx.query_mut::<TriggerVolume>() {
