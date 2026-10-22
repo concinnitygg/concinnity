@@ -295,6 +295,25 @@ impl PhysicsSystem {
         })
     }
 
+    // A camera a track drives is posed by the track alone, so it has no
+    // capsule; one handed back to its controller gets its capsule again.
+    fn hand_camera_over(&mut self, ctx: &PipelineContext<'_>) {
+        let Some(world) = self.world.as_mut() else {
+            return;
+        };
+        let tracked = player::camera_is_tracked(ctx);
+        if tracked && let Some(player) = self.player.take() {
+            world.remove_body(player.handle);
+        } else if !tracked && self.player.is_none() {
+            self.player = player::spawn(
+                world,
+                ctx,
+                &mut self.floor_y,
+                self.layers.mask(LAYER_CHARACTER),
+            );
+        }
+    }
+
     // Catch up with a planet world: carry the bodies through every move of
     // the simulated frame this system has not yet seen, swap in a newer
     // ground patch, and aim gravity at the planet's center in this frame.
@@ -539,57 +558,13 @@ impl System for PhysicsSystem {
                 joint_spec(&joint),
             );
         }
-        // player capsule for the Camera3D
-        // Every first-person camera is collided as a capsule. A RigidBody
-        // upgrades it from a free-flying spectator to a grounded,
-        // gravity-bound character. A third-person camera (a controller with
-        // a `follow` block) gets no capsule: it is a virtual orbit around the
-        // followed character, whose own rig capsule is the collided body.
-        let camera_pos = ctx
-            .query::<Camera3D>()
-            .next()
-            .filter(|c| {
-                c.controller
-                    .as_ref()
-                    .is_none_or(|ctrl| ctrl.follow.is_none())
-            })
-            .map(|c| c.position);
-        if let Some(cam_pos) = camera_pos {
-            let rb_opt = ctx.query::<RigidBody>().next().cloned();
-            let has_gravity = rb_opt.is_some();
-            let rb = rb_opt.unwrap_or_default();
-            if self.floor_y == 0.0 {
-                self.floor_y = cam_pos[1];
-            }
-            let radius = rb.capsule_radius.max(0.05);
-            let half_height = ((rb.capsule_height * 0.5) - radius).max(0.05);
-            // a grounded character's eye sits at the capsule top; a flying
-            // camera's capsule is centered on the eye.
-            let eye_offset = if has_gravity {
-                (rb.capsule_height * 0.5).max(radius + 0.05)
-            } else {
-                0.0
-            };
-            let center = [cam_pos[0], cam_pos[1] - eye_offset, cam_pos[2]];
-            world.configure_character(rb.max_slope_deg, rb.step_height, has_gravity);
-            let handle = world.add_character(
-                half_height,
-                radius,
-                center,
+        if !player::camera_is_tracked(ctx) {
+            self.player = player::spawn(
+                &mut world,
+                ctx,
+                &mut self.floor_y,
                 self.layers.mask(LAYER_CHARACTER),
             );
-            self.player = handle.map(|handle| PlayerPhysics {
-                handle,
-                shape: CharacterCapsule::new(half_height, radius),
-                eye_offset,
-                has_gravity,
-                gravity_scale: rb.gravity_scale.max(0.0),
-                jump_height: rb.jump_height.max(0.0),
-                vy: 0.0,
-                grounded: true,
-                center: PointInterp::new(center),
-                written_eye: None,
-            });
         }
 
         // Kinematic capsules for the root-motion character rigs published by
@@ -630,6 +605,7 @@ impl System for PhysicsSystem {
         // A planet world's frame moved since the last step: carry every body
         // along, then take the ground and the pull as they are in the new frame.
         self.follow_planet(ctx);
+        self.hand_camera_over(ctx);
 
         // snapshot reads (released before any query_mut below)
         let (cam_pos, cam_yaw, cam_pitch, desired_move, jump_req, interact_req) =
@@ -960,6 +936,8 @@ impl System for PhysicsSystem {
         StepResult::Continue
     }
 }
+
+mod player;
 
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,9 @@
 //! A planet to walk on: a 50 km sphere of continents and oceans, its rolling
 //! ground grown over with a windblown meadow that runs down gentle shores to
 //! the sea, under an atmosphere whose sky turns through a four-minute day.
-//! The afternoon gives way to a sunset, then to a moonlit night of stars, the
-//! Milky Way and distant galaxies, and the sun comes back up in the east.
+//! The morning climbs to noon and an afternoon, gives way to a sunset, then to
+//! a moonlit night of stars, the Milky Way and distant galaxies, and the sun
+//! comes back up in the east. A chrome marble hovers over the meadow ahead.
 //!
 //! The whole world is `planet.jsonl`, beside this file. This program only
 //! compiles it into a blob next to the executable and plays that blob.
@@ -10,10 +11,11 @@
 //! Run it with `cargo run --release --example planet`.
 //!
 //! The world also declares a benchmark (see `benchmark.rs`), which
-//! `--benchmark` runs: the camera flies instead of answering the player's
-//! controls, over the meadow and out over the sea, up out of the air to see the planet from orbit,
-//! and back down to skim the ground. The run times every frame and closes when
-//! the flight ends, printing what the frames cost, phase by phase.
+//! `--benchmark` runs: the marble flies instead of the player walking, and the
+//! camera follows it, through the grass and out over the sea, up toward the
+//! sun and out of the air to see the planet from orbit, down into the night
+//! and on to a sunrise over the next continent. The run times every frame and
+//! closes when the flight ends, printing what the frames cost, phase by phase.
 //!
 //! It takes the engine's launch flags (`--help` lists them), `--vsync` among
 //! them.

@@ -123,6 +123,11 @@ pub fn camera_track(mut args: CameraTrackArgs) -> CameraTrackArgs {
         leg.degrees_per_second = finite_non_negative(leg.degrees_per_second);
         leg.seconds = finite_non_negative(leg.seconds);
     }
+    for leg in &mut args.boom {
+        leg.distance = leg.distance.map(finite_non_negative);
+        leg.offset_deg = leg.offset_deg.filter(|o| o.iter().all(|a| a.is_finite()));
+        leg.seconds = finite_non_negative(leg.seconds);
+    }
     args
 }
 

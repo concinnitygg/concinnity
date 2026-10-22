@@ -14,6 +14,7 @@
 - [BlockType](BlockType.md) - Describes one entry in a [VoxelChunk](VoxelChunk.md) palette.
 - [Buoyancy](Buoyancy.md) - Makes a [`PropBody`](PropBody.md) float in water.
 - [Camera3D](Camera3D.md) - Declares the 3D camera. One per scene.
+- [CameraBoom](CameraBoom.md) - One change of framing on a [`CameraTrack`](CameraTrack.md)'s boom track: how far the camera sits from the track's `subject` and where the subject sits in the frame.
 - [CameraShot](CameraShot.md) - A reusable [Camera3D](Camera3D.md) preset: reference it from a [Scene](Scene.md)'s `camera_shot`, or use it standalone.
 - [CameraTrack](CameraTrack.md) - Drives the world's [Camera3D](Camera3D.md) along a scripted path, so a fly-through visits the same poses on every machine that runs it.
 - [CharacterModel](CharacterModel.md) - A character body that conforms to a [CharacterSchema](CharacterSchema.md).

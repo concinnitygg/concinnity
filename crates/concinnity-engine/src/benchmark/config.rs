@@ -4,7 +4,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::components::{CameraTravel, CameraTurn};
+use crate::components::{CameraBoom, CameraTravel, CameraTurn, Prop};
+use crate::ecs::Ref;
 
 /// A 60 Hz frame, the budget a run counts against unless a world says
 /// otherwise.
@@ -28,6 +29,11 @@ const DEFAULT_PHASE_NAME: &str = "run";
 /// The legs are the same ones a [`CameraTrack`](#cameratrack) takes, and played
 /// on the same fixed simulation clock, so a slower machine visits the same
 /// poses at the same times and simply samples fewer of them.
+///
+/// With a `subject` the run films a [Prop](#prop) in third person, as a track
+/// with a subject does: `travel` carries the prop, `turn` aims the camera and
+/// `boom` frames the prop. `start` then places the prop, and the camera is
+/// framed from it as the boom says from the first frame.
 ///
 /// The run is cut into `phases`, named stretches of time that the report
 /// gives one by one as well as whole, so a cost that belongs to one stretch
@@ -87,12 +93,19 @@ pub struct BenchmarkConfig {
     /// between frames and lowers its clocks.
     pub fps_cap: u32,
     /// Where the camera starts, or unset to start it where the world does.
+    /// With a `subject`, where the subject starts.
     pub start: Option<CameraPose>,
+    /// The [Prop](#prop) the run carries and films, or unset to carry the
+    /// camera itself.
+    pub subject: Option<Ref<Prop>>,
     /// Where the camera goes after the warm-up, leg by leg.
     pub travel: Vec<CameraTravel>,
     /// Where the camera looks after the warm-up, leg by leg. Played against
     /// the same clock as `travel` and independent of it.
     pub turn: Vec<CameraTurn>,
+    /// How the camera frames the `subject` after the warm-up, leg by leg, on
+    /// the same clock as `travel` and `turn`.
+    pub boom: Vec<CameraBoom>,
     /// The named stretches the run is measured in, back to back from the end
     /// of the warm-up. Left empty, the run is one ten-second phase.
     pub phases: Vec<BenchmarkPhase>,

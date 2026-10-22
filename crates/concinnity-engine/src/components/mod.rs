@@ -58,7 +58,8 @@ pub use crate::behavior::variables::{VariableDecl, Variables};
 pub use crate::camera::camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
 pub use crate::camera::probe::CameraProbe;
 pub use crate::camera::track::{
-    CameraTrack, CameraTrackArgs, CameraTravel, CameraTravelKey, CameraTurn, CameraTurnKey, Ease,
+    CameraBoom, CameraBoomKey, CameraTrack, CameraTrackArgs, CameraTravel, CameraTravelKey,
+    CameraTurn, CameraTurnKey, Ease,
 };
 pub use crate::controller::interact_event::InteractEvent;
 pub use crate::defaults::engine::EngineDefaults;

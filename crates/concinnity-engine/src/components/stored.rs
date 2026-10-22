@@ -22,7 +22,8 @@ pub use crate::behavior::variables::{VariableDecl, Variables};
 pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, CameraPose, FrameCapture};
 pub use crate::camera::camera3d::{CameraController, FollowController, FollowDrive};
 pub use crate::camera::track::{
-    CameraTrack, CameraTravel, CameraTravelKey, CameraTurn, CameraTurnKey, Ease,
+    CameraBoom, CameraBoomKey, CameraTrack, CameraTravel, CameraTravelKey, CameraTurn,
+    CameraTurnKey, Ease,
 };
 pub use crate::defaults::engine::EngineDefaults;
 pub use crate::geometry::block_type::BlockType;

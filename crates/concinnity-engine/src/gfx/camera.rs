@@ -60,11 +60,7 @@ pub fn view_matrix(position: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
 /// tilted onto `up` along the shortest arc. A camera standing on a planet sees
 /// its horizon level this way wherever it stands.
 pub fn view_matrix_about(position: [f32; 3], yaw: f32, pitch: f32, up: [f32; 3]) -> [[f32; 4]; 4] {
-    let m = view_matrix([0.0; 3], yaw, pitch);
-    // The view's rows are the camera's right, up and back axes.
-    let row = |r: usize| [m[0][r], m[1][r], m[2][r]];
-    let [right, cam_up, back] = [0, 1, 2].map(|r| tilt_to_up(up, row(r)));
-    let axes = [right, cam_up, back];
+    let axes = view_axes(yaw, pitch, up);
     let mut out = [[0.0; 4]; 4];
     for (r, axis) in axes.iter().enumerate() {
         for c in 0..3 {
@@ -74,6 +70,15 @@ pub fn view_matrix_about(position: [f32; 3], yaw: f32, pitch: f32, up: [f32; 3])
     }
     out[3][3] = 1.0;
     out
+}
+
+/// The world-space right, up and back axes of a camera at `yaw` and `pitch`
+/// about `up`, as [`view_matrix_about`] composes them.
+pub fn view_axes(yaw: f32, pitch: f32, up: [f32; 3]) -> [[f32; 3]; 3] {
+    let m = view_matrix([0.0; 3], yaw, pitch);
+    // The view's rows are the camera's right, up and back axes.
+    let row = |r: usize| [m[0][r], m[1][r], m[2][r]];
+    [0, 1, 2].map(|r| tilt_to_up(up, row(r)))
 }
 
 /// `v`, given in a frame whose up is `+Y`, turned into the frame whose up is

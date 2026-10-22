@@ -1,24 +1,22 @@
-// The flight laid over the planet: the course it follows, the points its legs
-// run between, and where the camera looks along the way.
+// The flight laid over the planet: the course the marble follows, the points
+// its legs run between, and how the camera films it along the way.
 
-use concinnity::components::{CameraTravel, CameraTurn, Ease, Planet};
+use concinnity::components::{CameraBoom, CameraTravel, CameraTurn, Ease, Planet};
 use concinnity_core::math::narrow_f32;
 
-use super::flight::{self, Fix, PHASES, smoothstep};
+use super::flight::{self, Fix};
+use super::framing::{self, Aim, Shot};
 use concinnity::math::dvec3::{DVec3, add, cross, dot, length, scale, sub};
 
 /// Degrees clockwise from north the course sets out on from where the world
 /// starts: across the shore a couple of hundred meters east, out to sea.
 const HEADING_DEG: f64 = 96.0;
+/// How far back along the course from where the world starts the marble
+/// sets off, in meters: far enough inland for a long run through the meadow.
+const START_BACK: f64 = 150.0;
 /// How often the path is pinned to the flight: often enough that a leg over
 /// the meadow strays from the ground under it by centimeters.
 const STEP_SECONDS: f64 = 0.2;
-const GROUND_PITCH_DEG: f64 = -6.0;
-// How far over the horizon the camera looks while it watches the sun: the
-// ground stays in the lower half, and from orbit the whole disc stays in view.
-const LIFT_DEG: f64 = 4.0;
-// How long the camera takes to turn from the course to the sun.
-const LOOK_SECONDS: f64 = 8.0;
 
 // The authored axes: the world starts at latitude 0, longitude 0, along +Y
 // from the center, with north along -Z and east along +X.
@@ -26,8 +24,8 @@ const START_UP: DVec3 = [0.0, 1.0, 0.0];
 const NORTH: DVec3 = [0.0, 0.0, -1.0];
 const EAST: DVec3 = [1.0, 0.0, 0.0];
 
-/// The great circle the camera follows round the planet from where the world
-/// starts. Along a great circle the camera's level frame turns with the
+/// The great circle the marble follows round the planet through where the
+/// world starts. Along a great circle the camera's level frame turns with the
 /// course, so a heading taken against the course holds for the whole flight.
 struct Course {
     forward: DVec3,
@@ -52,24 +50,25 @@ impl Course {
     }
 }
 
-/// The path from the start: where the camera begins and how it is posed, and
-/// the legs it travels and turns through.
+/// The path from the start: where the marble begins and how the camera is
+/// aimed at it, and the legs they travel, turn and frame through.
 pub(super) struct Path {
     pub(super) start: [f32; 3],
     pub(super) yaw_deg: f32,
     pub(super) pitch_deg: f32,
     pub(super) travel: Vec<CameraTravel>,
     pub(super) turn: Vec<CameraTurn>,
+    pub(super) boom: Vec<CameraBoom>,
 }
 
 impl Path {
     /// The path over `planet`, flooded to `sea_level` meters above its
-    /// radius when it has a sea, aimed by the sun's direction `sun` seconds
-    /// into the run.
+    /// radius when it has a sea, with the sun toward `sun` seconds into the
+    /// run.
     pub(super) fn new(planet: &Planet, sea_level: Option<f64>, sun: impl Fn(f64) -> DVec3) -> Self {
         let shape = planet.shape();
         let course = Course::new(HEADING_DEG);
-        let fixes = flight::fixes(shape.radius, STEP_SECONDS);
+        let fixes = flight::fixes(shape.radius, STEP_SECONDS, -START_BACK / shape.radius);
         let floor = sea_level.unwrap_or(f64::NEG_INFINITY);
         let surface = |up: DVec3| shape.radius + shape.height(up).max(floor);
         let points: Vec<DVec3> = fixes
@@ -79,13 +78,29 @@ impl Path {
                 add(shape.center, scale(up, surface(up) + fix.height))
             })
             .collect();
-        let views = views(&fixes, &course, sun, surface);
+        let views: Vec<View> = fixes
+            .iter()
+            .map(|fix| {
+                let up = course.up(fix.arc);
+                let sky = Sky {
+                    up,
+                    ahead: course.ahead(fix.arc),
+                    sun: sun(fix.seconds),
+                    dip: (surface(up) / (surface(up) + fix.height))
+                        .acos()
+                        .to_degrees(),
+                };
+                view(fix, &sky)
+            })
+            .collect();
 
-        let mut travel = Vec::with_capacity(fixes.len() - 1);
-        let mut turn = Vec::with_capacity(fixes.len() - 1);
+        let legs = fixes.len() - 1;
+        let mut travel = Vec::with_capacity(legs);
+        let mut turn = Vec::with_capacity(legs);
+        let mut boom = Vec::with_capacity(legs + 1);
+        boom.push(views[0].boom(0.0));
         for i in 1..fixes.len() {
-            let (from, to) = (fixes[i - 1], fixes[i]);
-            let seconds = narrow_f32(to.seconds - from.seconds);
+            let seconds = narrow_f32(fixes[i].seconds - fixes[i - 1].seconds);
             let step = sub(points[i], points[i - 1]);
             travel.push(CameraTravel {
                 direction: step.map(narrow_f32),
@@ -94,78 +109,92 @@ impl Path {
                 ease: Ease::Linear,
                 ..Default::default()
             });
-            let [yaw, pitch] = views[i];
             turn.push(CameraTurn {
-                yaw_deg: Some(narrow_f32(yaw)),
-                pitch_deg: Some(narrow_f32(pitch)),
+                yaw_deg: Some(narrow_f32(views[i].yaw)),
+                pitch_deg: Some(narrow_f32(views[i].pitch)),
                 seconds,
                 ease: Ease::Linear,
                 ..Default::default()
             });
+            boom.push(views[i].boom(seconds));
         }
-        let [yaw, pitch] = views[0];
         Self {
             start: points[0].map(narrow_f32),
-            yaw_deg: narrow_f32(yaw),
-            pitch_deg: narrow_f32(pitch),
+            yaw_deg: narrow_f32(views[0].yaw),
+            pitch_deg: narrow_f32(views[0].pitch),
             travel,
             turn,
+            boom,
         }
     }
 }
 
-// The camera's yaw and pitch in degrees at every fix. It looks down the course
-// over the meadow, then turns to watch the sun, aimed a little over the
-// horizon below it. Yaw is counterclockwise from the course's start heading,
-// which along the great circle stays the same angle from the course.
-fn views(
-    fixes: &[Fix],
-    course: &Course,
-    sun: impl Fn(f64) -> DVec3,
-    ground_radius: impl Fn(DVec3) -> f64,
-) -> Vec<[f64; 2]> {
-    let look_from = look_from();
-    let mut toward_sun: Option<f64> = None;
-    fixes
-        .iter()
-        .map(|fix| {
-            let watch = if PHASES[fix.phase].watches_sun {
-                smoothstep((fix.seconds - look_from) / LOOK_SECONDS)
-            } else {
-                0.0
-            };
-            if watch == 0.0 {
-                toward_sun = None;
-                return [-HEADING_DEG, GROUND_PITCH_DEG];
+// How the camera films the marble at one fix: its yaw and pitch in degrees,
+// and the boom's distance and offset.
+struct View {
+    yaw: f64,
+    pitch: f64,
+    distance: f64,
+    offset: [f64; 2],
+}
+
+impl View {
+    // The boom leg that reaches this framing over `seconds`.
+    fn boom(&self, seconds: f32) -> CameraBoom {
+        CameraBoom {
+            distance: Some(narrow_f32(self.distance)),
+            offset_deg: Some(self.offset.map(narrow_f32)),
+            seconds,
+            ease: Ease::Linear,
+            ..Default::default()
+        }
+    }
+}
+
+// What a fix's shots are aimed by: the marble's up and the course ahead of
+// it, the direction toward the sun, and how far below level the horizon
+// lies, in degrees.
+struct Sky {
+    up: DVec3,
+    ahead: DVec3,
+    sun: DVec3,
+    dip: f64,
+}
+
+impl Sky {
+    // `shot`'s yaw, counterclockwise from the course, and pitch, both in
+    // degrees from level.
+    fn angles(&self, shot: &Shot) -> [f64; 2] {
+        match shot.aim {
+            Aim::Course => [shot.yaw, shot.pitch - self.dip],
+            Aim::Sun => {
+                let left = cross(self.up, self.ahead);
+                let bearing = dot(self.sun, left).atan2(dot(self.sun, self.ahead));
+                let elevation = dot(self.sun, self.up).clamp(-1.0, 1.0).asin();
+                [
+                    bearing.to_degrees() + shot.yaw,
+                    elevation.to_degrees() + shot.pitch,
+                ]
             }
-            let up = course.up(fix.arc);
-            let ahead = course.ahead(fix.arc);
-            let toward = sun(fix.seconds);
-            let left = cross(up, ahead);
-            let raw = dot(toward, left).atan2(dot(toward, ahead)).to_degrees();
-            // Unwrapped from the last fix, so the camera never turns the long
-            // way round when the sun crosses behind it.
-            let bearing = toward_sun.map_or(raw, |last| last + wrap_deg(raw - last));
-            toward_sun = Some(bearing);
-            let ground = ground_radius(up);
-            let dip = (ground / (ground + fix.height)).acos().to_degrees();
-            let pitch = GROUND_PITCH_DEG + (LIFT_DEG - dip - GROUND_PITCH_DEG) * watch;
-            [-HEADING_DEG + bearing * watch, pitch]
-        })
-        .collect()
+        }
+    }
 }
 
-// When the camera starts to turn toward the sun: as the first phase that
-// watches it begins.
-fn look_from() -> f64 {
-    PHASES
-        .iter()
-        .take_while(|p| !p.watches_sun)
-        .map(|p| p.seconds)
-        .sum()
-}
-
-// `deg` brought into [-180, 180).
-fn wrap_deg(deg: f64) -> f64 {
-    (deg + 180.0).rem_euclid(360.0) - 180.0
+// The framing at `fix` under `sky`, eased from one shot to the next. Yaw is
+// counterclockwise from the course's start heading, which along the great
+// circle stays the same angle from the course.
+fn view(fix: &Fix, sky: &Sky) -> View {
+    let (from, to, k) = framing::at(fix.seconds);
+    let mix = |a: f64, b: f64| a + (b - a) * k;
+    let [from_yaw, from_pitch] = sky.angles(from);
+    let [to_yaw, to_pitch] = sky.angles(to);
+    View {
+        yaw: -HEADING_DEG + mix(from_yaw, to_yaw),
+        pitch: mix(from_pitch, to_pitch),
+        distance: mix(from.distance, to.distance),
+        offset: [
+            mix(from.offset[0], to.offset[0]),
+            mix(from.offset[1], to.offset[1]),
+        ],
+    }
 }

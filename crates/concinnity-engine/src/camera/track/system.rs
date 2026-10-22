@@ -2,11 +2,15 @@ use alloc::vec::Vec;
 
 use crate::camera::track::CameraTrackStatus;
 use crate::camera::track::timeline::{self, Key};
-use crate::components::{Camera3D, CameraTrack, CameraTurnKey};
+use crate::components::{
+    BodyDynamics, Camera3D, CameraBoomKey, CameraTrack, CameraTurnKey, Collider, Parent, Transform,
+};
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
+use crate::gfx::camera::view_axes;
 use crate::planet::{FrameRebases, RebaseCursor};
 use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use concinnity_core::math::{quat_mul, quat_normalize, quat_rotate, shortest_turn, vec3};
+use concinnity_core::math::{cos, quat_mul, quat_normalize, quat_rotate, shortest_turn, sin, vec3};
 
 const FULL_TURN_DEG: f32 = 360.0;
 
@@ -19,6 +23,10 @@ const FULL_TURN_DEG: f32 = 360.0;
 /// steps by [`SimTiming::alpha`], the way physics blends its bodies, so the
 /// camera moves as far as the frame took rather than by whole steps. Frozen
 /// while a world-pausing screen is open.
+///
+/// With a subject, travel carries the subject and the camera is placed from
+/// it by the boom in the same step, at the same pose time, so the subject
+/// holds its place in the frame exactly.
 #[derive(Debug)]
 pub(crate) struct CameraTrackSystem {
     travel: Vec<Key<3>>,
@@ -26,15 +34,25 @@ pub(crate) struct CameraTrackSystem {
     // turns away from is known.
     turn_legs: Vec<CameraTurnKey>,
     turn: Vec<Key<2>>,
+    // As the turn legs: held until `init` knows the framing the camera starts
+    // in. Each key's value is the distance, then the offset right and up.
+    boom_legs: Vec<CameraBoomKey>,
+    boom: Vec<Key<3>>,
+    boom_start: [f32; 3],
+    // The prop travel carries, while it is there to carry.
+    subject: Option<AssetId>,
+    // Fixed once every list is laid out at `init`, so the track runs as long
+    // whether or not its subject stays.
+    duration: f32,
     start_position: [f32; 3],
     start_angles_deg: [f32; 2],
-    // Travel is laid out leg by leg from where the camera is: `leg` is the
-    // leg under way, `anchor` where the camera stood when its progress was
-    // `anchor_progress` (the leg's start, or where a frame move carried it
-    // mid-leg), and `frame_turn` the turn every frame move so far gave the
-    // legs, which are authored in the frame the world started in. Every
-    // offset the camera rides is one leg's at most, so a long track stays as
-    // precise as a short one.
+    // Travel is laid out leg by leg from where the carried point is (the
+    // subject, else the camera): `leg` is the leg under way, `anchor` where
+    // the point stood when its progress was `anchor_progress` (the leg's
+    // start, or where a frame move carried it mid-leg), and `frame_turn` the
+    // turn every frame move so far gave the legs, which are authored in the
+    // frame the world started in. Every offset the point rides is one leg's
+    // at most, so a long track stays as precise as a short one.
     leg: usize,
     anchor: [f32; 3],
     anchor_progress: [f32; 3],
@@ -61,7 +79,8 @@ impl CameraTrackSystem {
     }
 
     /// The system for a world's baked track. The travel list is ready here;
-    /// the turn list waits for `init` to supply the camera's starting heading.
+    /// the turn and boom lists wait for `init` to supply the camera's starting
+    /// heading and framing.
     pub(crate) fn new(track: &CameraTrack) -> Self {
         Self {
             travel: track
@@ -76,6 +95,11 @@ impl CameraTrackSystem {
                 .collect(),
             turn_legs: track.turn.clone(),
             turn: Vec::new(),
+            boom_legs: track.boom.clone(),
+            boom: Vec::new(),
+            boom_start: [0.0; 3],
+            subject: track.subject.map(crate::ecs::Ref::id),
+            duration: 0.0,
             start_position: [0.0; 3],
             start_angles_deg: [0.0; 2],
             leg: 0,
@@ -90,9 +114,10 @@ impl CameraTrackSystem {
         }
     }
 
-    /// How long the whole track runs: whichever of its two lists lasts longer.
+    /// How long the whole track runs: whichever of its lists lasts longest,
+    /// as laid out at `init`.
     pub(crate) fn duration(&self) -> f32 {
-        timeline::duration(&self.travel).max(timeline::duration(&self.turn))
+        self.duration
     }
 
     /// Seconds of simulated time the track has run for.
@@ -127,6 +152,41 @@ impl CameraTrackSystem {
         }
     }
 
+    // Lay the boom legs out from the framing the camera starts in: each value
+    // a leg leaves unset holds, and until the first leg that sets a value the
+    // boom holds that value.
+    fn resolve_boom(&mut self, authored_distance: f32) {
+        let distance = self
+            .boom_legs
+            .iter()
+            .find_map(|leg| leg.distance)
+            .unwrap_or(authored_distance);
+        let offset = self
+            .boom_legs
+            .iter()
+            .find_map(|leg| leg.offset_deg)
+            .unwrap_or([0.0; 2]);
+        self.boom_start = [distance, offset[0], offset[1]];
+        let mut at = self.boom_start;
+        let mut from_seconds = 0.0;
+        self.boom.clear();
+        self.boom.reserve(self.boom_legs.len());
+        for leg in &self.boom_legs {
+            let distance = leg.distance.unwrap_or(at[0]);
+            let [right, up] = leg.offset_deg.unwrap_or([at[1], at[2]]);
+            let value = [distance, right, up];
+            let instant = leg.end_seconds <= from_seconds;
+            self.boom.push(Key {
+                value,
+                end_seconds: leg.end_seconds,
+                ease: leg.ease,
+                cut: leg.cut || (instant && value != at),
+            });
+            at = value;
+            from_seconds = leg.end_seconds;
+        }
+    }
+
     // Re-anchor on every leg the pose has finished: each starts where the
     // last one ended.
     fn advance(&mut self) {
@@ -140,24 +200,60 @@ impl CameraTrackSystem {
         }
     }
 
-    // Where the track puts the camera at the pose time.
+    // Where the track puts the carried point at the pose time.
     fn position(&self) -> [f32; 3] {
         let progress = timeline::progress(&self.travel, self.leg, self.pose_seconds);
         let traveled = quat_rotate(self.frame_turn, vec3::sub(progress, self.anchor_progress));
         vec3::add(self.anchor, traveled)
     }
 
-    // Write the pose the track holds at the pose time onto the camera, and
-    // publish where the track has reached.
+    // Carry travel on from `at` mid-leg: where a frame move carried the point,
+    // or where the camera stands once the subject it filmed is gone.
+    fn reanchor(&mut self, at: [f32; 3]) {
+        self.anchor = at;
+        self.anchor_progress = timeline::progress(&self.travel, self.leg, self.pose_seconds);
+    }
+
+    // Let go of a subject that has gone since the camera was last posed: the
+    // track carries on driving the camera from where it stands.
+    fn check_subject(&mut self, ctx: &PipelineContext<'_>) {
+        let Some(id) = self.subject else {
+            return;
+        };
+        if ctx.get_by_id::<Transform>(id).is_some() {
+            return;
+        }
+        tracing::warn!("camera track: its subject ({id}) is gone, so the track drives the camera");
+        self.subject = None;
+        if let Some(camera) = self.camera.and_then(|c| ctx.get::<Camera3D>(c)) {
+            let at = camera.position;
+            self.reanchor(at);
+        }
+    }
+
+    // Write the pose the track holds at the pose time onto the subject and
+    // the camera, and publish where the track has reached.
     fn apply(&mut self, ctx: &mut PipelineContext<'_>) {
         self.advance();
         let elapsed = self.elapsed();
         let angles = timeline::sample(self.start_angles_deg, &self.turn, self.pose_seconds);
+        let [yaw, pitch] = angles.map(f32::to_radians);
         let position = self.position();
-        if let Some(camera) = self.camera
+        if let Some(subject) = self.subject {
+            if let Some(transform) = ctx.get_mut_by_id::<Transform>(subject) {
+                transform.position = position;
+            }
+            let boom = timeline::sample(self.boom_start, &self.boom, self.pose_seconds);
+            if let Some(camera) = self.camera
+                && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
+            {
+                let eye = boom_eye(position, yaw, pitch, cam.up, boom);
+                cam.set_pose(eye, yaw, pitch);
+            }
+        } else if let Some(camera) = self.camera
             && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
         {
-            cam.set_pose(position, angles[0].to_radians(), angles[1].to_radians());
+            cam.set_pose(position, yaw, pitch);
         }
         let duration = self.duration();
         ctx.insert_resource(CameraTrackStatus {
@@ -177,8 +273,29 @@ impl System for CameraTrackSystem {
             self.start_angles_deg = [camera.yaw.to_degrees(), camera.pitch.to_degrees()];
         }
         self.anchor = self.start_position;
+        if self.subject.is_none() && !self.boom_legs.is_empty() {
+            tracing::warn!("camera track: it has boom legs but no subject, so they are not used");
+        }
+        if let Some(id) = self.subject {
+            match subject_start(ctx, id) {
+                Ok(position) => {
+                    let authored = vec3::length(vec3::sub(self.start_position, position));
+                    self.anchor = position;
+                    self.resolve_boom(authored);
+                }
+                Err(why) => {
+                    tracing::warn!(
+                        "camera track: its subject ({id}) {why}, so the track drives the camera"
+                    );
+                    self.subject = None;
+                }
+            }
+        }
         self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
         self.resolve_turn();
+        self.duration = timeline::duration(&self.travel)
+            .max(timeline::duration(&self.turn))
+            .max(timeline::duration(&self.boom));
         self.apply(ctx);
     }
 
@@ -186,22 +303,32 @@ impl System for CameraTrackSystem {
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }
-        // The frame moved the camera: travel carries on from where it was
-        // carried to, its offsets turned with the frame.
-        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>())
-            && let Some(cam) = self.camera.and_then(|c| ctx.get::<Camera3D>(c))
-        {
-            self.anchor = cam.position;
-            self.anchor_progress = timeline::progress(&self.travel, self.leg, self.pose_seconds);
+        // The frame moved the carried point: travel carries on from where it
+        // was carried to, its offsets turned with the frame.
+        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
+            let carried = match self.subject {
+                Some(id) => ctx.get_by_id::<Transform>(id).map(|t| t.position),
+                None => self
+                    .camera
+                    .and_then(|c| ctx.get::<Camera3D>(c))
+                    .map(|c| c.position),
+            };
+            if let Some(at) = carried {
+                self.reanchor(at);
+            }
             self.frame_turn = quat_normalize(quat_mul(rebase.rotation, self.frame_turn));
         }
+        // Before the clock moves, so travel is handed over at the pose the
+        // camera stands in.
+        self.check_subject(ctx);
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
         let before = self.elapsed();
         self.ticks += u64::from(timing.ticks);
         self.tick_dt = timing.tick_dt;
         let now = self.elapsed();
         let cut = timeline::cut_crossed(&self.travel, before, now)
-            || timeline::cut_crossed(&self.turn, before, now);
+            || timeline::cut_crossed(&self.turn, before, now)
+            || (self.subject.is_some() && timeline::cut_crossed(&self.boom, before, now));
         self.pose_seconds = pose_seconds(now, &timing, self.pose_seconds, cut);
         self.apply(ctx);
         if cut && self.camera.is_some() {
@@ -209,6 +336,39 @@ impl System for CameraTrackSystem {
         }
         StepResult::Continue
     }
+}
+
+// Where the subject `id` starts, or why it cannot be carried: its Transform
+// is the one travel writes, so it has to be a world-space root. A subject the
+// physics also simulates is carried anyway, with a warning, since the two then
+// fight over it.
+fn subject_start(ctx: &PipelineContext<'_>, id: AssetId) -> Result<[f32; 3], &'static str> {
+    let entity = ctx.entity_of(id).ok_or("is missing")?;
+    let transform = ctx.get::<Transform>(entity).ok_or("has no transform")?;
+    if ctx.get::<Parent>(entity).is_some() {
+        return Err("has a parent, so its transform is not in world space");
+    }
+    if ctx.get::<Collider>(entity).is_some() || ctx.get::<BodyDynamics>(entity).is_some() {
+        tracing::warn!(
+            "camera track: its subject ({id}) has a collider, which the physics will push against the track"
+        );
+    }
+    Ok(transform.position)
+}
+
+// The eye of a camera at `yaw` and `pitch` about `up` that sees `subject`
+// `boom` away: its distance, then degrees right of and above the center of
+// view.
+fn boom_eye(subject: [f32; 3], yaw: f32, pitch: f32, up: [f32; 3], boom: [f32; 3]) -> [f32; 3] {
+    let [distance, right_deg, up_deg] = boom;
+    let (right, rise) = (right_deg.to_radians(), up_deg.to_radians());
+    let [x_axis, y_axis, back] = view_axes(yaw, pitch, up);
+    let along = [cos(rise) * sin(right), sin(rise), -cos(rise) * cos(right)];
+    let toward = vec3::add(
+        vec3::add(vec3::scale(x_axis, along[0]), vec3::scale(y_axis, along[1])),
+        vec3::scale(back, along[2]),
+    );
+    vec3::sub(subject, vec3::scale(toward, distance))
 }
 
 // The track time a frame poses the camera at: `alpha` of the way from the
@@ -238,6 +398,9 @@ fn turn_seconds(leg: &CameraTurnKey, sweep_deg: f32) -> f32 {
 }
 
 #[cfg(test)]
+mod rig_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::components::cook::Camera3D as Camera3DArgs;
@@ -249,7 +412,11 @@ mod tests {
     const TICKS_PER_SECOND: usize = 60;
 
     fn track(travel: Vec<CameraTravel>, turn: Vec<CameraTurn>) -> CameraTrack {
-        CameraTrack::bake(crate::components::CameraTrackArgs { travel, turn })
+        CameraTrack::bake(crate::components::CameraTrackArgs {
+            travel,
+            turn,
+            ..Default::default()
+        })
     }
 
     // A world holding one camera at `pose` (position, yaw degrees, pitch

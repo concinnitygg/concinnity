@@ -210,9 +210,9 @@ fn a_camera_posed_from_outside_keeps_its_pose_through_a_frame_move() {
     assert_eq!(eye, [0.0, 1.0, 0.0]);
 }
 
-// A camera flown along a track through many frame moves, with the simulation
-// colliding it as a capsule, ends where the track's legs add up to however
-// the frames group and drop their ticks: no frame move costs it travel.
+// A camera flown along a track through many frame moves, beside a running
+// simulation, ends where the track's legs add up to however the frames group
+// and drop their ticks: no frame move costs it travel.
 #[test]
 fn a_tracked_camera_reaches_the_end_of_its_track_through_frame_moves() {
     use crate::camera::track::{CameraTrackStatus, CameraTrackSystem};
@@ -235,7 +235,7 @@ fn a_tracked_camera_reaches_the_end_of_its_track_through_frame_moves() {
                 ..Default::default()
             })
             .collect(),
-        turn: vec![],
+        ..Default::default()
     });
     let mut track_system = CameraTrackSystem::new(&track);
     world.push(track);
@@ -1201,4 +1201,56 @@ fn a_buoyant_prop_floats_in_the_worlds_water() {
     let y = |e: Entity| world.get::<Transform>(e).unwrap().position[1];
     assert!((y(floats) - 2.0).abs() < 0.02, "{}", y(floats));
     assert!((y(sinks) - 0.5).abs() < 0.05, "{}", y(sinks));
+}
+
+// A camera a track drives has no capsule, and gets one once the track lets
+// it go; a track that takes over a camera drops the capsule it had.
+#[test]
+fn only_a_camera_no_track_drives_is_collided_as_a_capsule() {
+    use crate::components::{CameraTrack, CameraTrackArgs};
+    let track = || CameraTrack::bake(CameraTrackArgs::default());
+
+    let mut world = World::new();
+    world.push(controlled_camera());
+    let tracked = world.push(track());
+    let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
+    physics.init(&mut world.context());
+    assert!(physics.player.is_none());
+    let bodies = physics.physics_body_count();
+    physics.step(&mut world.context());
+    assert_eq!(physics.physics_body_count(), bodies, "still tracked");
+
+    world.despawn(tracked);
+    physics.step(&mut world.context());
+    assert!(physics.player.is_some(), "handed back");
+    assert_eq!(physics.physics_body_count(), bodies + 1);
+
+    world.push(track());
+    physics.step(&mut world.context());
+    assert!(physics.player.is_none(), "taken over");
+    assert_eq!(physics.physics_body_count(), bodies);
+}
+
+// The physics never writes the pose of a camera a track drives.
+#[test]
+fn a_tracked_camera_keeps_the_pose_the_track_wrote() {
+    use crate::components::{CameraTrack, CameraTrackArgs};
+    let mut world = World::new();
+    world.push(controlled_camera());
+    world.push(CameraTrack::bake(CameraTrackArgs::default()));
+    world.push(RigidBody::default());
+    let mut physics = PhysicsSystem::new(&PhysicsConfig::default());
+    physics.init(&mut world.context());
+    for camera in world.context().query_mut::<Camera3D>() {
+        camera.position = [3.0, 7.0, -2.0];
+    }
+    for _ in 0..30 {
+        physics.step(&mut world.context());
+    }
+    let camera = world.query::<Camera3D>().next().unwrap();
+    assert_eq!(
+        camera.position,
+        [3.0, 7.0, -2.0],
+        "no gravity pulled it down"
+    );
 }

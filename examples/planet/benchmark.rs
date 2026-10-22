@@ -1,35 +1,38 @@
-//! The benchmark run: a short run over the meadow and across the coast out
-//! over the sea, then a climb that speeds up until the camera leaves the air,
-//! a pass over the planet from orbit, and a descent to skim the ground far
-//! round the planet, timed frame by frame and reported when the camera reaches
-//! the end of its path.
+//! The benchmark run: the chrome marble flown through the world and filmed
+//! from behind it, timed frame by frame and reported when the flight ends.
+//! It skims the meadow and crosses the beach and the surf, over the two
+//! floating crates, out over the sea; climbs toward the morning sun until it
+//! leaves the air; turns to show the whole planet from orbit and the
+//! terminator ahead; drops into the night and skims it low and fast; and
+//! lands on the next continent's meadow as the sun rises.
 //!
 //! A planet is simulated in a frame that moves with the camera, every
 //! kilometer, and draws its ground as tiles that refine and coarsen as the
 //! camera passes, so its cost is paid along a path rather than at a station.
 //! The run pays it on the ground, where the grass and the finest tiles are,
-//! through a climb and a descent that cross hundreds of frame moves, and from
-//! orbit, where the whole planet is in view.
+//! over the water, through a climb and a descent that cross hundreds of frame
+//! moves, and from orbit, where the whole planet is in view.
 //!
-//! The path follows one great circle round the planet from where the world
-//! starts, setting out east toward the nearest shore, each point a fixed
-//! height over the ground the planet's own shape puts there, or over the sea
-//! where the ground lies under it: the camera rides the hills and the waves
-//! rather than cutting through them. Height and speed change by a constant
-//! ratio at the fastest point of the climb and the descent, so a kilometer is
-//! crossed as gently at the top as a meter at the bottom. The camera looks down
-//! the course over the meadow, then turns to watch the sun. The track runs on
-//! the fixed simulation clock, so a slower host visits the same poses at the
-//! same track times and simply samples fewer of them.
+//! The path follows one great circle round the planet through where the
+//! world starts, setting out east toward the nearest shore, each point a
+//! fixed height over the ground the planet's own shape puts there, or over
+//! the sea where the ground lies under it: the marble rides the hills and the
+//! waves rather than cutting through them. Height and speed change by a
+//! constant ratio at the fastest point of the climb and the descent, so a
+//! kilometer is crossed as gently at the top as a meter at the bottom. The
+//! track runs on the fixed simulation clock, so a slower host visits the same
+//! poses at the same track times and simply samples fewer of them.
 //!
-//! The run is declared as the world's `BenchmarkConfig`: the camera's start,
-//! its legs, the phases the report is cut into and the frames it saves under
-//! `benchmark/` in the run's screenshot directory (`screenshots/` unless
-//! `--screenshots-dir` names another). It changes nothing until the app is benchmarked. The world's own sky turns as it always does, through the
-//! warm-up too; the camera's start and its track come from the planet's shape
-//! and where that sky carries the sun.
+//! The run is declared as the world's `BenchmarkConfig`: the marble it films
+//! and where it starts, its legs, the camera's turns and framing, the phases
+//! the report is cut into and the frames it saves under `benchmark/` in the
+//! run's screenshot directory (`screenshots/` unless `--screenshots-dir`
+//! names another). It changes nothing until the app is benchmarked. The
+//! world's own sky turns as it always does, through the warm-up too, so the
+//! flight's times are laid out against where that sky carries the sun.
 
 mod flight;
+mod framing;
 mod path;
 
 use concinnity::components::{
@@ -47,22 +50,25 @@ use path::Path;
 const WARMUP_SECONDS: f32 = 2.5;
 
 // The frames the run saves: the file name and the moment, in seconds of the
-// run as the HUD's `TRACK` chip counts them (the warm-up included). Day over
-// the meadow, across the beach and out over the sea, climbing out of it, the
-// planet from high up and from orbit, then the night skimmed low and back on
-// the ground.
-const CAPTURES: [(&str, f32); 10] = [
-    ("ground-day", 13.3),
-    ("shore-day", 14.5),
-    ("beach-day", 15.5),
-    ("sea-day", 22.0),
-    ("climb-6m", 31.93),
-    ("climb-30m", 34.65),
-    ("climb-600m", 38.5),
-    ("orbit", 55.0),
-    ("low-night", 95.0),
-    ("ground-night", 132.0),
+// run as the HUD's `TRACK` chip counts them (the warm-up included), each named
+// for what it shows.
+const CAPTURES: [(&str, f32); 12] = [
+    ("meadow-side", 11.5),
+    ("meadow-chase", 19.0),
+    ("beach", 25.0),
+    ("surf-crates", 29.4),
+    ("sea-skim", 40.0),
+    ("climb-sun", 53.0),
+    ("orbit-dayside", 66.0),
+    ("orbit-terminator", 76.0),
+    ("night-disc", 84.0),
+    ("night-skim", 105.0),
+    ("sunrise-coast", 121.0),
+    ("sunrise-meadow", 131.0),
 ];
+
+// The prop the run films.
+const SUBJECT: &str = "marble";
 
 // What the world declares that the run reads: the planet and sea its path
 // rides, and the sky and light it aims by.
@@ -74,8 +80,8 @@ struct Declared {
 }
 
 /// Declare the benchmark over `world`, already declared in `builder`: the
-/// camera starts where its path does and flies it, one phase per stretch of
-/// the flight.
+/// marble starts where its path does and flies it, filmed from behind, one
+/// phase per stretch of the flight.
 pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), String> {
     let declared = Declared {
         // The planet's references are names, which its shape does not need.
@@ -91,34 +97,37 @@ pub(crate) fn declare(builder: &mut WorldBuilder, world: &str) -> Result<(), Str
     let path = Path::new(&declared.planet, declared.sea_level, |seconds| {
         sun(&declared, warmup + seconds)
     });
-    builder.add(
-        "benchmark",
-        &BenchmarkConfig {
-            warmup_seconds: WARMUP_SECONDS,
-            start: Some(CameraPose {
-                position: path.start,
-                yaw_deg: path.yaw_deg,
-                pitch_deg: path.pitch_deg,
-            }),
-            travel: path.travel,
-            turn: path.turn,
-            phases: PHASES
-                .iter()
-                .map(|phase| BenchmarkPhase {
-                    name: phase.name.to_string(),
-                    seconds: narrow_f32(phase.seconds),
-                })
-                .collect(),
-            captures: CAPTURES
-                .iter()
-                .map(|&(name, track_seconds)| FrameCapture {
-                    seconds: track_seconds - WARMUP_SECONDS,
-                    path: format!("benchmark/{name}.png"),
-                })
-                .collect(),
-            ..Default::default()
-        },
-    );
+    builder
+        .add(
+            "benchmark",
+            &BenchmarkConfig {
+                warmup_seconds: WARMUP_SECONDS,
+                start: Some(CameraPose {
+                    position: path.start,
+                    yaw_deg: path.yaw_deg,
+                    pitch_deg: path.pitch_deg,
+                }),
+                travel: path.travel,
+                turn: path.turn,
+                boom: path.boom,
+                phases: PHASES
+                    .iter()
+                    .map(|phase| BenchmarkPhase {
+                        name: phase.name.to_string(),
+                        seconds: narrow_f32(phase.seconds),
+                    })
+                    .collect(),
+                captures: CAPTURES
+                    .iter()
+                    .map(|&(name, track_seconds)| FrameCapture {
+                        seconds: track_seconds - WARMUP_SECONDS,
+                        path: format!("benchmark/{name}.png"),
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+        )
+        .reference("subject", SUBJECT);
     Ok(())
 }
 

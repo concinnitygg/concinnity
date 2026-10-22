@@ -12,7 +12,8 @@ mod status;
 mod system;
 mod timeline;
 
-use crate::components::Vocabulary;
+use crate::components::{Prop, Vocabulary};
+use crate::ecs::Ref;
 use alloc::vec::Vec;
 use concinnity_core::math::vec3;
 pub(crate) use status::CameraTrackStatus;
@@ -122,12 +123,43 @@ pub struct CameraTurn {
     pub cut: bool,
 }
 
+/// One change of framing on a [`CameraTrack`](#cameratrack)'s boom track: how
+/// far the camera sits from the track's `subject` and where the subject sits
+/// in the frame.
+///
+/// Either value may be left out to keep the one the boom already holds. Until
+/// the first leg that sets a value the boom holds that value, so a track can
+/// open on the framing its first leg names.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
+)]
+#[serde(default)]
+pub struct CameraBoom {
+    /// Distance from the subject the camera ends at, in world units, or unset
+    /// to hold the current one.
+    pub distance: Option<f32>,
+    /// Where the subject sits in the frame the leg ends at, in degrees right
+    /// of and above the center of view, or unset to hold the current place.
+    /// `[0, -10]` keeps the subject a little below the center.
+    pub offset_deg: Option<[f32; 2]>,
+    /// Duration in seconds. A leg with only this set holds the framing for
+    /// that long.
+    pub seconds: f32,
+    /// How the change is paced.
+    pub ease: Ease,
+    /// Snap to the leg's framing instead of moving to it, as at a shot change.
+    /// A leg that takes no time anyway is a cut as soon as it changes the
+    /// framing.
+    pub cut: bool,
+}
+
 /// Drives the world's [`Camera3D`](#camera3d) along a scripted path, so a
 /// fly-through visits the same poses on every machine that runs it.
 ///
 /// One per world, and its presence takes the camera away from the input
 /// controller: a world declaring a track is driven by the track, whatever
-/// `controller` the camera carries.
+/// `controller` the camera carries. Nor does the physics collide the camera
+/// while a track drives it, so the path is flown exactly as written.
 ///
 /// The track has two independent lists played against one clock. `travel` is
 /// where the camera goes and `turn` is where it looks, so a leg of each runs
@@ -137,6 +169,22 @@ pub struct CameraTurn {
 ///
 /// A leg marked `cut` jumps rather than runs, which is how a track changes
 /// shot: the frame drawn from the new pose does not blend with the old one.
+///
+/// A track with a `subject` films a [Prop](#prop) from behind a boom, as a
+/// third-person camera does. `travel` then carries the subject rather than the
+/// camera, `turn` is still where the camera looks, and a third list, `boom`,
+/// sets how far back the camera sits and where in the frame the subject
+/// appears. The camera is placed from the subject on every frame, so the
+/// subject holds its place in the frame exactly while either moves, and a
+/// sweep of `turn` circles the camera round it. Without boom legs the camera
+/// is placed at its authored distance from the subject, on the line of view
+/// through it, from the first frame.
+///
+/// The subject must be a Prop with no `parent`, since travel writes its
+/// position in world space, and is moved by the track alone: give it no
+/// `collider` and no [`PropBody`](#propbody), or the physics pushes against
+/// the track. A subject that is missing, parented or later removed leaves the
+/// track driving the camera itself from wherever it stands, with a warning.
 ///
 /// The clock is the fixed simulation step, not the frame delta. A machine that
 /// renders half as fast visits the same poses at the same track times and
@@ -160,6 +208,7 @@ pub struct CameraTurn {
 ///         degrees_per_second: 30.0,
 ///         ..Default::default()
 ///     }],
+///     ..Default::default()
 /// };
 /// ```
 #[derive(
@@ -173,6 +222,12 @@ pub struct CameraTrackArgs {
     /// `travel` and independent of it, so the camera can turn one way while
     /// traveling another.
     pub turn: Vec<CameraTurn>,
+    /// The [Prop](#prop) the track carries and films, or unset for a track
+    /// that carries the camera itself.
+    pub subject: Option<Ref<Prop>>,
+    /// How the camera frames the `subject`, leg by leg, on the same clock as
+    /// the other two lists. Used only with a `subject`.
+    pub boom: Vec<CameraBoom>,
 }
 
 /// A point the travel track reaches, baked from a
@@ -231,6 +286,33 @@ pub struct CameraTurnKey {
     pub cut: bool,
 }
 
+/// A framing the boom track reaches, baked from a [`CameraBoom`](#cameraboom)
+/// leg. Unset values are resolved at world start, against the framing the
+/// camera starts in.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    crate::ecs::AssetFields,
+)]
+pub struct CameraBoomKey {
+    /// Distance from the subject reached, or `None` to hold the current one.
+    pub distance: Option<f32>,
+    /// Place of the subject in the frame reached, in degrees right and up,
+    /// or `None` to hold the current one.
+    pub offset_deg: Option<[f32; 2]>,
+    /// Seconds from the track's start at which the framing is reached.
+    pub end_seconds: f32,
+    /// How the change up to this key is paced.
+    pub ease: Ease,
+    /// The camera snaps to this framing rather than moving to it.
+    pub cut: bool,
+}
+
 /// The runtime `CameraTrack`: the keys
 /// [`cook::CameraTrack`](crate::components::cook::CameraTrack)'s legs bake into.
 ///
@@ -256,6 +338,10 @@ pub struct CameraTrack {
     pub travel: Vec<CameraTravelKey>,
     /// The turn track, as absolute headings.
     pub turn: Vec<CameraTurnKey>,
+    /// The prop the track carries and films, if any.
+    pub subject: Option<Ref<Prop>>,
+    /// The boom track, as the framings it reaches.
+    pub boom: Vec<CameraBoomKey>,
 }
 
 impl CameraTrack {
@@ -288,7 +374,28 @@ impl CameraTrack {
                 cut: leg.cut,
             })
             .collect();
-        Self { travel, turn }
+        let mut end_seconds = 0.0_f32;
+        let boom = args
+            .boom
+            .iter()
+            .map(|leg| {
+                let seconds = if leg.cut { 0.0 } else { leg.seconds };
+                end_seconds += seconds;
+                CameraBoomKey {
+                    distance: leg.distance,
+                    offset_deg: leg.offset_deg,
+                    end_seconds,
+                    ease: leg.ease,
+                    cut: leg.cut,
+                }
+            })
+            .collect();
+        Self {
+            travel,
+            turn,
+            subject: args.subject,
+            boom,
+        }
     }
 }
 
@@ -321,7 +428,11 @@ mod tests {
     }
 
     fn baked(travel: Vec<CameraTravel>, turn: Vec<CameraTurn>) -> CameraTrack {
-        CameraTrack::bake(CameraTrackArgs { travel, turn })
+        CameraTrack::bake(CameraTrackArgs {
+            travel,
+            turn,
+            ..Default::default()
+        })
     }
 
     #[test]
@@ -463,6 +574,41 @@ mod tests {
     }
 
     #[test]
+    fn boom_legs_are_laid_out_on_the_clock_and_keep_their_subject() {
+        let t = CameraTrack::bake(CameraTrackArgs {
+            subject: Some(Ref::new(crate::ecs::asset_id::AssetId(3))),
+            boom: vec![
+                CameraBoom {
+                    distance: Some(4.0),
+                    seconds: 2.0,
+                    ..Default::default()
+                },
+                CameraBoom {
+                    offset_deg: Some([5.0, -8.0]),
+                    seconds: 3.0,
+                    ease: Ease::InOut,
+                    ..Default::default()
+                },
+                CameraBoom {
+                    distance: Some(9.0),
+                    seconds: 6.0,
+                    cut: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        assert_eq!(t.subject, Some(Ref::new(crate::ecs::asset_id::AssetId(3))));
+        let ends: Vec<f32> = t.boom.iter().map(|k| k.end_seconds).collect();
+        assert_eq!(ends, [2.0, 5.0, 5.0], "a cut takes no time");
+        assert_eq!(t.boom[0].distance, Some(4.0));
+        assert_eq!(t.boom[0].offset_deg, None);
+        assert_eq!(t.boom[1].offset_deg, Some([5.0, -8.0]));
+        assert_eq!(t.boom[1].ease, Ease::InOut);
+        assert!(t.boom[2].cut);
+    }
+
+    #[test]
     fn a_degenerate_direction_becomes_a_hold_of_the_duration_it_implied() {
         // Zeroing the leg outright would pull every later leg earlier on the
         // clock, silently rewriting a path the author laid out around it.
@@ -489,6 +635,21 @@ mod tests {
                 ..Default::default()
             }],
         );
+        let boom = CameraTrack::bake(CameraTrackArgs {
+            boom: vec![CameraBoom {
+                distance: Some(-2.0),
+                offset_deg: Some([f32::NAN, 4.0]),
+                seconds: f32::NAN,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert_eq!(boom.boom[0].distance, Some(0.0));
+        assert_eq!(
+            boom.boom[0].offset_deg, None,
+            "an offset that is not a real angle holds"
+        );
+        assert_eq!(boom.boom[0].end_seconds, 0.0);
         assert_eq!(t.travel[0].delta, [0.0; 3]);
         assert_eq!(t.travel[0].end_seconds, 0.0);
         // A target that is not a real angle is dropped, so the leg holds.
