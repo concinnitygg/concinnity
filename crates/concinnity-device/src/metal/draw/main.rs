@@ -21,7 +21,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::PixelRect;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::probe::radiance::FaceStorage;
-use concinnity_engine::render::uniforms::{FaceCamera, ViewUniforms};
+use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -109,6 +109,8 @@ pub(in crate::metal) struct FacePass<'a> {
     pub timer: PassTimer,
     // The scale the face's radiance is stored at.
     pub storage: FaceStorage,
+    // The per-point sky the face shades by.
+    pub daylight: &'a DaylightBlock,
 }
 
 impl FacePass<'_> {
@@ -120,6 +122,7 @@ impl FacePass<'_> {
         clusters: None,
         timer: PassTimer::None,
         storage: FaceStorage::PROBE,
+        daylight: &DaylightBlock::OFF,
     };
 }
 
@@ -377,6 +380,7 @@ impl MtlContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: pass.storage.scale(),
+            daylight: *pass.daylight,
         });
 
         self.bind_clusters(&encoder, pass.clusters);
@@ -617,6 +621,7 @@ impl MtlContext {
             pre_exposure: self.pre_exposure.value(),
             screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
             _pad: 0.0,
+            daylight: self.state.view.daylight,
         }
     }
 

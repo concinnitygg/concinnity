@@ -117,12 +117,12 @@ fn fog_params_layout_matches_the_shader() {
     assert_eq!(offset_of!(FogParams, _pad3), 168);
 }
 
-// Fifteen scalars: the post tunables, the fade, the view selector, the
-// depth view's two distances, the reactive flag and the night-vision
-// weight.
+// Sixteen scalars: the post tunables, the fade, the view selector, the
+// depth view's two distances, the reactive flag, and the night-vision weight
+// and luminance scale.
 #[test]
 fn composite_params_layout_matches_shaders() {
-    assert_eq!(size_of::<CompositeParams>(), 60);
+    assert_eq!(size_of::<CompositeParams>(), 64);
     assert_eq!(offset_of!(CompositeParams, post), 0);
     assert_eq!(size_of::<PostProcessParams>(), 36);
     assert_eq!(offset_of!(PostProcessParams, exposure), 12);
@@ -133,6 +133,7 @@ fn composite_params_layout_matches_shaders() {
     assert_eq!(offset_of!(CompositeParams, depth_far), 48);
     assert_eq!(offset_of!(CompositeParams, reactive_valid), 52);
     assert_eq!(offset_of!(CompositeParams, night_vision), 56);
+    assert_eq!(offset_of!(CompositeParams, night_nits), 60);
 }
 
 #[test]

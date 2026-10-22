@@ -51,9 +51,10 @@ const fn sun_shot(seconds: f64, yaw: f64, pitch: f64, distance: f64, offset: [f6
 // back, over the beach, round with the floating crates as they pass on the
 // right, out to sea, up past it at the sun, round to face the whole planet
 // from orbit, ahead to the terminator, down at the dark disc, low through the
-// night, and ahead into the sunrise. The camera moves from one shot to the next eased in and out,
-// and holds between.
-pub(super) const SHOTS: [Shot; 23] = [
+// night, back at the setting moon over the sea, and ahead into the sunrise.
+// The camera moves from one shot to the next eased in and out, and holds
+// between.
+pub(super) const SHOTS: [Shot; 26] = [
     shot(0.0, 0.0, -4.0, 3.2, [0.0, -6.0]),
     shot(3.0, 0.0, -4.0, 3.0, [0.0, -6.0]),
     shot(7.0, -75.0, -5.0, 3.6, [8.0, -5.0]),
@@ -73,10 +74,13 @@ pub(super) const SHOTS: [Shot; 23] = [
     shot(60.0, -180.0, 3.0, 5.0, [-10.0, 12.0]),
     shot(67.0, -180.0, 3.0, 5.0, [-10.0, 12.0]),
     shot(72.0, 0.0, 2.0, 5.0, [8.0, 12.0]),
-    shot(84.0, 0.0, 2.0, 4.5, [8.0, 10.0]),
-    shot(92.0, 0.0, -10.0, 3.6, [0.0, -6.0]),
+    shot(94.0, 0.0, 2.0, 4.5, [8.0, 10.0]),
+    shot(102.0, 0.0, -10.0, 3.6, [0.0, -6.0]),
+    shot(103.0, -1.0, -9.5, 3.6, [0.0, -6.0]),
+    shot(106.0, 165.0, 4.0, 4.0, [10.0, -14.0]),
+    shot(108.5, 165.0, 4.0, 4.0, [10.0, -14.0]),
     shot(112.0, -12.0, -4.0, 3.4, [0.0, -6.0]),
-    shot(126.0, -12.0, -4.0, 3.2, [0.0, -6.0]),
+    shot(128.0, -12.0, -4.0, 3.2, [0.0, -6.0]),
 ];
 
 /// The two shots the camera is between `seconds` into the run, and how far

@@ -1976,6 +1976,7 @@ impl VkContext {
         TransparentView::new(
             &self.pass_camera(vp, cam_pos, time),
             self.uniforms.lights.uniforms(),
+            &self.state.view.daylight,
         )
     }
 

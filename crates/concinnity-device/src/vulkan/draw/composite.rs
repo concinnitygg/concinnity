@@ -13,6 +13,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::fullscreen;
@@ -116,6 +117,10 @@ impl fullscreen::CompositeEncoder for VkContext {
                 .adaptation
                 .as_ref()
                 .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
+            night_nits: auto_exposure::nits_per_exposed(
+                self.state.view.sunlight,
+                self.post_process.exposure,
+            ),
         };
         // SAFETY: the composite layout is live and matches the bound pipeline; `composite` is
         // borrowed for the call.

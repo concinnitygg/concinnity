@@ -6,8 +6,10 @@
 
 {HDR_STORE}
 
-// Layout matches `TransparentView` / the TransparentViewBlock UBO (256 B). One
-// host block feeds every producer.
+{DAYLIGHT_TYPES}
+
+// Layout matches `TransparentView` / the TransparentViewBlock UBO. One host
+// block feeds every producer.
 struct TransparentView
 {
     float4x4 vp;       // world -> clip (jittered when TAA is on)
@@ -29,6 +31,8 @@ struct TransparentView
     // x: 1 when the irradiance cube holds the sky's diffuse light, else a flat
     // ambient stands in. y: the authored indirect-light multiplier.
     float4 ambient;
+    // The planet's per-point sky, off for a world without one.
+    DaylightBlock daylight;
 };
 
 {CLUSTER_TYPES}

@@ -73,6 +73,10 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{RT_TRACE}", "rt_trace.hlsl"),
     ("{GLASS_REFLECTION}", "glass_reflection.hlsl"),
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
+    // DAYLIGHT_TYPES trails VIEW_UNIFORMS and TRANSPARENT_TYPES, which carry
+    // its marker, behind a guard; DAYLIGHT trails the passes that read it
+    // (MAIN_SHADING, the water).
+    ("{DAYLIGHT_TYPES}", "daylight_types.hlsl"),
     // REACTIVE_MASK trails TRANSPARENT_TYPES, which carries its marker; the
     // particle pass carries it too.
     ("{REACTIVE_MASK}", "reactive_mask.hlsl"),
@@ -94,6 +98,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{LIGHT_TYPES}", "light_types.hlsl"),
     ("{RAYMARCH_COMMON}", "raymarch_common.hlsl"),
     ("{MAIN_SHADING}", "main_shading.hlsl"),
+    ("{DAYLIGHT}", "daylight.hlsl"),
     // CANOPY trails MAIN_SHADING, which carries its marker, and leads
     // GRASS_FIELD, whose marker it carries; the grass kernel carries
     // GRASS_FIELD too.

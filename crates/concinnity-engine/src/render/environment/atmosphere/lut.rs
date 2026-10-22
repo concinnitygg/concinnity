@@ -33,13 +33,13 @@ pub(super) const TRANSMITTANCE_STEPS: u32 = 40;
 // A [0, 1] table coordinate to the texel-center range, so 0 and 1 land on the
 // first and last texel centers and the ends are never filtered against the
 // clamp.
-fn unit_to_texels(unit: f32, size: u32) -> f32 {
+pub(super) fn unit_to_texels(unit: f32, size: u32) -> f32 {
     let n = size as f32;
     unit * (n - 1.0) / n + 0.5 / n
 }
 
 // The inverse of `unit_to_texels`.
-fn texels_to_unit(uv: f32, size: u32) -> f32 {
+pub(super) fn texels_to_unit(uv: f32, size: u32) -> f32 {
     let n = size as f32;
     (uv - 0.5 / n) * n / (n - 1.0)
 }

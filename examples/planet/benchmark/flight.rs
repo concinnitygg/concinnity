@@ -71,7 +71,7 @@ pub(super) const PHASES: [Phase; 9] = [
     },
     Phase {
         name: "orbit",
-        seconds: 18.0,
+        seconds: 28.0,
         height: ORBIT_HEIGHT,
         speed: ORBIT_SPEED,
         change_seconds: 0.0,
@@ -85,7 +85,7 @@ pub(super) const PHASES: [Phase; 9] = [
     },
     Phase {
         name: "night",
-        seconds: 26.0,
+        seconds: 18.0,
         height: NIGHT_HEIGHT,
         speed: NIGHT_SPEED,
         change_seconds: 0.0,

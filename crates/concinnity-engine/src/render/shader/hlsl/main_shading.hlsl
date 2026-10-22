@@ -265,6 +265,15 @@ float ltc_evaluate(float3 N, float3 V, float3 P, float3x3 m_inv, float3 corners[
     return two_sided ? abs(form_factor) : max(-form_factor, 0.0);
 }
 
+#define DAYLIGHT VIEW.daylight
+{DAYLIGHT}
+
+// Only a planet's ground is lit from its own sky; every other surface keeps
+// the camera's, and compiles without it.
+#if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
+#define DAYLIGHT_SURFACE 1
+#endif
+
 {CANOPY}
 
 // ---- The shading model ----
@@ -381,11 +390,35 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // The direct light the ground under a canopy still gets.
     float3 Lo_under = (float3)(0.0);
 
+    // On a planet's ground, how much the light is the point's own: the
+    // bodies through the air above it and its own sky, in place of the
+    // camera's, as it lies further round the planet or the camera climbs.
+#ifdef DAYLIGHT_SURFACE
+    float3 day_up = (float3)(0.0);
+    float day_reach = 0.0;
+    if (daylight_on())
+    {
+        day_up = daylight_up(v.world_pos);
+        day_reach = daylight_reach(day_up) * daylight_ground(v.world_pos);
+    }
+#endif
+
     for (int i = 0; i < LIGHTS.num_dir; i++)
     {
         float3 L = normalize(LIGHTS.dir[i].dir_i.xyz);
         float intensity = LIGHTS.dir[i].dir_i.w;
         float3 radiance = LIGHTS.dir[i].col.xyz * intensity;
+#ifdef DAYLIGHT_SURFACE
+        if (day_reach > 0.0 && daylight_body(uint(i)))
+        {
+            radiance = lerp(radiance, daylight_body_light(uint(i), day_up), day_reach);
+        }
+        // A body too faint to show (the sun by night, the moon by day).
+        if (daylight_on() && max(radiance.r, max(radiance.g, radiance.b)) * VIEW.pre_exposure < 1e-4)
+        {
+            continue;
+        }
+#endif
 
         float3 H = normalize(V + L);
         float NdL = max(dot(N, L), 0.0);
@@ -547,6 +580,11 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         }
     }
 
+#ifdef DAYLIGHT_SURFACE
+    // The point's own sky on a level surface, for the ground and the canopy.
+    float3 day_sky = day_reach > 0.0 ? daylight_level_irradiance(day_up) : (float3)(0.0);
+#endif
+
     // What the surface reflects of diffuse light arriving from every side.
     float3 diffuse_albedo;
     float3 ambient;
@@ -555,6 +593,12 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         float3 F_ibl       = fresnel_schlick(NdV, F0);
         diffuse_albedo     = (1.0 - F_ibl) * (1.0 - metallic) * albedo;
         float3 irradiance  = irradiance_sample(N);
+#ifdef DAYLIGHT_SURFACE
+        if (day_reach > 0.0)
+        {
+            irradiance = lerp(irradiance, day_sky * saturate(0.5 + 0.5 * dot(N, day_up)), day_reach);
+        }
+#endif
         ambient = diffuse_albedo * irradiance / PI;
     }
     else
@@ -574,6 +618,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 prefiltered;
     if (environment_specular(probes, v.world_pos, reflect(-V, N), roughness, prefiltered))
     {
+
         float3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 
         // When an SSR / RT reflection composite owns the sharp specular for
@@ -613,6 +658,12 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         // blades see the sky their facing toward the viewer sees, as the
         // grass draws do.
         float3 sky = ibl_enabled ? irradiance_sample(canopy.along) / PI : (float3)(0.03);
+#ifdef DAYLIGHT_SURFACE
+        if (ibl_enabled && day_reach > 0.0)
+        {
+            sky = lerp(sky, day_sky * saturate(0.5 + 0.5 * dot(canopy.along, day_up)) / PI, day_reach);
+        }
+#endif
         sky = (sky * indirect.visibility + indirect.bounce) * LIGHTS.ambient_intensity;
         float3 ground = ambient + lerp(Lo, Lo_under, canopy.handed) + emissive;
         color = canopy_radiance(canopy, sky, ground);

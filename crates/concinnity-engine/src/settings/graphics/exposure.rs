@@ -52,7 +52,9 @@ pub struct Exposure {
     #[asset(default = 8.0, min = -EV_LIMIT, max = EV_LIMIT, apply = live)]
     pub auto_max_ev: f32,
     /// How quickly exposure chases a new target (per second). Higher converges
-    /// faster but can pump under flickering content; 1-3 is comfortable.
+    /// faster but can pump under flickering content; 1-3 is comfortable. As
+    /// the eye does, it adapts to a brighter view three times as fast as to a
+    /// darker one.
     #[asset(default = 1.5, min = 0.001, max = 20.0, apply = live)]
     pub auto_speed: f32,
     /// Extra stops auto-exposure adds once a scene is dark, on top of `ev`.
@@ -72,7 +74,9 @@ pub struct Exposure {
     /// exposure has adapted to, read in cd/m2 by taking the world's sun (its
     /// first [`DirectionalLight`](#directionallight)) as 100000 lux of
     /// sunlight, so a day stays in full color whatever the sun's intensity.
-    /// 0 keeps full color at any level.
+    /// Each pixel is weighed by its own brightness too: one bright enough for
+    /// the cones, such as a lit window or the moon, keeps its color however
+    /// dark the scene. 0 keeps full color at any level.
     #[asset(min = 0.0, max = 1.0, apply = live)]
     pub night_vision: f32,
     /// How many stops over white the brightest 0.1% of the frame may sit, with

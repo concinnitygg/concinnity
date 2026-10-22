@@ -33,6 +33,7 @@
 mod air;
 mod air_tables;
 mod apparent;
+mod daylight;
 mod frame;
 mod lut;
 mod optics;
@@ -45,6 +46,7 @@ mod sky_cube;
 pub use air::AirProfile;
 pub use air_tables::AirTables;
 pub use apparent::{ApparentGround, table_view_angle, zenith_horizon};
+pub use daylight::{DAYLIGHT_KNOTS, DaylightCurves};
 pub use frame::{AtmosphereFrame, sun_light};
 pub use lut::{
     AERIAL_MAX_DISTANCE_KM, AERIAL_SIZE, IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE,
@@ -69,7 +71,7 @@ pub use sky_cube::{
 /// looks right from the ground to high above it.
 ///
 /// The air is a shell `height_km` thick around the planet. With a
-/// [Planet](#planet) in the world it wraps that planet, at its center and
+/// [`Planet`](#planet) in the world it wraps that planet, at its center and
 /// radius. Without one, it wraps a sphere of `planet_radius_km` whose top is at
 /// height 0, so a flat world sits on a gently curved ground far below it.
 ///
@@ -90,6 +92,12 @@ pub use sky_cube::{
 /// [`SkyRotation`](#skyrotation) is the day cycle: with its axis along the
 /// planet's pole the sun rises and sets as the sky turns, and on a planet its
 /// height also follows where on the planet the camera stands.
+///
+/// On a [`Planet`](#planet), its ground and sea are lit point by point: each
+/// takes the sun (and a [`NightSky`](#nightsky)'s moon) through the air above
+/// it and the light of its own sky, so seen from high above, the day side is
+/// lit, a reddened band runs along the terminator and the night side is dark,
+/// lit by the moon where it is up.
 ///
 /// The sky is drawn behind everything, with the sun's disc in it. Distant
 /// surfaces fade into the air's color (aerial perspective), behind any

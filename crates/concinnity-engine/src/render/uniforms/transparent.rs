@@ -3,6 +3,7 @@
 //! meshes, and water surfaces.
 
 use super::PassCamera;
+use super::daylight::{DaylightBlock, VIEW_BLOCK_LIMIT};
 use super::shore::WaterShoreGpu;
 use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
@@ -18,7 +19,7 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 
 /// Per-frame view inputs shared by every draw in the transparent pass (water,
 /// glass), bound once for the whole pass. Matches `TransparentView` in
-/// `shaders/glass.hlsl` and `shaders/water.hlsl`. 256 bytes.
+/// `shaders/glass.hlsl` and `shaders/water.hlsl`.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct TransparentView {
@@ -55,11 +56,17 @@ pub struct TransparentView {
     /// the main pass's flat ambient), and the authored indirect-light multiplier
     /// (`IndirectLighting.ambient_intensity`) in `intensity`.
     pub ambient: [f32; 4],
+    /// The planet's per-point sky, [`DaylightBlock::OFF`] for a world
+    /// without one.
+    pub daylight: DaylightBlock,
 }
 
+const _: () = assert!(size_of::<TransparentView>() <= VIEW_BLOCK_LIMIT);
+
 impl TransparentView {
-    /// The view block for `camera`, lit by the sun `lights` glints with.
-    pub fn new(camera: &PassCamera, lights: &LightUniforms) -> Self {
+    /// The view block for `camera`, lit by the sun `lights` glints with and
+    /// the planet's per-point sky `daylight`.
+    pub fn new(camera: &PassCamera, lights: &LightUniforms, daylight: &DaylightBlock) -> Self {
         let c = camera.cam_pos;
         let (sun_dir, sun_color) = glint_sun(lights);
         Self {
@@ -73,6 +80,7 @@ impl TransparentView {
             sun_dir,
             sun_color,
             ambient: [camera.irradiance, lights.ambient_intensity, 0.0, 0.0],
+            daylight: *daylight,
         }
     }
 }
@@ -568,7 +576,7 @@ mod tests {
     fn the_view_block_carries_the_camera_and_the_glint_sun() {
         let camera = super::super::view::test_camera();
         let lights = LightUniforms::DEFAULT;
-        let view = TransparentView::new(&camera, &lights);
+        let view = TransparentView::new(&camera, &lights, &DaylightBlock::OFF);
         assert_eq!(view.vp, camera.vp);
         assert_eq!(view.inv_vp, camera.inv_vp);
         assert_eq!(view.camera_pos, [3.0, 4.0, 5.0, camera.pre_exposure]);
@@ -587,7 +595,7 @@ mod tests {
     // array, so it needs the 16-byte boundary the scalars ahead of it land on.
     #[test]
     fn transparent_view_layout_matches_shader() {
-        assert_eq!(size_of::<TransparentView>(), 256);
+        assert_eq!(size_of::<TransparentView>(), 256 + 1664);
         assert_eq!(offset_of!(TransparentView, vp), 0);
         assert_eq!(offset_of!(TransparentView, inv_vp), 64);
         assert_eq!(offset_of!(TransparentView, camera_pos), 128);
@@ -598,6 +606,7 @@ mod tests {
         assert_eq!(offset_of!(TransparentView, sun_dir), 208);
         assert_eq!(offset_of!(TransparentView, sun_color), 224);
         assert_eq!(offset_of!(TransparentView, ambient), 240);
+        assert_eq!(offset_of!(TransparentView, daylight), 256);
         assert_eq!(size_of::<TransparentView>() % 16, 0);
     }
 

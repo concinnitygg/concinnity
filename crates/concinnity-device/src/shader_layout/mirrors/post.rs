@@ -84,6 +84,7 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         depth_far,
         reactive_valid,
         night_vision,
+        night_nits,
     }))]
 }
 

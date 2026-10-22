@@ -29,6 +29,16 @@ pub struct AirProfile {
     pub ozone_half_width: f32,
 }
 
+/// The air at one height, per kilometer and color.
+pub(super) struct AirMedium {
+    /// Rayleigh scattering.
+    pub(super) rayleigh: [f32; 3],
+    /// Mie scattering.
+    pub(super) mie: [f32; 3],
+    /// What the air takes out of a beam crossing it.
+    pub(super) extinction: [f32; 3],
+}
+
 impl AirProfile {
     /// This air with every height multiplied by `k` and every coefficient
     /// divided by it: the same air around a ground `k` times the size, so a
@@ -65,6 +75,23 @@ impl AirProfile {
                 + self.mie_extinction[i] * mie
                 + self.ozone_absorption[i] * ozone
         })
+    }
+
+    /// The air at `height` kilometers above the ground. Mirrors `atmo_medium`
+    /// in `atmosphere_common.hlsl`.
+    pub(super) fn medium_at(&self, height: f32) -> AirMedium {
+        let rayleigh = exp(-height.max(0.0) / self.rayleigh_scale_height);
+        let mie = exp(-height.max(0.0) / self.mie_scale_height);
+        let ozone = self.ozone_density(height);
+        AirMedium {
+            rayleigh: self.rayleigh_scattering.map(|c| c * rayleigh),
+            mie: self.mie_scattering.map(|c| c * mie),
+            extinction: core::array::from_fn(|i| {
+                self.rayleigh_scattering[i] * rayleigh
+                    + self.mie_extinction[i] * mie
+                    + self.ozone_absorption[i] * ozone
+            }),
+        }
     }
 
     // The ozone layer's relative density: a tent peaking at its center.

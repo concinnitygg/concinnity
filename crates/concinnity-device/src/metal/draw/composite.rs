@@ -16,6 +16,7 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use std::cell::Cell;
 
+use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::gfx::render_types::TextDrawCall;
 use concinnity_engine::render::backend::error::RenderError;
@@ -119,6 +120,10 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
                 .adaptation
                 .as_ref()
                 .map_or(0.0, |a| a.night_vision(self.ctx.state.view.sunlight)),
+            night_nits: auto_exposure::nits_per_exposed(
+                self.ctx.state.view.sunlight,
+                self.ctx.post_process.exposure,
+            ),
         };
         enc.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared

@@ -2,6 +2,8 @@
 //! place a fragment, and the per-draw model pair the pre-pass differentiates for
 //! motion vectors.
 
+use super::daylight::{DaylightBlock, VIEW_BLOCK_LIMIT};
+
 /// The camera a screen-space pass reconstructs world positions from, as the
 /// per-frame view blocks of the raymarch and transparent passes take it.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -97,7 +99,12 @@ pub struct ViewUniforms {
     pub screen_bounce: f32,
     /// Pads the block to a whole `float4`.
     pub _pad: f32,
+    /// The planet's per-point sky, [`DaylightBlock::OFF`] for a world
+    /// without one.
+    pub daylight: DaylightBlock,
 }
+
+const _: () = assert!(size_of::<ViewUniforms>() <= VIEW_BLOCK_LIMIT);
 
 /// The camera of a view rendered from another viewpoint than the main camera:
 /// a reflection-probe face or a planar mirror.
@@ -120,6 +127,8 @@ pub struct FaceCamera {
     pub irradiance: f32,
     /// The scale the face's color target is written at.
     pub pre_exposure: f32,
+    /// The planet's per-point sky the face is lit by.
+    pub daylight: DaylightBlock,
 }
 
 impl ViewUniforms {
@@ -142,6 +151,7 @@ impl ViewUniforms {
             pre_exposure: face.pre_exposure,
             screen_bounce: 0.0,
             _pad: 0.0,
+            daylight: face.daylight,
         }
     }
 }
@@ -237,6 +247,7 @@ mod tests {
             sky_rot: [[6.0; 4]; 3],
             irradiance: 1.0,
             pre_exposure: 0.5,
+            daylight: DaylightBlock::OFF,
         });
         assert_eq!(
             (u.vp, u.view, u.cam_pos),
@@ -263,7 +274,7 @@ mod tests {
     // moved.
     #[test]
     fn view_uniforms_layout_matches_msl() {
-        assert_eq!(size_of::<ViewUniforms>(), 224);
+        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664);
         assert_eq!(offset_of!(ViewUniforms, vp), 0);
         assert_eq!(offset_of!(ViewUniforms, view), 64);
         assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
@@ -278,6 +289,7 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, pre_exposure), 212);
         assert_eq!(offset_of!(ViewUniforms, screen_bounce), 216);
         assert_eq!(offset_of!(ViewUniforms, _pad), 220);
+        assert_eq!(offset_of!(ViewUniforms, daylight), 224);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

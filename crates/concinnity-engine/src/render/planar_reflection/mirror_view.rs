@@ -59,6 +59,8 @@ pub struct MirrorShading {
     pub irradiance: f32,
     /// The scale the mirror target is written at.
     pub pre_exposure: f32,
+    /// The planet's per-point sky the mirror is lit by.
+    pub daylight: crate::render::uniforms::DaylightBlock,
 }
 
 /// The camera reflected across one plane for one frame.
@@ -122,6 +124,7 @@ impl MirrorView {
             sky_rot: shading.sky_rot,
             irradiance: shading.irradiance,
             pre_exposure: shading.pre_exposure,
+            daylight: shading.daylight,
         }
     }
 }
@@ -182,6 +185,7 @@ mod tests {
             sky_rot: [[0.0; 4]; 3],
             irradiance: 1.0,
             pre_exposure: 0.5,
+            daylight: crate::render::uniforms::DaylightBlock::OFF,
         });
         assert_eq!(cam.cam_pos, v.matrices.eye);
         assert_eq!((cam.elapsed, cam.pre_exposure), (2.0, 0.5));

@@ -767,6 +767,7 @@ impl VkContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: storage.scale(),
+            daylight: self.state.view.daylight,
         };
         let extent = vk::Extent2D {
             width: set.width,

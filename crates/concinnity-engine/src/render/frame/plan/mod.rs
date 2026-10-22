@@ -297,6 +297,7 @@ impl FramePlanner {
                 pre_exposure: inputs.pre_exposure,
                 screen_bounce: f32::from(u8::from(inputs.surface.screen_bounce)),
                 _pad: 0.0,
+                daylight: view.daylight,
             },
             cluster: ClusterParams::for_camera(
                 &ClusterCamera {

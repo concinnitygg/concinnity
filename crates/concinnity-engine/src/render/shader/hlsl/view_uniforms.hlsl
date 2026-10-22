@@ -4,6 +4,8 @@
 
 {HDR_STORE}
 
+{DAYLIGHT_TYPES}
+
 struct ViewUniforms
 {
     float4x4 vp;
@@ -34,6 +36,8 @@ struct ViewUniforms
     // surfaces beside the occlusion; 0.0 when it holds occlusion alone.
     float screen_bounce;
     float _pad_view2;
+    // The planet's per-point sky, off for a world without one.
+    DaylightBlock daylight;
 };
 
 // A world direction in the environment cubemaps' own frame. Every sky tap goes

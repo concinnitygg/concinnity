@@ -35,6 +35,8 @@ embed_shaders! {
     CLUSTER_TYPES => "cluster_types.hlsl",
     COMPOSITE => "composite.hlsl",
     CULL => "cull.hlsl",
+    DAYLIGHT => "daylight.hlsl",
+    DAYLIGHT_TYPES => "daylight_types.hlsl",
     DECAL => "decal.hlsl",
     DEPTH_CONVENTION => "depth_convention.hlsl",
     FOG => "fog.hlsl",

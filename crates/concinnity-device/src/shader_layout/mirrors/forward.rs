@@ -6,9 +6,9 @@ use concinnity_engine::gfx::render_types::{
     AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuMaterialParams, GpuObjectData,
     LightUniforms, PointLightData, ShadowUniforms, SpotShadowData,
 };
-use concinnity_engine::render::uniforms::ViewUniforms;
 use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, ShoreSwashGpu};
 use concinnity_engine::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
+use concinnity_engine::render::uniforms::{DaylightBlock, ViewUniforms};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
 
@@ -29,6 +29,16 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             pre_exposure,
             screen_bounce,
             [_pad] => ["_pad_view2"],
+            daylight,
+        })),
+        everywhere(mirror!(DaylightBlock => "DaylightBlock" {
+            center,
+            camera_up,
+            reach,
+            body_dir,
+            body_light,
+            _pad,
+            knots,
         })),
         everywhere(mirror!(LightUniforms => "LightUniforms" {
             [directional] => ["dir"],

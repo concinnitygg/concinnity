@@ -52,7 +52,7 @@ const WARMUP_SECONDS: f32 = 2.5;
 // The frames the run saves: the file name and the moment, in seconds of the
 // run as the HUD's `TRACK` chip counts them (the warm-up included), each named
 // for what it shows.
-const CAPTURES: [(&str, f32); 12] = [
+const CAPTURES: [(&str, f32); 13] = [
     ("meadow-side", 11.5),
     ("meadow-chase", 19.0),
     ("beach", 25.0),
@@ -61,10 +61,11 @@ const CAPTURES: [(&str, f32); 12] = [
     ("climb-sun", 53.0),
     ("orbit-dayside", 66.0),
     ("orbit-terminator", 76.0),
-    ("night-disc", 84.0),
+    ("night-disc", 93.0),
     ("night-skim", 105.0),
-    ("sunrise-coast", 121.0),
-    ("sunrise-meadow", 131.0),
+    ("night-moonpath", 109.5),
+    ("sunrise-coast", 123.0),
+    ("sunrise-meadow", 133.0),
 ];
 
 // The prop the run films.

@@ -148,6 +148,10 @@ pub struct CompositeParams {
     /// blended toward the rods' luminance with a blue cast, before the
     /// tonemap. 0 leaves the color untouched.
     pub night_vision: f32,
+    /// The luminance, in cd/m2, of a unit of the exposed color's
+    /// luminance: what turns each pixel's own brightness into the rods' share
+    /// of it, so a pixel too bright for the rods keeps its color.
+    pub night_nits: f32,
 }
 
 /// The farthest distance the depth channel view tells apart for a camera that

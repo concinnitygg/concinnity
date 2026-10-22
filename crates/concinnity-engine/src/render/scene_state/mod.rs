@@ -259,6 +259,9 @@ pub struct SceneView {
     /// The world's sun intensity, which stands for full sunlight when the
     /// scene's luminance is read in absolute units.
     pub sunlight: f32,
+    /// A planet's per-point sky, uploaded into the view blocks of the passes
+    /// that shade its ground and sea; off without one.
+    pub daylight: crate::render::uniforms::DaylightBlock,
 }
 
 impl SceneView {
@@ -274,6 +277,7 @@ impl SceneView {
             matrix: IDENTITY,
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             sunlight: 1.0,
+            daylight: crate::render::uniforms::DaylightBlock::OFF,
         }
     }
 }

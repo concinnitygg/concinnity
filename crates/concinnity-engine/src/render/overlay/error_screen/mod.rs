@@ -35,6 +35,7 @@ pub fn frame_params(
         rebase: None,
         grass_benders: &[],
         atmosphere: None,
+        daylight: &crate::render::uniforms::DaylightBlock::OFF,
         sunlight: 1.0,
         capture: None,
     }

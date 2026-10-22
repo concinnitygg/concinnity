@@ -137,6 +137,9 @@ pub struct FrameParams<'a> {
     /// Where the camera and the sun are about the planet, in a world with an
     /// `Atmosphere`; the backend draws the sky and the haze from it.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereFrame>,
+    /// A planet's per-point sky, which the views shading its ground and sea
+    /// carry; off without one.
+    pub daylight: &'a crate::render::uniforms::DaylightBlock,
     /// The authored intensity of the world's sun (its first directional
     /// light), which stands for full sunlight when the scene's luminance is
     /// read in absolute units.

@@ -28,6 +28,7 @@ use crate::render::temporal::history_reset::{
 };
 use crate::sky::SkyOrientation;
 use crate::transform::propagation::{self, TransformCache};
+use concinnity_core::fanout::FanOut;
 
 mod atmosphere;
 #[cfg(test)]
@@ -182,9 +183,10 @@ impl FrameExtractor {
     }
 
     /// The world's atmosphere, which each frame places about the planet and
-    /// which drives the sun light.
-    pub fn set_atmosphere(&mut self, settings: Option<AtmosphereSettings>) {
-        self.atmosphere = settings.map(AtmosphereDrive::new);
+    /// which drives the sun light. A planet's daylight curves are baked over
+    /// `rows`.
+    pub fn set_atmosphere<S: FanOut>(&mut self, settings: Option<AtmosphereSettings>, rows: &S) {
+        self.atmosphere = settings.map(|s| AtmosphereDrive::new(s, rows));
     }
 
     /// The logical viewport the line builder starts from.
@@ -454,11 +456,13 @@ impl FrameExtractor {
         }
         // An atmosphere lights the scene with the sun as it reaches the camera
         // through the air, so the set is re-pushed whenever that light changes.
+        let mut daylight = crate::render::uniforms::DaylightBlock::OFF;
         let atmosphere = self.atmosphere.as_mut().map(|drive| {
-            let (frame, set) = drive.frame(ctx, camera.position, directional);
+            let (frame, set, sky) = drive.frame(ctx, camera.position, directional);
             if set.is_some() {
                 directional = set;
             }
+            daylight = sky;
             frame
         });
 
@@ -518,6 +522,7 @@ impl FrameExtractor {
             history_reset,
             rebase,
             atmosphere,
+            daylight,
             sunlight: lights::sunlight(ctx),
             input_sampled_us: ctx.resource::<InputSampledAt>().map(|at| at.0),
         }

@@ -7,6 +7,7 @@
 //! GPU buffers are allocated.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types::{
     CompositeParams, TextDrawCall, TextUniforms, TextVertex,
 };
@@ -137,6 +138,10 @@ impl fullscreen::CompositeEncoder for DxContext {
                 .adaptation
                 .as_ref()
                 .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
+            night_nits: auto_exposure::nits_per_exposed(
+                self.state.view.sunlight,
+                self.post_process.exposure,
+            ),
         };
         // SAFETY: root param 2 is declared as `CompositeParams`-sized root constants.
         unsafe { cmd.set_graphics_root_constants(2, &composite) };

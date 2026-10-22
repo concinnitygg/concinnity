@@ -55,7 +55,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::DxContext;
+use super::context::{DxContext, align256};
 use super::error::map_hresult;
 use super::light_cull::ClusterGrid;
 use super::probe_prefilter::PrefilterGpu;
@@ -72,6 +72,8 @@ use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 pub(super) const PLAN: PrefilterPlan = PrefilterPlan::RUNTIME;
 // Captured cube-face resolution (mip 0 of the prefilter chain).
 const PROBE_FACE_SIZE: u32 = PLAN.face_size();
+// One face's view block, rounded up to the constant-buffer alignment.
+const VIEW_CBV_BYTES: u64 = align256(size_of::<super::draw::ViewUniforms>() as u64);
 
 // The GPU resources + state of one in-flight capture. The six faces share one
 // (MSAA) color + depth target reused across frames; each face has its own view
@@ -332,9 +334,10 @@ impl DxContext {
                     sky_rot: self.state.view.sky_rot,
                     irradiance: self.irradiance_lane(),
                     pre_exposure: FaceStorage::PROBE.scale(),
+                    daylight: concinnity_engine::render::uniforms::DaylightBlock::OFF,
                 });
             let cbv = alloc.alloc_buffer(
-                256,
+                VIEW_CBV_BYTES,
                 D3D12_HEAP_TYPE_UPLOAD,
                 D3D12_RESOURCE_STATE_GENERIC_READ,
             )?;
@@ -343,7 +346,7 @@ impl DxContext {
             // local that receives the mapping.
             unsafe { cbv.Map(0, None, Some(&raw mut ptr)) }
                 .map_err(|e| map_hresult(e.code(), "probe: map view cbv"))?;
-            // SAFETY: the buffer is 256 bytes; ViewUniforms is 208.
+            // SAFETY: the buffer is VIEW_CBV_BYTES, which holds a ViewUniforms.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&raw const view).cast::<u8>(),

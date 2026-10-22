@@ -46,6 +46,8 @@ struct CompositeParams
     float reactive_valid;
     // How far the scene is shown as the rods see it, in [0, 1].
     float night_vision;
+    // The luminance, in cd/m2, of a unit of the exposed color's luminance.
+    float night_nits;
 };
 
 [[vk::binding(0, 0)]] Texture2D<float4> hdr_tex : register(t0);
@@ -139,6 +141,32 @@ float scotopic_luminance(float3 c)
     return max(v, 0.0) * SCOTOPIC_WHITE_SCALE;
 }
 
+// The luminances, in cd/m2, at and below which sight is the rods' alone, and
+// at and above which it is the cones'. `SCOTOPIC_LUMINANCE` and
+// `PHOTOPIC_LUMINANCE` in gfx::auto_exposure.
+static const float ROD_ONLY_NITS = 0.01;
+static const float CONE_ONLY_NITS = 3.0;
+
+// The rods' share of sight at `nits` cd/m2: 1 at and below the rods' range, 0
+// at and above the cones', smooth in log luminance between. `rod_share` in
+// gfx::auto_exposure.
+float rod_share(float nits)
+{
+    float lo = log2(ROD_ONLY_NITS);
+    float hi = log2(CONE_ONLY_NITS);
+    float t = saturate((hi - log2(max(nits, 1e-30))) / (hi - lo));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// How far exposed color `c` turns to night vision: the frame's weight times
+// the rods' share at the pixel's own luminance, so a pixel bright enough for
+// the cones keeps its color. `pixel_night_weight` in gfx::auto_exposure.
+float night_weight(float3 c)
+{
+    float y = dot(c, float3(0.2126, 0.7152, 0.0722));
+    return post.night_vision * rod_share(y * post.night_nits);
+}
+
 // Scene color = exposed HDR resolve + bloom, blended toward night vision when
 // `night` is set. Exposure scales the HDR tap
 // only - the bloom mip already carries the exposure applied in the prefilter.
@@ -153,7 +181,7 @@ float3 scene_sample(float2 uv, bool night)
     }
     if (night)
     {
-        c = lerp(c, scotopic_luminance(c) * SCOTOPIC_TINT, post.night_vision);
+        c = lerp(c, scotopic_luminance(c) * SCOTOPIC_TINT, night_weight(c));
     }
     return c;
 }

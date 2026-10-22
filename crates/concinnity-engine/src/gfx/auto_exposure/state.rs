@@ -8,6 +8,10 @@ use super::{AutoExposureSettings, night_vision_weight};
 use crate::render::uniforms::ExposureMeasurement;
 use concinnity_core::math::{exp, exp2};
 
+// How much faster the exposure adapts when the scene brightens than when it
+// darkens.
+const LIGHT_ADAPTATION: f32 = 3.0;
+
 /// Lowest log2(luminance) the histogram bins span. Pixels darker than this fall
 /// in bin 0. Roughly matches a moonlit interior at the dim end.
 pub const LUM_LOG2_MIN: f32 = -10.0;
@@ -87,7 +91,15 @@ impl AutoExposureState {
             self.current_ev = self.current_ev.clamp(settings.min_ev, settings.max_ev);
             return self.current_ev;
         }
-        let blend = 1.0 - exp(-settings.speed * dt);
+        // The eye takes in more light faster than it opens up to less: a
+        // bright view swung into frame is not left glaring while the
+        // exposure catches up.
+        let speed = if target < self.current_ev {
+            settings.speed * LIGHT_ADAPTATION
+        } else {
+            settings.speed
+        };
+        let blend = 1.0 - exp(-speed * dt);
         self.adapted_log_lum += (avg_log_lum - self.adapted_log_lum) * blend;
         self.current_ev = (self.current_ev + (target - self.current_ev) * blend)
             .clamp(settings.min_ev, settings.max_ev);
@@ -257,6 +269,27 @@ mod tests {
             state.update(even(2.0), 0.0, &settings, 1.0 / 60.0);
         }
         assert!((state.current_ev + 2.0).abs() < 1.0e-3);
+    }
+
+    // Brightening settles faster than darkening by the same number of stops.
+    #[test]
+    fn the_exposure_adapts_to_light_faster_than_to_dark() {
+        let settings = AutoExposureSettings::resolve(-8.0, 8.0, 4.0, false);
+        let frames_to_settle = |from: f32, to: f32| {
+            let mut state = AutoExposureState {
+                current_ev: -from,
+                adapted_log_lum: from,
+            };
+            let mut n = 0;
+            while (state.current_ev + to).abs() > 0.05 && n < 1000 {
+                state.update(even(to), 0.0, &settings, 1.0 / 60.0);
+                n += 1;
+            }
+            n
+        };
+        let brighter = frames_to_settle(-2.0, 2.0);
+        let darker = frames_to_settle(2.0, -2.0);
+        assert!(brighter * 2 < darker, "{brighter} vs {darker}");
     }
 
     #[test]

@@ -62,9 +62,10 @@ pub(in crate::directx) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_P
 
 // Byte offset of a mirror ring entry's `ClusterParams` CBV, past its
 // `ViewUniforms` one; root CBVs are 256-byte aligned.
-const MIRROR_CLUSTER_OFFSET: usize = 256;
+const MIRROR_CLUSTER_OFFSET: usize = size_of::<ViewUniforms>().next_multiple_of(256);
 // Bytes in one mirror ring entry: the view CBV, then the cluster params CBV.
-const MIRROR_CBV_SIZE: u64 = 512;
+const MIRROR_CBV_SIZE: u64 =
+    (MIRROR_CLUSTER_OFFSET + size_of::<ClusterParams>().next_multiple_of(256)) as u64;
 
 // Where a plane's mirror render lands. Multisampled planes share one MSAA color
 // target and resolve out of it a plane at a time, the way the probe shares one
@@ -538,6 +539,7 @@ impl DxContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: storage.scale(),
+            daylight: self.state.view.daylight,
         };
 
         // Per kept plane: compute the reflected matrices, write the reflected
@@ -551,9 +553,9 @@ impl DxContext {
             let m = mirror.matrices;
             let view = ViewUniforms::face(mirror.face_camera(shading));
             let ring = set.ring_index(slot, params.frame_idx);
-            // SAFETY: `ring < planes.len() * frames`; the CBV is 256 bytes and
-            // `ViewUniforms` is 208. The slot is this frame's own, written before
-            // the GPU reads it later on this cmd list.
+            // SAFETY: `ring < planes.len() * frames`; the entry holds a
+            // `ViewUniforms` before `MIRROR_CLUSTER_OFFSET`. The slot is this
+            // frame's own, written before the GPU reads it later on this cmd list.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&raw const view).cast::<u8>(),

@@ -419,7 +419,8 @@ impl GraphicsSystem {
             .as_ref()
             .and_then(concinnity_engine::render::environment::grass::CanopyField::planet_range);
         self.extractor.set_grows_grass(fx.grass.is_some());
-        self.extractor.set_atmosphere(fx.atmosphere);
+        self.extractor
+            .set_atmosphere(fx.atmosphere, concinnity_host::thread::jobs::pool());
         let sdf_fields = if capture_sources {
             resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
         } else {

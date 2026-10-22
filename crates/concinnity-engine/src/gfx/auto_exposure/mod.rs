@@ -8,7 +8,7 @@ mod state;
 
 pub use night_vision::{
     METER_CALIBRATION, PHOTOPIC_LUMINANCE, SCOTOPIC_LUMINANCE, SUNLIGHT_LUX, ev100,
-    luminance_at_ev100, night_vision_weight, rod_share, scene_ev100,
+    luminance_at_ev100, night_vision_weight, nits_per_exposed, rod_share, scene_ev100,
 };
 pub use pre_exposure::PreExposure;
 pub use state::{

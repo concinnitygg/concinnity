@@ -57,7 +57,7 @@ pub(super) const BACK_BUFFERS: usize = 3;
 // Constant buffer alignment required by D3D12.
 pub(super) const CB_ALIGN: u64 = 256;
 
-pub(super) fn align256(n: u64) -> u64 {
+pub(super) const fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
 }
 

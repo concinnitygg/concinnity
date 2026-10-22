@@ -46,8 +46,8 @@ use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
-use concinnity_engine::render::uniforms::FaceCamera;
 use concinnity_engine::render::uniforms::vulkan::CullParams;
+use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU
@@ -903,6 +903,7 @@ impl RenderingBake {
                 sky_rot,
                 irradiance,
                 pre_exposure: FaceStorage::PROBE.scale(),
+                daylight: DaylightBlock::OFF,
             });
             buf.write_val(0, &view);
         }

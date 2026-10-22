@@ -882,6 +882,7 @@ impl MtlContext {
         let view = concinnity_engine::render::uniforms::TransparentView::new(
             &self.pass_camera(params),
             self.lights.uniforms(),
+            &self.state.view.daylight,
         );
         // The mirrors `PlanarReflection` rendered this frame, if the pass
         // samples mirrors at all (the same gate that put the node in the

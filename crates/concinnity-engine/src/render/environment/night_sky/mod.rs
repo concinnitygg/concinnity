@@ -27,7 +27,7 @@ mod stars;
 
 pub(crate) use frame::NightFrame;
 pub(crate) use galaxies::MAX_GALAXIES;
-pub(crate) use handover::{moon_share, shadowed_first};
+pub(crate) use handover::{moon_share, shadowed_first, shadowed_pair};
 pub(crate) use lanes::NightLanes;
 pub(crate) use settings::NightSkySettings;
 pub(crate) use stars::LIMIT_RANGE;

@@ -42,6 +42,32 @@ pub(crate) fn shadowed_first(
     DirectionalLightSet::collect(core::iter::once(first).chain(rest.iter().copied()))
 }
 
+/// [`shadowed_first`] for a planet whose ground is lit point by point: both
+/// bodies, the shadowed one first and the other second, unshadowed, so a
+/// point lit by the one the camera has lost still gets it from the daylight
+/// curves. The moon is scaled by `share` in either place, so the camera's
+/// light from it never steps.
+pub(crate) fn shadowed_pair(
+    sun: DirectionalLight,
+    moon: Option<DirectionalLight>,
+    share: f32,
+    rest: &[DirectionalLight],
+) -> DirectionalLightSet {
+    let moon = moon.map(|moon| DirectionalLight {
+        intensity: moon.intensity * share,
+        ..moon
+    });
+    let (first, second) = match moon {
+        Some(moon) if share > 0.0 => (moon, Some(sun)),
+        _ => (sun, moon),
+    };
+    DirectionalLightSet::collect(
+        core::iter::once(first)
+            .chain(second)
+            .chain(rest.iter().copied()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +127,61 @@ mod tests {
         );
         assert_eq!(moon_share((MOON_FADE_DEG + 1.0).to_radians()), 1.0);
         assert_eq!(moon_share(-0.01), 0.0);
+    }
+
+    // A planet lit point by point keeps both bodies: the shadowed one first,
+    // the other next, then the rest.
+    #[test]
+    fn a_planet_keeps_both_bodies() {
+        let sun = light([0.0, 1.0, 0.0], [1.0; 3], 3.0);
+        let moon = light([0.0, -1.0, 0.0], [0.9; 3], 0.01);
+        let fill = light([1.0, 0.0, 0.0], [0.2; 3], 1.0);
+        let day = shadowed_pair(sun, Some(moon), 0.0, &[fill]);
+        let dark_moon = DirectionalLight {
+            intensity: 0.0,
+            ..moon
+        };
+        assert_eq!(day.as_slice(), &[sun, dark_moon, fill]);
+        let night = shadowed_pair(sun, Some(moon), 0.5, &[fill]);
+        assert_eq!(night.as_slice()[0].direction, moon.direction);
+        assert_eq!(night.as_slice()[0].intensity, 0.005);
+        assert_eq!(night.as_slice()[1], sun);
+        assert_eq!(night.as_slice()[2], fill);
+        assert_eq!(shadowed_pair(sun, None, 1.0, &[]).as_slice(), &[sun]);
+    }
+
+    // Through a sunset the moon moves from the second place to the first
+    // without its light stepping.
+    #[test]
+    fn a_planet_moon_changes_place_without_a_step() {
+        let s = AtmosphereSettings::resolve(&Atmosphere::default(), None);
+        let camera = [0.0, s.bottom_radius + 0.002, 0.0];
+        let moon = light([-0.3, 0.8, 0.2], [0.9, 0.85, 0.8], 0.001);
+        let mut last: Option<f32> = None;
+        let mut swapped = false;
+        for step in 0..400 {
+            let elevation = (3.0 - step as f32 * 0.04).to_radians();
+            let sun = light([cos(elevation), sin(elevation), 0.0], [1.0; 3], 3.0);
+            let frame = AtmosphereFrame::new(&s, camera, &sun);
+            let share = moon_share(frame.sun_set_depth);
+            let set = shadowed_pair(sun_light(&frame, &sun), Some(moon), share, &[]);
+            let place = set
+                .as_slice()
+                .iter()
+                .position(|l| l.direction == moon.direction)
+                .expect("the moon is in the set");
+            swapped |= place == 0;
+            let now = set.as_slice()[place].intensity;
+            if let Some(before) = last {
+                assert!(
+                    (now - before).abs() < 0.001 * 0.05,
+                    "{step}: {before} -> {now}"
+                );
+            }
+            last = Some(now);
+        }
+        assert!(swapped);
+        assert_eq!(last, Some(0.001));
     }
 
     // Without a moon the sun keeps the place all night, and the other

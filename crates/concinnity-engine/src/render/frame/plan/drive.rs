@@ -90,6 +90,7 @@ pub fn drive_frame<D: FrameDevice>(device: &mut D, params: FrameParams<'_>) -> R
     view.view_distance = params.view_distance;
     view.sky_rot = with_sky_cube_scale(params.sky_rot, atmosphere);
     view.sunlight = params.sunlight;
+    view.daylight = *params.daylight;
 
     device.prepare(&params)?;
     if params.history_reset {
@@ -228,6 +229,7 @@ mod tests {
             rebase: None,
             grass_benders: &[],
             atmosphere: None,
+            daylight: &crate::render::uniforms::DaylightBlock::OFF,
             sunlight: 3.0,
             input_sampled_us: None,
             capture: None,

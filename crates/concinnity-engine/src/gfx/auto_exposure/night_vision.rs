@@ -48,6 +48,26 @@ pub fn rod_share(luminance: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The luminance, in cd/m2, of a unit of exposed color in a scene lit by a
+/// sun of intensity `sunlight` and exposed by `exposure`, or 0 without either.
+pub fn nits_per_exposed(sunlight: f32, exposure: f32) -> f32 {
+    if sunlight > 0.0 && exposure > 0.0 && sunlight.is_finite() && exposure.is_finite() {
+        SUNLIGHT_LUX / (sunlight * exposure)
+    } else {
+        0.0
+    }
+}
+
+// How far the composite turns one pixel to night vision: the frame's
+// `weight` times the rods' share at the pixel's own luminance, the exposed
+// `luminance` at `nits` cd/m2 a unit. The rods saturate in bright light, so
+// a pixel bright enough for the cones keeps its color however dark the rest
+// of the frame is. Mirrors `night_weight` in `composite.hlsl`.
+#[cfg(test)]
+fn pixel_night_weight(weight: f32, luminance: f32, nits: f32) -> f32 {
+    weight * rod_share(luminance * nits)
+}
+
 /// How far the composite turns the image to night vision: `strength` times
 /// the rods' share at a scene mean of `2^log_lum` under a sun of intensity
 /// `sunlight`.
@@ -172,5 +192,42 @@ mod tests {
         assert_eq!(night_vision_weight(5.0, -23.6, 3.2), 1.0);
         assert_eq!(night_vision_weight(-1.0, -23.6, 3.2), 0.0);
         assert_eq!(night_vision_weight(1.0, -23.6, 0.0), 0.0);
+    }
+
+    #[test]
+    fn the_rods_range_matches_the_composite() {
+        use crate::render::shader::consts::float;
+        let src = crate::render::shader::embedded::COMPOSITE;
+        assert_eq!(float(src, "ROD_ONLY_NITS"), SCOTOPIC_LUMINANCE);
+        assert_eq!(float(src, "CONE_ONLY_NITS"), PHOTOPIC_LUMINANCE);
+    }
+
+    // A unit of exposed color stands for the sunlight it was exposed from:
+    // full sunlight at unit exposure is the sun's own luminance.
+    #[test]
+    fn exposed_color_reads_in_nits_by_the_sun_and_the_exposure() {
+        assert_eq!(nits_per_exposed(3.2, 1.0), SUNLIGHT_LUX / 3.2);
+        assert_eq!(nits_per_exposed(3.2, 0.5), 2.0 * SUNLIGHT_LUX / 3.2);
+        assert_eq!(nits_per_exposed(0.0, 1.0), 0.0);
+        assert_eq!(nits_per_exposed(3.2, 0.0), 0.0);
+        assert_eq!(nits_per_exposed(f32::NAN, 1.0), 0.0);
+    }
+
+    // At night a dim pixel takes the frame's whole weight, a pixel bright
+    // enough for the cones none of it, and by day nothing turns.
+    #[test]
+    fn a_bright_pixel_keeps_its_color_at_night() {
+        let nits = 0.5;
+        assert_eq!(pixel_night_weight(0.8, 0.01, nits), 0.8);
+        assert_eq!(pixel_night_weight(0.8, 100.0, nits), 0.0);
+        let between = pixel_night_weight(0.8, 1.0, nits);
+        assert!(between > 0.0 && between < 0.8, "{between}");
+        assert_eq!(pixel_night_weight(0.0, 0.01, nits), 0.0);
+        let mut last = 1.0;
+        for y in [0.01, 0.1, 0.5, 1.0, 2.0, 5.0] {
+            let w = pixel_night_weight(1.0, y, nits);
+            assert!(w <= last, "{y}");
+            last = w;
+        }
     }
 }

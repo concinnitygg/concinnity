@@ -11,6 +11,7 @@
 
 pub mod bindless;
 pub mod canopy;
+pub mod daylight;
 pub mod directx;
 pub mod geometry;
 pub mod grass;
@@ -26,6 +27,7 @@ pub mod view;
 pub mod vulkan;
 
 pub use bindless::BINDLESS_POOL_SIZE;
+pub use daylight::{DaylightBlock, DaylightBody, DaylightView};
 pub use geometry::{
     DecalParams, DecalView, GpuParticle, LineView, ModelHistoryParams, ParticleView, SkinParams,
 };

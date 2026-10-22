@@ -135,6 +135,7 @@ pub fn submit(
         rebase: snap.frame.rebase,
         grass_benders: &snap.grass_benders,
         atmosphere: snap.frame.atmosphere,
+        daylight: &snap.frame.daylight,
         sunlight: snap.frame.sunlight,
         input_sampled_us: snap.frame.input_sampled_us,
         capture: snap.capture.as_deref(),

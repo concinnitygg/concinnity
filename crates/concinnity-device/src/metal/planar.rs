@@ -323,6 +323,7 @@ impl MtlContext {
                     clusters,
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),
                     storage: FaceStorage::mirror(&self.pre_exposure),
+                    daylight: &self.state.view.daylight,
                 },
             )?;
         }

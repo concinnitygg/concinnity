@@ -27,6 +27,7 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             sun_dir,
             sun_color,
             ambient,
+            daylight,
         })),
         everywhere(mirror!(GlassParams => "GlassParams" {
             center,
@@ -64,6 +65,7 @@ pub(in crate::shader_layout) fn glass_mesh() -> Vec<Case> {
             sun_dir,
             sun_color,
             ambient,
+            daylight,
         })),
         everywhere(mirror!(GlassMeshParams => "GlassMeshParams" {
             model,
@@ -89,6 +91,7 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             sun_dir,
             sun_color,
             ambient,
+            daylight,
         })),
         everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_k, motion, })),
         everywhere(mirror!(WaterRippleGpu => "WaterRipple" { shape, offset, })),
