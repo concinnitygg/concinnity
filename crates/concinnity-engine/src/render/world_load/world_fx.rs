@@ -10,27 +10,40 @@ use crate::components::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::planet::PlanetShape;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
 use crate::render::environment::atmosphere::AtmosphereSettings;
-use crate::render::environment::grass::{GrassField, PlanetGrass};
+use crate::render::environment::grass::{CanopyField, GrassField, GrassTerrain, PlanetGrass};
+use crate::render::environment::ground::GroundCovers;
 use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
 use crate::render::{decal, environment::volumetric_fog, particles};
 use crate::water::WaterBody;
 use crate::water::ocean::OceanQuality;
+use crate::water::sea::shore::ShoreWaves;
 use crate::wind::WindField;
+
+/// What a planet's ground is laid with: the grass its layers grow and the
+/// covers over it.
+#[derive(Debug, Clone, Default)]
+pub struct PlanetSurface {
+    /// The grass, `None` when no layer grows any.
+    pub grass: Option<PlanetGrass>,
+    /// The covers.
+    pub covers: GroundCovers,
+}
 
 /// Drain every effect component into the backend's effect inputs. Each record
 /// is resolved once here (texture slots, inverted decal matrices, clamped
 /// emitter tunables): the runtime keeps no per-frame update path for them.
-/// `name_of` labels an SDF volume by its asset's name.
+/// `name_of` labels an SDF volume by its asset's name; `planet` is the
+/// world's planet with what its ground is laid with.
 pub fn drain_world_fx(
     ctx: &mut PipelineContext<'_>,
     name_of: fn(AssetId) -> Option<String>,
     texture_count: usize,
     terrains: &[LoadedTerrain],
-    planet_grass: Option<PlanetGrass>,
-    planet: Option<&Planet>,
+    planet: Option<(&Planet, PlanetSurface)>,
     ocean_quality: OceanQuality,
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
@@ -51,6 +64,7 @@ pub fn drain_world_fx(
     // water surface takes its waves from.
     let wind = ctx.drain::<Wind>().into_iter().next();
     let wind_field = WindField::new(wind.as_ref());
+    let (planet, surface) = planet.unzip();
     let planet_shape = planet.map(Planet::shape);
     let surfaces = ctx.drain::<WaterSurface>();
     if planet_shape.is_none() && surfaces.iter().any(|s| s.shape == WaterShape::PlanetSea) {
@@ -66,9 +80,20 @@ pub fn drain_world_fx(
         .into_iter()
         .filter_map(|(id, g)| Some((id?, g)))
         .collect();
-    let terrain_grass = GrassField::resolve(&grass_terrains(terrains, &grass), wind.as_ref());
+    let grass_terrains = grass_terrains(terrains, &grass);
+    let terrain_grass = GrassField::resolve(&grass_terrains, wind.as_ref());
+    // The planet's beaches are wet where its sea's waves wash up them.
+    let shore = water_surfaces
+        .iter()
+        .find_map(|b| b.sea.as_ref()?.shore.clone());
+    let canopy = scene_canopy(
+        planet_shape.zip(surface.as_ref()),
+        terrain_grass.is_some().then_some(&grass_terrains[..]),
+        shore,
+        wind_field.strength,
+    );
     // One field per world: a planet's grass, or the terrains'.
-    let mut grass = match planet_grass {
+    let grass = match surface.and_then(|s| s.grass) {
         Some(planet) => {
             if terrain_grass.is_some() {
                 tracing::warn!(
@@ -80,14 +105,6 @@ pub fn drain_world_fx(
         }
         None => terrain_grass,
     };
-    // The planet's beaches are wet where its sea's waves wash up them.
-    if let Some(field) = grass.as_mut() {
-        field.canopy.set_shore(
-            water_surfaces
-                .iter()
-                .find_map(|b| b.sea.as_ref()?.shore.clone()),
-        );
-    }
     // One atmosphere per world, wrapped around the world's planet if it has
     // one. A night sky with no atmosphere is seen through a vacuum.
     let planet = planet.map(|p| (p.center.map(f64::from), p.radius));
@@ -110,8 +127,38 @@ pub fn drain_world_fx(
         glass_panels,
         sdf_volumes,
         grass,
+        canopy,
         atmosphere,
     }
+}
+
+// The scene's canopy block: the planet's ground (`planet`) when it grows
+// grass, lays covers or has a `shore` washing up it, and otherwise the far
+// fields of the grass `terrains` grow, if any, in a wind of mean
+// `wind_speed`.
+fn scene_canopy(
+    planet: Option<(PlanetShape, &PlanetSurface)>,
+    terrains: Option<&[GrassTerrain]>,
+    shore: Option<ShoreWaves>,
+    wind_speed: f32,
+) -> Option<CanopyField> {
+    let laid = planet
+        .filter(|(_, ground)| ground.grass.is_some() || ground.covers.count > 0 || shore.is_some());
+    let mut field = match (laid, terrains) {
+        (Some((_, ground)), Some(terrains)) if ground.grass.is_none() => {
+            tracing::warn!(
+                "the Planet's covers and wet sand are not drawn beside Terrains growing grass"
+            );
+            CanopyField::for_terrains(terrains, wind_speed).0
+        }
+        (Some((shape, ground)), _) => {
+            CanopyField::for_planet(shape, ground.grass.as_ref(), ground.covers, wind_speed).0
+        }
+        (None, Some(terrains)) => CanopyField::for_terrains(terrains, wind_speed).0,
+        (None, None) => return None,
+    };
+    field.set_shore(shore);
+    Some(field)
 }
 
 /// Drain the raymarched SDF volumes with their compiled payloads. A volume with
@@ -244,13 +291,13 @@ mod tests {
             1,
             &[grassy_terrain()],
             None,
-            None,
             OceanQuality::FULL,
         );
         assert!(
             fx.grass.is_some(),
             "the terrain's grass resolves to a field"
         );
+        assert_eq!(fx.canopy.and_then(|c| c.planet_range()), None);
         assert_eq!(
             fx.sdf_volumes.len(),
             1,
@@ -265,6 +312,109 @@ mod tests {
         assert_eq!(ctx.query::<Wind>().count(), 0);
         assert_eq!(ctx.query::<Grass>().count(), 0);
         assert_eq!(ctx.query::<Terrain>().count(), 1);
+    }
+
+    fn planet_shape() -> PlanetShape {
+        Planet {
+            land_share: 0.4,
+            ..Planet::default()
+        }
+        .shape()
+    }
+
+    fn sandy() -> PlanetSurface {
+        PlanetSurface {
+            grass: None,
+            covers: GroundCovers {
+                count: 1,
+                ..GroundCovers::default()
+            },
+        }
+    }
+
+    fn shore() -> ShoreWaves {
+        let sea = crate::water::spectrum::SeaShape::new(7.0, 50_000.0).unwrap();
+        ShoreWaves::new(&planet_shape(), 0.0, &sea, None).unwrap()
+    }
+
+    fn terrain_grass() -> Vec<GrassTerrain> {
+        let mut grass = hashbrown::HashMap::new();
+        grass.insert(GRASS, Grass::default());
+        grass_terrains(&[grassy_terrain()], &grass)
+    }
+
+    // Which block the scene lays.
+    #[derive(Debug, PartialEq)]
+    enum Block {
+        None,
+        Terrains,
+        Planet { layers: u32 },
+    }
+
+    fn scene_block(
+        planet: Option<&PlanetSurface>,
+        terrains: Option<&[GrassTerrain]>,
+        shore: Option<ShoreWaves>,
+    ) -> Block {
+        match scene_canopy(planet.map(|g| (planet_shape(), g)), terrains, shore, 0.0) {
+            None => Block::None,
+            Some(c) => c
+                .planet_range()
+                .map_or(Block::Terrains, |r| Block::Planet { layers: r.count }),
+        }
+    }
+
+    // A planet lays its ground in the block when it grows grass, lays covers
+    // or has a shore, and leaves it to grassy terrains otherwise.
+    #[test]
+    fn the_scene_block_is_the_planets_ground_when_it_has_one() {
+        let bare = PlanetSurface::default();
+        let grassy = PlanetSurface {
+            grass: PlanetGrass::resolve(
+                planet_shape(),
+                &[(Grass::default(), crate::components::GroundRule::default())],
+            ),
+            ..PlanetSurface::default()
+        };
+        assert!(grassy.grass.is_some());
+        let terrains = terrain_grass();
+        assert_eq!(scene_block(None, None, None), Block::None);
+        assert_eq!(scene_block(Some(&bare), None, None), Block::None);
+        assert_eq!(
+            scene_block(Some(&sandy()), None, None),
+            Block::Planet { layers: 0 }
+        );
+        assert_eq!(
+            scene_block(Some(&bare), None, Some(shore())),
+            Block::Planet { layers: 0 }
+        );
+        assert_eq!(
+            scene_block(Some(&grassy), None, None),
+            Block::Planet { layers: 1 }
+        );
+        assert_eq!(scene_block(None, Some(&terrains), None), Block::Terrains);
+        assert_eq!(
+            scene_block(Some(&bare), Some(&terrains), None),
+            Block::Terrains
+        );
+        // Terrains growing grass keep the block from a grassless planet; a
+        // planet's grass keeps it from them.
+        assert_eq!(
+            scene_block(Some(&sandy()), Some(&terrains), None),
+            Block::Terrains
+        );
+        assert_eq!(
+            scene_block(Some(&grassy), Some(&terrains), None),
+            Block::Planet { layers: 1 }
+        );
+    }
+
+    // The shore's wash rides whichever block the scene lays.
+    #[test]
+    fn the_scene_block_carries_the_shore() {
+        let with = scene_canopy(Some((planet_shape(), &sandy())), None, Some(shore()), 0.0);
+        let without = scene_canopy(Some((planet_shape(), &sandy())), None, None, 0.0);
+        assert_ne!(with, without);
     }
 
     // A volume with no compiled payload, or one whose payload cannot be read,

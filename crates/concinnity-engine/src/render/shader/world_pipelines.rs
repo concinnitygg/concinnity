@@ -6,13 +6,14 @@
 //! slot `b - 1`, which stays empty while the scene owning its Shader has not
 //! pinned.
 //!
-//! Only a bucket that draws a surface growing grass (one with a far band)
-//! compiles the grass ground and canopy into its main fragment, since that code
-//! costs every pixel of the program carrying it. A world Shader that draws one
-//! compiles it into its own bucket. The default keeps its bucket without it and
-//! gains two twins past the last world Shader: a canopy twin for the far-band
-//! draws that reach their band, and a ground twin, without the canopy, for
-//! those wholly nearer. The twins share one Shader's place in the budget.
+//! Only a bucket that draws a surface growing grass (one with a far band), or a
+//! planet's ground, compiles the grass ground and canopy into its main
+//! fragment, since that code costs every pixel of the program carrying it. A
+//! world Shader that draws one compiles it into its own bucket. The default
+//! keeps its bucket without it and gains two twins past the last world Shader:
+//! a canopy twin for the far-band draws that reach their band, and a ground
+//! twin, without the canopy, for those wholly nearer and for a planet's ground
+//! growing no grass. The twins share one Shader's place in the budget.
 
 use alloc::string::ToString;
 use alloc::vec::Vec;

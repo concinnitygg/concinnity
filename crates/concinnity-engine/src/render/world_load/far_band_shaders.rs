@@ -8,7 +8,8 @@ use crate::gfx::render_types::FarFieldTint;
 
 /// Per `ShaderHandle` value (`shader_count` of them, the default at 0): whether
 /// one of `draws` (each its shader bucket and far band) has a band under that
-/// Shader. A planet with grass streams its tiles under the default.
+/// Shader. A planet whose ground shades from the canopy block streams its
+/// tiles under the default.
 pub fn far_band_shaders(
     shader_count: usize,
     draws: impl IntoIterator<Item = (u32, FarFieldTint)>,
@@ -19,7 +20,7 @@ pub fn far_band_shaders(
         *default = true;
     }
     for (bucket, band) in draws {
-        if band.grows()
+        if band.shades_ground()
             && let Some(flag) = far.get_mut(bucket as usize)
         {
             *flag = true;

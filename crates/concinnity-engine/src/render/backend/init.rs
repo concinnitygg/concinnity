@@ -87,8 +87,9 @@ pub struct WorldShader<'a> {
     /// scene owns it: the backend leaves the bucket's pipeline unbuilt and the
     /// streaming pump installs it when that scene pins.
     pub deferred: bool,
-    /// A surface with a far band (`FarFieldTint::end > 0`) draws under this
-    /// Shader, so its draws need the canopy (see
+    /// A surface shading its ground from the canopy block
+    /// (`FarFieldTint::shades_ground`) draws under this Shader, so its draws
+    /// need the canopy (see
     /// [`crate::render::shader::world_pipelines`]).
     pub canopy: bool,
 }
@@ -181,6 +182,10 @@ pub struct WorldFx {
     pub sdf_volumes: Vec<SdfVolumeSource>,
     /// The grass field, or `None` when the world grows none.
     pub grass: Option<crate::render::environment::grass::GrassField>,
+    /// What the scene's canopy block is filled from: the far fields past the
+    /// grass and a planet's ground, which needs no grass for its covers and
+    /// wet sand; `None` when the world has neither.
+    pub canopy: Option<crate::render::environment::grass::CanopyField>,
     /// The atmosphere the sky is drawn from, or `None` when the world declares
     /// none.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereSettings>,
@@ -412,6 +417,7 @@ impl<'a> BackendInit<'a> {
                 glass_panels: Vec::new(),
                 sdf_volumes: Vec::new(),
                 grass: None,
+                canopy: None,
                 atmosphere: None,
             },
             requirements: RenderRequirements::default(),
@@ -501,6 +507,7 @@ mod tests {
             glass_panels: Vec::new(),
             sdf_volumes: Vec::new(),
             grass: None,
+            canopy: None,
             atmosphere: None,
         }
     }

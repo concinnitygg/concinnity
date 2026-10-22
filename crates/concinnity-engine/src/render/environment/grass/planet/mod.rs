@@ -12,10 +12,8 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
 use super::GrassBladeLook;
-use super::canopy::{CanopyField, CanopyRange};
 use crate::components::{Grass, GroundRule};
 use crate::planet::PlanetShape;
-use crate::render::environment::ground::GroundCovers;
 use crate::render::uniforms::ground::GroundRuleGpu;
 use cells::PlanetGrassGrid;
 use concinnity_core::math::noise::lcg_hash;
@@ -49,20 +47,12 @@ pub struct PlanetGrass {
     pub layers: Vec<PlanetGrassLayer>,
     /// Lattice cells of the meadow noise per unit of direction.
     pub meadow_scale: f32,
-    /// The covers laid over the ground the grass grows on, which the ground
-    /// under it and its far field shade with.
-    pub covers: GroundCovers,
 }
 
 impl PlanetGrass {
-    /// The grass `layers` grow on `shape`, each where its rule holds, over
-    /// ground laid with `covers`; `None` when no visible layer places a
-    /// blade.
-    pub fn resolve(
-        shape: PlanetShape,
-        layers: &[(Grass, GroundRule)],
-        covers: GroundCovers,
-    ) -> Option<Self> {
+    /// The grass `layers` grow on `shape`, each where its rule holds; `None`
+    /// when no visible layer places a blade.
+    pub fn resolve(shape: PlanetShape, layers: &[(Grass, GroundRule)]) -> Option<Self> {
         let grid = PlanetGrassGrid::new(&shape);
         let mut out = Vec::new();
         for (grass, rule) in layers.iter().filter(|(g, _)| g.visible) {
@@ -84,7 +74,6 @@ impl PlanetGrass {
             grid,
             layers: out,
             meadow_scale: density::meadow_scale(shape.radius),
-            covers,
         })
     }
 
@@ -95,13 +84,7 @@ impl PlanetGrass {
             .iter()
             .map(|g| (g.clone(), GroundRule::EVERYWHERE))
             .collect();
-        Self::resolve(shape, &layers, GroundCovers::default())
-    }
-
-    /// The run of the canopy block's layers the planet's far field shades
-    /// with.
-    pub fn far_field(&self) -> CanopyRange {
-        CanopyField::for_planet(self, 0.0).1
+        Self::resolve(shape, &layers)
     }
 }
 
@@ -147,6 +130,5 @@ mod tests {
             Some(l.cells),
             g.grid.cells_per_tile(Grass::default().density)
         );
-        assert_eq!(g.far_field().count, 2);
     }
 }

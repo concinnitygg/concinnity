@@ -103,7 +103,7 @@ impl SceneState {
     pub fn canopy_params(
         &self,
         canopy: &CanopyField,
-        hand_off: (&GrassLodView, f32),
+        hand_off: Option<(&GrassLodView, f32)>,
         time: f64,
     ) -> CanopyParams {
         canopy.params(

@@ -428,6 +428,7 @@ impl DxContext {
             particle,
             grass,
             grass_lod: std::cell::Cell::default(),
+            canopy_field: fx.canopy,
             commands,
             frame_sync,
             frame_capture: crate::frame_capture::FrameCaptures::new(capture),

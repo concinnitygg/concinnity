@@ -38,9 +38,9 @@ it is. A world has at most one planet.
 
 The ground takes the look of `material`, overlaid in order by each of
 `covers` where its rule holds, at most 4 of them: sand along the coasts,
-rock on cliffs. The covers are drawn on a planet that grows grass in its
-`layers`; one growing none shows its `material` alone. Each layer's own
-rule keeps its blades off the covers they should not grow on.
+rock on cliffs. The covers are drawn whether or not the planet grows grass
+in its `layers`, and each layer's own rule keeps its blades off the covers
+they should not grow on.
 
 Places on the planet are named by latitude and longitude, in degrees.
 Latitude 0, longitude 0 is straight up from the center, where a world

@@ -585,6 +585,9 @@ pub(crate) struct MtlContext {
     // All scene lights packed and pushed to the fragment shader at buffer(4),
     // with the local lights' reach. Pushed every draw, so no copy is ever stale.
     pub(super) lights: concinnity_engine::render::light::state::LightState,
+    // What the canopy block is filled from: the grass's far fields and the
+    // planet's ground. `None` when the world has neither.
+    pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
     // The far field's canopy block, refreshed each frame and pushed to the
     // fragment shader at buffer(21).
     pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,

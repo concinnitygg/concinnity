@@ -53,17 +53,19 @@ pub struct GrassRoute {
 }
 
 /// The shader bucket `obj` draws under from `cam_pos`: its own, except that a
-/// default-Shader draw growing grass goes to a grass twin. One whose bounds
-/// reach past where the frame's band starts goes to the canopy twin, which
-/// shades the ground and the canopy; one wholly nearer, where no pixel can be
-/// in the band, goes to the ground twin. An unbounded draw counts as reaching
-/// the band.
+/// default-Shader draw whose ground shades from the canopy block goes to a
+/// grass twin. One growing grass whose bounds reach past where the frame's
+/// band starts goes to the canopy twin, which shades the ground and the
+/// canopy; one wholly nearer, where no pixel can be in the band, or growing no
+/// grass, goes to the ground twin. An unbounded draw counts as reaching the
+/// band.
 pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], route: GrassRoute) -> u32 {
-    if obj.shader_bucket != 0 || !obj.material.far_field.grows() {
+    let far_field = obj.material.far_field;
+    if obj.shader_bucket != 0 || !far_field.shades_ground() {
         return obj.shader_bucket;
     }
     let twins = route.twins;
-    let twin = if reaches_far_band(obj, cam_pos, route.far_start) {
+    let twin = if far_field.grows_grass() && reaches_far_band(obj, cam_pos, route.far_start) {
         twins.canopy
     } else {
         twins.ground.or(twins.canopy)
@@ -418,6 +420,39 @@ mod tests {
             ..ROUTE
         };
         assert_eq!(draw_bucket(&tile(1.0), eye, unset), 3);
+    }
+
+    // A planet's ground growing no grass has no band: it takes the ground twin
+    // wherever it lies, the canopy twin only without one.
+    #[test]
+    fn a_grassless_planet_ground_routes_to_the_ground_twin() {
+        use crate::render::environment::grass::CanopyRange;
+        let eye = [0.0, 2.0, 0.0];
+        let bare = CanopyRange {
+            first: 0,
+            count: 0,
+            planet: true,
+        };
+        let mut ground = far_banded(5_000.0);
+        ground.material.far_field = FarFieldTint::of(bare.packed());
+        assert!(ground.material.far_field.shades_ground());
+        assert!(!ground.material.far_field.grows_grass());
+        assert_eq!(draw_bucket(&ground, eye, ROUTE), 4);
+        let unset = GrassRoute {
+            far_start: 0.0,
+            ..ROUTE
+        };
+        assert_eq!(draw_bucket(&ground, eye, unset), 4);
+        ground.bb_min = [f32::NAN; 3];
+        assert_eq!(draw_bucket(&ground, eye, ROUTE), 4);
+        let canopy_only = GrassRoute {
+            twins: GrassTwins {
+                canopy: Some(3),
+                ground: None,
+            },
+            ..ROUTE
+        };
+        assert_eq!(draw_bucket(&ground, eye, canopy_only), 3);
     }
 
     // Without a ground twin every far band takes the canopy twin; without

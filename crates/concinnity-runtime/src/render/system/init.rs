@@ -392,30 +392,32 @@ impl GraphicsSystem {
         let cluster_count = instanced_clusters.len();
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
-        let planet_grass = planet.as_ref().and_then(|p| {
-            let covers = concinnity_engine::render::environment::ground::GroundCovers::of(
-                p,
-                |h| world.materials.map.get(&h).copied(),
-                u32::saturating_from(world.texture_count),
-            );
-            concinnity_engine::render::world_load::world_scan::planet_grass(
-                p,
-                &concinnity_engine::render::environment::terrain::grass_by_id(ctx),
-                covers,
-            )
+        let planet_surface = planet.as_ref().map(|p| {
+            let surface = concinnity_engine::render::world_load::world_fx::PlanetSurface {
+                grass: concinnity_engine::render::world_load::world_scan::planet_grass(
+                    p,
+                    &concinnity_engine::render::environment::terrain::grass_by_id(ctx),
+                ),
+                covers: concinnity_engine::render::environment::ground::GroundCovers::of(
+                    p,
+                    |h| world.materials.map.get(&h).copied(),
+                    u32::saturating_from(world.texture_count),
+                ),
+            };
+            (p, surface)
         });
-        let planet_far_field = planet_grass
-            .as_ref()
-            .map(concinnity_engine::render::environment::grass::PlanetGrass::far_field);
         let fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
             world.texture_count,
             &world.terrains,
-            planet_grass,
-            planet.as_ref(),
+            planet_surface,
             quality_ceiling.ocean,
         );
+        let planet_far_field = fx
+            .canopy
+            .as_ref()
+            .and_then(concinnity_engine::render::environment::grass::CanopyField::planet_range);
         self.extractor.set_grows_grass(fx.grass.is_some());
         self.extractor.set_atmosphere(fx.atmosphere);
         let sdf_fields = if capture_sources {

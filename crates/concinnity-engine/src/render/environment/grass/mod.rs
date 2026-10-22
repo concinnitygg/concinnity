@@ -466,8 +466,6 @@ pub struct GrassField {
     pub lod_height: f32,
     /// The planet the layers grow on instead of terrains.
     pub planet: Option<PlanetGrass>,
-    /// What the far fields past the blades are shaded with.
-    pub canopy: CanopyField,
 }
 
 // The frame a planet's tiles are drawn in this frame, from any one of them.
@@ -525,7 +523,6 @@ impl GrassField {
             blade_height,
             lod_height,
             planet: None,
-            canopy: CanopyField::for_terrains(terrains, wind_field.strength).0,
         })
     }
 
@@ -549,7 +546,6 @@ impl GrassField {
             sizing: None,
             blade_height,
             lod_height,
-            canopy: CanopyField::for_planet(&planet, wind_field.strength).0,
             planet: Some(planet),
         }
     }
@@ -2012,7 +2008,6 @@ mod tests {
         #[test]
         fn each_layer_takes_its_rule() {
             use crate::components::GroundRule;
-            use crate::render::environment::ground::GroundCovers;
             let above = GroundRule {
                 altitude: [Some(2.0), None],
                 ..GroundRule::default()
@@ -2023,7 +2018,6 @@ mod tests {
                     (Grass::default(), GroundRule::default()),
                     (grass(30.0), above),
                 ],
-                GroundCovers::default(),
             )
             .unwrap();
             let mut f = GrassField::resolve_planet(grass, None);

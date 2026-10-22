@@ -260,7 +260,7 @@ mod tests {
         );
         for d in &draws {
             assert_eq!(d.material.far_field, FarFieldTint::of(canopy.packed()));
-            assert!(d.material.far_field.grows());
+            assert!(d.material.far_field.grows_grass());
         }
         assert_eq!(vertices.len(), colors.len());
         for (v, c) in vertices.iter().zip(&colors) {

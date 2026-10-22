@@ -661,17 +661,20 @@ impl FrameDevice for VkContext {
                 self.uniforms.lights.uniforms(),
             );
         }
-        self.uniforms.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self.state.canopy_params(
-                &grass.field.canopy,
-                (lod, grass.crossfade_phase()),
-                water_time,
-            ),
-            _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
-        };
+        let hand_off = self
+            .grass
+            .as_ref()
+            .zip(self.grass_lod.as_ref())
+            .map(|(grass, lod)| (lod, grass.crossfade_phase()));
+        self.uniforms.canopy = self
+            .canopy_field
+            .as_ref()
+            .map_or_else(Default::default, |field| {
+                self.state.canopy_params(field, hand_off, water_time)
+            });
         self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
         self.uniforms.canopy_tables.update(
-            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+            self.canopy_field.as_ref().map_or(&[], |f| f.tables()),
             frame_idx,
         );
 

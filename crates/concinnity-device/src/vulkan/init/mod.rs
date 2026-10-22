@@ -404,6 +404,7 @@ impl VkContext {
             particle: ParticleState::default(),
             grass,
             grass_lod: None,
+            canopy_field: fx.canopy,
             auto_exposure: world_fx.auto_exposure,
             hot_reload: ShaderReload::new(hot_reload),
             pipeline_gate: PipelineGate::default(),

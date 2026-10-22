@@ -248,17 +248,20 @@ impl FrameDevice for MtlContext {
         // line pass encodes through `&self`, so it cannot upload for itself.
         self.upload_lines(ring_slot, lines)?;
 
-        self.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self.state.canopy_params(
-                &grass.field.canopy,
-                (lod, grass.crossfade_phase()),
-                water_time,
-            ),
-            _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
-        };
+        let hand_off = self
+            .grass
+            .as_ref()
+            .zip(self.grass_lod.as_ref())
+            .map(|(grass, lod)| (lod, grass.crossfade_phase()));
+        self.canopy = self
+            .canopy_field
+            .as_ref()
+            .map_or_else(Default::default, |field| {
+                self.state.canopy_params(field, hand_off, water_time)
+            });
         self.canopy_tables.update(
             &self.hw.device,
-            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+            self.canopy_field.as_ref().map_or(&[], |f| f.tables()),
         )?;
         // The grass kernel's inputs, advanced only on a frame whose graph runs it,
         // so the draw-argument slot it fills alternates frame to frame.

@@ -60,12 +60,13 @@ pub struct MaterialUniforms {
 /// ground under its blades, and past where they end, the canopy they make.
 /// Where the blades hand over is the frame's (`CanopyParams::band`). A
 /// terrain with a far field carries each layer's density in its vertex color,
-/// rather than a multiplier on its albedo.
+/// rather than a multiplier on its albedo. A planet's ground shades from the
+/// block with no layers too, for its covers and wet sand.
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct FarFieldTint {
     /// The canopy block's layers the surface shades with, packed by
-    /// `CanopyRange::packed`; 0 for a surface growing no grass.
+    /// `CanopyRange::packed`; 0 for a surface the block does not shade.
     pub canopy: u32,
     /// Keeps the record's later members where the shaders read them.
     pub _pad: [u32; 2],
@@ -86,9 +87,14 @@ impl FarFieldTint {
         }
     }
 
-    /// Whether the surface grows grass, and so has a far field.
-    pub fn grows(&self) -> bool {
+    /// Whether the surface's ground shades from the canopy block.
+    pub fn shades_ground(&self) -> bool {
         self.canopy != 0
+    }
+
+    /// Whether the surface grows grass, and so has a far field past it.
+    pub fn grows_grass(&self) -> bool {
+        crate::render::environment::grass::CanopyRange::unpacked(self.canopy).count != 0
     }
 }
 

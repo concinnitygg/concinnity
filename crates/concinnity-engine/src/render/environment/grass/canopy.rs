@@ -328,6 +328,15 @@ impl CanopyRange {
     pub fn packed(self) -> u32 {
         (self.first & 0xff) | ((self.count & 0xff) << 8) | (u32::from(self.planet) << 16)
     }
+
+    /// The range an object record's `packed` word carries.
+    pub fn unpacked(packed: u32) -> Self {
+        Self {
+            first: packed & 0xff,
+            count: (packed >> 8) & 0xff,
+            planet: (packed >> 16) & 1 != 0,
+        }
+    }
 }
 
 /// A terrain's far field in the canopy block: its range, and which of the
@@ -353,8 +362,9 @@ struct PlanetCanopy {
 /// on average. Matches `sky_mu` in the shaders' `canopy_at`.
 const SKY_MU: f32 = 2.0 / 3.0;
 
-/// Every far field's layers in the world, and the planet they may grow on:
-/// what each frame's canopy block and view tables are filled from.
+/// Every far field's layers in the world, and the planet's ground, with or
+/// without grass on it: what each frame's canopy block and view tables are
+/// filled from.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CanopyField {
     layers: Vec<CanopyLayerGpu>,
@@ -405,11 +415,17 @@ impl CanopyField {
         (Self::new(layers, None), runs)
     }
 
-    /// The far field of a planet's `grass` in a wind of mean `wind_speed`, and
-    /// its run of layers.
-    pub fn for_planet(grass: &PlanetGrass, wind_speed: f32) -> (Self, CanopyRange) {
+    /// The ground of the planet `shape`, laid with `covers`, and the far field
+    /// of the `grass` it grows, if any, in a wind of mean `wind_speed`; and
+    /// the planet's run of layers, empty without grass.
+    pub fn for_planet(
+        shape: PlanetShape,
+        grass: Option<&PlanetGrass>,
+        covers: GroundCovers,
+        wind_speed: f32,
+    ) -> (Self, CanopyRange) {
         let layers: Vec<_> = grass
-            .layers
+            .map_or(&[][..], |g| &g.layers)
             .iter()
             .take(MAX_CANOPY_LAYERS)
             .map(|l| CanopyLayerGpu {
@@ -423,13 +439,27 @@ impl CanopyField {
             count: u32::saturating_from(layers.len()),
             planet: true,
         };
+        let meadow_scale = grass.map_or_else(
+            || super::planet::density::meadow_scale(shape.radius),
+            |g| g.meadow_scale,
+        );
         let planet = PlanetCanopy {
-            shape: grass.shape,
-            meadow_scale: grass.meadow_scale,
-            meadow_mean: meadow_mean(grass.meadow_scale, &seeds),
-            covers: grass.covers,
+            shape,
+            meadow_scale,
+            meadow_mean: meadow_mean(meadow_scale, &seeds),
+            covers,
         };
         (Self::new(layers, Some(planet)), range)
+    }
+
+    /// The run of layers a planet's ground shades with, when the block lays
+    /// one.
+    pub fn planet_range(&self) -> Option<CanopyRange> {
+        self.planet.as_ref().map(|_| CanopyRange {
+            first: 0,
+            count: u32::saturating_from(self.layers.len()),
+            planet: true,
+        })
     }
 
     fn new(layers: Vec<CanopyLayerGpu>, planet: Option<PlanetCanopy>) -> Self {
@@ -459,21 +489,22 @@ impl CanopyField {
     }
 
     /// This frame's block `time` seconds into the world, the blades handing
-    /// the field over as `lod` has them, at hand-off phase `phase`. On a
-    /// planet, `tile` is any tile drawn this frame, whose model places the
-    /// planet's axes in the simulated frame.
+    /// the field over as `lod` has them, at hand-off phase `phase`; with no
+    /// blades drawn (`hand_off` `None`) no layer is laid and the ground is
+    /// bare under its covers. On a planet, `tile` is any tile drawn this
+    /// frame, whose model places the planet's axes in the simulated frame.
     pub fn params(
         &self,
-        (lod, phase): (&GrassLodView, f32),
+        hand_off: Option<(&GrassLodView, f32)>,
         tile: Option<&DrawnPlanetTile>,
         time: f64,
     ) -> CanopyParams {
-        let mut params = CanopyParams {
-            layer_count: u32::saturating_from(self.layers.len()),
-            band: [lod.fade_start(), lod.extent, phase, 0.0],
-            ..CanopyParams::default()
-        };
-        params.layers[..self.layers.len()].copy_from_slice(&self.layers);
+        let mut params = CanopyParams::default();
+        if let Some((lod, phase)) = hand_off {
+            params.layer_count = u32::saturating_from(self.layers.len());
+            params.band = [lod.fade_start(), lod.extent, phase, 0.0];
+            params.layers[..self.layers.len()].copy_from_slice(&self.layers);
+        }
         if let (Some(planet), Some(tile)) = (&self.planet, tile) {
             let center = planet_center(&planet.shape, tile);
             // The model turns the planet's axes into the frame's, so its
@@ -1029,9 +1060,8 @@ mod tests {
         assert_eq!(field.layers[0].seed, grass.layers[0].seed);
         assert_eq!(field.layers[1].seed, grass.layers[1].seed);
         assert_eq!(field.layers[2].seed, grass.layers[2].seed);
-        assert_eq!(grass.canopy, field);
         let lod = grass.lod_view(1000.0);
-        let p = field.params((&lod, 5.0), None, 0.0);
+        let p = field.params(Some((&lod, 5.0)), None, 0.0);
         assert_eq!(p.layer_count, 5);
         assert_eq!(p.planet_rows, [[0.0; 4]; 3]);
         // The band is the blades' hand-off, at the frame's phase.
@@ -1054,6 +1084,9 @@ mod tests {
             planet: true,
         };
         assert_eq!(r.packed(), 5 | (3 << 8) | (1 << 16));
+        assert_eq!(CanopyRange::unpacked(r.packed()), r);
+        let terrain = CanopyRange { planet: false, ..r };
+        assert_eq!(CanopyRange::unpacked(terrain.packed()), terrain);
     }
 
     #[test]
@@ -1071,7 +1104,8 @@ mod tests {
         let grass =
             PlanetGrass::everywhere(shape, &vec![Grass::default(); MAX_CANOPY_LAYERS + 4]).unwrap();
         assert!(grass.layers.len() > MAX_CANOPY_LAYERS);
-        let (field, range) = CanopyField::for_planet(&grass, 0.0);
+        let (field, range) =
+            CanopyField::for_planet(shape, Some(&grass), GroundCovers::default(), 0.0);
         assert_eq!(range.count as usize, MAX_CANOPY_LAYERS);
         assert_eq!(field.tables().len(), MAX_CANOPY_TABLE_ROWS);
     }
@@ -1090,7 +1124,8 @@ mod tests {
             continents: crate::planet::Continents::NONE,
         };
         let grass = PlanetGrass::everywhere(shape, &[Grass::default()]).unwrap();
-        let (field, range) = CanopyField::for_planet(&grass, 0.0);
+        let (field, range) =
+            CanopyField::for_planet(shape, Some(&grass), GroundCovers::default(), 0.0);
         assert_eq!(range.count, 1);
         assert!(range.planet);
         let id = TileId {
@@ -1119,7 +1154,11 @@ mod tests {
             morph: crate::gfx::render_types::GpuTileMorph::default(),
             morph_extent: 0.0,
         };
-        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile), 0.0);
+        let p = field.params(
+            Some((&GrassLodView::new(1000.0, 0.5), 0.0)),
+            Some(&tile),
+            0.0,
+        );
         assert_eq!(p.planet_radius, 50_000.0);
         assert!(
             p.meadow_mean > 0.5 && p.meadow_mean < 1.0,
@@ -1155,10 +1194,10 @@ mod tests {
         let grass = PlanetGrass::resolve(
             shape,
             &[(Grass::default(), crate::components::GroundRule::default())],
-            GroundCovers::of(&planet, |_| None, 1),
         )
         .unwrap();
-        let (mut field, _) = CanopyField::for_planet(&grass, 0.0);
+        let covers = GroundCovers::of(&planet, |_| None, 1);
+        let (mut field, _) = CanopyField::for_planet(shape, Some(&grass), covers, 0.0);
         let id = TileId {
             face: CubeFace(2),
             level: 10,
@@ -1177,22 +1216,25 @@ mod tests {
         };
         let lod = GrassLodView::new(1000.0, 0.5);
         assert_eq!(
-            field.params((&lod, 0.0), Some(&tile), 7.0).swash,
+            field.params(Some((&lod, 0.0)), Some(&tile), 7.0).swash,
             ShoreSwashGpu::default()
         );
         let sea = SeaShape::new(7.0, 50_000.0).unwrap();
         let shore = ShoreWaves::new(&shape, 0.0, &sea, None).unwrap();
         field.set_shore(Some(shore.clone()));
-        let p = field.params((&lod, 0.0), Some(&tile), 7.0);
+        let p = field.params(Some((&lod, 0.0)), Some(&tile), 7.0);
         assert_eq!(p.swash, ShoreSwashGpu::new(&shore, 7.0));
         assert!(p.swash.runup > 0.0);
         assert_ne!(
             p.swash.phases,
-            field.params((&lod, 0.0), Some(&tile), 8.0).swash.phases
+            field
+                .params(Some((&lod, 0.0)), Some(&tile), 8.0)
+                .swash
+                .phases
         );
         // Off the planet, or before a tile is drawn, nothing washes.
         assert_eq!(
-            field.params((&lod, 0.0), None, 7.0).swash,
+            field.params(Some((&lod, 0.0)), None, 7.0).swash,
             ShoreSwashGpu::default()
         );
     }
@@ -1231,10 +1273,9 @@ mod tests {
                 (Grass::default(), GroundRule::default()),
                 (Grass::default(), above),
             ],
-            covers,
         )
         .unwrap();
-        let (field, _) = CanopyField::for_planet(&grass, 0.0);
+        let (field, _) = CanopyField::for_planet(shape, Some(&grass), covers, 0.0);
         let id = TileId {
             face: CubeFace(2),
             level: 10,
@@ -1251,7 +1292,11 @@ mod tests {
             morph: crate::gfx::render_types::GpuTileMorph::default(),
             morph_extent: 0.0,
         };
-        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile), 0.0);
+        let p = field.params(
+            Some((&GrassLodView::new(1000.0, 0.5), 0.0)),
+            Some(&tile),
+            0.0,
+        );
         assert_eq!(p.layers[0].rule, GroundRuleGpu::EVERYWHERE);
         assert_eq!(p.layers[1].rule, GroundRuleGpu::of(&above));
         assert_eq!(p.cover_count, 1);
@@ -1284,8 +1329,92 @@ mod tests {
         }
         // Off a planet nothing is laid.
         let (terrain, _) = CanopyField::for_terrains(&[], 0.0);
-        let t = terrain.params((&GrassLodView::new(1000.0, 0.5), 0.0), None, 0.0);
+        let t = terrain.params(Some((&GrassLodView::new(1000.0, 0.5), 0.0)), None, 0.0);
         assert_eq!(t.cover_count, 0);
+    }
+
+    // A planet growing no grass still lays its ground in the block: its
+    // frame, noise, covers and the shore's wash, with no layers.
+    #[test]
+    fn a_grassless_planet_lays_its_ground() {
+        use crate::components::{GroundCover, GroundRule, Planet};
+        use crate::render::uniforms::canopy::ShoreSwashGpu;
+        use crate::water::spectrum::SeaShape;
+        let sand = GroundCover {
+            rule: GroundRule {
+                altitude: [None, Some(2.0)],
+                ..GroundRule::default()
+            },
+            ..GroundCover::default()
+        };
+        let planet = Planet {
+            land_share: 0.4,
+            covers: vec![sand.clone()],
+            ..Planet::default()
+        };
+        let shape = planet.shape();
+        let covers = GroundCovers::of(&planet, |_| None, 1);
+        let (mut field, range) = CanopyField::for_planet(shape, None, covers, 0.0);
+        assert_eq!(
+            range,
+            CanopyRange {
+                first: 0,
+                count: 0,
+                planet: true
+            }
+        );
+        assert_ne!(range.packed(), 0);
+        assert_eq!(field.planet_range(), Some(range));
+        assert!(field.tables().is_empty());
+        let sea = SeaShape::new(7.0, 50_000.0).unwrap();
+        let shore = ShoreWaves::new(&shape, 0.0, &sea, None).unwrap();
+        field.set_shore(Some(shore.clone()));
+        let id = TileId {
+            face: CubeFace(2),
+            level: 10,
+            x: 512,
+            y: 511,
+        };
+        let mesh = crate::planet::tile_mesh(&shape, id);
+        let tile = DrawnPlanetTile {
+            id,
+            model: crate::planet::LocalFrame::AUTHORED.model_at(mesh.origin),
+            vertex_base: 0,
+            radial: mesh.radial,
+            origin_altitude: mesh.origin_altitude,
+            morph: crate::gfx::render_types::GpuTileMorph::default(),
+            morph_extent: 0.0,
+        };
+        let p = field.params(None, Some(&tile), 7.0);
+        assert_eq!(p.layer_count, 0);
+        assert_eq!(p.band, [0.0; 4]);
+        assert_eq!(p.planet_radius, narrow_f32(shape.radius));
+        assert_eq!(p.ground_octaves, shape.octave_count());
+        assert!(p.continent_octaves > 0);
+        assert_eq!(p.cover_count, 1);
+        assert_eq!(p.covers[0].rule, GroundRuleGpu::of(&sand.rule));
+        assert_eq!(p.swash, ShoreSwashGpu::new(&shore, 7.0));
+        assert_eq!(
+            [p.ground_origin, p.ground_up],
+            ground_reference(&shape, &tile)
+        );
+        // The same ground as under grass, but for the layers.
+        let grass = PlanetGrass::everywhere(shape, &[Grass::default()]).unwrap();
+        let (mut grassy, _) = CanopyField::for_planet(shape, Some(&grass), covers, 0.0);
+        grassy.set_shore(Some(shore));
+        let lod = GrassLodView::new(1000.0, 0.5);
+        let under = grassy.params(Some((&lod, 0.0)), Some(&tile), 7.0);
+        assert_eq!(under.layer_count, 1);
+        let bare = CanopyParams {
+            layer_count: 0,
+            band: [0.0; 4],
+            layers: CanopyParams::default().layers,
+            meadow_mean: p.meadow_mean,
+            ..under
+        };
+        assert_eq!(bytemuck::bytes_of(&bare), bytemuck::bytes_of(&p));
+        // With no blades drawn this frame, grass lays no layer either.
+        assert_eq!(grassy.params(None, Some(&tile), 7.0).layer_count, 0);
     }
 
     // The normal the shader's `ground_normal_at` returns, over the block's noise.
