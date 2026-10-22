@@ -661,9 +661,11 @@ impl FrameDevice for VkContext {
             );
         }
         self.uniforms.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self
-                .state
-                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
+            (Some(grass), Some(lod)) => self.state.canopy_params(
+                &grass.field.canopy,
+                (lod, grass.crossfade_phase()),
+                elapsed,
+            ),
             _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
         };
         self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);

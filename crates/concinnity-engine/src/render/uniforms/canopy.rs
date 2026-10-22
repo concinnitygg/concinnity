@@ -4,6 +4,10 @@
 
 use super::ground::{GroundCoverGpu, GroundRuleGpu};
 use crate::planet::MAX_GROUND_COVERS;
+use crate::render::environment::water::sea::shore::{
+    PHASE_NOISE_RADIANS, SWELL_VARIATION, ShoreWaves,
+};
+use concinnity_core::math::narrow_f32;
 
 /// Most layers the canopy block describes: every far field in the world
 /// together.
@@ -52,7 +56,8 @@ pub struct CanopyLayerGpu {
 
 /// The canopy block: every far field's layers, the frame a planet's ground is
 /// laid out in, the noise its height is summed from, its coasts, the covers
-/// laid over it, and where the blades hand the field to it. 2368 bytes.
+/// laid over it, where the blades hand the field to it, and the wash of a
+/// sea's waves up its beaches. 2464 bytes.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct CanopyParams {
@@ -126,6 +131,60 @@ pub struct CanopyParams {
     /// ([`GrassHistory::crossfade_phase`](crate::render::environment::grass::GrassHistory::crossfade_phase));
     /// `w` unused.
     pub band: [f32; 4],
+    /// The wash of a planet sea's waves up its beaches.
+    pub swash: ShoreSwashGpu,
+}
+
+/// The wash of a planet sea's waves up its beaches this frame, which wets the
+/// sand it reaches. Zero (`runup` 0) where no sea has shore waves. 96 bytes.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct ShoreSwashGpu {
+    /// The sea's height above the planet's datum, in meters.
+    pub sea_level: f32,
+    /// The highest the waves run up the beach, in meters above the sea.
+    pub runup: f32,
+    /// The highest rise the wash wets anywhere along the shore, before the
+    /// sand's relief, in meters above the sea.
+    pub reach: f32,
+    /// Keeps the record a whole number of rows.
+    pub _pad: f32,
+    /// Each shore train's angular frequency; `w` unused.
+    pub omegas: [f32; 4],
+    /// Each train's phase at the waterline this frame; `w` unused.
+    pub phases: [f32; 4],
+    /// Each train's deep-water height, in meters; `w` unused.
+    pub amplitudes: [f32; 4],
+    /// The shore's phase-noise octave salts, then its swell's; `w` unused.
+    pub noise_salts: [u32; 4],
+    /// The phase noise's `[lattice cells per unit of direction, radians
+    /// either way]`, then the swell's `[lattice cells per unit of direction,
+    /// share either way]`.
+    pub noise: [f32; 4],
+}
+
+impl ShoreSwashGpu {
+    /// The wash of `shore` `time` seconds into the world.
+    pub fn new(shore: &ShoreWaves, time: f64) -> Self {
+        let lane = |v: [f64; 3]| [narrow_f32(v[0]), narrow_f32(v[1]), narrow_f32(v[2]), 0.0];
+        let [s0, s1, s2] = shore.noise_salts();
+        Self {
+            sea_level: narrow_f32(shore.coast().sea_level),
+            runup: narrow_f32(shore.runup()),
+            reach: narrow_f32(shore.swash_reach()),
+            _pad: 0.0,
+            omegas: lane(shore.trains().map(|t| t.omega)),
+            phases: lane(shore.phases_at(time)),
+            amplitudes: lane(shore.trains().map(|t| t.amplitude)),
+            noise_salts: [s0, s1, s2, 0],
+            noise: [
+                narrow_f32(shore.noise_frequency()),
+                narrow_f32(PHASE_NOISE_RADIANS),
+                narrow_f32(shore.swell_frequency()),
+                narrow_f32(SWELL_VARIATION),
+            ],
+        }
+    }
 }
 
 impl Default for CanopyParams {
@@ -191,7 +250,18 @@ mod tests {
         assert_eq!(offset_of!(CanopyParams, ground_up), 2080);
         assert_eq!(offset_of!(CanopyParams, covers), 2096);
         assert_eq!(offset_of!(CanopyParams, band), 2352);
-        assert_eq!(size_of::<CanopyParams>(), 2368);
+        assert_eq!(offset_of!(CanopyParams, swash), 2368);
+        assert_eq!(size_of::<CanopyParams>(), 2464);
+        assert_eq!(size_of::<ShoreSwashGpu>(), 96);
+        assert_eq!(offset_of!(ShoreSwashGpu, sea_level), 0);
+        assert_eq!(offset_of!(ShoreSwashGpu, runup), 4);
+        assert_eq!(offset_of!(ShoreSwashGpu, reach), 8);
+        assert_eq!(offset_of!(ShoreSwashGpu, _pad), 12);
+        assert_eq!(offset_of!(ShoreSwashGpu, omegas), 16);
+        assert_eq!(offset_of!(ShoreSwashGpu, phases), 32);
+        assert_eq!(offset_of!(ShoreSwashGpu, amplitudes), 48);
+        assert_eq!(offset_of!(ShoreSwashGpu, noise_salts), 64);
+        assert_eq!(offset_of!(ShoreSwashGpu, noise), 80);
         // Metal sets the block inline, which caps it at 4 KiB.
         const { assert!(size_of::<CanopyParams>() <= 4096) };
         assert_eq!(CanopyParams::default().layer_count, 0);

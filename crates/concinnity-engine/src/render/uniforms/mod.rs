@@ -20,6 +20,7 @@ pub mod ocean;
 pub mod post;
 pub mod probe;
 pub mod raymarch;
+pub mod shore;
 pub mod transparent;
 pub mod view;
 pub mod vulkan;
@@ -34,6 +35,7 @@ pub use probe::{
     grown_probe_capacity,
 };
 pub use raymarch::{RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms};
+pub use shore::WaterShoreGpu;
 pub use transparent::{
     GlassMeshParams, GlassParams, TransparentView, WATER_MAX_WAVES, WaterOceanGpu, WaterParams,
     WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterWaveGpu,

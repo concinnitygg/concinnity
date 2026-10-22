@@ -98,14 +98,19 @@ impl SceneState {
         out.extend(self.drawn_planet_tiles_iter());
     }
 
-    /// This frame's canopy block for `canopy`, laid out in the frame the
-    /// planet's tiles are drawn in this frame.
+    /// This frame's canopy block for `canopy` `time` seconds into the world,
+    /// laid out in the frame the planet's tiles are drawn in this frame.
     pub fn canopy_params(
         &self,
         canopy: &CanopyField,
         hand_off: (&GrassLodView, f32),
+        time: f64,
     ) -> CanopyParams {
-        canopy.params(hand_off, self.drawn_planet_tiles_iter().next().as_ref())
+        canopy.params(
+            hand_off,
+            self.drawn_planet_tiles_iter().next().as_ref(),
+            time,
+        )
     }
 
     fn drawn_planet_tiles_iter(&self) -> impl Iterator<Item = DrawnPlanetTile> + '_ {

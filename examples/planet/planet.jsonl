@@ -10,7 +10,7 @@
 ["Wind",{"direction":[1.0,0.35],"strength":4.0,"gustiness":0.6,"gust_scale":16.0}]
 ["Grass",{"$id":"meadow","height":0.55,"height_variance":0.45,"width":0.03,"density":100.0,"clump_size":0.7}]
 ["Planet",{"center":[0.0,-50000.0,0.0],"radius":50000.0,"amplitude":40.0,"feature_size":2000.0,"octaves":8,"seed":95,"land_share":0.4,"continent_size":20000.0,"ocean_depth":60.0,"beach_width":60.0,"material":"turf","covers":[{"material":"seabed","rule":{"altitude":[null,-7.0],"altitude_edge":2.5}},{"material":"sand","rule":{"altitude":[-9.0,2.5],"altitude_edge":0.6}}],"layers":[{"grass":"meadow","rule":{"altitude":[2.5,null],"altitude_edge":0.6}}]}]
-["WaterSurface",{"$id":"sea","shape":"planet_sea","sea_level":0.0,"fetch_meters":50000.0}]
+["WaterSurface",{"$id":"sea","shape":"planet_sea","sea_level":0.0,"fetch_meters":50000.0,"wind_response":1.75}]
 ["Camera3D",{"$id":"cam","position":[0.0,8.0,0.0],"yaw":-1.6755,"pitch":-0.05,"fov_y_degrees":70.0,"controller":{"free_fly":false,"move_speed":5.0,"sprint_multiplier":4.0,"mouse_sensitivity":0.0015}}]
 ["Font",{"$id":"hud_font","size_px":20}]
 ["TextLabel",{"$id":"fps_chip","font":"hud_font","x":10,"y":10,"scale":0.7,"color":[1.0,1.0,1.0],"background":[0.0,0.22,0.08,0.85],"padding":5}]

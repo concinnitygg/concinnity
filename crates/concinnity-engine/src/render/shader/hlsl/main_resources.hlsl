@@ -69,10 +69,25 @@ struct CanopyLayer
 // Matches MAX_GROUND_COVERS in planet::cover.
 #define GROUND_MAX_COVERS 4
 
+// The wash of a planet sea's waves up its beaches. Mirrors `ShoreSwashGpu`
+// (96 B); `runup` 0 where no sea has shore waves.
+struct ShoreSwash
+{
+    float sea_level;
+    float runup;
+    float reach;
+    float _pad;
+    float4 omegas;
+    float4 phases;
+    float4 amplitudes;
+    uint4 noise_salts;
+    float4 noise; // [phase cells per unit of direction, radians, swell cells, share]
+};
+
 // Mirrors `CanopyParams` in concinnity-engine/src/render/uniforms/canopy.rs
-// (2368 B): every far field's layers, the planet's axes in the frame, the
-// noise its height is summed from, its coasts, the covers laid over it, and
-// where the blades hand the field to it.
+// (2464 B): every far field's layers, the planet's axes in the frame, the
+// noise its height is summed from, its coasts, the covers laid over it,
+// where the blades hand the field to it, and the wash up its beaches.
 struct CanopyParams
 {
     float4 planet_rows[3];
@@ -108,6 +123,7 @@ struct CanopyParams
     // x = where the blades start handing the field over, y = where they end,
     // z = the hand-off's phase (see grass_crossfade_shows_blades); w unused.
     float4 band;
+    ShoreSwash swash;
 };
 
 // ---- Resource bindings ----

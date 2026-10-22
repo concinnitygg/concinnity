@@ -63,6 +63,7 @@ embed_shaders! {
     PARTICLE => "particle.hlsl",
     PARTICLE_SIMULATE => "particle_simulate.hlsl",
     PARTICLE_TYPES => "particle_types.hlsl",
+    PLANET_NOISE => "planet_noise.hlsl",
     POST_COMMON => "post_common.hlsl",
     PROBE_COMMON => "probe_common.hlsl",
     PROBE_PREFILTER => "probe_prefilter.hlsl",

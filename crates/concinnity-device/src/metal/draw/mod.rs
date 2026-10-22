@@ -248,9 +248,11 @@ impl FrameDevice for MtlContext {
         self.upload_lines(ring_slot, lines)?;
 
         self.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self
-                .state
-                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
+            (Some(grass), Some(lod)) => self.state.canopy_params(
+                &grass.field.canopy,
+                (lod, grass.crossfade_phase()),
+                elapsed_f64,
+            ),
             _ => concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
         };
         self.canopy_tables.update(

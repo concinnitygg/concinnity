@@ -96,6 +96,27 @@ impl PlanetShape {
         (shore.height, gradient)
     }
 
+    /// How far inland of the coast direction `dir` (unit length) lies, in
+    /// meters (negative out to sea, exact at the coast and an estimate away
+    /// from it), and how fast that grows per meter along the ground, along
+    /// each authored axis. `None` on a planet without seas.
+    pub fn inland(&self, dir: DVec3) -> Option<(f64, DVec3)> {
+        if !self.continents.divides() {
+            return None;
+        }
+        let (inland, gradient) = self.continents.inland(self.radius, dir);
+        let along = dvec3::sub(gradient, dvec3::scale(dir, dvec3::dot(dir, gradient)));
+        Some((inland, dvec3::scale(along, 1.0 / self.radius)))
+    }
+
+    /// The ground's height `inland` meters from the coast where no hills
+    /// stand: the beach and the sea floor the coast's profile lays down.
+    pub fn coast_height(&self, inland: f64) -> f64 {
+        self.continents
+            .shore(inland, 0.0, self.amplitude, self.hill_rise())
+            .height
+    }
+
     // The hills' height in direction `dir` and its gradient over directions.
     fn hills(&self, dir: DVec3) -> (f64, DVec3) {
         if self.hill_height() <= 0.0 {
@@ -210,6 +231,25 @@ pub(crate) fn fbm(dir: DVec3, base: f64, octaves: u32, salt: impl Fn(u32) -> u32
         gradient = dvec3::add(gradient, dvec3::scale(along, octave.weight));
     }
     (sum, gradient)
+}
+
+/// Where unit direction `dir` lies in each of `octaves` octaves of the noise
+/// [`fbm`] sums with the same `base` and `salt`: the lattice cell and the
+/// place within it, so a sampler near `dir` can work from small offsets.
+pub(crate) fn octave_cells(
+    dir: DVec3,
+    base: f64,
+    octaves: u32,
+    salt: impl Fn(u32) -> u32,
+) -> impl Iterator<Item = ([i32; 3], DVec3)> {
+    octave_lattices(base, octaves, salt).map(move |octave| {
+        let p = dvec3::add(dmat3::mul_vec(&octave.to_lattice, dir), octave.offset);
+        let cell = p.map(libm::floor);
+        (
+            cell.map(i32::saturating_from),
+            [p[0] - cell[0], p[1] - cell[1], p[2] - cell[2]],
+        )
+    })
 }
 
 fn octave_lattices(
@@ -388,6 +428,63 @@ mod tests {
     // Directions spread over the whole sphere.
     fn everywhere(n: usize) -> impl Iterator<Item = DVec3> {
         (0..n).map(move |i| super::super::coast::fibonacci_direction(i, n))
+    }
+
+    // Each octave's cell and place within it are where `fbm` samples: the
+    // noise read from them sums to the same value.
+    #[test]
+    fn the_octave_cells_hold_the_lattice_points() {
+        let salt = |o: u32| 17 + 3 * o;
+        for dir in everywhere(40) {
+            let (want, _) = fbm(dir, 3_000.0, 5, salt);
+            let mut sum = 0.0;
+            let mut weight = 1.0;
+            for (o, (cell, within)) in octave_cells(dir, 3_000.0, 5, salt).enumerate() {
+                assert!(within.iter().all(|t| (0.0..1.0).contains(t)));
+                let p = core::array::from_fn(|i| f64::from(cell[i]) + within[i]);
+                sum += weight * value_noise(p, salt(u32::try_from(o).unwrap())).0;
+                weight *= 0.5;
+            }
+            assert!((sum - want).abs() < 1e-12, "{sum} {want}");
+        }
+    }
+
+    // The distance inland grows along the ground as its gradient says, the
+    // gradient lies along the ground, and the coast's profile is the height
+    // wherever the hills are flat. A planet without seas has no coast.
+    #[test]
+    fn the_distance_inland_and_its_gradient_agree() {
+        let s = coast_shape();
+        assert!(shape().inland([0.0, 1.0, 0.0]).is_none());
+        for dir in everywhere(300) {
+            let (_, gradient) = s.inland(dir).unwrap();
+            assert!(dvec3::dot(gradient, dir).abs() < 1e-12);
+            let step = 0.5;
+            for axis in [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]] {
+                let along = dvec3::normalize_or(
+                    dvec3::sub(axis, dvec3::scale(dir, dvec3::dot(axis, dir))),
+                    axis,
+                );
+                let at = |m: f64| {
+                    let d = dvec3::normalize_or(
+                        dvec3::add(dir, dvec3::scale(along, m / s.radius)),
+                        dir,
+                    );
+                    s.inland(d).unwrap().0
+                };
+                let fd = (at(step) - at(-step)) / (2.0 * step);
+                let want = dvec3::dot(gradient, along);
+                assert!((fd - want).abs() < 1e-3 + 1e-3 * want.abs(), "{fd} {want}");
+            }
+        }
+        let flat = PlanetShape {
+            amplitude: 0.0,
+            ..coast_shape()
+        };
+        for dir in everywhere(200) {
+            let (inland, _) = flat.inland(dir).unwrap();
+            assert!((flat.height(dir) - flat.coast_height(inland)).abs() < 1e-9);
+        }
     }
 
     #[test]

@@ -165,8 +165,42 @@ struct WaterSeaFace
     float4 ripple_offsets[2]; // each ripple octave's offset, [along, across] pairs
 };
 
+// Shore train phase-table nodes. Mirrors `SHORE_NODES` in
+// `core::render::water::sea::shore`.
+static const uint WATER_SHORE_NODES = 32u;
+// The noise octaves the shore reads: the continents', the phase noise's, then
+// the swell's.
+static const uint WATER_CONTINENT_OCTAVES = 6u;
+static const uint WATER_SHORE_OCTAVES = 9u;
+
+// A planet sea's shore waves. Matches `WaterShoreGpu` (1296 B); zero for a
+// sea without coasts, which `continent_octaves` 0 marks.
+struct WaterShore
+{
+    float4 planet_rows[3];       // simulated frame -> planet axes; w = the anchor's direction
+    uint4 continent_salts[2];
+    float continent_frequency;   // broadest octave's lattice cells per unit of direction
+    float continent_scale;       // meters inland per unit of the octaves' sum
+    float continent_offset;      // meters inland at a sum of 0, negated
+    uint continent_octaves;
+    uint4 noise_salts;           // the phase noise's octave salts, zw unused
+    float4 noise;                // [cells per unit of direction, radians, 1 / planet radius, 1 / sea radius]
+    float4 coast;                // [sea level, waterline, ocean depth, shelf]
+    float4 beach;                // [beach width, beach rise, table reach, peak wavelength]
+    float4 bounds;               // [inland seaward of which no shore wave or fade reaches, _, _, _]
+    float4 swell;                // [cells per unit of direction, share either way, _, _]
+    float4 lace;                 // [anchor in the planet's axes, wrapped; the period it wraps in]
+    float4 omegas;               // each train's angular frequency
+    float4 amplitudes;           // each train's deep-water height
+    float4 phases;               // each train's phase at the waterline this frame
+    float4 cascade_wavelengths;  // the wavelength each cascade fades out at; 0 keeps it
+    float4 table[2u * WATER_SHORE_NODES]; // per node: phases, then wavenumbers
+    int4 lattice_cells[WATER_SHORE_OCTAVES];    // per octave, the anchor's lattice cell
+    float4 lattice_places[WATER_SHORE_OCTAVES]; // and where in it the anchor lies
+};
+
 // Where a planet sea lies and how its grid is laid on it. Matches
-// `WaterSeaGpu` (480 B); zero for a rectangle.
+// `WaterSeaGpu` (2064 B); zero for a rectangle.
 struct WaterSea
 {
     float4 up;          // [radial up at the anchor, sea radius]
@@ -175,10 +209,11 @@ struct WaterSea
     float4 shape;       // [1 / radius, face blend, _, _]
     float4 wind_map[2]; // rows over a point that give where its gusts are read
     WaterSeaFace faces[WATER_SEA_FACES];
+    WaterShore shore;
 };
 
 // Per-surface tunables, refreshed every frame. Layout matches `WaterParams`
-// (1616 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
+// (3200 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
 // cannot desynchronize them from the CPU struct.
 struct WaterParams
 {
@@ -224,6 +259,8 @@ struct WaterParams
 #ifdef WATER_SEA
 static uint water_face = 0u;
 static float2 water_gust_xz = (float2)0.0;
+// How much of each cascade the shallows under the point being shaded leave.
+static float4 water_shore_damp = (float4)1.0;
 #define WATER_OCEAN_OFFSETS params.sea.faces[water_face].ocean_offsets
 #define WATER_RIPPLE_WARP params.sea.faces[water_face].warp.xy
 #define WATER_RIPPLE_OFFSET(r, ripple) water_sea_ripple_offset(r)
@@ -233,6 +270,10 @@ static float2 water_gust_xz = (float2)0.0;
 #define WATER_UP(i) water_sea_up(i.rest)
 #define WATER_SUN_HEIGHT(i) dot(view.sun_dir.xyz, water_sea_up(i.rest))
 #define WATER_WHITECAP(i, dx, dy) water_sea_cover
+#define WATER_DAMPED(c, x) ((x) * water_shore_damp[c])
+#define WATER_DAMPED_SLOPES(c, m) ((m) * float4(water_shore_damp[c], water_shore_damp[c], \
+                                              water_shore_damp[c] * water_shore_damp[c], \
+                                              water_shore_damp[c] * water_shore_damp[c]))
 #else
 #define WATER_OCEAN_OFFSETS params.ocean.offsets
 #define WATER_RIPPLE_WARP params.ripple_warp.xy
@@ -243,6 +284,8 @@ static float2 water_gust_xz = (float2)0.0;
 #define WATER_UP(i) float3(0.0, 1.0, 0.0)
 #define WATER_SUN_HEIGHT(i) view.sun_dir.y
 #define WATER_WHITECAP(i, dx, dy) water_whitecap_cover(i.local_xz, dx, dy)
+#define WATER_DAMPED(c, x) x
+#define WATER_DAMPED_SLOPES(c, m) m
 #endif
 
 // ---- Resource bindings ----
@@ -334,6 +377,14 @@ struct WaterVertexOut
     // The point on the sea at rest the vertex was displaced from, relative
     // to the anchor; the fragment finds its place on each face itself.
     [[vk::location(1)]] float3 rest : TEXCOORD1;
+    // The coast under the rest point (`water_shore_field`) and the shore's
+    // phase noise there (`water_shore_noise`), found per vertex: both vary
+    // over hundreds of meters, far wider than the grid's cells where the
+    // shore waves show.
+    [[vk::location(2)]] float4 shore_field : TEXCOORD2;
+    [[vk::location(3)]] float4 shore_noise : TEXCOORD3;
+    // How tall the swell runs there (`water_shore_swell`).
+    [[vk::location(4)]] float shore_swell : TEXCOORD4;
     float4 position : SV_Position;
 };
 
@@ -496,7 +547,8 @@ float3 water_ocean_displace(float2 xz, float footprint)
         float texels = footprint * params.ocean.inv_lengths[c] * size;
         float lod = max(log2(max(texels, 1e-6)), 0.0);
         float layer = float(params.ocean.layers.y + c);
-        d += ocean_displacement.SampleLevel(ocean_sampler, float3(water_ocean_uv(xz, c), layer), lod).xyz;
+        d += WATER_DAMPED(c, ocean_displacement.SampleLevel(ocean_sampler, float3(water_ocean_uv(xz, c), layer),
+                                                            lod).xyz);
     }
     return d;
 }
@@ -580,8 +632,9 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     {
         float inv_length = params.ocean.inv_lengths[c];
         float layer = float(params.ocean.layers.y + c);
-        float4 m = ocean_slopes.SampleGrad(ocean_sampler, float3(water_ocean_uv(local_xz, c), layer),
-                                           dx * inv_length, dy * inv_length);
+        float4 m = WATER_DAMPED_SLOPES(c, ocean_slopes.SampleGrad(ocean_sampler,
+                                                                  float3(water_ocean_uv(local_xz, c), layer),
+                                                                  dx * inv_length, dy * inv_length));
         binormal.y += m.x;
         tangent.y += m.y;
         removed += max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0);
@@ -661,8 +714,9 @@ float water_whitecap_cover(float2 local_xz, float2 dx, float2 dy)
         float inv_length = params.ocean.inv_lengths[c];
         float layer = float(params.ocean.layers.y + c);
         float3 uv = float3(water_ocean_uv(local_xz, c), layer);
-        clear *= 1.0 - saturate(ocean_displacement.SampleGrad(ocean_sampler, uv, dx * inv_length,
-                                                              dy * inv_length).w);
+        clear *= 1.0 - saturate(WATER_DAMPED(c, ocean_displacement.SampleGrad(ocean_sampler, uv,
+                                                                              dx * inv_length,
+                                                                              dy * inv_length).w));
     }
     return water_foam_lace(1.0 - clear, local_xz, max(length(dx), length(dy)));
 }
@@ -745,13 +799,477 @@ float3 water_sea_up(float3 rest)
     return normalize(rest + params.sea.up.xyz * params.sea.up.w);
 }
 
+{PLANET_NOISE}
+
+// The shore waves (render::water::sea::shore), read in the planet's axes.
+#define WATER_SHORE params.sea.shore
+
+// Mirrors the constants of render::water::sea::shore.
+static const uint WATER_SHORE_TRAINS = 3u;
+static const float WATER_BREAKER_INDEX = 0.78;
+static const float WATER_SHALLOWEST = 0.1;
+static const float2 WATER_GRADIENT_FADE = float2(0.15, 0.3);
+static const float WATER_MAX_LEAN = 0.75;
+static const float WATER_MAX_PINCH = 0.9;
+static const float WATER_FOAM_TRAIL = 0.45;
+static const float WATER_FOAM_LEAD = 0.5;
+static const float WATER_RESIDUAL_FOAM = 0.2;
+static const float WATER_FOAM_RIDE = 0.8;
+static const uint WATER_PHASE_NOISE_OCTAVES = 2u;
+// The phase noise's octaves weigh this much together.
+static const float WATER_PHASE_NOISE_WEIGHT = 1.5;
+static const float WATER_GRAVITY = 9.81;
+
+// The turn from one noise octave's lattice to the next: planet::OCTAVE_TURN,
+// row by row.
+static const float3x3 WATER_OCTAVE_TURN = float3x3(0.811838377983, -0.459433173493, 0.360332634004,
+                                                   0.534144405765, 0.833629154062, -0.140542475031,
+                                                   -0.235813913551, 0.306567435635, 0.922175799717);
+
+// `octaves` octaves of the planet's value noise at the unit direction `away`
+// from the anchor's, the broadest `frequency` cells per unit of
+// direction, octave `o` salted by `salts[o / 4][o % 4]` and read from the
+// anchor's lattice cell `first + o`: xyz = the sum's gradient over
+// directions, w = the sum (planet::fbm). From the third octave on, a sum sure
+// to end below `keep.x` stops at the most it could still reach, and one sure
+// to end above `keep.y` at the least.
+float4 water_shore_octaves(float3 away, uint first, float frequency, uint octaves, uint4 salts[2],
+                           float2 keep)
+{
+    float3x3 to_lattice = WATER_OCTAVE_TURN * frequency;
+    float weight = 1.0;
+    float4 sum = (float4)0.0;
+    for (uint o = 0u; o < octaves; o++)
+    {
+        if (o >= 2u)
+        {
+            // The octaves left add at most twice the next weight, less the
+            // last's.
+            float rest = 2.0 * weight - exp2(1.0 - float(octaves));
+            if (sum.w + rest < keep.x)
+            {
+                sum.w += rest;
+                break;
+            }
+            if (sum.w > keep.y)
+            {
+                break;
+            }
+        }
+        // The lattice point as the anchor's cell and a small step from it,
+        // which f32 holds however far the cell lies from the lattice's origin.
+        float3 q = WATER_SHORE.lattice_places[first + o].xyz + mul(to_lattice, away);
+        float3 step = floor(q);
+        float4 n = ground_noise_cell(WATER_SHORE.lattice_cells[first + o].xyz + int3(step), q - step,
+                                     salts[o >> 2u][o & 3u]);
+        sum.xyz += mul(n.xyz, to_lattice) * weight;
+        sum.w += n.w * weight;
+        to_lattice = mul(WATER_OCTAVE_TURN, to_lattice) * 2.0;
+        weight *= 0.5;
+    }
+    return sum;
+}
+
+// A vector in the planet's axes, in the simulated frame.
+float3 water_shore_to_frame(float3 v)
+{
+    return v.x * WATER_SHORE.planet_rows[0].xyz + v.y * WATER_SHORE.planet_rows[1].xyz
+           + v.z * WATER_SHORE.planet_rows[2].xyz;
+}
+
+// How deep the water is `inland` meters inland of the coast where no hills
+// stand (`CoastProfile::depth`).
+float water_shore_depth(float inland)
+{
+    float ground;
+    if (inland >= 0.0)
+    {
+        float t = min(inland / WATER_SHORE.beach.x, 1.0);
+        ground = WATER_SHORE.beach.y * t * (2.0 - t);
+    }
+    else
+    {
+        ground = -WATER_SHORE.coast.z * (1.0 - exp(inland / WATER_SHORE.coast.w));
+    }
+    return max(WATER_SHORE.coast.x - ground, 0.0);
+}
+
+// Every train's phase and wavenumber `offshore` meters out (`PhaseTable::at`).
+void water_shore_table(float offshore, out float3 phase, out float3 k)
+{
+    float reach = WATER_SHORE.beach.z;
+    float u = max(offshore, 0.0);
+    uint last = WATER_SHORE_NODES - 1u;
+    if (u >= reach)
+    {
+        k = WATER_SHORE.table[2u * last + 1u].xyz;
+        phase = WATER_SHORE.table[2u * last].xyz + k * (u - reach);
+        return;
+    }
+    uint j = min(uint(float(last) * sqrt(u / reach)), last - 1u);
+    float fa = float(j) / float(last);
+    float fb = float(j + 1u) / float(last);
+    float a = reach * fa * fa;
+    float span = reach * fb * fb - a;
+    float s = (u - a) / span;
+    float s2 = s * s;
+    float s3 = s2 * s;
+    float3 p0 = WATER_SHORE.table[2u * j].xyz;
+    float3 k0 = WATER_SHORE.table[2u * j + 1u].xyz;
+    float3 p1 = WATER_SHORE.table[2u * j + 2u].xyz;
+    float3 k1 = WATER_SHORE.table[2u * j + 3u].xyz;
+    phase = (2.0 * s3 - 3.0 * s2 + 1.0) * p0 + (s3 - 2.0 * s2 + s) * span * k0
+          + (-2.0 * s3 + 3.0 * s2) * p1 + (s3 - s2) * span * k1;
+    k = k0 + s * (k1 - k0);
+}
+
+// Where a rest point lies on the planet, in its axes: its direction from
+// the center (`dir`), and that direction less the anchor's (`away`), found
+// without the anchor's own rounding, so it stays precise on any planet.
+void water_shore_place(float3 rest, out float3 dir, out float3 away)
+{
+    float3 a = float3(WATER_SHORE.planet_rows[0].w, WATER_SHORE.planet_rows[1].w,
+                      WATER_SHORE.planet_rows[2].w);
+    float3 l = float3(dot(WATER_SHORE.planet_rows[0].xyz, rest),
+                      dot(WATER_SHORE.planet_rows[1].xyz, rest),
+                      dot(WATER_SHORE.planet_rows[2].xyz, rest))
+             * WATER_SHORE.noise.w;
+    // (a + l) / |a + l| - a for a unit a, with |a + l| - 1 found from its
+    // square so no 1 is ever subtracted.
+    float n = sqrt(1.0 + 2.0 * dot(a, l) + dot(l, l));
+    away = (l - a * ((2.0 * dot(a, l) + dot(l, l)) / (n + 1.0))) / n;
+    dir = a + away;
+}
+
+// The coast at unit direction `dir`, `away` from the anchor's: x = meters
+// inland, yzw = how fast that grows per meter along the sea, in the planet's
+// axes. Seaward of where the
+// shore reaches, and on dry ground, x is only a bound on the side it lies,
+// which reads the same. Zero for a sea without coasts.
+float4 water_shore_field(float3 dir, float3 away)
+{
+    if (WATER_SHORE.continent_octaves == 0u)
+    {
+        return (float4)0.0;
+    }
+    float scale = WATER_SHORE.continent_scale;
+    float offset = WATER_SHORE.continent_offset;
+    float2 keep = float2(WATER_SHORE.bounds.x + offset, WATER_SHORE.coast.y + offset) / scale;
+    float4 field = water_shore_octaves(away, 0u, WATER_SHORE.continent_frequency,
+                                       min(WATER_SHORE.continent_octaves, WATER_CONTINENT_OCTAVES),
+                                       WATER_SHORE.continent_salts, keep);
+    float3 grad = field.xyz * scale;
+    return float4(field.w * scale - offset, (grad - dir * dot(dir, grad)) * WATER_SHORE.noise.z);
+}
+
+// Whether the shore reaches coast `field` (dry ground included, so the
+// triangles along the waterline interpolate a whole phase noise).
+bool water_shore_reaches(float4 field)
+{
+    return WATER_SHORE.continent_octaves > 0u && field.x > WATER_SHORE.bounds.x;
+}
+
+// Where a point at coast `field` lies against the shore (`ShorePoint`), and
+// how much of each cascade the depth there leaves.
+struct WaterShorePoint
+{
+    float depth;
+    float weight;
+    float3 phases;
+    float3 k;
+    float3 landward;
+    float4 damp;
+};
+
+WaterShorePoint water_shore_point(float4 field)
+{
+    WaterShorePoint p = (WaterShorePoint)0;
+    p.damp = (float4)1.0;
+    // Out where the shore stops reaching, the open sea is left as it is.
+    if (!water_shore_reaches(field))
+    {
+        return p;
+    }
+    float inland = field.x;
+    float gl = length(field.yzw);
+    p.depth = water_shore_depth(inland);
+    for (uint c = 0u; c < WATER_OCEAN_MAX_CASCADES; c++)
+    {
+        float l = WATER_SHORE.cascade_wavelengths[c];
+        p.damp[c] = l > 0.0 ? smoothstep(0.25 * l, 0.5 * l, p.depth) : 1.0;
+    }
+    float offshore = WATER_SHORE.coast.y - inland;
+    float3 phases;
+    water_shore_table(offshore, phases, p.k);
+    float peak = WATER_SHORE.beach.w;
+    float reach = WATER_SHORE.beach.z;
+    p.weight = p.depth > 0.0
+                 ? (1.0 - smoothstep(0.25 * peak, 0.5 * peak, p.depth))
+                       * (1.0 - smoothstep(0.8 * reach, reach, offshore))
+                       * smoothstep(WATER_GRADIENT_FADE.x, WATER_GRADIENT_FADE.y, gl)
+                 : 0.0;
+    p.phases = phases / max(gl, WATER_GRADIENT_FADE.x);
+    p.landward = gl > 1e-9 ? field.yzw / gl : (float3)0.0;
+    return p;
+}
+
+// The phase noise at unit direction `dir`, `away` from the anchor's: w =
+// radians, xyz = its gradient in radians per meter along the sea, in the
+// planet's axes.
+float4 water_shore_noise(float3 dir, float3 away)
+{
+    uint4 salts[2] = { WATER_SHORE.noise_salts, (uint4)0u };
+    float4 n = water_shore_octaves(away, WATER_CONTINENT_OCTAVES, WATER_SHORE.noise.x,
+                                   WATER_PHASE_NOISE_OCTAVES, salts, float2(-1.0e30, 1.0e30));
+    float k = 2.0 * WATER_SHORE.noise.y / WATER_PHASE_NOISE_WEIGHT;
+    float3 along = n.xyz - dir * dot(dir, n.xyz);
+    return float4(along * (k * WATER_SHORE.noise.w), k * n.w - WATER_SHORE.noise.y);
+}
+
+// How tall the swell runs `away` from the anchor's direction, as a share
+// of its mean (`ShoreNoise::swell`).
+float water_shore_swell(float3 away)
+{
+    uint4 salts[2] = { uint4(WATER_SHORE.noise_salts.z, 0u, 0u, 0u), (uint4)0u };
+    float4 n = water_shore_octaves(away, WATER_CONTINENT_OCTAVES + WATER_PHASE_NOISE_OCTAVES,
+                                   WATER_SHORE.swell.x, 1u, salts, float2(-1.0e30, 1.0e30));
+    return 1.0 + WATER_SHORE.swell.y * (2.0 * n.w - 1.0);
+}
+
+// How many times taller a wave of `omega` and wavenumber `k` stands in water
+// `depth` meters deep than in deep water (`shoaling_at`).
+float water_shore_shoaling(float omega, float k, float depth)
+{
+    float kh = k * depth;
+    float n = kh > 20.0 ? 0.5 : 0.5 * (1.0 + 2.0 * kh / sinh(2.0 * kh));
+    return sqrt(0.5 * WATER_GRAVITY / omega / (n * omega / k));
+}
+
+// The shore waves at one point (`ShoreSurface`), in the planet's axes, and
+// the carrier's wavenumber and slope.
+struct WaterShoreSurface
+{
+    float height;
+    float3 shift;
+    float3 slope;
+    float foam;
+    // Periods since the crest passed, and the unit direction it travels.
+    float age;
+    float3 toward;
+    float k;
+    float steepness;
+};
+
+WaterShoreSurface water_shore_surface(WaterShorePoint p, float4 noise, float swell)
+{
+    WaterShoreSurface o = (WaterShoreSurface)0;
+    if (p.weight <= 0.0)
+    {
+        return o;
+    }
+    float shallow = max(p.depth, WATER_SHALLOWEST);
+    float re = 0.0;
+    float im = 0.0;
+    float total = 0.0;
+    float energy = 0.0;
+    float k_sum = 0.0;
+    for (uint i = 0u; i < WATER_SHORE_TRAINS; i++)
+    {
+        float a = p.weight * swell * WATER_SHORE.amplitudes[i]
+                * water_shore_shoaling(WATER_SHORE.omegas[i], p.k[i], shallow);
+        float s, c;
+        sincos(-(WATER_SHORE.phases[i] + p.phases[i] + noise.w), s, c);
+        re += a * c;
+        im += a * s;
+        total += a;
+        energy += a * a;
+        k_sum += a * p.k[i];
+    }
+    float envelope = sqrt(re * re + im * im);
+    float carrier = envelope > 0.0 ? atan2(im, re) : 0.0;
+    float3 travel = p.landward * (k_sum / max(total, 1e-12)) - noise.xyz;
+    float k = length(travel);
+    if (k <= 1e-9)
+    {
+        return o;
+    }
+    float3 toward = travel / k;
+    float cap = max(WATER_BREAKER_INDEX * p.depth, 1e-6);
+    float ratio = 2.0 * envelope / cap;
+    float held = min(envelope, 0.5 * cap);
+    float lean = WATER_MAX_LEAN * smoothstep(0.5, 1.0, ratio);
+    float u = carrier + lean * (1.0 - cos(carrier));
+    float du = 1.0 + lean * sin(carrier);
+    float pinch = WATER_MAX_PINCH * smoothstep(0.4, 1.0, ratio) / (1.0 + lean);
+    float su, cu;
+    sincos(u, su, cu);
+    float rise = -held * su * du * k;
+    float spread = -pinch * cu * du;
+    float since = -carrier;
+    since -= WATER_TAU * floor(since / WATER_TAU);
+    float trail = exp(-since / (WATER_TAU * WATER_FOAM_TRAIL));
+    float lead = smoothstep(WATER_TAU - WATER_FOAM_LEAD, WATER_TAU, since);
+    float crest = smoothstep(0.85, 1.15, ratio) * max(trail, lead);
+    float rms = 2.0 * sqrt(energy) / cap;
+    o.height = held * cu;
+    o.shift = toward * (-pinch * su / k);
+    o.slope = toward * (rise / (1.0 + spread));
+    o.foam = max(crest, WATER_RESIDUAL_FOAM * smoothstep(0.8, 1.5, rms));
+    o.age = since / WATER_TAU;
+    o.toward = toward;
+    o.k = k;
+    o.steepness = held * k;
+    return o;
+}
+
+// The surf's foam: webs of foam along the borders of cells two sizes wide,
+// laid out in the planet's axes, which one shows drifting with smooth noise of
+// cells as wide as the patches the foam breaks into.
+static const float WATER_SURF_CELL = 0.64;
+static const float WATER_SURF_COARSE = 1.28;
+static const float WATER_SURF_PATCH = 3.2;
+// How far the webs' cells stretch along the wave's travel as the foam ages.
+static const float WATER_SURF_STRETCH = 1.6;
+// How far, in meters, the webs' lines wander off their cells' borders.
+static const float WATER_SURF_WARP = 1.0;
+
+// How far the surf's foam has drifted shoreward `age` periods after its
+// crest passed, on a wave of wavenumber `k` (`foam_drift`).
+float water_surf_drift(float age, float k)
+{
+    float a = saturate(age);
+    return WATER_FOAM_RIDE * WATER_TAU / max(k, 1e-4) * a * (1.0 - a) * (1.0 - a);
+}
+
+// Value noise in [0, 1] with a quintic step, so no lattice line shows, at
+// lattice position `p`, the lattice repeating every `period` cells.
+float water_surf_noise(float3 p, float period, uint salt)
+{
+    float3 cell = floor(p);
+    float3 f = p - cell;
+    float3 s = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    float3 c0 = cell - period * floor(cell / period);
+    float3 c1 = c0 + 1.0;
+    c1 = select(c1 >= period, (float3)0.0, c1);
+    int3 a = int3(c0);
+    int3 b = int3(c1);
+    float x00 = lerp(ground_lattice(int3(a.x, a.y, a.z), salt), ground_lattice(int3(b.x, a.y, a.z), salt), s.x);
+    float x10 = lerp(ground_lattice(int3(a.x, b.y, a.z), salt), ground_lattice(int3(b.x, b.y, a.z), salt), s.x);
+    float x01 = lerp(ground_lattice(int3(a.x, a.y, b.z), salt), ground_lattice(int3(b.x, a.y, b.z), salt), s.x);
+    float x11 = lerp(ground_lattice(int3(a.x, b.y, b.z), salt), ground_lattice(int3(b.x, b.y, b.z), salt), s.x);
+    return lerp(lerp(x00, x10, s.y), lerp(x01, x11, s.y), s.z);
+}
+
+// How far lattice position `p` lies from the border between its nearest two
+// cells of a jittered lattice repeating every `period` cells, in cells,
+// distances along unit `toward` shrunk by `stretch` so the cells run long
+// that way.
+float water_surf_border(float3 p, float period, float3 toward, float stretch)
+{
+    float3 cell = floor(p);
+    float3 f = p - cell;
+    float squash = 1.0 - 1.0 / (stretch * stretch);
+    float2 nearest = (float2)1.0e9;
+    for (int z = -1; z <= 1; z++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                float3 d = float3(x, y, z);
+                float3 c = cell + d;
+                c -= period * floor(c / period);
+                int3 at = int3(c);
+                float3 jitter = float3(ground_lattice(at, 0x68e31da4u), ground_lattice(at, 0xb5297a4du),
+                                       ground_lattice(at, 0x1b56c4e9u));
+                float3 delta = d + jitter - f;
+                float along = dot(delta, toward);
+                float dist = sqrt(max(dot(delta, delta) - squash * along * along, 0.0));
+                nearest = dist < nearest.x ? float2(dist, nearest.x) : float2(nearest.x, min(nearest.y, dist));
+            }
+        }
+    }
+    return nearest.y - nearest.x;
+}
+
+// Three value noises in [0, 1] at lattice position `p`, repeating every
+// `period` cells, for a warp.
+float3 water_surf_warp(float3 p, float period)
+{
+    return float3(water_surf_noise(p, period, 0x2545f491u), water_surf_noise(p + 0.31, period, 0x9e3779b9u),
+                  water_surf_noise(p + 0.67, period, 0x7feb352du));
+}
+
+// The surf's foam `cover` at `p`, meters in the planet's axes within one
+// period, `age` periods after its crest passed, the wave traveling along
+// unit `toward`, seen through a pixel `footprint` meters across. Fresh foam
+// behind a bore is a nearly whole sheet with round holes; as it ages it thins
+// into translucent webs along the borders of cells streaked along the
+// travel, coarse in some places and fine in others, their lines bent at two
+// scales and swelling and pinching along their length, and breaks into
+// patches with clear water between. It fades to its cover as its cells
+// shrink below the pixel, so it never aliases into streaks at grazing views.
+float water_surf_lace(float cover, float age, float3 p, float3 toward, float footprint)
+{
+    if (cover <= 0.0)
+    {
+        return 0.0;
+    }
+    float fade = water_fade(WATER_SURF_CELL, footprint);
+    if (fade <= 0.0)
+    {
+        return cover;
+    }
+    float period = WATER_SHORE.lace.w;
+    // How old the foam reads, back to fresh as the next crest arrives.
+    float old = saturate(2.5 * age) * (1.0 - smoothstep(0.85, 1.0, age));
+    float patch = water_surf_noise(p / WATER_SURF_PATCH, period / WATER_SURF_PATCH, 0x51ed270bu);
+    float coarseness = water_surf_noise(p / WATER_SURF_PATCH + 0.5, period / WATER_SURF_PATCH, 0x0bb2c7a3u);
+    // A broad warp bends the coarse cells' borders and a finer one every
+    // short run of them.
+    float3 q = p + (water_surf_warp(p / WATER_SURF_COARSE, period / WATER_SURF_COARSE) - 0.5) * WATER_SURF_WARP;
+    q += (water_surf_warp(q / (0.5 * WATER_SURF_CELL), 2.0 * period / WATER_SURF_CELL) - 0.5)
+       * (0.4 * WATER_SURF_CELL);
+    float stretch = lerp(1.0, WATER_SURF_STRETCH, old);
+    float coarse = WATER_SURF_COARSE
+                 * water_surf_border(q / WATER_SURF_COARSE, period / WATER_SURF_COARSE, toward, stretch);
+    float fine = WATER_SURF_CELL * water_surf_border(q / WATER_SURF_CELL, period / WATER_SURF_CELL, toward, stretch);
+    // The foam lies along the borders, as wide as it is thick: thick fresh
+    // foam leaves only holes, thin old foam only the webs, their width
+    // wandering along them and breaking them into strands as they thin.
+    float thick = saturate(cover * (0.6 + 0.8 * patch));
+    float vary = water_surf_noise(q / (0.5 * WATER_SURF_CELL), 2.0 * period / WATER_SURF_CELL, 0x165667b1u);
+    float width = (0.015 + 0.5 * thick * thick) * lerp(1.0, 0.6, old)
+                * saturate(lerp(0.3 + 1.4 * vary, 2.0 * vary - 0.3, old * (1.0 - smoothstep(0.5, 0.9, thick))));
+    float which = smoothstep(0.35, 0.65, coarseness);
+    float web = lerp(1.0 - smoothstep(0.4 * width, width, fine),
+                     1.0 - smoothstep(0.5 * width, 1.4 * width, coarse), which);
+    // Thin foam gathers into patches, clear water between them, a
+    // translucent film inside them laced by the webs; the thicker the foam
+    // the more of the sea its patches cover, until behind the bore it is
+    // one sheet.
+    float gather = 0.4 * patch + 0.6 * water_surf_noise(q / WATER_SURF_COARSE, period / WATER_SURF_COARSE,
+                                                        0x3c6ef372u);
+    float edge = 0.9 - 1.1 * thick;
+    // The webs fade in only well inside a patch, after its film, so no lone
+    // junction is left on clear water at a patch's margin.
+    float inside = smoothstep(edge, edge + 0.15, gather);
+    float film = lerp(0.2, 0.9, thick);
+    float lace = max(web * smoothstep(edge + 0.03, edge + 0.12, gather), film * inside)
+               * lerp(1.0, 0.55, old * (1.0 - thick));
+    return lerp(cover, lace, fade);
+}
+
 // The simulated ocean's displacement at a rest point, each face's read at
 // the mip a pixel `footprint` meters across needs, the heights along the
 // sea's up there.
-float3 water_sea_displace(float3 rest, float footprint)
+float3 water_sea_displace(float3 rest, float footprint, float4 shore_field, float4 shore_noise,
+                          float shore_swell)
 {
     float3 up = water_sea_up(rest);
     float3 w = water_sea_weights(rest);
+    WaterShorePoint shore = water_shore_point(shore_field);
+    water_shore_damp = shore.damp;
     float3 d = (float3)0.0;
     for (uint f = 0u; f < WATER_SEA_FACES; f++)
     {
@@ -764,11 +1282,18 @@ float3 water_sea_displace(float3 rest, float footprint)
         float3 o = water_ocean_displace(p.s, footprint * p.stretch);
         d += w[f] * (o.y * up + (o.x * p.tu + o.z * p.tv) / p.stretch);
     }
+    if (shore.weight > 0.0)
+    {
+        WaterShoreSurface waves = water_shore_surface(shore, shore_noise, shore_swell);
+        float fade = water_fade(WATER_TAU / max(waves.k, 1e-4), footprint);
+        d += fade * (waves.height * up + water_shore_to_frame(waves.shift));
+    }
     return d;
 }
 
-// The whitecap cover `water_sea_shading` found.
+// The whitecap cover and the surf's foam `water_sea_shading` found.
 static float water_sea_cover = 0.0;
+static float water_sea_surf = 0.0;
 
 // The shading at a fragment's rest point: every live face's waves and
 // ripples, read through the pixel's footprint on the sea (`dx`, `dy`, from
@@ -784,6 +1309,26 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
     float3 slope = (float3)0.0;
     float alpha2 = 0.0;
     float cover = 0.0;
+    // The shore waves, faded as their crests shrink below the pixel; what the
+    // fade takes goes to the roughness, the foam to the lace below.
+    WaterShorePoint shore = water_shore_point(i.shore_field);
+    water_shore_damp = shore.damp;
+    float footprint = max(length(dx), length(dy));
+    float surf = 0.0;
+    if (shore.weight > 0.0)
+    {
+        WaterShoreSurface waves = water_shore_surface(shore, i.shore_noise, i.shore_swell);
+        float fade = water_fade(WATER_TAU / max(waves.k, 1e-4), footprint);
+        slope += fade * water_shore_to_frame(waves.slope);
+        alpha2 += (1.0 - fade * fade) * 0.5 * waves.steepness * waves.steepness;
+        float3 at = WATER_SHORE.lace.xyz
+                  + float3(dot(WATER_SHORE.planet_rows[0].xyz, i.rest), dot(WATER_SHORE.planet_rows[1].xyz, i.rest),
+                           dot(WATER_SHORE.planet_rows[2].xyz, i.rest));
+        // The foam rides in with its bore and slips back, not painted on the sea.
+        at -= waves.toward * water_surf_drift(waves.age, waves.k);
+        surf = water_surf_lace(saturate(waves.foam * params.foam_intensity), waves.age, at, waves.toward,
+                               footprint);
+    }
     for (uint f = 0u; f < WATER_SEA_FACES; f++)
     {
         if (w[f] <= 0.0)
@@ -804,6 +1349,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
         }
     }
     water_sea_cover = cover;
+    water_sea_surf = surf;
     WaterShading o;
     o.normal = normalize(up - slope);
     o.alpha = sqrt(alpha2);
@@ -829,18 +1375,28 @@ WaterVertexOut water_vertex(WaterVertexIn v)
     float3 rest = g.x * params.sea.tangent_u.xyz + g.y * params.sea.tangent_v.xyz - drop * params.sea.up.xyz;
     float rest_w = mul(view.vp, float4(rest + params.anchor.xyz, 1.0)).w;
     float footprint = water_pixel_meters(rest_w);
+    float3 dir;
+    float3 away;
+    water_shore_place(rest, dir, away);
+    float4 shore_field = water_shore_field(dir, away);
+    bool reaches = water_shore_reaches(shore_field);
+    float4 shore_noise = reaches ? water_shore_noise(dir, away) : (float4)0.0;
+    float shore_swell = reaches ? water_shore_swell(away) : 1.0;
     float3 pos = rest;
     if (params.ocean.layers.x > 0u)
     {
         // Nothing finer than two cells, which the grid would alias.
         float cell = water_grid_cell(v.pos.xz) * params.sea.tangent_u.w;
-        pos += water_sea_displace(rest, max(footprint, 2.0 * cell));
+        pos += water_sea_displace(rest, max(footprint, 2.0 * cell), shore_field, shore_noise, shore_swell);
     }
     pos += params.anchor.xyz;
 
     WaterVertexOut o;
     o.world_pos = pos;
     o.rest = rest;
+    o.shore_field = shore_field;
+    o.shore_noise = shore_noise;
+    o.shore_swell = shore_swell;
     o.position = mul(view.vp, float4(pos, 1.0));
     return o;
 }
@@ -1073,6 +1629,14 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
         s.foam = saturate(WATER_WHITECAP(i, dx, dy) * params.wind_gust.z);
         s.below = lerp(s.below, foam, s.foam);
     }
+#ifdef WATER_SEA
+    // The surf's foam, over the whitecaps.
+    if (water_sea_surf > 0.0)
+    {
+        s.below = lerp(s.below, foam, water_sea_surf);
+        s.foam = 1.0 - (1.0 - s.foam) * (1.0 - water_sea_surf);
+    }
+#endif
     return s;
 }
 
@@ -1156,7 +1720,11 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
     float3 glint = water_sun_glint(s.normal, view_dir, s.alpha);
     float3 color = lerp(s.below, reflection, fresnel) + glint;
+#ifdef WATER_SEA
+    if (water_whitecaps() || water_sea_surf > 0.0)
+#else
     if (water_whitecaps())
+#endif
     {
         // Whitecaps lie on top of the water: what they cover neither
         // mirrors nor glints.

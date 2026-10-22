@@ -231,7 +231,7 @@ impl DxContext {
                 ),
             )
         }));
-        self.upload_canopy(frame_idx);
+        self.upload_canopy(frame_idx, elapsed);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skin fold reads them. No-op when no SkinnedMesh is

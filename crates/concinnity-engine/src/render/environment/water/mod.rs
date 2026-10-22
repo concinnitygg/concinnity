@@ -23,6 +23,7 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use ocean::grid::OceanGrid;
 use ocean::{BodyOcean, OCEAN_CHOPPINESS, OceanPlan, OceanQuality, OceanSea};
 use ripples::{RIPPLES, Ripple};
+use sea::shore::ShoreWaves;
 use sea::{SeaBody, SeaSphere};
 use spectrum::{GRAVITY, WIND_SEA_WAVES, Wave, unit_hash, wind_sea};
 
@@ -144,7 +145,7 @@ impl WaterBody {
         let peak = sea
             .and_then(|s| s.shape())
             .map_or(1.0, |s| s.peak_wavelength());
-        let body = SeaBody::new(SeaSphere::new(planet, surface.sea_level), peak);
+        let mut body = SeaBody::new(SeaSphere::new(planet, surface.sea_level), peak);
         let shared = sea.and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
         let mut water = if let Some((sea, index)) = shared {
             Self::resolve_ocean(surface, wind, &sea, plan, index)
@@ -155,6 +156,10 @@ impl WaterBody {
         if let Some(ocean) = water.ocean.as_mut() {
             ocean.grid = body.grid;
         }
+        body.shore = sea.and_then(|s| s.shape()).and_then(|shape| {
+            let cascades = water.ocean.as_ref().map(|o| &o.cascades);
+            ShoreWaves::new(planet, f64::from(water.surface.sea_level), &shape, cascades)
+        });
         water.sea = Some(body);
         water
     }
@@ -478,6 +483,20 @@ pub enum WaterShape {
 /// a planar mirror, and it takes no authored swell: `waves` must be empty.
 /// `center`, `extent` and `subdivisions` do not apply. A world without a
 /// planet draws no planet sea.
+///
+/// Where the planet has continents and the sea meets their beaches, its waves
+/// come ashore as at a real coast. Over the shelf the open sea's longest
+/// waves give way to long swell lines running in toward the land; they slow
+/// and bunch up as the water shallows, turn to meet the beach nearly square,
+/// a little askew so the breakers peel along it, and grow taller until they
+/// break, about where a wave stands four fifths as tall as the water under
+/// it. Bigger waves come in sets and break farther out. A breaking crest
+/// pitches forward into a bore of white water that trails foam, and the
+/// wash of each wave runs on up the sand and drains back, leaving the beach
+/// darker and glossy where it reached, drying back between sets. The height
+/// and rhythm of the surf follow the wind sea: a stronger wind or a higher
+/// `wind_response` brings bigger, slower waves ashore. A sea standing over
+/// the planet's beaches, or around a planet without seas, has no surf.
 ///
 /// Its sun glint rides the waves, and its reflection and refraction move with
 /// neither the surface nor what they show, so temporal anti-aliasing and

@@ -292,53 +292,7 @@ float4 canopy_band_weights(float share, float3 root, float3 span, float plain, f
     return share * float4(root * plain + span * ramp, plain);
 }
 
-// The planet height noise's hash step: `lcg_hash` in concinnity-core's
-// math::noise.
-uint ground_lcg(uint v)
-{
-    v = v * 1664525u + 1013904223u;
-    return v ^ (v >> 16u);
-}
-
-// The height noise's value at lattice point `c`, in [0, 1].
-float ground_lattice(int3 c, uint salt)
-{
-    uint h = ground_lcg(ground_lcg(ground_lcg(asuint(c.x) ^ salt) + asuint(c.y) * 0x85ebca6bu)
-                        + asuint(c.z) * 0xc2b2ae35u);
-    return float(h & 0xffffu) / 65535.0;
-}
-
-// One octave of the ground's trilinear value noise at lattice position `p`:
-// xyz = its gradient along the lattice axes, w = its value.
-float4 ground_noise(float3 p, uint salt)
-{
-    float3 cell = floor(p);
-    float3 t = p - cell;
-    float3 s = t * t * (3.0 - 2.0 * t);
-    float3 ds = 6.0 * t * (1.0 - t);
-    int3 c = int3(cell);
-    float a = ground_lattice(c, salt);
-    float b = ground_lattice(c + int3(1, 0, 0), salt);
-    float d0 = ground_lattice(c + int3(0, 1, 0), salt);
-    float d1 = ground_lattice(c + int3(1, 1, 0), salt);
-    float e = ground_lattice(c + int3(0, 0, 1), salt);
-    float f = ground_lattice(c + int3(1, 0, 1), salt);
-    float g = ground_lattice(c + int3(0, 1, 1), salt);
-    float h = ground_lattice(c + int3(1, 1, 1), salt);
-    float k1 = b - a;
-    float k2 = d0 - a;
-    float k3 = e - a;
-    float k4 = a - b - d0 + d1;
-    float k5 = a - d0 - e + g;
-    float k6 = a - b - e + f;
-    float k7 = -a + b + d0 - d1 + e - f - g + h;
-    float value = a + k1 * s.x + k2 * s.y + k3 * s.z + k4 * s.x * s.y + k5 * s.y * s.z
-                + k6 * s.z * s.x + k7 * s.x * s.y * s.z;
-    return float4(ds * float3(k1 + k4 * s.y + k6 * s.z + k7 * s.y * s.z,
-                              k2 + k5 * s.z + k4 * s.x + k7 * s.z * s.x,
-                              k3 + k6 * s.x + k5 * s.y + k7 * s.x * s.y),
-                  value);
-}
+{PLANET_NOISE}
 
 // A sum of `octaves` noise octaves at unit direction `dir`, the broadest
 // `frequency` cells per unit of direction and `cell` meters wide, octave `o`
@@ -377,8 +331,8 @@ float4 ground_octaves(float3 dir, float frequency, float cell, uint octaves, uin
 
 // PlanetShape's coast (planet/coast.rs `shore`): how the ground's height
 // changes per meter `inland` of the coast (x) and per meter of the hills
-// standing `hill` high there (y).
-float2 ground_shore(float inland, float hill)
+// standing `hill` high there (y), and the height (z).
+float3 ground_shore(float inland, float hill)
 {
     float rise = max(CANOPY.hill_rise, 1e-3);
     if (inland >= 0.0)
@@ -388,11 +342,12 @@ float2 ground_shore(float inland, float hill)
         float x = saturate((inland - w) / rise);
         float fade = x * x * (3.0 - 2.0 * x);
         float fade_d = 6.0 * x * (1.0 - x);
-        return float2(CANOPY.beach_rise * 2.0 * (1.0 - t) / w + hill * fade_d / rise, fade);
+        return float3(CANOPY.beach_rise * 2.0 * (1.0 - t) / w + hill * fade_d / rise, fade,
+                      CANOPY.beach_rise * t * (2.0 - t) + hill * fade);
     }
     if (CANOPY.ocean_depth <= 0.0)
     {
-        return (float2)(0.0);
+        return (float3)(0.0);
     }
     float out_m = -inland;
     float e = exp(-out_m / CANOPY.shelf_length);
@@ -404,19 +359,21 @@ float2 ground_shore(float inland, float hill)
     float lift = CANOPY.seabed_lift;
     float d_out = -CANOPY.ocean_depth * fall_d
                 + lift * hill * (fall_d * fade + fall * fade_d / rise);
-    return float2(-d_out, lift * fall * fade);
+    return float3(-d_out, lift * fall * fade, -CANOPY.ocean_depth * fall + lift * hill * fall * fade);
 }
 
 // The planet ground's normal at unit direction `dir`, both in the planet's
-// axes: PlanetShape::normal, with each octave faded out as its cells shrink
-// below two pixels of `footprint` meters, so the detail a pixel cannot hold
-// averages away rather than aliasing, whatever tile the pixel lies on.
-float3 ground_normal_at(float3 dir, float footprint)
+// axes, and its height in meters above the datum (w): PlanetShape::normal,
+// with each octave faded out as its cells shrink below two pixels of
+// `footprint` meters, so the detail a pixel cannot hold averages away rather
+// than aliasing, whatever tile the pixel lies on.
+float4 ground_normal_at(float3 dir, float footprint)
 {
     float4 hills = ground_octaves(dir, CANOPY.ground_frequency, CANOPY.ground_cell,
                                   min(CANOPY.ground_octaves, 16u), CANOPY.ground_salts, footprint)
                  * CANOPY.ground_height_scale;
     float3 gradient = hills.xyz;
+    float height = hills.w;
     if (CANOPY.continent_octaves > 0u)
     {
         uint4 salts[4] = { CANOPY.continent_salts[0], CANOPY.continent_salts[1], (uint4)(0u),
@@ -425,29 +382,34 @@ float3 ground_normal_at(float3 dir, float footprint)
                                       CANOPY.planet_radius / CANOPY.continent_frequency,
                                       min(CANOPY.continent_octaves, 8u), salts, footprint)
                      * CANOPY.continent_scale;
-        float2 shore = ground_shore(field.w - CANOPY.continent_offset, hills.w);
+        float3 shore = ground_shore(field.w - CANOPY.continent_offset, hills.w);
         gradient = field.xyz * shore.x + hills.xyz * shore.y;
+        height = shore.z;
     }
     float3 along = gradient - dir * dot(dir, gradient);
-    return normalize(dir - along / CANOPY.planet_radius);
+    return float4(normalize(dir - along / CANOPY.planet_radius), height);
 }
 
+// A height no ground reaches, for surfaces without a planet's ground.
+static const float GROUND_NO_HEIGHT = 1e30;
+
 // The normal surface `od` shades with at `pos`, seen from a pixel covering
-// `footprint` meters: on a planet, its ground's own, independent of the tile
-// it lies on; elsewhere the interpolated `normal`.
-float3 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float footprint)
+// `footprint` meters, and its ground's height above the planet's datum (w):
+// on a planet, its ground's own, independent of the tile it lies on;
+// elsewhere the interpolated `normal`, at no height.
+float4 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float footprint)
 {
     bool planet = ((od.far_canopy >> 16u) & 1u) != 0u;
     if (!planet || CANOPY.planet_radius <= 0.0 || CANOPY.ground_octaves == 0u)
     {
-        return normal;
+        return float4(normal, GROUND_NO_HEIGHT);
     }
     float4 p = float4(pos, 1.0);
     float3 rel = float3(dot(CANOPY.planet_rows[0], p), dot(CANOPY.planet_rows[1], p),
                         dot(CANOPY.planet_rows[2], p));
-    float3 n = ground_normal_at(normalize(rel), footprint);
-    return normalize(CANOPY.planet_rows[0].xyz * n.x + CANOPY.planet_rows[1].xyz * n.y
-                     + CANOPY.planet_rows[2].xyz * n.z);
+    float4 n = ground_normal_at(normalize(rel), footprint);
+    return float4(normalize(CANOPY.planet_rows[0].xyz * n.x + CANOPY.planet_rows[1].xyz * n.y
+                            + CANOPY.planet_rows[2].xyz * n.z), n.w);
 }
 
 // Whether surface `od` is a planet's ground, and the block holds the planet.
@@ -517,6 +479,159 @@ GroundPlace ground_place(float3 pos, float3 normal, float footprint, uint2 layer
         g.noise = ground_rule_noise(g.dir * CANOPY.planet_radius, footprint);
     }
     return g;
+}
+
+// The wash of the sea's waves up a planet's beach and the wet sand it
+// leaves. Mirrors render::water::sea::shore::swash.
+static const float GROUND_SWASH_MEMORY = 36.0;
+static const uint GROUND_SWASH_MAX_CYCLES = 16u;
+static const float GROUND_FILM_DRAIN = 2.5;
+static const float GROUND_DRY_BACK = 12.0;
+static const float GROUND_SWASH_EDGE = 0.03;
+static const float GROUND_SWASH_SOFT = 0.05;
+static const float GROUND_SWASH_RELIEF = 0.06;
+static const float GROUND_SWASH_LOBES = 0.4;
+static const float GROUND_SEABED_WET = 1.0;
+static const float GROUND_SATURATED = 0.5;
+static const float GROUND_RUNUP_LIGHTER = 0.4;
+static const float GROUND_RELIEF_SPREAD = 0.3;
+// The shore's two phase-noise octaves weigh this much together.
+static const float GROUND_PHASE_NOISE_WEIGHT = 1.5;
+// How dark wet sand gets, how smooth it and the wash's film are, and the
+// foam along the front.
+static const float GROUND_WET_DARKEN = 0.65;
+static const float GROUND_WET_ROUGHNESS = 0.4;
+static const float GROUND_FILM_ROUGHNESS = 0.15;
+static const float3 GROUND_SWASH_FOAM = float3(0.8, 0.8, 0.78);
+
+// How much of a running or draining film covers the sand, how wet it is,
+// and how much of the front's foam line lies here, each in [0, 1].
+struct GroundSwash
+{
+    float film;
+    float wet;
+    float edge;
+};
+
+// The wash at the sand `height` meters above the sea's rest, its relief
+// `relief` in [-1, 1], where the shore's phase noise is `noise` and its
+// swell `swell` (`ShoreWaves::swash_at`).
+GroundSwash ground_swash(float height, float relief, float noise, float swell)
+{
+    GroundSwash w = (GroundSwash)0;
+    height -= GROUND_SWASH_RELIEF * relief;
+    if (height <= -GROUND_SEABED_WET)
+    {
+        return w;
+    }
+    if (height <= 0.0)
+    {
+        // The sea floor just off the waterline, still wet from the troughs.
+        w.wet = 1.0 - smoothstep(0.0, GROUND_SEABED_WET, -height);
+        w.film = w.wet;
+        return w;
+    }
+    float omega = CANOPY.swash.omegas.x;
+    float period = 6.28318530718 / omega;
+    float total = CANOPY.swash.amplitudes.x + CANOPY.swash.amplitudes.y + CANOPY.swash.amplitudes.z;
+    float runup = CANOPY.swash.runup * sqrt(swell) * (1.0 + GROUND_SWASH_LOBES * relief);
+    if (total <= 0.0 || height >= runup + GROUND_SWASH_SOFT)
+    {
+        return w;
+    }
+    uint cycles = clamp((uint)ceil(GROUND_SWASH_MEMORY / period), 1u, GROUND_SWASH_MAX_CYCLES);
+    float window = min(GROUND_SWASH_MEMORY, float(cycles) * period);
+    float since = CANOPY.swash.phases.x + noise;
+    since = (since - 6.28318530718 * floor(since / 6.28318530718)) / omega;
+    // The sand low on the beach stays damp between waves, and the wash soaks
+    // it more than the sand it barely reaches.
+    float up = smoothstep(0.0, runup, height);
+    float soak = 1.0 - GROUND_RUNUP_LIGHTER * up;
+    w.wet = GROUND_SATURATED * (1.0 - up);
+    for (uint j = 0u; j < cycles; j++)
+    {
+        float ago = since + float(j) * period;
+        float re = 0.0;
+        float im = 0.0;
+        for (uint i = 0u; i < 3u; i++)
+        {
+            float s, c;
+            sincos(CANOPY.swash.phases[i] + noise - CANOPY.swash.omegas[i] * ago, s, c);
+            re += CANOPY.swash.amplitudes[i] * c;
+            im += CANOPY.swash.amplitudes[i] * s;
+        }
+        float reach = runup * sqrt(re * re + im * im) / total;
+        if (reach + GROUND_SWASH_SOFT <= height)
+        {
+            continue;
+        }
+        // The front climbs `reach 4 s (1 - s)` over the cycle's period;
+        // above its top the thin tip touches the sand at the turn.
+        float q = sqrt(max(1.0 - height / reach, 0.0));
+        float wetted = 0.5 * (1.0 - q) * period;
+        float left = 0.5 * (1.0 + q) * period;
+        if (ago < wetted)
+        {
+            continue;
+        }
+        float tip = smoothstep(-GROUND_SWASH_SOFT, GROUND_SWASH_SOFT, reach - height);
+        float kept = tip * soak * (1.0 - smoothstep(0.75 * window, window, ago));
+        if (ago <= left)
+        {
+            w.film = max(w.film, tip);
+            w.wet = max(w.wet, kept);
+        }
+        else
+        {
+            float dry = ago - left;
+            w.film = max(w.film, tip * exp(-dry / GROUND_FILM_DRAIN));
+            w.wet = max(w.wet, kept * exp(-dry / GROUND_DRY_BACK));
+        }
+        if (j == 0u)
+        {
+            // Foam rides just behind the front while it climbs.
+            float s = ago / period;
+            float behind = reach * 4.0 * s * (1.0 - s) - height;
+            if (behind >= 0.0)
+            {
+                w.edge = tip * (1.0 - smoothstep(0.35, 0.5, s))
+                       * (1.0 - smoothstep(0.0, GROUND_SWASH_EDGE, behind));
+            }
+        }
+    }
+    return w;
+}
+
+// The wash at ground `place`, `height` meters above the planet's datum,
+// under a pixel covering `footprint` meters: the sand's relief read from the
+// ground rules' edge noise. Only ground in the band the wash can reach pays
+// for its noise.
+GroundSwash ground_swash_at(GroundPlace place, float height, float footprint)
+{
+    height -= CANOPY.swash.sea_level;
+    if (CANOPY.swash.runup <= 0.0 || height - GROUND_SWASH_RELIEF >= CANOPY.swash.reach
+        || height + GROUND_SWASH_RELIEF <= -GROUND_SEABED_WET)
+    {
+        return (GroundSwash)0;
+    }
+    // Saturating smoothly, never flat at a bound (`sand_relief`).
+    float r = ground_rule_noise(place.dir * CANOPY.planet_radius, footprint)
+            / (GROUND_RELIEF_SPREAD * GROUND_RULE_WANDER);
+    float relief = r * rsqrt(1.0 + r * r);
+    // How tall the swell runs along this stretch of shore, which the run-up
+    // follows by its square root (`ShoreNoise::swell`).
+    uint4 swell_salts[4] = { uint4(CANOPY.swash.noise_salts.z, 0u, 0u, 0u), (uint4)0u, (uint4)0u,
+                             (uint4)0u };
+    float swell_frequency = CANOPY.swash.noise.z;
+    float swell = 1.0 + CANOPY.swash.noise.w
+                      * (2.0 * ground_octaves(place.dir, swell_frequency, CANOPY.planet_radius / swell_frequency,
+                                             1u, swell_salts, 0.0).w - 1.0);
+    // The shore's phase noise, as the sea reads it.
+    uint4 salts[4] = { uint4(CANOPY.swash.noise_salts.xy, 0u, 0u), (uint4)0u, (uint4)0u, (uint4)0u };
+    float frequency = CANOPY.swash.noise.x;
+    float4 n = ground_octaves(place.dir, frequency, CANOPY.planet_radius / frequency, 2u, salts, 0.0);
+    float noise = 2.0 * CANOPY.swash.noise.y / GROUND_PHASE_NOISE_WEIGHT * n.w - CANOPY.swash.noise.y;
+    return ground_swash(height, relief, noise, swell);
 }
 
 // The covers laid over a planet's ground at `place`: how much of the

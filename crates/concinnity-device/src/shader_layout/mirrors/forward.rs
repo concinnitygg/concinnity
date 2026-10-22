@@ -7,7 +7,7 @@ use concinnity_engine::gfx::render_types::{
     LightUniforms, PointLightData, ShadowUniforms, SpotShadowData,
 };
 use concinnity_engine::render::uniforms::ViewUniforms;
-use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams};
+use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, ShoreSwashGpu};
 use concinnity_engine::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
@@ -117,6 +117,18 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             ground_up,
             covers,
             band,
+            swash,
+        })),
+        everywhere(mirror!(ShoreSwashGpu => "ShoreSwash" {
+            sea_level,
+            runup,
+            reach,
+            _pad,
+            omegas,
+            phases,
+            amplitudes,
+            noise_salts,
+            noise,
         })),
         everywhere(mirror!(CanopyLayerGpu => "CanopyLayer" {
             [root_color, color_variation] => ["root_color_variation"],

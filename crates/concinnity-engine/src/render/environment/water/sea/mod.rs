@@ -14,9 +14,11 @@
 mod face;
 #[cfg(test)]
 mod mirror;
+pub mod shore;
 
 use concinnity_core::math::{dvec3, narrow_f32};
 pub use face::SeaFace;
+use shore::{LatticePlace, SHORE_OCTAVES, SHORE_TRAINS, SURF_LACE_PERIOD, ShoreWaves};
 
 use super::WaterBody;
 use super::motion::BodyMotion;
@@ -74,6 +76,8 @@ pub struct SeaBody {
     pub sphere: SeaSphere,
     /// The camera-centered grid, in face meters.
     pub grid: OceanGrid,
+    /// The waves at its shores; `None` on a planet without coasts.
+    pub shore: Option<ShoreWaves>,
 }
 
 impl SeaBody {
@@ -83,6 +87,7 @@ impl SeaBody {
         Self {
             sphere,
             grid: OceanGrid::reaching(peak_wavelength, reach),
+            shore: None,
         }
     }
 }
@@ -97,6 +102,23 @@ pub struct SeaFaceMotion {
     /// Every pattern's offset at the anchor's place on the face (the wave
     /// phases, the ripple and warp offsets and the cascade tile offsets).
     pub motion: BodyMotion,
+}
+
+/// Where a planet sea's shore waves are read from at one instant.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeaShoreMotion {
+    /// The rotation from the simulated frame into the planet's authored
+    /// axes, one row per axis; each row's `w` is the anchor's direction from
+    /// the planet's center along that axis.
+    pub rows: [[f32; 4]; 3],
+    /// Each shore train's phase at the waterline, in `[0, tau)`.
+    pub phases: [f32; SHORE_TRAINS],
+    /// The anchor's place on the sea in the planet's axes, in meters, each
+    /// axis wrapped into one [`SURF_LACE_PERIOD`] centered on zero.
+    pub lace_origin: [f32; 3],
+    /// Where the anchor's direction lies in each noise octave the shore
+    /// reads ([`ShoreWaves::lattice_at`]).
+    pub lattice: [LatticePlace; SHORE_OCTAVES],
 }
 
 /// What moves on a planet sea at one instant.
@@ -118,6 +140,8 @@ pub struct SeaMotion {
     pub reach: f32,
     /// The faces around the corner nearest the anchor, one per axis.
     pub faces: [SeaFaceMotion; SEA_FACES],
+    /// Where its shore waves are read from; `None` without them.
+    pub shore: Option<SeaShoreMotion>,
 }
 
 impl WaterBody {
@@ -155,6 +179,22 @@ impl WaterBody {
             }
         });
 
+        let shore = sea.shore.as_ref().map(|shore| SeaShoreMotion {
+            rows: core::array::from_fn(|i| {
+                let mut axis = [0.0; 3];
+                axis[i] = 1.0;
+                let [x, y, z] = frame.dir_to_local(axis);
+                [x, y, z, narrow_f32(a[i])]
+            }),
+            phases: shore.phases_at(time).map(narrow_f32),
+            lace_origin: a.map(|c| {
+                let p = SURF_LACE_PERIOD;
+                let x = c * r + 0.5 * p;
+                narrow_f32(x - p * libm::floor(x / p) - 0.5 * p)
+            }),
+            lattice: shore.lattice_at(a),
+        });
+
         let crest = f64::from(self.reach()[0]);
         let horizon = |h: f64| {
             if h > 0.0 {
@@ -178,6 +218,7 @@ impl WaterBody {
             grid_scale,
             reach: narrow_f32(reach.min(0.95 * r)),
             faces,
+            shore,
         })
     }
 }

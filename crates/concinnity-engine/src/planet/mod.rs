@@ -59,7 +59,7 @@ pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use seams::{DrawnTile, TileSeams};
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
-pub(crate) use shape::{OCTAVE_TURN, octave_weight_sum};
+pub(crate) use shape::{OCTAVE_TURN, fbm, octave_cells, octave_weight_sum};
 pub use system::{
     GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetSystem, StartBuilder,
     inline_ground,

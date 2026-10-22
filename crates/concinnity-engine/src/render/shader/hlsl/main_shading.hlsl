@@ -304,19 +304,25 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // A planet's ground takes its covers' look where their rules hold.
     GroundCoverMix covers = ground_no_covers();
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
-    ground_normal = canopy_ground_normal(od, v.world_pos, v.normal, footprint);
+    float4 ground = canopy_ground_normal(od, v.world_pos, v.normal, footprint);
+    ground_normal = ground.xyz;
 #ifdef SURFACE_CANOPY
     float far_w = canopy_band(od, far_dist);
 #else
     const float far_w = 0.0;
 #endif
     GroundPlace place = (GroundPlace)0;
+    GroundSwash swash = (GroundSwash)0;
     if (canopy_on_planet(od))
     {
         place = ground_place(v.world_pos, ground_normal, footprint, canopy_layers(od));
         covers = ground_covers_at(place, v.uv);
         place.covered = 1.0 - covers.keep;
         albedo = albedo * covers.keep + covers.albedo;
+        // Where the sea's waves wash up the beach, the sand is darker and wet
+        // and a foam line runs at the wash's front.
+        swash = ground_swash_at(place, ground.w, footprint);
+        albedo = lerp(albedo * lerp(1.0, GROUND_WET_DARKEN, swash.wet), GROUND_SWASH_FOAM, swash.edge);
     }
     canopy = canopy_at(od, place, v.world_pos, ground_normal, v.color, albedo,
                        V_far / max(far_dist, 1e-4), footprint, v.position.xy, far_dist,
@@ -344,6 +350,12 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
                               + covers.roughness_metallic;
     float roughness = roughness_metallic.x;
     float metallic  = roughness_metallic.y;
+#if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
+    // Wet sand is smoother than dry, and the film the wash leaves smoother
+    // still, but for its foam.
+    roughness = lerp(roughness, min(roughness, GROUND_WET_ROUGHNESS), swash.wet);
+    roughness = lerp(roughness, GROUND_FILM_ROUGHNESS, swash.film * (1.0 - swash.edge));
+#endif
 
     float3 N = surface_normal(od, v.uv, ground_normal, v.tangent, v.bitangent);
 

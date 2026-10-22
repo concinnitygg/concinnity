@@ -9,7 +9,7 @@ use concinnity_engine::gfx::render_types::{
 };
 use concinnity_engine::render::uniforms::{
     GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterOceanGpu,
-    WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterWaveGpu,
+    WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterShoreGpu, WaterWaveGpu,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
@@ -133,6 +133,29 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             shape,
             wind_map,
             faces,
+            shore,
+        })),
+        everywhere(mirror!(WaterShoreGpu => "WaterShore" {
+            planet_rows,
+            continent_salts,
+            continent_frequency,
+            continent_scale,
+            continent_offset,
+            continent_octaves,
+            noise_salts,
+            noise,
+            coast,
+            beach,
+            bounds,
+            swell,
+            lace,
+            omegas,
+            amplitudes,
+            phases,
+            cascade_wavelengths,
+            table,
+            lattice_cells,
+            lattice_places,
         })),
         everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
             light_vps,

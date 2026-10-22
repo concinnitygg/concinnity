@@ -25,7 +25,10 @@ use super::planet::tiles::{DrawnPlanetTile, ground_reference, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
 use crate::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
 use crate::render::environment::ground::GroundCovers;
-use crate::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS};
+use crate::render::environment::water::sea::shore::ShoreWaves;
+use crate::render::uniforms::canopy::{
+    CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS, ShoreSwashGpu,
+};
 use crate::render::uniforms::ground::GroundRuleGpu;
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
@@ -357,6 +360,7 @@ pub struct CanopyField {
     layers: Vec<CanopyLayerGpu>,
     tables: Vec<[f32; 4]>,
     planet: Option<PlanetCanopy>,
+    shore: Option<ShoreWaves>,
 }
 
 impl CanopyField {
@@ -437,7 +441,14 @@ impl CanopyField {
             layers,
             tables,
             planet,
+            shore: None,
         }
+    }
+
+    /// Wet the planet's beaches with the wash of `shore`, the waves of its
+    /// sea.
+    pub fn set_shore(&mut self, shore: Option<ShoreWaves>) {
+        self.shore = shore;
     }
 
     /// Every layer's view table in layer order,
@@ -447,14 +458,15 @@ impl CanopyField {
         &self.tables
     }
 
-    /// This frame's block, the blades handing the field over as `lod` has
-    /// them, at hand-off phase `phase`. On a planet, `tile` is any tile drawn
-    /// this frame, whose model places the planet's axes in the simulated
-    /// frame.
+    /// This frame's block `time` seconds into the world, the blades handing
+    /// the field over as `lod` has them, at hand-off phase `phase`. On a
+    /// planet, `tile` is any tile drawn this frame, whose model places the
+    /// planet's axes in the simulated frame.
     pub fn params(
         &self,
         (lod, phase): (&GrassLodView, f32),
         tile: Option<&DrawnPlanetTile>,
+        time: f64,
     ) -> CanopyParams {
         let mut params = CanopyParams {
             layer_count: u32::saturating_from(self.layers.len()),
@@ -478,6 +490,9 @@ impl CanopyField {
             params.cover_count = planet.covers.count;
             [params.ground_origin, params.ground_up] = ground_reference(&planet.shape, tile);
             set_ground_noise(&mut params, &planet.shape);
+            if let Some(shore) = &self.shore {
+                params.swash = ShoreSwashGpu::new(shore, time);
+            }
         }
         params
     }
@@ -1016,7 +1031,7 @@ mod tests {
         assert_eq!(field.layers[2].seed, grass.layers[2].seed);
         assert_eq!(grass.canopy, field);
         let lod = grass.lod_view(1000.0);
-        let p = field.params((&lod, 5.0), None);
+        let p = field.params((&lod, 5.0), None, 0.0);
         assert_eq!(p.layer_count, 5);
         assert_eq!(p.planet_rows, [[0.0; 4]; 3]);
         // The band is the blades' hand-off, at the frame's phase.
@@ -1104,7 +1119,7 @@ mod tests {
             morph: crate::gfx::render_types::GpuTileMorph::default(),
             morph_extent: 0.0,
         };
-        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile));
+        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile), 0.0);
         assert_eq!(p.planet_radius, 50_000.0);
         assert!(
             p.meadow_mean > 0.5 && p.meadow_mean < 1.0,
@@ -1127,6 +1142,61 @@ mod tests {
 
     // Each planet layer's rule and the planet's covers ride the block, so the
     // ground under the grass and its far field place them as the kernel does.
+    #[test]
+    fn the_block_carries_the_shores_wash() {
+        use crate::components::Planet;
+        use crate::render::environment::water::spectrum::SeaShape;
+        use crate::render::uniforms::canopy::ShoreSwashGpu;
+        let planet = Planet {
+            land_share: 0.4,
+            ..Planet::default()
+        };
+        let shape = planet.shape();
+        let grass = PlanetGrass::resolve(
+            shape,
+            &[(Grass::default(), crate::components::GroundRule::default())],
+            GroundCovers::of(&planet, |_| None, 1),
+        )
+        .unwrap();
+        let (mut field, _) = CanopyField::for_planet(&grass, 0.0);
+        let id = TileId {
+            face: CubeFace(2),
+            level: 10,
+            x: 512,
+            y: 511,
+        };
+        let mesh = crate::planet::tile_mesh(&shape, id);
+        let tile = DrawnPlanetTile {
+            id,
+            model: crate::planet::LocalFrame::AUTHORED.model_at(mesh.origin),
+            vertex_base: 0,
+            radial: mesh.radial,
+            origin_altitude: mesh.origin_altitude,
+            morph: crate::gfx::render_types::GpuTileMorph::default(),
+            morph_extent: 0.0,
+        };
+        let lod = GrassLodView::new(1000.0, 0.5);
+        assert_eq!(
+            field.params((&lod, 0.0), Some(&tile), 7.0).swash,
+            ShoreSwashGpu::default()
+        );
+        let sea = SeaShape::new(7.0, 50_000.0).unwrap();
+        let shore = ShoreWaves::new(&shape, 0.0, &sea, None).unwrap();
+        field.set_shore(Some(shore.clone()));
+        let p = field.params((&lod, 0.0), Some(&tile), 7.0);
+        assert_eq!(p.swash, ShoreSwashGpu::new(&shore, 7.0));
+        assert!(p.swash.runup > 0.0);
+        assert_ne!(
+            p.swash.phases,
+            field.params((&lod, 0.0), Some(&tile), 8.0).swash.phases
+        );
+        // Off the planet, or before a tile is drawn, nothing washes.
+        assert_eq!(
+            field.params((&lod, 0.0), None, 7.0).swash,
+            ShoreSwashGpu::default()
+        );
+    }
+
     #[test]
     fn the_block_carries_layer_rules_and_covers() {
         use crate::components::{GroundCover, GroundRule, Planet};
@@ -1181,7 +1251,7 @@ mod tests {
             morph: crate::gfx::render_types::GpuTileMorph::default(),
             morph_extent: 0.0,
         };
-        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile));
+        let p = field.params((&GrassLodView::new(1000.0, 0.5), 0.0), Some(&tile), 0.0);
         assert_eq!(p.layers[0].rule, GroundRuleGpu::EVERYWHERE);
         assert_eq!(p.layers[1].rule, GroundRuleGpu::of(&above));
         assert_eq!(p.cover_count, 1);
@@ -1214,12 +1284,17 @@ mod tests {
         }
         // Off a planet nothing is laid.
         let (terrain, _) = CanopyField::for_terrains(&[], 0.0);
-        let t = terrain.params((&GrassLodView::new(1000.0, 0.5), 0.0), None);
+        let t = terrain.params((&GrassLodView::new(1000.0, 0.5), 0.0), None, 0.0);
         assert_eq!(t.cover_count, 0);
     }
 
-    // The shader's `ground_normal_at`, line for line, over the block's noise.
+    // The normal the shader's `ground_normal_at` returns, over the block's noise.
     fn shader_ground_normal(p: &CanopyParams, dir: [f32; 3], footprint: f32) -> [f32; 3] {
+        shader_ground(p, dir, footprint).0
+    }
+
+    // The shader's `ground_normal_at`, normal and height, line for line.
+    fn shader_ground(p: &CanopyParams, dir: [f32; 3], footprint: f32) -> ([f32; 3], f32) {
         let octaves = p.ground_octaves.min(16);
         let hills = shader_octaves(
             p,
@@ -1232,6 +1307,7 @@ mod tests {
         )
         .map(|v| v * p.ground_height_scale);
         let mut gradient = [hills[0], hills[1], hills[2]];
+        let mut height = hills[3];
         if p.continent_octaves > 0 {
             let salts = [p.continent_salts[0], p.continent_salts[1], [0; 4], [0; 4]];
             let field = shader_octaves(
@@ -1246,11 +1322,13 @@ mod tests {
             .map(|v| v * p.continent_scale);
             let shore = shader_shore(p, field[3] - p.continent_offset, hills[3]);
             gradient = core::array::from_fn(|i| field[i] * shore[0] + hills[i] * shore[1]);
+            height = shore[2];
         }
         let d = dot(dir, gradient);
-        unit(core::array::from_fn(|i| {
+        let normal = unit(core::array::from_fn(|i| {
             dir[i] - (gradient[i] - dir[i] * d) / p.planet_radius
-        }))
+        }));
+        (normal, height)
     }
 
     // The shader's `ground_octaves`, line for line.
@@ -1304,7 +1382,7 @@ mod tests {
     }
 
     // The shader's `ground_shore`, line for line.
-    fn shader_shore(p: &CanopyParams, inland: f32, hill: f32) -> [f32; 2] {
+    fn shader_shore(p: &CanopyParams, inland: f32, hill: f32) -> [f32; 3] {
         let rise = p.hill_rise.max(1e-3);
         if inland >= 0.0 {
             let w = p.beach_width;
@@ -1315,10 +1393,11 @@ mod tests {
             return [
                 p.beach_rise * 2.0 * (1.0 - t) / w + hill * fade_d / rise,
                 fade,
+                p.beach_rise * t * (2.0 - t) + hill * fade,
             ];
         }
         if p.ocean_depth <= 0.0 {
-            return [0.0; 2];
+            return [0.0; 3];
         }
         let out = -inland;
         let e = exp(-out / p.shelf_length);
@@ -1328,7 +1407,11 @@ mod tests {
         let fade_d = 6.0 * x * (1.0 - x);
         let lift = p.seabed_lift;
         let d_out = -p.ocean_depth * fall_d + lift * hill * (fall_d * fade + fall * fade_d / rise);
-        [-d_out, lift * fall * fade]
+        [
+            -d_out,
+            lift * fall * fade,
+            -p.ocean_depth * fall + lift * hill * fall * fade,
+        ]
     }
 
     // The shader's `ground_noise`, line for line.
@@ -1434,8 +1517,11 @@ mod tests {
                 continue;
             }
             let want = concinnity_core::math::dvec3::to_f32(shape.normal(dir));
-            let got = shader_ground_normal(&p, concinnity_core::math::dvec3::to_f32(dir), 0.01);
+            let (got, height) = shader_ground(&p, concinnity_core::math::dvec3::to_f32(dir), 0.01);
             assert!(dot(got, want) > 1.0 - 1e-5, "{got:?} {want:?}");
+            // The height the wash is measured on, within a few centimeters.
+            let exact = shape.height(dir);
+            assert!((f64::from(height) - exact).abs() < 0.03, "{height} {exact}");
             checked += 1;
         }
         assert!(checked > 100, "{checked}");

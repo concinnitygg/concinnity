@@ -98,6 +98,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // GRASS_FIELD, whose marker it carries; the grass kernel carries
     // GRASS_FIELD too.
     ("{CANOPY}", "canopy.hlsl"),
+    // PLANET_NOISE trails CANOPY, which carries its marker; the planet sea
+    // carries it too.
+    ("{PLANET_NOISE}", "planet_noise.hlsl"),
     ("{GRASS_FIELD}", "grass_field.hlsl"),
     // SURFACE_INPUTS trails MAIN_SHADING, which carries its marker, and
     // SPECULAR_AA trails SURFACE_INPUTS; the raymarch pre-pass carries it too.

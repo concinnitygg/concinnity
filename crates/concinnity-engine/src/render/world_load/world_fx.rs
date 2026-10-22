@@ -68,7 +68,7 @@ pub fn drain_world_fx(
         .collect();
     let terrain_grass = GrassField::resolve(&grass_terrains(terrains, &grass), wind.as_ref());
     // One field per world: a planet's grass, or the terrains'.
-    let grass = match planet_grass {
+    let mut grass = match planet_grass {
         Some(planet) => {
             if terrain_grass.is_some() {
                 tracing::warn!(
@@ -80,6 +80,14 @@ pub fn drain_world_fx(
         }
         None => terrain_grass,
     };
+    // The planet's beaches are wet where its sea's waves wash up them.
+    if let Some(field) = grass.as_mut() {
+        field.canopy.set_shore(
+            water_surfaces
+                .iter()
+                .find_map(|b| b.sea.as_ref()?.shore.clone()),
+        );
+    }
     // One atmosphere per world, wrapped around the world's planet if it has
     // one. A night sky with no atmosphere is seen through a vacuum.
     let planet = planet.map(|p| (p.center.map(f64::from), p.radius));
