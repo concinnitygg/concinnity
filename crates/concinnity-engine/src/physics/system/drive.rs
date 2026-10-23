@@ -1,0 +1,160 @@
+// The rolling drives: each frame takes every driven body's steering from its
+// `RollingControl`, each tick pushes the body by it, and the frame ends by
+// telling the control whether the body is on the ground and afloat.
+
+use alloc::vec::Vec;
+
+use crate::components::{Collider, RollingControl, Transform};
+use crate::ecs::{Entity, PipelineContext};
+use crate::physics::rolling_drive::{RollingBody, jump_impulse, push};
+use crate::physics::{BodyHandle, ColliderShape, Simulation};
+
+use super::super::convert::collider_shape;
+use super::super::props::PropBodies;
+use super::up_at;
+use concinnity_core::math::{SaturatingFrom, ceil};
+
+// How long a jump asked for in the air is kept for the body to land, in
+// seconds.
+const JUMP_WINDOW: f32 = 0.15;
+
+// The steepest ground the body counts as standing on: about 50 degrees.
+const GROUND_MIN_COS: f32 = 0.64;
+
+#[derive(Debug, Clone, Copy)]
+struct Driven {
+    entity: Entity,
+    handle: BodyHandle,
+    control: RollingControl,
+    radius: f32,
+    // Ticks left in which a jump asked for is taken.
+    jump_ticks: u32,
+    grounded: bool,
+    afloat: f32,
+}
+
+/// Every driven body and its steering for the frame.
+#[derive(Debug, Default)]
+pub(super) struct Drives {
+    driven: Vec<Driven>,
+}
+
+impl Drives {
+    pub(super) fn with_capacity(count: usize) -> Self {
+        Self {
+            driven: Vec::with_capacity(count),
+        }
+    }
+
+    /// Take this frame's steering from every control whose body is simulated
+    /// freely, keeping a jump asked for in an earlier frame that has not yet
+    /// run out. A jump is taken from the control as it is read; one asked of
+    /// a body something else poses is dropped.
+    pub(super) fn gather(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        props: &PropBodies,
+        tick_dt: f32,
+    ) {
+        let free = |entity: Entity| {
+            props
+                .prop_of(entity)
+                .filter(|p| p.dynamic && !p.is_posed())
+                .map(|p| p.handle)
+        };
+        self.driven.retain(|d| free(d.entity) == Some(d.handle));
+        let window = u32::saturating_from(ceil(JUMP_WINDOW / tick_dt.max(1e-6)));
+        for (entity, control) in ctx.query_mut_with_entity::<RollingControl>() {
+            let Some(handle) = free(entity) else {
+                control.jump = false;
+                continue;
+            };
+            let at = if let Some(at) = self.driven.iter().position(|d| d.entity == entity) {
+                at
+            } else {
+                self.driven.push(Driven {
+                    entity,
+                    handle,
+                    control: *control,
+                    radius: 0.0,
+                    jump_ticks: 0,
+                    grounded: false,
+                    afloat: 0.0,
+                });
+                self.driven.len() - 1
+            };
+            let driven = &mut self.driven[at];
+            if control.jump {
+                driven.jump_ticks = window;
+                control.jump = false;
+            }
+            driven.control = *control;
+        }
+        for driven in &mut self.driven {
+            driven.radius = rolling_radius(ctx, driven.entity);
+            driven.afloat = props.submerged_share(driven.entity);
+        }
+    }
+
+    /// One tick of every drive: a jump the body can take, then the roll and
+    /// the paddle for this tick's step.
+    pub(super) fn tick(&mut self, world: &mut Simulation) {
+        for driven in &mut self.driven {
+            let Some(state) = world.body_state(driven.handle) else {
+                continue;
+            };
+            let up = up_at(world, state.position);
+            driven.grounded = world.is_supported(driven.handle, up, GROUND_MIN_COS);
+            let body = RollingBody {
+                up,
+                linear_velocity: state.linear_velocity,
+                angular_velocity: state.angular_velocity,
+                mass: state.mass,
+                inertia: (state.inertia[0] + state.inertia[1] + state.inertia[2]) / 3.0,
+                radius: driven.radius,
+                afloat: driven.afloat,
+                grounded: driven.grounded,
+            };
+            if driven.jump_ticks > 0 {
+                driven.jump_ticks -= 1;
+                if driven.grounded && driven.control.jump_speed > 0.0 {
+                    world.apply_impulse(
+                        driven.handle,
+                        jump_impulse(&driven.control, &body),
+                        [0.0; 3],
+                    );
+                    driven.jump_ticks = 0;
+                }
+            }
+            let push = push(&driven.control, &body);
+            if push.force != [0.0; 3] || push.torque != [0.0; 3] {
+                world.add_force(driven.handle, push.force, push.torque);
+            }
+        }
+    }
+
+    /// Hand each control what its body's last tick found.
+    pub(super) fn publish(&self, ctx: &mut PipelineContext<'_>, props: &PropBodies) {
+        for driven in &self.driven {
+            if let Some(control) = ctx.get_mut::<RollingControl>(driven.entity) {
+                control.grounded = driven.grounded;
+                control.afloat = props.submerged_share(driven.entity);
+            }
+        }
+    }
+}
+
+// The radius `entity`'s collider rolls on: a ball's or a capsule's, or a
+// box's narrowest half width.
+fn rolling_radius(ctx: &PipelineContext<'_>, entity: Entity) -> f32 {
+    let Some(collider) = ctx.get::<Collider>(entity) else {
+        return 0.0;
+    };
+    let scale = ctx.get::<Transform>(entity).map_or([1.0; 3], |t| t.scale);
+    match collider_shape(&collider.0, scale) {
+        ColliderShape::Ball { radius } | ColliderShape::Capsule { radius, .. } => radius,
+        ColliderShape::Cuboid { half_extents } => {
+            half_extents[0].min(half_extents[1]).min(half_extents[2])
+        }
+    }
+}

@@ -7,9 +7,10 @@
 use crate::physics::{LayerMask, Simulation};
 use concinnity_core::math::vec3::length;
 
-use crate::components::{AudioOcclusionProbe, CameraProbe, GroundProbes};
+use crate::components::{AudioOcclusionProbe, CameraProbe, Followed, GroundProbes};
 use crate::ecs::PipelineContext;
 
+use super::props::PropBodies;
 use super::rig::RigPhysics;
 
 // Kept between the camera and the nearest obstruction so the near plane
@@ -27,9 +28,14 @@ pub(crate) fn step_probes(
     world: &Simulation,
     ctx: &mut PipelineContext<'_>,
     rigs: &[RigPhysics],
+    props: &PropBodies,
     mask: LayerMask,
 ) {
     let handle_of = |target| rigs.iter().find(|r| r.target == target).map(|r| r.handle);
+    let followed_body = |followed| match followed {
+        Followed::Rig(target) => handle_of(target),
+        Followed::Prop(entity) => props.handle_of(entity),
+    };
 
     for probes in ctx.query_mut::<GroundProbes>() {
         let exclude = handle_of(probes.target);
@@ -54,7 +60,7 @@ pub(crate) fn step_probes(
         ];
         let dist = length(dir);
         probe.clearance = world
-            .raycast(probe.pivot, dir, dist, handle_of(probe.target), mask)
+            .raycast(probe.pivot, dir, dist, followed_body(probe.followed), mask)
             .map(|hit| (hit.distance - CAMERA_MARGIN).max(CAMERA_MIN_DISTANCE));
     }
 
@@ -112,7 +118,13 @@ mod tests {
         w.push(probe([0.0; 3]));
 
         let mut ctx = w.context();
-        step_probes(&world, &mut ctx, &[], LayerMask::ALL);
+        step_probes(
+            &world,
+            &mut ctx,
+            &[],
+            &PropBodies::default(),
+            LayerMask::ALL,
+        );
 
         let answers: Vec<Option<bool>> = ctx
             .query::<AudioOcclusionProbe>()

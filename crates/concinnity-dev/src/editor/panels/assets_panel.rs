@@ -1971,6 +1971,7 @@ mod tests {
             "LayoutContainer",
             "Model",
             "PropBody",
+            "RollingDrive",
             "RigidBody",
             "Scene",
             "ScrollPanel",

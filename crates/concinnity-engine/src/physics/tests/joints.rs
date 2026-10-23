@@ -291,7 +291,7 @@ fn a_spherical_joint_holds_the_anchor_and_leaves_the_spin_alone() {
     );
 
     // Pushed hard sideways, it swings rather than separating.
-    sim.apply_impulse(bob, [0.0, 0.0, 8.0]);
+    sim.apply_impulse(bob, [0.0, 0.0, 8.0], [0.0; 3]);
     step_for(&mut sim, 120);
     let held = reach(position(&sim, bob), [0.0, 0.0, 0.0]);
     assert!((held - 1.0).abs() < 0.03, "pulled off its socket to {held}");
@@ -638,7 +638,7 @@ fn a_jointed_pair_settles_and_wakes_as_one_island() {
     assert_eq!(sim.is_sleeping(near), Some(true), "the pair has to settle");
     assert_eq!(sim.is_sleeping(far), Some(true));
 
-    sim.apply_impulse(near, [0.0, 4.0, 0.0]);
+    sim.apply_impulse(near, [0.0, 4.0, 0.0], [0.0; 3]);
     step_for(&mut sim, 2);
     assert_eq!(
         sim.is_sleeping(far),
@@ -686,6 +686,8 @@ fn a_motor_driven_island_never_falls_asleep() {
         [1.0, 0.0, 0.0],
         DynamicParams {
             linear_damping: 1.5,
+            angular_damping: 1.5,
+            rolling_resistance: 0.0,
             ..Default::default()
         },
     );

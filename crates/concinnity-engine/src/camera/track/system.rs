@@ -2,9 +2,7 @@ use alloc::vec::Vec;
 
 use crate::camera::track::CameraTrackStatus;
 use crate::camera::track::timeline::{self, Key};
-use crate::components::{
-    BodyDynamics, Camera3D, CameraBoomKey, CameraTrack, CameraTurnKey, Collider, Parent, Transform,
-};
+use crate::components::{Camera3D, CameraBoomKey, CameraTrack, CameraTurnKey, Parent, Transform};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
 use crate::gfx::camera::view_axes;
@@ -261,6 +259,7 @@ impl CameraTrackSystem {
             pose_seconds: self.pose_seconds,
             duration_seconds: duration,
             finished: elapsed >= duration,
+            subject: self.subject,
         });
     }
 }
@@ -340,18 +339,12 @@ impl System for CameraTrackSystem {
 
 // Where the subject `id` starts, or why it cannot be carried: its Transform
 // is the one travel writes, so it has to be a world-space root. A subject the
-// physics also simulates is carried anyway, with a warning, since the two then
-// fight over it.
+// physics simulates follows that Transform kinematically.
 fn subject_start(ctx: &PipelineContext<'_>, id: AssetId) -> Result<[f32; 3], &'static str> {
     let entity = ctx.entity_of(id).ok_or("is missing")?;
     let transform = ctx.get::<Transform>(entity).ok_or("has no transform")?;
     if ctx.get::<Parent>(entity).is_some() {
         return Err("has a parent, so its transform is not in world space");
-    }
-    if ctx.get::<Collider>(entity).is_some() || ctx.get::<BodyDynamics>(entity).is_some() {
-        tracing::warn!(
-            "camera track: its subject ({id}) has a collider, which the physics will push against the track"
-        );
     }
     Ok(transform.position)
 }

@@ -191,6 +191,8 @@ mod tests {
             restitution: 0.0,
             gravity_scale: 1.0,
             linear_damping: 0.0,
+            angular_damping: 0.0,
+            rolling_resistance: 0.0,
         }
     }
 

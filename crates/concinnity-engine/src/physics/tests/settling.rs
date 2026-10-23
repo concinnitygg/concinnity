@@ -232,7 +232,7 @@ fn a_sleeping_stack_wakes_when_something_lands_on_it() {
     assert!(handles.iter().all(|&h| sim.is_sleeping(h) == Some(true)));
 
     let top = *handles.last().expect("a stack");
-    sim.apply_impulse(top, [3.0, 0.0, 0.0]);
+    sim.apply_impulse(top, [3.0, 0.0, 0.0], [0.0; 3]);
     sim.step(TICK);
     assert_eq!(sim.is_sleeping(top), Some(false));
     // The push has to reach the bottom of the stack, not just the box it hit.
@@ -246,17 +246,23 @@ fn a_sleeping_stack_wakes_when_something_lands_on_it() {
 /// A half-meter ball rolling along x on the floor at `speed`, and how fast it
 /// is going after `seconds`.
 fn rolled(speed: f32, damping: f32, seconds: f32) -> f32 {
-    let mut sim = Simulation::new(awake(), 2);
-    add_floor(&mut sim);
-    let ball = drop_ball(
-        &mut sim,
-        [0.0, 0.5, 0.0],
+    rolled_with(
+        speed,
+        seconds,
         DynamicParams {
             friction: 0.6,
             linear_damping: damping,
+            angular_damping: damping,
             ..Default::default()
         },
-    );
+    )
+}
+
+/// As [`rolled`], for a ball of any `params`.
+fn rolled_with(speed: f32, seconds: f32, params: DynamicParams) -> f32 {
+    let mut sim = Simulation::new(awake(), 2);
+    add_floor(&mut sim);
+    let ball = drop_ball(&mut sim, [0.0, 0.5, 0.0], params);
     sim.set_linear_velocity(ball, [speed, 0.0, 0.0]);
     sim.set_angular_velocity(ball, [0.0, 0.0, -speed / 0.5]);
     settle(&mut sim, usize::saturating_from(seconds / TICK));
@@ -275,6 +281,35 @@ fn a_rolling_ball_slows_down_under_its_damping() {
         after < expected * 1.1,
         "rolled at {after:.3} after {seconds} s, damping alone leaves {expected:.3}"
     );
+}
+
+// Rolling resistance brings a ball to rest on level ground, where damping
+// alone only ever slows it: the resisting torque is the load times its lever,
+// so a ball at 2 m/s with a 0.05 share stops in about 2 / (0.05 g / 1.4) s.
+#[test]
+fn rolling_resistance_stops_a_rolling_ball() {
+    let resisted = DynamicParams {
+        friction: 0.6,
+        rolling_resistance: 0.05,
+        ..Default::default()
+    };
+    let stop = 2.0 * 1.4 / (0.05 * crate::physics::GRAVITY);
+    let after = rolled_with(2.0, stop * 1.5, resisted);
+    assert!(after < 0.02, "still rolling at {after:.3} m/s");
+    let midway = rolled_with(2.0, stop * 0.5, resisted);
+    assert!(
+        (0.6..1.4).contains(&midway),
+        "halfway it rolls at half speed: {midway:.3}"
+    );
+    let free = rolled_with(
+        2.0,
+        stop * 1.5,
+        DynamicParams {
+            friction: 0.6,
+            ..Default::default()
+        },
+    );
+    assert!(free > 1.9, "without it the ball keeps rolling: {free:.3}");
 }
 
 #[test]

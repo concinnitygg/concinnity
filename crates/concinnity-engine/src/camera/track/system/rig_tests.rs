@@ -447,9 +447,9 @@ fn a_parented_subject_leaves_the_track_driving_the_camera() {
     assert_eq!(subject(&world), [0.0, 1.0, -3.0], "left where it was");
 }
 
-// A subject the physics also collides is still carried, with a warning.
+// A subject the physics also simulates is carried.
 #[test]
-fn a_subject_with_a_collider_is_still_carried() {
+fn a_subject_with_a_body_is_carried() {
     let (mut world, mut system) = world_with(
         track(
             vec![travel([1.0, 0.0, 0.0], 4.0, 2.0)],
@@ -460,7 +460,7 @@ fn a_subject_with_a_collider_is_still_carried() {
         [0.0; 3],
     );
     let entity = world.entity_of(SUBJECT).expect("subject");
-    world.insert(entity, BodyDynamics::default());
+    world.insert(entity, crate::components::BodyDynamics::default());
     system.init(&mut world.context());
     seconds(&mut world, &mut system, 1);
     assert_near(subject(&world), [2.0, 0.0, 0.0], 1e-4);

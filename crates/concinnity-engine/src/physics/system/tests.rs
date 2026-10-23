@@ -289,6 +289,7 @@ fn ball_dynamics() -> BodyDynamics {
         mass: 1.0,
         friction: 0.5,
         linear_damping: 0.0,
+        angular_damping: 0.0,
         ..Default::default()
     }
 }

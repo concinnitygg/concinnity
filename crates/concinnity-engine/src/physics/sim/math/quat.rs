@@ -7,7 +7,7 @@
 // Euler angles reads back as the angles that were set.
 
 use super::vec3::{Vec3, vec3};
-use concinnity_core::math::sqrt;
+use concinnity_core::math::{atan2, sqrt};
 #[cfg(test)]
 use concinnity_core::math::{cos, sin};
 
@@ -109,6 +109,26 @@ impl Quat {
         let q = vec3(self.x, self.y, self.z);
         let t = q.cross(v) * 2.0;
         v + t * self.w + q.cross(t)
+    }
+
+    /// The angular velocity that turns `self` into `to` over `dt`, the short
+    /// way round.
+    pub(crate) fn turn_rate_to(self, to: Self, dt: f32) -> Vec3 {
+        let mut d = to.mul(self.conjugate()).normalize();
+        if d.w < 0.0 {
+            d = Self {
+                x: -d.x,
+                y: -d.y,
+                z: -d.z,
+                w: -d.w,
+            };
+        }
+        let axis = vec3(d.x, d.y, d.z);
+        let s = axis.length();
+        if s <= 1e-7 || dt <= 0.0 {
+            return Vec3::ZERO;
+        }
+        axis * (2.0 * atan2(s, d.w) / (s * dt))
     }
 
     pub(crate) fn inverse_rotate(self, v: Vec3) -> Vec3 {

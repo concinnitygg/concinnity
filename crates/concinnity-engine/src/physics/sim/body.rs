@@ -70,10 +70,20 @@ pub(crate) struct Body {
     pub(crate) friction: f32,
     pub(crate) restitution: f32,
     pub(crate) gravity_scale: f32,
-    pub(crate) damping: f32,
+    pub(crate) linear_damping: f32,
+    pub(crate) angular_damping: f32,
+    /// Rolling resistance times the rolling radius: the lever, in meters, a
+    /// contact's load resists rolling with.
+    pub(crate) rolling_lever: f32,
+    /// Force and torque set from outside for the next step, cleared by it.
+    pub(crate) force: Vec3,
+    pub(crate) torque: Vec3,
 
     /// Where a position-driven body is to be by the end of the next step.
     pub(crate) kinematic_target: Option<Vec3>,
+    /// The orientation a position-driven body is to have by then, when it is
+    /// turned as well as moved.
+    pub(crate) kinematic_turn: Option<Quat>,
 
     /// The caller's tag when this body is a sensor region, which resists
     /// nothing and records what overlaps it instead.
@@ -117,8 +127,13 @@ impl Body {
             // Read only once the body is freely simulated, so that a body
             // handed to the solver later falls at the world's rate.
             gravity_scale: 1.0,
-            damping: 0.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            rolling_lever: 0.0,
+            force: Vec3::ZERO,
+            torque: Vec3::ZERO,
             kinematic_target: None,
+            kinematic_turn: None,
             sensor: None,
             bounds: Aabb::EMPTY,
             sleep_timer: 0.0,
@@ -203,8 +218,13 @@ impl Body {
             friction: params.friction.max(0.0),
             restitution: params.restitution.clamp(0.0, 1.0),
             gravity_scale: params.gravity_scale,
-            damping: params.linear_damping.max(0.0),
+            linear_damping: params.linear_damping.max(0.0),
+            angular_damping: params.angular_damping.max(0.0),
+            rolling_lever: params.rolling_resistance.max(0.0) * rolling_radius(&shape),
+            force: Vec3::ZERO,
+            torque: Vec3::ZERO,
             kinematic_target: None,
+            kinematic_turn: None,
             sensor: None,
             bounds: Aabb::EMPTY,
             sleep_timer: 0.0,
@@ -282,6 +302,7 @@ impl Body {
         self.inertia_local = properties.inertia;
         self.inv_inertia_local = inverse_inertia(properties.inertia);
         self.kinematic_target = None;
+        self.kinematic_turn = None;
         self.linear_velocity = linear_velocity;
         self.angular_velocity = Vec3::ZERO;
         self.wake();
@@ -301,6 +322,7 @@ impl Body {
         self.inertia_local = Vec3::ZERO;
         self.inv_inertia_local = Vec3::ZERO;
         self.kinematic_target = None;
+        self.kinematic_turn = None;
         self.linear_velocity = Vec3::ZERO;
         self.angular_velocity = Vec3::ZERO;
         self.wake();
@@ -314,7 +336,9 @@ impl Body {
             Some(target) => (target - self.position) / dt,
             None => Vec3::ZERO,
         };
-        self.angular_velocity = Vec3::ZERO;
+        self.angular_velocity = self
+            .kinematic_turn
+            .map_or(Vec3::ZERO, |turn| self.orientation.turn_rate_to(turn, dt));
     }
 
     pub(crate) fn inv_inertia_world(&self) -> Mat3 {
@@ -368,6 +392,14 @@ impl Body {
     }
 }
 
+// The radius a shape rolls on: a ball's or a capsule's; a box does not roll.
+fn rolling_radius(shape: &ColliderShape) -> f32 {
+    match *shape {
+        ColliderShape::Ball { radius } | ColliderShape::Capsule { radius, .. } => radius,
+        ColliderShape::Cuboid { .. } => 0.0,
+    }
+}
+
 fn inverse_inertia(inertia: Vec3) -> Vec3 {
     let inverse = |i: f32| if i > 0.0 { 1.0 / i } else { 0.0 };
     Vec3::from_array([inverse(inertia.x), inverse(inertia.y), inverse(inertia.z)])
@@ -386,6 +418,8 @@ mod tests {
             restitution: 0.2,
             gravity_scale: 1.0,
             linear_damping: 0.0,
+            angular_damping: 0.0,
+            rolling_resistance: 0.0,
         }
     }
 
@@ -524,13 +558,16 @@ mod tests {
                 friction: -1.0,
                 restitution: 3.0,
                 linear_damping: -2.0,
+                angular_damping: -1.0,
+                rolling_resistance: -1.0,
                 ..params()
             },
             LayerMask::ALL,
         );
         assert_eq!(b.friction, 0.0);
         assert_eq!(b.restitution, 1.0);
-        assert_eq!(b.damping, 0.0);
+        assert_eq!((b.linear_damping, b.angular_damping), (0.0, 0.0));
+        assert_eq!(b.rolling_lever, 0.0);
     }
 
     #[test]

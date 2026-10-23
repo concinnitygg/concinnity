@@ -41,6 +41,7 @@ pub use crate::physics::config::PhysicsConfig;
 pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};
 pub use crate::physics::prop_body::PropBody;
 pub use crate::physics::rigid_body::RigidBody;
+pub use crate::physics::rolling_drive::RollingDrive;
 pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
 pub use crate::planet::{GroundCover, Planet};
 pub use crate::render::decal::Decal;
@@ -114,7 +115,8 @@ pub use super::{
     DespawnRequest, EntityTarget, File, FrameInput, GamepadAction, GamepadButton, GamepadMap,
     GlobalTransform, GroundProbe, GroundProbes, Held, Hidden, Identity, InputKey, InteractEvent,
     Interactable, Keyframe, Lifetime, MeshRenderer, ModelRenderer, MorphKey, NavDirection, Parent,
-    Pickup, PlayCue, PropInstance, RenderHandle, ReparentRequest, Room, RootMotionEvent,
-    SceneCommand, SceneMember, ScreenCommand, ScreenShown, SettingCommand, SettingOp, SkeletonPose,
-    SpawnRequest, Spawner, StoryCommand, Transform, VisibilityRequest, VolumeEvent, WakeRequest,
+    Pickup, PlayCue, PropInstance, RenderHandle, ReparentRequest, RollingControl, Room,
+    RootMotionEvent, SceneCommand, SceneMember, ScreenCommand, ScreenShown, SettingCommand,
+    SettingOp, SkeletonPose, SpawnRequest, Spawner, StoryCommand, Transform, VisibilityRequest,
+    VolumeEvent, WakeRequest,
 };

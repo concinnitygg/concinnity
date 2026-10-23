@@ -77,6 +77,7 @@ pub(crate) mod contact_event;
 pub(crate) mod joint;
 pub(crate) mod prop_body;
 pub(crate) mod rigid_body;
+pub(crate) mod rolling_drive;
 pub(crate) mod trigger_volume;
 pub(crate) mod volume_event;
 pub(crate) mod wake_request;

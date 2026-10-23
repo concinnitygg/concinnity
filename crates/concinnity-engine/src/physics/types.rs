@@ -37,6 +37,12 @@ pub struct DynamicParams {
     pub gravity_scale: f32,
     /// Linear velocity damping (air drag).
     pub linear_damping: f32,
+    /// Angular velocity damping, slowing spin on its own.
+    pub angular_damping: f32,
+    /// Rolling resistance: the share of the load a rolling contact resists
+    /// with, acting at the body's rolling radius (a ball's or a capsule's
+    /// radius; a box does not roll). `0.0` rolls freely.
+    pub rolling_resistance: f32,
 }
 
 /// A dynamic body's state between steps, for whatever acts on it from outside
@@ -53,6 +59,9 @@ pub struct BodyState {
     pub angular_velocity: [f32; 3],
     /// Mass, in kilograms.
     pub mass: f32,
+    /// Moments of inertia about the body's own axes, in kilogram square
+    /// meters.
+    pub inertia: [f32; 3],
     /// Whether the body is asleep, held still until something wakes it.
     pub sleeping: bool,
 }
@@ -66,6 +75,8 @@ impl Default for DynamicParams {
             restitution: 0.0,
             gravity_scale: 1.0,
             linear_damping: 0.0,
+            angular_damping: 0.0,
+            rolling_resistance: 0.0,
         }
     }
 }

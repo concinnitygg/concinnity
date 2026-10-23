@@ -3,7 +3,10 @@
 //! the sea, under an atmosphere whose sky turns through a four-minute day.
 //! The morning climbs to noon and an afternoon, gives way to a sunset, then to
 //! a moonlit night of stars, the Milky Way and distant galaxies, and the sun
-//! comes back up in the east. A chrome marble hovers over the meadow ahead.
+//! comes back up in the east. You roll a chrome marble over it, watched from
+//! behind: WASD rolls it the way the camera looks, Shift sprints, Space jumps
+//! and the mouse turns the camera. It parts the grass as it goes, runs down
+//! the beach into the surf, and floats and paddles out at sea.
 //!
 //! The whole world is `planet.jsonl`, beside this file. This program only
 //! compiles it into a blob next to the executable and plays that blob.
@@ -11,8 +14,8 @@
 //! Run it with `cargo run --release --example planet`.
 //!
 //! The world also declares a benchmark (see `benchmark.rs`), which
-//! `--benchmark` runs: the marble flies instead of the player walking, and the
-//! camera follows it, through the grass and out over the sea, up toward the
+//! `--benchmark` runs: the marble flies a scripted flight instead of rolling,
+//! and the camera follows it, through the grass and out over the sea, up toward the
 //! sun and out of the air to see the planet from orbit, down into the night
 //! and on to a sunrise over the next continent. The run times every frame and
 //! closes when the flight ends, printing what the frames cost, phase by phase.

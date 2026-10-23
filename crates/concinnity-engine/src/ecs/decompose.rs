@@ -14,7 +14,8 @@
 
 use crate::components::{
     BodyDynamics, Buoyancy, Children, Collider, Held, Interactable, MeshRenderer, ModelRenderer,
-    Parent, Pickup, Prop, PropBody, PropInstance, SceneMember, Transform,
+    Parent, Pickup, Prop, PropBody, PropInstance, RollingControl, RollingDrive, SceneMember,
+    Transform,
 };
 use crate::ecs::{Entity, PipelineContext};
 use alloc::collections::BTreeMap;
@@ -92,12 +93,23 @@ pub fn run(ctx: &mut PipelineContext<'_>) {
                 restitution: body.restitution,
                 gravity_scale: body.gravity_scale,
                 linear_damping: body.linear_damping,
+                angular_damping: body.angular_damping,
+                rolling_resistance: body.rolling_resistance,
                 impact_clip: body.impact_clip,
                 impact_volume: body.impact_volume,
                 asleep: body.asleep,
                 buoyancy: body.buoyancy.map(Buoyancy::validated),
             },
         );
+    }
+
+    // Each RollingDrive resolves onto its prop's entity as the control its
+    // steering writes and the physics reads.
+    for drive in ctx.drain::<RollingDrive>() {
+        let Some(entity) = drive.prop_name.and_then(|name| ctx.entity_of(name.id())) else {
+            continue;
+        };
+        ctx.insert(entity, RollingControl::new(&drive));
     }
 
     // Parent edges resolve once every entity exists; children accumulate so each
@@ -311,6 +323,25 @@ mod tests {
             .collect();
         // Only the PropBody's owner is dynamic, with its authored values.
         assert_eq!(dynamics, vec![(Some(MeshHandle::new(10)), 4.0)]);
+    }
+
+    // A RollingDrive resolves onto its prop's entity as its control.
+    #[test]
+    fn rolling_drive_decomposes_to_a_control_on_the_prop() {
+        let mut world = World::new();
+        world.push_identified(AssetId(1), prop());
+        world.add_component(RollingDrive {
+            prop_name: Some(Ref::new(AssetId(1))),
+            max_speed: 7.0,
+            ..Default::default()
+        });
+        world.start(HEADLESS_SYSTEMS).expect("start");
+        assert_eq!(world.query::<RollingDrive>().count(), 0);
+        let controls: Vec<_> = world
+            .join2::<RollingControl, Transform>()
+            .map(|(_, c, _)| c.max_speed)
+            .collect();
+        assert_eq!(controls, vec![7.0]);
     }
 
     // Despawning an entity removes every component on it: the pass drains the

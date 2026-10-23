@@ -181,10 +181,12 @@ pub struct CameraBoom {
 /// through it, from the first frame.
 ///
 /// The subject must be a Prop with no `parent`, since travel writes its
-/// position in world space, and is moved by the track alone: give it no
-/// `collider` and no [`PropBody`](#propbody), or the physics pushes against
-/// the track. A subject that is missing, parented or later removed leaves the
-/// track driving the camera itself from wherever it stands, with a warning.
+/// position in world space. The track owns its position: a subject with a
+/// [`PropBody`](#propbody) moves kinematically along the track while the
+/// track has it, still pushing whatever it runs into, and no
+/// [`RollingDrive`](#rollingdrive) steers it. A subject that is missing,
+/// parented or later removed leaves the track driving the camera itself from
+/// wherever it stands, with a warning.
 ///
 /// The clock is the fixed simulation step, not the frame delta. A machine that
 /// renders half as fast visits the same poses at the same track times and

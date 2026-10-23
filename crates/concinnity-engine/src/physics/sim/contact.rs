@@ -44,6 +44,9 @@ pub(crate) struct Manifold {
     /// body storage while it holds its dense arrays.
     pub(crate) friction: f32,
     pub(crate) restitution: f32,
+    /// The lever the pair resists rolling with: the larger of the two bodies'
+    /// rolling resistance times rolling radius, in meters.
+    pub(crate) rolling_lever: f32,
     pub(crate) points: [ManifoldPoint; MAX_MANIFOLD_POINTS],
     pub(crate) count: u8,
 }
@@ -56,6 +59,7 @@ impl Manifold {
             normal: Vec3::Y,
             friction: 0.0,
             restitution: 0.0,
+            rolling_lever: 0.0,
             points: [ManifoldPoint::default(); MAX_MANIFOLD_POINTS],
             count: 0,
         }
@@ -146,7 +150,6 @@ impl ContactCache {
         (&mut self.current, &self.previous)
     }
 
-    #[cfg(test)]
     pub(crate) fn manifolds(&self) -> &[Manifold] {
         &self.current
     }

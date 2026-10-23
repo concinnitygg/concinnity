@@ -55,6 +55,8 @@ fn unit_cube(position: Vec3, damping: f32) -> Body {
             restitution: 0.0,
             gravity_scale: 1.0,
             linear_damping: damping,
+            angular_damping: damping,
+            rolling_resistance: 0.0,
         },
         LayerMask::ALL,
     )

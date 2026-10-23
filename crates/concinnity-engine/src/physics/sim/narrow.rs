@@ -155,6 +155,7 @@ fn build_range(
             reversed: false,
             friction: sqrt(body_a.friction * body_b.friction),
             restitution: body_a.restitution.max(body_b.restitution),
+            rolling_lever: body_a.rolling_lever.max(body_b.rolling_lever),
         };
         match (body_a.terrain_index(), body_b.terrain_index()) {
             // Terrain never moves, so two grids can never meet.
@@ -193,6 +194,7 @@ fn build_range(
                 }
                 scratch.friction = pair.friction;
                 scratch.restitution = pair.restitution;
+                scratch.rolling_lever = pair.rolling_lever;
                 out.push(scratch);
             }
         }

@@ -41,6 +41,8 @@ fn params(restitution: f32, damping: f32) -> DynamicParams {
         restitution,
         gravity_scale: 1.0,
         linear_damping: damping,
+        angular_damping: damping,
+        rolling_resistance: 0.0,
     }
 }
 
@@ -212,7 +214,7 @@ fn an_impulse_moves_a_body_and_wakes_it() {
         sim.step(TICK);
     }
     assert_eq!(sim.is_sleeping(ball), Some(true));
-    sim.apply_impulse(ball, [0.0, 8.0, 0.0]);
+    sim.apply_impulse(ball, [0.0, 8.0, 0.0], [0.0; 3]);
     assert_eq!(sim.is_sleeping(ball), Some(false));
     sim.step(TICK);
     assert!(sim.body_pose(ball).expect("live").0[1] > 0.55);
@@ -891,6 +893,63 @@ fn a_driven_body_arrives_exactly_where_it_was_sent() {
     assert_eq!(sim.linear_velocity(platform), Some([0.0; 3]));
 }
 
+// A driven body sent to a pose turns at the rate that gets it there, the
+// short way round, and lands on it exactly.
+#[test]
+fn a_driven_body_turns_to_its_pose() {
+    let mut sim = Simulation::with_capacity(1);
+    let platform = sim
+        .add_kinematic(
+            &ColliderShape::Cuboid {
+                half_extents: [1.0, 0.1, 1.0],
+            },
+            [0.0; 3],
+            [0.0; 3],
+            0.5,
+            LayerMask::ALL,
+        )
+        .expect("room");
+    let half = core::f32::consts::FRAC_PI_4;
+    let quarter = [0.0, half.sin(), 0.0, half.cos()];
+    assert!(sim.set_kinematic_pose(platform, [1.0, 0.0, 0.0], quarter));
+    sim.step(TICK);
+    let (at, turned) = sim.body_pose_quat(platform).expect("live");
+    assert_eq!(at, [1.0, 0.0, 0.0]);
+    assert!(
+        (0..4).all(|i| (turned[i] - quarter[i]).abs() < 1e-6),
+        "{turned:?}"
+    );
+}
+
+// A ball resting on the floor stands on it; one leaving it does not, even on
+// the step whose contact still touches it.
+#[test]
+fn support_is_contact_that_holds_the_body_up() {
+    let mut sim = Simulation::with_capacity(2);
+    floor(&mut sim);
+    let ball = sim
+        .add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [0.0, 0.5, 0.0],
+            [0.0; 3],
+            params(0.0, 0.0),
+            LayerMask::ALL,
+        )
+        .expect("room");
+    for _ in 0..30 {
+        sim.step(TICK);
+    }
+    let up = [0.0, 1.0, 0.0];
+    assert!(sim.is_supported(ball, up, 0.64));
+    assert!(
+        !sim.is_supported(ball, [1.0, 0.0, 0.0], 0.64),
+        "a wall is not ground"
+    );
+    sim.apply_impulse(ball, [0.0, 5.0, 0.0], [0.0; 3]);
+    sim.step(TICK);
+    assert!(!sim.is_supported(ball, up, 0.64), "left the ground");
+}
+
 #[test]
 fn a_driven_body_ignores_gravity_and_impulses() {
     let mut sim = Simulation::with_capacity(1);
@@ -903,7 +962,7 @@ fn a_driven_body_ignores_gravity_and_impulses() {
             LayerMask::ALL,
         )
         .expect("room");
-    sim.apply_impulse(platform, [0.0, 100.0, 0.0]);
+    assert!(!sim.apply_impulse(platform, [0.0, 100.0, 0.0], [0.0; 3]));
     for _ in 0..120 {
         sim.step(TICK);
     }
@@ -1277,6 +1336,47 @@ fn config_round_trips_and_takes_effect() {
     assert_eq!(sim.config().gravity, crate::physics::GRAVITY);
     sim.step(TICK);
     assert!(sim.body_pose(ball).expect("live").0[1] < 5.0);
+}
+
+// Linear damping slows travel and angular damping slows spin, each leaving
+// the other alone.
+#[test]
+fn linear_and_angular_damping_are_separate() {
+    let mut sim = Simulation::new(
+        SimConfig {
+            gravity: 0.0,
+            ..SimConfig::default()
+        },
+        2,
+    );
+    let ball = |sim: &mut Simulation, x: f32, linear: f32, angular: f32| {
+        sim.add_dynamic(
+            &ColliderShape::Ball { radius: 0.5 },
+            [x, 0.0, 0.0],
+            [0.0; 3],
+            DynamicParams {
+                linear_damping: linear,
+                angular_damping: angular,
+                ..params(0.0, 0.0)
+            },
+            LayerMask::ALL,
+        )
+        .expect("room")
+    };
+    let drags = ball(&mut sim, 0.0, 4.0, 0.0);
+    let spins = ball(&mut sim, 5.0, 0.0, 4.0);
+    for b in [drags, spins] {
+        sim.set_body_velocity(b, [0.0, 0.0, 3.0], [2.0, 0.0, 0.0]);
+    }
+    for _ in 0..60 {
+        sim.step(TICK);
+    }
+    let (d, s) = (
+        sim.body_state(drags).unwrap(),
+        sim.body_state(spins).unwrap(),
+    );
+    assert!(d.linear_velocity[2] < 0.5 && (d.angular_velocity[0] - 2.0).abs() < 1e-4);
+    assert!(s.angular_velocity[0] < 0.5 && (s.linear_velocity[2] - 3.0).abs() < 1e-4);
 }
 
 #[test]

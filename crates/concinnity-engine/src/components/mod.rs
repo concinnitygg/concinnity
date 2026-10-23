@@ -56,7 +56,7 @@ pub use crate::behavior::definition::{
 };
 pub use crate::behavior::variables::{VariableDecl, Variables};
 pub use crate::camera::camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
-pub use crate::camera::probe::CameraProbe;
+pub use crate::camera::probe::{CameraProbe, Followed};
 pub use crate::camera::track::{
     CameraBoom, CameraBoomKey, CameraTrack, CameraTrackArgs, CameraTravel, CameraTravelKey,
     CameraTurn, CameraTurnKey, Ease,
@@ -84,6 +84,7 @@ pub use crate::physics::contact_event::ContactEvent;
 pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};
 pub use crate::physics::prop_body::PropBody;
 pub use crate::physics::rigid_body::RigidBody;
+pub use crate::physics::rolling_drive::{RollingControl, RollingDrive};
 pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
 pub use crate::physics::volume_event::VolumeEvent;
 pub use crate::physics::wake_request::WakeRequest;

@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 
 use crate::ecs::PipelineContext;
 use crate::gfx::frustum::transform_aabb;
+use crate::planet::PlanetFrame;
 use crate::render::environment::grass::GrassBender;
 
 // Refill `out` with this frame's benders.
@@ -27,9 +28,12 @@ pub(super) fn gather_into(ctx: &PipelineContext<'_>, out: &mut Vec<GrassBender>)
     {
         out.push(of_player(camera.position, body));
     }
+    let planet = ctx.resource::<PlanetFrame>();
     for (entity, collider, _) in ctx.join2::<Collider, BodyDynamics>() {
         if let Some(global) = ctx.get::<GlobalTransform>(entity) {
-            out.push(of_body(&collider.0, global.0));
+            let c = global.0[3];
+            let up = planet.map_or([0.0, 1.0, 0.0], |p| p.up_at([c[0], c[1], c[2]]));
+            out.push(of_body(&collider.0, global.0, up));
         }
     }
 }
@@ -52,10 +56,10 @@ fn of_player(eye: [f32; 3], body: &RigidBody) -> GrassBender {
     }
 }
 
-// A dynamic body's collider: a ball as itself, whichever way it has rolled;
-// any other shape by its world bounds, as wide as their wider horizontal half
-// and standing on their bottom.
-fn of_body(collider: &PropCollider, model: [[f32; 4]; 4]) -> GrassBender {
+// A dynamic body's collider: a ball as itself, whichever way it has rolled,
+// standing on its lowest point along `up`; any other shape by its world
+// bounds, as wide as their wider horizontal half and standing on their bottom.
+fn of_body(collider: &PropCollider, model: [[f32; 4]; 4], up: [f32; 3]) -> GrassBender {
     if collider.shape == PropColliderShape::Ball {
         // Balls scale by the X axis, like the collider they mirror.
         let x = model[0];
@@ -63,7 +67,7 @@ fn of_body(collider: &PropCollider, model: [[f32; 4]; 4]) -> GrassBender {
             collider.radius * concinnity_core::math::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
         let c = model[3];
         return GrassBender {
-            base: [c[0], c[1] - r, c[2]],
+            base: core::array::from_fn(|i| c[i] - r * up[i]),
             radius: r,
             height: 2.0 * r,
         };
@@ -88,6 +92,8 @@ fn of_body(collider: &PropCollider, model: [[f32; 4]; 4]) -> GrassBender {
 mod tests {
     use super::*;
     use crate::ecs::Handle;
+
+    const Y: [f32; 3] = [0.0, 1.0, 0.0];
 
     fn translated(scale: f32, at: [f32; 3]) -> [[f32; 4]; 4] {
         [
@@ -130,7 +136,7 @@ mod tests {
             radius: 0.5,
             ..PropCollider::default()
         };
-        let b = of_body(&ball, translated(2.0, [3.0, 1.0, -2.0]));
+        let b = of_body(&ball, translated(2.0, [3.0, 1.0, -2.0]), Y);
         assert_eq!(b.base, [3.0, 0.0, -2.0]);
         assert_eq!(b.radius, 1.0);
         assert_eq!(b.height, 2.0);
@@ -141,14 +147,14 @@ mod tests {
             [0.0, 0.0, 2.0, 0.0],
             [3.0, 1.0, -2.0, 1.0],
         ];
-        assert_eq!(of_body(&ball, rolled).radius, 1.0);
+        assert_eq!(of_body(&ball, rolled, Y).radius, 1.0);
 
         let crate_box = PropCollider {
             shape: PropColliderShape::Cuboid,
             half_extents: [0.4, 0.25, 0.9],
             ..PropCollider::default()
         };
-        let b = of_body(&crate_box, translated(1.0, [0.0, 0.25, 0.0]));
+        let b = of_body(&crate_box, translated(1.0, [0.0, 0.25, 0.0]), Y);
         assert_eq!(b.base, [0.0, 0.0, 0.0]);
         assert_eq!(b.radius, 0.9);
         assert_eq!(b.height, 0.5);
@@ -159,9 +165,23 @@ mod tests {
             half_height: 0.5,
             ..PropCollider::default()
         };
-        let b = of_body(&capsule, translated(1.0, [0.0, 0.7, 0.0]));
+        let b = of_body(&capsule, translated(1.0, [0.0, 0.7, 0.0]), Y);
         assert!(b.base[1].abs() < 1e-6);
         assert_eq!(b.radius, 0.2);
         assert!((b.height - 1.4).abs() < 1e-6);
+    }
+
+    // On a planet a ball stands on its lowest point toward the center, not
+    // below its center along -Y.
+    #[test]
+    fn a_ball_stands_along_the_planets_up() {
+        let ball = PropCollider {
+            shape: PropColliderShape::Ball,
+            radius: 0.5,
+            ..PropCollider::default()
+        };
+        let b = of_body(&ball, translated(1.0, [10.0, 0.0, 0.0]), [1.0, 0.0, 0.0]);
+        assert_eq!(b.base, [9.5, 0.0, 0.0]);
+        assert_eq!(b.height, 1.0);
     }
 }

@@ -15,6 +15,8 @@ use crate::physics::{BodyHandle, ColliderShape, Simulation};
 
 use crate::components::BodyDynamics;
 use crate::ecs::Entity;
+use crate::transform::quat_slerp;
+use concinnity_core::math::vec3::lerp;
 
 use super::capacity::DriverCapacities;
 use super::convert::dynamic_params;
@@ -46,6 +48,25 @@ pub(crate) struct PropPhysics {
     rest_written: bool,
     // How the body floats, when it is buoyant.
     pub(super) float: Option<Floater>,
+    // Set while something outside the physics owns the Transform: the body is
+    // driven there kinematically over the frame's ticks, and its pose is not
+    // written back.
+    posed: Option<PosedPath>,
+}
+
+// Where a posed body goes over the ticks to come: from the pose it last
+// reached to the one its owner put it in since.
+#[derive(Debug, Clone, Copy)]
+struct PosedPath {
+    from: ([f32; 3], [f32; 4]),
+    to: ([f32; 3], [f32; 4]),
+}
+
+impl PropPhysics {
+    // Whether an outside owner of the Transform poses the body.
+    pub(crate) fn is_posed(&self) -> bool {
+        self.posed.is_some()
+    }
 }
 
 // A collider-bearing entity's physics description, snapshotted from its
@@ -66,7 +87,10 @@ pub(crate) struct PropCollSnap {
 pub(crate) struct PropBodies {
     bodies: Vec<PropPhysics>,
     by_handle: SortedMap<BodyHandle, Entity>,
-    by_entity: SortedMap<Entity, BodyHandle>,
+    // Entity -> index into `bodies`, renumbered when a reap compacts them.
+    by_entity: SortedMap<Entity, usize>,
+    // The one entity whose Transform an outside owner poses, if any.
+    posed_owner: Option<Entity>,
     // Entities the body budget had no room for. Kept so the per-tick spawn
     // scan skips them instead of re-refusing them every tick; an entry lives
     // until its entity is despawned. Freed headroom does not bring one back.
@@ -83,6 +107,7 @@ impl PropBodies {
             bodies: Vec::with_capacity(caps.props),
             by_handle: SortedMap::with_capacity(caps.props),
             by_entity: SortedMap::with_capacity(caps.props),
+            posed_owner: None,
             refused: SortedSet::with_capacity(caps.refused),
             sampled: Vec::with_capacity(caps.sampled),
         }
@@ -143,9 +168,10 @@ impl PropBodies {
             written: (snap.position, snap.rotation_deg),
             rest_written: false,
             float,
+            posed: None,
         });
         self.by_handle.insert(handle, entity);
-        self.by_entity.insert(entity, handle);
+        self.by_entity.insert(entity, self.bodies.len() - 1);
         Some(handle)
     }
 
@@ -190,6 +216,9 @@ impl PropBodies {
         } = self;
         // A refused entity that is gone has nothing left to skip.
         refused.retain(|&entity| alive(entity));
+        if self.posed_owner.is_some_and(|e| !alive(e)) {
+            self.posed_owner = None;
+        }
         let before = bodies.len();
         bodies.retain(|prop| {
             if alive(prop.entity) {
@@ -197,13 +226,16 @@ impl PropBodies {
             }
             world.remove_body(prop.handle);
             by_handle.remove(&prop.handle);
-            by_entity.remove(&prop.entity);
             false
         });
         if bodies.len() == before {
             return held;
         }
-        held_entity.and_then(|e| bodies.iter().position(|p| p.entity == e))
+        by_entity.retain(|_, _| false);
+        for (index, prop) in bodies.iter().enumerate() {
+            by_entity.insert(prop.entity, index);
+        }
+        held_entity.and_then(|e| by_entity.get(&e).copied())
     }
 
     // The entity owning `handle`, or None when the body is not a prop's (the
@@ -220,7 +252,16 @@ impl PropBodies {
 
     // The body `entity` owns, or None when it has none.
     pub(crate) fn handle_of(&self, entity: Entity) -> Option<BodyHandle> {
-        self.by_entity.get(&entity).copied()
+        self.prop_of(entity).map(|p| p.handle)
+    }
+
+    // The prop body `entity` owns.
+    pub(crate) fn prop_of(&self, entity: Entity) -> Option<&PropPhysics> {
+        self.bodies.get(*self.by_entity.get(&entity)?)
+    }
+
+    fn prop_of_mut(&mut self, entity: Entity) -> Option<&mut PropPhysics> {
+        self.bodies.get_mut(*self.by_entity.get(&entity)?)
     }
 
     // Whether the entity was already refused a body, so the per-tick spawn
@@ -247,6 +288,93 @@ impl PropBodies {
         self.bodies.iter()
     }
 
+    // The share of `entity`'s body under water at its last tick: 0 for one
+    // that does not float or has no body.
+    pub(super) fn submerged_share(&self, entity: Entity) -> f32 {
+        self.prop_of(entity)
+            .and_then(|p| p.float)
+            .map_or(0.0, |f| f.submerged_share())
+    }
+
+    // Hand `entity`'s dynamic body to an outside owner of its Transform, which
+    // it then follows kinematically, or back to the solver, launched at the
+    // speed its last `tick_dt` tick moved it at. Returns whether its state
+    // changed.
+    pub(crate) fn set_posed(
+        &mut self,
+        world: &mut Simulation,
+        entity: Entity,
+        posed: bool,
+        tick_dt: f32,
+    ) -> bool {
+        let Some(prop) = self.prop_of_mut(entity).filter(|p| p.dynamic) else {
+            return false;
+        };
+        match (prop.posed, posed) {
+            (None, true) => {
+                let at = world
+                    .body_pose_quat(prop.handle)
+                    .unwrap_or_else(|| (prop.written.0, quat_from_euler_yxz_deg(prop.written.1)));
+                prop.posed = Some(PosedPath { from: at, to: at });
+                world.make_kinematic(prop.handle)
+            }
+            (Some(path), false) => {
+                prop.posed = None;
+                // Where its owner last put it, which the ticks may not have
+                // reached yet.
+                let launch = prop.pose.last_step().map(|d| d / tick_dt.max(1e-6));
+                let rotation_deg = euler_yxz_deg_from_quat(path.to.1);
+                world.teleport_body(prop.handle, path.to.0, rotation_deg);
+                prop.pose.snap(path.to.0, path.to.1);
+                prop.rest_written = false;
+                world.make_dynamic(prop.handle, launch)
+            }
+            _ => false,
+        }
+    }
+
+    // Pose `owned`'s body, the one Transform an outside owner holds, and
+    // release the one posed before it.
+    pub(crate) fn pose_only(
+        &mut self,
+        world: &mut Simulation,
+        owned: Option<Entity>,
+        tick_dt: f32,
+    ) {
+        if self.posed_owner == owned {
+            return;
+        }
+        if let Some(previous) = self.posed_owner.take() {
+            self.set_posed(world, previous, false, tick_dt);
+        }
+        if let Some(entity) = owned
+            && self.set_posed(world, entity, true, tick_dt)
+        {
+            self.posed_owner = Some(entity);
+        }
+    }
+
+    // Move the posed body `tick + 1` of `ticks` of the way to where its owner
+    // put it, arriving there on the last tick.
+    pub(crate) fn drive_posed(&mut self, world: &mut Simulation, tick: u32, ticks: u32) {
+        let Some(entity) = self.posed_owner else {
+            return;
+        };
+        let Some(prop) = self.prop_of_mut(entity) else {
+            return;
+        };
+        let Some(path) = prop.posed.as_mut() else {
+            return;
+        };
+        let t = (tick + 1) as f32 / ticks.max(1) as f32;
+        let at = lerp(path.from.0, path.to.0, t);
+        let turned = quat_slerp(path.from.1, path.to.1, t);
+        world.set_kinematic_pose(prop.handle, at, turned);
+        if tick + 1 >= ticks {
+            path.from = path.to;
+        }
+    }
+
     // Every buoyant prop's floating state with its body.
     pub(super) fn floaters_mut(&mut self) -> impl Iterator<Item = (BodyHandle, &mut Floater)> {
         self.bodies
@@ -268,6 +396,11 @@ impl PropBodies {
             let Some((position, rotation_deg)) = authored(prop.entity) else {
                 continue;
             };
+            if let Some(path) = &mut prop.posed {
+                path.to = (position, quat_from_euler_yxz_deg(rotation_deg));
+                prop.written = (position, rotation_deg);
+                continue;
+            }
             if (position, rotation_deg) == prop.written {
                 continue;
             }
@@ -291,6 +424,11 @@ impl PropBodies {
     ) {
         for prop in &mut self.bodies {
             prop.pose.rebase(rebase);
+            if let Some(path) = &mut prop.posed {
+                for pose in [&mut path.from, &mut path.to] {
+                    *pose = (rebase.apply_point(pose.0), rebase.apply_rotation(pose.1));
+                }
+            }
             prop.written = written(prop.entity).unwrap_or_else(|| {
                 (
                     rebase.apply_point(prop.written.0),
@@ -318,17 +456,22 @@ impl PropBodies {
             bodies, sampled, ..
         } = self;
         sampled.clear();
-        sampled.extend(bodies.iter_mut().filter(|p| p.dynamic).filter_map(|prop| {
-            let still = prop.pose.is_still();
-            if still && prop.rest_written {
-                return None;
-            }
-            prop.rest_written = still;
-            let (pos, rot) = prop.pose.sample(alpha);
-            let rot = euler_yxz_deg_from_quat(rot);
-            prop.written = (pos, rot);
-            Some((prop.entity, pos, rot))
-        }));
+        sampled.extend(
+            bodies
+                .iter_mut()
+                .filter(|p| p.dynamic && !p.is_posed())
+                .filter_map(|prop| {
+                    let still = prop.pose.is_still();
+                    if still && prop.rest_written {
+                        return None;
+                    }
+                    prop.rest_written = still;
+                    let (pos, rot) = prop.pose.sample(alpha);
+                    let rot = euler_yxz_deg_from_quat(rot);
+                    prop.written = (pos, rot);
+                    Some((prop.entity, pos, rot))
+                }),
+        );
         sampled
     }
 }

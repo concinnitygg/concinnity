@@ -75,6 +75,8 @@ fn cube_params(restitution: f32, damping: f32) -> DynamicParams {
         friction: 0.4,
         restitution,
         linear_damping: damping,
+        angular_damping: damping,
+        rolling_resistance: 0.0,
         ..Default::default()
     }
 }

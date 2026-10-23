@@ -35,7 +35,11 @@ pub(crate) struct SolverBody {
     pub(super) inv_inertia_local: Vec3,
     pub(crate) inv_inertia: Mat3,
     pub(crate) gravity_scale: f32,
-    pub(crate) damping: f32,
+    pub(crate) linear_damping: f32,
+    pub(crate) angular_damping: f32,
+    /// Force and torque set from outside, applied on every substep.
+    pub(crate) force: Vec3,
+    pub(crate) torque: Vec3,
     /// The water load each substep reads, an index into the step's loads;
     /// `NO_FLUID` without one.
     pub(crate) fluid: u32,
@@ -59,7 +63,10 @@ impl SolverBody {
         inv_inertia_local: Vec3::ZERO,
         inv_inertia: Mat3::ZERO,
         gravity_scale: 0.0,
-        damping: 0.0,
+        linear_damping: 0.0,
+        angular_damping: 0.0,
+        force: Vec3::ZERO,
+        torque: Vec3::ZERO,
         fluid: NO_FLUID,
         simulated: false,
     };
@@ -87,7 +94,10 @@ impl SolverBody {
                 Mat3::ZERO
             },
             gravity_scale: body.gravity_scale,
-            damping: body.damping,
+            linear_damping: body.linear_damping,
+            angular_damping: body.angular_damping,
+            force: body.force,
+            torque: body.torque,
             fluid: if simulated { body.fluid } else { NO_FLUID },
             simulated,
         }

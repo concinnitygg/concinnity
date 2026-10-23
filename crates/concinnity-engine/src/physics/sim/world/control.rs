@@ -24,6 +24,28 @@ impl Simulation {
         true
     }
 
+    /// Send a position-driven body to `pos`, turned to the `[x, y, z, w]`
+    /// quaternion `rotation`, over the next step, as
+    /// [`set_kinematic_translation`](Self::set_kinematic_translation) does
+    /// for position alone: it turns at the rate that gets it there, and
+    /// arrives exactly at the pose.
+    pub fn set_kinematic_pose(
+        &mut self,
+        handle: BodyHandle,
+        pos: [f32; 3],
+        rotation: [f32; 4],
+    ) -> bool {
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        if !body.is_kinematic() {
+            return false;
+        }
+        body.kinematic_target = Some(Vec3::from_array(pos));
+        body.kinematic_turn = Some(Quat::from_xyzw(rotation).normalize());
+        true
+    }
+
     /// Move a body to `pos` with rotation `euler_deg`, discarding the motion
     /// it had. Returns whether the handle named a live body with a shape to
     /// move (terrain is the world, not something in it).
@@ -50,6 +72,8 @@ impl Simulation {
     ///             restitution: 0.0,
     ///             gravity_scale: 1.0,
     ///             linear_damping: 0.0,
+    ///             angular_damping: 0.0,
+    ///             rolling_resistance: 0.0,
     ///         },
     ///         LayerMask::ALL,
     ///     )
@@ -80,6 +104,7 @@ impl Simulation {
         body.linear_velocity = Vec3::ZERO;
         body.angular_velocity = Vec3::ZERO;
         body.kinematic_target = None;
+        body.kinematic_turn = None;
         body.wake();
         body.refresh_bounds(margin);
         let proxy = proxy_for(body);
@@ -124,6 +149,7 @@ impl Simulation {
             body.linear_velocity = q.rotate(body.linear_velocity);
             body.angular_velocity = q.rotate(body.angular_velocity);
             body.kinematic_target = body.kinematic_target.map(|k| q.rotate(k) + t);
+            body.kinematic_turn = body.kinematic_turn.map(|k| q.mul(k).normalize());
             body.bounds = body.tight_bounds().expanded(margin);
             broadphase.set_proxy(u32::saturating_from(handle.index()), proxy_for(body));
         }
@@ -254,15 +280,6 @@ impl Simulation {
     pub(crate) fn set_angular_velocity(&mut self, handle: BodyHandle, velocity: [f32; 3]) {
         if let Some(body) = self.bodies.get_mut(pool_handle(handle)) {
             body.angular_velocity = Vec3::from_array(velocity);
-            body.wake();
-        }
-    }
-
-    #[cfg(test)]
-    /// Apply an impulse through a body's center of mass, waking it.
-    pub(crate) fn apply_impulse(&mut self, handle: BodyHandle, impulse: [f32; 3]) {
-        if let Some(body) = self.bodies.get_mut(pool_handle(handle)) {
-            body.linear_velocity += Vec3::from_array(impulse) * body.inv_mass;
             body.wake();
         }
     }

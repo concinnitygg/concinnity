@@ -4,11 +4,17 @@ use super::{Simulation, pool_handle};
 use crate::physics::sim::character::{self, CharacterCapsule};
 #[cfg(test)]
 use crate::physics::sim::math::Mat3;
+use crate::physics::sim::math::Vec3;
 use crate::physics::sim::query::{self, RayQuery};
 #[cfg(test)]
 use crate::physics::sim::query::{ShapeCast, ShapeCastHit};
 use crate::physics::sim::scene::Scene;
 use crate::physics::{BodyHandle, CharacterMove, CharacterMoveInput, LayerMask, RayHit};
+use concinnity_core::math::SaturatingFrom;
+
+// Speed away from a surface, in meters per second, past which a body only
+// grazing it is leaving it rather than resting on it.
+const LEAVING_SPEED: f32 = 0.1;
 
 impl Simulation {
     /// What a query reads: the bodies, the sweep order, and the height grids.
@@ -140,6 +146,35 @@ impl Simulation {
     pub fn body_pose_quat(&self, handle: BodyHandle) -> Option<([f32; 3], [f32; 4])> {
         let body = self.bodies.get(pool_handle(handle))?;
         Some((body.position.to_array(), body.orientation.to_xyzw()))
+    }
+
+    /// Whether a body rests on something under it: whether the last step
+    /// left it pressed against, or within the contact slop of, a surface that
+    /// faces within the angle whose cosine is `min_cos` of `up`. A contact
+    /// the body is only closing on, or leaving, does not count. `false` for
+    /// a stale handle.
+    pub fn is_supported(&self, handle: BodyHandle, up: [f32; 3], min_cos: f32) -> bool {
+        let Some(body) = self.bodies.get(pool_handle(handle)) else {
+            return false;
+        };
+        let velocity = body.linear_velocity;
+        let slot = u32::saturating_from(handle.index());
+        let up = Vec3::from_array(up);
+        let slop = self.config.linear_slop;
+        self.contacts.manifolds().iter().any(|m| {
+            let facing = if m.b == slot {
+                m.normal
+            } else if m.a == slot {
+                -m.normal
+            } else {
+                return false;
+            };
+            let leaving = velocity.dot(facing) > LEAVING_SPEED;
+            facing.dot(up) >= min_cos
+                && m.points()
+                    .iter()
+                    .any(|p| p.normal_impulse > 0.0 || (p.separation <= slop && !leaving))
+        })
     }
 
     #[cfg(test)]

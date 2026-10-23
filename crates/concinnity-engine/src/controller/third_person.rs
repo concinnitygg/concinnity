@@ -1,24 +1,34 @@
-//! Third-person character controller. An internal system (not a declarable
+//! Third-person follow controller. An internal system (not a declarable
 //! asset): `World::start` constructs one instead of `Camera3DSystem` when the
 //! controlling `Camera3D`'s controller carries a `follow` block. The mouse
-//! orbits the camera around the followed character's `CharacterRig`; WASD
-//! steers the character camera-relative, turning its facing yaw and feeding
-//! the travel speed to its `AnimationGraph` parameter so a locomotion blendspace
-//! picks the gait. Displacement comes from the clips' root motion, or from
-//! the controller itself in `direct` drive; either way `PhysicsSystem`
-//! resolves it against the scene on the next step.
+//! orbits the camera around what it follows, about the ground's up, and WASD
+//! steers it camera-relative along the ground.
+//!
+//! A followed `CharacterRig` turns its facing yaw toward the input heading and
+//! feeds the travel speed to its `AnimationGraph` parameter so a locomotion
+//! blendspace picks the gait. Displacement comes from the clips' root motion,
+//! or from the controller itself in `direct` drive; either way
+//! `PhysicsSystem` resolves it against the scene on the next step.
+//!
+//! A followed prop is steered through the `RollingControl` its
+//! `RollingDrive` gives it: the heading along the ground, the sprint and the
+//! jump, which `PhysicsSystem` turns into the push on its body.
 
 use alloc::string::String;
 
+use crate::camera::probe::Followed;
 use crate::components::{
     AnimationGraph, AnimationParams, Camera3D, CameraController, CameraProbe, CharacterRig,
-    ControlsCommand, FollowDrive, FrameInput,
+    ControlsCommand, FollowDrive, FrameInput, RollingControl, Transform,
 };
+use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
     Access, EventCursor, FrameTime, PipelineContext, SkinnedMeshHandle, StepResult, System,
 };
-use crate::gfx::camera;
+use crate::gfx::camera::view_axes;
+use crate::planet::{FrameRebases, PlanetFrame, RebaseCursor};
 use concinnity_core::math;
+use concinnity_core::math::vec3::{add, length, scale, sub};
 
 // Seconds for the smoothed travel speed to close half the gap to its target.
 const SPEED_HALF_LIFE: f32 = 0.12;
@@ -30,6 +40,31 @@ const SPEED_EPSILON: f32 = 0.01;
 fn turn_toward(current: f32, desired: f32, max_step: f32) -> f32 {
     let diff = math::shortest_turn(current, desired, core::f32::consts::TAU);
     current + diff.clamp(-max_step, max_step)
+}
+
+// Away from the pull at `p`: the planet's up, or `+Y`.
+fn up_at(ctx: &PipelineContext<'_>, p: [f32; 3]) -> [f32; 3] {
+    ctx.resource::<PlanetFrame>()
+        .map_or([0.0, 1.0, 0.0], |frame| frame.up_at(p))
+}
+
+// The camera-relative move the input asks for at `yaw` about `up`: along the
+// ground, its length the throttle, which the keys hold at 1 and the stick
+// sets by its deflection.
+fn ground_move(input: &FrameInput, yaw: f32, up: [f32; 3]) -> [f32; 3] {
+    let [right, _, back] = view_axes(yaw, 0.0, up);
+    let fwd = scale(back, -1.0);
+    let mut forward = input.move_axis[1];
+    let mut strafe = input.move_axis[0];
+    forward += f32::from(u8::from(input.forward)) - f32::from(u8::from(input.backward));
+    strafe += f32::from(u8::from(input.right)) - f32::from(u8::from(input.left));
+    let dir = add(scale(fwd, forward), scale(right, strafe));
+    let norm = length(dir);
+    if norm > 1.0 {
+        scale(dir, 1.0 / norm)
+    } else {
+        dir
+    }
 }
 
 /// Third-person controller behavior. Built by the host's system table from
@@ -44,22 +79,27 @@ pub struct ThirdPersonSystem {
     // Gamepad look speed in radians per second at full stick deflection.
     gamepad_look_sensitivity: f32,
     // From the follow block: the authored SkinnedMesh handle, which keys the
-    // rig / graph correlation web directly.
+    // rig / graph correlation web directly, or the followed prop.
     target: Option<SkinnedMeshHandle>,
+    prop: Option<AssetId>,
     distance: f32,
     height: f32,
+    lag_seconds: f32,
     drive: FollowDrive,
     turn_speed: f32,
     speed_parameter: String,
     jump_height: f32,
+    // What is followed, resolved at init.
+    followed: Option<Followed>,
     // Index of the speed parameter in the target graph's declaration order,
     // resolved once at init. `None` disables parameter writes.
     speed_param_index: Option<usize>,
     // Smoothed commanded travel speed (world units/second).
     speed: f32,
-    // Orbit pivot, refreshed from the rig each step; keeps the camera stable
-    // if the rig ever disappears.
+    // Orbit pivot, refreshed from what is followed each step; keeps the
+    // camera stable if it ever disappears. Carried through frame moves.
     pivot: [f32; 3],
+    rebases: RebaseCursor,
     controls_cursor: EventCursor,
 }
 
@@ -81,16 +121,98 @@ impl ThirdPersonSystem {
             mouse_sensitivity: controller.mouse_sensitivity,
             gamepad_look_sensitivity: crate::settings::DEFAULT_GAMEPAD_LOOK_SENSITIVITY,
             target: follow.target,
+            prop: follow.prop.map(crate::ecs::Ref::id),
             distance: follow.distance.max(0.1),
             height: follow.height,
+            lag_seconds: follow.lag_seconds.max(0.0),
             drive: follow.drive,
             turn_speed: follow.turn_speed.max(0.0),
             speed_parameter: follow.speed_parameter,
             jump_height: follow.jump_height.max(0.0),
+            followed: None,
             speed_param_index: None,
             speed: 0.0,
             pivot: [0.0; 3],
+            rebases: RebaseCursor::default(),
             controls_cursor: EventCursor::default(),
+        }
+    }
+
+    // Where the followed rig or prop stands, before the pivot's height.
+    fn followed_position(&self, ctx: &PipelineContext<'_>) -> Option<[f32; 3]> {
+        match self.followed? {
+            Followed::Rig(target) => ctx
+                .query::<CharacterRig>()
+                .find(|r| r.target == target)
+                .map(|r| r.position),
+            Followed::Prop(entity) => ctx.get::<Transform>(entity).map(|t| t.position),
+        }
+    }
+
+    // Resolve the speed parameter to its declaration index, while the
+    // target's AnimationGraph component still exists (AnimationSystem drains
+    // it during its own init, which runs after this one).
+    fn resolve_speed_parameter(&mut self, ctx: &PipelineContext<'_>, target: SkinnedMeshHandle) {
+        if self.speed_parameter.is_empty() {
+            return;
+        }
+        self.speed_param_index = ctx
+            .query::<AnimationGraph>()
+            .find(|g| g.target == Some(target))
+            .and_then(|g| {
+                g.parameters
+                    .iter()
+                    .position(|p| p.name == self.speed_parameter)
+            });
+        if self.speed_param_index.is_none() {
+            tracing::warn!(
+                "ThirdPersonSystem: no AnimationGraph parameter '{}' on follow target {target:?}, \
+                 speed writes disabled",
+                self.speed_parameter
+            );
+        }
+    }
+
+    // Steer the followed rig along `dir` (unit, or zero when idle) at the
+    // smoothed speed, and hand physics any jump.
+    fn steer_rig(
+        &self,
+        ctx: &mut PipelineContext<'_>,
+        target: SkinnedMeshHandle,
+        dir: [f32; 3],
+        input: &FrameInput,
+        dt: f32,
+    ) {
+        if let Some(rig) = ctx.query_mut::<CharacterRig>().find(|r| r.target == target) {
+            if dir != [0.0; 3] {
+                let desired = math::heading_of(dir);
+                let turned = turn_toward(rig.yaw, desired, self.turn_speed * dt);
+                if turned != rig.yaw {
+                    rig.yaw = turned;
+                    rig.moved = true;
+                }
+            }
+            rig.desired_move = match self.drive {
+                // The clips carry the displacement; the capsule only
+                // needs the facing and the speed parameter.
+                FollowDrive::RootMotion => [0.0; 3],
+                // In-place clips: move the capsule along the facing so
+                // the character travels where it visually walks.
+                FollowDrive::Direct => {
+                    let [x, _, z] = math::flat_forward(rig.yaw);
+                    [x * self.speed, 0.0, z * self.speed]
+                }
+            };
+            if input.jump && self.jump_height > 0.0 {
+                rig.jump_velocity = math::sqrt(2.0 * crate::physics::GRAVITY * self.jump_height);
+            }
+        }
+        if let Some(index) = self.speed_param_index
+            && let Some(params) = ctx
+                .query_mut::<AnimationParams>()
+                .find(|p| p.target == target)
+        {
+            params.set(index, self.speed);
         }
     }
 }
@@ -98,14 +220,20 @@ impl ThirdPersonSystem {
 impl System for ThirdPersonSystem {
     fn access(&self) -> Access {
         Access::new()
-            .reads_components(crate::component_mask![FrameInput])
+            .reads_components(crate::component_mask![FrameInput, Transform])
             .writes_components(crate::component_mask![
                 Camera3D,
                 CharacterRig,
                 AnimationParams,
                 CameraProbe,
+                RollingControl,
             ])
-            .reads_resources(crate::resource_mask![ControlsCommand, FrameTime])
+            .reads_resources(crate::resource_mask![
+                ControlsCommand,
+                FrameTime,
+                PlanetFrame,
+                FrameRebases
+            ])
     }
 
     fn init(&mut self, ctx: &mut PipelineContext<'_>) {
@@ -116,47 +244,37 @@ impl System for ThirdPersonSystem {
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },
         );
+        self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
 
-        let Some(target) = self.target else {
-            tracing::warn!("ThirdPersonSystem: follow has no target, controller idle");
+        self.followed = if let Some(target) = self.target {
+            self.resolve_speed_parameter(ctx, target);
+            Some(Followed::Rig(target))
+        } else if let Some(id) = self.prop {
+            let entity = ctx.entity_of(id);
+            if entity.is_none() {
+                tracing::warn!(
+                    "ThirdPersonSystem: the followed prop ({id}) is missing, controller idle"
+                );
+            }
+            entity.map(Followed::Prop)
+        } else {
+            tracing::warn!("ThirdPersonSystem: follow has no target or prop, controller idle");
+            None
+        };
+        let Some(followed) = self.followed else {
             return;
         };
 
-        // Resolve the speed parameter to its declaration index now, while the
-        // target's AnimationGraph component still exists (AnimationSystem drains
-        // it during its own init, which runs after this one).
-        if !self.speed_parameter.is_empty() {
-            self.speed_param_index = ctx
-                .query::<AnimationGraph>()
-                .find(|g| g.target == Some(target))
-                .and_then(|g| {
-                    g.parameters
-                        .iter()
-                        .position(|p| p.name == self.speed_parameter)
-                });
-            if self.speed_param_index.is_none() {
-                tracing::warn!(
-                    "ThirdPersonSystem: no AnimationGraph parameter '{}' on follow target {target:?}, \
-                     speed writes disabled",
-                    self.speed_parameter
-                );
-            }
-        }
-
-        // Seed the orbit pivot from the rig's authored placement.
-        if let Some(rig) = ctx.query::<CharacterRig>().find(|r| r.target == target) {
-            self.pivot = [
-                rig.position[0],
-                rig.position[1] + self.height,
-                rig.position[2],
-            ];
+        // Seed the orbit pivot from where the followed thing was placed.
+        if let Some(at) = self.followed_position(ctx) {
+            self.pivot = add(at, scale(up_at(ctx, at), self.height));
         }
 
         // Occlusion probe: PhysicsSystem raycasts pivot-to-camera each frame
         // and reports the largest unobstructed distance, so walls never cut
-        // between the camera and the character.
+        // between the camera and what it follows.
         ctx.push(CameraProbe {
-            target,
+            followed,
             pivot: self.pivot,
             desired: self.pivot,
             clearance: None,
@@ -175,10 +293,13 @@ impl System for ThirdPersonSystem {
                 gamepad_look_sensitivity: &mut self.gamepad_look_sensitivity,
             },
         );
+        if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
+            self.pivot = rebase.apply_point(self.pivot);
+        }
 
         // Read (not drain) the input snapshot deposited by the renderer, so
         // UiInputSystem can read the same snapshot. Movement fields are frozen
-        // while a menu is open, which parks the character and the orbit.
+        // while a menu is open, which parks what is followed and the orbit.
         let Some(input) = ctx.query::<FrameInput>().next().cloned() else {
             return StepResult::Continue;
         };
@@ -208,43 +329,15 @@ impl System for ThirdPersonSystem {
                 core::f32::consts::FRAC_PI_2 - 0.01,
             );
 
-        // Camera-relative movement intent on the ground plane.
-        let fwd = math::flat_forward(yaw);
-        let right = math::flat_right(yaw);
-        let mut dir = [0.0_f32; 3];
-        if input.forward {
-            dir[0] += fwd[0];
-            dir[2] += fwd[2];
-        }
-        if input.backward {
-            dir[0] -= fwd[0];
-            dir[2] -= fwd[2];
-        }
-        if input.right {
-            dir[0] += right[0];
-            dir[2] += right[2];
-        }
-        if input.left {
-            dir[0] -= right[0];
-            dir[2] -= right[2];
-        }
-        // The left stick rides the same bases; its magnitude survives into the
-        // commanded speed below, so partial deflection sets a slower gait.
-        dir[0] += fwd[0] * input.move_axis[1] + right[0] * input.move_axis[0];
-        dir[2] += fwd[2] * input.move_axis[1] + right[2] * input.move_axis[0];
-        let norm = math::sqrt(dir[0] * dir[0] + dir[2] * dir[2]);
-        let moving = norm > 1.0e-4;
-        if moving {
-            dir[0] /= norm;
-            dir[2] /= norm;
-        }
+        let at = self.followed_position(ctx);
+        let up = up_at(ctx, at.unwrap_or(self.pivot));
+        let dir = ground_move(&input, yaw, up);
+        let throttle = length(dir);
 
         // Smooth the commanded speed toward the input target, time-correct.
-        // The key vectors have magnitude >= 1, so the clamp leaves keyboard
-        // movement at full speed; a partially deflected stick scales it down.
-        let target_speed = if moving {
+        let target_speed = if throttle > 1.0e-4 {
             self.move_speed
-                * norm.clamp(0.0, 1.0)
+                * throttle
                 * if input.sprint {
                     self.sprint_multiplier
                 } else {
@@ -259,64 +352,48 @@ impl System for ThirdPersonSystem {
             self.speed = 0.0;
         }
 
-        // Drive the rig: turn toward the input heading, hand physics the
-        // direct-drive velocity and any jump, and refresh the orbit pivot.
-        if let Some(target) = self.target {
-            if let Some(rig) = ctx.query_mut::<CharacterRig>().find(|r| r.target == target) {
-                if moving {
-                    let desired = math::heading_of(dir);
-                    let turned = turn_toward(rig.yaw, desired, self.turn_speed * dt);
-                    if turned != rig.yaw {
-                        rig.yaw = turned;
-                        rig.moved = true;
-                    }
-                }
-                rig.desired_move = match self.drive {
-                    // The clips carry the displacement; the capsule only
-                    // needs the facing and the speed parameter.
-                    FollowDrive::RootMotion => [0.0; 3],
-                    // In-place clips: move the capsule along the facing so
-                    // the character travels where it visually walks.
-                    FollowDrive::Direct => {
-                        let [x, _, z] = math::flat_forward(rig.yaw);
-                        [x * self.speed, 0.0, z * self.speed]
-                    }
+        match self.followed {
+            Some(Followed::Rig(target)) => {
+                let heading = if throttle > 1.0e-4 {
+                    scale(dir, 1.0 / throttle)
+                } else {
+                    [0.0; 3]
                 };
-                if input.jump && self.jump_height > 0.0 {
-                    rig.jump_velocity =
-                        math::sqrt(2.0 * crate::physics::GRAVITY * self.jump_height);
+                self.steer_rig(ctx, target, heading, &input, dt);
+            }
+            Some(Followed::Prop(entity)) => {
+                if let Some(control) = ctx.get_mut::<RollingControl>(entity) {
+                    control.heading = dir;
+                    control.sprint = input.sprint;
+                    control.jump |= input.jump;
                 }
-                self.pivot = [
-                    rig.position[0],
-                    rig.position[1] + self.height,
-                    rig.position[2],
-                ];
             }
+            None => {}
+        }
 
-            if let Some(index) = self.speed_param_index
-                && let Some(params) = ctx
-                    .query_mut::<AnimationParams>()
-                    .find(|p| p.target == target)
-            {
-                params.set(index, self.speed);
-            }
+        // The pivot rides `height` above what is followed, closing on it by
+        // the lag's half life.
+        if let Some(at) = at {
+            let goal = add(at, scale(up, self.height));
+            self.pivot = if self.lag_seconds > 0.0 {
+                let close = 1.0 - math::half_life_decay(dt, self.lag_seconds);
+                add(self.pivot, scale(sub(goal, self.pivot), close))
+            } else {
+                goal
+            };
         }
 
         // Place the camera on the orbit sphere behind the pivot, pulled in
         // to the occlusion probe's clearance (answered by PhysicsSystem this
         // frame from last frame's ray) so a wall never cuts the view, and
         // commit the pose. The player-capsule intents stay cleared: in third
-        // person the character capsule moves, not a camera capsule.
-        let look = math::forward(yaw, pitch);
-        let desired = [
-            self.pivot[0] - look[0] * self.distance,
-            self.pivot[1] - look[1] * self.distance,
-            self.pivot[2] - look[2] * self.distance,
-        ];
+        // person what is followed moves, not a camera capsule.
+        let look = scale(view_axes(yaw, pitch, up)[2], -1.0);
+        let desired = sub(self.pivot, scale(look, self.distance));
         let mut distance = self.distance;
         if let Some(probe) = ctx
             .query_mut::<CameraProbe>()
-            .find(|p| Some(p.target) == self.target)
+            .find(|p| Some(p.followed) == self.followed)
         {
             if let Some(clearance) = probe.clearance {
                 distance = distance.min(clearance);
@@ -324,22 +401,16 @@ impl System for ThirdPersonSystem {
             probe.pivot = self.pivot;
             probe.desired = desired;
         }
-        let position = [
-            self.pivot[0] - look[0] * distance,
-            self.pivot[1] - look[1] * distance,
-            self.pivot[2] - look[2] * distance,
-        ];
+        let position = sub(self.pivot, scale(look, distance));
         for camera in ctx.query_mut::<Camera3D>() {
             if let Some(fov) = pending_fov {
                 camera.fov_y_degrees = fov;
             }
-            camera.yaw = yaw;
-            camera.pitch = pitch;
-            camera.position = position;
+            camera.up = up;
             camera.desired_move = [0.0; 3];
             camera.jump_requested = false;
             camera.interact_requested = false;
-            camera.view_matrix = camera::view_matrix(position, yaw, pitch);
+            camera.set_pose(position, yaw, pitch);
         }
 
         StepResult::Continue
@@ -390,6 +461,7 @@ mod tests {
                 turn_speed: 100.0,
                 speed_parameter: "speed".to_string(),
                 jump_height,
+                ..FollowController::default()
             }),
             ..CameraController::default()
         }
@@ -574,5 +646,178 @@ mod tests {
             "capsule settles onto the slab top: {:?}",
             rig.position
         );
+    }
+
+    // A follow camera on a prop on a planet's side: its world, the prop's
+    // entity, and up there.
+    mod on_a_sphere {
+        use super::*;
+        use crate::components::cook::Camera3D as Camera3DArgs;
+        use crate::components::{RollingDrive, Transform};
+        use crate::ecs::asset_id::AssetId;
+        use crate::ecs::{Entity, Ref};
+        use crate::planet::{Continents, LocalFrame, PlanetShape};
+        use concinnity_core::math::vec3::{dot, normalize_or};
+
+        const SHAPE: PlanetShape = PlanetShape {
+            center: [0.0, -5_000.0, 0.0],
+            radius: 5_000.0,
+            amplitude: 0.0,
+            feature_size: 100.0,
+            octaves: 1,
+            seed: 0,
+            continents: Continents::NONE,
+        };
+        const BALL: AssetId = AssetId(3);
+
+        fn rig(lag_seconds: f32) -> (World, ThirdPersonSystem, Entity, [f32; 3]) {
+            let mut world = World::new();
+            world.insert_resource(PlanetFrame {
+                shape: SHAPE,
+                frame: LocalFrame::AUTHORED,
+            });
+            world.insert_resource(FrameRebases::default());
+            world.insert_resource(FrameTime {
+                dt: 1.0 / 60.0,
+                elapsed: 0.0,
+            });
+            let at = [600.0, -36.0, 0.0];
+            let ball = world.push(Transform {
+                position: at,
+                ..Default::default()
+            });
+            world.identify(ball, BALL);
+            world.insert(ball, RollingControl::new(&RollingDrive::default()));
+            let controller = CameraController {
+                follow: Some(FollowController {
+                    prop: Some(Ref::new(BALL)),
+                    distance: 6.0,
+                    height: 1.0,
+                    lag_seconds,
+                    ..FollowController::default()
+                }),
+                ..CameraController::default()
+            };
+            world.push(Camera3D::bake(Camera3DArgs {
+                pitch: -0.3,
+                controller: Some(controller.clone()),
+                ..Default::default()
+            }));
+            let mut system = ThirdPersonSystem::new(&controller);
+            system.init(&mut world.context());
+            let up = PlanetFrame {
+                shape: SHAPE,
+                frame: LocalFrame::AUTHORED,
+            }
+            .up_at(at);
+            (world, system, ball, up)
+        }
+
+        fn frame(world: &mut World, system: &mut ThirdPersonSystem, input: FrameInput) {
+            for stale in world.context().query_mut::<FrameInput>() {
+                *stale = FrameInput::default();
+            }
+            if world.query::<FrameInput>().next().is_none() {
+                world.add_component(FrameInput::default());
+            }
+            *world.context().query_mut::<FrameInput>().next().unwrap() = input;
+            system.step(&mut world.context());
+        }
+
+        fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
+            (0..3).all(|i| (a[i] - b[i]).abs() < tol)
+        }
+
+        // The camera stands up its own way on the planet's side, orbits the
+        // pivot `height` above the prop along that up, and looks at it.
+        #[test]
+        fn the_camera_orbits_the_prop_about_the_planets_up() {
+            let (mut world, mut system, ball, up) = rig(0.0);
+            frame(&mut world, &mut system, FrameInput::default());
+            let camera = world.query::<Camera3D>().next().unwrap();
+            assert!(close(camera.up, up, 1e-6), "{:?} vs {up:?}", camera.up);
+            let at = world.get::<Transform>(ball).unwrap().position;
+            let pivot = add(at, scale(up, 1.0));
+            let back = sub(camera.position, pivot);
+            assert!((length(back) - 6.0).abs() < 1e-3, "{back:?}");
+            let look = scale(view_axes(camera.yaw, camera.pitch, up)[2], -1.0);
+            assert!(close(
+                normalize_or(back, 1e-6, [0.0; 3]),
+                scale(look, -1.0),
+                1e-4
+            ));
+            // Pitched down, the camera is above the pivot along up.
+            assert!(dot(back, up) > 1.0, "{back:?}");
+        }
+
+        // Forward steers the prop along the ground the way the camera faces,
+        // and a jump press is handed to its control.
+        #[test]
+        fn forward_steers_the_prop_along_the_ground_the_camera_faces() {
+            let (mut world, mut system, ball, up) = rig(0.0);
+            frame(
+                &mut world,
+                &mut system,
+                FrameInput {
+                    forward: true,
+                    sprint: true,
+                    jump: true,
+                    ..Default::default()
+                },
+            );
+            let control = *world.get::<RollingControl>(ball).unwrap();
+            assert!((length(control.heading) - 1.0).abs() < 1e-5);
+            assert!(dot(control.heading, up).abs() < 1e-5, "along the ground");
+            let camera = world.query::<Camera3D>().next().unwrap();
+            let look = scale(view_axes(camera.yaw, camera.pitch, up)[2], -1.0);
+            let flat = sub(look, scale(up, dot(look, up)));
+            let facing = normalize_or(flat, 1e-6, [0.0; 3]);
+            assert!(
+                close(control.heading, facing, 1e-4),
+                "{:?}",
+                control.heading
+            );
+            assert!(control.sprint && control.jump);
+            // The jump stays asked for until the physics takes it.
+            frame(&mut world, &mut system, FrameInput::default());
+            assert!(world.get::<RollingControl>(ball).unwrap().jump);
+        }
+
+        // A frame move carries a lagging pivot with everything else, so the
+        // camera holds its place behind the prop rather than swinging after
+        // where the prop used to be.
+        #[test]
+        fn a_frame_move_carries_the_lagging_pivot() {
+            let (mut world, mut system, ball, _) = rig(0.2);
+            for _ in 0..240 {
+                frame(&mut world, &mut system, FrameInput::default());
+            }
+            let offset = |world: &World| {
+                let at = world.get::<Transform>(ball).unwrap().position;
+                sub(world.query::<Camera3D>().next().unwrap().position, at)
+            };
+            let before = offset(&world);
+            let at = world.get::<Transform>(ball).unwrap().position;
+            let authored = LocalFrame::AUTHORED;
+            let (moved, rebase) = authored.recentered(at, SHAPE.up_at(authored.to_world(at)));
+            world.insert_resource(PlanetFrame {
+                shape: SHAPE,
+                frame: moved,
+            });
+            let mut ctx = world.context();
+            for t in ctx.query_mut::<Transform>() {
+                t.position = rebase.apply_point(t.position);
+            }
+            for camera in ctx.query_mut::<Camera3D>() {
+                camera.position = rebase.apply_point(camera.position);
+            }
+            let mut rebases = FrameRebases::default();
+            rebases.push(rebase);
+            world.insert_resource(rebases);
+            frame(&mut world, &mut system, FrameInput::default());
+            let after = offset(&world);
+            let expected = rebase.apply_vector(before);
+            assert!(close(after, expected, 0.05), "{after:?} vs {expected:?}");
+        }
     }
 }

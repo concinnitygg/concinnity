@@ -1,6 +1,8 @@
 // The tick's position along the camera track, published for readers outside
 // the simulation.
 
+use crate::ecs::asset_id::AssetId;
+
 /// Where a world's [`CameraTrack`](crate::components::CameraTrack) has reached
 /// this tick, published by
 /// [`CameraTrackSystem`](super::CameraTrackSystem).
@@ -21,6 +23,9 @@ pub(crate) struct CameraTrackStatus {
     /// Whether both lists have run out and the camera is holding its last
     /// pose.
     pub finished: bool,
+    /// The prop the track carries, once it has accepted it: the one whose
+    /// Transform it owns.
+    pub subject: Option<AssetId>,
 }
 
 #[cfg(test)]

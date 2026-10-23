@@ -73,6 +73,8 @@ pub(crate) fn dynamic_params(body: &BodyDynamics) -> DynamicParams {
         restitution: body.restitution.clamp(0.0, 1.0),
         gravity_scale: body.gravity_scale,
         linear_damping: body.linear_damping.max(0.0),
+        angular_damping: body.angular_damping.max(0.0),
+        rolling_resistance: body.rolling_resistance.max(0.0),
     }
 }
 

@@ -80,6 +80,11 @@ impl PoseInterp {
         self.prev == self.curr
     }
 
+    // How far the last tick moved the position.
+    pub(crate) fn last_step(&self) -> [f32; 3] {
+        concinnity_core::math::vec3::sub(self.curr.0, self.prev.0)
+    }
+
     // Adopt an externally written pose with no blend across the jump.
     pub(crate) fn snap(&mut self, position: [f32; 3], rotation: [f32; 4]) {
         self.prev = (position, rotation);

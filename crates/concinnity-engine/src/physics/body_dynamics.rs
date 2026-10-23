@@ -21,6 +21,11 @@ pub struct BodyDynamics {
     /// Linear velocity damping, modeling air drag.
     #[asset(default = 0.05)]
     pub linear_damping: f32,
+    /// Angular velocity damping.
+    #[asset(default = 0.05)]
+    pub angular_damping: f32,
+    /// Rolling resistance, as a share of a rolling contact's load.
+    pub rolling_resistance: f32,
     /// Clip played at the contact point when this body collides hard enough
     /// to publish a contact event.
     pub impact_clip: Option<AudioClipHandle>,

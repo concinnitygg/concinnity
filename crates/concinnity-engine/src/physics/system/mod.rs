@@ -12,9 +12,11 @@ use crate::physics::{
     PhysicsBudget, SensorCrossing, SimConfig, Simulation,
 };
 
+use crate::camera::track::CameraTrackStatus;
 use crate::components::{
-    BodyDynamics, Camera3D, Collider, ContactEvent, Held, Identity, PhysicsConfig, PhysicsJoint,
-    Pickup, PropBody, RigidBody, Transform, TriggerFilter, TriggerVolume, VolumeEvent, WakeRequest,
+    BodyDynamics, Camera3D, CameraTrack, Collider, ContactEvent, Held, Identity, PhysicsConfig,
+    PhysicsJoint, Pickup, PropBody, RigidBody, RollingControl, Transform, TriggerFilter,
+    TriggerVolume, VolumeEvent, WakeRequest,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
@@ -113,6 +115,8 @@ pub struct PhysicsSystem {
     gravity: f32,
     // The world's water, read by its buoyant bodies; `None` without water.
     water: Option<WaterQuery>,
+    // The bodies a `RollingDrive` steers.
+    drives: drive::Drives,
 }
 
 // Runtime physics state for the player camera capsule.
@@ -184,6 +188,7 @@ impl PhysicsSystem {
             off_ground: super::off_ground::OffGroundBodies::default(),
             gravity: GRAVITY,
             water: None,
+            drives: drive::Drives::default(),
         }
     }
 
@@ -245,6 +250,7 @@ impl PhysicsSystem {
         self.contact_batch = ContactBatch::with_capacity(caps.contact_pairs);
         self.contact_gate = ContactGate::with_capacity(caps.contact_pairs);
         self.sensor_filters = SortedMap::with_capacity(caps.sensor_filters);
+        self.drives = drive::Drives::with_capacity(caps.props);
     }
 
     // Build one body per collider-bearing entity from its per-instance
@@ -338,6 +344,9 @@ impl PhysicsSystem {
                 volume.position = rebase.apply_point(volume.position);
                 volume.rotation_deg = rebase.apply_euler_deg(volume.rotation_deg);
             }
+            for control in ctx.query_mut::<RollingControl>() {
+                control.heading = rebase.apply_vector(control.heading);
+            }
             for rig in &mut self.rigs {
                 let written = rig
                     .resolve(ctx)
@@ -366,7 +375,7 @@ impl PhysicsSystem {
             let bodies = self
                 .props
                 .iter()
-                .filter(|p| p.dynamic && Some(p.handle) != carried)
+                .filter(|p| p.dynamic && !p.is_posed() && Some(p.handle) != carried)
                 .map(|p| (p.handle, p.float.is_some_and(|f| f.afloat())));
             self.off_ground.update(
                 world,
@@ -406,6 +415,14 @@ fn water_of(world: &World) -> Option<WaterQuery> {
         &wind,
         planet.as_ref(),
     ))
+}
+
+// The entity whose Transform the world's camera track owns, if any: the
+// subject the track accepted, while the track is there.
+fn tracked_subject(ctx: &PipelineContext<'_>) -> Option<Entity> {
+    ctx.query::<CameraTrack>().next()?;
+    let subject = ctx.resource::<CameraTrackStatus>()?.subject?;
+    ctx.entity_of(subject)
 }
 
 // Up at `p`: away from the pull, which is `+Y` without a planet.
@@ -744,11 +761,17 @@ impl System for PhysicsSystem {
                 .map(|t| (t.position, t.rotation_deg))
         });
 
+        // A camera track's subject is posed by the track: its body follows the
+        // Transform the track writes, kinematically.
+        let owned = tracked_subject(ctx);
+        self.props.pose_only(world, owned, timing.tick_dt);
+
         // Root-motion displacements published since last frame, applied on the
         // frame's first tick. Rig capsules whose entity moved externally snap
         // before any tick runs.
         super::rig::drain_motions_into(ctx, &mut self.root_cursor, &mut self.motion_scratch);
         super::rig::sync_rigs(ctx, &mut self.rigs);
+        self.drives.gather(ctx, &self.props, timing.tick_dt);
 
         for tick in 0..timing.ticks {
             let dt = timing.tick_dt;
@@ -757,6 +780,8 @@ impl System for PhysicsSystem {
             if let Some(prop) = self.held.and_then(|idx| self.props.get(idx)) {
                 world.set_kinematic_translation(prop.handle, hold_pos);
             }
+            self.props.drive_posed(world, tick, timing.ticks);
+            self.drives.tick(world);
 
             // move the player capsule
             if let Some(player) = self.player.as_mut() {
@@ -826,11 +851,14 @@ impl System for PhysicsSystem {
             self.props.record_tick_poses(world);
         }
 
+        self.drives.publish(ctx, &self.props);
+
         // answer the IK ground probes and the follow camera's occlusion probe
         super::probes::step_probes(
             world,
             ctx,
             &self.rigs,
+            &self.props,
             self.layers
                 .query_mask(LAYER_CHARACTER, &[LAYER_WORLD, LAYER_PROP]),
         );
@@ -937,7 +965,10 @@ impl System for PhysicsSystem {
     }
 }
 
+mod drive;
 mod player;
 
+#[cfg(test)]
+mod drive_tests;
 #[cfg(test)]
 mod tests;

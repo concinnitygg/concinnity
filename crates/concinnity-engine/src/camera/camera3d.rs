@@ -1,8 +1,8 @@
 //! Runtime 3D camera component. Its authored args and controller config live in
 //! this file, alongside the runtime component they bake into.
 
-use crate::components::Vocabulary;
-use crate::ecs::SkinnedMeshHandle;
+use crate::components::{Prop, Vocabulary};
+use crate::ecs::{Ref, SkinnedMeshHandle};
 use alloc::string::String;
 
 /// How a followed character converts movement input into displacement.
@@ -26,10 +26,11 @@ pub enum FollowDrive {
 /// Third-person follow settings carried on a [`CameraController`](#cameracontroller).
 ///
 /// When `follow` is set the camera becomes a third-person orbit camera: the
-/// mouse orbits around the followed character, and WASD steers the character
-/// itself (camera-relative). The character must be a
-/// [`SkinnedMesh`](skinned_mesh.md) with a `capsule`, so it has a kinematic
-/// character capsule to move.
+/// mouse orbits around what it follows, and WASD steers it (camera-relative).
+/// It follows either a character, a [`SkinnedMesh`](skinned_mesh.md) with a
+/// `capsule` named by `target`, or a [Prop](#prop) named by `prop`, which a
+/// [`RollingDrive`](#rollingdrive) on it lets the keys roll. Up is away from
+/// the pull: a [`Planet`](#planet)'s center, or `+Y`.
 #[derive(
     Debug,
     Clone,
@@ -43,12 +44,18 @@ pub struct FollowController {
     /// Name of the followed [`SkinnedMesh`](skinned_mesh.md). It must declare a
     /// `capsule`.
     pub target: Option<SkinnedMeshHandle>,
+    /// Name of the followed [Prop](#prop), in place of a `target`.
+    pub prop: Option<Ref<Prop>>,
     /// Orbit distance from the pivot to the camera, in world units.
     #[asset(default = 4.0)]
     pub distance: f32,
-    /// Pivot height above the character's feet, in world units.
+    /// Pivot height above the character's feet, or above a prop's center,
+    /// in world units.
     #[asset(default = 1.5)]
     pub height: f32,
+    /// Seconds the pivot takes to close half the distance to what it follows,
+    /// smoothing a bumpy ride. `0` follows exactly.
+    pub lag_seconds: f32,
     /// How the character moves; see [`FollowDrive`](#followdrive).
     #[asset(default = FollowDrive::RootMotion)]
     pub drive: FollowDrive,

@@ -50,6 +50,12 @@ pub(crate) struct ContactConstraint {
     tangent: [Vec3; 2],
     friction: f32,
     restitution: f32,
+    /// Resistance to rolling: the lever the manifold's load resists the two
+    /// bodies' relative spin across the normal with, the mass that spin sees
+    /// about each tangent, and the angular impulse it holds.
+    rolling_lever: f32,
+    rolling_mass: [f32; 2],
+    rolling_impulse: [f32; 2],
     /// What one point's normal impulse does to the approach speed at every
     /// other, so the manifold is answered as one system rather than a point
     /// at a time.
@@ -134,6 +140,12 @@ pub(crate) fn prepare(
             // dense arrays.
             friction: manifold.friction,
             restitution: manifold.restitution,
+            rolling_lever: manifold.rolling_lever,
+            rolling_mass: [
+                angular_mass(&body_a, &body_b, tangent0),
+                angular_mass(&body_a, &body_b, tangent1),
+            ],
+            rolling_impulse: [0.0; 2],
             coupling: Coupling::build(&body_a, &body_b, normal, &anchors[..count]),
             points: [ConstraintPoint::default(); MAX_MANIFOLD_POINTS],
             count: u8::saturating_from(count),
@@ -179,10 +191,14 @@ pub(crate) fn warm_start(constraints: &mut [ContactConstraint], bodies: &mut Bod
             bodies.get_mut(a).apply_impulse(-impulse, ra);
             bodies.get_mut(b).apply_impulse(impulse, rb);
         }
+        let rolling = t0 * constraint.rolling_impulse[0] + t1 * constraint.rolling_impulse[1];
+        bodies.get_mut(a).apply_angular_impulse(-rolling);
+        bodies.get_mut(b).apply_angular_impulse(rolling);
     }
 }
 
-/// The normal impulses of one manifold, then its friction.
+/// The normal impulses of one manifold, then its friction, then its rolling
+/// resistance.
 ///
 /// The normals go together. Each point's velocity error is measured first and
 /// the manifold's own system is solved for all of them at once, so what reaches
@@ -280,7 +296,44 @@ pub(crate) fn solve(
             bodies.get_mut(a).apply_impulse(-impulse, ra);
             bodies.get_mut(b).apply_impulse(impulse, rb);
         }
+
+        if constraint.rolling_lever > 0.0 {
+            resist_rolling(constraint, bodies);
+        }
     }
+}
+
+// Oppose the bodies' relative spin across the normal, up to the lever times
+// the load the manifold carries, like friction for rolling. Spin about the
+// normal is left to friction.
+fn resist_rolling(constraint: &mut ContactConstraint, bodies: &mut Bodies<'_>) {
+    let [t0, t1] = constraint.tangent;
+    let (a, b) = (constraint.a, constraint.b);
+    let load: f32 = constraint.points[..constraint.count as usize]
+        .iter()
+        .map(|point| point.normal_impulse)
+        .sum();
+    let limit = constraint.rolling_lever * load;
+    let spin = bodies.get(b).angular_velocity - bodies.get(a).angular_velocity;
+    let held = constraint.rolling_impulse;
+    let mut wanted = [
+        held[0] - constraint.rolling_mass[0] * spin.dot(t0),
+        held[1] - constraint.rolling_mass[1] * spin.dot(t1),
+    ];
+    let magnitude = sqrt(wanted[0] * wanted[0] + wanted[1] * wanted[1]);
+    if magnitude > limit {
+        let scale = if magnitude > f32::MIN_POSITIVE {
+            limit / magnitude
+        } else {
+            0.0
+        };
+        wanted[0] *= scale;
+        wanted[1] *= scale;
+    }
+    let impulse = t0 * (wanted[0] - held[0]) + t1 * (wanted[1] - held[1]);
+    constraint.rolling_impulse = wanted;
+    bodies.get_mut(a).apply_angular_impulse(-impulse);
+    bodies.get_mut(b).apply_angular_impulse(impulse);
 }
 
 /// Bounce, from the speed measured before the step. Doing it last means the
@@ -345,6 +398,12 @@ fn current_separation(
     let reach_a = a.delta_position + a.delta_rotation.rotate(point.anchor_a);
     let reach_b = b.delta_position + b.delta_rotation.rotate(point.anchor_b);
     (reach_b - reach_a).dot(normal) + point.base_separation
+}
+
+/// Rotational mass the two bodies' relative spin about `axis` sees.
+fn angular_mass(a: &SolverBody, b: &SolverBody, axis: Vec3) -> f32 {
+    let k = axis.dot(a.inv_inertia.mul_vec3(axis)) + axis.dot(b.inv_inertia.mul_vec3(axis));
+    if k > 0.0 { 1.0 / k } else { 0.0 }
 }
 
 /// Mass seen along `direction` at the contact: the linear part plus what the

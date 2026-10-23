@@ -7,6 +7,7 @@ use crate::physics::sim::config::SimConfig;
 use crate::physics::sim::contact::{Manifold, carry_impulses};
 use crate::physics::sim::island::Islands;
 use crate::physics::sim::joint::Joint;
+use crate::physics::sim::math::Vec3;
 use crate::physics::sim::narrow;
 use crate::physics::sim::scene::Scene;
 use crate::physics::sim::solver::{self, Solver, SolverBody};
@@ -60,6 +61,8 @@ impl Simulation {
     ///             restitution: 0.2,
     ///             gravity_scale: 1.0,
     ///             linear_damping: 0.0,
+    ///             angular_damping: 0.0,
+    ///             rolling_resistance: 0.0,
     ///         },
     ///         LayerMask::ALL,
     ///     )
@@ -189,10 +192,15 @@ impl Simulation {
             body.position = solved.position;
             body.orientation = solved.rotation;
             body.fluid = NO_FLUID;
+            body.force = Vec3::ZERO;
+            body.torque = Vec3::ZERO;
             // A position-driven body lands exactly where it was sent, not
             // wherever the substeps' arithmetic left it.
             if let Some(target) = body.kinematic_target.take() {
                 body.position = target;
+            }
+            if let Some(turn) = body.kinematic_turn.take() {
+                body.orientation = turn;
             }
             if sweeping {
                 ccd.observe(slot, body, began_at, config.ccd_motion_ratio);

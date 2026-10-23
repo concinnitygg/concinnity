@@ -40,6 +40,14 @@ pub struct PropBody {
     /// Linear velocity damping, modeling air drag.
     #[asset(default = 0.05)]
     pub linear_damping: f32,
+    /// Angular velocity damping, slowing the body's spin.
+    #[asset(default = 0.05)]
+    pub angular_damping: f32,
+    /// Rolling resistance: the share of its load a rolling contact resists
+    /// with, acting at the collider's rolling radius (a ball's or a capsule's
+    /// radius). It stops a ball rolling on level ground. 0 rolls freely; a
+    /// box does not roll.
+    pub rolling_resistance: f32,
     /// Optional [`AudioClip`](#audioclip) played at the contact point when this
     /// body collides hard enough to pass the world's `contact_min_impulse`
     /// (see [`PhysicsConfig`](#physicsconfig)). Louder impacts play louder.

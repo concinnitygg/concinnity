@@ -43,7 +43,8 @@ pub(super) struct Floater {
     spot_left: f32,
     // The share of a spot's life the first one is kept for less.
     stagger: f32,
-    afloat: bool,
+    // The share of the body under water at its last tick.
+    share: f32,
 }
 
 impl Floater {
@@ -59,13 +60,18 @@ impl Floater {
             spot: WaterSpot::OPEN,
             spot_left: 0.0,
             stagger: stagger.clamp(0.0, 1.0),
-            afloat: false,
+            share: 0.0,
         }
     }
 
     /// Whether any of the body was in water at its last tick.
     pub(super) fn afloat(&self) -> bool {
-        self.afloat
+        self.share > 0.0
+    }
+
+    /// The share of the body under water at its last tick, from 0 to 1.
+    pub(super) fn submerged_share(&self) -> f32 {
+        self.share
     }
 
     /// One tick of the water's push on body `handle`, `dt` seconds starting
@@ -84,7 +90,7 @@ impl Floater {
         dt: f32,
     ) {
         let Some((position, rotation)) = world.body_pose_quat(handle) else {
-            self.afloat = false;
+            self.share = 0.0;
             return;
         };
         self.spot_left -= dt;
@@ -95,7 +101,7 @@ impl Floater {
             self.stagger = 0.0;
         }
         let Some(patch) = water.patch(&self.spot, frame, position, time) else {
-            self.afloat = false;
+            self.share = 0.0;
             return;
         };
         let w = patch.center;
@@ -112,7 +118,7 @@ impl Floater {
             *level = core::array::from_fn(|i| at[i] + w.up[i] * depth);
             wet += submerged(piece, rotation, w.up, depth).volume;
         }
-        self.afloat = wet > 0.0;
+        self.share = (wet / self.volume.max(1e-9)).clamp(0.0, 1.0);
         let Some(state) = world.body_state(handle) else {
             return;
         };
@@ -134,7 +140,7 @@ impl Floater {
             state.linear_velocity,
             state.angular_velocity,
             w.velocity,
-            wet / self.volume.max(1e-9),
+            self.share,
             self.buoyancy,
             dt,
         );

@@ -408,6 +408,7 @@ pub(crate) struct FieldPair {
     pub(crate) reversed: bool,
     pub(crate) friction: f32,
     pub(crate) restitution: f32,
+    pub(crate) rolling_lever: f32,
 }
 
 /// Build the manifolds a convex shape makes with a grid, appending them to
@@ -503,6 +504,7 @@ fn manifold_for(
     };
     manifold.friction = pair.friction;
     manifold.restitution = pair.restitution;
+    manifold.rolling_lever = pair.rolling_lever;
 
     let mut points = [Vec3::ZERO; MAX_TRIANGLE_POINTS];
     let mut separations = [0.0f32; MAX_TRIANGLE_POINTS];
@@ -737,6 +739,7 @@ mod tests {
                 reversed: false,
                 friction: 0.5,
                 restitution: 0.0,
+                rolling_lever: 0.0,
             },
             &mut out,
         );
@@ -778,6 +781,7 @@ mod tests {
                 reversed: true,
                 friction: 0.5,
                 restitution: 0.0,
+                rolling_lever: 0.0,
             },
             &mut out,
         );
@@ -811,7 +815,8 @@ mod tests {
                     b: 1,
                     reversed: false,
                     friction: 0.5,
-                    restitution: 0.0
+                    restitution: 0.0,
+                    rolling_lever: 0.0,
                 },
                 &mut out,
             ),
@@ -846,7 +851,8 @@ mod tests {
                     b: 1,
                     reversed: false,
                     friction: 0.5,
-                    restitution: 0.0
+                    restitution: 0.0,
+                    rolling_lever: 0.0,
                 },
                 &mut out,
             ) > 0

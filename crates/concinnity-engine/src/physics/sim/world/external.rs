@@ -1,5 +1,5 @@
 // What acts on a body from outside the solver between steps: its state read
-// out, the water pressing on it, and its velocity set outright.
+// out, the water pressing on it, a push, and its velocity set outright.
 
 use super::{Simulation, pool_handle};
 use crate::physics::sim::math::Vec3;
@@ -19,6 +19,7 @@ impl Simulation {
             linear_velocity: body.linear_velocity.to_array(),
             angular_velocity: body.angular_velocity.to_array(),
             mass: body.mass,
+            inertia: body.inertia_local.to_array(),
             sleeping: body.sleeping,
         })
     }
@@ -94,6 +95,69 @@ impl Simulation {
         } else {
             return false;
         }
+        if body.sleeping {
+            body.wake();
+        }
+        true
+    }
+
+    /// Push a dynamic body through the next step: `force` through its center
+    /// of mass, in newtons, and `torque` about it, in newton meters, both in
+    /// world axes. Each substep of the step applies them, as it does gravity,
+    /// so contact and friction answer the push as it builds. Pushes set again
+    /// before the step add up; the step clears them. A sleeping body wakes
+    /// for a push that is not zero. Returns whether the handle named a
+    /// dynamic body.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use concinnity_engine::physics::{
+    ///     ColliderShape, DynamicParams, LayerMask, SimConfig, Simulation,
+    /// };
+    ///
+    /// let mut sim = Simulation::new(SimConfig { gravity: 0.0, ..SimConfig::default() }, 1);
+    /// let shape = ColliderShape::Ball { radius: 0.5 };
+    /// let ball = sim.add_dynamic(&shape, [0.0; 3], [0.0; 3], DynamicParams::default(), LayerMask::ALL).unwrap();
+    /// // Ten newtons on a one-kilogram ball for a tenth of a second.
+    /// assert!(sim.add_force(ball, [10.0, 0.0, 0.0], [0.0; 3]));
+    /// sim.step(0.1);
+    /// assert!((sim.body_state(ball).unwrap().linear_velocity[0] - 1.0).abs() < 1e-4);
+    /// ```
+    pub fn add_force(&mut self, handle: BodyHandle, force: [f32; 3], torque: [f32; 3]) -> bool {
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        if !body.is_dynamic() {
+            return false;
+        }
+        let (force, torque) = (Vec3::from_array(force), Vec3::from_array(torque));
+        body.force += force;
+        body.torque += torque;
+        if body.sleeping && (force != Vec3::ZERO || torque != Vec3::ZERO) {
+            body.wake();
+        }
+        true
+    }
+
+    /// Strike a dynamic body at once: `linear` through its center of mass,
+    /// in newton seconds, and `angular` about it, in newton meter seconds,
+    /// both in world axes. Its velocity changes before the next step. A
+    /// sleeping body wakes. Returns whether the handle named a dynamic body.
+    pub fn apply_impulse(
+        &mut self,
+        handle: BodyHandle,
+        linear: [f32; 3],
+        angular: [f32; 3],
+    ) -> bool {
+        let Some(body) = self.bodies.get_mut(pool_handle(handle)) else {
+            return false;
+        };
+        if !body.is_dynamic() {
+            return false;
+        }
+        body.linear_velocity += Vec3::from_array(linear) * body.inv_mass;
+        body.angular_velocity += body.inv_inertia_world().mul_vec3(Vec3::from_array(angular));
         if body.sleeping {
             body.wake();
         }
@@ -189,6 +253,40 @@ mod tests {
         assert!(sim.body_state(b).unwrap().linear_velocity[1] < before);
     }
 
+    // A push lasts one step and adds up before it; an impulse lands at once.
+    // Torque and an angular impulse turn a ball by its inertia, 2/5 m r^2.
+    #[test]
+    fn pushes_and_impulses_move_a_body_by_its_mass() {
+        let mut sim = Simulation::new(
+            SimConfig {
+                gravity: 0.0,
+                ..SimConfig::default()
+            },
+            1,
+        );
+        let b = ball(&mut sim);
+        let inertia = 0.4 * 2.0 * 0.25;
+        assert!(sim.add_force(b, [1.0, 0.0, 0.0], [0.0, inertia, 0.0]));
+        assert!(sim.add_force(b, [1.0, 0.0, 0.0], [0.0; 3]), "adds up");
+        sim.step(0.5);
+        let s = sim.body_state(b).unwrap();
+        assert!((s.linear_velocity[0] - 0.5).abs() < 1e-4, "{s:?}");
+        assert!((s.angular_velocity[1] - 0.5).abs() < 1e-4, "{s:?}");
+        sim.step(0.5);
+        let after = sim.body_state(b).unwrap();
+        assert_eq!(
+            after.linear_velocity, s.linear_velocity,
+            "cleared by the step"
+        );
+
+        sim.sleep_body(b);
+        assert!(sim.apply_impulse(b, [0.0, 4.0, 0.0], [inertia, 0.0, 0.0]));
+        let hit = sim.body_state(b).unwrap();
+        assert!(!hit.sleeping);
+        assert!((hit.linear_velocity[1] - 2.0).abs() < 1e-5);
+        assert!((hit.angular_velocity[0] - 1.0).abs() < 1e-5);
+    }
+
     // Only a dynamic body is pushed or read; its velocity can be set.
     #[test]
     fn only_dynamic_bodies_take_outside_pushes() {
@@ -206,6 +304,8 @@ mod tests {
         sim.reserve_fluid_loads(1);
         assert!(!sim.set_fluid_load(wall, &half_full(1.0)));
         assert!(!sim.set_body_velocity(wall, [1.0; 3], [0.0; 3]));
+        assert!(!sim.add_force(wall, [1.0; 3], [1.0; 3]));
+        assert!(!sim.apply_impulse(wall, [1.0; 3], [1.0; 3]));
         let b = ball(&mut sim);
         assert!(sim.set_body_velocity(b, [1.0, 2.0, 3.0], [0.0, 0.5, 0.0]));
         let s = sim.body_state(b).unwrap();

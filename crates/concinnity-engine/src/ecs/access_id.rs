@@ -200,6 +200,7 @@ crate::define_access_ids! {
         crate::ecs::ScheduleMode,
         crate::ecs::EntityById,
         crate::planet::FrameRebases,
+        crate::planet::PlanetFrame,
         crate::camera::track::CameraTrackStatus,
         crate::ecs::DisabledSettingRows,
         crate::ecs::DisplayModes,

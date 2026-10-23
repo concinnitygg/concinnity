@@ -108,6 +108,8 @@ fn params(mass: f32, friction: f32, temper: Temper) -> DynamicParams {
         restitution: temper.restitution,
         gravity_scale: 1.0,
         linear_damping: temper.damping,
+        angular_damping: temper.damping,
+        rolling_resistance: 0.0,
     }
 }
 
