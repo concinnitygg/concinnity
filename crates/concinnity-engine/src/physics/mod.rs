@@ -74,6 +74,7 @@ pub(crate) mod buoyancy;
 pub(crate) mod collider;
 pub(crate) mod config;
 pub(crate) mod contact_event;
+pub(crate) mod drive_script;
 pub(crate) mod joint;
 pub(crate) mod prop_body;
 pub(crate) mod rigid_body;

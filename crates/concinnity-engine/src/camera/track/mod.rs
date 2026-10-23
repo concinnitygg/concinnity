@@ -8,7 +8,8 @@
 //! repeatable: a slower machine samples the same path at the same track times,
 //! just at fewer of them.
 
-mod status;
+mod carry;
+pub(crate) mod status;
 mod system;
 mod timeline;
 
@@ -52,6 +53,18 @@ impl Ease {
             Self::In => t * t,
             Self::Out => t * (2.0 - t),
             Self::InOut => t * t * (3.0 - 2.0 * t),
+        }
+    }
+
+    /// How fast [`eval`](Self::eval) rises at `t`, as a share of the leg per
+    /// share of its time.
+    pub fn rate(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => 1.0,
+            Self::In => 2.0 * t,
+            Self::Out => 2.0 - 2.0 * t,
+            Self::InOut => 6.0 * t * (1.0 - t),
         }
     }
 }
@@ -230,6 +243,13 @@ pub struct CameraTrackArgs {
     /// How the camera frames the `subject`, leg by leg, on the same clock as
     /// the other two lists. Used only with a `subject`.
     pub boom: Vec<CameraBoom>,
+    /// Seconds into the track before which it only films its `subject`,
+    /// which moves by itself: rolled by its physics, steered by its drive.
+    /// From then the track carries it, picking it up where it is and as fast
+    /// as it is going and easing it onto travel's path over the next few
+    /// seconds, so neither its position nor its speed jumps. `0` carries it
+    /// from the start.
+    pub carry_from_seconds: f32,
 }
 
 /// A point the travel track reaches, baked from a
@@ -344,6 +364,8 @@ pub struct CameraTrack {
     pub subject: Option<Ref<Prop>>,
     /// The boom track, as the framings it reaches.
     pub boom: Vec<CameraBoomKey>,
+    /// Track time the subject is carried from; before it, only filmed.
+    pub carry_from_seconds: f32,
 }
 
 impl CameraTrack {
@@ -397,6 +419,7 @@ impl CameraTrack {
             turn,
             subject: args.subject,
             boom,
+            carry_from_seconds: args.carry_from_seconds.max(0.0),
         }
     }
 }

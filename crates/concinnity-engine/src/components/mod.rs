@@ -81,6 +81,7 @@ pub use crate::input::nav_direction::NavDirection;
 pub use crate::physics::buoyancy::Buoyancy;
 pub use crate::physics::config::PhysicsConfig;
 pub use crate::physics::contact_event::ContactEvent;
+pub use crate::physics::drive_script::{DriveKey, DriveScript};
 pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};
 pub use crate::physics::prop_body::PropBody;
 pub use crate::physics::rigid_body::RigidBody;
@@ -200,7 +201,9 @@ pub use crate::transform::Transform;
 pub use crate::transform::children::Children;
 pub use crate::transform::parent::Parent;
 
-pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, CameraPose, FrameCapture};
+pub use crate::benchmark::PlanetTour;
+pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, BenchmarkRoute, CameraPose};
+pub use crate::screenshot::Screenshot;
 
 // HUD-overlay request components; their behavior lives in the client crate.
 pub use crate::hud::debug_hud::DebugHud;

@@ -4,7 +4,7 @@
 
 Reflections on glossy surfaces (water, polished floors): screen-space,
 hardware ray-traced, or neither. The `reflections` section of
-[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+[`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default
 below.
 
 Both methods are on by default, which is the look on capable hardware. The

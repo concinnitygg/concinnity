@@ -65,7 +65,19 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         name: "screenshots-dir",
         value: Some("DIR"),
         values: &[],
-        description: "Write screenshots and benchmark captures under DIR (default `screenshots`)",
+        description: "Write screenshots under DIR (default `screenshots`)",
+    },
+    LaunchFlag {
+        name: "screenshots",
+        value: None,
+        values: &[],
+        description: "Take the world's authored screenshots, as a benchmark always does",
+    },
+    LaunchFlag {
+        name: "screenshot-at",
+        value: Some("SECONDS[:FILE]"),
+        values: &[],
+        description: "Save the frame SECONDS into the run as FILE under the screenshot directory (repeatable)",
     },
     LaunchFlag {
         name: "frames",

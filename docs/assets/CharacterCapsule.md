@@ -2,7 +2,7 @@
 
 # CharacterCapsule
 
-A kinematic character capsule for a [SkinnedMesh](SkinnedMesh.md), in world
+A kinematic character capsule for a [`SkinnedMesh`](SkinnedMesh.md), in world
 units (after the mesh's `scale`).
 
 ## Parameters

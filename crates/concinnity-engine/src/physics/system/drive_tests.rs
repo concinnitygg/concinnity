@@ -9,7 +9,7 @@ use crate::planet::{
     FrameRebases, LocalFrame, PlanetGravity, PlanetGround, PlanetShape, Rebase, ground_patch,
 };
 use concinnity_core::math::narrow_f32;
-use concinnity_core::math::vec3::{dot, length};
+use concinnity_core::math::vec3::{dot, length, sub};
 
 const RADIUS: f32 = 0.5;
 
@@ -466,4 +466,136 @@ fn a_subject_the_track_refuses_stays_dynamic() {
     let sim = physics.world.as_ref().unwrap();
     assert_eq!(sim.is_kinematic(handle), Some(false));
     assert!(velocity(&physics, ball)[1] < -1.0, "it falls");
+}
+
+// A scripted roll over the planet's ground: west, then a jump turning north,
+// then half throttle south.
+fn scripted_roll(world: &mut World) -> Entity {
+    let ball = driven_ball(world, [0.0, RADIUS, 0.0]);
+    let key = |seconds, heading_deg, throttle, jump| crate::components::DriveKey {
+        seconds,
+        heading_deg,
+        throttle,
+        sprint: true,
+        jump,
+    };
+    world.insert(
+        ball,
+        crate::components::DriveScript::new(
+            &[
+                key(0.5, 270.0, 1.0, false),
+                key(2.0, 0.0, 1.0, true),
+                key(4.0, 180.0, 0.5, false),
+            ],
+            0.0,
+        ),
+    );
+    ball
+}
+
+// The scripted ball's body after `frames`, each running that many ticks, on a
+// planet patch, and the sim clock the frames reached.
+fn roll_with(frames: &[u32]) -> ([f32; 3], [f32; 4], [f32; 3]) {
+    let mut world = World::new();
+    publish_planet(&mut world, &LocalFrame::AUTHORED, [0.0; 3], 0);
+    let ball = scripted_roll(&mut world);
+    let mut physics = started(&mut world);
+    let mut time = 0.0_f64;
+    for &ticks in frames {
+        time += f64::from(ticks) * f64::from(SimTiming::TICK_DT);
+        world.insert_resource(SimTiming {
+            ticks,
+            tick_dt: SimTiming::TICK_DT,
+            alpha: 0.5,
+            time,
+        });
+        physics.step(&mut world.context());
+    }
+    let handle = physics.props.handle_of(ball).unwrap();
+    let state = physics.world.as_ref().unwrap().body_state(handle).unwrap();
+    (state.position, state.rotation, state.linear_velocity)
+}
+
+// The script is read at each tick's own moment, so the roll lands on exactly
+// the same state however frames group the ticks, and run after run.
+#[test]
+fn a_scripted_roll_repeats_exactly_however_ticks_are_grouped() {
+    let even = [1; 360];
+    let mut lumpy = Vec::new();
+    let mut sum = 0;
+    for ticks in [0, 2, 3, 1, 0, 4, 2].into_iter().cycle() {
+        if sum == 360 {
+            break;
+        }
+        let ticks = ticks.min(360 - sum);
+        sum += ticks;
+        lumpy.push(ticks);
+    }
+    assert_eq!(lumpy.iter().sum::<u32>(), 360);
+    let a = roll_with(&even);
+    assert_eq!(a, roll_with(&even), "the same run twice");
+    assert_eq!(a, roll_with(&lumpy), "ticks grouped differently");
+    // And it went somewhere: west, a hop, north, then south.
+    assert!(length([a.0[0], 0.0, a.0[2]]) > 3.0, "{:?}", a.0);
+}
+
+// A body a track picks up mid-roll stays simulated until then and becomes
+// kinematic from then, without jumping.
+#[test]
+fn a_rolling_body_turns_kinematic_where_the_track_picks_it_up() {
+    use crate::camera::track::CameraTrackSystem;
+    let mut world = World::new();
+    world.push(Camera3D::bake(crate::components::cook::Camera3D {
+        position: [0.0, 3.0, 6.0],
+        controller: None,
+        ..Default::default()
+    }));
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    world.insert(
+        ball,
+        crate::components::DriveScript::new(
+            &[crate::components::DriveKey {
+                heading_deg: 90.0,
+                ..Default::default()
+            }],
+            0.0,
+        ),
+    );
+    let track = CameraTrack::bake(CameraTrackArgs {
+        travel: alloc::vec![CameraTravel {
+            direction: [1.0, 0.0, 0.0],
+            distance: 60.0,
+            speed: 6.0,
+            ..Default::default()
+        }],
+        subject: Some(crate::ecs::Ref::new(AssetId(7))),
+        carry_from_seconds: 2.0,
+        ..Default::default()
+    });
+    let mut tracking = CameraTrackSystem::new(&track);
+    world.push(track);
+    let mut physics = started(&mut world);
+    tracking.init(&mut world.context());
+    let handle = physics.props.handle_of(ball).unwrap();
+    let mut last = world.get::<Transform>(ball).unwrap().position;
+    let mut kinematic_from = None;
+    for frame in 0..240 {
+        world.insert_resource(SimTiming {
+            ticks: 1,
+            tick_dt: SimTiming::TICK_DT,
+            alpha: 1.0,
+            time: f64::from(frame + 1) * f64::from(SimTiming::TICK_DT),
+        });
+        physics.step(&mut world.context());
+        tracking.step(&mut world.context());
+        let sim = physics.world.as_ref().unwrap();
+        if kinematic_from.is_none() && sim.is_kinematic(handle) == Some(true) {
+            kinematic_from = Some(frame);
+        }
+        let at = world.get::<Transform>(ball).unwrap().position;
+        assert!(length(sub(at, last)) < 0.25, "jumped at frame {frame}");
+        last = at;
+    }
+    let from = kinematic_from.expect("picked up");
+    assert!((119..=122).contains(&from), "kinematic from frame {from}");
 }

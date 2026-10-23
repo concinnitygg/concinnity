@@ -12,11 +12,9 @@
 //! Each frame is tallied under the phase it was drawn in as well as under the
 //! whole run, so the same reduction covers each stretch of the run.
 //!
-//! A report that saves frames as images asks the render side for each one as
-//! the run reaches its moment. Frames run while the window is minimized or
-//! hidden draw nothing and are left out of the measurement.
+//! Frames run while the window is minimized or hidden draw nothing and are
+//! left out of the measurement.
 
-mod capture;
 mod hidden;
 mod histogram;
 mod reduce;

@@ -13,17 +13,16 @@
 //!
 //! Run it with `cargo run --release --example planet`.
 //!
-//! The world also declares a benchmark (see `benchmark.rs`), which
-//! `--benchmark` runs: the marble flies a scripted flight instead of rolling,
-//! and the camera follows it, through the grass and out over the sea, up toward the
-//! sun and out of the air to see the planet from orbit, down into the night
-//! and on to a sunrise over the next continent. The run times every frame and
-//! closes when the flight ends, printing what the frames cost, phase by phase.
+//! The world also declares a benchmark, which `--benchmark` runs: the
+//! engine's tour of the planet. The marble rolls through the meadow, down the
+//! beach and into the surf, then lifts off, and the camera follows it out over
+//! the sea, up toward the sun and out of the air to see the planet from orbit,
+//! down into the night and on to a sunrise over the next continent. The run
+//! times every frame, saves the world's screenshots as it reaches them, and
+//! closes when the tour ends, printing what the frames cost, phase by phase.
 //!
 //! It takes the engine's launch flags (`--help` lists them), `--vsync` among
 //! them.
-
-mod benchmark;
 
 use std::path::PathBuf;
 
@@ -53,7 +52,6 @@ fn main() {
 fn run(args: LaunchArgs) -> Result<(), String> {
     let mut world = cook::world();
     world.add_jsonl(WORLD);
-    benchmark::declare(&mut world, WORLD)?;
     let blob = blob_path();
     world.write_blob(&blob).map_err(|e| e.to_string())?;
     App::from_blob(&blob)

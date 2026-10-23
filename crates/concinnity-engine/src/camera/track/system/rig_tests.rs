@@ -6,7 +6,7 @@ use crate::components::{CameraBoom, CameraTrackArgs, CameraTravel, CameraTurn, E
 use crate::ecs::Ref;
 use crate::planet::Rebase;
 use alloc::vec;
-use concinnity_core::math::{asin, atan2, quat_from_axis_angle};
+use concinnity_core::math::{SaturatingFrom, asin, atan2, quat_from_axis_angle};
 
 const SUBJECT: AssetId = AssetId(7);
 
@@ -34,6 +34,7 @@ fn track(travel: Vec<CameraTravel>, turn: Vec<CameraTurn>, boom: Vec<CameraBoom>
         turn,
         subject: Some(Ref::new(SUBJECT)),
         boom,
+        ..Default::default()
     })
 }
 
@@ -487,4 +488,143 @@ fn boom_legs_without_a_subject_are_ignored() {
     assert!((status_duration(&world) - 1.0).abs() < 1e-5);
     seconds(&mut world, &mut system, 1);
     assert_near(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
+}
+
+// A subject carried from a moment of the track is only filmed until then,
+// moving by itself, and is picked up where it is and as fast as it goes:
+// neither its position nor its speed jumps, and it eases onto travel's path.
+#[test]
+fn a_subject_picked_up_mid_motion_carries_on_without_a_jump() {
+    use crate::camera::track::carry::CARRY_BLEND_SECONDS;
+    let mut track = track(vec![travel([1.0, 0.0, 0.0], 100.0, 10.0)], vec![], vec![]);
+    track.carry_from_seconds = 2.0;
+    let (mut world, mut system) = world_with(track, [0.0, 2.0, 5.0], [0.0; 3]);
+    system.init(&mut world.context());
+    let status = |world: &World| world.resource::<CameraTrackStatus>().unwrap().subject;
+    // It rolls along +Z at 3 m/s by itself, 3 m off the path's start.
+    let mut at = [3.0, 0.0, 0.0];
+    let mut trail = Vec::new();
+    // Up to the frame it is picked up on, at 2 s: whatever moves it has
+    // moved it there by then.
+    for i in 0..120 {
+        at[2] += 3.0 * SimTiming::TICK_DT;
+        if let Some(t) = world.context().get_mut_by_id::<Transform>(SUBJECT) {
+            t.position = at;
+        }
+        frame(&mut world, &mut system, 1, 1.0);
+        trail.push(subject(&world));
+        if i < 119 {
+            assert_eq!(status(&world), None, "only filmed");
+            assert_eq!(subject(&world), at, "the track left it where it went");
+        }
+    }
+    // Picked up: the track moves it from here on.
+    for _ in 0..u32::saturating_from((CARRY_BLEND_SECONDS + 1.0) * 60.0) {
+        frame(&mut world, &mut system, 1, 1.0);
+        trail.push(subject(&world));
+    }
+    assert_eq!(status(&world), Some(SUBJECT));
+    let step = |i: usize| vec3::sub(trail[i], trail[i - 1]);
+    let before = step(118);
+    let after = step(120);
+    assert!(
+        vec3::length(vec3::sub(after, before)) < 0.01 * vec3::length(before) + 1e-3,
+        "{before:?} then {after:?}"
+    );
+    for i in 119..trail.len() {
+        let jump = vec3::length(vec3::sub(step(i), step(i - 1)));
+        assert!(jump < 0.02, "step {i} jumps by {jump}");
+    }
+    // Eased onto the path, which travel has run along +X at 10 m/s since
+    // the track started, and off it by none.
+    let end = subject(&world);
+    let elapsed = 2.0 + CARRY_BLEND_SECONDS + 1.0;
+    assert!((end[0] - 10.0 * elapsed).abs() < 0.2, "{end:?}");
+    assert!(end[2].abs() < 1e-3 && end[1].abs() < 1e-3, "{end:?}");
+}
+
+// A frame move while the subject is only filmed or still easing on carries
+// the path along: the subject ends where it would have with no move.
+#[test]
+fn a_frame_move_during_the_pick_up_carries_the_path() {
+    let run = |moved: bool| {
+        let mut track = track(vec![travel([1.0, 0.0, 0.0], 100.0, 10.0)], vec![], vec![]);
+        track.carry_from_seconds = 1.0;
+        let (mut world, mut system) = world_with(track, [0.0, 2.0, 5.0], [0.0; 3]);
+        world.insert_resource(FrameRebases::default());
+        system.init(&mut world.context());
+        let rebase = Rebase {
+            rotation: quat_from_axis_angle([0.0, 1.0, 0.0], 0.2),
+            translation: [-5.0, 0.0, 3.0],
+        };
+        let mut origin = Rebase {
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            translation: [0.0; 3],
+        };
+        for i in 0..300 {
+            if moved && (i == 30 || i == 90) {
+                let mut ctx = world.context();
+                for t in ctx.query_mut::<Transform>() {
+                    t.position = rebase.apply_point(t.position);
+                }
+                for c in ctx.query_mut::<Camera3D>() {
+                    c.position = rebase.apply_point(c.position);
+                }
+                let mut rebases = world
+                    .resource::<FrameRebases>()
+                    .cloned()
+                    .unwrap_or_default();
+                rebases.push(rebase);
+                world.insert_resource(rebases);
+                origin = Rebase {
+                    rotation: quat_mul(rebase.rotation, origin.rotation),
+                    translation: rebase.apply_point(origin.translation),
+                };
+            }
+            if i < 60 {
+                let back = origin.apply_point([2.0, 0.0, 0.05 * i as f32]);
+                if let Some(t) = world.context().get_mut_by_id::<Transform>(SUBJECT) {
+                    t.position = back;
+                }
+            }
+            frame(&mut world, &mut system, 1, 1.0);
+        }
+        // Back into the frame the run started in.
+        let at = subject(&world);
+        let r = origin.rotation;
+        let inverse = [-r[0], -r[1], -r[2], r[3]];
+        quat_rotate(inverse, vec3::sub(at, origin.translation))
+    };
+    let still = run(false);
+    let moved = run(true);
+    assert!(
+        vec3::length(vec3::sub(still, moved)) < 0.01,
+        "{still:?} vs {moved:?}"
+    );
+}
+
+// A pick-up on the first instant of a short leg takes the pace that leg sets
+// off at: a subject already running along the path stays on it.
+#[test]
+fn a_pick_up_on_a_leg_boundary_keeps_the_new_legs_pace() {
+    let legs = (0..12)
+        .map(|_| travel([1.0, 0.0, 0.0], 2.5, 10.0))
+        .collect();
+    let mut track = track(legs, vec![], vec![]);
+    track.carry_from_seconds = 1.0;
+    let (mut world, mut system) = world_with(track, [0.0, 2.0, 5.0], [0.0; 3]);
+    system.init(&mut world.context());
+    let mut worst = 0.0_f32;
+    for i in 1..=150_u16 {
+        let seconds = f32::from(i) * SimTiming::TICK_DT;
+        if i <= 60
+            && let Some(t) = world.context().get_mut_by_id::<Transform>(SUBJECT)
+        {
+            t.position = [10.0 * seconds, 0.0, 0.0];
+        }
+        frame(&mut world, &mut system, 1, 1.0);
+        let off = vec3::length(vec3::sub(subject(&world), [10.0 * seconds, 0.0, 0.0]));
+        worst = worst.max(off);
+    }
+    assert!(worst < 0.01, "strays {worst} m off the path");
 }

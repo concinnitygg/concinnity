@@ -7,7 +7,9 @@
 
 mod arm;
 pub(crate) mod config;
+mod planet_tour;
 mod run;
 
 pub use arm::arm;
+pub use planet_tour::PlanetTour;
 pub use run::BenchmarkRun;

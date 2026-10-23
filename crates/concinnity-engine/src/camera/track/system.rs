@@ -1,6 +1,8 @@
 use alloc::vec::Vec;
 
 use crate::camera::track::CameraTrackStatus;
+use crate::camera::track::carry::{CarryBlend, Filmed};
+use crate::camera::track::status::TrackPickup;
 use crate::camera::track::timeline::{self, Key};
 use crate::components::{Camera3D, CameraBoomKey, CameraTrack, CameraTurnKey, Parent, Transform};
 use crate::ecs::asset_id::AssetId;
@@ -39,6 +41,14 @@ pub(crate) struct CameraTrackSystem {
     boom_start: [f32; 3],
     // The prop travel carries, while it is there to carry.
     subject: Option<AssetId>,
+    // Track time the subject is carried from, whether it is carried yet, how
+    // it moved while it was only filmed, and the blend onto travel's path it
+    // was picked up with.
+    carry_from: f32,
+    carrying: bool,
+    filmed: Filmed,
+    blend: Option<CarryBlend>,
+    pickup: Option<TrackPickup>,
     // Fixed once every list is laid out at `init`, so the track runs as long
     // whether or not its subject stays.
     duration: f32,
@@ -97,6 +107,11 @@ impl CameraTrackSystem {
             boom: Vec::new(),
             boom_start: [0.0; 3],
             subject: track.subject.map(crate::ecs::Ref::id),
+            carry_from: track.carry_from_seconds,
+            carrying: false,
+            filmed: Filmed::default(),
+            blend: None,
+            pickup: None,
             duration: 0.0,
             start_position: [0.0; 3],
             start_angles_deg: [0.0; 2],
@@ -205,6 +220,36 @@ impl CameraTrackSystem {
         vec3::add(self.anchor, traveled)
     }
 
+    // Pick up the subject the track has been filming, where it is and as
+    // fast as it is going, to ease it onto travel's path from there.
+    fn pick_up(&mut self, ctx: &PipelineContext<'_>) {
+        let Some(at) = self
+            .subject
+            .and_then(|id| ctx.get_by_id::<Transform>(id))
+            .map(|t| t.position)
+        else {
+            return;
+        };
+        self.advance();
+        let planned = self.position();
+        let pace = quat_rotate(
+            self.frame_turn,
+            timeline::rate(&self.travel, self.leg, self.pose_seconds),
+        );
+        let gap = vec3::sub(at, planned);
+        self.blend = Some(CarryBlend::new(
+            gap,
+            vec3::sub(self.filmed.velocity(), pace),
+            self.pose_seconds,
+        ));
+        self.pickup = Some(TrackPickup {
+            seconds: self.pose_seconds,
+            gap: vec3::length(gap),
+            speed: vec3::length(self.filmed.velocity()),
+        });
+        self.carrying = true;
+    }
+
     // Carry travel on from `at` mid-leg: where a frame move carried the point,
     // or where the camera stands once the subject it filmed is gone.
     fn reanchor(&mut self, at: [f32; 3]) {
@@ -238,14 +283,25 @@ impl CameraTrackSystem {
         let [yaw, pitch] = angles.map(f32::to_radians);
         let position = self.position();
         if let Some(subject) = self.subject {
-            if let Some(transform) = ctx.get_mut_by_id::<Transform>(subject) {
-                transform.position = position;
-            }
+            let filmed_at = if self.carrying {
+                let gap = self.blend.map_or([0.0; 3], |b| b.at(self.pose_seconds));
+                let at = vec3::add(position, gap);
+                if let Some(transform) = ctx.get_mut_by_id::<Transform>(subject) {
+                    transform.position = at;
+                }
+                at
+            } else {
+                let at = ctx
+                    .get_by_id::<Transform>(subject)
+                    .map_or(position, |t| t.position);
+                self.filmed.see(at, self.pose_seconds);
+                at
+            };
             let boom = timeline::sample(self.boom_start, &self.boom, self.pose_seconds);
             if let Some(camera) = self.camera
                 && let Some(cam) = ctx.get_mut::<Camera3D>(camera)
             {
-                let eye = boom_eye(position, yaw, pitch, cam.up, boom);
+                let eye = boom_eye(filmed_at, yaw, pitch, cam.up, boom);
                 cam.set_pose(eye, yaw, pitch);
             }
         } else if let Some(camera) = self.camera
@@ -259,7 +315,8 @@ impl CameraTrackSystem {
             pose_seconds: self.pose_seconds,
             duration_seconds: duration,
             finished: elapsed >= duration,
-            subject: self.subject,
+            subject: self.subject.filter(|_| self.carrying),
+            pickup: self.pickup,
         });
     }
 }
@@ -281,6 +338,7 @@ impl System for CameraTrackSystem {
                     let authored = vec3::length(vec3::sub(self.start_position, position));
                     self.anchor = position;
                     self.resolve_boom(authored);
+                    self.carrying = self.carry_from <= 0.0;
                 }
                 Err(why) => {
                     tracing::warn!(
@@ -305,8 +363,16 @@ impl System for CameraTrackSystem {
         // The frame moved the carried point: travel carries on from where it
         // was carried to, its offsets turned with the frame.
         if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
+            // A subject travel carries exactly is where travel put it; one
+            // only filmed, or still easing onto the path, is not, so the path
+            // itself is carried.
+            let exact = self.carrying && self.blend.is_none();
             let carried = match self.subject {
-                Some(id) => ctx.get_by_id::<Transform>(id).map(|t| t.position),
+                Some(id) if exact => ctx.get_by_id::<Transform>(id).map(|t| t.position),
+                Some(_) => {
+                    self.advance();
+                    Some(rebase.apply_point(self.position()))
+                }
                 None => self
                     .camera
                     .and_then(|c| ctx.get::<Camera3D>(c))
@@ -316,6 +382,10 @@ impl System for CameraTrackSystem {
                 self.reanchor(at);
             }
             self.frame_turn = quat_normalize(quat_mul(rebase.rotation, self.frame_turn));
+            self.filmed.rebase(&rebase);
+            if let Some(blend) = self.blend.as_mut() {
+                blend.rebase(&rebase);
+            }
         }
         // Before the clock moves, so travel is handed over at the pose the
         // camera stands in.
@@ -329,6 +399,9 @@ impl System for CameraTrackSystem {
             || timeline::cut_crossed(&self.turn, before, now)
             || (self.subject.is_some() && timeline::cut_crossed(&self.boom, before, now));
         self.pose_seconds = pose_seconds(now, &timing, self.pose_seconds, cut);
+        if !self.carrying && self.subject.is_some() && self.pose_seconds >= self.carry_from {
+            self.pick_up(ctx);
+        }
         self.apply(ctx);
         if cut && self.camera.is_some() {
             PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);

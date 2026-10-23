@@ -19,7 +19,8 @@ pub use crate::behavior::definition::{
     BehaviorSource,
 };
 pub use crate::behavior::variables::{VariableDecl, Variables};
-pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, CameraPose, FrameCapture};
+pub use crate::benchmark::PlanetTour;
+pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, BenchmarkRoute, CameraPose};
 pub use crate::camera::camera3d::{CameraController, FollowController, FollowDrive};
 pub use crate::camera::track::{
     CameraBoom, CameraBoomKey, CameraTrack, CameraTravel, CameraTravelKey, CameraTurn,
@@ -38,6 +39,7 @@ pub use crate::input::key_binding::KeyBinding;
 pub use crate::input::key_event::{KeyEvent, KeyMods, KeyPress};
 pub use crate::physics::buoyancy::Buoyancy;
 pub use crate::physics::config::PhysicsConfig;
+pub use crate::physics::drive_script::DriveKey;
 pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};
 pub use crate::physics::prop_body::PropBody;
 pub use crate::physics::rigid_body::RigidBody;
@@ -62,6 +64,7 @@ pub use crate::render::sdf::volume::SdfVolume;
 pub use crate::render::shader::world_shader::{Shader, ShaderPrograms, ShaderStage};
 pub use crate::render::transparent::glass_panel::GlassPanel;
 pub use crate::resource::file::FileKind;
+pub use crate::screenshot::Screenshot;
 pub use crate::settings::graphics::ambient_occlusion::{
     AmbientOcclusion, AmbientOcclusionOverrides,
 };
@@ -112,11 +115,11 @@ pub use super::{
     AnimationIkChain, AnimationParam, AnimationParams, AnimationState, AnimationTrack,
     AnimationTransition, AppConfig, AudioCommand, AudioOcclusionProbe, AudioTarget, BodyDynamics,
     Camera3D, CameraProbe, CharacterRig, Children, Collider, ContactEvent, ControlsCommand,
-    DespawnRequest, EntityTarget, File, FrameInput, GamepadAction, GamepadButton, GamepadMap,
-    GlobalTransform, GroundProbe, GroundProbes, Held, Hidden, Identity, InputKey, InteractEvent,
-    Interactable, Keyframe, Lifetime, MeshRenderer, ModelRenderer, MorphKey, NavDirection, Parent,
-    Pickup, PlayCue, PropInstance, RenderHandle, ReparentRequest, RollingControl, Room,
-    RootMotionEvent, SceneCommand, SceneMember, ScreenCommand, ScreenShown, SettingCommand,
-    SettingOp, SkeletonPose, SpawnRequest, Spawner, StoryCommand, Transform, VisibilityRequest,
-    VolumeEvent, WakeRequest,
+    DespawnRequest, DriveScript, EntityTarget, File, FrameInput, GamepadAction, GamepadButton,
+    GamepadMap, GlobalTransform, GroundProbe, GroundProbes, Held, Hidden, Identity, InputKey,
+    InteractEvent, Interactable, Keyframe, Lifetime, MeshRenderer, ModelRenderer, MorphKey,
+    NavDirection, Parent, Pickup, PlayCue, PropInstance, RenderHandle, ReparentRequest,
+    RollingControl, Room, RootMotionEvent, SceneCommand, SceneMember, ScreenCommand, ScreenShown,
+    SettingCommand, SettingOp, SkeletonPose, SpawnRequest, Spawner, StoryCommand, Transform,
+    VisibilityRequest, VolumeEvent, WakeRequest,
 };

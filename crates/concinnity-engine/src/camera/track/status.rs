@@ -26,6 +26,19 @@ pub(crate) struct CameraTrackStatus {
     /// The prop the track carries, once it has accepted it: the one whose
     /// Transform it owns.
     pub subject: Option<AssetId>,
+    /// Where the track picked its subject up mid-motion, once it has.
+    pub pickup: Option<TrackPickup>,
+}
+
+/// Where a track picked up a subject it had only filmed until then.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct TrackPickup {
+    /// Track time of the pick-up, in seconds.
+    pub seconds: f32,
+    /// How far the subject was from travel's path, in meters.
+    pub gap: f32,
+    /// How fast the subject was going, in meters per second.
+    pub speed: f32,
 }
 
 #[cfg(test)]

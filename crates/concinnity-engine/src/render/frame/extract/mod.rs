@@ -239,10 +239,9 @@ impl FrameExtractor {
         {
             queues.ops.drain_into(&mut snap.ops);
         }
-        snap.capture = ctx
-            .resources
-            .remove::<FrameCaptureRequest>()
-            .map(|request| request.0);
+        let capture = ctx.resources.remove::<FrameCaptureRequest>();
+        snap.hide_ui = capture.as_ref().is_some_and(|c| !c.hud);
+        snap.capture = capture.map(|request| request.path);
         screenshot::schedule(&mut self.screenshot, ctx, snap, frame);
 
         // The frame pacer runs before the world steps, so the frame time here

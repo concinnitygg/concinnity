@@ -4,14 +4,14 @@
 
 An infinite, procedurally generated voxel world.
 
-Where a [VoxelChunk](VoxelChunk.md) is one authored chunk compiled to a fixed
+Where a [`VoxelChunk`](VoxelChunk.md) is one authored chunk compiled to a fixed
 mesh at build time, a `VoxelWorld` describes an *unbounded* world: chunks are
 generated on demand from `seed` as the camera moves and streamed in and out
 around it. The grid is infinite on X/Z and a single chunk tall on Y.
 Declaring one opts the world into chunk streaming; with no `VoxelWorld`
 present nothing changes.
 
-The `palette` lists [BlockType](BlockType.md) assets; the generator uses index
+The `palette` lists [`BlockType`](BlockType.md) assets; the generator uses index
 0 as air, index 1 as the surface block, and index 2 (when present) as the
 subsurface block. `material` supplies the textures and lighting shared by
 every chunk.
@@ -25,5 +25,5 @@ every chunk.
 - `impostor_radius`: An integer. Outer chunk radius streamed as cheap coarse impostors. Chunks farther than `view_radius` but within `impostor_radius` render as a low-detail surface mesh instead of full voxel geometry. `0` (the default) or any value `<= view_radius` disables impostors.
 - `impostor_step`: An integer. Coarse-grid step (in blocks) for distant-chunk impostors: the surface is sampled every `impostor_step` blocks. Higher = cheaper and coarser. Defaults to `4`.
 - `load_budget`: An integer. Maximum number of chunks generated and loaded per frame. Defaults to `3`.
-- `palette`: An array of strings. [BlockType](BlockType.md) asset names. Index 0 is air; 1 is the surface block; 2, when present, is the subsurface block. Defaults to `[]`.
+- `palette`: An array of strings. [`BlockType`](BlockType.md) asset names. Index 0 is air; 1 is the surface block; 2, when present, is the subsurface block. Defaults to `[]`.
 - `material`: A string. [Material](Material.md) shared by every chunk: textures and lighting. Optional.

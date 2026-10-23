@@ -131,6 +131,7 @@ pub const SYSTEMS: &SystemTable = &SystemTable {
         Core::ANIMATION,
         Core::STORY,
         Core::AUDIO,
+        Core::SCREENSHOT,
         Core::TEXT_INPUT,
         Core::STAT_HUD,
         Core::DEBUG_HUD,

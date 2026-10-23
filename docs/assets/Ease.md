@@ -2,7 +2,7 @@
 
 # Ease
 
-How a [CameraTrack](CameraTrack.md) leg paces the run between its start and
+How a [`CameraTrack`](CameraTrack.md) leg paces the run between its start and
 its end.
 
 ## Values

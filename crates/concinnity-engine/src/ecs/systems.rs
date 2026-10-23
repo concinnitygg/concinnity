@@ -29,6 +29,7 @@ use crate::physics::PhysicsSystem;
 use crate::planet::{PlanetSystem, StartBuilder, inline_ground};
 use crate::render::overlay::OverlaySystem;
 use crate::render::streaming::pools::StreamingSystem;
+use crate::screenshot::ScreenshotSystem;
 use crate::settings::system::{SettingsStore, SettingsSystem};
 use crate::sky::SkyRotationSystem;
 use crate::spawn::SpawnSystem;
@@ -339,6 +340,16 @@ impl<H: SystemHost> CoreSystems<H> {
         before: &[],
     };
 
+    /// The run's screenshots, once the cameras have posed this tick's frame.
+    pub const SCREENSHOT: SystemEntry = SystemEntry {
+        name: "ScreenshotSystem",
+        present_when: "the run is benchmarked or launched with --screenshots, and has screenshots to take",
+        phase: Phase::Late,
+        gate: |world| boxed(ScreenshotSystem::for_world(world)),
+        after: &["Camera3DSystem", "ThirdPersonSystem", "CameraTrackSystem"],
+        before: &[],
+    };
+
     /// A benchmark's report, last: it records the frame that just went.
     pub const FRAME_REPORT: SystemEntry = SystemEntry {
         name: "FrameReportSystem",
@@ -364,6 +375,7 @@ impl<H: SystemHost> CoreSystems<H> {
         Self::ANIMATION,
         Self::STORY,
         Self::AUDIO,
+        Self::SCREENSHOT,
         Self::TEXT_INPUT,
         Self::STAT_HUD,
         Self::DEBUG_HUD,

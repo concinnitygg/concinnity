@@ -2,7 +2,7 @@
 
 # TriggerFilter
 
-What a [TriggerVolume](TriggerVolume.md) senses.
+What a [`TriggerVolume`](TriggerVolume.md) senses.
 
 ## Values
 

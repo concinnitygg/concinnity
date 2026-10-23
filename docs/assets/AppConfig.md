@@ -30,7 +30,7 @@ both from the host machine. A non-zero value overrides that choice, clamped
 to what the machine can safely give.
 
 `frame_priority` decides which frame threads run ahead of the other
-applications on the machine; see [FramePriority](FramePriority.md).
+applications on the machine; see [`FramePriority`].
 
 `headless` keeps a world that could draw from opening a window. A world
 that draws nothing runs that way already.

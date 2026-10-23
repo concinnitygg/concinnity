@@ -10,7 +10,7 @@ and the on-screen sky.
 **Source formats:** a Radiance `.hdr`, or a panorama-sphere `.glb` /
 `.gltf` -- the packaging where an environment image is painted on the
 emissive channel of a sphere you stand inside. `cn add` recognizes the
-latter and produces an EnvironmentMap instead of scene geometry.
+latter and produces an `EnvironmentMap` instead of scene geometry.
 
 **Dynamic range:** a `.hdr` carries real radiance, so its sun can be
 thousands of times brighter than the sky and bakes into a bright key light
@@ -18,7 +18,7 @@ with a hot specular highlight. A panorama inside a `.glb` is a display
 image whose brightest value is white; it is read literally, with the sRGB
 curve inverted and white landing at 1.0 radiance. That makes it an exact
 backdrop and a soft, low-contrast fill light, never a key light. Raise
-[IndirectLighting](IndirectLighting.md)'s `ambient_intensity` to lift the
+[`IndirectLighting`](IndirectLighting.md)'s `ambient_intensity` to lift the
 level rather than expecting the bake to invent range the file lacks.
 
 **`prefilter_face_size` note:** this controls both the reflection detail and

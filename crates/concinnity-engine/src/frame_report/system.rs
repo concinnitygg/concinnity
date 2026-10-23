@@ -1,10 +1,7 @@
 // The system a benchmarked run gates in: records one row per frame, and
 // reports what the run cost when it ends.
 
-use crate::ecs::{
-    Clock, FrameCaptureRequest, FrameTime, PipelineContext, StepResult, System, WindowMinimized,
-    World,
-};
+use crate::ecs::{Clock, FrameTime, PipelineContext, StepResult, System, WindowMinimized, World};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -13,12 +10,10 @@ use core::fmt::{self, Write};
 
 use crate::benchmark::BenchmarkRun;
 use crate::camera::track::CameraTrackStatus;
-use crate::components::FrameCapture;
-use crate::launch::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest, screenshot_path};
+use crate::camera::track::status::TrackPickup;
 use crate::planet::FrameRebases;
 use crate::profile::RenderStats;
 
-use crate::frame_report::capture::CaptureSchedule;
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
 use crate::frame_report::report::write_report;
@@ -70,10 +65,9 @@ pub(crate) struct FrameReportSystem {
     previous_rebases: u64,
     // Each tick's pose, paired with its frame's GPU completion once it lands.
     shown: ShownFrames,
-    captures: CaptureSchedule,
+    // Where the camera track picked its subject up, once it has.
+    pickup: Option<TrackPickup>,
     hidden: HiddenFrames,
-    // Captures that came due while the window could not show them.
-    hidden_captures: Vec<FrameCapture>,
 }
 
 // What one step knows about its frame before the profile rotates in the
@@ -110,9 +104,8 @@ impl FrameReportSystem {
             previous_pose_seconds: 0.0,
             previous_rebases: 0,
             shown: ShownFrames::default(),
-            captures: CaptureSchedule::new(&config.captures),
+            pickup: None,
             hidden: HiddenFrames::default(),
-            hidden_captures: Vec::new(),
         }
     }
 
@@ -146,6 +139,13 @@ impl FrameReportSystem {
                 self.run.options.warmup_seconds,
             )?,
         }
+        if let Some(pickup) = self.pickup {
+            writeln!(
+                text,
+                "\nhandover: the track picked its subject up at {:.2} s, {:.2} m from its path, going {:.2} m/s",
+                pickup.seconds, pickup.gap, pickup.speed,
+            )?;
+        }
         if self.hidden.total() > 0 {
             let phases: Vec<String> = self
                 .hidden
@@ -159,20 +159,6 @@ impl FrameReportSystem {
                 phases.join(", "),
             )?;
         }
-        for skipped in &self.hidden_captures {
-            writeln!(
-                text,
-                "frame report: the window was hidden {:.1}s after the warm-up, so {} was not captured",
-                skipped.seconds, skipped.path,
-            )?;
-        }
-        for missed in self.captures.missed() {
-            writeln!(
-                text,
-                "frame report: the run ended before {:.1}s after the warm-up, so {} was not captured",
-                missed.seconds, missed.path,
-            )?;
-        }
         Ok(())
     }
 }
@@ -182,6 +168,9 @@ impl System for FrameReportSystem {
         let now = ctx.resource::<Clock>().map_or(0, Clock::read);
         let started = *self.started.get_or_insert(now);
         let status = ctx.resource::<CameraTrackStatus>().copied();
+        if let Some(pickup) = status.and_then(|s| s.pickup) {
+            self.pickup = Some(pickup);
+        }
         let run_seconds = status.map_or_else(
             || narrow_f32(now.saturating_sub(started) as f64 * 1e-6),
             |s| s.elapsed_seconds,
@@ -246,21 +235,6 @@ impl System for FrameReportSystem {
                 ctx.profile.render_handoffs(),
                 ctx.profile.system_fan_outs(),
             ));
-        }
-
-        // A capture costs its frame nothing it shows, so the frames around it
-        // are measured like any other.
-        let measured_seconds = run_seconds - self.benchmark.config.warmup_seconds;
-        if let Some(capture) = self.captures.due(measured_seconds) {
-            if unseen {
-                self.hidden_captures.push(capture);
-            } else {
-                let dir = ctx
-                    .resource::<LaunchRequest>()
-                    .map_or(DEFAULT_SCREENSHOTS_DIR, LaunchRequest::screenshots_dir);
-                let path = screenshot_path(dir, &capture.path);
-                ctx.insert_resource(FrameCaptureRequest(path));
-            }
         }
 
         if run_seconds >= self.benchmark.end_seconds() {
@@ -590,96 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn a_capture_is_requested_once_and_the_frames_around_it_are_measured() {
-        use crate::components::FrameCapture;
-
-        let mut world = World::new();
-        let mut system = report(&configured(BenchmarkConfig {
-            warmup_seconds: 0.0,
-            captures: vec![FrameCapture {
-                seconds: 0.0,
-                path: "a.png".to_string(),
-            }],
-            ..Default::default()
-        }));
-        system.init(&mut world.context());
-        // The first step only starts the clock; the second is the first frame
-        // measured, and the capture is due on it.
-        system.step(&mut world.context());
-        system.step(&mut world.context());
-        let request = world.remove_resource::<FrameCaptureRequest>();
-        assert_eq!(request.map(|r| r.0).as_deref(), Some("screenshots/a.png"));
-
-        // Each frame is recorded once the next step closes it: the capture's
-        // and the one after it are both in.
-        system.step(&mut world.context());
-        system.step(&mut world.context());
-        assert_eq!(system.run().recorded.len(), 2);
-        assert!(world.resource::<FrameCaptureRequest>().is_none());
-    }
-
-    // A capture lands under the screenshot directory the launch names.
-    #[test]
-    fn a_capture_lands_under_the_launch_s_screenshot_directory() {
-        use crate::components::FrameCapture;
-        use crate::launch::LaunchArgs;
-
-        let mut world = World::new();
-        world.insert_resource(LaunchRequest {
-            args: LaunchArgs {
-                screenshots_dir: Some("shots/vulkan".to_string()),
-                ..LaunchArgs::NONE
-            },
-            ..Default::default()
-        });
-        let mut system = report(&configured(BenchmarkConfig {
-            warmup_seconds: 0.0,
-            captures: vec![FrameCapture {
-                seconds: 0.0,
-                path: "benchmark/a.png".to_string(),
-            }],
-            ..Default::default()
-        }));
-        system.init(&mut world.context());
-        system.step(&mut world.context());
-        system.step(&mut world.context());
-        let request = world.remove_resource::<FrameCaptureRequest>();
-        assert_eq!(
-            request.map(|r| r.0).as_deref(),
-            Some("shots/vulkan/benchmark/a.png")
-        );
-    }
-
-    #[test]
-    fn a_capture_waits_for_its_moment_after_the_warm_up() {
-        use crate::components::FrameCapture;
-
-        let run = configured(BenchmarkConfig {
-            warmup_seconds: 0.05,
-            captures: vec![FrameCapture {
-                seconds: 0.05,
-                path: "a.png".to_string(),
-            }],
-            ..Default::default()
-        });
-        let (mut world, mut camera, mut system) = world_with(track(vec![leg(60.0, 1.0)]), &run);
-        camera.init(&mut world.context());
-        system.init(&mut world.context());
-        let mut requested_at = None;
-        for _ in 0..12 {
-            step(&mut world, &mut camera, &mut system);
-            if world.remove_resource::<FrameCaptureRequest>().is_some() {
-                assert!(requested_at.is_none(), "requested twice");
-                requested_at = world
-                    .resource::<CameraTrackStatus>()
-                    .map(|s| s.elapsed_seconds);
-            }
-        }
-        let at = requested_at.expect("the run passed the capture's moment");
-        assert!(at >= 0.1, "requested at {at}s");
-    }
-
-    #[test]
     fn frames_run_while_the_window_is_hidden_go_unrecorded_and_are_tallied() {
         use crate::frame_report::hidden::RESTORE_DROPPED_FRAMES;
 
@@ -702,28 +586,6 @@ mod tests {
         system.step(&mut world.context());
         assert_eq!(system.run().recorded.len(), 2);
         assert_eq!(system.hidden.total(), 3 + RESTORE_DROPPED_FRAMES);
-    }
-
-    #[test]
-    fn a_capture_due_while_the_window_is_hidden_is_skipped() {
-        use crate::components::FrameCapture;
-
-        let mut world = World::new();
-        let mut system = report(&configured(BenchmarkConfig {
-            warmup_seconds: 0.0,
-            captures: vec![FrameCapture {
-                seconds: 0.0,
-                path: "a.png".to_string(),
-            }],
-            ..Default::default()
-        }));
-        system.init(&mut world.context());
-        system.step(&mut world.context());
-        world.insert_resource(WindowMinimized(true));
-        system.step(&mut world.context());
-        assert!(world.resource::<FrameCaptureRequest>().is_none());
-        assert_eq!(system.hidden_captures.len(), 1);
-        assert_eq!(system.captures.missed().count(), 0);
     }
 
     #[test]

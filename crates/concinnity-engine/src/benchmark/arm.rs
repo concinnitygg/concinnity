@@ -4,9 +4,11 @@
 use alloc::vec::Vec;
 
 use crate::benchmark::BenchmarkRun;
+use crate::benchmark::planet_tour;
 use crate::components::cook::CameraTrack as CameraTrackArgs;
 use crate::components::{
-    BenchmarkConfig, Camera3D, CameraBoom, CameraTrack, CameraTravel, CameraTurn, Prop, Transform,
+    BenchmarkConfig, BenchmarkRoute, BodyDynamics, Camera3D, CameraBoom, CameraTrack, CameraTravel,
+    CameraTurn, DriveScript, Planet, Prop, PropBody, RollingControl, RollingDrive, Transform,
 };
 use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
@@ -21,11 +23,12 @@ pub fn arm(world: &mut World) {
     if world.resource::<BenchmarkRun>().is_some() {
         return;
     }
-    let config = world
+    let mut config = world
         .query::<BenchmarkConfig>()
         .next()
         .cloned()
         .unwrap_or_default();
+    resolve_route(world, &mut config);
     if let Some(pose) = config.start {
         let subject = config
             .subject
@@ -42,12 +45,81 @@ pub fn arm(world: &mut World) {
             );
         }
     }
+    if !config.drive.is_empty()
+        && let Some(entity) = config.subject.and_then(|s| world.entity_of(s.id()))
+    {
+        let warmup = config.warmup_seconds.max(0.0);
+        world.insert(entity, DriveScript::new(&config.drive, warmup));
+    }
     let track = CameraTrack::bake(track_args(&config));
     match world.query_mut::<CameraTrack>().next() {
         Some(declared) => *declared = track,
         None => world.add_component(track),
     }
     world.insert_resource(BenchmarkRun::new(config));
+}
+
+// Lay `config`'s route out over `world`: a planet tour fills the start, the
+// legs and the phases from the world's planet and sun. Says which route was
+// taken, since a world that chooses none can be toured without asking.
+fn resolve_route(world: &World, config: &mut BenchmarkConfig) {
+    let planet = world.query::<Planet>().next().is_some();
+    let tours = match config.route {
+        BenchmarkRoute::Legs => false,
+        BenchmarkRoute::PlanetTour if !planet => {
+            tracing::warn!(
+                "benchmark: the run asks to tour a planet, but the world has none, so it follows its {} authored leg(s)",
+                config.travel.len()
+            );
+            return;
+        }
+        BenchmarkRoute::PlanetTour => true,
+        BenchmarkRoute::Auto => planet && !config.authors_route(),
+    };
+    if !tours {
+        tracing::info!(
+            "benchmark: the run follows its {} authored leg(s)",
+            config.travel.len()
+        );
+        return;
+    }
+    let rolls = rolls(world, config);
+    let Some(plan) = planet_tour::plan(world, config.tour, config.warmup_seconds, rolls) else {
+        return;
+    };
+    tracing::info!(
+        "benchmark: the run tours the planet, setting out {:.0} degrees from north, {}",
+        config.tour.heading_deg,
+        if rolls {
+            "the subject rolling itself into the sea before it flies"
+        } else {
+            "skimming the ground"
+        }
+    );
+    config.start = Some(plan.start);
+    config.travel = plan.travel;
+    config.turn = plan.turn;
+    config.boom = plan.boom;
+    config.phases = plan.phases;
+    config.drive = plan.drive;
+    config.carry_from_seconds = plan.carry_from_seconds;
+}
+
+// Whether the run's subject rolls itself: it has a drive and a body to push.
+fn rolls(world: &World, config: &BenchmarkConfig) -> bool {
+    let Some(subject) = config.subject.map(crate::ecs::Ref::id) else {
+        return false;
+    };
+    let entity = world.entity_of(subject);
+    let driven = world
+        .query::<RollingDrive>()
+        .any(|d| d.prop_name.is_some_and(|p| p.id() == subject))
+        || entity.is_some_and(|e| world.get::<RollingControl>(e).is_some());
+    let body = world
+        .query::<PropBody>()
+        .any(|b| b.prop_name.is_some_and(|p| p.id() == subject))
+        || entity.is_some_and(|e| world.get::<BodyDynamics>(e).is_some());
+    driven && body
 }
 
 // Move the subject `id` to `at`, returning where it was authored: on its
@@ -89,11 +161,19 @@ fn track_args(config: &BenchmarkConfig) -> CameraTrackArgs {
     travel.extend(config.travel.iter().cloned());
     turn.extend(config.turn.iter().cloned());
     boom.extend(config.boom.iter().cloned());
+    // A subject carried from a moment of the run is carried from that moment
+    // after the warm-up; one carried from the start, through the warm-up too.
+    let carry_from_seconds = if config.carry_from_seconds > 0.0 {
+        warmup + config.carry_from_seconds
+    } else {
+        0.0
+    };
     CameraTrackArgs {
         travel,
         turn,
         subject: config.subject,
         boom,
+        carry_from_seconds,
     }
 }
 
@@ -120,6 +200,66 @@ mod tests {
             speed: 1.0,
             ..Default::default()
         }
+    }
+
+    // A planet world whose config authors none of its route tours its planet;
+    // one that authors any of it, or asks for its legs, keeps it; a tour asked
+    // of a world with no planet keeps the authored legs.
+    #[test]
+    fn the_route_is_a_tour_for_a_planet_without_legs() {
+        let planet: Planet = crate::test_support::from_json(
+            r#"{"center":[0.0,-5000.0,0.0],"radius":5000.0,"amplitude":0.0}"#,
+        );
+        let armed = |config: BenchmarkConfig, with_planet: bool| {
+            let mut world = world_with_camera();
+            if with_planet {
+                world.push(planet.clone());
+            }
+            world.add_component(config);
+            arm(&mut world);
+            world.resource::<BenchmarkRun>().unwrap().config.clone()
+        };
+        let toured = armed(BenchmarkConfig::default(), true);
+        assert!(toured.travel.len() > 100 && toured.start.is_some());
+        assert_eq!(toured.phases[0].name, "settle");
+        let legs = BenchmarkConfig {
+            travel: alloc::vec![leg(4.0)],
+            ..Default::default()
+        };
+        assert_eq!(armed(legs.clone(), true).travel, legs.travel);
+        // Any authored part of the route keeps the route authored.
+        let phased = BenchmarkConfig {
+            phases: alloc::vec![crate::components::BenchmarkPhase {
+                name: "still".into(),
+                seconds: 5.0,
+            }],
+            ..Default::default()
+        };
+        let kept = armed(phased.clone(), true);
+        assert!(kept.travel.is_empty() && kept.start.is_none());
+        assert_eq!(kept.phases, phased.phases);
+        let started = BenchmarkConfig {
+            start: Some(CameraPose::default()),
+            ..Default::default()
+        };
+        assert!(armed(started, true).travel.is_empty());
+        let held = BenchmarkConfig {
+            route: BenchmarkRoute::Legs,
+            ..Default::default()
+        };
+        assert!(armed(held, true).travel.is_empty());
+        let forced = BenchmarkConfig {
+            route: BenchmarkRoute::PlanetTour,
+            ..Default::default()
+        };
+        assert!(armed(forced.clone(), false).travel.is_empty());
+        let forced_legs = BenchmarkConfig {
+            travel: alloc::vec![leg(4.0)],
+            ..forced.clone()
+        };
+        assert_eq!(armed(forced_legs.clone(), false).travel, forced_legs.travel);
+        assert!(!armed(forced, true).travel.is_empty());
+        assert!(armed(BenchmarkConfig::default(), false).travel.is_empty());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 
-use crate::components::{Collider, RollingControl, Transform};
+use crate::components::{Collider, DriveScript, RollingControl, Transform};
 use crate::ecs::{Entity, PipelineContext};
 use crate::physics::rolling_drive::{RollingBody, jump_impulse, push};
 use crate::physics::{BodyHandle, ColliderShape, Simulation};
@@ -29,6 +29,9 @@ struct Driven {
     radius: f32,
     // Ticks left in which a jump asked for is taken.
     jump_ticks: u32,
+    // The script key that steered the last tick, so a key's jump is asked for
+    // once, as it takes over.
+    script_key: Option<usize>,
     grounded: bool,
     afloat: f32,
 }
@@ -37,12 +40,15 @@ struct Driven {
 #[derive(Debug, Default)]
 pub(super) struct Drives {
     driven: Vec<Driven>,
+    // Ticks a jump asked for is kept for.
+    jump_window: u32,
 }
 
 impl Drives {
     pub(super) fn with_capacity(count: usize) -> Self {
         Self {
             driven: Vec::with_capacity(count),
+            jump_window: 0,
         }
     }
 
@@ -64,6 +70,7 @@ impl Drives {
         };
         self.driven.retain(|d| free(d.entity) == Some(d.handle));
         let window = u32::saturating_from(ceil(JUMP_WINDOW / tick_dt.max(1e-6)));
+        self.jump_window = window;
         for (entity, control) in ctx.query_mut_with_entity::<RollingControl>() {
             let Some(handle) = free(entity) else {
                 control.jump = false;
@@ -78,6 +85,7 @@ impl Drives {
                     control: *control,
                     radius: 0.0,
                     jump_ticks: 0,
+                    script_key: None,
                     grounded: false,
                     afloat: 0.0,
                 });
@@ -92,18 +100,37 @@ impl Drives {
         }
         for driven in &mut self.driven {
             driven.radius = rolling_radius(ctx, driven.entity);
-            driven.afloat = props.submerged_share(driven.entity);
         }
     }
 
-    /// One tick of every drive: a jump the body can take, then the roll and
-    /// the paddle for this tick's step.
-    pub(super) fn tick(&mut self, world: &mut Simulation) {
+    /// One tick of every drive starting `time` seconds into the world: the
+    /// steering a script has for that moment, a jump the body can take, then
+    /// the roll and the paddle for this tick's step. North lies along `north`
+    /// before it is laid along the ground.
+    pub(super) fn tick(
+        &mut self,
+        world: &mut Simulation,
+        ctx: &PipelineContext<'_>,
+        props: &PropBodies,
+        time: f64,
+        north: [f32; 3],
+    ) {
         for driven in &mut self.driven {
+            driven.afloat = props.submerged_share(driven.entity);
             let Some(state) = world.body_state(driven.handle) else {
                 continue;
             };
             let up = up_at(world, state.position);
+            if let Some((index, key)) = ctx
+                .get::<DriveScript>(driven.entity)
+                .and_then(|script| script.key_at(time))
+            {
+                DriveScript::steer(key, &mut driven.control, up, north);
+                if key.jump && driven.script_key != Some(index) {
+                    driven.jump_ticks = self.jump_window;
+                }
+                driven.script_key = Some(index);
+            }
             driven.grounded = world.is_supported(driven.handle, up, GROUND_MIN_COS);
             let body = RollingBody {
                 up,

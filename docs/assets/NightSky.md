@@ -4,16 +4,16 @@
 
 The sky beyond the air: stars, the Milky Way, distant galaxies and the
 moon, fixed to the celestial sphere so they rise and set as a
-[SkyRotation](SkyRotation.md) turns it.
+[`SkyRotation`](SkyRotation.md) turns it.
 
 Under an [Atmosphere](Atmosphere.md) the night sky is seen through the air:
 it dims and hides toward the horizon, and the daylight sky outshines it,
 so it comes out as the sun sets and the twilight fades. Without one it is
 seen as from airless ground: black between the stars, with the sun's disc
 in it by day, and it lights the scene in place of an
-[EnvironmentMap](EnvironmentMap.md).
+[`EnvironmentMap`](EnvironmentMap.md).
 
-The celestial pole is the [SkyRotation](SkyRotation.md)'s axis (straight up
+The celestial pole is the [`SkyRotation`](SkyRotation.md)'s axis (straight up
 without one). The Milky Way is a band around the sky whose own pole leans
 `milky_way_tilt_deg` away from the celestial pole, toward the side
 `milky_way_turn_deg` around the pole from the sun, with its bright core
@@ -24,7 +24,7 @@ The moon circles the sky once every `moon_period_days` days (a day being
 one full turn of the sky), drifting east against the stars, so it rises
 a little later each day. Its lit side faces the sun, so its phase follows
 its angle from the sun: new beside it, full opposite it. At night it is a
-second, dim [DirectionalLight](DirectionalLight.md), dimmed and reddened by
+second, dim [`DirectionalLight`](DirectionalLight.md), dimmed and reddened by
 the air like the sun. Only one directional light casts shadows: once the
 sun has fully set the moon takes them over, its light fading in over the
 next 6 degrees of the sun's descent, and it hands them back the same way

@@ -21,7 +21,10 @@ fn extract_once(fx: &mut FrameExtractor, world: &mut World) -> RenderSnapshot {
 #[test]
 fn a_capture_request_rides_the_next_frame_only() {
     let mut world = World::new();
-    world.insert_resource(FrameCaptureRequest("shot.png".to_string()));
+    world.insert_resource(FrameCaptureRequest {
+        path: "shot.png".to_string(),
+        hud: true,
+    });
     let mut fx = FrameExtractor::default();
     assert_eq!(
         extract_once(&mut fx, &mut world).capture.as_deref(),
@@ -29,6 +32,38 @@ fn a_capture_request_rides_the_next_frame_only() {
     );
     assert!(world.resource::<FrameCaptureRequest>().is_none());
     assert_eq!(extract_once(&mut fx, &mut world).capture, None);
+}
+
+// A capture without its HUD draws none of the overlay on its frame, and the
+// frame after it draws the overlay again.
+#[test]
+fn a_capture_without_the_hud_hides_the_overlay_on_its_frame() {
+    let call = || crate::gfx::render_types::TextDrawCall {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        atlas_slot: 0,
+        clip_rect: None,
+        layer: 0,
+    };
+    let overlay = |world: &mut World| {
+        world.insert_resource(OverlayFrame {
+            calls: vec![call()],
+            ..Default::default()
+        });
+    };
+    let mut world = World::new();
+    let mut fx = FrameExtractor::default();
+    overlay(&mut world);
+    world.insert_resource(FrameCaptureRequest {
+        path: "clean.png".to_string(),
+        hud: false,
+    });
+    let shot = extract_once(&mut fx, &mut world);
+    assert_eq!(shot.capture.as_deref(), Some("clean.png"));
+    assert!(shot.hide_ui);
+    assert_eq!(shot.text_calls.len(), 1, "kept to recycle, only not drawn");
+    overlay(&mut world);
+    assert!(!extract_once(&mut fx, &mut world).hide_ui);
 }
 
 // A started burst captures the frames after it, named for each frame.

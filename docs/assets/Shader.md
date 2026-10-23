@@ -32,8 +32,8 @@ surface's material record whichever path drew it: `tint_roughness`,
 `emissive_metallic`, `albedo_index`, `normal_index`, `emissive_map_index`,
 `orm_map_index` and `bb_max_alpha_cutoff.w` are the fields a surface
 reads. `transform` receives the model matrix and the model-space
-attributes, after skinning for a [SkinnedMesh](SkinnedMesh.md) and per
-instance for an [InstancedProp](InstancedProp.md), and returns the projected
+attributes, after skinning for a [`SkinnedMesh`](SkinnedMesh.md) and per
+instance for an [`InstancedProp`](InstancedProp.md), and returns the projected
 vertex; the engine's own is `project_vertex`, so a displacement is
 `return project_vertex(model, pos + offset, normal, tangent, color, uv);`.
 The same `transform` places the surface's depth, normal and motion for the
@@ -105,8 +105,8 @@ included, plus the grass variants below.
 
 - **Instanced, skinned, and voxel-chunk draws always use the world default.**
   A Material naming a Shader cannot be used by an
-  [InstancedProp](InstancedProp.md), a [SkinnedMesh](SkinnedMesh.md), or a
-  [VoxelWorld](VoxelWorld.md); give those a Material without one.
+  [`InstancedProp`](InstancedProp.md), a [`SkinnedMesh`](SkinnedMesh.md), or a
+  [`VoxelWorld`](VoxelWorld.md); give those a Material without one.
 - **Grass takes variants of its Shader.** A Shader whose ground grows grass
   (a [Terrain](Terrain.md) with `layers`, or any [Planet](Planet.md), whose ground
   draws with the world default) takes 2 more buckets: the ground and grass

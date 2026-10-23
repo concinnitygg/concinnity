@@ -2,7 +2,7 @@
 
 # BenchmarkPhase
 
-One named stretch of a [BenchmarkConfig](BenchmarkConfig.md)'s run.
+One named stretch of a [`BenchmarkConfig`](BenchmarkConfig.md)'s run.
 
 ## Parameters
 

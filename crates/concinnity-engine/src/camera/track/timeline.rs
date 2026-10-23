@@ -63,6 +63,23 @@ pub(super) fn progress<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32
     lerp_array([0.0; N], key.value, key.ease.eval(t))
 }
 
+/// How fast leg `leg` moves the track `seconds` in, per second: nothing
+/// outside the leg's span, and its eased rate within it.
+pub(super) fn rate<const N: usize>(keys: &[Key<N>], leg: usize, seconds: f32) -> [f32; N] {
+    let Some(key) = keys.get(leg) else {
+        return [0.0; N];
+    };
+    let from = leg
+        .checked_sub(1)
+        .map_or(0.0, |prev| keys[prev].end_seconds);
+    let span = key.end_seconds - from;
+    if key.cut || span <= 0.0 || seconds < from || seconds > key.end_seconds {
+        return [0.0; N];
+    }
+    let speed = key.ease.rate((seconds - from) / span) / span;
+    key.value.map(|v| v * speed)
+}
+
 /// Whether the clock moving from `from` to `to` seconds reaches a cut key. A
 /// key at the start of the track is where the camera already stands, so it is
 /// never crossed.
@@ -106,6 +123,27 @@ mod tests {
         assert_eq!(progress(&keys, 1, 4.0), [15.0], "half of its own 30");
         assert_eq!(progress(&keys, 1, 9.0), [30.0]);
         assert_eq!(progress(&keys, 2, 9.0), [0.0], "past the track");
+    }
+
+    // A leg's rate is its value over its span, shaped by its ease, from the
+    // instant it starts; outside its span it adds nothing.
+    #[test]
+    fn a_leg_runs_at_its_own_rate_from_its_start() {
+        let mut keys = keys();
+        assert_eq!(
+            rate(&keys, 1, 2.0),
+            [7.5],
+            "30 over 4 s, at its first instant"
+        );
+        assert_eq!(rate(&keys, 1, 1.0), [0.0], "not started");
+        assert_eq!(rate(&keys, 0, 3.0), [0.0], "done");
+        keys[1].ease = Ease::InOut;
+        assert_eq!(rate(&keys, 1, 2.0), [0.0]);
+        assert_eq!(
+            rate(&keys, 1, 4.0),
+            [11.25],
+            "1.5 times the mean at its middle"
+        );
     }
 
     #[test]

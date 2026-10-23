@@ -2,7 +2,7 @@
 
 # DebugHud
 
-Requests the developer debug HUD: a set of [TextLabel](TextLabel.md) chips
+Requests the developer debug HUD: a set of [`TextLabel`](TextLabel.md) chips
 with diagnostic readouts, anchored to the top-right of the window and
 toggled with F1 (hidden by default).
 
@@ -19,19 +19,19 @@ frame's step count), so their on-screen position is fixed by the engine
 rather than the authored coordinates.
 
 The always-on frame-rate and GPU-memory readouts live on the separate
-[StatHud](StatHud.md).
+[`StatHud`](StatHud.md).
 
 Every rendering world receives a `DebugHud` at start when it declares none,
 and any label field left unset receives a chip, so the example below is
 only needed to restyle them. The HUD only activates in developer contexts:
 a debug build of the host binary, or a world launched through `cn debug`;
 release builds leave it inert even when declared. Declare an
-[EngineDefaults](EngineDefaults.md) with `"debug_hud": false` to leave the
+[`EngineDefaults`](EngineDefaults.md) with `"debug_hud": false` to leave the
 world without one.
 
 ## Parameters
 
-- `passes_label`: A string. [TextLabel](TextLabel.md) that receives the per-step GPU-timing chip text. Optional.
-- `mouse_label`: A string. [TextLabel](TextLabel.md) that receives the cursor-position chip text. Optional.
-- `camera_label`: A string. [TextLabel](TextLabel.md) that receives the live camera-pose chip text. Optional.
-- `sys_label`: A string. [TextLabel](TextLabel.md) that receives the thread / memory budget chip text. Optional.
+- `passes_label`: A string. [`TextLabel`](TextLabel.md) that receives the per-step GPU-timing chip text. Optional.
+- `mouse_label`: A string. [`TextLabel`](TextLabel.md) that receives the cursor-position chip text. Optional.
+- `camera_label`: A string. [`TextLabel`](TextLabel.md) that receives the live camera-pose chip text. Optional.
+- `sys_label`: A string. [`TextLabel`](TextLabel.md) that receives the thread / memory budget chip text. Optional.

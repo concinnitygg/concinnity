@@ -201,6 +201,8 @@ pub struct RenderSnapshot {
     pub grass_benders: Vec<crate::render::environment::grass::GrassBender>,
     /// Save the frame to this PNG path once it is presented.
     pub capture: Option<String>,
+    /// Draw the frame without its overlay, for a screenshot without its HUD.
+    pub hide_ui: bool,
 }
 
 impl RenderSnapshot {
@@ -217,6 +219,7 @@ impl RenderSnapshot {
         self.scene_ops.clear();
         self.grass_benders.clear();
         self.capture = None;
+        self.hide_ui = false;
     }
 }
 

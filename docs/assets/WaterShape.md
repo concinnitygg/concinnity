@@ -2,7 +2,7 @@
 
 # WaterShape
 
-What a [WaterSurface](WaterSurface.md) covers.
+What a [`WaterSurface`](WaterSurface.md) covers.
 
 ## Values
 

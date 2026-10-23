@@ -15,7 +15,7 @@ taller than the band it scrolls (mouse wheel or thumb drag) and rows outside
 the band are clipped.
 
 All pixel fields are in the same reference-space coordinates as the Screen's
-other UI (see the overlay scaling notes on [MainMenu](MainMenu.md)).
+other UI (see the overlay scaling notes on [`MainMenu`](MainMenu.md)).
 
 ## Parameters
 
@@ -25,7 +25,7 @@ other UI (see the overlay scaling notes on [MainMenu](MainMenu.md)).
 - `width`: A float. Width of the content band in reference pixels. Defaults to `0.0`.
 - `height`: A float. Height of the content band (the visible window) in reference pixels. Defaults to `0.0`.
 - `rows`: An array of [ScrollRow](ScrollRow.md) objects. The rows in the band, top to bottom. Defaults to `[]`.
-- `groups`: An array of [ScrollGroup](ScrollGroup.md) objects. Collapsible groups, referenced by index from [ScrollRow::group]. Defaults to `[]`.
+- `groups`: An array of [ScrollGroup](ScrollGroup.md) objects. Collapsible groups, referenced by index from [`ScrollRow::group`]. Defaults to `[]`.
 - `thumb`: A string. Scrollbar thumb [Sprite](Sprite.md) the UI moves and resizes. `None` for a panel with no scrollbar. Optional.
 - `track`: A string. Scrollbar track [Sprite](Sprite.md). Hidden along with the thumb when the content fits the band. Optional.
 - `track_x`: A float. Left edge of the scrollbar track in reference pixels. Defaults to `0.0`.

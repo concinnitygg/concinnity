@@ -6,7 +6,7 @@ Upscaler selector for `GraphicsConfig.anti_aliasing.upscaler`. `Auto` resolves a
 to the best available (DLSS, then XeSS, then FSR3); the explicit variants
 request a specific upscaler and fall back when it is unavailable. DirectX
 and Vulkan both resolve all three, each from the vendor SDK staged beside
-the binary; Metal uses MetalFX and treats any value as its native path.
+the binary; Metal uses `MetalFX` and treats any value as its native path.
 
 ## Values
 

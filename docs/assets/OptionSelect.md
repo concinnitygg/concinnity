@@ -6,8 +6,8 @@ A settings row that cycles through a fixed set of values on click.
 
 `OptionSelect` is a build-time shorthand for one row of a settings menu: a
 left-aligned name, a right-aligned current value, and a clickable region
-that advances the value. It expands into a [TextLabel](TextLabel.md) for the
-name, a `TextLabel` for the value, and a [HitRegion](HitRegion.md) whose
+that advances the value. It expands into a [`TextLabel`](TextLabel.md) for the
+name, a `TextLabel` for the value, and a [`HitRegion`](HitRegion.md) whose
 action advances `setting`.
 
 The `setting` field names an engine setting the runtime knows how to read,

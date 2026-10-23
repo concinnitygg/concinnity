@@ -781,7 +781,9 @@ impl System for PhysicsSystem {
                 world.set_kinematic_translation(prop.handle, hold_pos);
             }
             self.props.drive_posed(world, tick, timing.ticks);
-            self.drives.tick(world);
+            let north = frame.dir_to_local([0.0, 0.0, -1.0]);
+            self.drives
+                .tick(world, ctx, &self.props, timing.tick_start(tick), north);
 
             // move the player capsule
             if let Some(player) = self.player.as_mut() {

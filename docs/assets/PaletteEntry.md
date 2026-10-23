@@ -2,7 +2,7 @@
 
 # PaletteEntry
 
-One entry in a [MaterialPalette](MaterialPalette.md). Each carries an `alias` (the suffix of the
+One entry in a [`MaterialPalette`]. Each carries an `alias` (the suffix of the
 expanded [Material](Material.md) name) plus the Material fields the expansion
 fills in. The [Texture](Texture.md)s named by `albedo` / `normal_map` resolve
 on the expanded Material.

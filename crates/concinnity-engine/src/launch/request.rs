@@ -8,8 +8,7 @@ use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::{QualityPreset, StoredSettings, UserGraphicsSettings};
 
-/// Where screenshots and benchmark captures land unless the launch names
-/// another directory: relative to the working directory the run started in.
+/// Where screenshots land unless the launch names another directory: relative to the working directory the run started in.
 pub const DEFAULT_SCREENSHOTS_DIR: &str = "screenshots";
 
 /// The file a capture at `path` is written to for a run whose screenshots go
@@ -92,8 +91,7 @@ impl LaunchRequest {
         })
     }
 
-    /// The directory this run writes screenshots and benchmark captures
-    /// under.
+    /// The directory this run writes screenshots under.
     pub fn screenshots_dir(&self) -> &str {
         self.args
             .screenshots_dir

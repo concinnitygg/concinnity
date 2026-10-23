@@ -30,10 +30,12 @@ is placed at its authored distance from the subject, on the line of view
 through it, from the first frame.
 
 The subject must be a Prop with no `parent`, since travel writes its
-position in world space, and is moved by the track alone: give it no
-`collider` and no [`PropBody`](PropBody.md), or the physics pushes against
-the track. A subject that is missing, parented or later removed leaves the
-track driving the camera itself from wherever it stands, with a warning.
+position in world space. The track owns its position: a subject with a
+[`PropBody`](PropBody.md) moves kinematically along the track while the
+track has it, still pushing whatever it runs into, and no
+[`RollingDrive`](RollingDrive.md) steers it. A subject that is missing,
+parented or later removed leaves the track driving the camera itself from
+wherever it stands, with a warning.
 
 The clock is the fixed simulation step, not the frame delta. A machine that
 renders half as fast visits the same poses at the same track times and
@@ -47,3 +49,4 @@ simulation.
 - `turn`: An array of [CameraTurn](CameraTurn.md) objects. Where the camera looks, leg by leg. Played against the same clock as `travel` and independent of it, so the camera can turn one way while traveling another. Defaults to `[]`.
 - `subject`: A string. The [Prop](Prop.md) the track carries and films, or unset for a track that carries the camera itself.
 - `boom`: An array of [CameraBoom](CameraBoom.md) objects. How the camera frames the `subject`, leg by leg, on the same clock as the other two lists. Used only with a `subject`. Defaults to `[]`.
+- `carry_from_seconds`: A float. Seconds into the track before which it only films its `subject`, which moves by itself: rolled by its physics, steered by its drive. From then the track carries it, picking it up where it is and as fast as it is going and easing it onto travel's path over the next few seconds, so neither its position nor its speed jumps. `0` carries it from the start. Defaults to `0.0`.

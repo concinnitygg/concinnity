@@ -105,6 +105,9 @@ mod tests {
             "directx",
             "--screenshots-dir",
             "shots",
+            "--screenshots",
+            "--screenshot-at",
+            "4:start",
         ])
         .unwrap();
         assert_eq!(
@@ -117,6 +120,11 @@ mod tests {
                 graphics_api: Some(concinnity_engine::platform::Platform::DirectX),
                 screenshots_dir: Some("shots".into()),
                 frames: Some(5),
+                screenshots: true,
+                screenshot_at: vec![concinnity_engine::launch::ScreenshotAt::new(
+                    4.0,
+                    "start.png"
+                )],
             }
         );
     }

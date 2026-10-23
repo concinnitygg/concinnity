@@ -2,10 +2,10 @@
 
 # CameraShot
 
-A reusable [Camera3D](Camera3D.md) preset: reference it from a
+A reusable [`Camera3D`](Camera3D.md) preset: reference it from a
 [Scene](Scene.md)'s `camera_shot`, or use it standalone.
 
-Used standalone, it expands into a [Camera3D](Camera3D.md) with the same
+Used standalone, it expands into a [`Camera3D`](Camera3D.md) with the same
 parameters.
 
 **Examples**
@@ -16,7 +16,7 @@ From library preset (standalone, replaces Camera3D):
 
 ## Parameters
 
-- `preset`: A string. Name of a built-in or file-backed preset (e.g. "shot_eye_level"). Preset values are used as defaults; any inline fields override them.
+- `preset`: A string. Name of a built-in or file-backed preset (e.g. "`shot_eye_level`"). Preset values are used as defaults; any inline fields override them.
 - `fov_y_degrees`: A float. Vertical field of view in degrees. Defaults to `75.0`.
 - `near`: A float. Near clip plane distance in world units. Defaults to `0.05`.
 - `view_distance`: A float. How far the camera sees in world units; `null` for no limit. Optional.

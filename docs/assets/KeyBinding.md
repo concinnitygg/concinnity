@@ -5,12 +5,12 @@
 Maps a keyboard key to an action.
 
 When the bound key is pressed, the action fires once per press (like a
-[HitRegion](HitRegion.md) click), whether or not the camera holds the cursor.
-While a [TextInput](TextInput.md) has keyboard focus, bindings are suspended
+[`HitRegion`](HitRegion.md) click), whether or not the camera holds the cursor.
+While a [`TextInput`](TextInput.md) has keyboard focus, bindings are suspended
 so typing cannot trigger actions; a [Screen](Screen.md)'s `toggle_key` stays
 live.
 
-InputKey names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
+`InputKey` names are case-sensitive canonical names (e.g. `"Escape"`, `"Space"`,
 `"Enter"`).
 
 A binding with `mods` fires only while exactly those modifiers are held, and

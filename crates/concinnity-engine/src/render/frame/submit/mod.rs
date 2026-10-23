@@ -125,7 +125,7 @@ pub fn submit(
         near: snap.frame.near,
         view_distance: snap.frame.view_distance,
         cam_pos: snap.frame.cam_pos,
-        text_calls: &snap.text_calls,
+        text_calls: if snap.hide_ui { &[] } else { &snap.text_calls },
         lines: &snap.lines,
         world_hidden: snap.frame.world_hidden,
         view_mode: snap.frame.view_mode,

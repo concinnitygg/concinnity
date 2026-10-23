@@ -479,10 +479,16 @@ pub fn schedule_mode(resources: &crate::ecs::Resources) -> ScheduleMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputSampledAt(pub u64);
 
-/// A frame the report wants saved: the PNG path for the next frame drawn.
-/// Written by the frame report; the graphics system moves it onto that frame.
+/// A frame a screenshot wants saved: the PNG path for the next frame drawn,
+/// and whether the UI shows in it. Written by the screenshot system; the
+/// graphics system moves it onto that frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FrameCaptureRequest(pub String);
+pub struct FrameCaptureRequest {
+    /// Where the image is written.
+    pub path: String,
+    /// Whether the HUD and other UI are drawn in the frame.
+    pub hud: bool,
+}
 
 /// A `screenshot` action fired: save this many consecutive frames, starting
 /// with the next drawn. Written by the UI input system; the graphics system

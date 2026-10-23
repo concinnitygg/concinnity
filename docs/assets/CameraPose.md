@@ -2,7 +2,7 @@
 
 # CameraPose
 
-Where a [BenchmarkConfig](BenchmarkConfig.md) starts the camera.
+Where a [`BenchmarkConfig`](BenchmarkConfig.md) starts the camera.
 
 ## Parameters
 

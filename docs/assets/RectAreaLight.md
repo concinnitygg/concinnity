@@ -5,14 +5,14 @@
 A rectangular area light: a glowing panel that lights the scene from its
 whole surface rather than from a single point.
 
-Unlike a [PointLight](PointLight.md) or [SpotLight](SpotLight.md), the softness of
+Unlike a [`PointLight`](PointLight.md) or [`SpotLight`](SpotLight.md), the softness of
 the shadow terminator and the shape of the specular highlight follow the
 panel's real dimensions, so a wide softbox wraps light around a surface and
 leaves a stretched rectangular reflection on glossy materials. Use it for
 windows, ceiling panels, screens, and practical lights.
 
 The panel is positioned by `center`, oriented by `normal` (the direction it
-emits), and sized by `half_size`, matching [GlassPanel](GlassPanel.md).
+emits), and sized by `half_size`, matching [`GlassPanel`](GlassPanel.md).
 
 ## Parameters
 

@@ -68,6 +68,7 @@ pub mod platform;
 pub mod profile;
 pub mod render;
 pub mod resource;
+pub mod screenshot;
 pub mod settings;
 pub mod shutdown;
 pub mod sky;

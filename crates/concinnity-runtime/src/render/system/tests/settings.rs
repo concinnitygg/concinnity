@@ -1,8 +1,6 @@
 use super::*;
-use concinnity_engine::benchmark::BenchmarkRun;
-use concinnity_engine::components::{
-    BenchmarkConfig, FrameCapture, KeyBinding, UiAction, WindowMode,
-};
+use concinnity_engine::components::{KeyBinding, Screenshot, UiAction, WindowMode};
+use concinnity_engine::launch::LaunchArgs;
 use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
 use concinnity_engine::window::display_mode::DisplayMode;
@@ -106,21 +104,31 @@ fn a_capture_launch_request_reaches_the_backend() {
     assert!(lock(&state).init.as_ref().unwrap().capture);
 }
 
-// A benchmark that saves frames along the way keeps the presented frame
-// readable, with no launch request asking for it.
+// A run that takes screenshots keeps the presented frame readable, with no
+// capture request asking for it; the same world played normally does not.
 #[test]
-fn a_benchmark_with_captures_arms_frame_capture() {
-    let (state, hooks) = recording_hooks();
-    let mut world = scene_builder().build();
-    world.insert_resource(BenchmarkRun::new(BenchmarkConfig {
-        captures: vec![FrameCapture {
+fn a_run_taking_screenshots_arms_frame_capture() {
+    let armed = |args: LaunchArgs| {
+        let (state, hooks) = recording_hooks();
+        let mut b = scene_builder();
+        b.push(Screenshot {
             seconds: 1.0,
-            path: "shot.png".to_string(),
-        }],
-        ..Default::default()
+            file: "shot.png".to_string(),
+            hud: true,
+        });
+        let mut world = b.build();
+        world.insert_resource(LaunchRequest {
+            args,
+            ..Default::default()
+        });
+        init_graphics(&mut world, hooks);
+        lock(&state).init.as_ref().unwrap().capture
+    };
+    assert!(armed(LaunchArgs {
+        screenshots: true,
+        ..LaunchArgs::NONE
     }));
-    init_graphics(&mut world, hooks);
-    assert!(lock(&state).init.as_ref().unwrap().capture);
+    assert!(!armed(LaunchArgs::NONE));
 }
 
 // A key bound to a screenshot keeps the presented frame readable, with no

@@ -5,7 +5,7 @@
 Cascaded shadow maps for the world's directional lights: their resolution,
 how far from the camera they reach, how many cascades split that range, and
 how often each is re-rendered. The `shadows` section of
-[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+[`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default
 below.
 
 The defaults describe the quality capable hardware runs, not what every GPU

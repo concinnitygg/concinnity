@@ -1175,17 +1175,18 @@ registry.
 | 10  | Animation           | Late       | The world declares any `Animation` or `AnimationGraph`.                                                               |
 | 11  | Story               | Late       | The world declares a `Story`.                                                                                         |
 | 12  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
-| 13  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
-| 14  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
-| 15  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
-| 16  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
-| 17  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
-| 18  | Settings            | PreRender  | The world runs with a window.                                                                                         |
-| 19  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
-| 20  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
-| 21  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
-| 22  | Graphics            | PostRender | The world runs with a window.                                                                                         |
-| 23  | Frame report        | PostRender | The run is benchmarked (`--benchmark`).                                                                               |
+| 13  | Screenshot          | Late       | The launch has a `--screenshot-at`, or takes the world's shots and the world declares a `Screenshot`.                 |
+| 14  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
+| 15  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
+| 16  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
+| 17  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
+| 18  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
+| 19  | Settings            | PreRender  | The world runs with a window.                                                                                         |
+| 20  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
+| 21  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
+| 22  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
+| 23  | Graphics            | PostRender | The world runs with a window.                                                                                         |
+| 24  | Frame report        | PostRender | The run is benchmarked (`--benchmark`).                                                                               |
 
 Key ordering constraints:
 
@@ -1213,6 +1214,8 @@ Key ordering constraints:
   previous-frame movement intent, a deliberate one-frame-lagged resolution.
 - **Cameras and story before audio.** The listener reads the camera, and page
   audio is heard the same tick.
+- **Cameras before screenshots.** A shot requested this tick shows the pose the
+  cameras and the camera track just set.
 
 Blobs are profile-agnostic (the cook injects a debug HUD into every rendering
 world), so the running binary is the one place its own profile is knowable: a
@@ -2641,11 +2644,23 @@ fluctuation is not reported as a leak.
 Any world can be benchmarked by launching it with `--benchmark` (`cn run
 --benchmark`, or an app passing `LaunchArgs` with `benchmark` set to
 `App::with_args`). A `BenchmarkConfig` asset customizes
-the run: the camera's start pose, the travel and turn legs it follows after the
-warm-up, the named phases the run is measured in, the frame budget, the frame-rate
-cap, and frames to save as images. A world without one holds its starting camera
-for ten seconds after a two-second warm-up; declaring one changes nothing on an
+the run: the camera's start pose, the travel, turn and boom legs it follows after
+the warm-up, a subject it films, the drive keys that steer a rolling subject and
+the moment the run picks it up, the named phases the run is measured in, the frame
+budget, and the frame-rate cap. A world without one holds its starting camera for
+ten seconds after a two-second warm-up; declaring one changes nothing on an
 ordinary launch.
+
+A world with a `Planet` whose config authors none of its route tours the planet
+instead: one great circle through where the world starts, over the ground, the
+shore and the sea, up into orbit, through the night and down into the sunrise,
+built when the run arms from the world's planet, sea and sun. A subject with a
+`RollingDrive` rolls itself into the sea first and is picked up there with no jump
+in position or speed. `route` asks for the legs or the tour outright, and the run
+logs which route it took.
+
+A benchmarked run also takes the world's `Screenshot`s, each the frame drawn at a
+moment of the fixed simulation clock, so the images match across hosts.
 
 The run records one fixed-size row per frame (wall, CPU, GPU, per-pass, and
 per-system times), reduces each column to count, mean, percentiles (50, 95, 99),
@@ -2682,6 +2697,15 @@ quality preset, ray-tracing dynamic-geometry policy, skinned ray-tracing geometr
 DLSS preset, fixed frame rate, hidden show flags, GPU validation, serial driver,
 serial schedule, and screenshot capture after a frame count. The engine reads no
 environment variables for these; every development knob is a flag.
+
+Screenshots: `--screenshots` takes the world's `Screenshot`s on any run, as
+`--benchmark` always does; plain play takes none. `--screenshot-at SECONDS[:FILE]`
+(repeatable) saves the frame drawn that many seconds into the run on the simulation
+clock, named for the moment to the millisecond when `FILE` is left out and given a
+`.png` extension when it has none. `--screenshots-dir DIR` puts them all under
+`DIR` (default `screenshots`). A shot whose file would leave that directory, or
+that writes a file another shot writes, is refused at startup; one past the end of
+a benchmark, never reached, or due while the window is hidden is reported.
 
 ### 26.2 Debug protocol
 

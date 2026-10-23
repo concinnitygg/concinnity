@@ -4,7 +4,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::components::{CameraBoom, CameraTravel, CameraTurn, Prop};
+use crate::benchmark::PlanetTour;
+use crate::components::{CameraBoom, CameraTravel, CameraTurn, DriveKey, Prop, Vocabulary};
 use crate::ecs::Ref;
 
 /// A 60 Hz frame, the budget a run counts against unless a world says
@@ -21,8 +22,13 @@ const DEFAULT_PHASE_NAME: &str = "run";
 ///
 /// A world is benchmarked when it is launched with `--benchmark`, whether it
 /// declares one of these or not. Without one the camera holds the pose the
-/// world starts it at for ten seconds after the warm-up. Declaring one does
-/// nothing on an ordinary launch, so a world can ship its benchmark beside it.
+/// world starts it at for ten seconds after the warm-up, or, on a world with
+/// a [`Planet`](#planet), tours the planet as [`PlanetTour`](#planettour)
+/// describes. A config that authors any of its route (`start`, `travel`,
+/// `turn`, `boom`, `phases`, `drive` or `carry_from_seconds`) keeps it unless
+/// it asks for the tour by `route`. The run says which route it took as it starts. Declaring one
+/// does nothing on an ordinary launch, so a world can ship its benchmark
+/// beside it.
 ///
 /// A benchmarked run takes the camera away from the player: it holds still
 /// through the warm-up, then follows `travel` and `turn` from where it stood.
@@ -98,6 +104,20 @@ pub struct BenchmarkConfig {
     /// The [Prop](#prop) the run carries and films, or unset to carry the
     /// camera itself.
     pub subject: Option<Ref<Prop>>,
+    /// Which way the run goes: the legs below, or a tour of the world's
+    /// [`Planet`](#planet). Left to choose, a world with a planet tours it
+    /// when the config authors none of its route.
+    pub route: BenchmarkRoute,
+    /// How the run tours the planet, when it does.
+    pub tour: PlanetTour,
+    /// How the subject's [`RollingDrive`](#rollingdrive) is steered after the
+    /// warm-up, key by key, while the subject moves by itself.
+    pub drive: Vec<DriveKey>,
+    /// Seconds after the warm-up from which `travel` carries the subject.
+    /// Until then the run only films it, and its physics and its `drive` move
+    /// it; from then the run picks it up where it is, as fast as it is going,
+    /// and eases it onto travel's path. `0` carries it from the start.
+    pub carry_from_seconds: f32,
     /// Where the camera goes after the warm-up, leg by leg.
     pub travel: Vec<CameraTravel>,
     /// Where the camera looks after the warm-up, leg by leg. Played against
@@ -109,17 +129,40 @@ pub struct BenchmarkConfig {
     /// The named stretches the run is measured in, back to back from the end
     /// of the warm-up. Left empty, the run is one ten-second phase.
     pub phases: Vec<BenchmarkPhase>,
-    /// Frames saved as PNG images along the way, each the first frame drawn at
-    /// or after its moment of the run.
-    ///
-    /// The moments are counted from the end of the warm-up, on the clock the
-    /// camera moves by, so a capture shows the same pose on every run. A
-    /// capture is copied out within its frame and written to disk in the
-    /// background, so the frames around it are measured like any other.
-    pub captures: Vec<FrameCapture>,
+}
+
+/// Which way a [`BenchmarkConfig`](#benchmarkconfig)'s run goes.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, Vocabulary,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkRoute {
+    /// A tour of the world's planet when it has one and the config authors
+    /// none of its route, else the config's own route.
+    #[default]
+    #[vocab("auto")]
+    Auto,
+    /// The config's own `travel`, `turn` and `boom` legs.
+    #[vocab("legs")]
+    Legs,
+    /// A tour of the world's planet, as `tour` describes.
+    #[vocab("planet_tour")]
+    PlanetTour,
 }
 
 impl BenchmarkConfig {
+    /// Whether the config lays out any of its own route: where it starts,
+    /// any leg, phase or drive key, or a moment it carries its subject from.
+    pub fn authors_route(&self) -> bool {
+        self.start.is_some()
+            || !self.travel.is_empty()
+            || !self.turn.is_empty()
+            || !self.boom.is_empty()
+            || !self.phases.is_empty()
+            || !self.drive.is_empty()
+            || self.carry_from_seconds != 0.0
+    }
+
     /// The phases the run is measured in: the declared ones, or the one
     /// default phase when none are.
     pub fn resolved_phases(&self) -> Vec<BenchmarkPhase> {
@@ -179,32 +222,6 @@ pub struct CameraPose {
     pub yaw_deg: f32,
     /// Elevation in degrees. Positive looks up.
     pub pitch_deg: f32,
-}
-
-/// One frame a [`BenchmarkConfig`](#benchmarkconfig) saves as an image.
-///
-/// ```rust
-/// # use concinnity_engine::components::{BenchmarkConfig, FrameCapture};
-/// BenchmarkConfig {
-///     captures: vec![FrameCapture {
-///         seconds: 30.0,
-///         path: "captures/sunset.png".to_string(),
-///     }],
-///     ..Default::default()
-/// };
-/// ```
-#[derive(
-    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, crate::ecs::AssetFields,
-)]
-#[serde(default)]
-pub struct FrameCapture {
-    /// How many seconds after the warm-up the frame is taken.
-    pub seconds: f32,
-    /// Where the PNG is written. A relative path is taken from the run's
-    /// screenshot directory (`screenshots` under the working directory the run
-    /// started in, unless the launch names another); an absolute one is used
-    /// as given.
-    pub path: String,
 }
 
 #[cfg(test)]
