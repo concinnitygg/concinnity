@@ -151,6 +151,16 @@ pub(super) struct LogicalDevice {
     // (`descriptor_layout::update_after_bind_is_wanted`), which is MoltenVK and
     // no desktop driver.
     pub update_after_bind: bool,
+    // `VK_KHR_draw_indirect_count` was enabled, so a cull's lists draw by the
+    // counts it wrote (see `draws_by_count`).
+    pub draw_indirect_count: bool,
+}
+
+// Whether a device with `extensions` draws a cull's lists by their GPU-written
+// counts. Without the extension (MoltenVK) every list is zeroed before the
+// scatter and drawn at its full capacity, a zeroed command drawing nothing.
+pub(super) fn draws_by_count<'a>(mut extensions: impl Iterator<Item = &'a [u8]>) -> bool {
+    extensions.any(|name| name == b"VK_KHR_draw_indirect_count")
 }
 
 pub(super) fn create_logical_device(
@@ -224,6 +234,19 @@ pub(super) fn create_logical_device(
     // Vulkan requires an implementation that exposes it to have it enabled, so
     // `create_device` is invalid without this.
     let has_portability_subset = has_ext(b"VK_KHR_portability_subset");
+    let draw_indirect_count = draws_by_count(exts.iter().map(|e| {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
+        unsafe { CStr::from_ptr(e.extension_name.as_ptr()) }.to_bytes()
+    }));
+    tracing::info!(
+        "Vulkan cull lists draw {}",
+        if draw_indirect_count {
+            "by their GPU-written counts (VK_KHR_draw_indirect_count)"
+        } else {
+            "at full capacity over zeroed commands (no VK_KHR_draw_indirect_count)"
+        }
+    );
 
     // Probe which of those features the device actually supports.
     let mut f16_probe = vk::PhysicalDeviceShaderFloat16Int8Features::default();
@@ -294,6 +317,9 @@ pub(super) fn create_logical_device(
     }
     if has_portability_subset {
         enabled.push(c"VK_KHR_portability_subset".to_owned());
+    }
+    if draw_indirect_count {
+        enabled.push(c"VK_KHR_draw_indirect_count".to_owned());
     }
 
     // RT capability gate: the device is capable AND XeSS is not the active
@@ -517,6 +543,7 @@ pub(super) fn create_logical_device(
             rt_capable: false,
             caps,
             update_after_bind: false,
+            draw_indirect_count,
         });
     }
 
@@ -559,6 +586,7 @@ pub(super) fn create_logical_device(
         rt_capable,
         caps,
         update_after_bind: want_update_after_bind,
+        draw_indirect_count,
     })
 }
 

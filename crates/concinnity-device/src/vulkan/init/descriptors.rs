@@ -116,14 +116,14 @@ fn create_descriptor_pool(
     .build();
     // total sets: global (n_frames) + shadow global (n_frames) + atlas +
     // per-frame×cluster instance sets + per-frame composite sets + per-frame
-    // bindless sets + per-frame GPU-cull sets.
+    // bindless sets + per-frame GPU-cull and packing sets.
     let total_sets = n_frames
         + n_frames
         + n_atlas
         + n_frames * n_cluster
         + n_frames
         + bindless_sets_count
-        + bindless_sets_count
+        + 2 * bindless_sets_count
         + shadow_cull_set_count
         + gbuffer_sets_count
         + history_sets_count;
@@ -189,8 +189,9 @@ fn pool_sizes(c: &PoolCounts) -> PoolSizes {
                 + 2 * c.gbuffer_sets
                 + 2 * c.history_sets,
         )
-        // The GPU-cull set per frame.
+        // The GPU-cull and packing sets per frame.
         .sets(&super::main_cull_set(), c.bindless_sets)
+        .sets(&crate::vulkan::compact::compact_set(), c.bindless_sets)
 }
 
 // Allocate and write the per-frame global sets.
@@ -253,11 +254,13 @@ mod pool_tests {
             (&global_set(), 3),
             (&shadow_global_set(), 3),
             (&super::super::main_cull_set(), 3),
+            (&crate::vulkan::compact::compact_set(), 3),
         ]));
         let bindless_ssbos = 3 * c.bindless_sets;
         let need = PoolSizes::default()
             .sets(&global_set(), 3)
             .sets(&super::super::main_cull_set(), 3)
+            .sets(&crate::vulkan::compact::compact_set(), 3)
             .count(vk::DescriptorType::STORAGE_BUFFER);
         assert!(pool.count(vk::DescriptorType::STORAGE_BUFFER) >= need + bindless_ssbos);
     }

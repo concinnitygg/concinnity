@@ -28,13 +28,11 @@ pub struct CullParams {
     pub cam_pos: [f32; 3],
     /// Draw records the kernel iterates.
     pub object_count: u32,
-    /// Shader-bucket command regions in the indirect buffer. The kernel writes
-    /// every record's slot in all `bucket_count` regions (a draw in the record's
-    /// own bucket, a no-op everywhere else); region `b` starts at command
-    /// `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
+    /// Shader buckets the kernel routes between; 1 sends every record to the
+    /// default's stream.
     pub bucket_count: u32,
-    /// `u32` slots one bucket occupies in the output list.
-    pub bucket_stride: u32,
+    /// The first skinned record, whose draws take the skinned tail's stream.
+    pub skinned_base: u32,
 }
 
 /// Cull-side Hi-Z uniforms (cull.hlsl, 80 bytes): the previous frame's
@@ -71,7 +69,7 @@ mod tests {
         assert_eq!(offset_of!(CullParams, cam_pos), 96);
         assert_eq!(offset_of!(CullParams, object_count), 108);
         assert_eq!(offset_of!(CullParams, bucket_count), 112);
-        assert_eq!(offset_of!(CullParams, bucket_stride), 116);
+        assert_eq!(offset_of!(CullParams, skinned_base), 116);
     }
 
     // CullHizParams in cull.hlsl: mat4 (64) + float2 (8) + two uints. Total 80

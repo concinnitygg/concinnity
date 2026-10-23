@@ -23,13 +23,11 @@ pub struct CullParams {
     pub hiz_mip_count: u32,
     /// Non-zero when the Hi-Z occlusion test runs.
     pub hiz_enabled: u32,
-    /// Shader-bucket command regions in the indirect buffer. The kernel writes
-    /// every record's slot in all `bucket_count` regions (a draw in the record's
-    /// own bucket, a no-op everywhere else); region `b` starts at command
-    /// `b * bucket_stride`. `bucket_count = 1` degenerates to a single region.
+    /// Shader buckets the kernel routes between; 1 sends every record to the
+    /// default's stream.
     pub bucket_count: u32,
-    /// `u32` slots one bucket occupies in the output list.
-    pub bucket_stride: u32,
+    /// The first skinned record, whose draws take the skinned tail's stream.
+    pub skinned_base: u32,
     /// Padding so the field layout matches the shader-side struct.
     pub _pad: [u32; 2],
 }
@@ -54,6 +52,6 @@ mod tests {
         assert_eq!(offset_of!(CullParams, hiz_mip_count), 184);
         assert_eq!(offset_of!(CullParams, hiz_enabled), 188);
         assert_eq!(offset_of!(CullParams, bucket_count), 192);
-        assert_eq!(offset_of!(CullParams, bucket_stride), 196);
+        assert_eq!(offset_of!(CullParams, skinned_base), 196);
     }
 }

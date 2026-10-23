@@ -75,11 +75,11 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
 
 // Compute cull compute kernel. One invocation per build-time `DrawObject`
 // frustum/distance-tests the object's `GpuObjectData` AABB against the six
-// CPU-extracted frustum planes and writes one `VkDrawIndexedIndirectCommand`
-// into the per-frame indirect buffer: survivors get `instance_count = 1`,
-// culled or disabled objects get `instance_count = 0` (a no-op draw). The main
-// bindless pass then issues the whole buffer with a single
-// `cmd_draw_indexed_indirect`, so the CPU never walks the static draw list.
+// CPU-extracted frustum planes and counts the ones it keeps per stream; the
+// packing kernels (`vulkan/compact.rs`) then write their
+// `VkDrawIndexedIndirectCommand`s into one list per stream of the per-frame
+// indirect buffer, which the main bindless pass draws list by list, so the
+// CPU never walks the static draw list.
 //
 // The frustum and distance maths mirror `gfx::frustum` exactly (the six
 // planes are extracted CPU-side already normalized) so the GPU path culls

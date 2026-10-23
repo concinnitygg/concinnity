@@ -13,7 +13,7 @@
 //! itself only deals with the HDR pass.
 
 use ash::vk;
-use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::SKINNED_STREAM;
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
@@ -205,19 +205,9 @@ impl VkContext {
             //
             // Once per shader bucket: bucket 0 runs under the bindless pipeline
             // bound above, each later bucket under its material shader's own
-            // pipeline. The cull kernel wrote every record's command into
-            // exactly one bucket's region, so the regions never double-draw.
-            // SAFETY: the frame's indirect buffer is owned by `self.cull`, and the cull dispatch
-            // that filled it was barriered before this pass reads it.
-            unsafe {
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    self.cull.indirect_buffers[frame_idx].buffer(),
-                    0,
-                    u32::saturating_from(self.state.draw.skinned_record_base()),
-                    u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>()),
-                );
-            }
+            // pipeline. The cull packed every kept record into exactly one
+            // stream's list, so the lists never double-draw.
+            self.draw_main_stream(cmd, self.cull.indirect_buffers[frame_idx].buffer(), 0);
             // GPU expands the indirect buffer to up to `draw.n_objects` draw
             // commands inside, but the call count surfaced to the profiler
             // is the host-side draw. Mirrors DirectX / Metal.
@@ -302,21 +292,13 @@ impl VkContext {
                     vk::IndexType::UINT32,
                 );
             }
-            // Indirect draw #2: the skinned tail
-            // `[skinned_record_base(), record_count())`, byte-offset into the
-            // same indirect command buffer.
-            let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
-            // SAFETY: the offset addresses the skinned tail inside the frame's cull-written
-            // indirect buffer, owned by `self.cull`.
-            unsafe {
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    self.cull.indirect_buffers[frame_idx].buffer(),
-                    (self.state.draw.skinned_record_base() * cmd_stride) as u64,
-                    u32::saturating_from(self.state.draw.n_skinned),
-                    u32::saturating_from(cmd_stride),
-                );
-            }
+            // Indirect draw #2: the skinned tail's list, from
+            // `skinned_record_base()` in the same indirect command buffer.
+            self.draw_main_stream(
+                cmd,
+                self.cull.indirect_buffers[frame_idx].buffer(),
+                SKINNED_STREAM,
+            );
             self.inc_draw_calls(1);
         }
 
@@ -470,17 +452,7 @@ impl VkContext {
         }
         // Indirect draw #1: the static + instance prefix against the static
         // VB/IB bound above, once per shader bucket.
-        // SAFETY: the phase-2 indirect buffer is owned by `self.cull` and was written by the
-        // phase-2 cull ahead of this pass.
-        unsafe {
-            device.cmd_draw_indexed_indirect(
-                cmd,
-                self.cull.indirect_buffers2[frame_idx].buffer(),
-                0,
-                u32::saturating_from(self.state.draw.skinned_record_base()),
-                u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>()),
-            );
-        }
+        self.draw_main_stream(cmd, self.cull.indirect_buffers2[frame_idx].buffer(), 0);
         self.inc_draw_calls(1);
         self.inc_draw_calls(self.draw_bucket_regions(
             cmd,
@@ -495,7 +467,6 @@ impl VkContext {
         if self.state.draw.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
-            let cmd_stride = size_of::<vk::DrawIndexedIndirectCommand>();
             // SAFETY: the phase-2 pass is still open on `cmd`, and the bindless pipeline is owned
             // by `self.cull`.
             unsafe {
@@ -520,17 +491,11 @@ impl VkContext {
                     vk::IndexType::UINT32,
                 );
             }
-            // SAFETY: the offset addresses the skinned tail inside the phase-2 indirect buffer,
-            // owned by `self.cull`.
-            unsafe {
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    self.cull.indirect_buffers2[frame_idx].buffer(),
-                    (self.state.draw.skinned_record_base() * cmd_stride) as u64,
-                    u32::saturating_from(self.state.draw.n_skinned),
-                    u32::saturating_from(cmd_stride),
-                );
-            }
+            self.draw_main_stream(
+                cmd,
+                self.cull.indirect_buffers2[frame_idx].buffer(),
+                SKINNED_STREAM,
+            );
             self.inc_draw_calls(1);
         }
 

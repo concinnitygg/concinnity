@@ -18,11 +18,11 @@
 //! programs in `SHADER_MODEL_6_5`, as every entry reaching an inline
 //! `RayQuery` must.
 
-use super::{ShaderProgram, Table, shared, spd};
+use super::{ShaderProgram, Table, commands, shared, spd};
 
 /// Everything the DirectX backend compiles.
 pub static TABLE: Table = Table {
-    programs: &[shared::ALL, spd::ALL],
+    programs: &[shared::ALL, commands::ALL, spd::ALL],
     msaa: &[false, true],
 };
 

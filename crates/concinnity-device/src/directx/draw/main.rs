@@ -6,6 +6,7 @@
 //! it.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::SKINNED_STREAM;
 use concinnity_engine::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -227,10 +228,10 @@ impl DxContext {
         // Build-time static objects render through the bindless pipeline
         // driven by a GPU-culled indirect command buffer.
         // A compute kernel frustum/distance-tests every build-time object and
-        // writes one ExecuteIndirect command per object (survivors get a real
-        // draw, culled / disabled objects an instance_count-0 no-op); the
-        // bindless main pass then issues the whole buffer with a single
-        // ExecuteIndirect; the CPU never walks the static draw list. Each
+        // packs the survivors' ExecuteIndirect commands into one list per
+        // stream; the bindless main pass issues each list with one
+        // ExecuteIndirect by its GPU-written count; the CPU never walks the
+        // static draw list. Each
         // draw is stateless apart from the per-command object-id b0 root
         // constant, with model/material/textures fetched from the per-frame
         // GpuObjectData buffer + the bindless texture pool. Instances, streamed
@@ -287,23 +288,10 @@ impl DxContext {
             // shader's own pipeline. The cull kernel wrote every record's
             // command into exactly one bucket's region, so the regions never
             // double-draw.
-            let prefix_count = u32::saturating_from(self.state.draw.skinned_record_base());
-            // SAFETY: the cull pass filled this frame's indirect buffer ahead of this pass, and
-            // the command signature matches the bindless root signature bound above.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cull_sig,
-                    prefix_count,
-                    indirect,
-                    0,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            // One CPU draw issued; the kernel-written ICB runs N indirect
+            // One CPU draw issued; the kernel-written list runs N indirect
             // commands inside, but the call count surfaced to the profiler
             // is the host-side draw. Mirrors Metal's bindless main pass.
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(cmd, cull_sig, indirect, 0));
             self.inc_draw_calls(self.execute_bucket_regions(cmd, cull_sig, indirect, frame_idx));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
@@ -361,23 +349,7 @@ impl DxContext {
             // ExecuteIndirect #2: skinned tail
             // `[skinned_record_base(), record_count())`, byte-offset into the
             // same indirect command buffer.
-            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
-            let skinned_offset = (self.state.draw.skinned_record_base()
-                * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
-                as u64;
-            // SAFETY: the cull pass wrote the skinned tail at `skinned_offset` inside this frame's
-            // indirect buffer, and the bindless root signature is bound above.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cull_sig,
-                    skinned_count,
-                    indirect,
-                    skinned_offset,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(cmd, cull_sig, indirect, SKINNED_STREAM));
         }
 
         // The blades shade on the lights, shadows and environment the surfaces
@@ -505,20 +477,7 @@ impl DxContext {
             self.bind_main_root_args(cmd, frame_idx, gpu, object_gva);
             // ExecuteIndirect #1: static + instance prefix against the static
             // VB/IB (bound above), once per shader bucket.
-            let prefix_count = u32::saturating_from(self.state.draw.skinned_record_base());
-            // SAFETY: the phase-2 cull filled this frame's second indirect buffer ahead of this
-            // pass, and the command signature matches the root signature bound above.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cull_sig,
-                    prefix_count,
-                    indirect,
-                    0,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(cmd, cull_sig, indirect, 0));
             self.inc_draw_calls(self.execute_bucket_regions(cmd, cull_sig, indirect, frame_idx));
 
             // ExecuteIndirect #2: skinned tail against the deformed VB + skinned
@@ -537,23 +496,12 @@ impl DxContext {
                 // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the
                 // frame.
                 unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
-                let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
-                let skinned_offset = (self.state.draw.skinned_record_base()
-                    * crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize)
-                    as u64;
-                // SAFETY: the phase-2 cull wrote the skinned tail at `skinned_offset` inside the
-                // second indirect buffer, and the root arguments set above persist.
-                unsafe {
-                    cmd.ExecuteIndirect(
-                        cull_sig,
-                        skinned_count,
-                        indirect,
-                        skinned_offset,
-                        None::<&ID3D12Resource>,
-                        0,
-                    );
-                }
-                self.inc_draw_calls(1);
+                self.inc_draw_calls(self.execute_main_stream(
+                    cmd,
+                    cull_sig,
+                    indirect,
+                    SKINNED_STREAM,
+                ));
             }
         }
 

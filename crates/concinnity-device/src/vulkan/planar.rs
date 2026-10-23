@@ -32,6 +32,7 @@ use concinnity_engine::render::planar_reflection::{
 use concinnity_engine::render::probe::radiance::FaceStorage;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::compact::DrawLists;
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PROBE_RECORDS_SSBO_BINDING, PoolSizes, global_set};
 use super::draw::ViewUniforms;
@@ -40,7 +41,7 @@ use super::graph_exec::GraphFrameParams;
 use super::light_cull::{
     LightCullInputs, cluster_list_size, light_cull_set_bindings, write_light_cull_set,
 };
-use super::probe::{FaceArea, FaceView};
+use super::probe::{FaceArea, FacePacking, FaceView};
 use super::record::Recorder;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
@@ -113,6 +114,11 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
     cull_indirect_bufs: Vec<PooledBuffer>,
     cull_status_bufs: Vec<PooledBuffer>,
     cull_sets: Vec<vk::DescriptorSet>,
+    // Per-(plane, frame) group-count scratch and packing set, and the records
+    // every plane's cull buffers hold.
+    cull_group_counts: Vec<PooledBuffer>,
+    compact_sets: Vec<vk::DescriptorSet>,
+    cull_count: usize,
     // A bake-style Hi-Z read set (cull set 1) with hiz_enabled = 0 so the mirror
     // cull is frustum-only -- the main camera's pyramid is meaningless for a
     // reflected frustum. `Some` only when the world runs Hi-Z. Shared across planes.
@@ -134,17 +140,19 @@ pub(in crate::vulkan) struct PlanarCullSources<'a> {
     // The variant block every cull set binds; a single stream never reads it.
     pub(in crate::vulkan) frame_variant_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) cull_set_layout: vk::DescriptorSetLayout,
+    pub(in crate::vulkan) compact_set_layout: vk::DescriptorSetLayout,
     pub(in crate::vulkan) cull_count: usize,
     pub(in crate::vulkan) hiz: Option<(vk::DescriptorSetLayout, vk::ImageView)>,
 }
 
-// The planar pool: per (plane, frame) a global, a binning and a cull set, and
-// one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
+// The planar pool: per (plane, frame) a global, a binning, a cull and a
+// packing set, and one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
 fn planar_pool_sizes(ring_sets: u32, has_hiz: u32) -> PoolSizes {
     PoolSizes::default()
         .sets(&global_set(), ring_sets)
         .sets(&light_cull_set_bindings(), ring_sets)
         .sets(&crate::vulkan::init::main_cull_set(), ring_sets)
+        .sets(&crate::vulkan::compact::compact_set(), ring_sets)
         .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
         .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
 }
@@ -403,7 +411,12 @@ impl PlanarReflectionSet {
         globals: PlanarGlobalSet<'_>,
         cull: PlanarCullSources<'_>,
     ) -> RenderResult<Self> {
-        let PlanarDevice { alloc, device, .. } = gpu;
+        let PlanarDevice {
+            alloc,
+            device,
+            command_pool,
+            queue,
+        } = gpu;
         let PlanarConfig {
             frames,
             sample_count,
@@ -472,15 +485,21 @@ impl PlanarReflectionSet {
         use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let object_range = (cull.cull_count * size_of::<GpuObjectData>()).max(4) as u64;
         let args_range = (cull.cull_count * size_of::<GpuDrawArgs>()).max(4) as u64;
-        let indirect_size =
-            (cull.cull_count * size_of::<vk::DrawIndexedIndirectCommand>()).max(4) as u64;
+        let indirect_size = crate::vulkan::compact::indirect_buffer_bytes(cull.cull_count);
         let status_size = (cull.cull_count * size_of::<u32>()).max(4) as u64;
+        let group_count_size = crate::vulkan::compact::group_count_bytes(cull.cull_count);
         let mut cull_indirect_bufs = Vec::with_capacity(ring);
         let mut cull_status_bufs = Vec::with_capacity(ring);
+        let mut cull_group_counts = Vec::with_capacity(ring);
         for _ in 0..ring {
             cull_indirect_bufs.push(alloc.create_buffer(
                 indirect_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                crate::vulkan::compact::INDIRECT_USAGE,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?);
+            cull_group_counts.push(alloc.create_buffer(
+                group_count_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )?);
             cull_status_bufs.push(alloc.create_buffer(
@@ -489,6 +508,7 @@ impl PlanarReflectionSet {
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )?);
         }
+        super::compact::zero_indirect_buffers(device, command_pool, queue, &cull_indirect_bufs)?;
 
         // One pool: the per-(plane, frame) global, cull and binning sets, and
         // one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
@@ -497,7 +517,7 @@ impl PlanarReflectionSet {
         let pool_sizes = planar_pool_sizes(ring_sets, has_hiz).build();
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(ring_sets * 3 + has_hiz);
+            .max_sets(ring_sets * 4 + has_hiz);
         let pool = device
             .create_descriptor_pool(&pool_info)
             .map_err(|e| super::error::map_vk_result(e, "planar descriptor pool"))?;
@@ -542,7 +562,7 @@ impl PlanarReflectionSet {
             SetWrites::new(set)
                 .storage_buffer(0, cull.frame_object_buffers[frame].buffer(), object_range)
                 .storage_buffer(1, cull.frame_draw_args_buffers[frame].buffer(), args_range)
-                .storage_buffer(2, cull_indirect_bufs[i].buffer(), indirect_size)
+                .storage_buffer(2, cull_group_counts[i].buffer(), group_count_size)
                 .storage_buffer(3, cull_status_bufs[i].buffer(), status_size)
                 .storage_buffer(
                     4,
@@ -550,6 +570,28 @@ impl PlanarReflectionSet {
                     crate::vulkan::init::VARIANT_BUFFER_BYTES,
                 )
                 .apply(device);
+        }
+        let compact_sets =
+            alloc_descriptor_sets(device, pool.handle(), &vec![cull.compact_set_layout; ring])?;
+        for (i, &set) in compact_sets.iter().enumerate() {
+            let frame = i % frames;
+            crate::vulkan::compact::write_compact_set(
+                device,
+                set,
+                &crate::vulkan::compact::CompactBuffers {
+                    variants: (
+                        cull.frame_variant_buffers[frame].buffer(),
+                        crate::vulkan::init::VARIANT_BUFFER_BYTES,
+                    ),
+                    draw_args: (cull.frame_draw_args_buffers[frame].buffer(), args_range),
+                    status: (cull_status_bufs[i].buffer(), status_size),
+                    group_counts: (cull_group_counts[i].buffer(), group_count_size),
+                    lists: DrawLists {
+                        buffer: cull_indirect_bufs[i].buffer(),
+                        commands: cull.cull_count,
+                    },
+                },
+            );
         }
 
         // The Hi-Z set (cull set 1) with hiz_enabled = 0: a frustum-only reflected
@@ -583,6 +625,9 @@ impl PlanarReflectionSet {
             cull_indirect_bufs,
             cull_status_bufs,
             cull_sets,
+            cull_group_counts,
+            compact_sets,
+            cull_count: cull.cull_count,
             hiz_set,
             hiz_ubo,
             _pool: pool,
@@ -725,6 +770,8 @@ impl PlanarReflectionSet {
         self.cluster_sets.clear();
         self.cull_indirect_bufs.clear();
         self.cull_status_bufs.clear();
+        self.cull_group_counts.clear();
+        self.compact_sets.clear();
         self.hiz_ubo = None;
         self.global_sets.clear();
         self.cull_sets.clear();
@@ -798,12 +845,20 @@ impl VkContext {
             // narrowed to the crop, and the oblique clip rides the view-proj, so it
             // also rejects geometry that cannot reach the crop or sits behind the
             // reflector.
+            let packing = FacePacking {
+                set: set.compact_sets[ring],
+                lists: DrawLists {
+                    buffer: set.cull_indirect_bufs[ring].buffer(),
+                    commands: set.cull_count,
+                },
+                records: set.cull_count,
+            };
             self.encode_probe_cull(
                 cmd,
                 set.cull_sets[ring],
                 set.hiz_set,
-                &mirror.frustum,
-                m.eye,
+                packing,
+                (&mirror.frustum, m.eye),
             );
             let cluster_params = mirror.cluster_params(
                 &frame,
@@ -874,7 +929,7 @@ impl VkContext {
                     storage,
                 },
                 bindless_set,
-                set.cull_indirect_bufs[ring].buffer(),
+                packing,
             );
         }
 
@@ -979,11 +1034,13 @@ mod tests {
     #[test]
     fn the_planar_pool_covers_its_sets() {
         let cull = crate::vulkan::init::main_cull_set();
+        let compact = crate::vulkan::compact::compact_set();
         for ring in [1, 2, 6] {
             assert!(planar_pool_sizes(ring, 1).covers(&[
                 (&global_set(), ring),
                 (&light_cull_set_bindings(), ring),
                 (&cull, ring),
+                (&compact, ring),
             ]));
         }
     }

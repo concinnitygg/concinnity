@@ -765,6 +765,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 // keeps addressing exactly the records those buffers hold. The reflection-probe
 // bake is the one such consumer: it builds its buffers once and renders the six
 // cube faces one per frame, while runtime spawns keep growing the live list.
+// Bytes of a set of lists' execution ranges: one per stream.
+pub(super) const STREAM_RANGE_BYTES: usize =
+    render_types::DRAW_STREAMS * size_of::<render_types::GpuExecutionRange>();
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DrawRecordCounts {
     pub total: usize,
@@ -922,6 +926,11 @@ impl MtlContext {
             )
             .ok_or_else(|| super::error::allocation_failed("cull status buffer"))?;
         self.cull.status_buffer = Some(status);
+        self.cull.group_counts = Some(self.private_buffer(
+            render_types::group_count_words(concinnity_core::math::saturating_u32(new_cap)) * 4,
+            "cull group counts",
+        )?);
+        self.cull.ranges = Some(self.private_buffer(STREAM_RANGE_BYTES, "cull list ranges")?);
 
         // Second-pass ICB + argument buffer, only when two-pass occlusion is on.
         if self.cull.two_pass_occlusion {
@@ -954,11 +963,25 @@ impl MtlContext {
                 unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
             }
             self.cull.icbs_2 = icbs_2;
+            self.cull.ranges_2 =
+                Some(self.private_buffer(STREAM_RANGE_BYTES, "phase-2 cull list ranges")?);
         }
 
         self.cull.icbs = icbs;
         self.cull.icb_capacity = new_cap;
         Ok(())
+    }
+
+    // A GPU-only buffer of `bytes`, at least one word, zero-filled at creation.
+    fn private_buffer(
+        &self,
+        bytes: usize,
+        label: &str,
+    ) -> error::RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
+        self.hw
+            .device
+            .newBufferWithLength_options(bytes.max(4), MTLResourceOptions::StorageModePrivate)
+            .ok_or_else(|| super::error::allocation_failed(label))
     }
 
     // Ensure the GPU-driven shadow view ICBs and their status buffers have a
@@ -1079,7 +1102,16 @@ impl MtlContext {
             // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
             // member, exactly like the main + shadow ICBs.
             unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
-            slots.push(super::cull::MirrorCullSlot { icb, arg_buffer });
+            slots.push(super::cull::MirrorCullSlot {
+                icb,
+                arg_buffer,
+                group_counts: self.private_buffer(
+                    render_types::group_count_words(concinnity_core::math::saturating_u32(new_cap))
+                        * 4,
+                    "mirror cull group counts",
+                )?,
+                ranges: self.private_buffer(STREAM_RANGE_BYTES, "mirror cull list ranges")?,
+            });
         }
         // Shared single-pass status scratch: the mirror cull writes per-object
         // status the same as phase 1, but nothing reads it (no phase-2 over the

@@ -377,6 +377,16 @@ pub(super) struct VkCull {
     // Per-frame indirect draw-command buffers the cull kernel writes and the
     // main pass consumes (`INDIRECT_BUFFER`). Device-local.
     pub(super) indirect_buffers: Vec<PooledBuffer>,
+    // Commands each indirect buffer holds ahead of its count slots: every
+    // bucket region's, back to back.
+    pub(super) indirect_commands: usize,
+    // The scan and scatter that pack each cull's kept draws per stream, each
+    // frame's group-count scratch (phase 2 reusing phase 1's once its packing
+    // has read it), and each frame's phase-1 and phase-2 packing sets.
+    pub(super) compact: Option<super::compact::VkCompactKernels>,
+    pub(super) group_count_buffers: Vec<PooledBuffer>,
+    pub(super) compact_sets: Vec<vk::DescriptorSet>,
+    pub(super) compact_sets2: Vec<vk::DescriptorSet>,
     // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
     // phase-2 reads. Device-local storage.
     pub(super) cull_status_buffers: Vec<PooledBuffer>,
@@ -472,6 +482,8 @@ impl VkCull {
         self.indirect_buffers.clear();
         self.cull_status_buffers.clear();
         self.variant_buffers.clear();
+        self.group_count_buffers.clear();
+        self.compact = None;
         self.indirect_buffers2.clear();
         self.shadow_indirect_buffers.clear();
         self.spot_indirect_buffers.clear();
@@ -912,6 +924,10 @@ pub(super) struct VkHardware {
     // Reads the GPU's timestamp counter now, to place a frame's timestamps on
     // the host clock. `None` without `VK_EXT_calibrated_timestamps`.
     pub(super) timestamp_calibration: Option<ash::ext::calibrated_timestamps::Device>,
+    // Draws a cull's lists by their GPU-written counts; `None` without
+    // `VK_KHR_draw_indirect_count`, where each list draws at full capacity
+    // over commands zeroed before the scatter.
+    pub(super) draw_count: Option<ash::khr::draw_indirect_count::Device>,
     // `VK_EXT_memory_budget` device-local heap indices summed for the
     // VRAM-residency chip. Empty when the extension is unavailable; the chip
     // then reports 0.
@@ -990,6 +1006,7 @@ impl VkHardware {
             timestamp_query_pool: self.timestamp_query_pool.take(),
             timestamp_period_ns: self.timestamp_period_ns,
             timestamp_calibration: self.timestamp_calibration.clone(),
+            draw_count: self.draw_count.clone(),
             device_local_heaps: self.device_local_heaps.clone(),
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,

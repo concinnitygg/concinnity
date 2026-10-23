@@ -5,6 +5,7 @@
 
 use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
+pub(super) use concinnity_engine::render::shader::programs::commands::CULL_SCATTER;
 pub(super) use concinnity_engine::render::shader::programs::shared::*;
 pub(super) use concinnity_engine::render::shader::programs::spd::{
     HIZ_SPD_MSAA, HIZ_SPD_SINGLE, HIZ_SPD_TAIL,

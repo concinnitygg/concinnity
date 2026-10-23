@@ -12,10 +12,10 @@
 //! The ray-traced programs compile to `SPV_KHR_ray_query` (SPIR-V 1.5), so the
 //! host builds them only on a device with `VK_KHR_ray_query`.
 
-use super::{Table, shared, spd};
+use super::{Table, commands, shared, spd};
 
 /// Everything the Vulkan backend compiles.
 pub static TABLE: Table = Table {
-    programs: &[shared::ALL, spd::ALL],
+    programs: &[shared::ALL, commands::ALL, spd::ALL],
     msaa: &[false, true],
 };

@@ -1,5 +1,5 @@
-//! The compute cull: the phase-1 and phase-2 decision kernels, the ICB encode
-//! kernel, and the Hi-Z depth pyramid the occlusion test reads.
+//! The compute cull: the phase-1 and phase-2 decision kernels, the kernels
+//! that pack their draws into ICB lists, the shadow views' encode kernel, and the Hi-Z depth pyramid the occlusion test reads.
 
 use concinnity_engine::render::backend::error::RenderResult;
 use objc2::rc::Retained;
@@ -15,6 +15,8 @@ pub(super) struct ComputeCull {
     pub(super) pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub(super) pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub(super) encode_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub(super) scan_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub(super) scatter_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub(super) icb_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     pub(super) hiz: Option<HiZResources>,
 }
@@ -29,6 +31,8 @@ pub(super) fn build_compute_cull(
             pipeline: None,
             pipeline_phase2: None,
             encode_pipeline: None,
+            scan_pipeline: None,
+            scatter_pipeline: None,
             icb_arg_encoder: None,
             hiz: None,
         });
@@ -56,6 +60,8 @@ pub(super) fn build_compute_cull(
         pipeline: Some(cull.decide),
         pipeline_phase2: Some(cull.decide_phase2),
         encode_pipeline: Some(cull.encode),
+        scan_pipeline: Some(cull.scan),
+        scatter_pipeline: Some(cull.scatter),
         icb_arg_encoder: Some(cull.icb_arg_encoder),
         hiz: Some(hiz),
     })

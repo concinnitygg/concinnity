@@ -393,7 +393,7 @@ fn cull_variants_layout_matches_shaders() {
 
 #[test]
 fn variant_constants_match_the_cull_shader() {
-    let src = crate::render::shader::embedded::CULL;
+    let src = crate::render::shader::embedded::CULL_COMMON;
     for (name, value) in [
         ("DRAW_FAR_BAND", DrawArgsFlags::FAR_BAND as usize),
         ("DRAW_ROUTE_SHIFT", DrawArgsFlags::ROUTE_SHIFT as usize),

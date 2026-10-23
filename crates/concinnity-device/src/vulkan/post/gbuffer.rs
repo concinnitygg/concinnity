@@ -1077,7 +1077,6 @@ impl VkContext {
         let Some(&gset) = self.cull.gbuffer_sets.get(frame_idx) else {
             return;
         };
-        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
         let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
 
         let sets = [
@@ -1117,8 +1116,7 @@ impl VkContext {
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             }
-            // SAFETY: `indirect` is this frame's indirect buffer, live until its fence signals.
-            unsafe { device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride) };
+            self.draw_main_stream(cmd, indirect, 0);
             self.inc_draw_calls(1);
         }
         // The material-referenced shader buckets write their own regions of the
@@ -1167,19 +1165,11 @@ impl VkContext {
                     vk::IndexType::UINT32,
                 );
             }
-            let skinned_offset = (self.state.draw.skinned_record_base() * stride as usize) as u64;
-            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
-            // SAFETY: `indirect` is this frame's indirect buffer, and the skinned tail starts at
-            // the skinned record base inside it.
-            unsafe {
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    indirect,
-                    skinned_offset,
-                    skinned_count,
-                    stride,
-                );
-            }
+            self.draw_main_stream(
+                cmd,
+                indirect,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            );
             self.inc_draw_calls(1);
             // The current deformed buffer is posed this frame, so next frame's
             // history slot (this slot) is valid -- prime the ring.

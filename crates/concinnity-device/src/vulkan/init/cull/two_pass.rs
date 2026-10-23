@@ -27,6 +27,8 @@ pub(super) struct TwoPassCull {
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) pool: Option<OwnedDescriptorPool>,
     pub(super) indirect_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
+    // Each frame's phase-2 packing set, from `pool`.
+    pub(super) compact_sets: Vec<vk::DescriptorSet>,
     pub(super) main_render_pass_phase1: Option<OwnedRenderPass>,
     pub(super) main_render_pass_phase2: Option<OwnedRenderPass>,
 }
@@ -44,9 +46,9 @@ pub(super) fn build_two_pass_cull(
 ) -> RenderResult<TwoPassCull> {
     let InitGpu {
         hw,
+        command_pool,
         frames,
         hot_reload,
-        ..
     } = *gpu;
     let (device, alloc) = (&hw.device, &hw.alloc);
     let n_frames = u32::saturating_from(frames);
@@ -69,6 +71,7 @@ pub(super) fn build_two_pass_cull(
         Vec<vk::DescriptorSet>,
         Option<OwnedDescriptorPool>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
+        Vec<vk::DescriptorSet>,
         Option<OwnedRenderPass>,
         Option<OwnedRenderPass>,
     );
@@ -77,19 +80,21 @@ pub(super) fn build_two_pass_cull(
         cull_sets2,
         two_pass_pool,
         indirect_buffers2,
+        compact_sets2,
         main_render_pass_phase1,
         main_render_pass_phase2,
     ): TwoPassCullResources = if let Some(kernels) = compute.kernels.as_ref()
+        && let Some(compact) = compute.compact.as_ref()
         && occlusion_two_pass
     {
         let (set_layout, pipeline_layout) = (&kernels.set_layout, &kernels.pipeline_layout);
         let n = plan.n_cull as u64;
         let object_buffer_size = n * size_of::<render_types::GpuObjectData>() as u64;
         let draw_args_size = n * size_of::<render_types::GpuDrawArgs>() as u64;
-        // Bucket-expanded exactly like the phase-1 buffers: `Main2` issues the
-        // same per-bucket regions over this buffer.
-        let indirect_size =
-            indirect_commands.max(1) as u64 * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+        // Laid out exactly like the phase-1 buffers: `Main2` issues the same
+        // per-stream lists over this buffer.
+        let indirect_size = crate::vulkan::compact::indirect_buffer_bytes(indirect_commands);
+        let group_count_size = crate::vulkan::compact::group_count_bytes(plan.n_cull);
         let status_size = n * size_of::<u32>() as u64;
 
         // Phase-2 cull pipeline (`main_phase2` entry, shared layout).
@@ -101,32 +106,37 @@ pub(super) fn build_two_pass_cull(
         for _ in 0..frames {
             ind2_buffers.push(alloc.create_buffer(
                 indirect_size,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                crate::vulkan::compact::INDIRECT_USAGE,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )?);
         }
+        crate::vulkan::compact::zero_indirect_buffers(
+            device,
+            command_pool,
+            hw.graphics_queue,
+            &ind2_buffers,
+        )?;
 
-        // Dedicated descriptor pool for the per-frame phase-2 cull sets
-        // (5 storage buffers each), kept off the shared pool's exact sizing.
-        let pool_sizes = PoolSizes::default()
-            .sets(&main_cull_set(), n_frames)
-            .build();
+        // Dedicated descriptor pool for the per-frame phase-2 cull and
+        // packing sets, kept off the shared pool's exact sizing.
+        let pool_sizes = two_pass_pool_sizes(n_frames).build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .pool_sizes(&pool_sizes)
-                    .max_sets(n_frames),
+                    .max_sets(2 * n_frames),
             )
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "two-pass cull descriptor pool"))?;
         let set_layouts2: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets2 = alloc_descriptor_sets(device, pool.handle(), &set_layouts2)?;
         for (i, &set) in sets2.iter().enumerate() {
-            // Binding 2 is the second indirect buffer, which Cull2 writes; binding 3 the
-            // cull status phase 1 wrote.
+            // Binding 2 is the frame's group counts, which phase 2 reuses once
+            // phase 1's packing has read them; binding 3 the cull status phase
+            // 1 wrote.
             SetWrites::new(set)
                 .storage_buffer(0, object_buffers[i].buffer(), object_buffer_size)
                 .storage_buffer(1, draw_args_buffers[i].buffer(), draw_args_size)
-                .storage_buffer(2, ind2_buffers[i].buffer(), indirect_size)
+                .storage_buffer(2, compute.group_count_buffers[i].buffer(), group_count_size)
                 .storage_buffer(3, cull_status_buffers[i].buffer(), status_size)
                 .storage_buffer(
                     4,
@@ -134,6 +144,28 @@ pub(super) fn build_two_pass_cull(
                     super::compute::VARIANT_BUFFER_BYTES,
                 )
                 .apply(device);
+        }
+
+        let compact_layouts: Vec<_> = (0..frames).map(|_| compact.set_layout.handle()).collect();
+        let compact_sets2 = alloc_descriptor_sets(device, pool.handle(), &compact_layouts)?;
+        for (i, &set) in compact_sets2.iter().enumerate() {
+            crate::vulkan::compact::write_compact_set(
+                device,
+                set,
+                &crate::vulkan::compact::CompactBuffers {
+                    variants: (
+                        compute.variant_buffers[i].buffer(),
+                        super::compute::VARIANT_BUFFER_BYTES,
+                    ),
+                    draw_args: (draw_args_buffers[i].buffer(), draw_args_size),
+                    status: (cull_status_buffers[i].buffer(), status_size),
+                    group_counts: (compute.group_count_buffers[i].buffer(), group_count_size),
+                    lists: crate::vulkan::compact::DrawLists {
+                        buffer: ind2_buffers[i].buffer(),
+                        commands: indirect_commands,
+                    },
+                },
+            );
         }
 
         // Phase-1 (STORE MSAA color) + phase-2 (LOAD color + depth) main
@@ -146,18 +178,40 @@ pub(super) fn build_two_pass_cull(
             sets2,
             Some(pool),
             ind2_buffers,
+            compact_sets2,
             Some(rp1),
             Some(rp2),
         )
     } else {
-        (None, Vec::new(), None, Vec::new(), None, None)
+        (None, Vec::new(), None, Vec::new(), Vec::new(), None, None)
     };
     Ok(TwoPassCull {
         pipeline: cull_pipeline_phase2,
         sets: cull_sets2,
         pool: two_pass_pool,
         indirect_buffers: indirect_buffers2,
+        compact_sets: compact_sets2,
         main_render_pass_phase1,
         main_render_pass_phase2,
     })
+}
+
+// The two-pass pool: each frame's phase-2 cull set and packing set.
+fn two_pass_pool_sizes(frames: u32) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&main_cull_set(), frames)
+        .sets(&crate::vulkan::compact::compact_set(), frames)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_two_pass_pool_covers_its_sets() {
+        assert!(two_pass_pool_sizes(3).covers(&[
+            (&main_cull_set(), 3),
+            (&crate::vulkan::compact::compact_set(), 3),
+        ]));
+    }
 }

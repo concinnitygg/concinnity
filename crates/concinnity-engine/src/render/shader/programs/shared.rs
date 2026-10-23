@@ -104,6 +104,15 @@ pub static CULL_SHADOW: ShaderProgram = ShaderProgram {
     gates: &["SHADOW_CULL"],
     msaa: false,
 };
+/// `cull_scan` from `cull_compact.hlsl`: each stream's place per cull group,
+/// and its list's length.
+pub static CULL_SCAN: ShaderProgram = ShaderProgram {
+    file: "cull_compact.hlsl",
+    entry: "cull_scan",
+    label: "cull_scan.hlsl",
+    gates: &[],
+    msaa: false,
+};
 /// `model_history_kernel` from `model_history.hlsl`: this frame's model
 /// snapshot for the next frame's motion vectors.
 pub static MODEL_HISTORY: ShaderProgram = ShaderProgram {
@@ -892,6 +901,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &CULL_PHASE1,
     &CULL_PHASE2,
     &CULL_SHADOW,
+    &CULL_SCAN,
     &RT_SKIN,
     &PROBE_MIP0,
     &PROBE_DOWNSAMPLE,

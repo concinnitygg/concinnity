@@ -5,7 +5,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::bindless::BindlessPass;
-use super::compute::{ComputeCull, indirect_buffer_size};
+use super::compute::ComputeCull;
 use crate::directx::context::dump_on_err;
 use crate::directx::cull::{compile_cull_shader_phase2, create_cull_pso};
 use crate::directx::init::InitGpu;
@@ -42,7 +42,10 @@ pub(super) fn build_two_pass_cull(
         create_cull_pso(device, crs, &cs2),
     )?;
     let indirect_size =
-        indirect_buffer_size(&compute.variants, bindless.world_pipelines.bucket_count());
+        crate::directx::compact::indirect_buffer_bytes(super::compute::indirect_commands(
+            &compute.variants,
+            bindless.world_pipelines.bucket_count(),
+        ));
     // One per frame plus the reserved reflection-probe capture slot, matching
     // the phase-1 indirect buffers.
     let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames() + 1);

@@ -5,6 +5,7 @@
 
 use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
+pub(super) use concinnity_engine::render::shader::programs::commands::CULL_SCATTER;
 use concinnity_engine::render::shader::programs::dx;
 pub(super) use concinnity_engine::render::shader::programs::shared::*;
 pub(super) use concinnity_engine::render::shader::programs::spd::{

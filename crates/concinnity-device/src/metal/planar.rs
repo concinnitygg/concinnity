@@ -259,9 +259,8 @@ impl MtlContext {
             // beside the main camera) is captured and geometry that cannot reach
             // the crop is not. The reflected view-proj carries the oblique
             // near-plane clip, so the frustum also rejects geometry behind the
-            // reflector. A frame with no cull records has no mirror to fill, and
-            // the face render then draws nothing.
-            let icb_override = match (params.object_buffer, params.draw_args_buffer) {
+            // reflector. A plane with no mirror culled this frame draws nothing.
+            let culled = match (params.object_buffer, params.draw_args_buffer) {
                 (Some(object_buffer), Some(draw_args_buffer)) => {
                     self.encode_mirror_cull(
                         cmd_buf,
@@ -274,7 +273,7 @@ impl MtlContext {
                             timer: PassTimer::None,
                         },
                     )?;
-                    self.cull.mirror_slots.get(slot).map(|s| s.icb.as_ref())
+                    self.cull.mirror_slots.get(slot)
                 }
                 _ => None,
             };
@@ -316,10 +315,10 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
-                    regions: self.cull.live_regions(),
+                    regions: self.cull.mirror_regions(culled),
                 },
                 FacePass {
-                    icb_override,
+                    icb_override: culled.map(|s| s.icb.as_ref()),
                     scissor: Some(crop),
                     clusters,
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),

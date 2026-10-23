@@ -249,6 +249,7 @@ pub(super) fn acquire_hardware(
         rt_capable,
         caps,
         update_after_bind,
+        draw_indirect_count,
     } = create_logical_device(
         &instance,
         physical_device,
@@ -392,6 +393,8 @@ pub(super) fn acquire_hardware(
 
     let timestamp_calibration = (calibrated_timestamps && timestamp_query_pool.is_some())
         .then(|| ash::ext::calibrated_timestamps::Device::new(&instance, &device));
+    let draw_count =
+        draw_indirect_count.then(|| ash::khr::draw_indirect_count::Device::new(&instance, &device));
 
     Ok((
         VkHardware {
@@ -407,6 +410,7 @@ pub(super) fn acquire_hardware(
             timestamp_query_pool,
             timestamp_period_ns: timestamp_period,
             timestamp_calibration,
+            draw_count,
             device_local_heaps,
             memory_budget_supported,
             rt_capable,

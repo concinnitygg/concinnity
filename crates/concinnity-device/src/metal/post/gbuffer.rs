@@ -439,7 +439,7 @@ impl MtlContext {
         // pipeline; the cull drew each record in exactly one region. A bucket the
         // main pass skips (Shader not resident) is skipped here too, so depth
         // and velocity never carry geometry the color pass leaves out.
-        if let Some(prefix) = counts.prefix(0) {
+        if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
@@ -448,11 +448,9 @@ impl MtlContext {
             // A bucket without a pre-pass pipeline (one failed to build) is
             // skipped too: it shades, but adds nothing to the G-buffer.
             for (b, icb) in self.cull.icbs.iter().enumerate() {
-                let range = match regions.commands(b) {
-                    Some(region) if region.is_empty() => continue,
-                    Some(region) => region,
-                    None => prefix.clone(),
-                };
+                if !regions.draws(b) {
+                    continue;
+                }
                 let pipelines = match b {
                     0 => Some(default),
                     b => self.cull.world_pipelines.get(b),
@@ -461,16 +459,12 @@ impl MtlContext {
                     continue;
                 };
                 enc.set_pipeline(prepass);
-                // SAFETY: the default's prefix spans the static + instance +
-                // chunk command slots and a later bucket's region its own
-                // records; every reused main ICB is sized for `counts.total`.
-                unsafe {
-                    enc.executeCommandsInBuffer_withRange(
-                        icb,
-                        crate::metal::context::ns_range(range),
-                    );
-                }
-                draw_calls += 1;
+                draw_calls += crate::metal::draw::main::execute_list(
+                    enc,
+                    icb,
+                    regions,
+                    concinnity_core::math::saturating_u32(b),
+                );
             }
         }
 
@@ -479,7 +473,7 @@ impl MtlContext {
         // after a rebuild), or with velocity inactive / a single frame in
         // flight, bind the CURRENT buffer as the previous one -> zero skinned
         // motion (no garbage motion vector from an unposed prior slot).
-        if let (Some(deformed), Some(tail), Some(prepass)) = (
+        if let (Some(deformed), Some(_), Some(prepass)) = (
             deformed_current,
             counts.skinned_tail(0),
             default.prepass.as_ref(),
@@ -503,14 +497,12 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            // SAFETY: the tail spans the folded skinned command slots.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(
-                    &self.cull.icbs[0],
-                    crate::metal::context::ns_range(tail),
-                );
-            }
-            draw_calls += 1;
+            draw_calls += crate::metal::draw::main::execute_list(
+                enc,
+                &self.cull.icbs[0],
+                regions,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            );
             // The current deformed slot now holds a valid pose, so next frame's
             // previous-frame read is well-defined. Relaxed: the only other access
             // is the next frame's same-pass load, ordered by the render-graph

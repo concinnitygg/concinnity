@@ -160,8 +160,7 @@ pub(in crate::directx) struct FaceUniforms<'a> {
 // and the per-object buffer address for bindless rendering.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct IndirectDraw<'a> {
-    pub indirect: &'a ID3D12Resource,
-    pub indirect_offset: u32,
+    pub lists: crate::directx::compact::DrawLists<'a>,
     pub object_gva: u64,
     pub material_params_gva: u64,
 }
@@ -456,8 +455,7 @@ impl DxContext {
                 storage: FaceStorage::PROBE,
             },
             IndirectDraw {
-                indirect,
-                indirect_offset: 0,
+                lists: self.main_lists(indirect),
                 object_gva,
                 material_params_gva: self.material_params_gva(slot),
             },
@@ -715,8 +713,7 @@ impl DxContext {
             ),
         };
         let IndirectDraw {
-            indirect,
-            indirect_offset,
+            lists,
             object_gva,
             material_params_gva,
         } = draw;
@@ -865,22 +862,19 @@ impl DxContext {
             com::gpu_va(&self.uniforms.probe_set_empty_cbv),
             self.probe.gpu.stand_in_records.gpu_va(),
         );
-        let max_commands = u32::saturating_from(self.state.draw.skinned_record_base());
-        // Static + instance prefix `[0, skinned_record_base())`. Skinned tail
-        // omitted (not captured into the probe in V1).
-        // SAFETY: the command signature lives beside the bindless PSO, and `indirect` is the
-        // cull's live argument buffer for this face.
-        unsafe {
-            cmd.ExecuteIndirect(
-                cull_sig,
-                max_commands,
-                indirect,
-                u64::from(indirect_offset),
-                None::<&ID3D12Resource>,
-                0,
-            );
-        }
-        self.inc_draw_calls(1);
+        // The static + instance stream. Skinned tail omitted (not captured into
+        // the probe in V1).
+        let face = render_types::StreamLayout {
+            bucket_count: 1,
+            ..self.stream_layout()
+        };
+        self.inc_draw_calls(crate::directx::compact::execute_stream(
+            cmd,
+            cull_sig,
+            lists,
+            0,
+            face.slots(0),
+        ));
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
             self.encode_sky(cmd, view_gva, self.current_frame);

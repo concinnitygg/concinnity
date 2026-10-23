@@ -670,8 +670,6 @@ impl DxContext {
             return;
         };
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
-        let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
-        let prefix = self.state.draw.skinned_record_base();
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let main_view_gva = com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]);
 
@@ -727,20 +725,7 @@ impl DxContext {
             // SAFETY: bucket 0's pre-pass PSO is owned by `self.cull` and matches the root
             // signature above.
             unsafe { cmd.SetPipelineState(pso) };
-            let prefix_count = u32::saturating_from(prefix);
-            // SAFETY: the camera cull filled this frame's indirect buffer, and the command
-            // signature matches the pre-pass root signature bound above.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cmd_sig,
-                    prefix_count,
-                    indirect,
-                    0,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(cmd, cmd_sig, indirect, 0));
         }
         // The material-referenced shader buckets write their own regions of the
         // command buffer, each drawn under its own pre-pass PSO; a bucket whose
@@ -790,20 +775,12 @@ impl DxContext {
             unsafe { cmd.IASetVertexBuffers(0, Some(&[*cur_vbv, prev_vbv])) };
             // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
             unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
-            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
-            // SAFETY: the cull wrote the skinned tail at `prefix * stride` inside this frame's
-            // indirect buffer, and the root arguments bound for the prefix persist.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cmd_sig,
-                    skinned_count,
-                    indirect,
-                    (prefix * stride) as u64,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(
+                cmd,
+                cmd_sig,
+                indirect,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            ));
             // The current deformed buffer is posed this frame, so next frame's
             // history slot (this slot) is valid -- prime the ring.
             self.skinned

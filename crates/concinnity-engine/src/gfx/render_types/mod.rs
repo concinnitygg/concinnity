@@ -6,6 +6,7 @@ mod material;
 mod overlay;
 mod post;
 mod shadow;
+mod streams;
 mod variants;
 
 #[cfg(test)]
@@ -35,6 +36,12 @@ pub use post::{
 pub use shadow::{
     MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, ShadowArrayExtent, ShadowPassPush, ShadowUniforms,
     SpotShadowData, shadow_array_extent, spot_shadow_slice_size,
+};
+pub use streams::{
+    COUNT_SLOT_ALIGN, COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, DRAW_STREAMS, GpuCompactParams,
+    GpuExecutionRange, SKINNED_STREAM, StreamLayout, StreamSlots, compact, count_slot_offset,
+    cull_groups, culled_records, group_count_index, group_count_words, group_counts,
+    scan_group_counts,
 };
 pub use variants::{
     BucketSpans, DAYLIGHT_COS_MARGIN, GpuBucketRegion, GpuCullVariants, GpuVariantRoute,

@@ -264,6 +264,8 @@ impl MtlContext {
             self.cull.pipeline = Some(cull.decide);
             self.cull.pipeline_phase2 = Some(cull.decide_phase2);
             self.cull.encode_pipeline = Some(cull.encode);
+            self.cull.scan_pipeline = Some(cull.scan);
+            self.cull.scatter_pipeline = Some(cull.scatter);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
             // Force the ICB rebuilds on the next frame so every argument buffer
             // is re-encoded with the arg encoder the new encode kernel produced.

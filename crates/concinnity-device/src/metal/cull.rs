@@ -91,9 +91,20 @@ pub(crate) struct CullState {
     // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    // The ICB encode kernel (`cull_encode.metal`), dispatched after every
-    // decision dispatch on the same encoder.
+    // The shadow views' ICB encode kernel (`cull_encode.metal`), dispatched
+    // after their decision dispatches on the same encoder.
     pub encode_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    // The kernels that pack every other cull's kept draws into per-stream ICB
+    // lists after its decision dispatch, on the same encoder: the scan
+    // (`cull_compact.hlsl`) and the scatter (`cull_encode.metal`).
+    pub scan_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    pub scatter_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    // The main view's group-count scratch, both phases (phase 2 reusing it
+    // once phase 1's scatter has read it), and the execution range of each
+    // stream's list in `icbs` and in `icbs_2`. Grown with `icbs`.
+    pub group_counts: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub ranges: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub ranges_2: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // How many shader buckets this world routes between: the world Shader
     // count plus each Shader's grass variants. Fixed at init.
     pub bucket_count: usize,
@@ -101,8 +112,8 @@ pub(crate) struct CullState {
     // set per dispatch. The regions follow the runtime draws each frame.
     pub variants: render_types::GpuCullVariants,
     // One indirect command buffer per shader bucket (index = bucket); the
-    // cull kernel encodes each record's draw into its bucket's ICB and resets
-    // its slot everywhere else. Empty until `ensure_icb_capacity` builds them.
+    // cull packs each kept record's draw into its stream's list in its
+    // bucket's ICB. Empty until `ensure_icb_capacity` builds them.
     pub icbs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
     // Encoder that writes an ICB array into the encode kernel's argument
     // buffer. Every ICB argument buffer (main, phase 2, shadow, mirror) has the
@@ -173,33 +184,45 @@ impl CullState {
         Some(&self.world_pipelines.get(bucket as usize)?.main)
     }
 
-    // The live frame's regions, every bucket drawn.
-    pub(in crate::metal) fn live_regions(&self) -> BucketRegions<'_> {
+    // The live frame's regions over a mirror slot's lists, every bucket drawn;
+    // none without a slot culled this frame.
+    pub(in crate::metal) fn mirror_regions<'a>(
+        &'a self,
+        slot: Option<&'a MirrorCullSlot>,
+    ) -> BucketRegions<'a> {
         BucketRegions {
             variants: &self.variants,
             live: u64::MAX,
+            ranges: slot.map(|s| &*s.ranges),
         }
     }
 }
 
-// The bucket regions a set of ICBs was encoded with, and the buckets its view
-// can pick: the live frame's, or a probe capture's snapshot.
+// The bucket regions a set of ICBs was encoded with, the buckets its view can
+// pick, and where the cull wrote each stream's list: the live frame's, or a
+// probe capture's snapshot.
 #[derive(Clone, Copy)]
 pub(in crate::metal) struct BucketRegions<'a> {
     pub(in crate::metal) variants: &'a render_types::GpuCullVariants,
     // A bit per bucket (see `GpuCullVariants::live_buckets`); the others skip.
     pub(in crate::metal) live: u64,
+    // Each stream's `GpuExecutionRange` in the ICBs; `None` before the ICBs
+    // are first built.
+    pub(in crate::metal) ranges: Option<&'a ProtocolObject<dyn objc2_metal::MTLBuffer>>,
 }
 
 impl BucketRegions<'_> {
-    // The commands bucket `b` executes from its ICB's start, `None` for the
-    // default, which executes the whole record set; none for a bucket the view
-    // cannot pick.
-    pub(in crate::metal) fn commands(&self, b: usize) -> Option<std::ops::Range<usize>> {
-        (b > 0).then(|| {
-            let len = self.variants.regions.get(b).map_or(0, |r| r.len() as usize);
-            0..if (self.live >> b) & 1 != 0 { len } else { 0 }
-        })
+    // Whether bucket `b`'s list can hold a draw for this view: the default's
+    // always, a later bucket's when it takes records and the view can pick it.
+    pub(in crate::metal) fn draws(&self, b: usize) -> bool {
+        b == 0
+            || ((self.live >> b) & 1 != 0
+                && self.variants.regions.get(b).is_some_and(|r| !r.is_empty()))
+    }
+
+    // Where stream `stream`'s execution range sits in `ranges`.
+    pub(in crate::metal) fn range_offset(stream: u32) -> usize {
+        stream as usize * size_of::<render_types::GpuExecutionRange>()
     }
 }
 
@@ -210,6 +233,9 @@ impl BucketRegions<'_> {
 pub(crate) struct MirrorCullSlot {
     pub icb: Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>,
     pub arg_buffer: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    // The slot's group-count scratch and its lists' execution ranges.
+    pub group_counts: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    pub ranges: Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
 }
 
 // Buffer index the encode kernel expects its `ICBContainer` argument buffer
@@ -223,6 +249,12 @@ const CULL_STATUS_BUFFER_INDEX: usize = 5;
 const CULL_ENCODE_PARAMS_INDEX: usize = 7;
 // Buffer index of the inline `GpuCullVariants` both cull kernels read.
 const CULL_VARIANTS_BUFFER_INDEX: usize = 8;
+// Buffer indices of the group-count scratch the decision writes and the
+// packing reads, the execution ranges the scan writes, and the scan's inline
+// `GpuCompactParams`.
+const CULL_GROUP_COUNTS_BUFFER_INDEX: usize = 9;
+const CULL_RANGES_BUFFER_INDEX: usize = 10;
+const CULL_COMPACT_PARAMS_INDEX: usize = 11;
 
 // The four texture-pool indices the Metal bindless fragment shader
 // (`fragment_main_bindless`, main_bindless.hlsl) reads for one surface. Albedo,
@@ -394,6 +426,20 @@ struct CullOutputTarget<'a> {
     icbs: &'a [Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>],
     arg_buf: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
     status: &'a Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    // The group-count scratch the decision and the packing share, and where
+    // the scan writes each stream's execution range.
+    group_counts: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+    ranges: &'a ProtocolObject<dyn objc2_metal::MTLBuffer>,
+}
+
+// One cull's packing on the encoder its decision ran on: the records it
+// covered and the outcome it keeps.
+#[derive(Clone, Copy)]
+struct Packing {
+    object_count: usize,
+    skinned_base: usize,
+    bucket_count: usize,
+    drawn: u32,
 }
 
 // One planar mirror's cull: the frame's object records, the mirror frustum and
@@ -417,6 +463,24 @@ struct CullDispatchOptions<'a> {
     use_hiz: bool,
     timing: super::pass_timing::PassTimer,
     label: &'a NSString,
+}
+
+// `groups` whole 64-thread groups: the decision and the packing kernels share
+// threadgroup memory across a group, so every thread of the last one runs too.
+fn dispatch_groups(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, groups: usize) {
+    use objc2_metal::{MTLComputeCommandEncoder as _, MTLSize};
+    enc.dispatchThreadgroups_threadsPerThreadgroup(
+        MTLSize {
+            width: groups,
+            height: 1,
+            depth: 1,
+        },
+        MTLSize {
+            width: render_types::CULL_GROUP_RECORDS as usize,
+            height: 1,
+            depth: 1,
+        },
+    );
 }
 
 // One thread per slot over a non-uniform grid: no remainder branch beyond the
@@ -619,11 +683,12 @@ impl MtlContext {
     }
 
     // Encode the GPU-driven cull compute pass: one thread per
-    // `DrawObject` frustum/distance-tests the object and either encodes an
-    // indexed draw into `cull_icb` or resets that command slot to a no-op.
-    // The bindless main pass then issues the whole buffer with one
-    // `executeCommandsInBuffer`. A no-op when the cull pipeline / ICB are not
-    // set up (non-bindless contexts) or there is no geometry.
+    // `DrawObject` frustum/distance-tests the object, and the packing encodes
+    // the kept ones' indexed draws into one list per stream of the ICBs. The
+    // bindless main pass then executes each list with one
+    // `executeCommandsInBuffer` over its GPU-written range. A no-op when the
+    // cull pipeline / ICB are not set up (non-bindless contexts) or there is no
+    // geometry.
     // pub(in crate::metal) so the render-graph executor in
     // metal/graph_exec.rs can dispatch this pass from a CompiledGraph.
     pub(in crate::metal) fn encode_cull(
@@ -634,8 +699,12 @@ impl MtlContext {
         view: CullView<'_>,
         counts: DrawRecordCounts,
     ) -> RenderResult<()> {
-        let (Some(arg_buf), Some(status)) = (&self.cull.icb_arg_buffer, &self.cull.status_buffer)
-        else {
+        let (Some(arg_buf), Some(status), Some(group_counts), Some(ranges)) = (
+            &self.cull.icb_arg_buffer,
+            &self.cull.status_buffer,
+            &self.cull.group_counts,
+            &self.cull.ranges,
+        ) else {
             return Ok(());
         };
         if self.cull.icbs.is_empty() {
@@ -653,6 +722,8 @@ impl MtlContext {
                 icbs: &self.cull.icbs,
                 arg_buf,
                 status,
+                group_counts,
+                ranges,
             },
             CullDispatchOptions {
                 use_hiz: true,
@@ -706,6 +777,8 @@ impl MtlContext {
                 icbs: std::slice::from_ref(&mirror.icb),
                 arg_buf: &mirror.arg_buffer,
                 status,
+                group_counts: &mirror.group_counts,
+                ranges: &mirror.ranges,
             },
             CullDispatchOptions {
                 use_hiz: false,
@@ -727,20 +800,24 @@ impl MtlContext {
         variants
     }
 
-    // A probe capture's snapshot `variants`, drawing only the buckets its
-    // faces (lit by no planet sky) can pick.
+    // A probe capture's snapshot `variants` over the main ICBs its faces cull
+    // into, drawing only the buckets its faces (lit by no planet sky) can pick.
     pub(in crate::metal) fn probe_regions<'a>(
-        &self,
+        &'a self,
         variants: &'a render_types::GpuCullVariants,
     ) -> BucketRegions<'a> {
         let live = self
             .view_variants(variants, &DaylightBlock::OFF)
             .live_buckets(self.cull.world_pipelines.bucket_count());
-        BucketRegions { variants, live }
+        BucketRegions {
+            variants,
+            live,
+            ranges: self.cull.ranges.as_deref(),
+        }
     }
 
-    // The live frame's regions for the main view, drawing only the buckets
-    // that view can pick.
+    // The live frame's regions for the main view over phase 1's lists,
+    // drawing only the buckets that view can pick.
     pub(in crate::metal) fn main_regions(&self) -> BucketRegions<'_> {
         let live = self
             .view_variants(&self.cull.variants, &self.state.view.daylight)
@@ -748,13 +825,14 @@ impl MtlContext {
         BucketRegions {
             variants: &self.cull.variants,
             live,
+            ranges: self.cull.ranges.as_deref(),
         }
     }
 
     // Shared body of every phase-1 cull dispatch (main + per-planar mirror): one
-    // thread per `DrawObject` frustum/distance(/Hi-Z)-tests the record and either
-    // encodes an indexed draw into `icb` or resets that slot to a no-op. The caller
-    // supplies the target ICB + its argument buffer + a per-object status scratch,
+    // thread per `DrawObject` frustum/distance(/Hi-Z)-tests the record, then the
+    // packing encodes the kept ones into their streams' lists. The caller
+    // supplies the target ICBs + their argument buffer + a per-object status scratch,
     // whether to consult the Hi-Z pyramid (`use_hiz`), an optional pass-timing id,
     // and an encoder label. A no-op when the cull pipeline is absent (non-bindless)
     // or there is no geometry.
@@ -781,6 +859,8 @@ impl MtlContext {
             icbs,
             arg_buf,
             status,
+            group_counts,
+            ranges,
         } = target;
         let CullDispatchOptions {
             use_hiz,
@@ -788,8 +868,7 @@ impl MtlContext {
             label,
         } = options;
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
-        let (Some(pipeline), Some(encode)) = (&self.cull.pipeline, &self.cull.encode_pipeline)
-        else {
+        let Some(pipeline) = &self.cull.pipeline else {
             return Ok(());
         };
         // Static objects + folded instances: the kernel tests one thread per
@@ -875,23 +954,73 @@ impl MtlContext {
             enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
         }
 
-        dispatch_records(&enc, pipeline, object_count);
-        enc.set_pipeline(encode);
+        enc.set_buffer(group_counts, 0, CULL_GROUP_COUNTS_BUFFER_INDEX);
+        enc.set_buffer(ranges, 0, CULL_RANGES_BUFFER_INDEX);
+        dispatch_groups(
+            &enc,
+            render_types::cull_groups(u32::saturating_from(object_count)) as usize,
+        );
+        self.encode_packing(
+            &enc,
+            Packing {
+                object_count,
+                skinned_base: counts.skinned_base,
+                bucket_count: icbs.len(),
+                drawn: CullStatus::DRAWN,
+            },
+        );
+        Ok(())
+    }
+
+    // Pack the cull just dispatched on `enc` into its ICBs' lists: scan its
+    // group counts into each stream's execution range, then scatter its kept
+    // records' draws, each list in record order. The decision's buffers stay
+    // bound; dispatches on one encoder run in order.
+    fn encode_packing(
+        &self,
+        enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+        packing: Packing,
+    ) {
+        let (Some(scan), Some(scatter)) = (&self.cull.scan_pipeline, &self.cull.scatter_pipeline)
+        else {
+            return;
+        };
+        let Packing {
+            object_count,
+            skinned_base,
+            bucket_count,
+            drawn,
+        } = packing;
+        let bucket_count = u32::saturating_from(bucket_count.max(1));
+        enc.set_pipeline(scan);
+        enc.set_value(
+            &render_types::GpuCompactParams {
+                object_count: u32::saturating_from(object_count),
+                bucket_count,
+                skinned_base: u32::saturating_from(skinned_base),
+                drawn,
+            },
+            CULL_COMPACT_PARAMS_INDEX,
+        );
+        dispatch_groups(enc, bucket_count.min(64) as usize + 1);
+        enc.set_pipeline(scatter);
         enc.set_value(
             &EncodeParams {
                 object_count: u32::saturating_from(object_count),
                 region_count: 1,
                 region_mask: 1,
-                skinned_base: u32::saturating_from(counts.skinned_base),
-                bucket_count: u32::saturating_from(icbs.len()),
-                draw_status: CullStatus::DRAWN,
+                skinned_base: u32::saturating_from(skinned_base),
+                bucket_count,
+                draw_status: drawn,
                 region_base: 0,
                 _pad: 0,
             },
             CULL_ENCODE_PARAMS_INDEX,
         );
-        dispatch_records(&enc, encode, object_count);
-        Ok(())
+        dispatch_groups(
+            enc,
+            render_types::cull_groups(u32::saturating_from(object_count)) as usize,
+        );
     }
 
     // Encode the phase-2 GPU cull for two-pass occlusion. Runs after the Hi-Z
@@ -912,13 +1041,16 @@ impl MtlContext {
         cam_pos: [f32; 3],
     ) -> RenderResult<u32> {
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
-        let (Some(pipeline), Some(encode), Some(arg_buf), Some(status), Some(hiz)) = (
+        let (Some(pipeline), Some(arg_buf), Some(status), Some(hiz)) = (
             &self.cull.pipeline_phase2,
-            &self.cull.encode_pipeline,
             &self.cull.icb_2_arg_buffer,
             &self.cull.status_buffer,
             self.cull.hiz.as_ref(),
         ) else {
+            return Ok(0);
+        };
+        let (Some(group_counts), Some(ranges)) = (&self.cull.group_counts, &self.cull.ranges_2)
+        else {
             return Ok(0);
         };
         if self.cull.icbs_2.is_empty() {
@@ -985,22 +1117,21 @@ impl MtlContext {
             enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
         }
 
-        dispatch_records(&enc, pipeline, object_count);
-        enc.set_pipeline(encode);
-        enc.set_value(
-            &EncodeParams {
-                object_count: u32::saturating_from(object_count),
-                region_count: 1,
-                region_mask: 1,
-                skinned_base,
-                bucket_count: u32::saturating_from(self.cull.icbs_2.len()),
-                draw_status: CullStatus::REDRAW,
-                region_base: 0,
-                _pad: 0,
-            },
-            CULL_ENCODE_PARAMS_INDEX,
+        enc.set_buffer(group_counts, 0, CULL_GROUP_COUNTS_BUFFER_INDEX);
+        enc.set_buffer(ranges, 0, CULL_RANGES_BUFFER_INDEX);
+        dispatch_groups(
+            &enc,
+            render_types::cull_groups(u32::saturating_from(object_count)) as usize,
         );
-        dispatch_records(&enc, encode, object_count);
+        self.encode_packing(
+            &enc,
+            Packing {
+                object_count,
+                skinned_base: self.skinned_record_base(),
+                bucket_count: self.cull.icbs_2.len(),
+                drawn: CullStatus::REDRAW,
+            },
+        );
         Ok(0)
     }
 
@@ -1359,7 +1490,25 @@ pub(super) struct CullPipeline {
     pub decide: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub decide_phase2: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub encode: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    pub scan: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    pub scatter: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub icb_arg_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
+}
+
+// A pipeline the packing runs in 64-record threadgroups, refused where the
+// device cannot run a group that wide.
+fn group_wide(
+    pipeline: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    label: &str,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLComputePipelineState>>> {
+    use objc2_metal::MTLComputePipelineState as _;
+    let width = render_types::CULL_GROUP_RECORDS as usize;
+    if pipeline.maxTotalThreadsPerThreadgroup() < width {
+        return Err(RenderError::ShaderCompile(format!(
+            "{label}: the device runs fewer than {width} threads a group"
+        )));
+    }
+    Ok(pipeline)
 }
 
 // Build the GPU-driven cull pipelines. The decision kernels run one thread
@@ -1371,9 +1520,30 @@ pub(super) fn build_cull_pipeline(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
 ) -> RenderResult<CullPipeline> {
-    let decide = compute_pipeline(device, &super::builtin_shaders::CULL_PHASE1, hot_reload)?;
-    let decide_phase2 = compute_pipeline(device, &super::builtin_shaders::CULL_PHASE2, hot_reload)?;
+    let decide = group_wide(
+        compute_pipeline(device, &super::builtin_shaders::CULL_PHASE1, hot_reload)?,
+        "cull phase 1",
+    )?;
+    let decide_phase2 = group_wide(
+        compute_pipeline(device, &super::builtin_shaders::CULL_PHASE2, hot_reload)?,
+        "cull phase 2",
+    )?;
+    let scan = group_wide(
+        compute_pipeline(device, &super::builtin_shaders::CULL_SCAN, hot_reload)?,
+        "cull scan",
+    )?;
     let library = cull_encode_library(device, hot_reload)?;
+    let scatter_fn = library
+        .newFunctionWithName(&ns_str("cull_scatter"))
+        .ok_or_else(|| {
+            RenderError::ShaderCompile("cull_scatter not found in cull_encode library".to_string())
+        })?;
+    let scatter = group_wide(
+        device
+            .newComputePipelineStateWithFunction_error(&scatter_fn)
+            .map_err(|e| RenderError::ShaderCompile(format!("cull scatter pipeline: {e:?}")))?,
+        "cull scatter",
+    )?;
     let encode_fn = library
         .newFunctionWithName(&ns_str("cull_encode"))
         .ok_or_else(|| {
@@ -1390,6 +1560,8 @@ pub(super) fn build_cull_pipeline(
         decide,
         decide_phase2,
         encode,
+        scan,
+        scatter,
         icb_arg_encoder,
     })
 }
@@ -1474,9 +1646,10 @@ mod tests {
         assert_eq!(idx.normal, u32::saturating_from(cap - 1));
     }
 
-    // A probe face draws the record set its capture snapshotted: after the live
-    // draw list grows, the snapshot's regions still hold each of its records
-    // once and execute exactly its count, while the live ones have moved on.
+    // A probe capture keeps the regions its records were culled with: as the
+    // live draw list grows, the snapshot's regions still hold each of its
+    // records once, while the live ones have moved on, and the buckets its
+    // view cannot pick draw nothing.
     #[test]
     fn a_snapshot_keeps_its_regions_as_the_live_list_grows() {
         use super::BucketRegions;
@@ -1502,12 +1675,8 @@ mod tests {
         live.cover_runtime(3, 40, 30..34);
         let snapshot = live;
         live.cover_runtime(3, 48, 30..42);
-        let face = BucketRegions {
-            variants: &snapshot,
-            live: u64::MAX,
-        };
-        assert_eq!(face.commands(1), Some(0..6 + 4));
-        assert_eq!(face.commands(2), Some(0..8 + 4));
+        assert_eq!(snapshot.regions[1].len(), 6 + 4);
+        assert_eq!(snapshot.regions[2].len(), 8 + 4);
         for record in 30..34 {
             for b in 1..3 {
                 let r = &snapshot.regions[b];
@@ -1525,16 +1694,39 @@ mod tests {
         let skipped = BucketRegions {
             variants: &snapshot,
             live: 0b101,
+            ranges: None,
         };
+        assert!(!skipped.draws(1), "a bucket the view cannot pick");
+        assert!(skipped.draws(2));
+        assert!(skipped.draws(0), "the default always draws");
+        assert!(
+            !skipped.draws(3),
+            "a bucket that takes no record draws nothing"
+        );
+    }
+
+    // Each stream's execution range sits at its index in the range buffer,
+    // in the layout Metal reads it in.
+    #[test]
+    fn execution_ranges_are_metals_layout() {
+        use concinnity_engine::gfx::render_types::{
+            DRAW_STREAMS, GpuExecutionRange, SKINNED_STREAM,
+        };
+        use objc2_metal::MTLIndirectCommandBufferExecutionRange as Range;
+        assert_eq!(size_of::<GpuExecutionRange>(), size_of::<Range>());
         assert_eq!(
-            skipped.commands(1),
-            Some(0..0),
-            "a bucket the view cannot pick"
+            core::mem::offset_of!(GpuExecutionRange, location),
+            core::mem::offset_of!(Range, location)
         );
         assert_eq!(
-            skipped.commands(0),
-            None,
-            "the default executes every record"
+            core::mem::offset_of!(GpuExecutionRange, length),
+            core::mem::offset_of!(Range, length)
         );
+        assert_eq!(super::BucketRegions::range_offset(1), 8);
+        assert_eq!(
+            super::BucketRegions::range_offset(SKINNED_STREAM) + 8,
+            crate::metal::context::STREAM_RANGE_BYTES
+        );
+        assert_eq!(crate::metal::context::STREAM_RANGE_BYTES, 8 * DRAW_STREAMS);
     }
 }

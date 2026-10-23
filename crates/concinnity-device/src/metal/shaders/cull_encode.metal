@@ -3,12 +3,16 @@
 using namespace metal;
 
 // Turns the per-object `cull_status` the single-source `cull.hlsl` decision
-// kernel wrote into Metal indirect command buffers. One thread per command
-// slot: a record whose status equals `draw_status` gets an indexed draw in its
-// shader bucket's ICB and a reset in every other bucket; anything else resets
-// every bucket. This is the only half of the cull Metal keeps hand-written,
-// because the ICB encoding (`render_command`, `array<command_buffer, N>`) is a
-// declaration HLSL cannot express.
+// kernels wrote into Metal indirect command buffers. This is the only half of
+// the cull Metal keeps hand-written, because the ICB encoding
+// (`render_command`, `array<command_buffer, N>`) is a declaration HLSL cannot
+// express.
+//
+//   cull_scatter  the main, phase-2, mirror and probe culls: every kept record
+//                 drawn at its place in its stream's list, which
+//                 `cull_compact.hlsl`'s scan laid out (mirrors its scatter)
+//   cull_encode   the shadow views: one thread per command slot, a draw for a
+//                 kept record and a reset for any other
 
 // Mirrors gfx::render_types::GpuDrawArgs (16 B).
 struct GpuDrawArgs {
@@ -27,8 +31,13 @@ constant uint CULL_BUCKET_SHIFT = 8u;
 constant uint MAX_SHADER_BUCKETS = 64u;
 constant uint MAX_VARIANT_ROUTES = 32u;
 
+// Locked to gfx::render_types::{CULL_GROUP_RECORDS, SKINNED_STREAM}.
+constant uint CULL_GROUP_RECORDS = 64u;
+constant uint SKINNED_STREAM = 64u;
+constant uint NO_STREAM = 0xffffffffu;
+
 // Mirrors gfx::render_types::GpuBucketRegion (32 B): a bucket's build-time
-// records, then its runtime ones, back to back in its ICB.
+// records, then its runtime ones.
 struct BucketRegion {
     uint first;
     uint count;
@@ -50,24 +59,16 @@ struct CullVariants {
     BucketRegion regions[MAX_SHADER_BUCKETS];
 };
 
-// The command `record` takes in bucket region `r`'s ICB, or ~0 when it falls
-// outside the region. Mirrors GpuBucketRegion::command less the offset, since
-// each bucket has an ICB of its own.
-static uint bucket_slot(constant BucketRegion &r, uint record) {
-    uint k = record - r.first;
-    if (k < r.count) {
-        return k;
-    }
-    k = record - r.runtime_first;
-    return k < r.runtime_count ? r.count + k : 0xffffffffu;
+// Whether `record` falls in region `r`. Mirrors GpuBucketRegion::command.
+static bool in_region(constant BucketRegion &r, uint record) {
+    return record - r.first < r.count || record - r.runtime_first < r.runtime_count;
 }
 
-// Mirrors metal::uniforms::EncodeParams (32 B). The slot grid is
-// `region_count * object_count`: one region for the main, phase-2 and mirror
-// culls, one per shadow view for the shadow culls, where region `c` is the
-// view's block of the shadow ICB and `region_mask` says which views were
-// re-culled this frame (the others keep their prior commands). A dispatch
-// covers the regions from `region_base` on, so it need not span the whole grid.
+// Mirrors metal::uniforms::EncodeParams (32 B). For the shadow views the slot
+// grid is `region_count * object_count`, region `c` the view's block of the
+// shadow ICB, `region_mask` the views re-culled this frame (the others keep
+// their prior commands) and `region_base` the first region a dispatch covers.
+// The scatter covers one record set: `region_count` is 1 there.
 struct EncodeParams {
     uint object_count;
     uint region_count;
@@ -80,11 +81,88 @@ struct EncodeParams {
 };
 
 // The per-bucket indirect command buffers, reached through an argument buffer.
-// Only the first `bucket_count` entries are encoded; the kernel never
-// constructs a command against an entry past that.
+// Only the first `bucket_count` entries are encoded; the kernels never
+// construct a command against an entry past that.
 struct ICBContainer {
     array<command_buffer, MAX_SHADER_BUCKETS> icbs [[id(0)]];
 };
+
+// Encode `record`'s indexed draw at `index` of `icb`. Records at or past
+// `skinned_base` draw the compute-deformed geometry through the skinned index
+// buffer; the index buffer is part of the indirect command on Metal, so it is
+// picked here rather than bound per draw range. `base_instance` carries the
+// record id into the vertex stage.
+static void encode_draw(command_buffer icb,
+                        uint index,
+                        uint record,
+                        GpuDrawArgs a,
+                        uint skinned_base,
+                        const device uint *index_buf,
+                        const device uint *skinned_index_buf) {
+    const device uint *ib = record >= skinned_base ? skinned_index_buf : index_buf;
+    render_command cmd(icb, index);
+    cmd.draw_indexed_primitives(primitive_type::triangle,
+                                a.index_count,
+                                ib + a.index_offset,
+                                1u,
+                                a.base_vertex,
+                                record);
+}
+
+kernel void cull_scatter(
+    constant GpuDrawArgs   *draw_args         [[buffer(1)]],
+    const device uint      *index_buf         [[buffer(3)]],
+    device ICBContainer    *icb_c             [[buffer(4)]],
+    const device uint      *cull_status       [[buffer(5)]],
+    const device uint      *skinned_index_buf [[buffer(6)]],
+    constant EncodeParams  &p                 [[buffer(7)]],
+    constant CullVariants  &variants          [[buffer(8)]],
+    const device uint      *group_counts      [[buffer(9)]],
+    uint                    record            [[thread_position_in_grid]],
+    uint                    group             [[threadgroup_position_in_grid]],
+    uint                    gi                [[thread_index_in_threadgroup]]
+) {
+    threadgroup uint group_streams[CULL_GROUP_RECORDS];
+    uint stream = NO_STREAM;
+    uint skinned_base = min(p.skinned_base, p.object_count);
+    if (record < p.object_count) {
+        uint word = cull_status[record];
+        if ((word & CULL_OUTCOME_MASK) == p.draw_status) {
+            uint bucket = min(word >> CULL_BUCKET_SHIFT, MAX_SHADER_BUCKETS - 1u);
+            if (p.bucket_count <= 1u || bucket == 0u) {
+                stream = record >= skinned_base ? SKINNED_STREAM : 0u;
+            } else if (in_region(variants.regions[bucket], record)) {
+                stream = bucket;
+            }
+        }
+    }
+    group_streams[gi] = stream;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (stream == NO_STREAM) {
+        return;
+    }
+    uint rank = 0u;
+    for (uint j = 0u; j < gi; ++j) {
+        rank += group_streams[j] == stream ? 1u : 0u;
+    }
+    uint groups = (p.object_count + CULL_GROUP_RECORDS - 1u) / CULL_GROUP_RECORDS;
+    uint place = group_counts[stream * groups + group] + rank;
+    uint first = 0u;
+    uint capacity = skinned_base;
+    uint icb = 0u;
+    if (stream == SKINNED_STREAM) {
+        first = skinned_base;
+        capacity = p.object_count - skinned_base;
+    } else if (stream > 0u) {
+        constant BucketRegion &r = variants.regions[stream];
+        capacity = r.count + r.runtime_count;
+        icb = stream;
+    }
+    if (place < capacity) {
+        encode_draw(icb_c->icbs[icb], first + place, record, draw_args[record],
+                    skinned_base, index_buf, skinned_index_buf);
+    }
+}
 
 kernel void cull_encode(
     constant GpuDrawArgs   *draw_args         [[buffer(1)]],
@@ -93,7 +171,6 @@ kernel void cull_encode(
     const device uint      *cull_status       [[buffer(5)]],
     const device uint      *skinned_index_buf [[buffer(6)]],
     constant EncodeParams  &p                 [[buffer(7)]],
-    constant CullVariants  &variants          [[buffer(8)]],
     uint                    tid               [[thread_position_in_grid]]
 ) {
     uint slot = p.region_base * p.object_count + tid;
@@ -105,34 +182,11 @@ kernel void cull_encode(
         return;
     }
     uint record = slot - region * p.object_count;
-    GpuDrawArgs a = draw_args[record];
-    uint word = cull_status[slot];
-    bool draw = (word & CULL_OUTCOME_MASK) == p.draw_status;
-    uint bucket = min(word >> CULL_BUCKET_SHIFT, p.bucket_count - 1u);
-    // Records at or past `skinned_base` draw the compute-deformed geometry
-    // through the skinned index buffer. The index buffer is part of the
-    // indirect command on Metal, so it is picked here rather than bound per
-    // draw range. `base_instance` carries the record id into the vertex stage.
-    const device uint *ib = record >= p.skinned_base ? skinned_index_buf : index_buf;
-    // A single stream writes the record's own slot. Otherwise every bucket
-    // region holding the record is written each frame: a freed slot can be
-    // reused by a record of a different bucket, which would otherwise leave
-    // the old bucket's command stale and still executing.
-    for (uint b = 0u; b < p.bucket_count; ++b) {
-        uint index = p.bucket_count <= 1u ? slot : bucket_slot(variants.regions[b], record);
-        if (index == 0xffffffffu) {
-            continue;
-        }
-        render_command cmd(icb_c->icbs[b], index);
-        if (b != bucket || !draw) {
-            cmd.reset();
-            continue;
-        }
-        cmd.draw_indexed_primitives(primitive_type::triangle,
-                                    a.index_count,
-                                    ib + a.index_offset,
-                                    1u,
-                                    a.base_vertex,
-                                    record);
+    if ((cull_status[slot] & CULL_OUTCOME_MASK) != p.draw_status) {
+        render_command cmd(icb_c->icbs[0], slot);
+        cmd.reset();
+        return;
     }
+    encode_draw(icb_c->icbs[0], slot, record, draw_args[record], p.skinned_base, index_buf,
+                skinned_index_buf);
 }

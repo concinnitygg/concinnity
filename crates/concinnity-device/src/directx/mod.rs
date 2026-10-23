@@ -10,6 +10,7 @@ mod barrier_translate;
 pub(crate) mod builtin_shaders;
 mod canopy;
 mod com;
+mod compact;
 mod context;
 mod cull;
 mod cull_readback;

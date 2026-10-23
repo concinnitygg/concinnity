@@ -199,12 +199,12 @@ mod tests {
 
     // The shader is the authority on these values: the Rust constants exist so
     // the host can name them, and Metal's encode kernel is handed one of them
-    // as a uniform. Read `cull.hlsl` and assert every `STATUS_*` it declares
+    // as a uniform. Read `cull_common.hlsl` and assert every `STATUS_*` it declares
     // matches, so a shader edit that renumbers one fails here rather than
     // silently mis-tallying a readback.
     #[test]
     fn constants_match_the_cull_shader() {
-        let declared = parse_shader_statuses(crate::render::shader::embedded::CULL);
+        let declared = parse_shader_statuses(crate::render::shader::embedded::CULL_COMMON);
         let expected = [
             ("STATUS_DRAWN", CullStatus::DRAWN),
             ("STATUS_HIZ_CANDIDATE", CullStatus::HIZ_CANDIDATE),
@@ -232,7 +232,7 @@ mod tests {
     // it, and a tally counts the outcome alone.
     #[test]
     fn a_status_word_carries_its_bucket_above_the_outcome() {
-        let src = crate::render::shader::embedded::CULL;
+        let src = crate::render::shader::embedded::CULL_COMMON;
         assert_eq!(
             crate::render::shader::consts::uint(src, "CULL_OUTCOME_MASK"),
             CullStatus::OUTCOME_MASK as usize

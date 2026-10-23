@@ -5,14 +5,15 @@
 // by a scene other than the start scene). The streaming pump calls in here as
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 //
-// The bucket regions of the GPU-culled command buffer are issued here too: the
-// cull kernel wrote every record's command into exactly one region, so each
-// region is one `ExecuteIndirect` under that bucket's pipeline. Mirrors
+// The bucket lists of the GPU-culled command buffer are issued here too: the
+// cull packed every kept record into exactly one stream's list, so each list
+// is one `ExecuteIndirect` under that bucket's pipeline. Mirrors
 // `metal/world_shaders.rs` + the bucket loop in `metal/draw/main.rs`.
 //
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
@@ -345,7 +346,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(pso) };
-            self.execute_bucket_region(cmd, cull_sig, indirect, bucket);
+            self.execute_main_stream(cmd, cull_sig, indirect, u32::saturating_from(bucket));
         })
     }
 
@@ -376,7 +377,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(prepass) };
-            self.execute_bucket_region(cmd, prepass_sig, indirect, bucket);
+            self.execute_main_stream(cmd, prepass_sig, indirect, u32::saturating_from(bucket));
             issued += 1;
         }
         issued
@@ -417,36 +418,21 @@ impl DxContext {
             })
     }
 
-    // Execute bucket `bucket`'s region of `indirect`: the commands of the
-    // records the cull can route to it.
-    fn execute_bucket_region(
+    // Execute stream `stream`'s list of `indirect`, one of the main view's
+    // indirect buffers, by the count its cull wrote.
+    pub(in crate::directx) fn execute_main_stream(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        cull_sig: &ID3D12CommandSignature,
+        signature: &ID3D12CommandSignature,
         indirect: &ID3D12Resource,
-        bucket: usize,
-    ) {
-        let Some(region) = self
-            .cull
-            .variants
-            .regions
-            .get(bucket)
-            .filter(|r| !r.is_empty())
-        else {
-            return;
-        };
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call; the region lies inside `indirect`,
-        // which was sized for every region.
-        unsafe {
-            cmd.ExecuteIndirect(
-                cull_sig,
-                region.len(),
-                indirect,
-                u64::from(region.offset) * u64::from(super::cull::INDIRECT_COMMAND_STRIDE),
-                None::<&ID3D12Resource>,
-                0,
-            );
-        }
+        stream: u32,
+    ) -> u32 {
+        super::compact::execute_stream(
+            cmd,
+            signature,
+            self.main_lists(indirect),
+            stream,
+            self.stream_layout().slots(stream),
+        )
     }
 }

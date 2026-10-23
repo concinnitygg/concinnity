@@ -21,7 +21,9 @@
 
 use concinnity_engine::platform::Platform;
 use concinnity_engine::render::shader::programs::metal::bindless_textures;
-use concinnity_engine::render::shader::programs::{ShaderProgram, Table, dx, metal, shared, spd};
+use concinnity_engine::render::shader::programs::{
+    ShaderProgram, Table, commands, dx, metal, shared, spd,
+};
 use concinnity_shader::HlslTarget;
 use concinnity_toolchain::{
     Backend, EmittedMsl, ShaderArtifact, hash_sources, msl_binds, msl_binds_a_resource,
@@ -92,8 +94,25 @@ const CULL_REGISTERS: &[(&str, &str)] = &[
     ("draw_args", "t1"),
     ("hiz_tex", "t2"),
     ("variants", "t3"),
-    ("commands", "u0"),
+    ("group_counts", "u0"),
     ("cull_status", "u1"),
+];
+
+// The scan and the scatter that pack a cull's draws, from `directx/cull.rs`:
+// one root signature, the list lengths and the commands sharing its last slot.
+const CULL_SCAN_REGISTERS: &[(&str, &str)] = &[
+    ("params", "b0"),
+    ("variants", "t0"),
+    ("group_counts", "u0"),
+    ("stream_counts", "u2"),
+];
+const CULL_SCATTER_REGISTERS: &[(&str, &str)] = &[
+    ("params", "b0"),
+    ("variants", "t0"),
+    ("draw_args", "t1"),
+    ("group_counts", "u0"),
+    ("cull_status", "u1"),
+    ("commands", "u2"),
 ];
 
 // One program and the registers its DirectX root signature declares.
@@ -153,6 +172,14 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("draw_args", "t1"),
             ("commands", "u0"),
         ],
+    },
+    DxilAbi {
+        program: &shared::CULL_SCAN,
+        registers: CULL_SCAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &commands::CULL_SCATTER,
+        registers: CULL_SCATTER_REGISTERS,
     },
     DxilAbi {
         program: &shared::MODEL_HISTORY,
@@ -1017,6 +1044,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
             ("variants", "buffer(8)"),
+            ("group_counts", "buffer(9)"),
             ("hiz_tex", "texture(0)"),
         ]],
         argument_ids: &[],
@@ -1029,7 +1057,20 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("objects", "buffer(0)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+            ("variants", "buffer(8)"),
+            ("group_counts", "buffer(9)"),
             ("hiz_tex", "texture(0)"),
+        ]],
+        argument_ids: &[],
+    },
+    // The scan between the decision and the encode, on the same encoder.
+    MetalAbi {
+        program: &shared::CULL_SCAN,
+        slots: &[&[
+            ("variants", "buffer(8)"),
+            ("group_counts", "buffer(9)"),
+            ("stream_counts", "buffer(10)"),
+            ("params", "buffer(11)"),
         ]],
         argument_ids: &[],
     },

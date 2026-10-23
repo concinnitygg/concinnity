@@ -5,12 +5,13 @@
 // by a scene other than the start scene). The streaming pump calls in here as
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 //
-// The bucket regions of the GPU-culled command buffer are issued here too: the
-// cull kernel wrote every record's command into exactly one region, so each
-// region is one `cmd_draw_indexed_indirect` under that bucket's pipeline.
+// The bucket lists of the GPU-culled command buffer are issued here too: the
+// cull packed every kept record into exactly one stream's list, so each list
+// is one indirect draw under that bucket's pipeline.
 // Mirrors `metal/world_shaders.rs` and `directx/world_shaders.rs`.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
@@ -300,7 +301,7 @@ impl VkContext {
                     pipeline.handle(),
                 );
             }
-            self.draw_bucket_region(cmd, indirect, bucket);
+            self.draw_main_stream(cmd, indirect, u32::saturating_from(bucket));
         })
     }
 
@@ -336,7 +337,7 @@ impl VkContext {
                     prepass.handle(),
                 );
             }
-            self.draw_bucket_region(cmd, indirect, bucket);
+            self.draw_main_stream(cmd, indirect, u32::saturating_from(bucket));
             issued += 1;
         }
         issued
@@ -377,30 +378,19 @@ impl VkContext {
             })
     }
 
-    // Draw bucket `bucket`'s region of `indirect`: the commands of the records
-    // the cull can route to it.
-    fn draw_bucket_region(&self, cmd: vk::CommandBuffer, indirect: vk::Buffer, bucket: usize) {
-        let Some(region) = self
-            .cull
-            .variants
-            .regions
-            .get(bucket)
-            .filter(|r| !r.is_empty())
-        else {
-            return;
-        };
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call; the region lies inside `indirect`, which
-        // was sized for every region.
-        unsafe {
-            self.hw.device.cmd_draw_indexed_indirect(
-                cmd,
-                indirect,
-                vk::DeviceSize::from(region.offset)
-                    * vk::DeviceSize::from(super::cull::INDIRECT_COMMAND_STRIDE),
-                region.len(),
-                super::cull::INDIRECT_COMMAND_STRIDE,
-            );
-        }
+    // Draw stream `stream`'s list of `indirect`, one of the main view's
+    // indirect buffers.
+    pub(in crate::vulkan) fn draw_main_stream(
+        &self,
+        cmd: vk::CommandBuffer,
+        indirect: vk::Buffer,
+        stream: u32,
+    ) {
+        self.draw_stream(
+            cmd,
+            self.main_lists(indirect),
+            stream,
+            self.stream_layout().slots(stream),
+        );
     }
 }

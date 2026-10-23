@@ -33,6 +33,10 @@ pub mod raymarch;
 /// The engine programs every backend compiles.
 pub mod shared;
 
+/// The programs that write indirect draw commands, which Vulkan and DirectX
+/// compile.
+pub mod commands;
+
 /// The single-pass Hi-Z downsampler Vulkan and DirectX build the depth pyramid
 /// with.
 pub mod spd;

@@ -128,6 +128,7 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{NIGHT_SKY}", "night_sky.hlsl"),
     ("{WIND}", "wind.hlsl"),
     ("{HIZ_TEST}", "hiz_test.hlsl"),
+    ("{CULL_COMMON}", "cull_common.hlsl"),
     // HDR_STORE trails every fragment that carries it (VIEW_UNIFORMS,
     // TRANSPARENT_TYPES, RAYMARCH_TYPES, ATMOSPHERE_TYPES).
     ("{HDR_STORE}", "hdr_store.hlsl"),

@@ -474,6 +474,14 @@ impl MtlContext {
         self.bind_main_pass_shared(&encoder, &view_uniforms);
         // Main2 is the same main camera as phase 1, so it reads the clusters too.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
+        // Phase 2's lists, in its own ICBs.
+        let gpu = GpuFrameBuffers {
+            regions: crate::metal::cull::BucketRegions {
+                ranges: self.cull.ranges_2.as_deref(),
+                ..gpu.regions
+            },
+            ..gpu
+        };
         let draw_calls =
             self.execute_bindless_static_icb(&encoder, obj_buf, tex_args, &self.cull.icbs_2, gpu);
 
@@ -543,23 +551,21 @@ impl MtlContext {
 
         // Static + instance prefix, once per shader bucket: bucket 0 executes
         // under the pipeline `bind_main_pass_shared` bound, each later bucket
-        // under its material shader's pipeline. The cull kernel wrote every
-        // record's command into exactly one bucket's ICB, so the ranges never
+        // under its material shader's pipeline. The cull packed every kept
+        // record into exactly one stream's list, so the lists never
         // double-draw. The static u32 index buffer is referenced only inside the
         // indirect commands (not bound), so make it resident; the static vertex
         // buffer is already bound at binding 1.
-        if let Some(prefix) = counts.prefix(0) {
+        if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
             for (b, icb) in icbs.iter().enumerate() {
-                let range = match regions.commands(b) {
-                    Some(region) if region.is_empty() => continue,
-                    Some(region) => region,
-                    None => prefix.clone(),
-                };
+                if !regions.draws(b) {
+                    continue;
+                }
                 if b > 0 {
                     // A bucket whose Shader is not resident yet (its scene has
                     // not pinned) has no pipeline: skip it until warmup builds
@@ -569,17 +575,8 @@ impl MtlContext {
                     };
                     enc.set_pipeline(&pipelines.main);
                 }
-                // SAFETY: the default's prefix spans the static + instance
-                // command slots and a later bucket's region its own records
-                // (`ensure_icb_capacity` sized every ICB for `counts.total`,
-                // which bounds both).
-                unsafe {
-                    enc.executeCommandsInBuffer_withRange(
-                        icb,
-                        crate::metal::context::ns_range(range),
-                    );
-                }
-                draw_calls += 1;
+                draw_calls +=
+                    execute_list(enc, icb, regions, concinnity_core::math::saturating_u32(b));
             }
             // Restore the default pipeline for the skinned tail below (and for
             // the caller's subsequent sub-paths, which re-bind anyway).
@@ -596,7 +593,7 @@ impl MtlContext {
         // exactly when the fold is active, which is also when the tail is
         // non-empty. Skinned draws always render under the world default shader,
         // so only bucket 0's ICB executes here.
-        if let (Some(deformed), Some(icb0), Some(tail)) =
+        if let (Some(deformed), Some(icb0), Some(_)) =
             (deformed_skinned, icbs.first(), counts.skinned_tail(0))
         {
             enc.set_vertex_buffer(deformed, 0, 1);
@@ -607,11 +604,7 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            // SAFETY: the tail spans the folded skinned command slots.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(icb0, crate::metal::context::ns_range(tail));
-            }
-            draw_calls += 1;
+            draw_calls += execute_list(enc, icb0, regions, render_types::SKINNED_STREAM);
         }
         draw_calls
     }
@@ -785,4 +778,30 @@ impl MtlContext {
         enc.popDebugGroup();
         draw_calls
     }
+}
+
+// Execute stream `stream`'s list of `icb` at the execution range the cull
+// wrote for it, returning the indirect executes issued: none before the ICBs
+// are first built.
+pub(in crate::metal) fn execute_list(
+    enc: &ProtocolObject<dyn objc2_metal::MTLRenderCommandEncoder>,
+    icb: &ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>,
+    regions: crate::metal::cull::BucketRegions<'_>,
+    stream: u32,
+) -> u32 {
+    let Some(ranges) = regions.ranges else {
+        return 0;
+    };
+    // SAFETY: the cull that encoded `icb` wrote this stream's range at its
+    // offset in `ranges`, a list no longer than the stream's region, which
+    // `ensure_icb_capacity` sized `icb` to hold; both buffers outlive the
+    // command buffer this encoder records into.
+    unsafe {
+        enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+            icb,
+            ranges,
+            crate::metal::cull::BucketRegions::range_offset(stream),
+        );
+    }
+    1
 }

@@ -17,7 +17,7 @@ use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
 
 mod bindless;
 mod compute;
-pub(in crate::vulkan) use compute::{VARIANT_BUFFER_BYTES, main_cull_set};
+pub(in crate::vulkan) use compute::{VARIANT_BUFFER_BYTES, cull_set_bindings, main_cull_set};
 mod gbuffer;
 mod shadow;
 mod two_pass;
@@ -233,6 +233,11 @@ pub(super) fn build_cull(
         cull_sets: compute.sets,
         draw_args_buffers: compute.draw_args_buffers,
         indirect_buffers: compute.indirect_buffers,
+        indirect_commands,
+        compact: compute.compact,
+        group_count_buffers: compute.group_count_buffers,
+        compact_sets: compute.compact_sets,
+        compact_sets2: two_pass.compact_sets,
         cull_status_buffers: compute.status_buffers,
         occlusion_two_pass,
         cull_sets2: two_pass.sets,

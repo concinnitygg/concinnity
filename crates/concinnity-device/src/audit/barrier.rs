@@ -31,9 +31,11 @@ enum Reason {
     // transition can express it: the Hi-Z reduction's per-mip chain, where one
     // mip is written while the previous is sampled; the MSAA resolve step, which
     // needs its source and destination in the resolve states for the length of
-    // one call; and the refraction snapshots, where a pass copies the attachment
-    // it is blending into because a fragment cannot sample it. Each opens and
-    // closes within one node, so no net state crosses the node boundary.
+    // one call; the refraction snapshots, where a pass copies the attachment
+    // it is blending into because a fragment cannot sample it; and the cull's
+    // packing, whose scan and scatter read what the dispatch before them wrote.
+    // Each opens and closes within one node, so no net state crosses the node
+    // boundary.
     IntraPass,
     // Resource creation, staging upload, and resize transitions. Outside any
     // frame's command stream.
@@ -157,6 +159,13 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::Ungraphed,
             ),
             ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            ("compact.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
+            (
+                "compact_test.rs",
+                "cmd_pipeline_barrier",
+                1,
+                Reason::OutOfFrame,
+            ),
             // The model-history ring: the snapshot dispatch writes the slot a
             // pre-pass `frames_in_flight - 1` frames ago read, so the write is
             // fenced behind those vertex reads and released to the next frame's.
@@ -403,6 +412,7 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::Ungraphed,
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
+            ("compact.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // Four for the mirror targets and their cull's indirect buffer, two
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.

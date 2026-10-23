@@ -11,15 +11,14 @@
 //                pyramid, for two-pass occlusion
 //   SHADOW_CULL  light-frustum only, one dispatch per cascade
 //
-// Single source for all three hosts. On Vulkan and DirectX the kernel writes
-// the indirect command record itself; on Metal it writes only `cull_status`,
-// and the hand-written `metal/shaders/cull_encode.metal` turns that status into
-// the indirect command buffer. Metal has no multi-draw-indirect and its ICB
-// encoding (`render_command`, `array<command_buffer, N>`) is a declaration HLSL
-// cannot express, but nothing in the decision needs it, so the decision is what
-// lives here and the encoding is what stays per backend. The two share
-// `cull_status` at buffer(5) and `draw_args` at buffer(1), which is the whole
-// interface between them.
+// Single source for all three hosts. Phases 1 and 2 write the outcome into
+// `cull_status` and count each 64-record group's draws per stream into
+// `group_counts`; cull_compact.hlsl then scans the counts and, on Vulkan and
+// DirectX, scatters every kept record's command into its stream's list. On
+// Metal the hand-written `metal/shaders/cull_encode.metal` is the scatter,
+// since its ICB encoding (`render_command`, `array<command_buffer, N>`) is a
+// declaration HLSL cannot express. The shadow cull packs nothing: it writes
+// every record's command, or its status on Metal, at the record's own slot.
 //
 // The backend define selects the host's constant shape, and here it is a
 // difference in shape rather than in slot numbers, so all three arms stay. Vulkan hands the kernel
@@ -31,28 +30,9 @@
 // either. The accessor defines below are what let the body read them without
 // caring.
 //
-// The command record itself genuinely differs and cannot be unified: a Vulkan
-// indirect draw is a bare `VkDrawIndexedIndirectCommand` whose `first_instance`
-// carries the object id, while a D3D12 ExecuteIndirect command signature
-// prepends the b0 root constant the shaders read the object id from, so its
-// record is a word longer and starts with that id.
-
 {OBJECT_COMMON}
 {DEPTH_CONVENTION}
-
-// `cull_status` values. STATUS_HIZ_CANDIDATE is the only outcome phase 2
-// re-tests against the rebuilt pyramid; the others are settled by phase 1.
-static const uint STATUS_DRAWN         = 0u; // visible in phase 1 -> never re-tested
-static const uint STATUS_HIZ_CANDIDATE = 1u; // Hi-Z-occluded in phase 1 -> candidate
-static const uint STATUS_CULLED        = 2u; // frustum/distance/disabled -> settled
-static const uint STATUS_REDRAW        = 3u; // candidate found visible in phase 2
-static const uint STATUS_HIZ_CULLED    = 4u; // candidate still occluded in phase 2
-
-// Phase 1 keeps the outcome in a status word's low byte and the record's
-// shader bucket in the byte above, so phase 2 and Metal's encode kernel draw
-// the record where phase 1 routed it. Locked to gfx::cull_status.
-static const uint CULL_OUTCOME_MASK = 0xFFu;
-static const uint CULL_BUCKET_SHIFT = 8u;
+{CULL_COMMON}
 
 // ---- Per-host constants ----
 
@@ -61,8 +41,7 @@ static const uint CULL_BUCKET_SHIFT = 8u;
 // Layout matches `metal::uniforms::CullUniforms` (208 B), the inline constant
 // block at buffer(2). `cam_pos` is a whole float4 lane (w unused): MSL sizes a
 // constant-buffer float3 at 16 bytes, so a scalar after it would not pack.
-// `skinned_base` and `cascade_base` are read by the encode kernel's host, not
-// here; they ride the one block both dispatches share.
+// `cascade_base` offsets the shadow cull's status by its view.
 struct CullParams
 {
     float4   planes[6];
@@ -98,7 +77,7 @@ struct CullParams
     uint     hiz_mip_count;
     uint     hiz_enabled;
     uint     bucket_count;
-    uint     bucket_stride;
+    uint     skinned_base;
     uint     _pad0;
     uint     _pad1;
 };
@@ -119,7 +98,7 @@ struct CullParams
     float3 cam_pos;
     uint   object_count;
     uint   bucket_count;
-    uint   bucket_stride;
+    uint   skinned_base;
 };
 
 // Layout matches `vulkan::uniforms::CullHizParams` (80 B), set 1 binding 1.
@@ -158,28 +137,6 @@ struct CullHizParams
 
 #ifndef SHADOW_CULL
 
-// The record's variant route plus one rides flag bits 16..22, and whether it
-// grows grass with a far band bit 3. Locked to gfx::render_types::DrawArgsFlags.
-static const uint DRAW_FAR_BAND        = 8u;
-static const uint DRAW_ROUTE_SHIFT     = 16u;
-static const uint DRAW_ROUTE_MASK      = 0x3Fu;
-
-// Locked to gfx::render_types::{MAX_SHADER_BUCKETS, MAX_VARIANT_ROUTES,
-// VARIANT_FAR, VARIANT_DAYLIGHT, DAYLIGHT_COS_MARGIN}.
-static const uint  MAX_SHADER_BUCKETS  = 64u;
-static const uint  MAX_VARIANT_ROUTES  = 32u;
-static const uint  VARIANT_FAR         = 1u;
-static const uint  VARIANT_DAYLIGHT    = 2u;
-static const float DAYLIGHT_COS_MARGIN = 1e-6;
-
-// The variant block, gfx::render_types::GpuCullVariants, read as 16-byte rows
-// (a structured buffer element may not reach its size): the view's four rows,
-// then a row per route (the bucket per feature combination, a byte each, and
-// the features tested), then two rows per bucket region (its build-time
-// records' first and count, its runtime ones', then the region's offset).
-static const uint CULL_VARIANT_ROUTE_ROW  = 4u;
-static const uint CULL_VARIANT_REGION_ROW = 36u;
-
 #if defined(CN_BACKEND_METAL)
 #define CULL_VARIANTS_REGISTER t8
 #else
@@ -211,65 +168,19 @@ static const uint CULL_VARIANT_REGION_ROW = 36u;
 [[vk::binding(3, 0)]] RWStructuredBuffer<uint> cull_status : register(CULL_STATUS_REGISTER);
 #endif
 
+#ifdef SHADOW_CULL
 #ifndef CN_BACKEND_METAL
-
-#ifdef CN_BACKEND_DIRECTX
-
-// One ExecuteIndirect command: the b0 object-id root constant followed by
-// D3D12_DRAW_INDEXED_ARGUMENTS. 24 bytes; matches the command signature in
-// directx/init/pipelines.rs.
-struct DrawCommand
-{
-    uint object_id;
-    uint index_count;
-    uint instance_count;
-    uint start_index;
-    int  base_vertex;
-    uint start_instance;
-};
-
-DrawCommand make_command(uint i, GpuDrawArgs a)
-{
-    DrawCommand c;
-    c.object_id = i;
-    c.index_count = a.index_count;
-    c.instance_count = 1u;
-    c.start_index = a.index_offset;
-    c.base_vertex = int(a.base_vertex);
-    c.start_instance = 0u;
-    return c;
-}
-
-#else
-
-// Matches VkDrawIndexedIndirectCommand (20 bytes). `first_instance` delivers
-// the record id to the depth-only and bindless vertex stages, which read it
-// back through `object_instance_index`.
-struct DrawCommand
-{
-    uint index_count;
-    uint instance_count;
-    uint first_index;
-    int  vertex_offset;
-    uint first_instance;
-};
-
-DrawCommand make_command(uint i, GpuDrawArgs a)
-{
-    DrawCommand c;
-    c.index_count = a.index_count;
-    c.instance_count = 1u;
-    c.first_index = a.index_offset;
-    c.vertex_offset = int(a.base_vertex);
-    c.first_instance = i;
-    return c;
-}
-
-#endif
-
 [[vk::binding(2, 0)]] RWStructuredBuffer<DrawCommand> commands : register(u0);
-
-#endif // !CN_BACKEND_METAL
+#endif
+#else
+// Each group's draws per stream, stream by stream: the scan's input.
+#ifdef CN_BACKEND_METAL
+#define CULL_GROUP_COUNTS_REGISTER u9
+#else
+#define CULL_GROUP_COUNTS_REGISTER u0
+#endif
+[[vk::binding(2, 0)]] RWStructuredBuffer<uint> group_counts : register(CULL_GROUP_COUNTS_REGISTER);
+#endif
 
 #ifndef SHADOW_CULL
 
@@ -459,70 +370,51 @@ uint record_bucket(GpuDrawArgs a, uint i)
     return min((r.x >> (8u * features)) & 0xFFu, cull.bucket_count - 1u);
 }
 
-#ifndef CN_BACKEND_METAL
-// The command record `i` writes in bucket `b`'s region, or ~0 when it falls
-// outside it. Mirrors GpuBucketRegion::command.
-uint bucket_command(uint b, uint i)
+groupshared uint group_stream_counts[DRAW_STREAMS];
+
+// The stream record `i`, kept with status `word`, draws in.
+uint kept_stream(uint i, uint word)
 {
-    uint4 spans = variants[CULL_VARIANT_REGION_ROW + 2u * b];
-    uint offset = variants[CULL_VARIANT_REGION_ROW + 2u * b + 1u].x;
-    uint k = i - spans.x;
-    if (k < spans.y)
-    {
-        return offset + k;
-    }
-    k = i - spans.z;
-    return k < spans.w ? offset + spans.y + k : 0xFFFFFFFFu;
+    uint bucket = min(word >> CULL_BUCKET_SHIFT, MAX_SHADER_BUCKETS - 1u);
+    return record_stream(i, bucket, cull.bucket_count, cull.skinned_base,
+        CULL_REGION_SPANS(variants, bucket));
 }
 
-// Write one record's command into its shader bucket's region and a no-op into
-// every other region that holds the record. `c` already carries
-// instance_count 0 when the record was culled, so a culled record resets every
-// region. The reset sweep matters because a freed draw slot can be reused by a
-// record of a DIFFERENT bucket, which would otherwise leave the old bucket's
-// command stale and still executing. A single-stream dispatch (one bucket)
-// writes the record's own slot.
-void write_bucket_commands(uint i, DrawCommand c, uint bucket)
+// Count group `group`'s kept records per stream into `group_counts`, every
+// stream's count written so no stale one survives. Each thread passes the
+// stream its record draws in, NO_STREAM when it draws in none.
+void count_streams(uint gi, uint group, uint stream)
 {
-    if (cull.bucket_count <= 1u)
+    for (uint s = gi; s < DRAW_STREAMS; s += CULL_GROUP_RECORDS)
     {
-        commands[i] = c;
-        return;
+        group_stream_counts[s] = 0u;
     }
-    DrawCommand noop = c;
-    noop.instance_count = 0u;
-    for (uint b = 0u; b < cull.bucket_count; ++b)
+    GroupMemoryBarrierWithGroupSync();
+    if (stream != NO_STREAM)
     {
-        uint slot = bucket_command(b, i);
-        if (slot == 0xFFFFFFFFu)
-        {
-            continue;
-        }
-        if (b == bucket)
-        {
-            commands[slot] = c;
-        }
-        else
-        {
-            commands[slot] = noop;
-        }
+        InterlockedAdd(group_stream_counts[stream], 1u);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    uint groups = (cull.object_count + CULL_GROUP_RECORDS - 1u) / CULL_GROUP_RECORDS;
+    for (uint t = gi; t < DRAW_STREAMS; t += CULL_GROUP_RECORDS)
+    {
+        group_counts[t * groups + group] = group_stream_counts[t];
     }
 }
-#endif // !CN_BACKEND_METAL
 
 #endif // !SHADOW_CULL
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void cull_kernel(uint3 tid : SV_DispatchThreadID)
+void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 {
     uint i = tid.x;
+
+#ifdef SHADOW_CULL
     if (i >= cull.object_count)
     {
         return;
     }
-
-#ifdef SHADOW_CULL
     GpuDrawArgs a = draw_args[i];
     // Light-frustum only, against this cascade's `planes`. Deliberately NO
     // per-object distance cull: the cascade light frustum already bounds the
@@ -546,79 +438,74 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID)
     }
     commands[i] = c;
 #endif
-#elif defined(CULL_PHASE2)
-    // Runs after the pyramid was rebuilt from this frame's phase-1 depth.
-    // Re-tests only the objects phase 1 marked STATUS_HIZ_CANDIDATE against the
-    // fresh pyramid (projected through this frame's VP, carried in
-    // `prev_view_proj` exactly as phase 1 used the previous frame's). A
-    // candidate still occluded by this frame's actual depth stays culled; one
-    // now visible is redrawn. Everything else phase 1 settled and is left as it
-    // was.
-    uint word = cull_status[i];
-    bool candidate = (word & CULL_OUTCOME_MASK) == STATUS_HIZ_CANDIDATE;
-    bool redraw = candidate;
-    if (candidate)
-    {
-        GpuObjectData obj = objects[i];
-        if (CULL_HIZ_ENABLED != 0u
-            && hiz_occluded(obj.bb_min_cull_distance.xyz, obj.bb_max_alpha_cutoff.xyz))
-        {
-            redraw = false;
-        }
-        cull_status[i] = (redraw ? STATUS_REDRAW : STATUS_HIZ_CULLED)
-            | (word & ~CULL_OUTCOME_MASK);
-    }
-#ifndef CN_BACKEND_METAL
-    GpuDrawArgs a = draw_args[i];
-    DrawCommand c = make_command(i, a);
-    if (!redraw)
-    {
-        c.instance_count = 0u;
-    }
-    write_bucket_commands(i, c, word >> CULL_BUCKET_SHIFT);
-#endif
 #else
-    // Phase 1. Records the outcome in `cull_status` for two-pass occlusion: a
-    // Hi-Z cull is the only outcome phase 2 reconsiders against the rebuilt
-    // pyramid; everything else is settled here.
-    GpuDrawArgs a = draw_args[i];
-    uint status = STATUS_DRAWN;
-    if ((a.flags & DRAW_ENABLED) == 0u)
+    // Every thread of the group reaches the count, past the last record too.
+    uint stream = NO_STREAM;
+    if (i < cull.object_count)
     {
-        status = STATUS_CULLED;
-    }
-    else if ((a.flags & DRAW_CULLABLE) != 0u)
-    {
-        GpuObjectData obj = objects[i];
-        float3 bb_min = obj.bb_min_cull_distance.xyz;
-        float3 bb_max = obj.bb_max_alpha_cutoff.xyz;
-        float cull_distance = obj.bb_min_cull_distance.w;
-        if (frustum_culled(bb_min, bb_max))
+#ifdef CULL_PHASE2
+        // Runs after the pyramid was rebuilt from this frame's phase-1 depth.
+        // Re-tests only the objects phase 1 marked STATUS_HIZ_CANDIDATE against
+        // the fresh pyramid (projected through this frame's VP, carried in
+        // `prev_view_proj` exactly as phase 1 used the previous frame's). A
+        // candidate still occluded by this frame's actual depth stays culled;
+        // one now visible is redrawn. Everything else phase 1 settled and is
+        // left as it was.
+        uint word = cull_status[i];
+        if ((word & CULL_OUTCOME_MASK) == STATUS_HIZ_CANDIDATE)
+        {
+            GpuObjectData obj = objects[i];
+            bool redraw = CULL_HIZ_ENABLED == 0u
+                || !hiz_occluded(obj.bb_min_cull_distance.xyz, obj.bb_max_alpha_cutoff.xyz);
+            cull_status[i] = (redraw ? STATUS_REDRAW : STATUS_HIZ_CULLED)
+                | (word & ~CULL_OUTCOME_MASK);
+            if (redraw)
+            {
+                stream = kept_stream(i, word);
+            }
+        }
+#else
+        // Phase 1. Records the outcome in `cull_status` for two-pass
+        // occlusion: a Hi-Z cull is the only outcome phase 2 reconsiders
+        // against the rebuilt pyramid; everything else is settled here.
+        GpuDrawArgs a = draw_args[i];
+        uint status = STATUS_DRAWN;
+        if ((a.flags & DRAW_ENABLED) == 0u)
         {
             status = STATUS_CULLED;
         }
-        else if (cull_distance > 0.0
-            && aabb_distance_sq(bb_min, bb_max) > cull_distance * cull_distance)
+        else if ((a.flags & DRAW_CULLABLE) != 0u)
         {
-            status = STATUS_CULLED;
+            GpuObjectData obj = objects[i];
+            float3 bb_min = obj.bb_min_cull_distance.xyz;
+            float3 bb_max = obj.bb_max_alpha_cutoff.xyz;
+            float cull_distance = obj.bb_min_cull_distance.w;
+            if (frustum_culled(bb_min, bb_max))
+            {
+                status = STATUS_CULLED;
+            }
+            else if (cull_distance > 0.0
+                && aabb_distance_sq(bb_min, bb_max) > cull_distance * cull_distance)
+            {
+                status = STATUS_CULLED;
+            }
+            else if (CULL_HIZ_ENABLED != 0u && hiz_occluded(bb_min, bb_max))
+            {
+                // Cull when the AABB is fully behind the previous frame's
+                // depth pyramid. Skipped on the first frame and after a resize
+                // (`hiz_enabled == 0`), where no valid pyramid exists yet.
+                status = STATUS_HIZ_CANDIDATE;
+            }
         }
-        else if (CULL_HIZ_ENABLED != 0u && hiz_occluded(bb_min, bb_max))
+        uint bucket = (a.flags & DRAW_ENABLED) != 0u ? record_bucket(a, i) : 0u;
+        uint word = status | (bucket << CULL_BUCKET_SHIFT);
+        cull_status[i] = word;
+        if (status == STATUS_DRAWN)
         {
-            // Cull when the AABB is fully behind the previous frame's depth
-            // pyramid. Skipped on the first frame and after a resize
-            // (`hiz_enabled == 0`), where no valid pyramid exists yet.
-            status = STATUS_HIZ_CANDIDATE;
+            stream = kept_stream(i, word);
         }
-    }
-    uint bucket = (a.flags & DRAW_ENABLED) != 0u ? record_bucket(a, i) : 0u;
-    cull_status[i] = status | (bucket << CULL_BUCKET_SHIFT);
-#ifndef CN_BACKEND_METAL
-    DrawCommand c = make_command(i, a);
-    if (status != STATUS_DRAWN)
-    {
-        c.instance_count = 0u;
-    }
-    write_bucket_commands(i, c, bucket);
 #endif
+    }
+    count_streams(gi, gid.x, stream);
 #endif
 }

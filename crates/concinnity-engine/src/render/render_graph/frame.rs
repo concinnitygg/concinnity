@@ -1858,6 +1858,32 @@ mod tests {
         assert_eq!(g.passes[4].kind, PassKind::Render); // Main2
     }
 
+    // Each cull packs its draws through one group-count scratch per frame
+    // slot, which phase 2 reuses: phase 1 packs within `Cull`, and Main and
+    // its pre-pass draw phase 1's lists, all before `Cull2` writes it again.
+    // Every feature that adds passes between them is on, so none may move a
+    // reader of phase 1's lists past `Cull2`.
+    #[test]
+    fn phase_ones_lists_are_drawn_before_phase_two_culls() {
+        let mut i = all_off();
+        for (_, enable) in GATED_FLAGS {
+            enable(&mut i);
+        }
+        i.world_hidden = false;
+        let g = build_frame_graph(&i).expect("compiles");
+        let at = |id| {
+            g.passes
+                .iter()
+                .position(|p| p.id == id)
+                .unwrap_or_else(|| panic!("{id:?} in the graph"))
+        };
+        let cull2 = at(PassId::Cull2);
+        for reader in [PassId::Cull, PassId::Main, PassId::GBufferPrepass] {
+            assert!(at(reader) < cull2, "{reader:?} runs before Cull2");
+        }
+        assert!(at(PassId::Cull) < at(PassId::GBufferPrepass));
+    }
+
     // Index of `label` in the compiled graph's resource arena.
     fn resource_of(g: &CompiledGraph, label: &str) -> usize {
         g.resources

@@ -282,7 +282,7 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 cam_pos,
                 object_count,
                 bucket_count,
-                bucket_stride,
+                skinned_base,
             }),
         ),
         on(
@@ -305,7 +305,7 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 hiz_mip_count,
                 hiz_enabled,
                 bucket_count,
-                bucket_stride,
+                skinned_base,
                 [_pad] => ["_pad0", "_pad1"],
             }),
         ),
