@@ -423,6 +423,8 @@ impl DxContext {
             atmosphere,
             transparent,
             water_sim,
+            wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
+            wake_frame: None,
             planar_reflection,
             fog,
             particle,

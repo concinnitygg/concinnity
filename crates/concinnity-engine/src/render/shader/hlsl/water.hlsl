@@ -57,7 +57,10 @@
 // frame moves; where two faces meet, their seas blend across a band. Every
 // wave lookup above is shared, reading the face being sampled through the
 // WATER_* hooks below, which expand to the rectangle's own expressions
-// otherwise.
+// otherwise. A sea also carries the wake bodies make crossing it near the
+// camera (water_wake.hlsl): its height rides on the waves, held to what the
+// depth lets stand, its slopes add to theirs, and its foam lies over the
+// whitecaps and the surf.
 //
 // One fragment entry per compile, selected by a define. Only the reflection
 // differs between them, exactly as in glass.hlsl:
@@ -199,8 +202,16 @@ struct WaterShore
     float4 lattice_places[WATER_SHORE_OCTAVES]; // and where in it the anchor lies
 };
 
+// Where a planet sea's wake lies. Matches `WaterWakeGpu` (32 B); all zero
+// while none runs.
+struct WaterWake
+{
+    float4 lookup; // [1 / window width, cell size, center x, center z]
+    float4 fade;   // [clear half-width, 1 / sponge width, height per meter of depth, on]
+};
+
 // Where a planet sea lies and how its grid is laid on it. Matches
-// `WaterSeaGpu` (2064 B); zero for a rectangle.
+// `WaterSeaGpu` (2096 B); zero for a rectangle.
 struct WaterSea
 {
     float4 up;          // [radial up at the anchor, sea radius]
@@ -210,10 +221,11 @@ struct WaterSea
     float4 wind_map[2]; // rows over a point that give where its gusts are read
     WaterSeaFace faces[WATER_SEA_FACES];
     WaterShore shore;
+    WaterWake wake;
 };
 
 // Per-surface tunables, refreshed every frame. Layout matches `WaterParams`
-// (3200 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
+// (3232 B); the vec3 fields are float4 so MSL's 16-byte constant-buffer float3
 // cannot desynchronize them from the CPU struct.
 struct WaterParams
 {
@@ -305,6 +317,18 @@ SamplerState ocean_sampler : register(s4);
 [[vk::binding(3, 1)]] Texture2DArray<float4> ocean_displacement : register(t9);
 [[vk::binding(4, 1)]] Texture2DArray<float4> ocean_slopes : register(t10);
 [[vk::binding(5, 1)]] SamplerState ocean_sampler : register(s6);
+#endif
+
+#ifdef WATER_SEA
+// The wake around the camera (water_wake.hlsl): (height, slope x, slope z,
+// foam) per cell, with mips, each cell in the texel its coordinates wrap to,
+// read through the oceans' wrapping sampler. Bound for every sea; zero while
+// none runs.
+#ifdef CN_BACKEND_DIRECTX
+Texture2D<float4> wake_field : register(t17);
+#else
+[[vk::binding(6, 1)]] Texture2D<float4> wake_field : register(t11);
+#endif
 #endif
 
 // This surface's planar reflection target, bound per surface and sampled at the
@@ -1260,6 +1284,112 @@ float water_surf_lace(float cover, float age, float3 p, float3 toward, float foo
     return lerp(cover, lace, fade);
 }
 
+// How the wake fades at frame point `p` (x, z): whole inside its clear
+// area, nothing at its window's edge or while none runs.
+float water_wake_fade(float2 p)
+{
+    WaterWake w = params.sea.wake;
+    float2 off = abs(p - w.lookup.zw);
+    float edge = max(off.x, off.y);
+    return w.fade.w > 0.0 ? saturate((w.fade.x - edge) * w.fade.y + 1.0) : 0.0;
+}
+
+// The wake at frame point `p` (x, z), read at the mip a footprint
+// `footprint` meters across needs: (height, slope x, slope z, foam).
+float4 water_wake_level(float2 p, float footprint)
+{
+    float fade = water_wake_fade(p);
+    if (fade <= 0.0)
+    {
+        return (float4)0.0;
+    }
+    float lod = log2(max(footprint / params.sea.wake.lookup.y, 1.0));
+    return fade * wake_field.SampleLevel(ocean_sampler, p * params.sea.wake.lookup.x, lod);
+}
+
+// The wake at frame point `p` (x, z), read through a pixel whose footprint
+// moves `dx`, `dy` meters across it.
+float4 water_wake(float2 p, float2 dx, float2 dy)
+{
+    float fade = water_wake_fade(p);
+    if (fade <= 0.0)
+    {
+        return (float4)0.0;
+    }
+    float s = params.sea.wake.lookup.x;
+    return fade * wake_field.SampleGrad(ocean_sampler, p * s, dx * s, dy * s);
+}
+
+// The tallest the wake stands at coast `field`, which breaks it where the
+// water grows shallow; unbounded out at sea.
+float water_wake_limit(float4 field)
+{
+    return water_shore_reaches(field) ? params.sea.wake.fade.z * max(water_shore_depth(field.x), 0.0)
+                                      : 1e6;
+}
+
+// Below these the wake is still water: a millimeter of height, a thousandth
+// of slope, a hundredth of foam.
+static const float WATER_WAKE_QUIET_HEIGHT = 1e-3;
+static const float WATER_WAKE_QUIET_SLOPE = 1e-3;
+static const float WATER_WAKE_QUIET_FOAM = 1e-2;
+
+// How far, in meters, the wake must stand over what the depth holds before it
+// breaks into foam, and by how far it is fully broken; and how much foam
+// breaking adds at most.
+static const float2 WATER_WAKE_BREAK = float2(0.05, 0.3);
+static const float WATER_WAKE_BREAK_FOAM = 0.5;
+
+// Whether `wake` stirs the surface enough to draw.
+bool water_wake_stirs(float4 wake)
+{
+    return abs(wake.x) > WATER_WAKE_QUIET_HEIGHT || wake.w > WATER_WAKE_QUIET_FOAM
+           || max(abs(wake.y), abs(wake.z)) > WATER_WAKE_QUIET_SLOPE;
+}
+
+// The lace the wake's foam breaks up on: three octaves of value noise, each
+// cell in meters with its weight, and the cells its lattice repeats over.
+static const float3 WATER_WAKE_LACE_CELLS = float3(1.1, 0.37, 0.13);
+static const float3 WATER_WAKE_LACE_WEIGHTS = float3(0.5, 0.3, 0.2);
+static const float WATER_WAKE_LACE_PERIOD = 256.0;
+
+// How soft the lace's edge is, as a share of the noise's range.
+static const float WATER_WAKE_LACE_SOFTNESS = 0.12;
+
+// How opaque the thinnest foam is, as a share of the thickest: thin foam is
+// sheer as well as sparse.
+static const float WATER_WAKE_THIN_OPACITY = 0.25;
+
+// One octave of the lace at `p` on cells `cell` meters across: ridged, so
+// its highs run in thin threads around darker pools, as foam laces, and its
+// mean once a pixel `footprint` meters across can no longer resolve it.
+float water_wake_lace_octave(float2 p, float cell, float footprint)
+{
+    float2 q = p / cell;
+    q -= floor(q / WATER_WAKE_LACE_PERIOD) * WATER_WAKE_LACE_PERIOD;
+    float n = water_periodic_noise(q, WATER_WAKE_LACE_PERIOD);
+    float ridge = 1.0 - abs(2.0 * n - 1.0);
+    return lerp(0.5, ridge * ridge, water_fade(cell, footprint));
+}
+
+// How opaque the wake's foam stands at frame point `p` where it covers
+// `cover` of the water, seen through a pixel `footprint` meters across: a
+// soft-edged lace at three scales covering about `cover` of the surface,
+// whose opacity thins with it as the foam ages.
+float water_wake_lace(float cover, float2 p, float footprint)
+{
+    float3 cells = WATER_WAKE_LACE_CELLS;
+    float lace = WATER_WAKE_LACE_WEIGHTS.x * water_wake_lace_octave(p, cells.x, footprint)
+               + WATER_WAKE_LACE_WEIGHTS.y * water_wake_lace_octave(p, cells.y, footprint)
+               + WATER_WAKE_LACE_WEIGHTS.z * water_wake_lace_octave(p, cells.z, footprint);
+    // Stretched toward an even spread over [0, 1], so the share above the
+    // cut is about `cover`.
+    lace = saturate(0.5 + 2.2 * (lace - 0.5));
+    float edge = WATER_WAKE_LACE_SOFTNESS;
+    float mask = smoothstep(1.0 - cover - edge, 1.0 - cover + edge, lace);
+    return mask * lerp(WATER_WAKE_THIN_OPACITY, 1.0, cover);
+}
+
 // The simulated ocean's displacement at a rest point, each face's read at
 // the mip a pixel `footprint` meters across needs, the heights along the
 // sea's up there.
@@ -1291,9 +1421,11 @@ float3 water_sea_displace(float3 rest, float footprint, float4 shore_field, floa
     return d;
 }
 
-// The whitecap cover and the surf's foam `water_sea_shading` found.
+// The whitecap cover, the surf's foam and the wake's `water_sea_shading`
+// found.
 static float water_sea_cover = 0.0;
 static float water_sea_surf = 0.0;
+static float water_sea_wake = 0.0;
 
 // The shading at a fragment's rest point: every live face's waves and
 // ripples, read through the pixel's footprint on the sea (`dx`, `dy`, from
@@ -1348,6 +1480,24 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
             cover += w[f] * w[f] * water_whitecap_cover(p.s, sdx, sdy);
         }
     }
+    // The wake over everything, held to what the depth lets stand; what
+    // the shallows break off turns to foam.
+    float2 p = (i.rest + params.anchor.xyz).xz;
+    float4 wake = water_wake(p, dx.xz, dy.xz);
+    if (water_wake_stirs(wake))
+    {
+        float limit = water_wake_limit(i.shore_field);
+        float height = abs(wake.x);
+        slope += float3(wake.y, 0.0, wake.z) * saturate(limit / max(height, 1e-6));
+        // Breaking in the shallows foams only where the wake stands well over
+        // what the depth holds, in a narrow band.
+        float broken = WATER_WAKE_BREAK_FOAM * smoothstep(WATER_WAKE_BREAK.x, WATER_WAKE_BREAK.y, height - limit);
+        float churn = saturate((wake.w + broken) * params.foam_intensity);
+        if (churn > WATER_WAKE_QUIET_FOAM)
+        {
+            water_sea_wake = water_wake_lace(churn, p, footprint);
+        }
+    }
     water_sea_cover = cover;
     water_sea_surf = surf;
     WaterShading o;
@@ -1383,11 +1533,17 @@ WaterVertexOut water_vertex(WaterVertexIn v)
     float4 shore_noise = reaches ? water_shore_noise(dir, away) : (float4)0.0;
     float shore_swell = reaches ? water_shore_swell(away) : 1.0;
     float3 pos = rest;
+    // Nothing finer than two cells, which the grid would alias.
+    float cell = water_grid_cell(v.pos.xz) * params.sea.tangent_u.w;
     if (params.ocean.layers.x > 0u)
     {
-        // Nothing finer than two cells, which the grid would alias.
-        float cell = water_grid_cell(v.pos.xz) * params.sea.tangent_u.w;
         pos += water_sea_displace(rest, max(footprint, 2.0 * cell), shore_field, shore_noise, shore_swell);
+    }
+    float4 wake = water_wake_level((rest + params.anchor.xyz).xz, max(footprint, 2.0 * cell));
+    if (abs(wake.x) > WATER_WAKE_QUIET_HEIGHT)
+    {
+        float limit = water_wake_limit(shore_field);
+        pos += clamp(wake.x, -limit, limit) * water_sea_up(rest);
     }
     pos += params.anchor.xyz;
 
@@ -1661,11 +1817,16 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
         s.below = lerp(s.below, foam, s.foam);
     }
 #ifdef WATER_SEA
-    // The surf's foam, over the whitecaps.
+    // The surf's foam, over the whitecaps, and the wake's over both.
     if (water_sea_surf > 0.0)
     {
         s.below = lerp(s.below, foam, water_sea_surf);
         s.foam = 1.0 - (1.0 - s.foam) * (1.0 - water_sea_surf);
+    }
+    if (water_sea_wake > 0.0)
+    {
+        s.below = lerp(s.below, foam, water_sea_wake);
+        s.foam = 1.0 - (1.0 - s.foam) * (1.0 - water_sea_wake);
     }
 #endif
     return s;
@@ -1791,7 +1952,7 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
     float3 glint = water_sun_glint(s.normal, view_dir, s.alpha, s.world_pos);
     float3 color = lerp(s.below, reflection, fresnel) + glint;
 #ifdef WATER_SEA
-    if (water_whitecaps() || water_sea_surf > 0.0)
+    if (water_whitecaps() || water_sea_surf > 0.0 || water_sea_wake > 0.0)
 #else
     if (water_whitecaps())
 #endif

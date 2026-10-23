@@ -38,6 +38,7 @@ use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::transparent;
 use concinnity_engine::render::uniforms::{TransparentView, WaterParams};
 use concinnity_engine::water::WaterBody;
+use concinnity_engine::water::stir::WaterStir;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
@@ -170,11 +171,38 @@ impl MtlContext {
             .any(|s| s.visible && s.planar_slot.is_some())
     }
 
-    // Carry the water surfaces into the frame the world moved to.
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
     pub(in crate::metal) fn rebase_water(&mut self, rebase: &Rebase) {
         for surface in &mut self.water.surfaces {
             surface.motion.rebase(rebase);
         }
+        self.water.wake.rebase(rebase);
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::metal) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water
+                .ocean
+                .as_ref()
+                .is_some_and(super::water_sim::OceanSim::wakes);
+        let sea = self
+            .water
+            .surfaces
+            .iter()
+            .find_map(|s| s.motion.sea_datum(camera));
+        self.water.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => Some(self.water.wake.advance(camera, sea, time, stirs)),
+            _ => None,
+        };
     }
 
     // True when a visible surface samples a simulated ocean, so `WaterSim` has
@@ -264,7 +292,10 @@ impl MtlContext {
             };
             // Everything but the motion and the planar flag below is
             // asset-side-static.
-            let mut params = surface.motion.params_at(time, [cam[0], cam[1], cam[2]]);
+            let wake = self.water.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let mut params = surface
+                .motion
+                .params_with_wake(time, [cam[0], cam[1], cam[2]], &wake);
             let mut fragment_textures = vec![
                 // The refraction snapshot (texture 0) + resolved main depth
                 // (texture 1). The IBL prefilter cube (texture 2), the probe cube

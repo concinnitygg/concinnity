@@ -5,10 +5,14 @@
 
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::ParticleParams;
+use crate::planet::Rebase;
+use crate::render::particles::burst::{FrameRows, MAX_EMITTER_BURSTS};
 use crate::render::particles::{
-    MAX_EMITTERS, ParticleEmitterRecord, ParticleSpawnState, ParticleSpawns, spawn_seed,
+    EmitterBursts, MAX_EMITTERS, ParticleBurst, ParticleEmitterRecord, ParticleSpawnState,
+    ParticleSpawns, spawn_seed,
 };
 use crate::render::slots::table::{AtCapacity, RemoveError, SlotTable};
+use concinnity_core::math::SaturatingFrom;
 
 /// The per-frame clock [`ParticleSystem::prepare`] advanced: the integration
 /// step and the frame counter the kernel's RNG seed mixes in. Each emitter's
@@ -27,6 +31,10 @@ struct Emitter<G> {
     aabb_max: [f32; 3],
     spawn_state: ParticleSpawnState,
     spawns: ParticleSpawns,
+    bursts: EmitterBursts,
+    // Whether it has ever spawned a burst, which can lie anywhere, so its
+    // bounds no longer hold its particles.
+    fed: bool,
     gpu: G,
 }
 
@@ -43,7 +51,7 @@ struct Emitter<G> {
 /// let record = ParticleEmitterRecord::new(&ParticleEmitter::default(), 0);
 /// let mut particles = ParticleSystem::new();
 /// let id = particles.insert(record, "pool").expect("room for one");
-/// let frame = particles.prepare(0.5).expect("an emitter exists");
+/// let frame = particles.prepare(0.5, &[]).expect("an emitter exists");
 /// assert_eq!(particles.emitters(&frame).count(), 1);
 /// assert_eq!(particles.remove(id), Ok("pool"));
 /// ```
@@ -51,6 +59,9 @@ pub struct ParticleSystem<G> {
     emitters: SlotTable<Emitter<G>>,
     last_elapsed: f32,
     frame_index: u32,
+    rows: FrameRows,
+    // Whether a dropped burst has been reported.
+    dropped_reported: bool,
 }
 
 impl<G> Default for ParticleSystem<G> {
@@ -70,6 +81,8 @@ impl<G> ParticleSystem<G> {
             emitters: SlotTable::new(capacity),
             last_elapsed: 0.0,
             frame_index: 0,
+            rows: FrameRows::default(),
+            dropped_reported: false,
         }
     }
 
@@ -93,6 +106,8 @@ impl<G> ParticleSystem<G> {
             aabb_max,
             spawn_state: ParticleSpawnState::default(),
             spawns: ParticleSpawns::default(),
+            bursts: EmitterBursts::default(),
+            fed: false,
             gpu,
         })
     }
@@ -117,25 +132,87 @@ impl<G> ParticleSystem<G> {
         self.emitters.never_used()
     }
 
+    /// Carry every emitter, and on the next frame every live particle, into
+    /// the frame the world moved to. Gravity stays as it is: a moved frame's
+    /// down is down where it now lies.
+    pub fn rebase(&mut self, rebase: &Rebase) {
+        for (_, e) in self.emitters.iter_mut() {
+            let r = &mut e.record;
+            r.position = rebase.apply_point(r.position);
+            r.direction = rebase.apply_vector(r.direction);
+            (e.aabb_min, e.aabb_max) = r.aabb();
+        }
+        self.rows.rebase(rebase);
+    }
+
     /// Advance the frame clock to `elapsed` seconds and take every live
-    /// emitter's spawn run for this frame. Run exactly once per frame, before
-    /// either pass encodes, so the simulation and the draw see one frame.
-    /// `None` until an emitter has ever been inserted; the clock keeps running
-    /// while every slot is tombstoned.
-    pub fn prepare(&mut self, elapsed: f32) -> Option<ParticleFrame> {
+    /// emitter's spawn run for this frame, with the `bursts` asked of it:
+    /// at most [`MAX_EMITTER_BURSTS`] an emitter and
+    /// [`MAX_FRAME_BURSTS`](super::burst::MAX_FRAME_BURSTS) a frame, as far
+    /// as its pool has dead slots, the rest dropped. Run exactly once per
+    /// frame, before either pass encodes, so the simulation and the draw see
+    /// one frame. `None` until an emitter has ever been inserted; the clock
+    /// keeps running while every slot is tombstoned.
+    pub fn prepare(&mut self, elapsed: f32, bursts: &[ParticleBurst]) -> Option<ParticleFrame> {
         if self.emitters.never_used() {
             return None;
         }
         let dt = (elapsed - self.last_elapsed).max(0.0);
         self.last_elapsed = elapsed;
         self.frame_index = self.frame_index.wrapping_add(1);
+        self.rows.begin();
+        let mut dropped = false;
         for (_, e) in self.emitters.iter_mut() {
-            e.spawns = e.spawn_state.take_spawns(dt, &e.record);
+            let first = self.rows.bursts();
+            let mut asked = 0u32;
+            if let Some(id) = e.record.id {
+                let mine = bursts.iter().filter(|b| b.emitter == id && b.count > 0);
+                for (n, burst) in mine.enumerate() {
+                    let count = burst.count.min(e.record.max_particles);
+                    if n >= MAX_EMITTER_BURSTS || !self.rows.push(burst, count) {
+                        dropped = true;
+                        break;
+                    }
+                    asked = asked.saturating_add(count);
+                }
+            }
+            let count = self.rows.bursts() - first;
+            e.spawns = e.spawn_state.take_spawns(dt, &e.record, asked);
+            // The bursts go first: the rate's spawns give way to them, and
+            // those the pool has no room for are cut from the last.
+            let mut room = e.spawns.count;
+            for i in first..first + count {
+                let n = self.rows.count(i).min(room);
+                if n < self.rows.count(i) {
+                    dropped = true;
+                }
+                self.rows.set_count(i, n);
+                room -= n;
+            }
+            e.bursts = EmitterBursts {
+                first: u32::saturating_from(first),
+                count: u32::saturating_from(count),
+                spawns: e.spawns.count - room,
+            };
+            e.fed |= count > 0;
+        }
+        if dropped && !core::mem::replace(&mut self.dropped_reported, true) {
+            tracing::warn!(
+                "particle bursts dropped: an emitter takes {MAX_EMITTER_BURSTS} a frame and \
+                 the frame {}, as far as its pool has room",
+                super::burst::MAX_FRAME_BURSTS
+            );
         }
         Some(ParticleFrame {
             dt,
             frame_index: self.frame_index,
         })
+    }
+
+    /// The frame's rows [`Self::prepare`] wrote, which every emitter's
+    /// simulation reads: the frame's move, then the bursts.
+    pub fn rows(&self) -> &[[f32; 4]] {
+        self.rows.rows()
     }
 
     /// Every live emitter with this frame's simulation uniform, in id order.
@@ -150,7 +227,8 @@ impl<G> ParticleSystem<G> {
             .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
 
-    /// The live emitters whose spawn bounds meet `frustum`, in id order. Each
+    /// The live emitters whose spawn bounds meet `frustum`, and those that
+    /// spawn bursts, which can lie anywhere, in id order. Each
     /// is tested once: a caller that needs to know whether the draw runs at all
     /// peeks this iterator rather than counting it first.
     pub fn visible<'a>(
@@ -160,7 +238,7 @@ impl<G> ParticleSystem<G> {
     ) -> impl Iterator<Item = ActiveEmitter<'a, G>> + 'a {
         self.emitters
             .iter()
-            .filter(|(_, e)| frustum.intersects_aabb(e.aabb_min, e.aabb_max))
+            .filter(|(_, e)| e.fed || frustum.intersects_aabb(e.aabb_min, e.aabb_max))
             .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
 
@@ -196,9 +274,12 @@ impl<'a, G> ActiveEmitter<'a, G> {
             id,
             record: &e.record,
             gpu: &e.gpu,
-            params: e
-                .record
-                .params(frame.dt, e.spawns, spawn_seed(frame.frame_index, id)),
+            params: e.record.params(
+                frame.dt,
+                e.spawns,
+                e.bursts,
+                spawn_seed(frame.frame_index, id),
+            ),
         }
     }
 }
@@ -207,7 +288,9 @@ impl<'a, G> ActiveEmitter<'a, G> {
 mod tests {
     use super::*;
     use crate::components::ParticleEmitter;
+    use crate::ecs::asset_id::AssetId;
     use crate::gfx::frustum::Plane;
+    use crate::render::particles::burst::{PARTICLE_FRAME_HEADER, PARTICLE_FRAME_ROWS};
     use alloc::vec;
     use alloc::vec::Vec;
 
@@ -246,32 +329,32 @@ mod tests {
     fn a_never_used_system_prepares_nothing() {
         let mut s = ParticleSystem::<()>::with_capacity(4);
         assert!(s.is_empty());
-        assert_eq!(s.prepare(1.0), None);
+        assert_eq!(s.prepare(1.0, &[]), None);
     }
 
     #[test]
     fn prepare_steps_the_clock_and_the_frame_counter() {
         let mut s = ParticleSystem::with_capacity(4);
         s.insert(record_at([0.0; 3]), ()).unwrap();
-        let a = s.prepare(0.25).unwrap();
+        let a = s.prepare(0.25, &[]).unwrap();
         assert_eq!((a.dt, a.frame_index), (0.25, 1));
-        let b = s.prepare(0.75).unwrap();
+        let b = s.prepare(0.75, &[]).unwrap();
         assert_eq!((b.dt, b.frame_index), (0.5, 2));
         // A clock that went backwards steps by zero.
-        assert_eq!(s.prepare(0.5).unwrap().dt, 0.0);
+        assert_eq!(s.prepare(0.5, &[]).unwrap().dt, 0.0);
     }
 
     #[test]
     fn the_clock_keeps_running_while_every_emitter_is_removed() {
         let mut s = ParticleSystem::with_capacity(4);
         let id = s.insert(record_at([0.0; 3]), ()).unwrap();
-        s.prepare(1.0);
+        s.prepare(1.0, &[]);
         s.remove(id).unwrap();
         assert!(s.is_empty());
         assert!(!s.never_used());
-        assert_eq!(s.prepare(2.0).unwrap().frame_index, 2);
+        assert_eq!(s.prepare(2.0, &[]).unwrap().frame_index, 2);
         s.insert(record_at([0.0; 3]), ()).unwrap();
-        assert_eq!(s.prepare(2.5).unwrap().dt, 0.5);
+        assert_eq!(s.prepare(2.5, &[]).unwrap().dt, 0.5);
     }
 
     #[test]
@@ -280,7 +363,7 @@ mod tests {
         let rec = record_at([0.0; 3]);
         s.insert(rec, ()).unwrap();
         s.insert(rec, ()).unwrap();
-        let frame = s.prepare(0.5).unwrap();
+        let frame = s.prepare(0.5, &[]).unwrap();
         let all: Vec<_> = s.emitters(&frame).collect();
         assert_eq!(all.len(), 2);
         for e in &all {
@@ -290,7 +373,7 @@ mod tests {
             assert_eq!(e.params.random_seed, spawn_seed(1, e.id));
         }
         // The next frame continues each emitter's own ring.
-        let frame = s.prepare(1.0).unwrap();
+        let frame = s.prepare(1.0, &[]).unwrap();
         let first: Vec<u32> = s.emitters(&frame).map(|e| e.params.spawn_first).collect();
         assert_eq!(first, vec![5, 5]);
     }
@@ -300,7 +383,7 @@ mod tests {
         let mut s = ParticleSystem::with_capacity(4);
         let near = s.insert(record_at([0.0; 3]), 'n').unwrap();
         s.insert(record_at([100.0, 0.0, 0.0]), 'f').unwrap();
-        let frame = s.prepare(0.1).unwrap();
+        let frame = s.prepare(0.1, &[]).unwrap();
         let seen: Vec<(usize, char)> = s
             .visible(&frame, &frustum_left_of_ten())
             .map(|e| (e.id, *e.gpu))
@@ -314,15 +397,135 @@ mod tests {
     fn a_reused_slot_starts_a_fresh_ring() {
         let mut s = ParticleSystem::with_capacity(1);
         let id = s.insert(record_at([0.0; 3]), 1).unwrap();
-        s.prepare(1.0);
+        s.prepare(1.0, &[]);
         assert!(!s.has_room());
         assert_eq!(s.insert(record_at([0.0; 3]), 2), Err(AtCapacity));
         assert_eq!(s.remove(id), Ok(1));
         assert_eq!(s.insert(record_at([0.0; 3]), 3), Ok(id));
-        let frame = s.prepare(1.5).unwrap();
+        let frame = s.prepare(1.5, &[]).unwrap();
         let e = s.emitters(&frame).next().unwrap();
         assert_eq!((e.params.spawn_first, e.params.spawn_count), (0, 5));
         assert_eq!(s.gpu_states().copied().collect::<Vec<_>>(), vec![3]);
+    }
+
+    fn burst_for(emitter: AssetId, x: f32, count: u32) -> ParticleBurst {
+        ParticleBurst {
+            emitter,
+            position: [x, 0.0, 0.0],
+            direction: [0.0, 1.0, 0.0],
+            speed: 1.0,
+            count,
+        }
+    }
+
+    fn named(position: [f32; 3], id: u32, spawn_rate: f32) -> ParticleEmitterRecord {
+        ParticleEmitterRecord {
+            id: Some(AssetId(id)),
+            spawn_rate,
+            ..record_at(position)
+        }
+    }
+
+    // A burst goes to the emitter it names, ahead of that emitter's rate,
+    // and shows in its uniform; an emitter no burst names has none.
+    #[test]
+    fn bursts_reach_the_emitter_they_name() {
+        let mut s = ParticleSystem::with_capacity(4);
+        let spray = s.insert(named([0.0; 3], 9, 0.0), ()).unwrap();
+        let other = s.insert(record_at([0.0; 3]), ()).unwrap();
+        let bursts = [
+            burst_for(AssetId(9), 1.0, 3),
+            burst_for(AssetId(4), 2.0, 5),
+            burst_for(AssetId(9), 3.0, 2),
+        ];
+        let frame = s.prepare(0.5, &bursts).unwrap();
+        let params: Vec<_> = s.emitters(&frame).map(|e| (e.id, e.params)).collect();
+        let p = params.iter().find(|(id, _)| *id == spray).unwrap().1;
+        assert_eq!([p.burst_first, p.burst_count, p.burst_spawns], [0, 2, 5]);
+        assert_eq!(p.spawn_count, 5);
+        let q = params.iter().find(|(id, _)| *id == other).unwrap().1;
+        assert_eq!([q.burst_count, q.burst_spawns], [0, 0]);
+        assert_eq!(q.spawn_count, 5);
+        let rows = s.rows();
+        assert_eq!(rows.len(), PARTICLE_FRAME_HEADER + 4);
+        assert_eq!(rows[PARTICLE_FRAME_HEADER], [1.0, 0.0, 0.0, 3.0]);
+        assert_eq!(rows[PARTICLE_FRAME_HEADER + 2], [3.0, 0.0, 0.0, 2.0]);
+        // The next frame without bursts has none.
+        let frame = s.prepare(1.0, &[]).unwrap();
+        assert!(s.emitters(&frame).all(|e| e.params.burst_count == 0));
+        assert_eq!(s.rows().len(), PARTICLE_FRAME_HEADER);
+    }
+
+    // Past the cap an emitter's bursts are dropped, and so is what its pool
+    // has no room for, the last bursts first; nothing panics.
+    #[test]
+    fn bursts_past_the_caps_are_dropped() {
+        let mut s = ParticleSystem::with_capacity(2);
+        let mut rec = named([0.0; 3], 9, 0.0);
+        rec.max_particles = 40;
+        s.insert(rec, ()).unwrap();
+        let many: Vec<_> = (0..MAX_EMITTER_BURSTS + 5)
+            .map(|i| burst_for(AssetId(9), i as f32, 2))
+            .collect();
+        let frame = s.prepare(0.5, &many).unwrap();
+        let p = s.emitters(&frame).next().unwrap().params;
+        assert_eq!(p.burst_count as usize, MAX_EMITTER_BURSTS);
+        assert_eq!(p.burst_spawns as usize, 2 * MAX_EMITTER_BURSTS);
+        // Only 8 slots stay dead for the next frame: the last bursts lose out.
+        let frame = s.prepare(0.6, &many).unwrap();
+        let p = s.emitters(&frame).next().unwrap().params;
+        assert_eq!(p.burst_spawns, 8);
+        assert_eq!(p.spawn_count, 8);
+        let counts: Vec<f32> = s.rows()[PARTICLE_FRAME_HEADER..]
+            .iter()
+            .step_by(2)
+            .map(|r| r[3])
+            .collect();
+        assert_eq!(counts[..4], [2.0; 4]);
+        assert!(counts[4..].iter().all(|c| *c == 0.0));
+        // The frame as a whole holds its own cap.
+        let mut wide = ParticleSystem::with_capacity(MAX_EMITTERS);
+        for id in 0..20 {
+            wide.insert(named([0.0; 3], id, 0.0), ()).unwrap();
+        }
+        let flood: Vec<_> = (0..20)
+            .flat_map(|id| (0..MAX_EMITTER_BURSTS).map(move |_| burst_for(AssetId(id), 0.0, 1)))
+            .collect();
+        wide.prepare(0.5, &flood).unwrap();
+        assert_eq!(wide.rows().len(), PARTICLE_FRAME_ROWS);
+    }
+
+    // An emitter that has spawned a burst is drawn wherever the camera looks,
+    // since its particles can lie anywhere.
+    #[test]
+    fn a_fed_emitter_is_never_culled() {
+        let mut s = ParticleSystem::with_capacity(2);
+        s.insert(named([100.0, 0.0, 0.0], 9, 0.0), ()).unwrap();
+        let frame = s.prepare(0.1, &[]).unwrap();
+        assert_eq!(s.visible(&frame, &frustum_left_of_ten()).count(), 0);
+        let frame = s.prepare(0.2, &[burst_for(AssetId(9), 0.0, 1)]).unwrap();
+        assert_eq!(s.visible(&frame, &frustum_left_of_ten()).count(), 1);
+        let frame = s.prepare(0.3, &[]).unwrap();
+        assert_eq!(s.visible(&frame, &frustum_left_of_ten()).count(), 1);
+    }
+
+    // A move of the frame carries the emitters and reaches the next frame's
+    // header, so the live particles follow.
+    #[test]
+    fn a_frame_move_carries_the_emitters_and_the_live_particles() {
+        let mut s = ParticleSystem::with_capacity(2);
+        s.insert(record_at([5.0, 0.0, 0.0]), ()).unwrap();
+        s.rebase(&Rebase {
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            translation: [-5.0, 0.0, 0.0],
+        });
+        let frame = s.prepare(0.1, &[]).unwrap();
+        let e = s.emitters(&frame).next().unwrap();
+        assert_eq!(e.params.position, [0.0; 3]);
+        assert_eq!(s.rows()[0], [1.0, 0.0, 0.0, -5.0]);
+        assert_eq!(s.rows()[3][0], 1.0);
+        s.prepare(0.2, &[]);
+        assert_eq!(s.rows()[3][0], 0.0);
     }
 
     #[test]
@@ -351,6 +554,6 @@ mod tests {
         let mut s = ParticleSystem::with_capacity(2);
         s.insert(record_at([0.0; 3]), ()).unwrap();
         s.clear();
-        assert_eq!(s.prepare(1.0), None);
+        assert_eq!(s.prepare(1.0, &[]), None);
     }
 }

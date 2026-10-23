@@ -898,10 +898,11 @@ fn view_set_bindings() -> [Binding; 6] {
 
 // Set 1: one record's params UBO (0), the planar reflection target it samples
 // (1) and that target's sampler (2), then the simulated oceans' displacement
-// and slope arrays (3, 4) and their sampler (5). The UBO is visible to the
-// vertex stage because the water vertex stage reads its wave table out of it,
-// and the oceans' arrays because it displaces by them; only water reads 3..5.
-fn params_set_bindings() -> [Binding; 6] {
+// and slope arrays (3, 4) and their sampler (5), and a planet sea's wake (6).
+// The UBO is visible to the vertex stage because the water vertex stage reads
+// its wave table out of it, and the oceans' arrays and the wake because it
+// displaces by them; only water reads 3..6.
+fn params_set_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
     let frag = vk::ShaderStageFlags::FRAGMENT;
     let both = vk::ShaderStageFlags::VERTEX | frag;
@@ -912,6 +913,7 @@ fn params_set_bindings() -> [Binding; 6] {
         (3, T::SAMPLED_IMAGE, both),
         (4, T::SAMPLED_IMAGE, both),
         (5, T::SAMPLER, both),
+        (6, T::SAMPLED_IMAGE, both),
     ]
 }
 
@@ -973,7 +975,8 @@ fn write_view_set_images(device: &VkDevice, set: vk::DescriptorSet, inputs: View
 // `buffer`, the planar reflection target the record samples (binding 1) -- its
 // slot's mirror render, or the 1x1 stand-in for a slotless record (the shaders
 // gate on the `planar` flag) -- with the sampler it is read through (binding
-// 2), and the oceans' arrays (bindings 3..5) where the world has water.
+// 2), and the oceans' arrays and the wake (bindings 3..6) where the world has
+// water.
 #[derive(Clone, Copy)]
 struct ParamsSetTargets {
     buffer: vk::Buffer,
@@ -999,7 +1002,8 @@ fn write_params_set(device: &VkDevice, set: vk::DescriptorSet, t: ParamsSetTarge
         Some(o) => writes
             .sampled_image_in(3, o.displacement, vk::ImageLayout::GENERAL)
             .sampled_image_in(4, o.slopes, vk::ImageLayout::GENERAL)
-            .sampler(5, o.sampler),
+            .sampler(5, o.sampler)
+            .sampled_image_in(6, o.wake, vk::ImageLayout::GENERAL),
         None => writes,
     };
     writes.apply(device);
@@ -1988,7 +1992,8 @@ impl VkContext {
     // transparent content or nothing is visible. Leaves the scene image
     // SHADER_READ_ONLY and the main depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the
     // downstream stack.
-    // Carry the water surfaces into the frame the world moved to.
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
     pub(in crate::vulkan) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
         if let Some(water) = self
             .transparent
@@ -1997,6 +2002,31 @@ impl VkContext {
         {
             water.rebase_water(rebase);
         }
+        self.wake.rebase(rebase);
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::vulkan) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[concinnity_engine::water::stir::WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water_sim
+                .as_ref()
+                .is_some_and(super::water_sim::OceanSim::wakes);
+        let sea = self
+            .transparent
+            .as_ref()
+            .and_then(|t| t.producers.water.as_ref())
+            .and_then(|w| w.sea_datum(camera));
+        self.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => Some(self.wake.advance(camera, sea, time, stirs)),
+            _ => None,
+        };
     }
 
     // Write each visible water surface's params, advanced to `time` seconds
@@ -2013,7 +2043,8 @@ impl VkContext {
             .as_ref()
             .and_then(|t| t.producers.water.as_ref())
         {
-            water.advance_water(frame_idx, time, camera);
+            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            water.advance_water(frame_idx, time, camera, &wake);
         }
     }
 

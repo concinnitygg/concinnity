@@ -243,6 +243,7 @@ mod tests {
         let low = OceanQuality {
             size: 128,
             cascades: 2,
+            ..OceanQuality::FULL
         };
         let (fine, fine_spectra) = all(OceanQuality::FULL);
         let (coarse, coarse_spectra) = all(low);

@@ -133,6 +133,8 @@ pub(in crate::metal) struct GraphSubmission {
 // completion handler attached by `draw_frame`.
 pub(in crate::metal) struct GraphFrameParams<'a> {
     pub cmd_buf: &'a ProtocolObject<dyn MTLCommandBuffer>,
+    // The particle bursts systems asked for this frame.
+    pub particle_bursts: &'a [concinnity_engine::render::particles::ParticleBurst],
     pub cam_pos: [f32; 3],
     pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // Per-skinned-object morph weights for this frame, from the same ring slot
@@ -356,7 +358,11 @@ impl MtlContext {
         // to happen before the read-only `encode_particles` path runs. We
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
-        let particle_frame = self.prepare_particle_pass(narrow_f32(params.elapsed));
+        let particle_frame = self.prepare_particle_pass(
+            narrow_f32(params.elapsed),
+            params.particle_bursts,
+            params.ring_slot,
+        );
         self.diagnostics
             .draw_calls_accum
             .store(0, Ordering::Relaxed);

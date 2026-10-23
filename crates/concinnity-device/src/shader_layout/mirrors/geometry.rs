@@ -16,6 +16,7 @@ use concinnity_engine::render::uniforms::grass::{
 use concinnity_engine::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_engine::render::uniforms::ocean::OceanFftParams;
 use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
+use concinnity_engine::render::uniforms::wake::{WaterWakeParams, WaterWakeStirGpu};
 use concinnity_engine::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
 };
@@ -189,6 +190,21 @@ pub(in crate::shader_layout) fn water_fft() -> Vec<Case> {
     }))]
 }
 
+pub(in crate::shader_layout) fn water_wake() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(WaterWakeParams => "WaterWakeParams" {
+            window,
+            carry,
+            grid,
+            cell,
+            damping,
+            foam,
+            stirs,
+        })),
+        everywhere(mirror!(WaterWakeStirGpu => "WaterWakeStir" { now, prev, })),
+    ]
+}
+
 pub(in crate::shader_layout) fn grass_bend() -> Vec<Case> {
     vec![everywhere(mirror!(GrassBendParams => "GrassBendParams" {
         window,
@@ -230,7 +246,9 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
             spawn_first,
             random_seed,
             max_particles,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            burst_first,
+            burst_count,
+            burst_spawns,
         })),
     ]
 }

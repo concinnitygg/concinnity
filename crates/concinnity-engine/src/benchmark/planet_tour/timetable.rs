@@ -32,6 +32,9 @@ const NIGHT_SPEED: f64 = 2_000.0;
 const SKIM_SPEED: f64 = 18.0;
 const ROLL_SPEED: f64 = 15.0;
 const PADDLE_SPEED: f64 = 2.0;
+/// The pace the subject is towed up to through the water before it lifts off,
+/// in meters per second.
+pub(super) const WAKE_SPEED: f64 = 8.0;
 
 const fn phase(
     name: &'static str,
@@ -57,12 +60,14 @@ const SKIM: [Phase; 3] = [
 ];
 
 // A held settle, then the subject rolls itself through the grass and down the
-// beach into the surf, and floats and paddles out. The tour picks it up as the
-// sea phase opens.
-const ROLL: [Phase; 3] = [
+// beach into the surf, floats and paddles out, and is towed up to speed
+// through the water, plowing a wake. The tour picks it up as the sea phase
+// opens.
+const ROLL: [Phase; 4] = [
     phase("settle", 3.0, ROLL_HEIGHT, 0.0, 0.0),
     phase("roll", 27.0, ROLL_HEIGHT, ROLL_SPEED, 3.0),
-    phase("float", 6.0, FLOAT_HEIGHT, PADDLE_SPEED, 1.0),
+    phase("float", 4.0, FLOAT_HEIGHT, PADDLE_SPEED, 1.0),
+    phase("wake", 8.0, FLOAT_HEIGHT, WAKE_SPEED, 2.0),
 ];
 
 // Out over the sea, a climb toward the sun that speeds up out of the air, a
@@ -81,12 +86,13 @@ const FLIGHT: [Phase; 6] = [
 ];
 
 /// The tour's phases in order: the ground stretch, rolled or skimmed, then
-/// the flight. A rolling subject floats only on a planet with a `sea`.
+/// the flight. A rolling subject floats and plows a wake only on a planet
+/// with a `sea`.
 pub(super) fn phases(rolls: bool, sea: bool) -> Vec<&'static Phase> {
     let ground: &[Phase] = if rolls { &ROLL } else { &SKIM };
     ground
         .iter()
-        .filter(|phase| sea || phase.name != "float")
+        .filter(|phase| sea || !matches!(phase.name, "float" | "wake"))
         .chain(FLIGHT.iter())
         .collect()
 }

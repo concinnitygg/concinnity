@@ -182,7 +182,7 @@ fn planet_cells_coarsen_down_the_tiers() {
 }
 
 // The top tiers run the full simulation; the lowest runs two cascades of
-// 128, which the simulation supports as is.
+// 128, which the simulation supports as is, and no wake.
 #[test]
 fn the_ocean_simulation_scales_with_tier() {
     let ultra = resolve_ceiling(QualityPreset::Ultra, &GpuProfile::UNKNOWN);
@@ -194,9 +194,13 @@ fn the_ocean_simulation_scales_with_tier() {
         low.ocean,
         OceanQuality {
             size: 128,
-            cascades: 2
+            cascades: 2,
+            wake: false,
         }
     );
+    // Every tier past the weakest runs the wake.
+    let medium = resolve_ceiling(QualityPreset::Medium, &GpuProfile::UNKNOWN);
+    assert!(medium.ocean.wake);
     for preset in QualityPreset::ALL {
         let c = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
         assert_eq!(c.ocean.clamped(), c.ocean, "{preset:?}");

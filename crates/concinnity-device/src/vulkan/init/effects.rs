@@ -571,6 +571,7 @@ pub(super) fn build_world_effects(
                     queue: graphics_queue,
                 },
                 &fx.ocean,
+                frames,
                 scene.anisotropy,
                 hot_reload,
             )

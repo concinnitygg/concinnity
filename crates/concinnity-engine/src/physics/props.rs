@@ -11,7 +11,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, euler_yxz_deg_from_quat, quat_from_euler_yxz_deg};
 
-use crate::physics::{BodyHandle, ColliderShape, Simulation};
+use crate::physics::{BodyHandle, ColliderShape, MAX_FLUID_PIECES, Simulation};
+use crate::water::stir::{StirPiece, WaterStir};
 
 use crate::components::BodyDynamics;
 use crate::ecs::Entity;
@@ -372,6 +373,27 @@ impl PropBodies {
         world.set_kinematic_pose(prop.handle, at, turned);
         if tick + 1 >= ticks {
             path.from = path.to;
+        }
+    }
+
+    // Refill `out` with every buoyant prop's stir at its last tick.
+    pub(super) fn stirs_into(&self, out: &mut Vec<WaterStir>) {
+        out.clear();
+        for prop in &self.bodies {
+            let Some(float) = &prop.float else {
+                continue;
+            };
+            let stir = float.stir();
+            let mut pieces = [StirPiece::default(); MAX_FLUID_PIECES];
+            pieces[..stir.len()].copy_from_slice(stir);
+            let (up, velocity) = float.motion();
+            out.push(WaterStir {
+                entity: prop.entity,
+                up,
+                velocity,
+                pieces,
+                count: stir.len(),
+            });
         }
     }
 

@@ -513,6 +513,7 @@ impl FrameDevice for VkContext {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
+            self.particle.system.rebase(rebase);
         }
         Ok(())
     }
@@ -641,6 +642,8 @@ impl FrameDevice for VkContext {
             lines,
             world_hidden,
             grass_benders,
+            water_stirs,
+            particle_bursts,
             ..
         } = *frame_params;
         let VkFrame {
@@ -661,6 +664,7 @@ impl FrameDevice for VkContext {
             );
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
         self.write_cluster_params(frame_idx, &plan.cluster);
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &plan.view);
 
@@ -723,6 +727,7 @@ impl FrameDevice for VkContext {
             water_time,
             near,
             grass_benders,
+            particle_bursts,
             planar: self
                 .planar_reflection
                 .as_ref()

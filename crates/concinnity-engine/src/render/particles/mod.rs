@@ -5,6 +5,7 @@
 //! per-emitter GPU buffers themselves are allocated by the backend at init.
 
 use crate::components::ParticleEmitter;
+use crate::ecs::asset_id::AssetId;
 use crate::gfx::render_types::ParticleParams;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -12,8 +13,10 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::vec3::{length, normalize_or};
 use concinnity_core::math::{cos, floor};
 
+pub mod burst;
 pub(crate) mod emitter;
 mod system;
+pub use burst::{EmitterBursts, ParticleBurst, ParticleBursts};
 pub use system::{ActiveEmitter, ParticleFrame, ParticleSystem};
 
 /// Live emitters a renderer holds at once, on every backend; adds past it
@@ -35,6 +38,9 @@ const MIN_LIFETIME: f32 = 0.001;
 /// drives its compute + render passes from these fields each frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParticleEmitterRecord {
+    /// The emitter's asset id, which a [`ParticleBurst`] names it by; `None`
+    /// for one with no asset behind it.
+    pub id: Option<AssetId>,
     /// Index of the albedo texture in the renderer's bindless / per-frame
     /// texture pool. `0` means "no texture authored": the renderer's white
     /// fallback at slot 0 is sampled and the color gradient still shows.
@@ -81,6 +87,7 @@ impl ParticleEmitterRecord {
         let lifetime_min = emitter.lifetime_min.max(MIN_LIFETIME);
         let speed_min = emitter.speed_min.max(0.0);
         Self {
+            id: None,
             texture_slot,
             position: emitter.position,
             direction: normalize_or(emitter.direction, 1e-6, [0.0, 1.0, 0.0]),
@@ -134,10 +141,17 @@ impl ParticleEmitterRecord {
     ///
     /// `dt` is the elapsed seconds since the previous compute dispatch (the
     /// integration step); `spawns` is the run of pool slots the kernel fills
-    /// with fresh particles this frame; and `random_seed` is the emitter's frame
-    /// seed ([`spawn_seed`]), which the kernel mixes with each spawn's ordinal to
+    /// with fresh particles this frame, the last `bursts.spawns` of them from
+    /// the emitter's `bursts`; and `random_seed` is the emitter's frame seed
+    /// ([`spawn_seed`]), which the kernel mixes with each spawn's ordinal to
     /// drive its cheap on-GPU RNG.
-    pub fn params(&self, dt: f32, spawns: ParticleSpawns, random_seed: u32) -> ParticleParams {
+    pub fn params(
+        &self,
+        dt: f32,
+        spawns: ParticleSpawns,
+        bursts: EmitterBursts,
+        random_seed: u32,
+    ) -> ParticleParams {
         ParticleParams {
             position: self.position,
             spread_cos: self.spread_cos,
@@ -156,23 +170,26 @@ impl ParticleEmitterRecord {
             spawn_first: spawns.first,
             random_seed,
             max_particles: self.max_particles,
-            _pad: [0; 3],
+            burst_first: bursts.first,
+            burst_count: bursts.count,
+            burst_spawns: bursts.spawns,
         }
     }
 }
 
-/// Resolve a list of `ParticleEmitter` components into `ParticleEmitterRecord`s
-/// the backend can consume. Skips invisible emitters and emitters whose pool
-/// would be empty. An emitter's `texture` carries its cook-assigned
-/// `TextureHandle`, whose value is the texture's albedo pool slot; `texture_count`
-/// is the pool size and bounds the handle. An out-of-range handle is logged and
-/// dropped; an emitter with no `texture` falls back to slot 0 (white).
+/// Resolve a list of `ParticleEmitter` components, each with its asset id,
+/// into `ParticleEmitterRecord`s the backend can consume. Skips invisible
+/// emitters and emitters whose pool would be empty. An emitter's `texture`
+/// carries its cook-assigned `TextureHandle`, whose value is the texture's
+/// albedo pool slot; `texture_count` is the pool size and bounds the handle. An
+/// out-of-range handle is logged and dropped; an emitter with no `texture`
+/// falls back to slot 0 (white).
 pub fn build_particle_records(
-    emitters: &[&ParticleEmitter],
+    emitters: &[(Option<AssetId>, &ParticleEmitter)],
     texture_count: usize,
 ) -> Vec<ParticleEmitterRecord> {
     let mut out = Vec::new();
-    for e in emitters {
+    for &(id, e) in emitters {
         if !e.visible {
             continue;
         }
@@ -181,7 +198,10 @@ pub fn build_particle_records(
             Some(handle) if handle.index() < texture_count => handle.index(),
             Some(_) => continue,
         };
-        out.push(ParticleEmitterRecord::new(e, slot));
+        out.push(ParticleEmitterRecord {
+            id,
+            ..ParticleEmitterRecord::new(e, slot)
+        });
     }
     out
 }
@@ -258,11 +278,16 @@ struct ParticleSpawnState {
 
 impl ParticleSpawnState {
     /// Step this emitter's clock by `dt`, add the frame's spawn allotment and
-    /// hand out as much of its integer part as the pool has dead slots for,
-    /// as the run of slots it fills. Spawns with no dead slot to land in are
-    /// dropped. The run is empty when the emitter is paused
-    /// (`spawn_rate <= 0`).
-    fn take_spawns(&mut self, dt: f32, record: &ParticleEmitterRecord) -> ParticleSpawns {
+    /// `extra` spawns asked for on top, and hand out as many as the pool has
+    /// dead slots for, as the run of slots it fills. Spawns with no dead slot
+    /// to land in are dropped. Without `extra` the run is empty when the
+    /// emitter is paused (`spawn_rate <= 0`).
+    fn take_spawns(
+        &mut self,
+        dt: f32,
+        record: &ParticleEmitterRecord,
+        extra: u32,
+    ) -> ParticleSpawns {
         let pool = record.max_particles.max(1);
         if pool != self.pool {
             self.pool = pool;
@@ -272,7 +297,10 @@ impl ParticleSpawnState {
         if dt.is_finite() && dt > 0.0 {
             self.clock += f64::from(dt);
         }
-        let budget = self.take_budget(dt, record.spawn_rate, pool);
+        let budget = self
+            .take_budget(dt, record.spawn_rate, pool)
+            .saturating_add(extra)
+            .min(pool);
         let count = self.dead_slots(budget);
         let first = u32::saturating_from(self.issued % u64::from(pool));
         if count > 0 {
@@ -349,7 +377,7 @@ mod tests {
             visible: false,
             ..Default::default()
         };
-        assert!(build_particle_records(&[&e], 0).is_empty());
+        assert!(build_particle_records(&[(None, &e)], 0).is_empty());
     }
 
     #[test]
@@ -358,7 +386,7 @@ mod tests {
             texture: Some(crate::ecs::TextureHandle::new(999)),
             ..Default::default()
         };
-        assert!(build_particle_records(&[&e], 0).is_empty());
+        assert!(build_particle_records(&[(None, &e)], 0).is_empty());
     }
 
     #[test]
@@ -367,7 +395,7 @@ mod tests {
             texture: Some(crate::ecs::TextureHandle::new(2)),
             ..Default::default()
         };
-        let recs = build_particle_records(&[&e], 5);
+        let recs = build_particle_records(&[(None, &e)], 5);
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].texture_slot, 2);
     }
@@ -375,7 +403,7 @@ mod tests {
     #[test]
     fn emitter_without_texture_uses_fallback_slot() {
         let e = ParticleEmitter::default();
-        let recs = build_particle_records(&[&e], 0);
+        let recs = build_particle_records(&[(None, &e)], 0);
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].texture_slot, 0);
     }
@@ -386,7 +414,7 @@ mod tests {
             direction: [0.0, 5.0, 0.0],
             ..Default::default()
         };
-        let recs = build_particle_records(&[&e], 0);
+        let recs = build_particle_records(&[(None, &e)], 0);
         let d = recs[0].direction;
         assert!((length(d) - 1.0).abs() < 1e-5);
     }
@@ -397,7 +425,7 @@ mod tests {
             direction: [0.0, 0.0, 0.0],
             ..Default::default()
         };
-        let recs = build_particle_records(&[&e], 0);
+        let recs = build_particle_records(&[(None, &e)], 0);
         assert_eq!(recs[0].direction, [0.0, 1.0, 0.0]);
     }
 
@@ -407,7 +435,7 @@ mod tests {
             max_particles: u32::MAX,
             ..Default::default()
         };
-        let recs = build_particle_records(&[&e], 0);
+        let recs = build_particle_records(&[(None, &e)], 0);
         assert_eq!(recs[0].max_particles, MAX_PARTICLES_PER_EMITTER);
     }
 
@@ -417,7 +445,7 @@ mod tests {
             spread_deg: 0.0,
             ..Default::default()
         };
-        let recs = build_particle_records(&[&e], 0);
+        let recs = build_particle_records(&[(None, &e)], 0);
         assert!((recs[0].spread_cos - 1.0).abs() < 1e-6);
     }
 
@@ -428,7 +456,7 @@ mod tests {
             lifetime_max: 0.1,
             ..Default::default()
         };
-        let recs = build_particle_records(&[&e], 0);
+        let recs = build_particle_records(&[(None, &e)], 0);
         assert!(recs[0].lifetime_max >= recs[0].lifetime_min);
     }
 
@@ -517,7 +545,7 @@ mod tests {
         rec: &ParticleEmitterRecord,
         frames: usize,
     ) -> Vec<ParticleSpawns> {
-        (0..frames).map(|_| s.take_spawns(1.0, rec)).collect()
+        (0..frames).map(|_| s.take_spawns(1.0, rec, 0)).collect()
     }
 
     fn run(first: u32, count: u32) -> ParticleSpawns {
@@ -562,13 +590,13 @@ mod tests {
     fn dropped_spawns_are_not_carried_over() {
         let rec = spawner(5.0, 5, 10.0);
         let mut s = ParticleSpawnState::default();
-        assert_eq!(s.take_spawns(1.0, &rec), run(0, 5));
+        assert_eq!(s.take_spawns(1.0, &rec, 0), run(0, 5));
         // Everything is live for ten seconds; the frames in between spawn
         // nothing and owe nothing.
         for _ in 0..9 {
-            assert_eq!(s.take_spawns(1.0, &rec).count, 0);
+            assert_eq!(s.take_spawns(1.0, &rec, 0).count, 0);
         }
-        assert_eq!(s.take_spawns(1.0, &rec), run(0, 5));
+        assert_eq!(s.take_spawns(1.0, &rec, 0), run(0, 5));
     }
 
     #[test]
@@ -594,12 +622,12 @@ mod tests {
         let short = spawner(2.0, 4, 1.0);
         let long = spawner(2.0, 4, 5.0);
         let mut s = ParticleSpawnState::default();
-        assert_eq!(s.take_spawns(1.0, &short), run(0, 2));
-        assert_eq!(s.take_spawns(1.0, &long), run(2, 2));
+        assert_eq!(s.take_spawns(1.0, &short, 0), run(0, 2));
+        assert_eq!(s.take_spawns(1.0, &long, 0), run(2, 2));
         // Slots 0-1 held short-lived particles, dead by clock 2.
-        assert_eq!(s.take_spawns(1.0, &long), run(0, 2));
+        assert_eq!(s.take_spawns(1.0, &long, 0), run(0, 2));
         // Slots 2-3 hold particles that live until clock 7.
-        assert_eq!(s.take_spawns(1.0, &long).count, 0);
+        assert_eq!(s.take_spawns(1.0, &long, 0).count, 0);
     }
 
     #[test]
@@ -607,34 +635,34 @@ mod tests {
         let long = spawner(2.0, 2, 5.0);
         let short = spawner(2.0, 2, 1.0);
         let mut s = ParticleSpawnState::default();
-        assert_eq!(s.take_spawns(1.0, &long), run(0, 2));
+        assert_eq!(s.take_spawns(1.0, &long, 0), run(0, 2));
         // The particles already in the pool were spawned to live five seconds.
         for _ in 0..4 {
-            assert_eq!(s.take_spawns(1.0, &short).count, 0);
+            assert_eq!(s.take_spawns(1.0, &short, 0).count, 0);
         }
-        assert_eq!(s.take_spawns(1.0, &short), run(0, 2));
+        assert_eq!(s.take_spawns(1.0, &short, 0), run(0, 2));
     }
 
     #[test]
     fn a_different_pool_size_starts_the_ring_over() {
         let mut s = ParticleSpawnState::default();
-        s.take_spawns(1.0, &spawner(3.0, 8, 10.0));
-        assert_eq!(s.take_spawns(1.0, &spawner(3.0, 5, 10.0)), run(0, 3));
+        s.take_spawns(1.0, &spawner(3.0, 8, 10.0), 0);
+        assert_eq!(s.take_spawns(1.0, &spawner(3.0, 5, 10.0), 0), run(0, 3));
     }
 
     #[test]
     fn a_paused_or_stopped_emitter_hands_out_nothing() {
         let rec = spawner(2.0, 10, 0.5);
         let mut s = ParticleSpawnState::default();
-        s.take_spawns(1.0, &rec);
-        assert_eq!(s.take_spawns(1.0, &spawner(0.0, 10, 0.5)), run(2, 0));
-        assert_eq!(s.take_spawns(0.0, &rec), run(2, 0));
+        s.take_spawns(1.0, &rec, 0);
+        assert_eq!(s.take_spawns(1.0, &spawner(0.0, 10, 0.5), 0), run(2, 0));
+        assert_eq!(s.take_spawns(0.0, &rec, 0), run(2, 0));
     }
 
     #[test]
     fn a_run_never_laps_the_pool() {
         let mut s = ParticleSpawnState::default();
-        assert_eq!(s.take_spawns(1.0, &spawner(1000.0, 10, 0.5)), run(0, 10));
+        assert_eq!(s.take_spawns(1.0, &spawner(1000.0, 10, 0.5), 0), run(0, 10));
     }
 
     #[test]
@@ -652,6 +680,7 @@ mod tests {
 
     fn make_record(position: [f32; 3]) -> ParticleEmitterRecord {
         ParticleEmitterRecord {
+            id: None,
             texture_slot: 0,
             position,
             direction: [0.0, 1.0, 0.0],
@@ -728,7 +757,7 @@ mod tests {
     }
 
     fn one_record(emitter: &ParticleEmitter) -> ParticleEmitterRecord {
-        *build_particle_records(&[emitter], 4)
+        *build_particle_records(&[(None, emitter)], 4)
             .first()
             .expect("a visible emitter with a pool makes a record")
     }
@@ -739,7 +768,12 @@ mod tests {
     #[test]
     fn the_per_frame_uniform_carries_the_records_fields() {
         let record = one_record(&ParticleEmitter::default());
-        let params = record.params(0.016, ParticleSpawns { first: 7, count: 5 }, 42);
+        let bursts = EmitterBursts {
+            first: 3,
+            count: 2,
+            spawns: 4,
+        };
+        let params = record.params(0.016, ParticleSpawns { first: 7, count: 5 }, bursts, 42);
 
         assert_eq!(params.position, record.position);
         assert_eq!(params.direction, record.direction);
@@ -759,6 +793,22 @@ mod tests {
         assert_eq!(params.spawn_first, 7);
         assert_eq!(params.spawn_count, 5);
         assert_eq!(params.random_seed, 42);
+        assert_eq!(
+            [params.burst_first, params.burst_count, params.burst_spawns],
+            [3, 2, 4]
+        );
+    }
+
+    // Spawns asked for on top of the rate land even on a paused emitter, as
+    // far as the pool has dead slots for them.
+    #[test]
+    fn extra_spawns_take_dead_slots_too() {
+        let rec = spawner(0.0, 10, 0.5);
+        let mut s = ParticleSpawnState::default();
+        assert_eq!(s.take_spawns(1.0, &rec, 4), run(0, 4));
+        assert_eq!(s.take_spawns(0.1, &rec, 9), run(4, 6));
+        assert_eq!(s.take_spawns(0.1, &rec, 3).count, 0);
+        assert_eq!(s.take_spawns(1.0, &rec, 3), run(0, 3));
     }
 
     // A clock that went backwards between dispatches integrates as a stopped
@@ -766,7 +816,12 @@ mod tests {
     #[test]
     fn a_backwards_step_integrates_as_a_stopped_one() {
         let record = one_record(&ParticleEmitter::default());
-        assert_eq!(record.params(-1.0, ParticleSpawns::default(), 0).dt, 0.0);
+        assert_eq!(
+            record
+                .params(-1.0, ParticleSpawns::default(), EmitterBursts::default(), 0)
+                .dt,
+            0.0
+        );
     }
 
     // A non-finite authored color would propagate NaN through the gradient

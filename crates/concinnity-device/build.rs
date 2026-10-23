@@ -405,32 +405,83 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_VERT,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG,
         registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG,
+        registers: WATER_WAKE_REGISTERS,
     },
     DxilAbi {
         program: &shared::WATER_SEA_DAYLIGHT_FRAG,
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT,
         registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_WAKE_REGISTERS,
     },
     DxilAbi {
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
         registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: WATER_WAKE_REGISTERS,
     },
     DxilAbi {
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_OCEAN_REGISTERS,
     },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+        registers: WATER_WAKE_REGISTERS,
+    },
     // The simulated ocean's kernels, under their own root signature in
     // `directx/water_sim.rs`: the root constants, the spectrum and row
     // transforms as root views, and one table of the four mip UAVs.
+    // The wake's kernels, under their own root signature in
+    // `directx/water_sim.rs`: the block as a root CBV, the state and the
+    // transform as root views, and a table of the field's two mip views.
+    DxilAbi {
+        program: &shared::WATER_WAKE_ROWS,
+        registers: &[("params", "b0"), ("state", "u1"), ("work", "u2")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_COLUMNS,
+        registers: &[("params", "b0"), ("work", "u2")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_INVERSE,
+        registers: &[("params", "b0"), ("state", "u1"), ("work", "u2")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_SHADE,
+        registers: &[("params", "b0"), ("state", "u1"), ("dst_field", "u3")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_MIP,
+        registers: &[("dst_field", "u3"), ("src_field", "t4")],
+    },
     DxilAbi {
         program: &shared::WATER_FFT_ROWS,
         registers: &[("params", "b0"), ("spectrum", "t5"), ("rows", "u6")],
@@ -558,7 +609,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::PARTICLE_SIMULATE,
-        registers: &[("params", "b0"), ("pool", "u0")],
+        registers: &[("params", "b0"), ("pool", "u0"), ("frame_rows", "t1")],
     },
     // The raster remainder, from `src/directx/{particle,decal,line}.rs` and
     // `pipeline.rs`. Only the particle pair has a `CN_BACKEND_DIRECTX` branch, and only
@@ -737,6 +788,9 @@ const WATER_OCEAN_REGISTERS: &[(&str, &str)] = &[
     ("ocean_slopes", "t16"),
     ("ocean_sampler", "s4"),
 ];
+
+// A planet sea's wake field, the third SRV of the oceans' table.
+const WATER_WAKE_REGISTERS: &[(&str, &str)] = &[("wake_field", "t17")];
 
 // The light every water fragment's body is lit by: the cascaded shadow and the
 // sky irradiance cube, a table and a CBV past the probe set in both signatures.
@@ -1163,6 +1217,43 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     MetalAbi {
+        program: &shared::WATER_WAKE_ROWS,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("state", "buffer(1)"),
+            ("work", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_COLUMNS,
+        slots: &[&[("params", "buffer(0)"), ("work", "buffer(2)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_INVERSE,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("state", "buffer(1)"),
+            ("work", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_SHADE,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("state", "buffer(1)"),
+            ("dst_field", "texture(3)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_MIP,
+        slots: &[&[("dst_field", "texture(3)"), ("src_field", "texture(4)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
         program: &shared::WATER_FFT_COLUMNS,
         slots: &[&[
             ("params", "buffer(0)"),
@@ -1477,37 +1568,38 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("params", "buffer(6)"),
             ("ocean_displacement", "texture(9)"),
             ("ocean_sampler", "sampler(6)"),
+            ("wake_field", "texture(11)"),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_FRAG,
-        slots: WATER_SLOTS,
+        slots: WATER_SEA_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_DAYLIGHT_FRAG,
-        slots: WATER_SLOTS,
+        slots: WATER_SEA_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_FRAG_RT,
-        slots: WATER_RT_SLOTS,
+        slots: WATER_SEA_RT_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
-        slots: WATER_RT_SLOTS,
+        slots: WATER_SEA_RT_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
-        slots: WATER_RT_TEXTURED_SLOTS,
+        slots: WATER_SEA_RT_TEXTURED_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
-        slots: WATER_RT_TEXTURED_SLOTS,
+        slots: WATER_SEA_RT_TEXTURED_SLOTS,
         argument_ids: &[],
     },
     // The HLSL families. Their Metal indices come from the `register()`
@@ -1809,7 +1901,11 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::PARTICLE_SIMULATE,
-        slots: &[&[("pool", "buffer(0)"), ("params", "buffer(2)")]],
+        slots: &[&[
+            ("pool", "buffer(0)"),
+            ("frame_rows", "buffer(1)"),
+            ("params", "buffer(2)"),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
@@ -2063,6 +2159,38 @@ const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_POOL_SLOTS,
     WATER_BODY_LIGHT_SLOTS,
     WATER_OCEAN_SLOTS,
+];
+// A planet sea's wake field, which its fragments shade from too.
+const WATER_WAKE_SLOTS: &[(&str, &str)] = &[("wake_field", "texture(11)")];
+const WATER_SEA_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
+    WATER_WAKE_SLOTS,
+];
+const WATER_SEA_RT_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    TRANSPARENT_TRACE_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
+    WATER_WAKE_SLOTS,
+];
+const WATER_SEA_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    TRANSPARENT_TRACE_SLOTS,
+    TRANSPARENT_POOL_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
+    WATER_WAKE_SLOTS,
 ];
 
 // Every DirectX program's registers against the root signature its host

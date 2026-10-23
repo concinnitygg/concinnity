@@ -25,6 +25,7 @@ pub mod shore;
 pub mod transparent;
 pub mod view;
 pub mod vulkan;
+pub mod wake;
 
 pub use bindless::BINDLESS_POOL_SIZE;
 pub use daylight::{DaylightBlock, DaylightBody, DaylightView};

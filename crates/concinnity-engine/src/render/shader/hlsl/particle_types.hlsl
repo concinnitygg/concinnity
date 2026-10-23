@@ -45,7 +45,10 @@ struct ParticleParams
     uint spawn_first;
     uint random_seed;
     uint max_particles;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    // The emitter's bursts this frame: `burst_count` of the frame's rows'
+    // bursts from `burst_first`, which spawn the last `burst_spawns` of the
+    // run.
+    uint burst_first;
+    uint burst_count;
+    uint burst_spawns;
 };

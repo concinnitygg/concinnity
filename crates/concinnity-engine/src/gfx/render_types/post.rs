@@ -530,6 +530,11 @@ pub struct ParticleParams {
     pub random_seed: u32,
     /// Pool size in slots; the kernel returns early past it.
     pub max_particles: u32,
-    /// Padding to the 16-byte multiple a constant buffer is sized in.
-    pub _pad: [u32; 3],
+    /// The emitter's first burst in the frame's rows.
+    pub burst_first: u32,
+    /// How many bursts the emitter has this frame.
+    pub burst_count: u32,
+    /// How many of this frame's spawns come from the bursts, the last of the
+    /// run.
+    pub burst_spawns: u32,
 }

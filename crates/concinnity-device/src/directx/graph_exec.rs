@@ -1268,7 +1268,7 @@ impl DxContext {
                 self.encode_fog(cmd, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
-            PassId::WaterSim => self.encode_water_sim(cmd, params.water_time),
+            PassId::WaterSim => self.encode_water_sim(cmd, params.frame_idx, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
             PassId::ParticlesSim => {
                 // Integrates each live emitter's persistent pool. The graph's only

@@ -43,9 +43,10 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_D32_FLOAT;
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{self, CompileProgram};
 use super::com;
-use super::context::{DxContext, align256};
+use super::context::DxContext;
 use super::descriptor_slot::DescriptorTables;
 use super::error::map_hresult;
+use super::mapped_blocks::MappedBlocks;
 use super::pso::{Blend, Depth, DepthBias, GraphicsPso, Raster, compute_pso};
 use super::root_constants::RootConstants;
 use super::root_sig::{RootSig, Visibility};
@@ -270,60 +271,6 @@ pub(in crate::directx) struct GrassResources {
     state: RefCell<GrassFrameState>,
 }
 
-// One persistently mapped upload-heap block per frame in flight.
-struct MappedBlocks {
-    buffers: Vec<PooledBuffer>,
-    ptrs: Vec<*mut u8>,
-    size: usize,
-}
-
-impl MappedBlocks {
-    fn new(alloc: &DeviceAllocator, size: usize, label: &str) -> RenderResult<Self> {
-        let size = align256(size as u64);
-        let frames = alloc.frames_in_flight();
-        let mut buffers = Vec::with_capacity(frames);
-        let mut ptrs = Vec::with_capacity(frames);
-        for _ in 0..frames {
-            let buf = alloc.alloc_buffer(
-                size,
-                D3D12_HEAP_TYPE_UPLOAD,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-            )?;
-            let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-            // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live
-            // local that receives the mapping.
-            unsafe { buf.Map(0, None, Some(&raw mut ptr)) }
-                .map_err(|e| map_hresult(e.code(), label))?;
-            ptrs.push(ptr.cast::<u8>());
-            buffers.push(buf);
-        }
-        Ok(Self {
-            buffers,
-            ptrs,
-            size: usize::saturating_from(size),
-        })
-    }
-
-    // Write `value` into frame `frame_idx`'s block and return its address.
-    fn write<T: bytemuck::NoUninit>(&self, frame_idx: usize, value: &T) -> u64 {
-        self.write_bytes(frame_idx, bytemuck::bytes_of(value))
-    }
-
-    // Write `bytes`, at most the block's size, into frame `frame_idx`'s block
-    // and return its address.
-    fn write_bytes(&self, frame_idx: usize, bytes: &[u8]) -> u64 {
-        let bytes = &bytes[..bytes.len().min(self.size)];
-        // SAFETY: the destination is the persistent mapping of this frame's UPLOAD-heap buffer,
-        // `size` bytes long and `bytes` no longer, which the GPU no longer reads once this
-        // frame's slot has been waited on; the source is a separate live value, so the ranges
-        // cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ptrs[frame_idx], bytes.len());
-        }
-        com::gpu_va(&self.buffers[frame_idx])
-    }
-}
-
 // A buffer of `count` blades, at least one, resting in UNORDERED_ACCESS
 // once a list the queue runs ahead of every later submission moves it there.
 // The kernel writes every blade a draw reads, so it starts unset.
@@ -537,21 +484,25 @@ impl DxContext {
         };
         let mut state = grass.state.borrow_mut();
         let frame = state.frame(&grass.field, &self.state, &view);
-        let view_gva = grass.params.write(frame_idx, &frame.view.params);
-        let shadow = frame.shadow.map(|pass| {
-            GrassPlacement::of(grass.shadow_params.write(frame_idx, &pass.params), &pass)
-        });
+        let view_gva = grass.params.write(frame_idx, &frame.view.params)?;
+        let shadow = match frame.shadow {
+            Some(pass) => Some(GrassPlacement::of(
+                grass.shadow_params.write(frame_idx, &pass.params)?,
+                &pass,
+            )),
+            None => None,
+        };
         Some(GrassFrame {
             view: GrassPlacement::of(view_gva, &frame.view),
             shadow,
-            bend_gva: grass.bend_params.write(frame_idx, &frame.bend.params),
+            bend_gva: grass.bend_params.write(frame_idx, &frame.bend.params)?,
             bend_dispatch: frame.bend.dispatch,
             planet_tiles_gva: grass
                 .planet_tiles
-                .write_bytes(frame_idx, bytemuck::cast_slice(frame.planet_tile_records())),
+                .write_bytes(frame_idx, bytemuck::cast_slice(frame.planet_tile_records()))?,
             tiles_gva: grass
                 .tiles
-                .write_bytes(frame_idx, bytemuck::cast_slice(frame.tile_records())),
+                .write_bytes(frame_idx, bytemuck::cast_slice(frame.tile_records()))?,
         })
     }
 

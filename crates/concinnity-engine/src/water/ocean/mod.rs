@@ -55,13 +55,16 @@ pub struct OceanQuality {
     pub size: u32,
     /// Cascades per simulation, in `1..=MAX_OCEAN_CASCADES`.
     pub cascades: u32,
+    /// Whether a planet sea runs a wake for the bodies crossing it.
+    pub wake: bool,
 }
 
 impl OceanQuality {
-    /// The finest simulation: three cascades of 256 x 256.
+    /// The finest simulation: three cascades of 256 x 256, and a wake.
     pub const FULL: Self = Self {
         size: 256,
         cascades: 3,
+        wake: true,
     };
     /// The smallest cascade side: the first cascade then holds every wave of
     /// the band the CPU reads ([`band::BAND_REACH`] of its steps).
@@ -80,6 +83,7 @@ impl OceanQuality {
             cascades: self
                 .cascades
                 .clamp(1, u32::saturating_from(MAX_OCEAN_CASCADES)),
+            wake: self.wake,
         }
     }
 
@@ -187,6 +191,8 @@ pub struct OceanPlan {
     pub simulations: Vec<OceanSimulation>,
     /// The quality every simulation runs at.
     pub quality: OceanQuality,
+    /// Whether a simulated planet sea runs a wake, which its quality allows.
+    pub wake: bool,
 }
 
 impl OceanPlan {
@@ -195,6 +201,7 @@ impl OceanPlan {
         Self {
             simulations: Vec::new(),
             quality: quality.clamped(),
+            wake: false,
         }
     }
 
@@ -293,25 +300,29 @@ mod tests {
         let q = OceanQuality {
             size: 200,
             cascades: 9,
+            ..OceanQuality::FULL
         }
         .clamped();
         assert_eq!(
             q,
             OceanQuality {
                 size: 128,
-                cascades: 4
+                cascades: 4,
+                ..OceanQuality::FULL
             }
         );
         let q = OceanQuality {
             size: 4096,
             cascades: 0,
+            ..OceanQuality::FULL
         }
         .clamped();
         assert_eq!(
             q,
             OceanQuality {
                 size: 256,
-                cascades: 1
+                cascades: 1,
+                ..OceanQuality::FULL
             }
         );
         assert_eq!(OceanQuality::FULL.clamped(), OceanQuality::FULL);

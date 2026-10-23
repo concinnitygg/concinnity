@@ -14,13 +14,31 @@
 // are locked to the Rust structs by the layout mirrors in concinnity-device's
 // shader_layout/mirrors/geometry.rs.
 //
+// Every emitter also reads the frame's rows (core::render::particles::burst):
+// the frame's move, which carries every live particle into the frame the
+// world moved to, then the bursts systems asked for this frame. An emitter's
+// bursts spawn the last `burst_spawns` of its run, each from its own point
+// along its own axis.
+//
 // The pool takes its Metal index from the number on its `register()` (see
 // concinnity-shader's `metal_bindings`), which is buffer(0), the slot
-// `metal/particle.rs` writes.
+// `metal/particle.rs` writes; the rows take buffer(1).
 
 {PARTICLE_TYPES}
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<Particle> pool : register(u0);
+
+// Rows of `[R | t]` for the frame's move, then `[moved, _, _, _]`, then per
+// burst `[position, count]` and `[direction, speed scale]`.
+#ifdef CN_BACKEND_DIRECTX
+StructuredBuffer<float4> frame_rows : register(t1);
+#else
+[[vk::binding(0, 1)]] StructuredBuffer<float4> frame_rows : register(t1);
+#endif
+
+// Mirror `PARTICLE_FRAME_HEADER` and `MAX_EMITTER_BURSTS` in core.
+static const uint PARTICLE_FRAME_HEADER = 4u;
+static const uint PARTICLE_MAX_EMITTER_BURSTS = 16u;
 
 // A host difference, not a target one: DirectX takes the params as root
 // constants at b0, while Vulkan pushes them and the Metal encoder writes them to
@@ -71,6 +89,15 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
     }
     Particle pt = pool[id];
 
+    // Carry a live particle into the frame the world moved to.
+    if (pt.velocity_lifetime.w > 0.0 && frame_rows[3].x > 0.0)
+    {
+        float4 p = float4(pt.position_age.xyz, 1.0);
+        float4 v = float4(pt.velocity_lifetime.xyz, 0.0);
+        pt.position_age.xyz = float3(dot(frame_rows[0], p), dot(frame_rows[1], p), dot(frame_rows[2], p));
+        pt.velocity_lifetime.xyz = float3(dot(frame_rows[0], v), dot(frame_rows[1], v), dot(frame_rows[2], v));
+    }
+
     // Age the particle in this slot, if any. A lifetime of 0 flags a dead slot.
     if (pt.velocity_lifetime.w > 0.0)
     {
@@ -95,14 +122,35 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
         uint rng = (spawn * 747796405u) ^ (params.random_seed * 2891336453u);
         // Warm the RNG so adjacent spawns decorrelate; the value is dropped.
         float warm = prng(rng);
-        float3 dir = sample_cone(
-            rng,
-            normalize(params.direction_speed_min.xyz),
-            params.position_spread.w);
-        float speed = lerp(
+        float3 origin = params.position_spread.xyz;
+        float3 axis = params.direction_speed_min.xyz;
+        float scale = 1.0;
+        // The run's last spawns are the bursts', each burst's in turn.
+        uint rate_spawns = params.spawn_count - params.burst_spawns;
+        if (spawn >= rate_spawns)
+        {
+            uint left = spawn - rate_spawns;
+            for (uint b = 0u; b < min(params.burst_count, PARTICLE_MAX_EMITTER_BURSTS); b++)
+            {
+                uint row = PARTICLE_FRAME_HEADER + 2u * (params.burst_first + b);
+                float4 at = frame_rows[row];
+                uint count = uint(at.w);
+                if (left < count)
+                {
+                    float4 along = frame_rows[row + 1u];
+                    origin = at.xyz;
+                    axis = along.xyz;
+                    scale = along.w;
+                    break;
+                }
+                left -= count;
+            }
+        }
+        float3 dir = sample_cone(rng, normalize(axis), params.position_spread.w);
+        float speed = scale * lerp(
             params.direction_speed_min.w, params.gravity_speed_max.w, prng(rng));
         float life = lerp(params.lifetime_min, params.lifetime_max, prng(rng));
-        pt.position_age = float4(params.position_spread.xyz, 0.0);
+        pt.position_age = float4(origin, 0.0);
         pt.velocity_lifetime = float4(dir * speed, max(life, 0.001));
     }
 

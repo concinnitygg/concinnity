@@ -4,6 +4,7 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_engine::profile;
+use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
@@ -210,6 +211,10 @@ pub(super) struct WaterState {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub ocean: Option<super::water_sim::OceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub wake: WakeHistory,
+    pub wake_frame: Option<WakeFrame>,
 }
 
 // Transparent glass: the `GlassPanel` producer and the see-through mesh path.
@@ -1274,6 +1279,7 @@ impl MtlContext {
             let pipelines = super::particle::build_particle_pipelines(
                 &self.hw.device,
                 self.hot_reload.enabled,
+                self.frames_in_flight + 1,
             )?;
             self.particle.pipelines = Some(pipelines);
         }

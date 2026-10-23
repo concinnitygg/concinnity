@@ -9,6 +9,7 @@ use core::ops::Range;
 use crate::planet::Rebase;
 use crate::render::environment::water::frame::WaterMotion;
 use crate::render::transparent::Producer;
+use crate::render::uniforms::wake::WaterWakeGpu;
 use crate::render::uniforms::{DaylightBlock, WaterParams};
 
 /// A backend record that accepts a water surface's per-frame params into its
@@ -194,6 +195,12 @@ impl<P, R> TransparentProducer<P, R> {
             .any(|r| r.visible && r.planar_slot.is_some())
     }
 
+    /// The height in the simulated frame of the first planet sea's resting
+    /// surface under a camera at `camera`, which the wake lies on.
+    pub fn sea_datum(&self, camera: [f32; 3]) -> Option<f32> {
+        self.water.iter().find_map(|w| w.sea_datum(camera))
+    }
+
     /// Carry every water surface into the frame the world moved to.
     pub fn rebase_water(&mut self, rebase: &Rebase) {
         for motion in &mut self.water {
@@ -204,13 +211,19 @@ impl<P, R> TransparentProducer<P, R> {
 
 impl<P, R: WaterParamsSink> TransparentProducer<P, R> {
     /// Write each visible water surface's params, advanced to `time` seconds
-    /// and seen from `camera`, into its `frame_idx` copy.
-    pub fn advance_water(&self, frame_idx: usize, time: f64, camera: [f32; 3]) {
+    /// and seen from `camera`, a planet sea's pointed at `wake`, into its
+    /// `frame_idx` copy.
+    pub fn advance_water(
+        &self,
+        frame_idx: usize,
+        time: f64,
+        camera: [f32; 3],
+        wake: &WaterWakeGpu,
+    ) {
         for (record, water) in self.records.iter().zip(&self.water) {
             if record.visible {
-                record
-                    .gpu
-                    .write_water_params(frame_idx, &water.params_at(time, camera));
+                let params = water.params_with_wake(time, camera, wake);
+                record.gpu.write_water_params(frame_idx, &params);
             }
         }
     }
@@ -421,7 +434,7 @@ mod tests {
             WaterMotion::new(&body(), false),
             WaterMotion::new(&body(), false)
         ];
-        p.advance_water(1, 0.5, [0.0; 3]);
+        p.advance_water(1, 0.5, [0.0; 3], &WaterWakeGpu::default());
         assert_eq!(p.records[0].gpu.get(), 101);
         assert_eq!(p.records[1].gpu.get(), 0);
     }

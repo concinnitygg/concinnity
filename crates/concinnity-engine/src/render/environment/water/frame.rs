@@ -7,7 +7,9 @@ use crate::planet::{LocalFrame, Rebase};
 use crate::render::environment::grass::map_then;
 use crate::render::uniforms::WaterParams;
 use crate::render::uniforms::grass::GRASS_IDENTITY_MAP;
+use crate::render::uniforms::wake::WaterWakeGpu;
 use crate::water::WaterBody;
+use concinnity_core::math::dvec3;
 
 /// A surface's params as built at init, and the body whose waves, ripples
 /// and ocean tiles move them each frame. A planet sea also keeps where the
@@ -60,6 +62,31 @@ impl WaterMotion {
         match self.body.sea_motion_at(time, &self.frame, camera) {
             Some(sea) => params.advance_sea(&self.body, &sea, self.wind_map),
             None => params.advance(&self.body.motion_at(time, self.body.anchor(camera))),
+        }
+        params
+    }
+
+    /// The height in the simulated frame of a planet sea's resting surface
+    /// under a camera at `camera`; `None` for any other body.
+    pub fn sea_datum(&self, camera: [f32; 3]) -> Option<f32> {
+        let sphere = &self.body.sea.as_ref()?.sphere;
+        let eye = dvec3::sub(self.frame.to_world(camera), sphere.center);
+        let dir = dvec3::normalize_or(eye, [0.0, 1.0, 0.0]);
+        let rest = dvec3::add(sphere.center, dvec3::scale(dir, sphere.radius));
+        Some(self.frame.to_local(rest)[1])
+    }
+
+    /// [`Self::params_at`], a planet sea's pointed at the wake `wake`
+    /// describes. A rectangle has no wake.
+    pub fn params_with_wake(
+        &self,
+        time: f64,
+        camera: [f32; 3],
+        wake: &WaterWakeGpu,
+    ) -> WaterParams {
+        let mut params = self.params_at(time, camera);
+        if self.body.sea.is_some() {
+            params.sea.wake = *wake;
         }
         params
     }
@@ -143,5 +170,27 @@ mod tests {
         let p = motion.params_at(3.0, [0.0, 30.0, 0.0]);
         assert_eq!(p.sea.wind_map, motion.wind_map);
         assert!(p.sea.up[3] > 50_000.0);
+
+        // The sea's datum is its rest height under the camera, the same
+        // however high over that spot the camera rises; a pond has none.
+        let up = [p.sea.up[0], p.sea.up[1], p.sea.up[2]];
+        let low = motion.sea_datum([0.0, 30.0, 0.0]).unwrap_or(f32::NAN);
+        let high = motion
+            .sea_datum(core::array::from_fn(|i| [0.0, 30.0, 0.0][i] + 3000.0 * up[i]))
+            .unwrap_or(f32::NAN);
+        assert!((low - high).abs() < 1e-2, "{low} {high}");
+        assert!((low - (p.anchor[1])).abs() < 1.0, "{low} {:?}", p.anchor);
+        assert_eq!(pond.sea_datum([0.0; 3]), None);
+
+        // Only the sea takes the wake's lane.
+        let lane = WaterWakeGpu {
+            lookup: [1.0, 2.0, 3.0, 4.0],
+            fade: [5.0, 6.0, 7.0, 1.0],
+        };
+        let woken = motion.params_with_wake(3.0, [0.0, 30.0, 0.0], &lane);
+        assert_eq!(woken.sea.wake, lane);
+        assert_eq!(p.sea.wake, WaterWakeGpu::default());
+        let still = pond.params_with_wake(3.0, [700.0, 4.0, -700.0], &lane);
+        assert_eq!(bytemuck::bytes_of(&still), bytemuck::bytes_of(&after));
     }
 }

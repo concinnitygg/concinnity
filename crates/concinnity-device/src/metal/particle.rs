@@ -19,7 +19,10 @@
 
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
+use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
+use concinnity_engine::render::particles::{
+    ParticleBurst, ParticleEmitterRecord, ParticleFrame, ParticleSystem,
+};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::uniforms::ParticleView;
 use objc2::rc::Retained;
@@ -56,6 +59,8 @@ pub(super) struct ParticlePipelines {
     pub simulate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub render: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+    // The frame's rows every simulation reads, one buffer per ring slot.
+    pub rows: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
 // The emitter table with each emitter's GPU pool, and the shared compute +
@@ -64,6 +69,8 @@ pub(super) struct ParticlePipelines {
 pub(crate) struct ParticleState {
     pub system: ParticleSystem<ParticleEmitterGpuState>,
     pub pipelines: Option<ParticlePipelines>,
+    // The ring slot this frame's rows went to.
+    pub rows_slot: usize,
 }
 
 impl MtlContext {
@@ -73,9 +80,28 @@ impl MtlContext {
     pub(in crate::metal) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
+        bursts: &[ParticleBurst],
+        ring_slot: usize,
     ) -> Option<ParticleFrame> {
-        self.particle.pipelines.as_ref()?;
-        self.particle.system.prepare(elapsed)
+        let pipelines = self.particle.pipelines.as_ref()?;
+        let frame = self.particle.system.prepare(elapsed, bursts)?;
+        let slot = ring_slot % pipelines.rows.len().max(1);
+        let rows = self.particle.system.rows();
+        if let Some(buffer) = pipelines.rows.get(slot) {
+            let bytes = bytemuck::cast_slice::<[f32; 4], u8>(rows);
+            // SAFETY: the buffer is shared storage sized for `PARTICLE_FRAME_ROWS` rows, which
+            // the rows never outgrow, and this ring slot's last reader retired before the frame
+            // was paced in.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    buffer.contents().as_ptr().cast::<u8>(),
+                    bytes.len().min(buffer.length()),
+                );
+            }
+        }
+        self.particle.rows_slot = slot;
+        Some(frame)
     }
 
     // Encode the `ParticlesSim` node: age + integrate + respawn every live
@@ -112,6 +138,9 @@ impl MtlContext {
             ns_string!("particles: simulate"),
         );
         enc.set_pipeline(&pipelines.simulate);
+        if let Some(rows) = pipelines.rows.get(self.particle.rows_slot) {
+            enc.set_buffer(rows, 0, 1);
+        }
         // Every live pool ticks, visible or not, so an off-screen emitter stays
         // in a realistic mid-life state for when the camera turns back. The cost
         // is per-slot work in a single threadgroup, so leaving it un-culled is
@@ -235,6 +264,7 @@ impl MtlContext {
 pub(super) fn build_particle_pipelines(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     hot_reload: bool,
+    ring_slots: usize,
 ) -> RenderResult<ParticlePipelines> {
     // Compute kernel, from `particle_simulate.hlsl`. The render pair below
     // splices the same `{PARTICLE_TYPES}` fragment, so both halves stride one
@@ -291,10 +321,19 @@ pub(super) fn build_particle_pipelines(
             .ok_or_else(|| RenderError::Other("failed to create particle sampler state".into()))?
     };
 
+    let row_bytes = PARTICLE_FRAME_ROWS * size_of::<[f32; 4]>();
+    let rows = (0..ring_slots.max(1))
+        .map(|_| {
+            device
+                .newBufferWithLength_options(row_bytes, MTLResourceOptions::StorageModeShared)
+                .ok_or_else(|| allocation_failed("the particle frame rows"))
+        })
+        .collect::<RenderResult<_>>()?;
     Ok(ParticlePipelines {
         simulate,
         render,
         sampler,
+        rows,
     })
 }
 

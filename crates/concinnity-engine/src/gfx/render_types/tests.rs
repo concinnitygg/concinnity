@@ -100,6 +100,33 @@ fn an_out_of_range_albedo_clamps_into_the_real_textures() {
     assert_eq!(albedo_pool_index(0, 0), 0);
 }
 
+// Three (vec3, scalar) lanes, the two colors, then twelve scalars, the last
+// three the emitter's bursts; 128 bytes, Vulkan's whole push range.
+#[test]
+fn particle_params_layout_matches_the_shader() {
+    assert_eq!(size_of::<ParticleParams>(), 128);
+    assert_eq!(offset_of!(ParticleParams, position), 0);
+    assert_eq!(offset_of!(ParticleParams, spread_cos), 12);
+    assert_eq!(offset_of!(ParticleParams, direction), 16);
+    assert_eq!(offset_of!(ParticleParams, speed_min), 28);
+    assert_eq!(offset_of!(ParticleParams, gravity), 32);
+    assert_eq!(offset_of!(ParticleParams, speed_max), 44);
+    assert_eq!(offset_of!(ParticleParams, color_start), 48);
+    assert_eq!(offset_of!(ParticleParams, color_end), 64);
+    assert_eq!(offset_of!(ParticleParams, lifetime_min), 80);
+    assert_eq!(offset_of!(ParticleParams, lifetime_max), 84);
+    assert_eq!(offset_of!(ParticleParams, size_start), 88);
+    assert_eq!(offset_of!(ParticleParams, size_end), 92);
+    assert_eq!(offset_of!(ParticleParams, dt), 96);
+    assert_eq!(offset_of!(ParticleParams, spawn_count), 100);
+    assert_eq!(offset_of!(ParticleParams, spawn_first), 104);
+    assert_eq!(offset_of!(ParticleParams, random_seed), 108);
+    assert_eq!(offset_of!(ParticleParams, max_particles), 112);
+    assert_eq!(offset_of!(ParticleParams, burst_first), 116);
+    assert_eq!(offset_of!(ParticleParams, burst_count), 120);
+    assert_eq!(offset_of!(ParticleParams, burst_spawns), 124);
+}
+
 // Three float4 lanes of scalars after the four vector lanes; the
 // pre-exposure opens the last one.
 #[test]

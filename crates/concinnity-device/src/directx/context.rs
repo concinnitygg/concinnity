@@ -810,6 +810,10 @@ pub(crate) struct DxContext {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub(super) water_sim: Option<super::water_sim::DxOceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
+    pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
@@ -1494,6 +1498,7 @@ impl FrameDevice for DxContext {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
+            self.particle.system.rebase(rebase);
         }
         Ok(())
     }
@@ -1590,8 +1595,11 @@ impl FrameDevice for DxContext {
             lines,
             world_hidden,
             grass_benders,
+            water_stirs,
+            particle_bursts,
             ..
         } = *frame_params;
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
         let DxFrame {
             frame,
             gpu_wait,
@@ -1606,7 +1614,7 @@ impl FrameDevice for DxContext {
             params.upload(frame);
         }
 
-        let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64));
+        let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64), particle_bursts, frame);
 
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The

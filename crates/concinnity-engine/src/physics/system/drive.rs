@@ -6,12 +6,14 @@ use alloc::vec::Vec;
 
 use crate::components::{Collider, DriveScript, RollingControl, Transform};
 use crate::ecs::{Entity, PipelineContext};
-use crate::physics::rolling_drive::{RollingBody, jump_impulse, push};
+use crate::physics::drive_script::compass;
+use crate::physics::rolling_drive::{RollingBody, TOW_RAMP, jump_impulse, push, tow, tow_hold};
 use crate::physics::{BodyHandle, ColliderShape, Simulation};
 
 use super::super::convert::collider_shape;
 use super::super::props::PropBodies;
 use super::up_at;
+use concinnity_core::math::vec3::dot;
 use concinnity_core::math::{SaturatingFrom, ceil};
 
 // How long a jump asked for in the air is kept for the body to land, in
@@ -20,6 +22,13 @@ const JUMP_WINDOW: f32 = 0.15;
 
 // The steepest ground the body counts as standing on: about 50 degrees.
 const GROUND_MIN_COS: f32 = 0.64;
+
+#[derive(Debug, Clone, Copy)]
+struct Towed {
+    pace: f32,
+    draft: f32,
+    last: f32,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Driven {
@@ -32,6 +41,9 @@ struct Driven {
     // The script key that steered the last tick, so a key's jump is asked for
     // once, as it takes over.
     script_key: Option<usize>,
+    // While a scripted tow pulls the body: the pace it has reached, and the
+    // share of the body under water it floated at and had last tick.
+    towed: Option<Towed>,
     grounded: bool,
     afloat: f32,
 }
@@ -86,6 +98,7 @@ impl Drives {
                     radius: 0.0,
                     jump_ticks: 0,
                     script_key: None,
+                    towed: None,
                     grounded: false,
                     afloat: 0.0,
                 });
@@ -103,16 +116,17 @@ impl Drives {
         }
     }
 
-    /// One tick of every drive starting `time` seconds into the world: the
-    /// steering a script has for that moment, a jump the body can take, then
-    /// the roll and the paddle for this tick's step. North lies along `north`
-    /// before it is laid along the ground.
+    /// One `dt`-second tick of every drive starting `time` seconds into the
+    /// world: the steering a script has for that moment, a jump the body can
+    /// take, then the roll and the paddle for this tick's step, or the tow a
+    /// script's pace asks for in their place. North lies along `north` before
+    /// it is laid along the ground.
     pub(super) fn tick(
         &mut self,
         world: &mut Simulation,
         ctx: &PipelineContext<'_>,
         props: &PropBodies,
-        time: f64,
+        (time, dt): (f64, f32),
         north: [f32; 3],
     ) {
         for driven in &mut self.driven {
@@ -121,6 +135,8 @@ impl Drives {
                 continue;
             };
             let up = up_at(world, state.position);
+            let mut pace = 0.0;
+            let mut heading_deg = 0.0;
             if let Some((index, key)) = ctx
                 .get::<DriveScript>(driven.entity)
                 .and_then(|script| script.key_at(time))
@@ -130,6 +146,8 @@ impl Drives {
                     driven.jump_ticks = self.jump_window;
                 }
                 driven.script_key = Some(index);
+                pace = key.pace;
+                heading_deg = key.heading_deg;
             }
             driven.grounded = world.is_supported(driven.handle, up, GROUND_MIN_COS);
             let body = RollingBody {
@@ -142,6 +160,35 @@ impl Drives {
                 afloat: driven.afloat,
                 grounded: driven.grounded,
             };
+            if pace > 0.0 {
+                let toward = compass(heading_deg, up, north);
+                let share = driven.afloat;
+                let towed = driven.towed.unwrap_or_else(|| Towed {
+                    pace: dot(state.linear_velocity, toward).max(0.0),
+                    draft: share,
+                    last: share,
+                });
+                let step = TOW_RAMP * dt;
+                let pace = towed.pace + (pace - towed.pace).clamp(-step, step);
+                // A share of a ball's volume per meter it sinks, near its middle.
+                let per_meter = 0.75 / driven.radius.max(1e-3);
+                let deeper = (share - towed.draft) / per_meter;
+                let sinking = (share - towed.last) / (dt.max(1e-6) * per_meter);
+                let mut force = tow(pace, toward, &body);
+                if towed.draft > 0.0 {
+                    let hold = tow_hold(deeper, sinking, &body);
+                    force = core::array::from_fn(|i| force[i] + hold[i]);
+                }
+                driven.towed = Some(Towed {
+                    pace,
+                    draft: towed.draft,
+                    last: share,
+                });
+                driven.jump_ticks = 0;
+                world.add_force(driven.handle, force, [0.0; 3]);
+                continue;
+            }
+            driven.towed = None;
             if driven.jump_ticks > 0 {
                 driven.jump_ticks -= 1;
                 if driven.grounded && driven.control.jump_speed > 0.0 {

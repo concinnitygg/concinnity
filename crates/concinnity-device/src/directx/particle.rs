@@ -22,12 +22,16 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::ParticleParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
+use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
+use concinnity_engine::render::particles::{
+    ParticleBurst, ParticleEmitterRecord, ParticleFrame, ParticleSystem,
+};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
+use super::mapped_blocks::MappedBlocks;
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
@@ -93,10 +97,12 @@ pub(in crate::directx) struct ParticleEmitterGpuState {
 // Compute root signature for `particle_simulate`:
 //   [0] root CBV b0 : ParticleParams (per-emitter, per-frame)
 //   [1] root UAV u0 : pool (RWStructuredBuffer<Particle>)
+//   [2] root SRV t1 : the frame's rows (per-frame)
 fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
         .uav(0, Visibility::All)
+        .srv(1, Visibility::All)
         .build(device, "particle simulate root sig")
 }
 
@@ -171,6 +177,9 @@ pub(in crate::directx) struct ParticleResources {
 
     // Heap slot of the main-depth SRV, bound at t2 for the fragment's depth test.
     depth_srv_gpu: SrvSlot,
+
+    // Per-frame rows every simulation reads.
+    rows: MappedBlocks,
 }
 
 impl ParticleResources {
@@ -252,6 +261,11 @@ impl ParticleResources {
             params_stride,
             emitter_srv_base_slot,
             depth_srv_gpu,
+            rows: MappedBlocks::new(
+                alloc,
+                PARTICLE_FRAME_ROWS * size_of::<[f32; 4]>(),
+                "map particle frame rows",
+            )?,
         })
     }
 }
@@ -393,9 +407,14 @@ impl DxContext {
     pub(in crate::directx) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
+        bursts: &[ParticleBurst],
+        frame_idx: usize,
     ) -> Option<ParticleFrame> {
-        self.particle.resources.as_ref()?;
-        self.particle.system.prepare(elapsed)
+        let resources = self.particle.resources.as_ref()?;
+        let frame = self.particle.system.prepare(elapsed, bursts)?;
+        let rows = bytemuck::cast_slice::<[f32; 4], u8>(self.particle.system.rows());
+        resources.rows.write_bytes(frame_idx, rows)?;
+        Some(frame)
     }
 
     // Fill this frame's slot of the `ParticleParams` upload ring for every live
@@ -446,6 +465,9 @@ impl DxContext {
         let Some(resources) = self.particle.resources.as_ref() else {
             return;
         };
+        let Some(rows_gva) = resources.rows.address(frame_idx) else {
+            return;
+        };
 
         // The pool is in UNORDERED_ACCESS already; the kernel reads + writes
         // through its root UAV. Each
@@ -456,6 +478,8 @@ impl DxContext {
         unsafe { cmd.SetComputeRootSignature(&resources.simulate_root_sig) };
         // SAFETY: the simulate PSO is owned by `resources` and matches the root signature above.
         unsafe { cmd.SetPipelineState(&resources.simulate_pso) };
+        // SAFETY: the signature declares the rows' SRV here, and this frame's block is live.
+        unsafe { cmd.SetComputeRootShaderResourceView(2, rows_gva) };
         for emitter in self.particle.system.emitters(&frame) {
             let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
             // SAFETY: `params_gva` addresses this emitter's slot in this frame's params ring.

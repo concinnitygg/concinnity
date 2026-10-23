@@ -134,6 +134,8 @@ pub fn submit(
         history_reset: snap.frame.history_reset.any(),
         rebase: snap.frame.rebase,
         grass_benders: &snap.grass_benders,
+        water_stirs: &snap.water_stirs,
+        particle_bursts: &snap.particle_bursts,
         atmosphere: snap.frame.atmosphere,
         daylight: &snap.frame.daylight,
         sunlight: snap.frame.sunlight,

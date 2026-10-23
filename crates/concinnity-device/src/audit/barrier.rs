@@ -309,6 +309,9 @@ const AUDITS: &[BackendAudit] = &[
             // the simulation node, each mip handed back to the resting state
             // once written so the next reduction reads it.
             ("water_sim.rs", ".ResourceBarrier(", 3, Reason::IntraPass),
+            // The wake's field, opened for unordered access after the ocean's
+            // arrays in the same node, each mip handed back the same way.
+            ("water_wake.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // The one-shot zero-init of a new emitter's pool, into COPY_DEST and
             // back to its UNORDERED_ACCESS resting state. The pool's
             // UAV -> NON_PIXEL_SHADER_RESOURCE pair crosses the sim -> draw node

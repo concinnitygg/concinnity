@@ -810,6 +810,49 @@ pub static WATER_MIP: ShaderProgram = ShaderProgram {
     msaa: false,
 };
 
+// The water's wake: its rows in, its columns turned, its rows back, its
+// shading field and that field's mips.
+/// `water_wake_rows` from `water_wake.hlsl`.
+pub static WATER_WAKE_ROWS: ShaderProgram = ShaderProgram {
+    file: "water_wake.hlsl",
+    entry: "water_wake_rows",
+    label: "water_wake_rows.hlsl",
+    gates: &["WATER_WAKE_ROWS"],
+    msaa: false,
+};
+/// `water_wake_columns` from `water_wake.hlsl`.
+pub static WATER_WAKE_COLUMNS: ShaderProgram = ShaderProgram {
+    file: "water_wake.hlsl",
+    entry: "water_wake_columns",
+    label: "water_wake_columns.hlsl",
+    gates: &["WATER_WAKE_COLUMNS"],
+    msaa: false,
+};
+/// `water_wake_inverse` from `water_wake.hlsl`.
+pub static WATER_WAKE_INVERSE: ShaderProgram = ShaderProgram {
+    file: "water_wake.hlsl",
+    entry: "water_wake_inverse",
+    label: "water_wake_inverse.hlsl",
+    gates: &["WATER_WAKE_INVERSE"],
+    msaa: false,
+};
+/// `water_wake_shade` from `water_wake.hlsl`.
+pub static WATER_WAKE_SHADE: ShaderProgram = ShaderProgram {
+    file: "water_wake.hlsl",
+    entry: "water_wake_shade",
+    label: "water_wake_shade.hlsl",
+    gates: &["WATER_WAKE_SHADE"],
+    msaa: false,
+};
+/// `water_wake_mip` from `water_wake.hlsl`.
+pub static WATER_WAKE_MIP: ShaderProgram = ShaderProgram {
+    file: "water_wake.hlsl",
+    entry: "water_wake_mip",
+    label: "water_wake_mip.hlsl",
+    gates: &["WATER_WAKE_MIP"],
+    msaa: false,
+};
+
 // Grass: the blade kernel, the bend pass and the cascade's depth-only draw, then
 // the blade pair the G-buffer pre-pass draws (under the pre-pass's own gate,
 // like the surfaces') and the pair Main draws.
@@ -980,6 +1023,11 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FFT_COLUMNS,
     &WATER_FFT_COLUMNS_FOAM,
     &WATER_MIP,
+    &WATER_WAKE_ROWS,
+    &WATER_WAKE_COLUMNS,
+    &WATER_WAKE_INVERSE,
+    &WATER_WAKE_SHADE,
+    &WATER_WAKE_MIP,
     &GRASS_GENERATE,
     &GRASS_BEND,
     &GRASS_SHADOW_VERT,

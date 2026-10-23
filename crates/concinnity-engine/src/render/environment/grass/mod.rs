@@ -319,7 +319,7 @@ pub fn map_then(rows: [[f32; 4]; 2], m: &Mat4) -> [[f32; 4]; 2] {
 
 /// Rows over a point `(x, y, z, 1)` applied at fixed height `y`, as rows over
 /// `(x, z, 1)`.
-fn map_at_height(rows: [[f32; 4]; 2], y: f32) -> [[f32; 4]; 2] {
+pub fn map_at_height(rows: [[f32; 4]; 2], y: f32) -> [[f32; 4]; 2] {
     rows.map(|r| [r[0], r[2], r[1] * y + r[3], 0.0])
 }
 

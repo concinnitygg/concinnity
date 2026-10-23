@@ -30,6 +30,7 @@ mod hot_reload;
 mod init;
 mod light_cull;
 mod line;
+mod mapped_blocks;
 mod material_params;
 mod parallel_encoder;
 mod particle;
@@ -58,6 +59,7 @@ mod transparent;
 mod upload_ring;
 mod water;
 mod water_sim;
+mod water_wake;
 mod wireframe;
 mod world_shaders;
 

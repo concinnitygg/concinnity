@@ -8,8 +8,11 @@ pub(crate) mod query;
 pub mod ripples;
 pub mod sea;
 pub mod spectrum;
+pub mod spray;
+pub mod stir;
 
-use crate::components::Vocabulary;
+use crate::components::{ParticleEmitter, Vocabulary};
+use crate::ecs::Ref;
 use crate::planet::PlanetShape;
 use crate::wind::WindField;
 use alloc::vec::Vec;
@@ -141,6 +144,7 @@ impl WaterBody {
             .map_or(1.0, |s| s.peak_wavelength());
         let mut body = SeaBody::new(SeaSphere::new(planet, surface.sea_level), peak);
         let shared = sea.and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
+        plan.wake |= shared.is_some() && plan.quality.wake;
         let mut water = if let Some((sea, index)) = shared {
             Self::resolve_ocean(surface, wind, &sea, plan, index)
         } else {
@@ -528,6 +532,10 @@ pub struct WaterSurface {
     /// 0 is none; smaller water never whitecaps. Values outside [0, 1] are
     /// clamped.
     pub whitecaps: f32,
+    /// The particle emitter that throws spray where floating bodies plunge
+    /// into the water, leave it, or plow through it fast, a burst at a time
+    /// from where they meet the surface. None throws no spray.
+    pub spray: Option<Ref<ParticleEmitter>>,
     /// Sharpness of the grazing-angle reflection. Higher confines reflections to
     /// steeper viewing angles.
     #[asset(default = 5.0)]
@@ -700,6 +708,32 @@ mod tests {
         let summed = WaterBody::resolve(&WaterSurface::default(), &fresh_breeze());
         assert_eq!(pond.waves, summed.waves);
         assert_eq!(pond.grid_lane(), [cell_size(&pond.surface), 0.0, 0.0, 0.0]);
+    }
+
+    // Only a simulated planet sea runs a wake, and only at a quality that
+    // allows one; a flat ocean never does.
+    #[test]
+    fn a_simulated_planet_sea_wakes() {
+        let wind = fresh_breeze();
+        let (_, flat) =
+            WaterBody::resolve_all(&[open_sea([0.0; 3])], &wind, OceanQuality::FULL, None);
+        assert!(!flat.wake);
+        let sea = WaterSurface {
+            shape: WaterShape::PlanetSea,
+            sea_level: 10.0,
+            ..Default::default()
+        };
+        let planet = crate::components::Planet::default().shape();
+        let resolve = |quality| WaterBody::resolve_all([&sea], &wind, quality, Some(&planet)).1;
+        assert!(resolve(OceanQuality::FULL).wake);
+        let off = OceanQuality {
+            wake: false,
+            ..OceanQuality::FULL
+        };
+        assert!(!resolve(off).wake);
+        let (_, still) =
+            WaterBody::resolve_all([&sea], &WindField::STILL, OceanQuality::FULL, Some(&planet));
+        assert!(!still.wake);
     }
 
     // A sea foams only once a body sharing it asks for whitecaps; a pond's

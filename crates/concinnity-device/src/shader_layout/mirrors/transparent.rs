@@ -7,6 +7,7 @@
 use concinnity_engine::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
 };
+use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
 use concinnity_engine::render::uniforms::{
     GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterOceanGpu,
     WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterShoreGpu, WaterWaveGpu,
@@ -137,7 +138,9 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             wind_map,
             faces,
             shore,
+            wake,
         })),
+        everywhere(mirror!(WaterWakeGpu => "WaterWake" { lookup, fade, })),
         everywhere(mirror!(WaterShoreGpu => "WaterShore" {
             planet_rows,
             continent_salts,

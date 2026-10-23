@@ -125,6 +125,7 @@ pub const SYSTEMS: &SystemTable = &SystemTable {
         Core::PLANET,
         Core::BEHAVIOR,
         Core::PHYSICS,
+        Core::WATER_SPRAY,
         Core::CAMERA3D,
         Core::THIRD_PERSON,
         Core::CAMERA_TRACK,

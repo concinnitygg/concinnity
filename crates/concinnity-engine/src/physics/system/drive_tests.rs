@@ -469,7 +469,7 @@ fn a_subject_the_track_refuses_stays_dynamic() {
 }
 
 // A scripted roll over the planet's ground: west, then a jump turning north,
-// then half throttle south.
+// then half throttle south, then towed east.
 fn scripted_roll(world: &mut World) -> Entity {
     let ball = driven_ball(world, [0.0, RADIUS, 0.0]);
     let key = |seconds, heading_deg, throttle, jump| crate::components::DriveKey {
@@ -478,6 +478,7 @@ fn scripted_roll(world: &mut World) -> Entity {
         throttle,
         sprint: true,
         jump,
+        pace: 0.0,
     };
     world.insert(
         ball,
@@ -486,6 +487,10 @@ fn scripted_roll(world: &mut World) -> Entity {
                 key(0.5, 270.0, 1.0, false),
                 key(2.0, 0.0, 1.0, true),
                 key(4.0, 180.0, 0.5, false),
+                crate::components::DriveKey {
+                    pace: 6.0,
+                    ..key(5.0, 90.0, 1.0, false)
+                },
             ],
             0.0,
         ),
@@ -535,7 +540,7 @@ fn a_scripted_roll_repeats_exactly_however_ticks_are_grouped() {
     let a = roll_with(&even);
     assert_eq!(a, roll_with(&even), "the same run twice");
     assert_eq!(a, roll_with(&lumpy), "ticks grouped differently");
-    // And it went somewhere: west, a hop, north, then south.
+    // And it went somewhere: west, a hop, north, south, then east.
     assert!(length([a.0[0], 0.0, a.0[2]]) > 3.0, "{:?}", a.0);
 }
 
@@ -598,4 +603,96 @@ fn a_rolling_body_turns_kinematic_where_the_track_picks_it_up() {
     }
     let from = kinematic_from.expect("picked up");
     assert!((119..=122).contains(&from), "kinematic from frame {from}");
+}
+
+// The height of the towing tests' water, clear of the floor beneath.
+const SEA: f32 = 5.0;
+
+// A floating ball towed east at `pace` from a second in, through water at
+// `SEA` with `waves`: its velocity two seconds into the tow and eight, how
+// high over the water it sat then, and the least and most of it under water
+// from six seconds on.
+fn towed(
+    pace: f32,
+    waves: Vec<crate::components::WaterWave>,
+) -> ([f32; 3], [f32; 3], f32, [f32; 2]) {
+    use crate::components::{Buoyancy, DriveKey, DriveScript, WaterSurface};
+    let mut world = World::new();
+    world.push(WaterSurface {
+        center: [0.0, SEA, 0.0],
+        extent: [100.0, 100.0],
+        depth_meters: 4.0,
+        density: 1000.0,
+        waves,
+        ..Default::default()
+    });
+    let ball = driven_ball(&mut world, [-80.0, SEA, 0.0]);
+    if let Some(body) = world.context().get_mut::<BodyDynamics>(ball) {
+        body.mass = 250.0;
+        body.buoyancy = Some(Buoyancy {
+            linear_drag: 3.0,
+            angular_drag: 3.0,
+        });
+    }
+    world.insert(
+        ball,
+        DriveScript::new(
+            &[DriveKey {
+                seconds: 1.0,
+                heading_deg: 90.0,
+                pace,
+                ..DriveKey::default()
+            }],
+            0.0,
+        ),
+    );
+    world.insert_resource(FrameRebases::default());
+    let mut physics = PhysicsSystem::new(&PhysicsConfig::default()).with_water(water_of(&world));
+    physics.init(&mut world.context());
+    let mut under = [1.0f32, 0.0];
+    let mut early = [0.0; 3];
+    for n in 1..540u32 {
+        world.insert_resource(SimTiming {
+            time: f64::from(n) * f64::from(SimTiming::TICK_DT),
+            ..Default::default()
+        });
+        physics.step(&mut world.context());
+        if n == 180 {
+            early = velocity(&physics, ball);
+        }
+        if n >= 360 {
+            let share = control(&world, ball).afloat;
+            under = [under[0].min(share), under[1].max(share)];
+        }
+    }
+    let y = world.get::<Transform>(ball).unwrap().position[1] - SEA;
+    (early, velocity(&physics, ball), y, under)
+}
+
+// A pace tows a floating ball up to it through still water at the tow's
+// steady rate, against the water's drag, along the key's heading, while the
+// water still holds it up.
+#[test]
+fn a_pace_tows_a_floating_ball_up_to_speed() {
+    let pace = 12.0;
+    let (early, v, y, _) = towed(pace, Vec::new());
+    assert!((4.0..8.0).contains(&early[0]), "{early:?}");
+    assert!((v[0] - pace).abs() < 1.0, "{v:?}");
+    assert!(v[2].abs() < 0.2, "{v:?}");
+    assert!(y.abs() < RADIUS, "{y}");
+}
+
+// Towed fast across a swell whose crests pass at the ball's own heave beat,
+// it rides the swell without leaping clear or going under.
+#[test]
+fn a_towed_ball_rides_a_swell_without_leaping() {
+    let swell = crate::components::WaterWave {
+        amplitude: 0.5,
+        wavelength: 20.0,
+        direction: [1.0, 0.0],
+        ..Default::default()
+    };
+    let (_, v, _, under) = towed(14.0, alloc::vec![swell]);
+    assert!((v[0] - 14.0).abs() < 1.5, "{v:?}");
+    assert!(under[0] > 0.2 && under[1] < 0.98, "{under:?}");
 }

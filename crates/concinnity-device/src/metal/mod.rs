@@ -68,6 +68,7 @@ mod transient_pool;
 mod transparent;
 mod water;
 mod water_sim;
+mod water_wake;
 mod world_shaders;
 
 pub(crate) use context::MtlContext;

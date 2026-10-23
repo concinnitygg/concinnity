@@ -109,6 +109,7 @@ mod tests {
             OceanQuality {
                 size,
                 cascades: count,
+                ..OceanQuality::FULL
             },
         )
     }

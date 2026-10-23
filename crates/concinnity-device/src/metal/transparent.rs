@@ -264,6 +264,10 @@ impl MtlContext {
             }
             enc.set_vertex_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
             enc.set_fragment_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
+            // A sea's wake rides the same sampler; a rectangle never reads it.
+            use super::water_wake::WAKE_FIELD_TEXTURE_INDEX;
+            enc.set_vertex_texture(&a.wake, WAKE_FIELD_TEXTURE_INDEX);
+            enc.set_fragment_texture(&a.wake, WAKE_FIELD_TEXTURE_INDEX);
         }
         // The main camera's cluster grid, which bins the probes a surface
         // blends, takes the params at buffer(12) and the lists at buffer(13).

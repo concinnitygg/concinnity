@@ -401,6 +401,8 @@ impl VkContext {
             atmosphere,
             transparent: world_fx.transparent,
             water_sim: world_fx.water_sim,
+            wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
+            wake_frame: None,
             planar_reflection: world_fx.planar_reflection,
             particle: ParticleState::default(),
             grass,

@@ -193,6 +193,7 @@ impl QualityCeiling {
         ocean: OceanQuality {
             size: 128,
             cascades: 2,
+            wake: false,
         },
         min_planet_cell_size: 4,
     };
@@ -221,6 +222,7 @@ impl QualityCeiling {
         ocean: OceanQuality {
             size: 128,
             cascades: 3,
+            ..OceanQuality::FULL
         },
         min_planet_cell_size: 2,
     };

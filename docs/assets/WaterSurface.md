@@ -94,6 +94,7 @@ keep their history, which holds distant waves still.
 - `foam_width_meters`: A float. Width of the shoreline foam band, in meters. Defaults to `0.3`.
 - `foam_intensity`: A float. Strength of the shoreline foam, in [0, 1]. Defaults to `0.8`.
 - `whitecaps`: A float. Strength of the foam on a simulated ocean's breaking crests, in [0, 1]. 0 is none; smaller water never whitecaps. Values outside [0, 1] are clamped. Defaults to `0.0`.
+- `spray`: A string. The particle emitter that throws spray where floating bodies plunge into the water, leave it, or plow through it fast, a burst at a time from where they meet the surface. None throws no spray.
 - `fresnel_power`: A float. Sharpness of the grazing-angle reflection. Higher confines reflections to steeper viewing angles. Defaults to `5.0`.
 - `roughness`: A float. Surface roughness in [0, 1]. Higher gives blurrier reflections, and pushes a mirrored reflection further off its line with each wave: a near-mirror surface keeps its reflection almost still. Defaults to `0.05`.
 - `refraction_strength`: A float. How strongly the surface bends the view of what's beneath it. Defaults to `0.15`.

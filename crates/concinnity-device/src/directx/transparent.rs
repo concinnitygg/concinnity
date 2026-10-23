@@ -406,7 +406,8 @@ unsafe impl Sync for TransparentResources {}
 //   [10] root SRV t22 per-cluster light lists and probe masks
 //   [11] table  t13..14 the cascaded shadow map and the sky irradiance cube
 //   [12] root CBV b3  ShadowUniforms
-//   [13] table  t15..16 the simulated oceans' displacement and slope arrays
+//   [13] table  t15..17 the simulated oceans' displacement and slope arrays,
+//                     and a planet sea's wake
 //   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp ;
 //   s3 : shadow compare ; s4 : anisotropic wrap (every stage)
 //
@@ -429,9 +430,9 @@ const PROBE_RECORDS_ROOT_RT: u32 = 17;
 // both signatures by the shadow uniforms CBV (b3).
 const BODY_LIGHT_ROOT_BASE: u32 = 11;
 const BODY_LIGHT_ROOT_RT: u32 = 20;
-// Root parameter index of the oceans' array table (t15..t16), last in both
-// signatures and visible to every stage: the water's vertex stage displaces
-// by it.
+// Root parameter index of the oceans' array table (t15..t17, the wake's field
+// last), last in both signatures and visible to every stage: the water's
+// vertex stage displaces by it.
 const OCEAN_ROOT_BASE: u32 = 13;
 const OCEAN_ROOT_RT: u32 = 22;
 
@@ -453,7 +454,7 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .srv(22, Pixel) // [10] t22 cluster lists
         .srv_table(13, 2, Pixel) // [11] t13..t14 shadow map + irradiance cube
         .cbv(3, Pixel) // [12] b3 ShadowUniforms
-        .srv_table(15, 2, All) // [13] t15..t16 ocean arrays
+        .srv_table(15, 3, All) // [13] t15..t17 ocean arrays + a sea's wake
         // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
         // s3: the shadow compare. s4: the ocean arrays.
         .static_sampler(SamplerState::LinearClamp, 0, Pixel)
@@ -561,7 +562,8 @@ fn transparent_pso(
 //   [19] root SRV t22  per-cluster light lists and probe masks
 //   [20] table  t13..14 the cascaded shadow map and the sky irradiance cube
 //   [21] root CBV b3   ShadowUniforms
-//   [22] table  t15..16 the simulated oceans' displacement and slope arrays
+//   [22] table  t15..17 the simulated oceans' displacement and slope arrays,
+//                     and a planet sea's wake
 //   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp,
 //                   s3 shadow compare, s4 anisotropic wrap (every stage)
 //
@@ -596,7 +598,7 @@ fn create_transparent_rt_root_signature(
         .srv(22, Pixel) // [19] t22 cluster lists
         .srv_table(13, 2, Pixel) // [20] t13..t14 shadow map + irradiance cube
         .cbv(3, Pixel) // [21] b3 ShadowUniforms
-        .srv_table(15, 2, All) // [22] t15..t16 ocean arrays
+        .srv_table(15, 3, All) // [22] t15..t17 ocean arrays + a sea's wake
         .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
         .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
         .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
@@ -1171,7 +1173,8 @@ impl DxContext {
         )
     }
 
-    // Carry the water surfaces into the frame the world moved to.
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
     pub(in crate::directx) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
         if let Some(water) = self
             .transparent
@@ -1180,6 +1183,31 @@ impl DxContext {
         {
             water.rebase_water(rebase);
         }
+        self.wake.rebase(rebase);
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::directx) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[concinnity_engine::water::stir::WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water_sim
+                .as_ref()
+                .is_some_and(super::water_sim::DxOceanSim::wakes);
+        let sea = self
+            .transparent
+            .as_ref()
+            .and_then(|t| t.producers.water.as_ref())
+            .and_then(|w| w.sea_datum(camera));
+        self.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => Some(self.wake.advance(camera, sea, time, stirs)),
+            _ => None,
+        };
     }
 
     // Write each visible water surface's params, advanced to `time` seconds
@@ -1196,7 +1224,8 @@ impl DxContext {
             .as_ref()
             .and_then(|t| t.producers.water.as_ref())
         {
-            water.advance_water(frame_idx, time, camera);
+            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            water.advance_water(frame_idx, time, camera, &wake);
         }
     }
 

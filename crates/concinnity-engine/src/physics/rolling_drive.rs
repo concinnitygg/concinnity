@@ -175,6 +175,42 @@ pub(crate) fn push(control: &RollingControl, body: &RollingBody) -> RollingPush 
     }
 }
 
+/// How hard a tow pulls toward its pace, in meters per second squared per
+/// meter per second short of it, and the most it pulls.
+const TOW_GAIN: f32 = 30.0;
+const TOW_MAX_ACCEL: f32 = 60.0;
+
+/// How fast a tow's pace changes, in meters per second squared.
+pub(crate) const TOW_RAMP: f32 = 3.0;
+
+/// How stiffly and how hard a tow holds a body afloat at the draft it
+/// floated at, per second squared and per second: a body towed fast across a
+/// swell would otherwise lag the passing crests, plunge under them and leap
+/// clear behind. The most it pushes, in meters per second squared.
+const TOW_HOLD: f32 = 40.0;
+const TOW_HOLD_DAMPING: f32 = 12.0;
+const TOW_HOLD_MAX: f32 = 20.0;
+
+/// The force that tows `body` along the unit ground direction `toward` at
+/// `pace` meters per second: toward that velocity along the ground, nothing
+/// along up.
+pub(crate) fn tow(pace: f32, toward: [f32; 3], body: &RollingBody) -> [f32; 3] {
+    let v = body.linear_velocity;
+    let rising = dot(v, body.up);
+    let short: [f32; 3] = core::array::from_fn(|i| toward[i] * pace - (v[i] - body.up[i] * rising));
+    let lead = length(short);
+    let accel = (lead * TOW_GAIN).min(TOW_MAX_ACCEL);
+    scale(normalize_or(short, 1e-6, [0.0; 3]), accel * body.mass)
+}
+
+/// The force a tow holds `body` at its draft by: `deeper` meters below the
+/// draft it floated at and sinking at `sinking` meters per second against the
+/// water, it is pushed back up, and above it down.
+pub(crate) fn tow_hold(deeper: f32, sinking: f32, body: &RollingBody) -> [f32; 3] {
+    let accel = (deeper * TOW_HOLD + sinking * TOW_HOLD_DAMPING).clamp(-TOW_HOLD_MAX, TOW_HOLD_MAX);
+    scale(body.up, accel * body.mass)
+}
+
 /// The impulse a jump gives `body`, in newton seconds: what brings its speed
 /// away from the ground up to the jump speed, and nothing for a body already
 /// rising faster.
@@ -250,6 +286,48 @@ mod tests {
     }
 
     // Afloat, the roll gives way to a paddle along the heading.
+    // A tow pulls along the ground toward its pace, harder the further short
+    // of it, to its cap, ignores how the body rises or sinks, and holds a body
+    // already at its pace still.
+    #[test]
+    fn a_tow_pulls_along_the_ground_toward_its_pace() {
+        let toward = [0.0, 0.0, 1.0];
+        let f = tow(10.0, toward, &ball([0.0; 3], 0.6));
+        assert!(close(f, [0.0, 0.0, 2.0 * TOW_MAX_ACCEL]));
+        let near = tow(10.0, toward, &ball([3.0, 0.0, 9.9], 0.6));
+        assert!(close(near, [0.0, 0.0, 2.0 * 0.1 * TOW_GAIN]));
+        assert!(close(
+            tow(10.0, toward, &ball([-2.0, 0.0, 10.0], 0.6)),
+            [0.0; 3]
+        ));
+        // Sideways drift is pulled out too.
+        let drift = tow(10.0, toward, &ball([0.0, 0.1, 10.0], 0.6));
+        assert!(drift[1] < 0.0 && drift[0] == 0.0);
+    }
+
+    // The hold pushes a body sunk below its draft back up, one riding high
+    // down, and one sinking up harder, along up, within its cap.
+    #[test]
+    fn a_tow_holds_the_draft() {
+        let b = ball([0.0; 3], 0.6);
+        assert!(close(
+            tow_hold(0.1, 0.0, &b),
+            [2.0 * 0.1 * TOW_HOLD, 0.0, 0.0]
+        ));
+        assert!(close(
+            tow_hold(-0.1, 0.0, &b),
+            [-2.0 * 0.1 * TOW_HOLD, 0.0, 0.0]
+        ));
+        assert!(close(
+            tow_hold(0.0, 1.0, &b),
+            [2.0 * TOW_HOLD_DAMPING, 0.0, 0.0]
+        ));
+        assert!(close(
+            tow_hold(5.0, 5.0, &b),
+            [2.0 * TOW_HOLD_MAX, 0.0, 0.0]
+        ));
+    }
+
     #[test]
     fn afloat_the_drive_paddles() {
         let mut c = control();

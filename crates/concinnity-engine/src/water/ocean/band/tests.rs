@@ -171,6 +171,7 @@ fn the_band_is_deterministic_and_preset_free() {
     let low = OceanQuality {
         size: 128,
         cascades: 2,
+        ..OceanQuality::FULL
     };
     let mut a = OceanBand::new(&sea(), &cascades(OceanQuality::FULL)).unwrap();
     let mut b = OceanBand::new(&sea(), &cascades(low)).unwrap();
@@ -223,7 +224,12 @@ fn the_rates_follow_the_waves() {
 #[test]
 fn the_first_cascade_draws_the_whole_band_at_every_size() {
     for size in [32, 64, 128, 256, 512] {
-        let quality = OceanQuality { size, cascades: 2 }.clamped();
+        let quality = OceanQuality {
+            size,
+            cascades: 2,
+            ..OceanQuality::FULL
+        }
+        .clamped();
         assert!(quality.size >= OceanQuality::MIN_SIZE);
         let c = cascades(quality);
         let dk = core::f32::consts::TAU / c.lengths()[0];

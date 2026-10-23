@@ -16,6 +16,7 @@ use crate::physics::{
 };
 use crate::planet::LocalFrame;
 use crate::water::query::{WaterQuery, WaterSpot};
+use crate::water::stir::StirPiece;
 use concinnity_core::math::quat_rotate;
 use forces::drag;
 use samples::Samples;
@@ -45,6 +46,11 @@ pub(super) struct Floater {
     stagger: f32,
     // The share of the body under water at its last tick.
     share: f32,
+    // Each piece as it stirred the water at its last tick, up out of the
+    // water there and the body's velocity.
+    stir: [StirPiece; MAX_FLUID_PIECES],
+    up: [f32; 3],
+    velocity: [f32; 3],
 }
 
 impl Floater {
@@ -61,6 +67,9 @@ impl Floater {
             spot_left: 0.0,
             stagger: stagger.clamp(0.0, 1.0),
             share: 0.0,
+            stir: [StirPiece::default(); MAX_FLUID_PIECES],
+            up: [0.0, 1.0, 0.0],
+            velocity: [0.0; 3],
         }
     }
 
@@ -72,6 +81,25 @@ impl Floater {
     /// The share of the body under water at its last tick, from 0 to 1.
     pub(super) fn submerged_share(&self) -> f32 {
         self.share
+    }
+
+    /// Each piece as it stirred the water at its last tick.
+    pub(super) fn stir(&self) -> &[StirPiece] {
+        &self.stir[..self.samples.pieces().len()]
+    }
+
+    /// Up out of the water and the body's velocity at its last tick.
+    pub(super) fn motion(&self) -> ([f32; 3], [f32; 3]) {
+        (self.up, self.velocity)
+    }
+
+    // Off the water: every piece holds back nothing where it is.
+    fn dry_out(&mut self, position: [f32; 3]) {
+        self.share = 0.0;
+        for s in &mut self.stir {
+            s.at = position;
+            s.volume = 0.0;
+        }
     }
 
     /// One tick of the water's push on body `handle`, `dt` seconds starting
@@ -90,7 +118,7 @@ impl Floater {
         dt: f32,
     ) {
         let Some((position, rotation)) = world.body_pose_quat(handle) else {
-            self.share = 0.0;
+            self.dry_out([0.0; 3]);
             return;
         };
         self.spot_left -= dt;
@@ -101,7 +129,7 @@ impl Floater {
             self.stagger = 0.0;
         }
         let Some(patch) = water.patch(&self.spot, frame, position, time) else {
-            self.share = 0.0;
+            self.dry_out(position);
             return;
         };
         let w = patch.center;
@@ -109,19 +137,24 @@ impl Floater {
         // reads a level far below it.
         let mut levels = [[0.0f32; 3]; MAX_FLUID_PIECES];
         let mut wet = 0.0;
-        for (piece, level) in self.samples.pieces().iter().zip(&mut levels) {
+        let pieces = self.samples.pieces().iter().zip(&mut levels);
+        for ((piece, level), stir) in pieces.zip(&mut self.stir) {
             let o = quat_rotate(rotation, piece.offset);
             let at: [f32; 3] = core::array::from_fn(|i| position[i] + o[i]);
             let depth = water
                 .depth(&self.spot, &patch, frame, at, time)
                 .unwrap_or(DRY);
             *level = core::array::from_fn(|i| at[i] + w.up[i] * depth);
-            wet += submerged(piece, rotation, w.up, depth).volume;
+            let under = submerged(piece, rotation, w.up, depth).volume;
+            *stir = StirPiece::new(at, *level, piece_radius(piece.volume), depth, under);
+            wet += under;
         }
         self.share = (wet / self.volume.max(1e-9)).clamp(0.0, 1.0);
+        self.up = w.up;
         let Some(state) = world.body_state(handle) else {
             return;
         };
+        self.velocity = state.linear_velocity;
         // The load goes over dry as well as wet: a body falling in meets the
         // water in the substep it reaches it, not a tick later.
         let moving = w.velocity.iter().any(|v| v.abs() > STILL_WATER);
@@ -146,4 +179,9 @@ impl Floater {
         );
         world.set_body_velocity(handle, linear, angular);
     }
+}
+
+// The radius of a ball of `volume`.
+fn piece_radius(volume: f32) -> f32 {
+    libm::cbrtf(3.0 * volume.max(0.0) / (4.0 * core::f32::consts::PI))
 }

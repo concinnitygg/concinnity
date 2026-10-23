@@ -22,12 +22,14 @@ use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
+use crate::render::particles::ParticleBursts;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
 use crate::render::temporal::history_reset::{
     FrameClock, HistoryResetCauses, HistoryResetTracker, HistoryView, PendingHistoryReset,
 };
 use crate::sky::SkyOrientation;
 use crate::transform::propagation::{self, TransformCache};
+use crate::water::stir::WaterStirs;
 use concinnity_core::fanout::FanOut;
 
 mod atmosphere;
@@ -302,7 +304,8 @@ impl FrameExtractor {
 
     // Updated model matrices for every entity whose transform changed since
     // last frame, queued for its draw slots, plus what follows the same
-    // transforms: grass benders and the editor's pick index. The cached
+    // transforms: grass benders, the floating bodies' stirs, the particle
+    // bursts asked for and the editor's pick index. The cached
     // propagation skips the resolve when no Transform / Parent changed; the
     // push gate drops slots whose matrix is unchanged, so a static scene sends
     // nothing.
@@ -316,6 +319,12 @@ impl FrameExtractor {
         }
         if self.grows_grass {
             grass_benders::gather_into(ctx, &mut snap.grass_benders);
+        }
+        if let Some(stirs) = ctx.resource::<WaterStirs>() {
+            snap.water_stirs.extend_from_slice(&stirs.0);
+        }
+        if let Some(bursts) = ctx.resource_mut::<ParticleBursts>() {
+            bursts.take_into(&mut snap.particle_bursts);
         }
         if !self.pick_candidates.is_empty() {
             self.refresh_pick_index(ctx, snap);

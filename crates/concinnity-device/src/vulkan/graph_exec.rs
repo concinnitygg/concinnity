@@ -527,6 +527,8 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // What may be trampling the grass this frame.
     pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
+    // The particle bursts systems asked for this frame.
+    pub particle_bursts: &'a [concinnity_engine::render::particles::ParticleBurst],
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,
@@ -610,7 +612,11 @@ impl VkContext {
         // the `&self` `encode_particles` (which may run on a parallel-recording
         // worker) never mutates the particle `Cell`s. `None` when the pass is
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(narrow_f32(params.elapsed));
+        let particle_frame = self.prepare_particle_pass(
+            narrow_f32(params.elapsed),
+            params.particle_bursts,
+            params.frame_idx,
+        );
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
@@ -1122,7 +1128,7 @@ impl VkContext {
                 self.encode_fog(rec, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
-            PassId::WaterSim => self.encode_water_sim(rec, params.water_time),
+            PassId::WaterSim => self.encode_water_sim(rec, params.frame_idx, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);
@@ -1134,7 +1140,7 @@ impl VkContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, *frame);
+                    self.encode_particles_sim(cmd, params.frame_idx, *frame);
                 }
             }
             PassId::ParticlesDraw => {

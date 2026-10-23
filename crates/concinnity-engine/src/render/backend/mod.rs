@@ -134,6 +134,11 @@ pub struct FrameParams<'a> {
     /// The characters and bodies that may be trampling grass this frame,
     /// stamped into the grass's bend field near the camera.
     pub grass_benders: &'a [crate::render::environment::grass::GrassBender],
+    /// What the floating bodies push aside this frame, which a planet sea's
+    /// wake turns into waves near the camera.
+    pub water_stirs: &'a [crate::water::stir::WaterStir],
+    /// The particle bursts systems asked for this frame, by emitter.
+    pub particle_bursts: &'a [crate::render::particles::ParticleBurst],
     /// Where the camera and the sun are about the planet, in a world with an
     /// `Atmosphere`; the backend draws the sky and the haze from it.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereFrame>,
@@ -530,6 +535,7 @@ mod tests {
 
     fn stub_emitter() -> crate::render::particles::ParticleEmitterRecord {
         crate::render::particles::ParticleEmitterRecord {
+            id: None,
             texture_slot: 0,
             position: [0.0; 3],
             direction: [0.0, 1.0, 0.0],

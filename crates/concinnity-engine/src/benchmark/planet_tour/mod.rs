@@ -38,8 +38,9 @@ use framing::Framing;
 ///
 /// A subject with a [`RollingDrive`](#rollingdrive) rolls itself over the
 /// ground first: through the grass, down the beach and into the sea, where it
-/// floats and paddles until the tour picks it up and flies it; on a planet
-/// with no sea it is picked up as the roll ends. A subject
+/// floats and paddles, then is towed up to speed through the water, until the
+/// tour picks it up and flies it; on a planet with no sea it is picked up as
+/// the roll ends. A subject
 /// without one, or none at all, skims the ground instead.
 ///
 /// ```json
@@ -145,10 +146,11 @@ pub(crate) fn plan(
 
 // The rolling subject's drive: held through the settle, then sprinting along
 // the course's heading through the roll and paddling on through any float,
-// picked up as the sea phase opens.
+// towed up to the wake's pace through any wake, and picked up as the sea phase
+// opens.
 fn roll_script(phases: &[&timetable::Phase], heading_deg: f32) -> (Vec<DriveKey>, f32) {
     let start = |name| narrow_f32(timetable::phase_start(phases, name).unwrap_or(0.0));
-    let keys = alloc::vec![
+    let mut keys = alloc::vec![
         DriveKey {
             seconds: 0.0,
             heading_deg,
@@ -160,9 +162,17 @@ fn roll_script(phases: &[&timetable::Phase], heading_deg: f32) -> (Vec<DriveKey>
             heading_deg,
             throttle: 1.0,
             sprint: true,
-            jump: false,
+            ..DriveKey::default()
         },
     ];
+    if let Some(wake) = timetable::phase_start(phases, "wake") {
+        keys.push(DriveKey {
+            seconds: narrow_f32(wake),
+            heading_deg,
+            pace: narrow_f32(timetable::WAKE_SPEED),
+            ..DriveKey::default()
+        });
+    }
     (keys, start("sea"))
 }
 

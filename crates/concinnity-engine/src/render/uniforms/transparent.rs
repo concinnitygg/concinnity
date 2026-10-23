@@ -5,6 +5,7 @@
 use super::PassCamera;
 use super::daylight::{DaylightBlock, VIEW_BLOCK_LIMIT};
 use super::shore::WaterShoreGpu;
+use super::wake::WaterWakeGpu;
 use crate::components::GlassPanel;
 use crate::gfx::render_types::LightUniforms;
 use crate::render::environment::water::motion::BodyMotion;
@@ -296,7 +297,7 @@ impl WaterSeaFaceGpu {
 
 /// Where a planet sea lies and how its grid is laid on it. Matches
 /// `WaterSea` in `shaders/water.hlsl`; zero for a rectangle, which never
-/// reads it. 2064 bytes.
+/// reads it. 2096 bytes.
 #[derive(Copy, Clone, Default, Debug, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct WaterSeaGpu {
@@ -320,6 +321,8 @@ pub struct WaterSeaGpu {
     pub faces: [WaterSeaFaceGpu; SEA_FACES],
     /// The waves at its shores.
     pub shore: WaterShoreGpu,
+    /// Where its wake lies; zero while none runs.
+    pub wake: WaterWakeGpu,
 }
 
 impl WaterSeaGpu {
@@ -337,6 +340,7 @@ impl WaterSeaGpu {
             wind_map,
             faces: motion.faces.each_ref().map(WaterSeaFaceGpu::from_motion),
             shore: WaterShoreGpu::default(),
+            wake: WaterWakeGpu::default(),
         }
     }
 }
@@ -345,7 +349,7 @@ impl WaterSeaGpu {
 /// frame: the anchor, the wave phases, the ripple offsets and the ocean tile
 /// offsets move with time and the camera (see [`WaterParams::advance`]). The
 /// vec3-ish fields are `[f32; 4]` so the layout is byte-identical to the
-/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 3200
+/// shader's `float4`. Matches `WaterParams` in `shaders/water.hlsl`. 3232
 /// bytes.
 #[derive(Copy, Clone, Debug, bytemuck::NoUninit)]
 #[repr(C)]
@@ -650,7 +654,7 @@ mod tests {
     // two 16-byte rows.
     #[test]
     fn water_params_layout_matches_shader() {
-        assert_eq!(size_of::<WaterParams>(), 3200);
+        assert_eq!(size_of::<WaterParams>(), 3232);
         assert_eq!(offset_of!(WaterParams, anchor), 0);
         assert_eq!(offset_of!(WaterParams, deep_color), 16);
         assert_eq!(offset_of!(WaterParams, shallow_color), 32);
@@ -672,7 +676,7 @@ mod tests {
         assert_eq!(offset_of!(WaterParams, grid), 1056);
         assert_eq!(offset_of!(WaterParams, ocean), 1072);
         assert_eq!(offset_of!(WaterParams, sea), 1136);
-        assert_eq!(size_of::<WaterSeaGpu>(), 2064);
+        assert_eq!(size_of::<WaterSeaGpu>(), 2096);
         assert_eq!(offset_of!(WaterSeaGpu, up), 0);
         assert_eq!(offset_of!(WaterSeaGpu, tangent_u), 16);
         assert_eq!(offset_of!(WaterSeaGpu, tangent_v), 32);
@@ -680,6 +684,7 @@ mod tests {
         assert_eq!(offset_of!(WaterSeaGpu, wind_map), 64);
         assert_eq!(offset_of!(WaterSeaGpu, faces), 96);
         assert_eq!(offset_of!(WaterSeaGpu, shore), 480);
+        assert_eq!(offset_of!(WaterSeaGpu, wake), 2064);
         assert_eq!(size_of::<WaterSeaFaceGpu>(), 128);
         assert_eq!(offset_of!(WaterSeaFaceGpu, rows), 0);
         assert_eq!(offset_of!(WaterSeaFaceGpu, warp), 48);
@@ -712,6 +717,7 @@ mod tests {
                 OceanQuality {
                     size: 256,
                     cascades,
+                    ..OceanQuality::FULL
                 },
             ),
             first_layer: 3,

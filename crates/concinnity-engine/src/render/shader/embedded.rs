@@ -106,6 +106,7 @@ embed_shaders! {
     VIEW_UNIFORMS => "view_uniforms.hlsl",
     WATER => "water.hlsl",
     WATER_FFT => "water_fft.hlsl",
+    WATER_WAKE => "water_wake.hlsl",
     WIND => "wind.hlsl",
 }
 

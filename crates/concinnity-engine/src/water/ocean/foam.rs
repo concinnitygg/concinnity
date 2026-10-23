@@ -331,6 +331,7 @@ mod tests {
         let quality = OceanQuality {
             size: 128,
             cascades: 2,
+            ..OceanQuality::FULL
         };
         let cascades = Cascades::new(s.shape().unwrap().peak_wavelength(), quality);
         let calibration = FoamCalibration::new(&s, &cascades);

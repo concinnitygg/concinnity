@@ -422,3 +422,36 @@ fn a_held_body_over_water_reads_afloat() {
     assert!(f.floater.afloat());
     assert_eq!(f.sim.body_pose_quat(f.body).unwrap().0, [0.0; 3]);
 }
+
+// A floating body reports each piece's stir: as much water as it holds
+// under, where it is, and nothing once it is out of the water. A held body
+// reports too, so a carried one stirs the water it crosses.
+#[test]
+fn the_stir_reports_the_water_held_under() {
+    let r = 0.5;
+    let mut f = Float::new(
+        ColliderShape::Ball { radius: r },
+        250.0,
+        [0.0, 0.5, 0.0],
+        pond(Vec::new()),
+    );
+    f.run(12.0, TICK);
+    let stir = f.floater.stir();
+    assert_eq!(stir.len(), 1);
+    let under = 0.25 * samples::ball_volume(r);
+    // Read at the last tick's start, a hair before the settled pose.
+    assert!((stir[0].volume - under).abs() < 0.03 * under, "{stir:?}");
+    assert!((stir[0].radius - r).abs() < 1e-5);
+    let p = f.state().position;
+    assert!((0..3).all(|i| (stir[0].at[i] - p[i]).abs() < 0.01), "{p:?}");
+
+    f.sim.make_kinematic(f.body);
+    f.sim.teleport_body(f.body, [3.0, 5.0, 0.0], [0.0; 3]);
+    f.run(TICK, TICK);
+    assert_eq!(f.floater.stir()[0].volume, 0.0);
+    assert_eq!(f.floater.stir()[0].at, [3.0, 5.0, 0.0]);
+    f.sim.teleport_body(f.body, [3.0, 0.0, 0.0], [0.0; 3]);
+    f.run(TICK, TICK);
+    let half = 0.5 * samples::ball_volume(r);
+    assert!((f.floater.stir()[0].volume - half).abs() < 0.01 * half);
+}

@@ -35,6 +35,7 @@ use crate::sky::SkyRotationSystem;
 use crate::spawn::SpawnSystem;
 use crate::story::{StoryStore, StorySystem};
 use crate::ui::UiInputSystem;
+use crate::water::spray::WaterSpraySystem;
 use concinnity_core::fanout::{FanOut, Inline, Lent};
 
 /// What a host lends this crate's systems when their gates build them: always
@@ -162,6 +163,16 @@ impl<H: SystemHost> CoreSystems<H> {
         gate: |world| boxed(PhysicsSystem::for_world(world).map(|s| s.with_pool(H::POOL))),
         after: &["OverlaySystem"],
         before: &["Camera3DSystem", "ThirdPersonSystem"],
+    };
+
+    /// The spray floating bodies throw, once the physics has stepped them.
+    pub const WATER_SPRAY: SystemEntry = SystemEntry {
+        name: "WaterSpraySystem",
+        present_when: "a WaterSurface names a spray emitter",
+        phase: Phase::Late,
+        gate: |world| boxed(WaterSpraySystem::for_world(world)),
+        after: &["PhysicsSystem"],
+        before: &[],
     };
 
     /// The fly / walk camera controller.
@@ -369,6 +380,7 @@ impl<H: SystemHost> CoreSystems<H> {
         Self::PLANET,
         Self::BEHAVIOR,
         Self::PHYSICS,
+        Self::WATER_SPRAY,
         Self::CAMERA3D,
         Self::THIRD_PERSON,
         Self::CAMERA_TRACK,

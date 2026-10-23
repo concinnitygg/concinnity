@@ -27,6 +27,7 @@ use crate::planet::{
     FrameRebases, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround, RebaseCursor,
 };
 use crate::water::query::WaterQuery;
+use crate::water::stir::WaterStirs;
 use crate::wind::WindField;
 use concinnity_core::math::vec3::{add, normalize_or, scale, sub};
 use concinnity_core::math::{cos, sin, sqrt};
@@ -782,8 +783,13 @@ impl System for PhysicsSystem {
             }
             self.props.drive_posed(world, tick, timing.ticks);
             let north = frame.dir_to_local([0.0, 0.0, -1.0]);
-            self.drives
-                .tick(world, ctx, &self.props, timing.tick_start(tick), north);
+            self.drives.tick(
+                world,
+                ctx,
+                &self.props,
+                (timing.tick_start(tick), dt),
+                north,
+            );
 
             // move the player capsule
             if let Some(player) = self.player.as_mut() {
@@ -854,6 +860,9 @@ impl System for PhysicsSystem {
         }
 
         self.drives.publish(ctx, &self.props);
+        if self.water.is_some() {
+            publish_stirs(ctx, &self.props);
+        }
 
         // answer the IK ground probes and the follow camera's occlusion probe
         super::probes::step_probes(
@@ -964,6 +973,17 @@ impl System for PhysicsSystem {
         super::rig::publish_rigs(ctx, &mut self.rigs, alpha);
 
         StepResult::Continue
+    }
+}
+
+// What the floating bodies push aside after the frame's ticks, for the water's
+// wake.
+fn publish_stirs(ctx: &mut PipelineContext<'_>, props: &PropBodies) {
+    if ctx.resource::<WaterStirs>().is_none() {
+        ctx.insert_resource(WaterStirs::default());
+    }
+    if let Some(stirs) = ctx.resource_mut::<WaterStirs>() {
+        props.stirs_into(&mut stirs.0);
     }
 }
 

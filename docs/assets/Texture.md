@@ -12,7 +12,7 @@ Use the `generator` field for built-in patterns or supply a `source` file path.
 
 ## Parameters
 
-- `generator`: A string. Procedural generator name. Empty or omitted means use `source` instead. Defaults to `""`.
+- `generator`: A string. Procedural generator name. Empty or omitted means use `source` instead. `puff` is a soft white disc fading to clear at its rim, for particle sprites. Defaults to `""`.
 - `source`: A string. Path to the source image, relative to the project root. Used only when `generator` is empty. A `.glb` path is allowed, use `image_index` to pick which embedded image to use. Defaults to `""`.
 - `image_index`: An integer. When `source` points to a `.glb` file, which embedded image to import. Ignored for regular image files. Defaults to `0`.
 - `resolution`: An integer. Resolution hint for procedural generators (width = height). Defaults to 512. Ignored for file-backed textures.

@@ -228,6 +228,8 @@ mod tests {
             history_reset,
             rebase: None,
             grass_benders: &[],
+            water_stirs: &[],
+            particle_bursts: &[],
             atmosphere: None,
             daylight: &crate::render::uniforms::DaylightBlock::OFF,
             sunlight: 3.0,

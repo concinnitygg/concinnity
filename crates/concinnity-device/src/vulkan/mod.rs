@@ -68,6 +68,7 @@ mod transparent;
 mod upload_ring;
 mod water;
 mod water_sim;
+mod water_wake;
 mod window;
 mod wire_cache;
 mod wireframe;

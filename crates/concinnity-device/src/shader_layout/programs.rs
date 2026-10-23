@@ -219,6 +219,11 @@ pub(super) static WATER_FFT_ROWS: Program = Program {
     splices: &[],
 };
 
+pub(super) static WATER_WAKE_ROWS: Program = Program {
+    row: &shared::WATER_WAKE_ROWS,
+    splices: &[],
+};
+
 pub(super) static GRASS_BEND: Program = Program {
     row: &shared::GRASS_BEND,
     splices: &[],

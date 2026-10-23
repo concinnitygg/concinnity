@@ -18,7 +18,7 @@ use concinnity_core::math::{cos, sin};
 ///
 /// ```rust
 /// # use concinnity_engine::components::DriveKey;
-/// DriveKey { seconds: 3.0, heading_deg: 90.0, throttle: 1.0, sprint: true, jump: false };
+/// DriveKey { seconds: 3.0, heading_deg: 90.0, throttle: 1.0, sprint: true, jump: false, pace: 0.0 };
 /// ```
 #[derive(
     Debug,
@@ -43,6 +43,12 @@ pub struct DriveKey {
     pub sprint: bool,
     /// Jump as the key takes over, if the body is on the ground.
     pub jump: bool,
+    /// A speed to tow the body at along the heading, in meters per second,
+    /// in place of the drive: the body is pulled along the ground toward it,
+    /// gaining it at a steady rate, however the drive could move it, while
+    /// what holds it up (the ground, the water) still does. 0 leaves it to
+    /// the drive.
+    pub pace: f32,
 }
 
 /// A rolling drive's steering, scripted on the simulation clock.

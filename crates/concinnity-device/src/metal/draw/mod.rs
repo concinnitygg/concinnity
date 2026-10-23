@@ -98,6 +98,7 @@ impl FrameDevice for MtlContext {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_water(rebase);
+            self.particle.system.rebase(rebase);
         }
         Ok(())
     }
@@ -198,6 +199,8 @@ impl FrameDevice for MtlContext {
             lines,
             world_hidden,
             grass_benders,
+            water_stirs,
+            particle_bursts,
             atmosphere,
             input_sampled_us,
             ..
@@ -242,6 +245,7 @@ impl FrameDevice for MtlContext {
         } = self.scene_textures()?;
 
         self.prepare_atmosphere(atmosphere, plan.atmosphere);
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
 
         // This frame's ribbon geometry, written into this slot's persistent
         // vertex buffer up front for the same reason the text geometry is: the
@@ -294,6 +298,7 @@ impl FrameDevice for MtlContext {
 
         let params = GraphFrameParams {
             cmd_buf: &cmd_buf,
+            particle_bursts,
             cam_pos,
             skinned_joint_bufs: &skinned_joint_bufs,
             skinned_morph_weight_bufs: &skinned_morph_weight_bufs,

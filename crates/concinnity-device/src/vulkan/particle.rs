@@ -26,7 +26,10 @@ use concinnity_core::math::saturating_u32;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::ParticleParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleFrame, ParticleSystem};
+use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
+use concinnity_engine::render::particles::{
+    ParticleBurst, ParticleEmitterRecord, ParticleFrame, ParticleSystem,
+};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::uniforms::{GpuParticle, ParticleView};
 
@@ -131,6 +134,10 @@ pub(in crate::vulkan) struct ParticleResources {
     pub(in crate::vulkan) compute_pipeline_layout: OwnedPipelineLayout,
     // set 0: the pool SSBO per emitter.
     pub(in crate::vulkan) compute_set_layout: OwnedSetLayout,
+    // set 1: the frame's rows, one buffer and set per frame slot.
+    _rows_set_layout: OwnedSetLayout,
+    rows: Vec<PooledBuffer>,
+    rows_sets: Vec<vk::DescriptorSet>,
 
     // Render passes: the particle.hlsl billboard pair over the scene and the
     // reactive mask, one per way the frame treats the mask.
@@ -225,10 +232,14 @@ impl ParticleResources {
             create_render_pass(device, HDR_FORMAT, mask)
         })?;
         let compute_set_layout = create_descriptor_set_layout(device, &compute_set_bindings())?;
+        let rows_set_layout = create_descriptor_set_layout(device, &rows_set_bindings())?;
         let view_set_layout = create_descriptor_set_layout(device, &view_set_bindings())?;
         let emitter_set_layout = create_descriptor_set_layout(device, &emitter_set_bindings())?;
-        let compute_pipeline_layout =
-            create_compute_pipeline_layout(device, compute_set_layout.handle())?;
+        let compute_pipeline_layout = create_compute_pipeline_layout(
+            device,
+            compute_set_layout.handle(),
+            rows_set_layout.handle(),
+        )?;
         let render_pipeline_layout = create_render_pipeline_layout(
             device,
             view_set_layout.handle(),
@@ -276,6 +287,26 @@ impl ParticleResources {
                 .apply(device);
         }
 
+        // Per-frame rows (HOST_VISIBLE | HOST_COHERENT, persistently mapped)
+        // and the set each frame's simulation binds them through.
+        let rows_bytes = (PARTICLE_FRAME_ROWS * size_of::<[f32; 4]>()) as u64;
+        let rows = (0..frames)
+            .map(|_| {
+                alloc.create_buffer(
+                    rows_bytes,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )
+            })
+            .collect::<RenderResult<Vec<_>>>()?;
+        let rows_layouts: Vec<_> = (0..frames).map(|_| rows_set_layout.handle()).collect();
+        let rows_sets = alloc_descriptor_sets(device, descriptor_pool.handle(), &rows_layouts)?;
+        for (set, buffer) in rows_sets.iter().zip(&rows) {
+            SetWrites::new(*set)
+                .storage_buffer(0, buffer.buffer(), rows_bytes)
+                .apply(device);
+        }
+
         let framebuffers =
             create_framebuffers(device, render_passes.compatible(), &targets, frames)?;
 
@@ -283,6 +314,9 @@ impl ParticleResources {
             compute_pipeline,
             compute_pipeline_layout,
             compute_set_layout,
+            _rows_set_layout: rows_set_layout,
+            rows,
+            rows_sets,
             render_passes,
             render_pipeline,
             render_pipeline_layout,
@@ -517,6 +551,15 @@ fn create_render_pass(
 }
 
 // Compute set 0: the pool SSBO.
+// Compute set 1, per frame: the frame's rows.
+fn rows_set_bindings() -> [Binding; 1] {
+    [(
+        0,
+        vk::DescriptorType::STORAGE_BUFFER,
+        vk::ShaderStageFlags::COMPUTE,
+    )]
+}
+
 fn compute_set_bindings() -> [Binding; 1] {
     [(
         0,
@@ -558,12 +601,13 @@ const _: () = assert!(PARTICLE_PUSH_BYTES <= 128);
 fn create_compute_pipeline_layout(
     device: &VkDevice,
     compute_set_layout: vk::DescriptorSetLayout,
+    rows_set_layout: vk::DescriptorSetLayout,
 ) -> RenderResult<OwnedPipelineLayout> {
     let push_range = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
         .size(PARTICLE_PUSH_BYTES);
-    let set_layouts = [compute_set_layout];
+    let set_layouts = [compute_set_layout, rows_set_layout];
     let info = vk::PipelineLayoutCreateInfo::default()
         .set_layouts(&set_layouts)
         .push_constant_ranges(std::slice::from_ref(&push_range));
@@ -593,14 +637,16 @@ fn create_render_pipeline_layout(
 fn create_descriptor_pool(device: &VkDevice, frames: usize) -> RenderResult<OwnedDescriptorPool> {
     let frames = u32::saturating_from(frames);
     let max_emitters = u32::saturating_from(MAX_EMITTERS);
-    // One view set per frame slot, one compute + one render set per emitter.
+    // One view and one rows set per frame slot, one compute + one render set
+    // per emitter.
     let sizes = PoolSizes::default()
         .sets(&view_set_bindings(), frames)
+        .sets(&rows_set_bindings(), frames)
         .sets(&compute_set_bindings(), max_emitters)
         .sets(&emitter_set_bindings(), max_emitters)
         .build();
     let info = vk::DescriptorPoolCreateInfo::default()
-        .max_sets(frames + 2 * max_emitters)
+        .max_sets(2 * frames + 2 * max_emitters)
         .pool_sizes(&sizes);
     device
         .create_descriptor_pool(&info)
@@ -690,9 +736,15 @@ impl VkContext {
     pub(in crate::vulkan) fn prepare_particle_pass(
         &mut self,
         elapsed: f32,
+        bursts: &[ParticleBurst],
+        frame_idx: usize,
     ) -> Option<ParticleFrame> {
-        self.particle.resources.as_ref()?;
-        self.particle.system.prepare(elapsed)
+        let resources = self.particle.resources.as_ref()?;
+        let frame = self.particle.system.prepare(elapsed, bursts)?;
+        if let Some(rows) = resources.rows.get(frame_idx) {
+            rows.write_slice(0, self.particle.system.rows());
+        }
+        Some(frame)
     }
 
     // Encode the `ParticlesSim` node: dispatch the simulation kernel over each
@@ -709,6 +761,7 @@ impl VkContext {
     pub(in crate::vulkan) fn encode_particles_sim(
         &self,
         cmd: vk::CommandBuffer,
+        frame_idx: usize,
         frame: ParticleFrame,
     ) {
         let Some(resources) = self.particle.resources.as_ref() else {
@@ -728,6 +781,21 @@ impl VkContext {
                 cmd,
                 vk::PipelineBindPoint::COMPUTE,
                 resources.compute_pipeline.handle(),
+            );
+        }
+        let Some(&rows_set) = resources.rows_sets.get(frame_idx) else {
+            return;
+        };
+        // SAFETY: `cmd` is recording, and the frame's rows set is owned by `resources` and
+        // matches set 1 of the compute layout.
+        unsafe {
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                resources.compute_pipeline_layout.handle(),
+                1,
+                std::slice::from_ref(&rows_set),
+                &[],
             );
         }
         for emitter in self.particle.system.emitters(&frame) {

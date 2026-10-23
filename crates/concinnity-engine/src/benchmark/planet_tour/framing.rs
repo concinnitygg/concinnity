@@ -82,8 +82,10 @@ const SKIM: [Shot; 8] = [
 ];
 
 // The same through the grass while the subject rolls itself, up over the
-// beach as it comes down to the water, and looking down on it as it floats.
-const ROLL: [Shot; 10] = [
+// beach as it comes down to the water, looking down on it as it floats, high
+// behind it as it is towed up to speed so its wake spreads below, and low at
+// its side for the spray off its bow.
+const ROLL: [Shot; 13] = [
     shot("settle", 0.0, 0.0, -4.0, 3.2, [0.0, -6.0]),
     shot("roll", 0.0, 0.0, -4.0, 3.0, [0.0, -6.0]),
     shot("roll", 4.0, -75.0, -5.0, 3.6, [8.0, -5.0]),
@@ -94,6 +96,9 @@ const ROLL: [Shot; 10] = [
     shot("roll", -3.0, -35.0, -13.0, 4.6, [8.0, 3.0]),
     shot("float", 1.0, 10.0, -16.0, 5.0, [10.0, 4.0]),
     shot("float", -1.0, 10.0, -16.0, 5.0, [10.0, 4.0]),
+    shot("wake", 1.5, 8.0, -22.0, 9.0, [0.0, 8.0]),
+    shot("wake", 4.0, 8.0, -22.0, 9.0, [0.0, 8.0]),
+    shot("wake", -1.5, -55.0, -14.0, 6.5, [6.0, -2.0]),
 ];
 
 // Out to sea behind the subject, up past it at the sun, round to face the

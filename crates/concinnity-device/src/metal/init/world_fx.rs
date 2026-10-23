@@ -167,7 +167,11 @@ pub(super) fn build_particles(
     let pipelines = if particles.is_empty() {
         None
     } else {
-        Some(build_particle_pipelines(device, gpu.hot_reload)?)
+        Some(build_particle_pipelines(
+            device,
+            gpu.hot_reload,
+            gpu.frames_in_flight + 1,
+        )?)
     };
     for rec in particles {
         let state = build_emitter_gpu_state(device, &rec)?;
@@ -175,7 +179,11 @@ pub(super) fn build_particles(
             .insert(rec, state)
             .map_err(|_| RenderError::Other("particles: no free emitter slot".into()))?;
     }
-    Ok(ParticleState { system, pipelines })
+    Ok(ParticleState {
+        system,
+        pipelines,
+        rows_slot: 0,
+    })
 }
 
 // Planar reflection slots: group every flat reflector (water surfaces + glass
@@ -258,6 +266,8 @@ pub(super) fn build_water(
         sea,
         surfaces,
         ocean,
+        wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
+        wake_frame: None,
     })
 }
 

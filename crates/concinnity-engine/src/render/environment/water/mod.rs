@@ -5,6 +5,7 @@
 pub mod frame;
 pub mod motion;
 pub mod sea;
+pub mod wake;
 
 #[cfg(test)]
 pub(crate) mod fields;

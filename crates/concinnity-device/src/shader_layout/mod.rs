@@ -350,6 +350,11 @@ fn water_fft_layouts_match_the_shader() {
 }
 
 #[test]
+fn water_wake_layouts_match_the_shader() {
+    check(&programs::WATER_WAKE_ROWS, &mirrors::geometry::water_wake());
+}
+
+#[test]
 fn grass_bend_layouts_match_the_shader() {
     check(&programs::GRASS_BEND, &mirrors::geometry::grass_bend());
 }

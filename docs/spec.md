@@ -1169,24 +1169,25 @@ registry.
 | 4   | Planet              | Early      | The world declares a `Planet`.                                                                                        |
 | 5   | Behavior            | Logic      | The world declares any `Behavior`.                                                                                    |
 | 6   | Physics             | Late       | The world declares a `PhysicsConfig`, `RigidBody`, `PropBody`, or `TriggerVolume`, or a skinned mesh bakes a capsule. |
-| 7   | First-person camera | Late       | The first controlled `Camera3D` has no follow block.                                                                  |
-| 8   | Third-person camera | Late       | The first controlled `Camera3D` has a follow block.                                                                   |
-| 9   | Camera track        | Late       | The world declares a `CameraTrack` and the `Camera3D` it drives.                                                      |
-| 10  | Animation           | Late       | The world declares any `Animation` or `AnimationGraph`.                                                               |
-| 11  | Story               | Late       | The world declares a `Story`.                                                                                         |
-| 12  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
-| 13  | Screenshot          | Late       | The launch has a `--screenshot-at`, or takes the world's shots and the world declares a `Screenshot`.                 |
-| 14  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
-| 15  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
-| 16  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
-| 17  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
-| 18  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
-| 19  | Settings            | PreRender  | The world runs with a window.                                                                                         |
-| 20  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
-| 21  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
-| 22  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
-| 23  | Graphics            | PostRender | The world runs with a window.                                                                                         |
-| 24  | Frame report        | PostRender | The run is benchmarked (`--benchmark`).                                                                               |
+| 7   | Water spray         | Late       | A `WaterSurface` names a `spray` emitter.                                                                             |
+| 8   | First-person camera | Late       | The first controlled `Camera3D` has no follow block.                                                                  |
+| 9   | Third-person camera | Late       | The first controlled `Camera3D` has a follow block.                                                                   |
+| 10  | Camera track        | Late       | The world declares a `CameraTrack` and the `Camera3D` it drives.                                                      |
+| 11  | Animation           | Late       | The world declares any `Animation` or `AnimationGraph`.                                                               |
+| 12  | Story               | Late       | The world declares a `Story`.                                                                                         |
+| 13  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
+| 14  | Screenshot          | Late       | The launch has a `--screenshot-at`, or takes the world's shots and the world declares a `Screenshot`.                 |
+| 15  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
+| 16  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
+| 17  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
+| 18  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
+| 19  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
+| 20  | Settings            | PreRender  | The world runs with a window.                                                                                         |
+| 21  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
+| 22  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
+| 23  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
+| 24  | Graphics            | PostRender | The world runs with a window.                                                                                         |
+| 25  | Frame report        | PostRender | The run is benchmarked (`--benchmark`).                                                                               |
 
 Key ordering constraints:
 
@@ -2863,31 +2864,31 @@ _Timing-only_ identities time work recorded inside another graph node.
 | 4   | `ssao_blur`            | render      | Depth-aware blur; the graph node for the whole SSAO bundle.                                                 |
 | 5   | `main`                 | render      | Lit forward pass; writes HDR color and depth, then draws the sky.                                           |
 | 6   | `auto_exposure`        | compute     | Luminance histogram and reduction over the undecorated scene.                                               |
-| 7   | `decals`               | render      | Deferred box decals.                                                                                        |
-| 8   | `fog`                  | render      | Fullscreen application of the froxel volume.                                                                |
-| 9   | `particles_sim`        | compute     | Particle aging, integration, and ring spawns. Async-eligible.                                                |
-| 10  | `particles_draw`       | render      | Billboard particles blended into the HDR target.                                                            |
-| 11  | `ssr_resolve`          | render      | Screen-space reflection march and composite.                                                                |
-| 12  | `taa_resolve`          | render      | Temporal accumulation.                                                                                      |
-| 13  | `bloom`                | render      | Prefilter, downsample, and upsample chain.                                                                  |
-| 14  | `composite`            | render      | Tonemap or HDR encode, grade, overlay UI, present.                                                          |
-| 15  | `fog_froxel`           | compute     | Froxel scattering and transmittance volume.                                                                 |
-| 16  | `upscale`              | compute     | Temporal upscaling from render to output resolution. Replaces TAA.                                         |
-| 17  | `transparent`          | render      | Back-to-front glass and water, after reflections and before temporal resolve.                              |
-| 18  | `raymarch`             | render      | Sphere-traced SDF volumes; writes color and depth.                                                          |
-| 19  | `hiz_build`            | compute     | Mid-frame Hi-Z rebuild from phase-1 depth.                                                                  |
-| 20  | `cull2`                | compute     | Phase-2 re-test of phase-1-occluded objects.                                                                |
-| 21  | `main2`                | render      | Phase-2 draw of the disoccluded survivors.                                                                  |
-| 22  | `ssgi`                 | render      | Screen-space GI: Hi-Z trace with in-trace temporal accumulation, then upsample and composite.               |
-| 23  | `rt_reflections`       | render      | Ray-traced reflections. Takes precedence over SSR.                                                          |
-| 24  | `gbuffer_prepass`      | render      | Normal, linear depth, roughness, and motion MRT plus depth; copies model history.                           |
-| 25  | `reflection_composite` | timing only | Roughness-aware blur and composite at the tail of the reflection pass.                                      |
-| 26  | `light_cull`           | compute     | Clustered light and probe binning.                                                                          |
-| 27  | `spot_shadow`          | render      | GPU-culled depth render of each shadowed spot cone into its array slice.                                    |
-| 28  | `lines`                | render      | Depth-tested world-space line ribbons.                                                                      |
-| 29  | `hiz_final`            | compute     | Terminal Hi-Z build from the frame's final depth, for the next frame's cull.                                |
-| 30  | `planar_reflection`    | render      | Mirrored, cropped re-render of the scene per reflector plane.                                               |
-| 31  | `sky`                  | timing only | The sky draw at the tail of the main pass (separately timed on DirectX 12 and Vulkan).                      |
+| 8   | `decals`               | render      | Deferred box decals.                                                                                        |
+| 9   | `fog`                  | render      | Fullscreen application of the froxel volume.                                                                |
+| 10  | `particles_sim`        | compute     | Particle aging, integration, and ring spawns. Async-eligible.                                                |
+| 11  | `particles_draw`       | render      | Billboard particles blended into the HDR target.                                                            |
+| 12  | `ssr_resolve`          | render      | Screen-space reflection march and composite.                                                                |
+| 13  | `taa_resolve`          | render      | Temporal accumulation.                                                                                      |
+| 14  | `bloom`                | render      | Prefilter, downsample, and upsample chain.                                                                  |
+| 15  | `composite`            | render      | Tonemap or HDR encode, grade, overlay UI, present.                                                          |
+| 16  | `fog_froxel`           | compute     | Froxel scattering and transmittance volume.                                                                 |
+| 17  | `upscale`              | compute     | Temporal upscaling from render to output resolution. Replaces TAA.                                         |
+| 18  | `transparent`          | render      | Back-to-front glass and water, after reflections and before temporal resolve.                              |
+| 19  | `raymarch`             | render      | Sphere-traced SDF volumes; writes color and depth.                                                          |
+| 20  | `hiz_build`            | compute     | Mid-frame Hi-Z rebuild from phase-1 depth.                                                                  |
+| 21  | `cull2`                | compute     | Phase-2 re-test of phase-1-occluded objects.                                                                |
+| 22  | `main2`                | render      | Phase-2 draw of the disoccluded survivors.                                                                  |
+| 23  | `ssgi`                 | render      | Screen-space GI: Hi-Z trace with in-trace temporal accumulation, then upsample and composite.               |
+| 24  | `rt_reflections`       | render      | Ray-traced reflections. Takes precedence over SSR.                                                          |
+| 25  | `gbuffer_prepass`      | render      | Normal, linear depth, roughness, and motion MRT plus depth; copies model history.                           |
+| 26  | `reflection_composite` | timing only | Roughness-aware blur and composite at the tail of the reflection pass.                                      |
+| 27  | `light_cull`           | compute     | Clustered light and probe binning.                                                                          |
+| 28  | `spot_shadow`          | render      | GPU-culled depth render of each shadowed spot cone into its array slice.                                    |
+| 29  | `lines`                | render      | Depth-tested world-space line ribbons.                                                                      |
+| 30  | `hiz_final`            | compute     | Terminal Hi-Z build from the frame's final depth, for the next frame's cull.                                |
+| 31  | `planar_reflection`    | render      | Mirrored, cropped re-render of the scene per reflector plane.                                               |
+| 32  | `sky`                  | timing only | The sky draw at the tail of the main pass (separately timed on DirectX 12 and Vulkan).                      |
 
 ---
 

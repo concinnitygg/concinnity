@@ -17,3 +17,4 @@ stays true however far the body rolls.
 - `throttle`: A float. How hard to drive, from 0 (coast) to 1. Defaults to `1.0`.
 - `sprint`: A boolean. Whether to sprint. Defaults to `false`.
 - `jump`: A boolean. Jump as the key takes over, if the body is on the ground. Defaults to `false`.
+- `pace`: A float. A speed to tow the body at along the heading, in meters per second, in place of the drive: the body is pulled along the ground toward it, gaining it at a steady rate, however the drive could move it, while what holds it up (the ground, the water) still does. 0 leaves it to the drive. Defaults to `0.0`.

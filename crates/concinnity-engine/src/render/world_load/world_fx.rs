@@ -48,9 +48,9 @@ pub fn drain_world_fx(
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
-    let emitters: Vec<ParticleEmitter> = ctx.drain::<ParticleEmitter>();
-    let particles =
-        particles::build_particle_records(&emitters.iter().collect::<Vec<_>>(), texture_count);
+    let emitters = ctx.drain_with_ids::<ParticleEmitter>();
+    let emitters: Vec<_> = emitters.iter().map(|(id, e)| (*id, e)).collect();
+    let particles = particles::build_particle_records(&emitters, texture_count);
     let glass_panels = ctx.drain::<GlassPanel>();
     let sdf_volumes = drain_sdf_volumes(ctx, name_of);
     // The first enabled fog wins: the fog pass models one homogeneous medium.

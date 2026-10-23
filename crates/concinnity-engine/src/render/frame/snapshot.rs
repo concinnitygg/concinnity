@@ -199,6 +199,10 @@ pub struct RenderSnapshot {
     pub scene_ops: Vec<SceneOp>,
     /// Everything that may be trampling grass this frame.
     pub grass_benders: Vec<crate::render::environment::grass::GrassBender>,
+    /// What the floating bodies push aside, for the water's wake.
+    pub water_stirs: Vec<crate::water::stir::WaterStir>,
+    /// The particle bursts systems asked for this frame.
+    pub particle_bursts: Vec<crate::render::particles::ParticleBurst>,
     /// Save the frame to this PNG path once it is presented.
     pub capture: Option<String>,
     /// Draw the frame without its overlay, for a screenshot without its HUD.
@@ -218,6 +222,8 @@ impl RenderSnapshot {
         self.lines.clear();
         self.scene_ops.clear();
         self.grass_benders.clear();
+        self.water_stirs.clear();
+        self.particle_bursts.clear();
         self.capture = None;
         self.hide_ui = false;
     }

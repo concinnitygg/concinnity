@@ -35,7 +35,7 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
     match generator {
         "checker" | "brick" | "concrete" | "grass" | "sky" | "wood" | "tile" | "metal"
-        | "terrain" | "stone" | "plaster" | "" => Ok(()),
+        | "terrain" | "stone" | "plaster" | "puff" | "" => Ok(()),
         other => Err(format!("unknown texture generator '{other}'")),
     }
 }
@@ -81,6 +81,7 @@ fn texture_image(
         "terrain" => rgba8_image(generate_terrain(tex.resolution)),
         "stone" => rgba8_image(generate_stone(tex.resolution)),
         "plaster" => rgba8_image(generate_plaster(tex.resolution)),
+        "puff" => rgba8_image(generate_puff(tex.resolution)),
         "" => {
             if tex.source.is_empty() {
                 return Err("file-backed Texture requires a `source` path".to_string());
@@ -880,6 +881,24 @@ fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
         }
     }
 
+    (size, size, pixels)
+}
+
+// A soft white puff for sprites: opaque in the middle, fading to clear at the
+// rim along `(1 - r^2)^2`, so a particle drawn with it reads as a droplet or a
+// wisp rather than a square.
+fn generate_puff(resolution: u32) -> (u32, u32, Vec<u8>) {
+    let size = resolution.max(8);
+    let half = size as f32 * 0.5;
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 + 0.5 - half) / half;
+            let dy = (y as f32 + 0.5 - half) / half;
+            let fade = (1.0 - (dx * dx + dy * dy)).max(0.0);
+            pixels.extend_from_slice(&[255, 255, 255, u8::saturating_from(255.0 * fade * fade)]);
+        }
+    }
     (size, size, pixels)
 }
 
@@ -1702,7 +1721,7 @@ mod tests {
     fn validate_texture_generator_known_generators_ok() {
         for name in &[
             "checker", "brick", "concrete", "grass", "sky", "wood", "tile", "metal", "terrain",
-            "stone", "plaster", "",
+            "stone", "plaster", "puff", "",
         ] {
             let args = serde_json::json!({"generator": name});
             assert!(
@@ -1775,6 +1794,18 @@ mod tests {
             avg_r > 55 && avg_r < 135,
             "expected dark gray, avg_r={avg_r}"
         );
+    }
+
+    // A puff is white throughout, solid at its middle and clear at its rim.
+    #[test]
+    fn generate_puff_fades_to_its_rim() {
+        let (w, h, px) = generate_puff(32);
+        assert_eq!((w, h), (32, 32));
+        let alpha = |x: u32, y: u32| px[((y * 32 + x) * 4 + 3) as usize];
+        assert!(alpha(16, 16) > 245);
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(16, 4) < alpha(16, 10));
+        assert!(px.chunks(4).all(|c| c[..3] == [255, 255, 255]));
     }
 
     #[test]

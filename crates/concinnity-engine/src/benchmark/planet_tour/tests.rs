@@ -101,19 +101,20 @@ fn the_sea_floors_the_path() {
     );
 }
 
-// A rolling subject rolls itself through a settle, a roll and a float before
-// the flight: its drive holds still, then sprints along the tour's heading,
-// and the tour picks it up as the sea phase opens. A skimming one has no
+// A rolling subject rolls itself through a settle, a roll, a float and a
+// wake before the flight: its drive holds still, sprints along the tour's
+// heading, then is towed at the wake's pace, and the tour picks it up as the
+// sea phase opens. A skimming one has no
 // drive and is carried from the start.
 #[test]
 fn a_rolling_subject_rolls_before_it_flies() {
     let tour = PlanetTour::default();
     let rolled = plan(&world(true), tour, 2.0, true).unwrap();
     let names: Vec<&str> = rolled.phases.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(&names[..4], ["settle", "roll", "float", "sea"]);
-    let sea: f32 = rolled.phases[..3].iter().map(|p| p.seconds).sum();
+    assert_eq!(&names[..5], ["settle", "roll", "float", "wake", "sea"]);
+    let sea: f32 = rolled.phases[..4].iter().map(|p| p.seconds).sum();
     assert_eq!(rolled.carry_from_seconds, sea);
-    assert_eq!(rolled.drive.len(), 2);
+    assert_eq!(rolled.drive.len(), 3);
     assert_eq!(
         (rolled.drive[0].seconds, rolled.drive[0].throttle),
         (0.0, 0.0)
@@ -121,17 +122,23 @@ fn a_rolling_subject_rolls_before_it_flies() {
     let roll = &rolled.drive[1];
     assert_eq!(roll.seconds, rolled.phases[0].seconds);
     assert!(roll.sprint && roll.throttle == 1.0 && roll.heading_deg == tour.heading_deg);
+    assert_eq!(roll.pace, 0.0);
+    let wake = &rolled.drive[2];
+    let wake_start: f32 = rolled.phases[..3].iter().map(|p| p.seconds).sum();
+    assert_eq!(wake.seconds, wake_start);
+    assert_eq!(f64::from(wake.pace), timetable::WAKE_SPEED);
+    assert_eq!(wake.heading_deg, tour.heading_deg);
     let skimmed = plan(&world(true), tour, 2.0, false).unwrap();
     assert!(skimmed.drive.is_empty() && skimmed.carry_from_seconds == 0.0);
     assert_eq!(skimmed.phases[1].name, "meadow");
     // The flight after the ground stretch is the same either way.
-    let flight = |p: &TourPlan| -> Vec<(String, f32)> {
-        p.phases[3..]
+    let flight = |p: &TourPlan, from: usize| -> Vec<(String, f32)> {
+        p.phases[from..]
             .iter()
             .map(|x| (x.name.clone(), x.seconds))
             .collect()
     };
-    assert_eq!(flight(&rolled), flight(&skimmed));
+    assert_eq!(flight(&rolled, 4), flight(&skimmed, 3));
 }
 
 // With no sea to float on, a rolling subject is picked up as its roll ends,
