@@ -390,3 +390,20 @@ fn the_foam_rides_in_and_slips_back() {
     // Shorter waves carry it less far.
     assert!(foam_drift(0.3, 2.0 * k) < foam_drift(0.3, k));
 }
+
+// No crest carries the surface farther than `max_shift`, anywhere across the
+// surf and out to sea, at any phase.
+#[test]
+fn the_shift_stays_within_its_bound() {
+    let s = shore();
+    let bound = s.max_shift();
+    let mut most = 0.0_f64;
+    for inland in [-300.0, -120.0, -40.0, -12.0, -4.0, -1.0] {
+        let p = s.point(inland, [1.0, 0.0, 0.0]);
+        for step in 0..800 {
+            let w = s.surface(&p, &calm(0.0), s.phases_at(f64::from(step) * 0.05));
+            most = most.max(dvec3::length(w.shift));
+        }
+    }
+    assert!(most > 0.0 && most <= bound, "{most} > {bound}");
+}

@@ -46,6 +46,14 @@ const SEA: WaterPrograms = WaterPrograms {
     frag_rt_textured: &super::builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
 };
 
+// A planet sea lit from its own sky, where it reaches.
+const SEA_DAYLIGHT: WaterPrograms = WaterPrograms {
+    vert: &super::builtin_shaders::WATER_SEA_VERT,
+    frag: &super::builtin_shaders::WATER_SEA_DAYLIGHT_FRAG,
+    frag_rt: &super::builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT,
+    frag_rt_textured: &super::builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+};
+
 // Compile a shape's vertex + fragment shaders, injecting the MSAA define so
 // the depth sampler type matches the main-depth resource's sample count.
 fn compile_water_shaders(
@@ -133,7 +141,12 @@ pub(in crate::vulkan) fn build_water_producer(
     let sea = surfaces
         .iter()
         .any(|b| b.sea.is_some())
-        .then(|| build_water_pipelines(&ctx, &SEA))
+        .then(|| -> RenderResult<_> {
+            Ok([
+                build_water_pipelines(&ctx, &SEA)?,
+                build_water_pipelines(&ctx, &SEA_DAYLIGHT)?,
+            ])
+        })
         .transpose()?;
 
     let mut records = Vec::with_capacity(surfaces.len());
@@ -238,7 +251,7 @@ mod tests {
     #[test]
     fn water_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for programs in [&super::RECTANGLE, &super::SEA] {
+        for programs in [&super::RECTANGLE, &super::SEA, &super::SEA_DAYLIGHT] {
             super::compile_water_shaders(programs, false, true).expect("water compiles (msaa)");
             super::compile_water_shaders(programs, false, false).expect("water compiles");
         }
@@ -256,6 +269,8 @@ mod tests {
             (&super::RECTANGLE, false),
             (&super::SEA, true),
             (&super::SEA, false),
+            (&super::SEA_DAYLIGHT, true),
+            (&super::SEA_DAYLIGHT, false),
         ] {
             let shaders = super::compile_water_rt_shaders(programs, false, msaa, 4)
                 .expect("water rt shaders compile");

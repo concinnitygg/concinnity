@@ -1126,7 +1126,7 @@ impl VkContext {
         // whose Shader is not resident is skipped, matching what the color pass
         // will draw.
         if prefix > 0 {
-            self.inc_draw_calls(self.draw_prepass_bucket_regions(cmd, indirect, prefix));
+            self.inc_draw_calls(self.draw_prepass_bucket_regions(cmd, indirect, frame_idx));
         }
 
         // Skinned tail: the current deformed VB (binding 0) + the previous-frame

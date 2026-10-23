@@ -32,17 +32,51 @@ pub const CANOPY_GATE: &str = "SURFACE_CANOPY";
 /// alone, for draws wholly nearer than their far band.
 pub const GROUND_GATE: &str = "SURFACE_GRASS_GROUND";
 
-/// What a main fragment shades of the grass a surface grows.
+/// The gate a grass fragment compiles under to light a planet's ground from
+/// its own sky where it lies far round the planet or the camera is high.
+pub const DAYLIGHT_GATE: &str = "SURFACE_DAYLIGHT";
+
+/// What a main fragment shades of the ground a surface grows grass on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GrassShading {
+pub enum SurfaceVariant {
     /// Nothing: the surface grows no grass.
     #[default]
-    None,
+    Plain,
     /// The ground under the grass (litter, patches, the leaf's shade), for a
     /// draw that cannot reach its far band.
     Ground,
+    /// [`Self::Ground`], lit from a planet's own sky.
+    GroundDaylight,
     /// The ground under the grass and the canopy past the blades.
     Canopy,
+    /// [`Self::Canopy`], lit from a planet's own sky.
+    CanopyDaylight,
+}
+
+impl SurfaceVariant {
+    /// Every variant, the plain one first.
+    pub const ALL: [Self; 5] = [
+        Self::Plain,
+        Self::Ground,
+        Self::GroundDaylight,
+        Self::Canopy,
+        Self::CanopyDaylight,
+    ];
+
+    /// Whether the fragment shades the ground under grass.
+    pub fn shades_ground(self) -> bool {
+        self != Self::Plain
+    }
+
+    /// Whether the fragment lights the ground from a planet's own sky.
+    pub fn daylight(self) -> bool {
+        matches!(self, Self::GroundDaylight | Self::CanopyDaylight)
+    }
+
+    /// Whether the fragment shades the canopy past the blades.
+    pub fn canopy(self) -> bool {
+        matches!(self, Self::Canopy | Self::CanopyDaylight)
+    }
 }
 
 /// One entry point of one main-pass file. The vertex entries carry the
@@ -75,12 +109,24 @@ pub const MAIN_FRAGMENT_CANOPY: Program = Program {
     entry: "fragment_main_bindless",
     gates: &[CANOPY_GATE],
 };
+/// [`MAIN_FRAGMENT_CANOPY`] lit from a planet's own sky.
+pub const MAIN_FRAGMENT_CANOPY_DAYLIGHT: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    gates: &[CANOPY_GATE, DAYLIGHT_GATE],
+};
 /// The bindless main-pass fragment entry that shades the ground under grass
 /// without the canopy.
 const MAIN_FRAGMENT_GROUND: Program = Program {
     file: "main_bindless.hlsl",
     entry: "fragment_main_bindless",
     gates: &[GROUND_GATE],
+};
+/// [`MAIN_FRAGMENT_GROUND`] lit from a planet's own sky.
+const MAIN_FRAGMENT_GROUND_DAYLIGHT: Program = Program {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    gates: &[GROUND_GATE, DAYLIGHT_GATE],
 };
 /// The G-buffer pre-pass vertex entry.
 pub const PREPASS_VERTEX: Program = Program {
@@ -96,22 +142,27 @@ pub const PREPASS_FRAGMENT: Program = Program {
 };
 
 /// Every program a world Shader compiles, on every host: the bindless main
-/// pair, the canopy and ground main fragments and the pre-pass pair.
+/// pair, the canopy and ground main fragments with and without a planet's own
+/// sky, and the pre-pass pair.
 pub const ALL: &[Program] = &[
     MAIN_VERTEX,
     MAIN_FRAGMENT,
     MAIN_FRAGMENT_CANOPY,
+    MAIN_FRAGMENT_CANOPY_DAYLIGHT,
     MAIN_FRAGMENT_GROUND,
+    MAIN_FRAGMENT_GROUND_DAYLIGHT,
     PREPASS_VERTEX,
     PREPASS_FRAGMENT,
 ];
 
-/// The main fragment that shades `grass`.
-pub fn main_fragment(grass: GrassShading) -> &'static Program {
-    match grass {
-        GrassShading::None => &MAIN_FRAGMENT,
-        GrassShading::Ground => &MAIN_FRAGMENT_GROUND,
-        GrassShading::Canopy => &MAIN_FRAGMENT_CANOPY,
+/// The main fragment that shades `variant`.
+pub fn main_fragment(variant: SurfaceVariant) -> &'static Program {
+    match variant {
+        SurfaceVariant::Plain => &MAIN_FRAGMENT,
+        SurfaceVariant::Ground => &MAIN_FRAGMENT_GROUND,
+        SurfaceVariant::GroundDaylight => &MAIN_FRAGMENT_GROUND_DAYLIGHT,
+        SurfaceVariant::Canopy => &MAIN_FRAGMENT_CANOPY,
+        SurfaceVariant::CanopyDaylight => &MAIN_FRAGMENT_CANOPY_DAYLIGHT,
     }
 }
 
@@ -230,7 +281,9 @@ mod tests {
                 ("vertex_main_bindless", &[][..]),
                 ("fragment_main_bindless", &[][..]),
                 ("fragment_main_bindless", &[CANOPY_GATE][..]),
+                ("fragment_main_bindless", &[CANOPY_GATE, DAYLIGHT_GATE][..]),
                 ("fragment_main_bindless", &[GROUND_GATE][..]),
+                ("fragment_main_bindless", &[GROUND_GATE, DAYLIGHT_GATE][..]),
                 ("vertex_prepass_bindless", &[PREPASS_GATE][..]),
                 ("fragment_prepass_bindless", &[PREPASS_GATE][..]),
             ]
@@ -251,38 +304,35 @@ mod tests {
         assert!(!main.contains("#define SURFACE_PREPASS"));
     }
 
-    // Each grass fragment carries its own gate alone, and differs from the
-    // plain fragment by that gate only.
+    // Each grass fragment carries its own gates alone, and differs from the
+    // plain fragment by those gates only.
     #[test]
-    fn each_grass_fragment_carries_only_its_gate() {
-        assert_eq!(main_fragment(GrassShading::None), &MAIN_FRAGMENT);
-        assert_eq!(main_fragment(GrassShading::Ground), &MAIN_FRAGMENT_GROUND);
-        assert_eq!(main_fragment(GrassShading::Canopy), &MAIN_FRAGMENT_CANOPY);
-        let plain = source(&MAIN_FRAGMENT, Platform::Metal, &fragment_only());
-        let canopy = source(&MAIN_FRAGMENT_CANOPY, Platform::Metal, &fragment_only());
-        let ground = source(&MAIN_FRAGMENT_GROUND, Platform::Metal, &fragment_only());
-        assert!(!plain.contains("#define SURFACE_CANOPY"));
-        assert!(!plain.contains("#define SURFACE_GRASS_GROUND"));
-        assert!(canopy.contains("#define SURFACE_CANOPY 1\n"));
-        assert!(!canopy.contains("#define SURFACE_GRASS_GROUND"));
-        assert!(ground.contains("#define SURFACE_GRASS_GROUND 1\n"));
-        assert!(!ground.contains("#define SURFACE_CANOPY"));
+    fn each_grass_fragment_carries_only_its_gates() {
         let body = |src: &str| -> Vec<String> {
             src.lines()
                 .filter(|l| !l.starts_with("#line ") && !l.starts_with("#define "))
                 .map(String::from)
                 .collect()
         };
-        assert_eq!(
-            body(&canopy),
-            body(&plain),
-            "the gate is the only difference"
-        );
-        assert_eq!(
-            body(&ground),
-            body(&plain),
-            "the gate is the only difference"
-        );
+        let plain = source(&MAIN_FRAGMENT, Platform::Metal, &fragment_only());
+        assert_eq!(main_fragment(SurfaceVariant::Plain), &MAIN_FRAGMENT);
+        for variant in SurfaceVariant::ALL {
+            let program = main_fragment(variant);
+            let src = source(program, Platform::Metal, &fragment_only());
+            for (gate, on) in [
+                (CANOPY_GATE, variant.canopy()),
+                (GROUND_GATE, variant.shades_ground() && !variant.canopy()),
+                (DAYLIGHT_GATE, variant.daylight()),
+            ] {
+                let define = alloc::format!("#define {gate} 1\n");
+                assert_eq!(src.contains(&define), on, "{variant:?} {gate}");
+            }
+            assert_eq!(
+                body(&src),
+                body(&plain),
+                "{variant:?}: the gates are the only difference"
+            );
+        }
     }
 
     #[test]

@@ -41,26 +41,20 @@ impl VkContext {
     }
 
     // The main pipeline a probe or planar face draws its one command stream
-    // under: the canopy twin's when the world has one, so a far band seen in a
-    // face keeps its canopy, else the default's.
+    // under: the default's fullest grass variant when the world has one, so a
+    // far band seen in a face keeps its canopy, else the default's.
     pub(in crate::vulkan) fn face_bindless_pipeline(
         &self,
     ) -> Option<&crate::vulkan::owned::OwnedPipeline> {
-        let twin = self
+        let superset = self
             .cull
             .world_pipelines
-            .canopy_twin()
-            .and_then(|twin| self.cull.world_pipelines.get(twin as usize));
-        match twin {
+            .superset_bucket()
+            .and_then(|bucket| self.cull.world_pipelines.get(bucket as usize));
+        match superset {
             Some(pipelines) => Some(&pipelines.main),
             None => self.cull.bindless_pipeline.as_ref(),
         }
-    }
-
-    // Byte offset of shader bucket `b`'s command region in an indirect buffer.
-    pub(in crate::vulkan) fn bucket_region_offset(&self, bucket: usize) -> vk::DeviceSize {
-        (bucket * self.cull.bucket_stride) as vk::DeviceSize
-            * vk::DeviceSize::from(INDIRECT_COMMAND_STRIDE)
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested

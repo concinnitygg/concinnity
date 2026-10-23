@@ -33,7 +33,7 @@ use crate::planet::{
 };
 use crate::water::ocean::MAX_OCEAN_CASCADES;
 use crate::water::ocean::cascades::Cascades;
-use crate::water::spectrum::{SeaShape, unit_hash};
+use crate::water::spectrum::{GRAVITY, SeaShape, unit_hash};
 use concinnity_core::math::noise::lcg_hash;
 use concinnity_core::math::{SaturatingFrom, dvec3};
 use core::f64::consts::TAU;
@@ -513,6 +513,18 @@ impl ShoreWaves {
             gradient: dvec3::scale(along, k / self.radius),
             swell: 1.0 + SWELL_VARIATION * (2.0 * swell - 1.0),
         }
+    }
+
+    /// The most a breaking crest carries the surface toward the land, in
+    /// meters: its pinch over the wavenumber, which shoaling only raises above
+    /// the slowest train's deep-water one.
+    pub fn max_shift(&self) -> f64 {
+        let slowest = self
+            .trains
+            .iter()
+            .map(|t| t.omega)
+            .fold(f64::INFINITY, f64::min);
+        MAX_PINCH * f64::from(GRAVITY) / (slowest * slowest)
     }
 
     /// The waves at `point`, its slow variation `noise`, the trains at

@@ -38,7 +38,7 @@ pub(super) fn build_two_pass_cull(
     bindless: &BindlessPass,
     compute: &ComputeCull,
     plan: &CullPlan,
-    shader_bucket_count: usize,
+    indirect_commands: usize,
     msaa_samples: vk::SampleCountFlags,
     occlusion_two_pass: bool,
 ) -> RenderResult<TwoPassCull> {
@@ -89,7 +89,7 @@ pub(super) fn build_two_pass_cull(
         // Bucket-expanded exactly like the phase-1 buffers: `Main2` issues the
         // same per-bucket regions over this buffer.
         let indirect_size =
-            shader_bucket_count as u64 * n * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+            indirect_commands.max(1) as u64 * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
         let status_size = n * size_of::<u32>() as u64;
 
         // Phase-2 cull pipeline (`main_phase2` entry, shared layout).
@@ -107,7 +107,7 @@ pub(super) fn build_two_pass_cull(
         }
 
         // Dedicated descriptor pool for the per-frame phase-2 cull sets
-        // (4 storage buffers each), kept off the shared pool's exact sizing.
+        // (5 storage buffers each), kept off the shared pool's exact sizing.
         let pool_sizes = PoolSizes::default()
             .sets(&main_cull_set(), n_frames)
             .build();
@@ -128,6 +128,11 @@ pub(super) fn build_two_pass_cull(
                 .storage_buffer(1, draw_args_buffers[i].buffer(), draw_args_size)
                 .storage_buffer(2, ind2_buffers[i].buffer(), indirect_size)
                 .storage_buffer(3, cull_status_buffers[i].buffer(), status_size)
+                .storage_buffer(
+                    4,
+                    compute.variant_buffers[i].buffer(),
+                    super::compute::VARIANT_BUFFER_BYTES,
+                )
                 .apply(device);
         }
 

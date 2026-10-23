@@ -76,6 +76,17 @@ pub(in crate::metal) struct TransparentDraw {
     // World-space distance from camera to the draw's center, used for the
     // back-to-front sort. Larger = farther = drawn first.
     pub(in crate::metal) sort_distance: f32,
+    // A second slice of the same buffers drawn right after under its own
+    // pipeline, in the scene pass only: a planet sea's inner rings, which
+    // shade without the planet's own sky.
+    pub(in crate::metal) then: Option<DrawSlice>,
+}
+
+// A slice of a draw's indices and the pipeline it draws under.
+pub(in crate::metal) struct DrawSlice {
+    pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub(in crate::metal) index_count: u32,
+    pub(in crate::metal) index_offset_bytes: usize,
 }
 
 // Copy a `#[repr(C)]` uniform struct into an owned byte buffer for a
@@ -145,21 +156,32 @@ fn encode_transparent_draw(
     for (slot, samp) in &d.fragment_samplers {
         enc.set_fragment_sampler(samp.as_ref(), *slot);
     }
+    draw_slice(enc, d, d.index_count, d.index_offset_bytes);
+    Ok(())
+}
+
+// Draw `index_count` of `d`'s indices from `index_offset_bytes` under the
+// bound pipeline and `d`'s bindings.
+fn draw_slice(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    d: &TransparentDraw,
+    index_count: u32,
+    index_offset_bytes: usize,
+) {
     // SAFETY: the index range is the record's own slice of `d.index_buffer`, which the record
     // keeps alive past the draw.
     unsafe {
         enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
             MTLPrimitiveType::Triangle,
-            d.index_count as usize,
+            index_count as usize,
             d.index_type,
             &d.index_buffer,
-            d.index_offset_bytes,
+            index_offset_bytes,
             1,
             d.base_vertex as isize,
             0,
         );
     }
-    Ok(())
 }
 
 impl MtlContext {
@@ -492,6 +514,10 @@ impl MtlContext {
 
         for &i in &order {
             encode_transparent_draw(&enc, &draws[i], &draws[i].pipeline)?;
+            if let Some(then) = &draws[i].then {
+                enc.set_pipeline(&then.pipeline);
+                draw_slice(&enc, &draws[i], then.index_count, then.index_offset_bytes);
+            }
         }
 
         Ok(u32::saturating_from(order.len()))

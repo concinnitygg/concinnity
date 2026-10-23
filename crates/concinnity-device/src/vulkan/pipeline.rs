@@ -4,7 +4,7 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::shader::programs::surface::{self, GrassShading};
+use concinnity_engine::render::shader::programs::surface::{self, SurfaceVariant};
 use concinnity_engine::render::shader::world_pipelines::BucketSource;
 use concinnity_engine::render::shadow::bias;
 
@@ -28,19 +28,25 @@ pub(super) struct BindlessSpv {
     pub frag: Vec<u8>,
     // The main fragment that shades a far band as canopy.
     pub canopy_frag: Vec<u8>,
+    // `canopy_frag` lit from a planet's own sky.
+    pub canopy_daylight_frag: Vec<u8>,
     // The main fragment that shades the ground under grass alone.
     pub ground_frag: Vec<u8>,
+    // `ground_frag` lit from a planet's own sky.
+    pub ground_daylight_frag: Vec<u8>,
     pub prepass_vert: Vec<u8>,
     pub prepass_frag: Vec<u8>,
 }
 
 impl BindlessSpv {
-    // The main fragment that shades `grass`.
-    pub(super) fn main_frag(&self, grass: GrassShading) -> &[u8] {
-        match grass {
-            GrassShading::None => &self.frag,
-            GrassShading::Ground => &self.ground_frag,
-            GrassShading::Canopy => &self.canopy_frag,
+    // The main fragment that shades `variant`.
+    pub(super) fn main_frag(&self, variant: SurfaceVariant) -> &[u8] {
+        match variant {
+            SurfaceVariant::Plain => &self.frag,
+            SurfaceVariant::Ground => &self.ground_frag,
+            SurfaceVariant::GroundDaylight => &self.ground_daylight_frag,
+            SurfaceVariant::Canopy => &self.canopy_frag,
+            SurfaceVariant::CanopyDaylight => &self.canopy_daylight_frag,
         }
     }
 }
@@ -51,14 +57,17 @@ impl BindlessSpv {
 // is the world's compiles the same file through `world_entry` instead.
 pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<BindlessSpv> {
     use super::builtin_shaders::{
-        MAIN_BINDLESS_CANOPY_FRAG, MAIN_BINDLESS_FRAG, MAIN_BINDLESS_GROUND_FRAG,
-        MAIN_BINDLESS_VERT, MAIN_PREPASS_FRAG, MAIN_PREPASS_VERT,
+        MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG, MAIN_BINDLESS_CANOPY_FRAG, MAIN_BINDLESS_FRAG,
+        MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG, MAIN_BINDLESS_GROUND_FRAG, MAIN_BINDLESS_VERT,
+        MAIN_PREPASS_FRAG, MAIN_PREPASS_VERT,
     };
     Ok(BindlessSpv {
         vert: MAIN_BINDLESS_VERT.compile(hot_reload)?,
         frag: MAIN_BINDLESS_FRAG.compile(hot_reload)?,
         canopy_frag: MAIN_BINDLESS_CANOPY_FRAG.compile(hot_reload)?,
+        canopy_daylight_frag: MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG.compile(hot_reload)?,
         ground_frag: MAIN_BINDLESS_GROUND_FRAG.compile(hot_reload)?,
+        ground_daylight_frag: MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG.compile(hot_reload)?,
         prepass_vert: MAIN_PREPASS_VERT.compile(hot_reload)?,
         prepass_frag: MAIN_PREPASS_FRAG.compile(hot_reload)?,
     })
@@ -297,8 +306,8 @@ pub(super) struct BucketPipelines {
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
     pub programs: Option<concinnity_engine::components::ShaderPrograms>,
-    // What of the grass the main fragment shades.
-    pub grass: GrassShading,
+    // Which of its Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
 // What a bucket's pre-pass pipeline is built against: the G-buffer's render
@@ -339,9 +348,9 @@ pub(super) fn build_bucket_pipeline(
     engine_default: &BindlessSpv,
 ) -> RenderResult<BucketPipelines> {
     if let Some(programs) = source.programs {
-        build_world_shader_pipeline(device, targets, bucket, programs, source.grass)
+        build_world_shader_pipeline(device, targets, bucket, programs, source.variant)
     } else {
-        let frag = engine_default.main_frag(source.grass);
+        let frag = engine_default.main_frag(source.variant);
         let main = create_bucket_main(device, targets, bucket, &engine_default.vert, frag)?;
         let prepass = targets.prepass.and_then(|prepass| {
             let stages = (
@@ -354,7 +363,7 @@ pub(super) fn build_bucket_pipeline(
             main,
             prepass,
             programs: None,
-            grass: source.grass,
+            variant: source.variant,
         })
     }
 }
@@ -367,10 +376,14 @@ pub(super) fn build_world_shader_pipeline(
     targets: BucketPipelineTargets,
     bucket: usize,
     programs: &concinnity_engine::components::ShaderPrograms,
-    grass: GrassShading,
+    variant: SurfaceVariant,
 ) -> RenderResult<BucketPipelines> {
     let vert = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
-    let frag = world_entry(programs, surface::main_fragment(grass), targets.hot_reload)?;
+    let frag = world_entry(
+        programs,
+        surface::main_fragment(variant),
+        targets.hot_reload,
+    )?;
     let main = create_bucket_main(device, targets, bucket, &vert, &frag)?;
     let prepass = targets.prepass.and_then(|prepass| {
         build_world_prepass(device, prepass, bucket, programs, targets.hot_reload)
@@ -379,7 +392,7 @@ pub(super) fn build_world_shader_pipeline(
         main,
         prepass,
         programs: Some(programs.clone()),
-        grass,
+        variant,
     })
 }
 

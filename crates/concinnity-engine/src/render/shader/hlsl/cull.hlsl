@@ -48,6 +48,12 @@ static const uint STATUS_CULLED        = 2u; // frustum/distance/disabled -> set
 static const uint STATUS_REDRAW        = 3u; // candidate found visible in phase 2
 static const uint STATUS_HIZ_CULLED    = 4u; // candidate still occluded in phase 2
 
+// Phase 1 keeps the outcome in a status word's low byte and the record's
+// shader bucket in the byte above, so phase 2 and Metal's encode kernel draw
+// the record where phase 1 routed it. Locked to gfx::cull_status.
+static const uint CULL_OUTCOME_MASK = 0xFFu;
+static const uint CULL_BUCKET_SHIFT = 8u;
+
 // ---- Per-host constants ----
 
 #if defined(CN_BACKEND_METAL)
@@ -149,6 +155,39 @@ struct CullHizParams
 
 [[vk::binding(0, 0)]] StructuredBuffer<GpuObjectData> objects : register(t0);
 [[vk::binding(1, 0)]] StructuredBuffer<GpuDrawArgs> draw_args : register(t1);
+
+#ifndef SHADOW_CULL
+
+// The record's variant route plus one rides flag bits 16..22, and whether it
+// grows grass with a far band bit 3. Locked to gfx::render_types::DrawArgsFlags.
+static const uint DRAW_FAR_BAND        = 8u;
+static const uint DRAW_ROUTE_SHIFT     = 16u;
+static const uint DRAW_ROUTE_MASK      = 0x3Fu;
+
+// Locked to gfx::render_types::{MAX_SHADER_BUCKETS, MAX_VARIANT_ROUTES,
+// VARIANT_FAR, VARIANT_DAYLIGHT, DAYLIGHT_COS_MARGIN}.
+static const uint  MAX_SHADER_BUCKETS  = 64u;
+static const uint  MAX_VARIANT_ROUTES  = 32u;
+static const uint  VARIANT_FAR         = 1u;
+static const uint  VARIANT_DAYLIGHT    = 2u;
+static const float DAYLIGHT_COS_MARGIN = 1e-6;
+
+// The variant block, gfx::render_types::GpuCullVariants, read as 16-byte rows
+// (a structured buffer element may not reach its size): the view's four rows,
+// then a row per route (the bucket per feature combination, a byte each, and
+// the features tested), then two rows per bucket region (its build-time
+// records' first and count, its runtime ones', then the region's offset).
+static const uint CULL_VARIANT_ROUTE_ROW  = 4u;
+static const uint CULL_VARIANT_REGION_ROW = 36u;
+
+#if defined(CN_BACKEND_METAL)
+#define CULL_VARIANTS_REGISTER t8
+#else
+#define CULL_VARIANTS_REGISTER t3
+#endif
+[[vk::binding(4, 0)]] StructuredBuffer<uint4> variants : register(CULL_VARIANTS_REGISTER);
+
+#endif // !SHADOW_CULL
 
 // Per-object outcome of the phase-1 cull, and the decision kernel's only output
 // on Metal, where `metal/cull.rs` and the encode kernel both reach it at
@@ -339,28 +378,133 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     return hiz_rect_occluded(ndc_min, ndc_max, aabb_nearest_depth, CULL_HIZ_SIZE, CULL_HIZ_MIPS);
 }
 
-#ifndef CN_BACKEND_METAL
-// Write one record's command into its own shader bucket's region and a no-op
-// into every other region. `c` already carries instance_count 0 when the record
-// was culled, so a culled record resets every region. The reset sweep matters
-// because a freed draw slot can be reused by a record of a DIFFERENT bucket,
-// which would otherwise leave the old bucket's command stale and still
-// executing.
-void write_bucket_commands(uint i, DrawCommand c, uint flags)
+// Whether the farthest corner of the box lies past `start` from the eye.
+bool reaches_far(float3 bb_min, float3 bb_max, float start)
 {
-    uint bucket = min((flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK,
-                      cull.bucket_count - 1u);
+    float3 d = max(abs(cull.cam_pos.xyz - bb_min), abs(bb_max - cull.cam_pos.xyz));
+    return dot(d, d) > start * start;
+}
+
+// Whether a planet's own sky may reach any point of the box: the camera is
+// high enough for it to reach everywhere, or a corner lies far enough round
+// the planet. The corners suffice, since the points the sky does not reach
+// form a convex cone. Mirrors GpuCullVariants::daylight_reaches.
+bool daylight_reaches(float3 bb_min, float3 bb_max)
+{
+    float4 center = asfloat(variants[1]);
+    float4 camera_up = asfloat(variants[2]);
+    if (camera_up.w > 0.0)
+    {
+        return true;
+    }
+    float near_cos = asfloat(variants[3].x) + DAYLIGHT_COS_MARGIN;
+    [unroll] for (uint i = 0u; i < 8u; ++i)
+    {
+        float3 corner = float3(
+            (i & 1u) != 0u ? bb_max.x : bb_min.x,
+            (i & 2u) != 0u ? bb_max.y : bb_min.y,
+            (i & 4u) != 0u ? bb_max.z : bb_min.z);
+        float3 d = corner - center.xyz;
+        float len = length(d);
+        if (len <= 0.0 || dot(d, camera_up.xyz) / len < near_cos)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The features a record has among those `route` tests. Mirrors
+// GpuCullVariants::features.
+uint variant_features(uint4 route, GpuDrawArgs a, uint i)
+{
+    bool bounded = (a.flags & DRAW_CULLABLE) != 0u;
+    float3 bb_min = (float3)(0.0);
+    float3 bb_max = (float3)(0.0);
+    if (bounded)
+    {
+        GpuObjectData obj = objects[i];
+        bb_min = obj.bb_min_cull_distance.xyz;
+        bb_max = obj.bb_max_alpha_cutoff.xyz;
+    }
+    uint features = 0u;
+    if ((route.y & VARIANT_FAR) != 0u && (a.flags & DRAW_FAR_BAND) != 0u
+        && (!bounded || reaches_far(bb_min, bb_max, asfloat(variants[0].x))))
+    {
+        features |= VARIANT_FAR;
+    }
+    if ((route.y & VARIANT_DAYLIGHT) != 0u && asfloat(variants[1].w) > 0.5
+        && (!bounded || daylight_reaches(bb_min, bb_max)))
+    {
+        features |= VARIANT_DAYLIGHT;
+    }
+    return features;
+}
+
+// The shader bucket record `i` draws under: its route's pick among its
+// Shader's variants, or its base bucket. Mirrors GpuCullVariants::bucket.
+uint record_bucket(GpuDrawArgs a, uint i)
+{
+    uint route = (a.flags >> DRAW_ROUTE_SHIFT) & DRAW_ROUTE_MASK;
+    if (cull.bucket_count <= 1u)
+    {
+        return 0u;
+    }
+    if (route == 0u || route > MAX_VARIANT_ROUTES)
+    {
+        return min((a.flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK, cull.bucket_count - 1u);
+    }
+    uint4 r = variants[CULL_VARIANT_ROUTE_ROW + route - 1u];
+    uint features = variant_features(r, a, i);
+    return min((r.x >> (8u * features)) & 0xFFu, cull.bucket_count - 1u);
+}
+
+#ifndef CN_BACKEND_METAL
+// The command record `i` writes in bucket `b`'s region, or ~0 when it falls
+// outside it. Mirrors GpuBucketRegion::command.
+uint bucket_command(uint b, uint i)
+{
+    uint4 spans = variants[CULL_VARIANT_REGION_ROW + 2u * b];
+    uint offset = variants[CULL_VARIANT_REGION_ROW + 2u * b + 1u].x;
+    uint k = i - spans.x;
+    if (k < spans.y)
+    {
+        return offset + k;
+    }
+    k = i - spans.z;
+    return k < spans.w ? offset + spans.y + k : 0xFFFFFFFFu;
+}
+
+// Write one record's command into its shader bucket's region and a no-op into
+// every other region that holds the record. `c` already carries
+// instance_count 0 when the record was culled, so a culled record resets every
+// region. The reset sweep matters because a freed draw slot can be reused by a
+// record of a DIFFERENT bucket, which would otherwise leave the old bucket's
+// command stale and still executing. A single-stream dispatch (one bucket)
+// writes the record's own slot.
+void write_bucket_commands(uint i, DrawCommand c, uint bucket)
+{
+    if (cull.bucket_count <= 1u)
+    {
+        commands[i] = c;
+        return;
+    }
     DrawCommand noop = c;
     noop.instance_count = 0u;
     for (uint b = 0u; b < cull.bucket_count; ++b)
     {
+        uint slot = bucket_command(b, i);
+        if (slot == 0xFFFFFFFFu)
+        {
+            continue;
+        }
         if (b == bucket)
         {
-            commands[b * cull.bucket_stride + i] = c;
+            commands[slot] = c;
         }
         else
         {
-            commands[b * cull.bucket_stride + i] = noop;
+            commands[slot] = noop;
         }
     }
 }
@@ -410,7 +554,8 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID)
     // candidate still occluded by this frame's actual depth stays culled; one
     // now visible is redrawn. Everything else phase 1 settled and is left as it
     // was.
-    bool candidate = cull_status[i] == STATUS_HIZ_CANDIDATE;
+    uint word = cull_status[i];
+    bool candidate = (word & CULL_OUTCOME_MASK) == STATUS_HIZ_CANDIDATE;
     bool redraw = candidate;
     if (candidate)
     {
@@ -420,7 +565,8 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID)
         {
             redraw = false;
         }
-        cull_status[i] = redraw ? STATUS_REDRAW : STATUS_HIZ_CULLED;
+        cull_status[i] = (redraw ? STATUS_REDRAW : STATUS_HIZ_CULLED)
+            | (word & ~CULL_OUTCOME_MASK);
     }
 #ifndef CN_BACKEND_METAL
     GpuDrawArgs a = draw_args[i];
@@ -429,7 +575,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID)
     {
         c.instance_count = 0u;
     }
-    write_bucket_commands(i, c, a.flags);
+    write_bucket_commands(i, c, word >> CULL_BUCKET_SHIFT);
 #endif
 #else
     // Phase 1. Records the outcome in `cull_status` for two-pass occlusion: a
@@ -464,14 +610,15 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID)
             status = STATUS_HIZ_CANDIDATE;
         }
     }
-    cull_status[i] = status;
+    uint bucket = (a.flags & DRAW_ENABLED) != 0u ? record_bucket(a, i) : 0u;
+    cull_status[i] = status | (bucket << CULL_BUCKET_SHIFT);
 #ifndef CN_BACKEND_METAL
     DrawCommand c = make_command(i, a);
     if (status != STATUS_DRAWN)
     {
         c.instance_count = 0u;
     }
-    write_bucket_commands(i, c, a.flags);
+    write_bucket_commands(i, c, bucket);
 #endif
 #endif
 }

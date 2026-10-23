@@ -42,14 +42,15 @@ impl WaterBody {
 
     /// The grid the body is drawn on, relative to its anchor: the surface's
     /// own tessellation for a summed body, the camera-centered grid for a
-    /// simulated one.
+    /// simulated one, in rings out from the anchor for a planet's sea (see
+    /// [`SeaBody::sky_split`](crate::water::sea::SeaBody::sky_split)).
     ///
     /// # Errors
     ///
     /// Returns an error if the body's grid cannot be built.
     pub fn mesh(&self) -> Result<(Vec<Vertex>, Vec<u16>), String> {
         if let Some(sea) = &self.sea {
-            return Ok(sea.grid.mesh());
+            return Ok(sea.grid.ring_mesh());
         }
         if let Some(ocean) = &self.ocean {
             return Ok(ocean.grid.mesh());

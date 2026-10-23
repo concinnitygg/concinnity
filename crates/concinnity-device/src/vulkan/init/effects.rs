@@ -509,6 +509,7 @@ pub(super) fn build_world_effects(
         let cull_sources = crate::vulkan::planar::PlanarCullSources {
             frame_object_buffers: &cull.object_buffers,
             frame_draw_args_buffers: &cull.draw_args_buffers,
+            frame_variant_buffers: &cull.variant_buffers,
             cull_set_layout: kernels.set_layout.handle(),
             cull_count: n_cull,
             hiz: cull

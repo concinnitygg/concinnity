@@ -462,6 +462,7 @@ impl MtlContext {
                 fragment_textures,
                 fragment_samplers: vec![(0, self.composite.sampler.clone())],
                 sort_distance,
+                then: None,
             });
         }
     }
@@ -596,6 +597,7 @@ impl MtlContext {
                 ],
                 fragment_samplers: vec![(0, self.composite.sampler.clone())],
                 sort_distance: mesh.distance,
+                then: None,
             });
         }
     }

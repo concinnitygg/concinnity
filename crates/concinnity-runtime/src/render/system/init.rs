@@ -497,12 +497,13 @@ impl GraphicsSystem {
                         world.shaders.shaders.len(),
                         far_bands,
                         planet_far_field.is_some(),
+                        planet.is_some(),
                     ),
                 )
-                .map(|(s, canopy)| WorldShader {
+                .map(|(s, grass)| WorldShader {
                     programs: s.programs.as_ref(),
                     deferred: s.deferred,
-                    canopy,
+                    grass,
                 })
                 .collect(),
             media: MediaPayloads {

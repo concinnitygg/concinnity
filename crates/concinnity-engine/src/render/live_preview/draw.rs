@@ -35,12 +35,16 @@ pub struct DrawMaterial {
 
 impl DrawMaterial {
     /// Whether swapping this material for `other` is only a per-draw rewrite.
-    /// The shader bucket picks the pipeline a draw renders under, and the
-    /// transparency flags decide at init which pass draws it; both are baked
-    /// into structures no per-draw call rebuilds, so a swap that moves either
-    /// needs the world rebuilt.
+    /// The shader bucket picks the pipeline a draw renders under, whether its
+    /// ground shades from the canopy block picks between that bucket and its
+    /// Shader's grass variants, and the transparency flags decide at init which
+    /// pass draws it; all are baked into structures no per-draw call rebuilds
+    /// (the cull's bucket regions hold only the records that can route to
+    /// them), so a swap that moves any needs the world rebuilt.
     pub fn swappable_with(&self, other: &Self) -> bool {
         self.entry.shader_bucket == other.entry.shader_bucket
+            && self.entry.uniforms.far_field.shades_ground()
+                == other.entry.uniforms.far_field.shades_ground()
             && self.entry.uniforms.transparent == other.entry.uniforms.transparent
             && self.entry.uniforms.see_through == other.entry.uniforms.see_through
     }
@@ -393,6 +397,33 @@ mod tests {
         let mut shaded = steel;
         shaded.entry.shader_bucket = 2;
         assert!(!steel.swappable_with(&shaded), "the pipeline moves");
+    }
+
+    // A swap onto or off a ground shading from the canopy block moves the draw
+    // between its Shader's bucket and the Shader's grass variants, under the
+    // default Shader and a world one alike; between two such grounds it stays.
+    #[test]
+    fn a_swap_across_the_grass_variants_is_not_expressible() {
+        use crate::gfx::render_types::FarFieldTint;
+        let f = fixture();
+        let steel = material(&f.world, AssetId(10)).expect("steel");
+        for bucket in [0, 2] {
+            let mut plain = steel;
+            plain.entry.shader_bucket = bucket;
+            let mut ground = plain;
+            ground.entry.uniforms.far_field = FarFieldTint::of(1 << 8);
+            let mut covers = plain;
+            covers.entry.uniforms.far_field = FarFieldTint::of(1 << 16);
+            assert!(
+                !plain.swappable_with(&ground),
+                "bucket {bucket}: onto the variants"
+            );
+            assert!(!ground.swappable_with(&plain), "bucket {bucket}: off them");
+            assert!(
+                ground.swappable_with(&covers),
+                "bucket {bucket}: within them"
+            );
+        }
     }
 
     // A material whose texture reference points past the pool is a corrupt

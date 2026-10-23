@@ -17,6 +17,7 @@ use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
 
 mod bindless;
 mod compute;
+pub(in crate::vulkan) use compute::{VARIANT_BUFFER_BYTES, main_cull_set};
 mod gbuffer;
 mod shadow;
 mod two_pass;
@@ -155,7 +156,11 @@ pub(super) fn build_cull(
         },
     )?;
     let world_pipelines = bindless::build_world_pipelines(gpu, &bindless, world_shaders)?;
-    let shader_bucket_count = world_pipelines.bucket_count();
+    let variants = world.cull_variants(&world_pipelines);
+    let indirect_commands = concinnity_engine::gfx::render_types::region_commands(
+        &variants.regions,
+        world_pipelines.bucket_count(),
+    );
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
@@ -165,7 +170,7 @@ pub(super) fn build_cull(
             descriptors,
             plan,
             bindless: &bindless,
-            shader_bucket_count,
+            indirect_commands,
             occlusion_two_pass,
         },
     )?;
@@ -196,7 +201,7 @@ pub(super) fn build_cull(
         &bindless,
         &compute,
         plan,
-        shader_bucket_count,
+        indirect_commands,
         targets.msaa_samples,
         occlusion_two_pass,
     )?;
@@ -213,6 +218,11 @@ pub(super) fn build_cull(
         bindless_update_after_bind: plan.bindless_uab,
         world_pipelines,
         bucket_stride: plan.n_cull,
+        variants,
+        variant_buffers: compute.variant_buffers,
+        live_buckets: (0..gpu.frames)
+            .map(|_| std::sync::atomic::AtomicU64::new(u64::MAX))
+            .collect(),
         bindless_main_spv: bindless.main_spv,
         prepass_layout: bindless.prepass_layout,
         prepass_pipeline: bindless.prepass_pipeline,

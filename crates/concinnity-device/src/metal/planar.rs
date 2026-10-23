@@ -316,6 +316,7 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
+                    regions: self.cull.live_regions(),
                 },
                 FacePass {
                     icb_override,

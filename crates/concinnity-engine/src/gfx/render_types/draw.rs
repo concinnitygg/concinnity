@@ -506,23 +506,28 @@ impl DrawArgsFlags {
     // occupant, so the G-buffer pre-pass must reproject through the current
     // model instead. Mirrored by DRAW_NO_HISTORY in object_common.hlsl.
     pub(crate) const NO_HISTORY: u32 = 4;
-    // The record's shader bucket rides bits 8..16: the cull kernel routes the
-    // record's indirect command into that bucket's ICB. Values and layout are
-    // mirrored by the cull shaders (DRAW_BUCKET_SHIFT in cull.hlsl and
-    // cull_encode.metal).
+    // The record grows grass with a far band, so its route picks the canopy
+    // variant once the band starts within its bounds. Mirrored by
+    // DRAW_FAR_BAND in object_common.hlsl.
+    pub(crate) const FAR_BAND: u32 = 8;
+    // The record's base shader bucket rides bits 8..16: the cull kernel routes
+    // the record's indirect command into that bucket's region, unless the
+    // record has a variant route. Mirrored by DRAW_BUCKET_SHIFT in
+    // object_common.hlsl; the encode kernel reads the routed bucket from the
+    // cull status instead.
     pub(crate) const BUCKET_SHIFT: u32 = 8;
+    // The record's variant route plus one rides bits 16..22; 0 when the record
+    // draws under its base bucket alone. Mirrored by DRAW_ROUTE_SHIFT.
+    pub(crate) const ROUTE_SHIFT: u32 = 16;
+    pub(crate) const ROUTE_MASK: u32 = 0x3F;
 }
 
-/// Upper bound on the Shaders a world's buckets are budgeted for, the default
-/// and its grass twins (counted as one) included. Enforced by the world-shape
-/// check and quoted as a number in the Shader asset docs.
-pub const MAX_SHADER_BUCKETS: usize = 8;
-
-/// Upper bound on shader buckets a cull dispatch can route between (the ICB
-/// argument-buffer array length in the Metal encode kernel): the budgeted
-/// Shaders plus the default's second grass twin. Mirrored by `MAX_DRAW_BUCKETS`
-/// in `cull_encode.metal`.
-pub const MAX_DRAW_BUCKETS: usize = MAX_SHADER_BUCKETS + 1;
+/// Upper bound on the shader buckets a world draws with: one per Shader, the
+/// default included, plus each Shader's grass variants. Each bucket is one
+/// pipeline and one indirect command region per pass, and costs the host a bind
+/// and an execute in each. Enforced by the world-shape check and quoted as a
+/// number in the Shader asset docs.
+pub const MAX_SHADER_BUCKETS: usize = 64;
 
 /// Pack the per-frame cull-decision bits for one `DrawObject`. Mirrors the
 /// CPU `visible = BVH(cullable) + always_draw` partition: an object draws when
@@ -549,13 +554,25 @@ pub fn draw_args_no_history() -> u32 {
 }
 
 /// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,
-/// clamped to the routing budget the cull kernels implement. A bucket past the
-/// budget renders with the world default program rather than reading a command
-/// region that does not exist; the world-shape check fails such a world at build
-/// time, so the clamp is a backstop.
+/// clamped to the buckets the cull kernels route between. A bucket past the
+/// cap renders with the last one rather than reading a command region that
+/// does not exist; the world-shape check fails such a world at build time, so
+/// the clamp is a backstop.
 pub fn draw_args_bucket_bits(shader_bucket: u32) -> u32 {
-    let bucket = u32::saturating_from((shader_bucket as usize).min(MAX_DRAW_BUCKETS - 1));
+    let bucket = u32::saturating_from((shader_bucket as usize).min(MAX_SHADER_BUCKETS - 1));
     bucket << DrawArgsFlags::BUCKET_SHIFT
+}
+
+/// Pack a draw's variant route into the `GpuDrawArgs::flags` upper bits: the
+/// route the cull picks its bucket by (see
+/// [`GpuCullVariants`](super::GpuCullVariants)), and whether it grows grass
+/// with a far band. `None` draws under the base bucket alone.
+pub fn draw_args_route_bits(route: Option<u32>, far_band: bool) -> u32 {
+    let Some(route) = route.filter(|&r| (r as usize) < super::MAX_VARIANT_ROUTES) else {
+        return 0;
+    };
+    let far = if far_band { DrawArgsFlags::FAR_BAND } else { 0 };
+    ((route + 1) << DrawArgsFlags::ROUTE_SHIFT) | far
 }
 
 /// One GPU-instanced draw: a shared mesh slice + material rendered at many

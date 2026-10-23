@@ -1527,6 +1527,11 @@ float water_scene_distance(float2 ndc_xy, float depth01)
 #define DAYLIGHT view.daylight
 {DAYLIGHT}
 
+// Only a planet sea's daylight variants light it from its own sky.
+#if defined(WATER_SEA) && defined(SURFACE_DAYLIGHT)
+#define WATER_SEA_DAYLIGHT 1
+#endif
+
 // The radiance a white Lambertian surface facing `n` at `pos` reflects: the
 // sun's irradiance through `shadow` plus the sky's, both over pi. Without an
 // irradiance cube the sky is the main pass's flat ambient fill. On a planet's
@@ -1541,7 +1546,7 @@ float3 water_lambert(float3 n, float shadow, float3 pos)
     float3 sky = view.ambient.x > 0.5
         ? irradiance_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(n), 0.0).rgb * WATER_INV_PI
         : (float3)(WATER_FLAT_AMBIENT);
-#ifdef WATER_SEA
+#ifdef WATER_SEA_DAYLIGHT
     float3 up = daylight_on() ? daylight_up(pos) : (float3)(0.0);
     float reach = daylight_on() ? daylight_reach(up) * daylight_ground(pos) : 0.0;
     if (reach > 0.0)
@@ -1692,7 +1697,7 @@ float3 water_environment(float3 world_pos, float3 r, float alpha)
     float3 gradient = lerp(float3(0.55, 0.62, 0.7), float3(0.25, 0.45, 0.7), horizon);
     // Blurrier water reads a coarser cube level.
     float3 env = transparent_environment(world_pos, r, saturate(sqrt(alpha)), gradient);
-#ifdef WATER_SEA
+#ifdef WATER_SEA_DAYLIGHT
     // On a planet's sea away from the camera, the sky over the point.
     if (daylight_on())
     {
@@ -1742,7 +1747,7 @@ float3 water_glint(float3 normal, float3 view_dir, float alpha, float3 sun_dir, 
 float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, float3 pos)
 {
     float3 glint = water_glint(normal, view_dir, alpha, view.sun_dir.xyz, view.sun_color.rgb);
-#ifdef WATER_SEA
+#ifdef WATER_SEA_DAYLIGHT
     float3 up = daylight_on() ? daylight_up(pos) : (float3)(0.0);
     float reach = daylight_on() ? daylight_reach(up) * daylight_ground(pos) : 0.0;
     if (reach > 0.0)

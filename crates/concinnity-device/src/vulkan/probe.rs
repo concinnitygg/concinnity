@@ -1184,19 +1184,7 @@ impl BakeResources {
         let tex_pool = u32::saturating_from(ctx.cull.bindless_pool_size);
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
         let faces = u32::saturating_from(CAPTURE_FACES);
-        // The six per-face global sets, the four cull SSBOs, the object SSBO,
-        // texture pool, parameter table and vertex stream of each face's
-        // bindless set, and a Hi-Z set (an image and a UBO) when the world runs
-        // Hi-Z.
-        let pool_sizes = PoolSizes::default()
-            .sets(&global_set(), faces)
-            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + 3 * faces)
-            .add(
-                vk::DescriptorType::SAMPLED_IMAGE,
-                faces * tex_pool + has_hiz,
-            )
-            .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
-            .build();
+        let pool_sizes = probe_pool_sizes(faces, tex_pool, has_hiz).build();
         let max_sets = 1 + 2 * faces + has_hiz;
         // The per-face bindless sets below come from `cull.bindless_set_layout`,
         // so this pool has to declare update-after-bind whenever that layout
@@ -1226,6 +1214,15 @@ impl BakeResources {
             .storage_buffer(1, draw_args_buf.buffer(), args_size)
             .storage_buffer(2, indirect_buf.buffer(), indirect_size)
             .storage_buffer(3, status_buf.buffer(), status_size)
+            .storage_buffer(
+                4,
+                ctx.cull
+                    .variant_buffers
+                    .first()
+                    .ok_or_else(|| RenderError::Other("probe: no cull variant buffer".into()))?
+                    .buffer(),
+                super::init::VARIANT_BUFFER_BYTES,
+            )
             .apply(device);
 
         // The material parameter table as the bake starts, for every face.
@@ -1344,8 +1341,52 @@ fn make_host_buffer(
     Ok(buf)
 }
 
+// The bake's pool: the per-face global sets, one cull set, each face's
+// bindless set (its object SSBO, parameter table and vertex stream, and the
+// texture pool of `tex_pool` images), and a Hi-Z set (an image and a UBO) when
+// the world runs Hi-Z.
+fn probe_pool_sizes(faces: u32, tex_pool: u32, has_hiz: u32) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&global_set(), faces)
+        .sets(&super::init::main_cull_set(), 1)
+        .add(vk::DescriptorType::STORAGE_BUFFER, 3 * faces)
+        .add(
+            vk::DescriptorType::SAMPLED_IMAGE,
+            faces * tex_pool + has_hiz,
+        )
+        .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
+}
+
 #[cfg(test)]
 mod tests {
+    // The pool holds every binding of every set the bake allocates.
+    #[test]
+    fn the_probe_pool_covers_its_sets() {
+        use crate::vulkan::descriptor_layout::{PoolSizes, global_set};
+        let faces = u32::saturating_from(CAPTURE_FACES);
+        let bindless = PoolSizes::default()
+            .add(vk::DescriptorType::STORAGE_BUFFER, 3 * faces)
+            .add(vk::DescriptorType::SAMPLED_IMAGE, faces * 8);
+        let pool = probe_pool_sizes(faces, 8, 0);
+        assert!(pool.covers(&[
+            (&global_set(), faces),
+            (&crate::vulkan::init::main_cull_set(), 1),
+        ]));
+        let total = |p: &PoolSizes, ty| p.count(ty);
+        let need = PoolSizes::default()
+            .sets(&global_set(), faces)
+            .sets(&crate::vulkan::init::main_cull_set(), 1);
+        for ty in [
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+        ] {
+            assert!(
+                total(&pool, ty) >= total(&need, ty) + total(&bindless, ty),
+                "{ty:?}"
+            );
+        }
+    }
+
     use super::*;
 
     // A capture routes every record into region 0. Getting this wrong is

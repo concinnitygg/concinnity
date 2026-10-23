@@ -61,6 +61,8 @@ pub(in crate::metal) struct GpuFrameBuffers<'a> {
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     pub counts: crate::metal::context::DrawRecordCounts,
+    // The regions the ICBs were encoded with.
+    pub regions: crate::metal::cull::BucketRegions<'a>,
 }
 
 // The reflection-probe face attachments `encode_main_into_face` renders into
@@ -509,6 +511,7 @@ impl MtlContext {
             material_params,
             deformed_skinned,
             counts,
+            regions,
             ..
         } = gpu;
         // Object records (binding 9) + bindless textures (binding 7) are shared
@@ -551,8 +554,12 @@ impl MtlContext {
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = crate::metal::context::ns_range(prefix);
             for (b, icb) in icbs.iter().enumerate() {
+                let range = match regions.commands(b) {
+                    Some(region) if region.is_empty() => continue,
+                    Some(region) => region,
+                    None => prefix.clone(),
+                };
                 if b > 0 {
                     // A bucket whose Shader is not resident yet (its scene has
                     // not pinned) has no pipeline: skip it until warmup builds
@@ -562,10 +569,15 @@ impl MtlContext {
                     };
                     enc.set_pipeline(&pipelines.main);
                 }
-                // SAFETY: the prefix spans the static + instance command slots
-                // (`ensure_icb_capacity` sized every ICB for `counts.total`).
+                // SAFETY: the default's prefix spans the static + instance
+                // command slots and a later bucket's region its own records
+                // (`ensure_icb_capacity` sized every ICB for `counts.total`,
+                // which bounds both).
                 unsafe {
-                    enc.executeCommandsInBuffer_withRange(icb, range);
+                    enc.executeCommandsInBuffer_withRange(
+                        icb,
+                        crate::metal::context::ns_range(range),
+                    );
                 }
                 draw_calls += 1;
             }
@@ -752,9 +764,9 @@ impl MtlContext {
         let bucket_icbs: &[Retained<_>] = match icb_override {
             Some(icb) => {
                 // Every record of the mirror stream draws under one program,
-                // which must shade the far bands the canopy twin otherwise does.
-                if let Some(twin) = self.cull.mirror_canopy_pipeline() {
-                    enc.set_pipeline(twin);
+                // which must shade the far bands the grass variants otherwise do.
+                if let Some(superset) = self.cull.mirror_superset_pipeline() {
+                    enc.set_pipeline(superset);
                 }
                 override_holder = [objc2::Message::retain(icb)];
                 &override_holder

@@ -33,6 +33,16 @@ pub static MAIN_BINDLESS_CANOPY_FRAG: ShaderProgram = ShaderProgram {
     msaa: false,
 };
 
+/// [`MAIN_BINDLESS_CANOPY_FRAG`] under `SURFACE_DAYLIGHT`: lit from a planet's
+/// own sky.
+pub static MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG: ShaderProgram = ShaderProgram {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    label: "main_bindless_canopy_daylight_frag.hlsl",
+    gates: &[super::surface::CANOPY_GATE, super::surface::DAYLIGHT_GATE],
+    msaa: false,
+};
+
 /// `fragment_main_bindless` from `main_bindless.hlsl` under
 /// `SURFACE_GRASS_GROUND`: the main fragment that shades the ground under
 /// grass without the canopy.
@@ -44,13 +54,25 @@ pub static MAIN_BINDLESS_GROUND_FRAG: ShaderProgram = ShaderProgram {
     msaa: false,
 };
 
-/// The engine's main fragment that shades `grass`.
-pub fn main_bindless_frag(grass: super::surface::GrassShading) -> &'static ShaderProgram {
-    use super::surface::GrassShading;
-    match grass {
-        GrassShading::None => &MAIN_BINDLESS_FRAG,
-        GrassShading::Ground => &MAIN_BINDLESS_GROUND_FRAG,
-        GrassShading::Canopy => &MAIN_BINDLESS_CANOPY_FRAG,
+/// [`MAIN_BINDLESS_GROUND_FRAG`] under `SURFACE_DAYLIGHT`: lit from a planet's
+/// own sky.
+pub static MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG: ShaderProgram = ShaderProgram {
+    file: "main_bindless.hlsl",
+    entry: "fragment_main_bindless",
+    label: "main_bindless_ground_daylight_frag.hlsl",
+    gates: &[super::surface::GROUND_GATE, super::surface::DAYLIGHT_GATE],
+    msaa: false,
+};
+
+/// The engine's main fragment that shades `variant`.
+pub fn main_bindless_frag(variant: super::surface::SurfaceVariant) -> &'static ShaderProgram {
+    use super::surface::SurfaceVariant;
+    match variant {
+        SurfaceVariant::Plain => &MAIN_BINDLESS_FRAG,
+        SurfaceVariant::Ground => &MAIN_BINDLESS_GROUND_FRAG,
+        SurfaceVariant::GroundDaylight => &MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
+        SurfaceVariant::Canopy => &MAIN_BINDLESS_CANOPY_FRAG,
+        SurfaceVariant::CanopyDaylight => &MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG,
     }
 }
 
@@ -681,12 +703,13 @@ pub static WATER_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
 
 // A planet's sea: the same entries over the sea's own grid, bent onto the
 // sphere, with its waves laid out on the planet's cube faces.
-/// `water_vertex` from `water.hlsl`, for a planet sea.
+/// `water_vertex` from `water.hlsl`, for a planet sea, with or without its
+/// own sky: the vertex stage reads none of the sky's code.
 pub static WATER_SEA_VERT: ShaderProgram = ShaderProgram {
     file: "water.hlsl",
     entry: "water_vertex",
     label: "water_sea_vert.hlsl",
-    gates: &["WATER_SEA"],
+    gates: &["WATER_SEA", super::surface::DAYLIGHT_GATE],
     msaa: false,
 };
 /// `water_fragment` from `water.hlsl`, for a planet sea.
@@ -697,6 +720,14 @@ pub static WATER_SEA_FRAG: ShaderProgram = ShaderProgram {
     gates: &["WATER_SEA"],
     msaa: true,
 };
+/// [`WATER_SEA_FRAG`] under `SURFACE_DAYLIGHT`: lit from the planet's own sky.
+pub static WATER_SEA_DAYLIGHT_FRAG: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_fragment",
+    label: "water_sea_daylight_frag.hlsl",
+    gates: &["WATER_SEA", super::surface::DAYLIGHT_GATE],
+    msaa: true,
+};
 /// `water_rt_fragment` from `water.hlsl`, for a planet sea.
 pub static WATER_SEA_FRAG_RT: ShaderProgram = ShaderProgram {
     file: "water.hlsl",
@@ -705,12 +736,33 @@ pub static WATER_SEA_FRAG_RT: ShaderProgram = ShaderProgram {
     gates: &["WATER_SEA", "WATER_RT"],
     msaa: true,
 };
+/// [`WATER_SEA_FRAG_RT`] under `SURFACE_DAYLIGHT`: lit from the planet's own sky.
+pub static WATER_SEA_DAYLIGHT_FRAG_RT: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_rt_fragment",
+    label: "water_sea_daylight_frag_rt.hlsl",
+    gates: &["WATER_SEA", "WATER_RT", super::surface::DAYLIGHT_GATE],
+    msaa: true,
+};
 /// `water_rt_fragment` from `water.hlsl`, for a planet sea.
 pub static WATER_SEA_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
     file: "water.hlsl",
     entry: "water_rt_fragment",
     label: "water_sea_frag_rt_textured.hlsl",
     gates: &["WATER_SEA", "WATER_RT", "RT_TEXTURED"],
+    msaa: true,
+};
+/// [`WATER_SEA_FRAG_RT_TEXTURED`] under `SURFACE_DAYLIGHT`: lit from the planet's own sky.
+pub static WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED: ShaderProgram = ShaderProgram {
+    file: "water.hlsl",
+    entry: "water_rt_fragment",
+    label: "water_sea_daylight_frag_rt_textured.hlsl",
+    gates: &[
+        "WATER_SEA",
+        "WATER_RT",
+        "RT_TEXTURED",
+        super::surface::DAYLIGHT_GATE,
+    ],
     msaa: true,
 };
 
@@ -832,7 +884,9 @@ pub static ALL: &[&ShaderProgram] = &[
     &MAIN_BINDLESS_VERT,
     &MAIN_BINDLESS_FRAG,
     &MAIN_BINDLESS_CANOPY_FRAG,
+    &MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG,
     &MAIN_BINDLESS_GROUND_FRAG,
+    &MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
     &LIGHT_CULL,
     &MODEL_HISTORY,
     &CULL_PHASE1,
@@ -907,8 +961,11 @@ pub static ALL: &[&ShaderProgram] = &[
     &WATER_FRAG_RT_TEXTURED,
     &WATER_SEA_VERT,
     &WATER_SEA_FRAG,
+    &WATER_SEA_DAYLIGHT_FRAG,
     &WATER_SEA_FRAG_RT,
+    &WATER_SEA_DAYLIGHT_FRAG_RT,
     &WATER_SEA_FRAG_RT_TEXTURED,
+    &WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
     &WATER_FFT_ROWS,
     &WATER_FFT_COLUMNS,
     &WATER_FFT_COLUMNS_FOAM,
@@ -966,6 +1023,9 @@ mod tests {
                 "water_frag.hlsl",
                 "water_frag_rt.hlsl",
                 "water_frag_rt_textured.hlsl",
+                "water_sea_daylight_frag.hlsl",
+                "water_sea_daylight_frag_rt.hlsl",
+                "water_sea_daylight_frag_rt_textured.hlsl",
                 "water_sea_frag.hlsl",
                 "water_sea_frag_rt.hlsl",
                 "water_sea_frag_rt_textured.hlsl",

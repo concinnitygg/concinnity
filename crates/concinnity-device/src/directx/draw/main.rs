@@ -304,12 +304,7 @@ impl DxContext {
             // commands inside, but the call count surfaced to the profiler
             // is the host-side draw. Mirrors Metal's bindless main pass.
             self.inc_draw_calls(1);
-            self.inc_draw_calls(self.execute_bucket_regions(
-                cmd,
-                cull_sig,
-                indirect,
-                u32::saturating_from(self.state.draw.skinned_record_base()),
-            ));
+            self.inc_draw_calls(self.execute_bucket_regions(cmd, cull_sig, indirect, frame_idx));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
                 // SAFETY: the command list is in the recording state, and every resource,
@@ -524,12 +519,7 @@ impl DxContext {
                 );
             }
             self.inc_draw_calls(1);
-            self.inc_draw_calls(self.execute_bucket_regions(
-                cmd,
-                cull_sig,
-                indirect,
-                u32::saturating_from(self.state.draw.skinned_record_base()),
-            ));
+            self.inc_draw_calls(self.execute_bucket_regions(cmd, cull_sig, indirect, frame_idx));
 
             // ExecuteIndirect #2: skinned tail against the deformed VB + skinned
             // IB. The root signature + root descriptors set above persist, so only

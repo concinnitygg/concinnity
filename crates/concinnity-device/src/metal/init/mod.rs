@@ -261,6 +261,7 @@ impl MtlContext {
             &gpu,
             cull::CullInputs {
                 world_shaders: &world_shaders,
+                draws: &world.draw_objects,
                 vert_desc: &vert_desc,
                 features: &features,
                 shadow_enabled: shadow.enabled,

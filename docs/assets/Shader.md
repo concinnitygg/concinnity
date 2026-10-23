@@ -100,15 +100,19 @@ float4 shade(VertexOut v, GpuObjectData od)
 
 The first declared Shader is the world's default: everything renders with it
 unless a [Material](Material.md) names another one through its `shader` field.
-A world may declare up to 8 Shaders in total.
+A world draws with at most 64 shader buckets: one per Shader, the default
+included, plus the grass variants below.
 
 - **Instanced, skinned, and voxel-chunk draws always use the world default.**
   A Material naming a Shader cannot be used by an
   [InstancedProp](InstancedProp.md), a [SkinnedMesh](SkinnedMesh.md), or a
   [VoxelWorld](VoxelWorld.md); give those a Material without one.
-- **At most 8 Shaders**, the world default included, or 7 when grass draws
-  a far field over ground shaded by the world default, which takes a slot of
-  its own.
+- **Grass takes variants of its Shader.** A Shader whose ground grows grass
+  (a [Terrain](Terrain.md) with `layers`, or any [Planet](Planet.md), whose ground
+  draws with the world default) takes 2 more buckets: the ground and grass
+  canopy seen far away, and the ground alone. In a world with a Planet it takes
+  4: each of those with and without the planet's own sky. The renderer picks
+  between them per draw, and only where they look the same.
 
 Planar reflections are the one case with no build-time signal: a surface
 reflected in a mirror is drawn with the world default Shader regardless of

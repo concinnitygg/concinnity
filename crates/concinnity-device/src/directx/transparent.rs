@@ -1494,24 +1494,41 @@ impl DxContext {
         unsafe { set_viewport(cmd, (w, h)) };
 
         let mut bound: Option<&ID3D12PipelineState> = None;
-        for &(kind, i) in order {
-            let pso = match kind {
-                Producer::GlassMesh => transparent
-                    .glass_mesh
-                    .as_ref()
-                    .expect("the draw order only names live producers")
-                    .pipeline(textured),
-                _ => transparent
-                    .producer(kind)
-                    .record_pipeline(i, rt_live, textured),
-            };
+        let mut bind = |pso| {
             if bound != Some(pso) {
                 // SAFETY: the command list is in the recording state, and the PSO is live for
                 // the call.
                 unsafe { cmd.SetPipelineState(pso) };
                 bound = Some(pso);
             }
-            self.draw_transparent_entry(transparent, &frame, kind, i);
+        };
+        let record_frame = producer::RecordFrame {
+            rt_live,
+            textured,
+            daylight: &self.state.view.daylight,
+        };
+        for &(kind, i) in order {
+            if kind == Producer::GlassMesh {
+                bind(
+                    transparent
+                        .glass_mesh
+                        .as_ref()
+                        .expect("the draw order only names live producers")
+                        .pipeline(textured),
+                );
+                self.draw_transparent_entry(transparent, &frame, kind, i, None);
+                continue;
+            }
+            let p = transparent.producer(kind);
+            let index_count = p.records.get(i).map_or(0, |r| r.gpu.index_count);
+            for draw in p
+                .record_draws(i, record_frame, index_count)
+                .into_iter()
+                .flatten()
+            {
+                bind(draw.pipeline);
+                self.draw_transparent_entry(transparent, &frame, kind, i, Some(draw.indices));
+            }
         }
 
         // The scene target and main depth are both graph resources; the next
@@ -1578,7 +1595,7 @@ impl DxContext {
                 // SAFETY: the command list is in the recording state, and the PSO is live for
                 // the call.
                 unsafe { cmd.SetPipelineState(pso) };
-                self.draw_transparent_entry(transparent, frame, kind, i);
+                self.draw_transparent_entry(transparent, frame, kind, i, None);
             }
             let to_read = transition_barrier(
                 target,
@@ -1592,15 +1609,17 @@ impl DxContext {
 
     // Bind one draw-order entry's geometry and params and draw it under the set
     // PSO. A mesh draws its `DrawObject`'s slice of the shared scene buffers; a
-    // pane or water surface draws its record's own pair plus its planar resolve
-    // table (t3): its mirror render when it has a planar slot, else the scene
-    // snapshot as a valid stand-in (the shaders gate on `planar > 0.5`).
+    // pane or water surface draws its record's own pair, `indices` of it or all
+    // of it, plus its planar resolve table (t3): its mirror render when it has a
+    // planar slot, else the scene snapshot as a valid stand-in (the shaders gate
+    // on `planar > 0.5`).
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,
         frame: &TransparentFrame<'_>,
         kind: Producer,
         i: usize,
+        indices: Option<std::ops::Range<u32>>,
     ) {
         let cmd = frame.cmd;
         if kind == Producer::GlassMesh {
@@ -1636,8 +1655,12 @@ impl DxContext {
             unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
             // SAFETY: the SRV heap is set, and the planar resolve or scene snapshot is live.
             unsafe { cmd.set_graphics_srv_table(frame.planar_root, planar_srv) };
-            // SAFETY: the record's buffers and every table its PSO reads are bound.
-            unsafe { cmd.DrawIndexedInstanced(r.gpu.index_count, 1, 0, 0, 0) };
+            let indices = indices.unwrap_or(0..r.gpu.index_count);
+            // SAFETY: the record's buffers and every table its PSO reads are bound, and
+            // `indices` lies within its index buffer.
+            unsafe {
+                cmd.DrawIndexedInstanced(indices.end - indices.start, 1, indices.start, 0, 0);
+            }
         }
         self.inc_draw_calls(1);
     }

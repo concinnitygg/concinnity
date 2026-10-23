@@ -9,7 +9,7 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
@@ -408,7 +408,7 @@ impl VkContext {
             &BucketSource {
                 programs: world,
                 deferred: false,
-                grass: GrassShading::None,
+                variant: SurfaceVariant::Plain,
             },
             engine,
         )?;

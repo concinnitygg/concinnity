@@ -64,7 +64,7 @@ static const uint DRAW_CULLABLE   = 2u;
 static const uint DRAW_NO_HISTORY = 4u;
 
 // The record's shader bucket rides the upper flag bits; values and layout are
-// locked to gfx::render_types::{DrawArgsFlags::BUCKET_SHIFT, MAX_DRAW_BUCKETS}.
+// locked to gfx::render_types::DrawArgsFlags::BUCKET_SHIFT.
 static const uint DRAW_BUCKET_SHIFT = 8u;
 static const uint DRAW_BUCKET_MASK  = 0xFFu;
 

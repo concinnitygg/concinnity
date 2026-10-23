@@ -7,7 +7,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::WorldShader;
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{
     BucketPlan, BucketSource, WorldPipelines,
 };
@@ -185,7 +185,7 @@ pub(super) fn build_bindless_pass(
         let default_source = BucketSource {
             programs: world_shaders[0].programs,
             deferred: false,
-            grass: GrassShading::None,
+            variant: SurfaceVariant::Plain,
         };
         let pipelines =
             build_bucket_pipeline(device, bucket_targets, 0, &default_source, &engine_spv)?;
@@ -270,7 +270,9 @@ pub(super) fn build_bindless_pass(
                 vert: Vec::new(),
                 frag: Vec::new(),
                 canopy_frag: Vec::new(),
+                canopy_daylight_frag: Vec::new(),
                 ground_frag: Vec::new(),
+                ground_daylight_frag: Vec::new(),
                 prepass_vert: Vec::new(),
                 prepass_frag: Vec::new(),
             },

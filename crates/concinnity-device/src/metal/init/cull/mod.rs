@@ -26,6 +26,8 @@ mod shadow;
 #[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    // The build-time draws, each at its own cull record.
+    pub(super) draws: &'a [concinnity_engine::gfx::render_types::DrawObject],
     pub(super) vert_desc: &'a MTLVertexDescriptor,
     pub(super) features: &'a Features,
     // Whether the cascade shadow pipeline exists.
@@ -46,6 +48,14 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     // runtime flag is true only when the feature can actually run.
     let two_pass_occlusion = inputs.occlusion_two_pass && compute.pipeline_phase2.is_some();
 
+    let variants = bindless
+        .world_pipelines
+        .cull_variants(&bindless.world_pipelines.bucket_spans(
+            inputs.draws,
+            inputs.draws.len()..inputs.draws.len(),
+            inputs.reserved_records,
+        ));
+
     Ok(CullState {
         bindless: bindless.active,
         main_pipeline: bindless.main_pipeline,
@@ -53,6 +63,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         pipeline: compute.pipeline,
         encode_pipeline: compute.encode_pipeline,
         bucket_count: bindless.bucket_count,
+        variants,
         icbs: Vec::new(),
         icb_arg_encoder: compute.icb_arg_encoder,
         icb_arg_buffer: None,

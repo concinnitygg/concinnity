@@ -13,7 +13,7 @@
 use ash::vk;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
@@ -37,13 +37,14 @@ impl VkContext {
         programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let grass = self.cull.world_pipelines.grass(bucket as usize);
-        let pipelines = self.bucket_pipelines(bucket, programs, grass, prepared, false)?;
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, variant, prepared, false)?;
+        let family = self.build_family(bucket, programs, true)?;
         // The displaced pipelines drop into the device's retire queue, which
         // holds them until every frame in flight that recorded against them
         // retires.
         self.cull.world_pipelines.install(bucket, pipelines)?;
-        Ok(())
+        self.install_family(family)
     }
 
     // One shader bucket's pipelines to replace a bucket that has a pre-pass
@@ -54,7 +55,7 @@ impl VkContext {
         &self,
         bucket: u32,
         programs: &concinnity_engine::components::ShaderPrograms,
-        grass: GrassShading,
+        variant: SurfaceVariant,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
     ) -> RenderResult<BucketPipelines> {
@@ -65,7 +66,8 @@ impl VkContext {
         replace_bucket(
             bucket as usize,
             live_prepass,
-            world_shader_for(prepared, &self.pipeline_gate, targets).filter(|p| p.grass == grass),
+            world_shader_for(prepared, &self.pipeline_gate, targets)
+                .filter(|p| p.variant == variant),
             |p: &BucketPipelines| p.prepass.is_some(),
             || {
                 build_world_shader_pipeline(
@@ -73,7 +75,7 @@ impl VkContext {
                     targets,
                     bucket as usize,
                     programs,
-                    grass,
+                    variant,
                 )
             },
         )
@@ -94,8 +96,9 @@ impl VkContext {
             let prepared = self
                 .bucket_pipeline_targets()
                 .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
+            let family = self.build_family(0, programs, false)?;
             self.update_default_world_shader(programs, prepared)?;
-            self.update_grass_twins(programs)?;
+            self.install_family(family)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -104,31 +107,45 @@ impl VkContext {
         }
         let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
             .is_some_and(|live| live.prepass.is_some());
-        let grass = self.cull.world_pipelines.grass(bucket as usize);
-        let pipelines = self.bucket_pipelines(bucket, programs, grass, prepared, live_prepass)?;
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, variant, prepared, live_prepass)?;
+        let family = self.build_family(bucket, programs, false)?;
         self.cull.world_pipelines.install(bucket, pipelines)?;
+        self.install_family(family)?;
         Ok(PipelineSwap::Swapped)
     }
 
-    // Rebuild the default Shader's grass twins from its fresh programs, when
-    // the world has them. Built here rather than on a worker: only a hot reload
-    // of the default Shader reaches them.
-    fn update_grass_twins(
-        &mut self,
+    // Shader `shader`'s grass variants built from its fresh programs, when it
+    // has them: every one when `install`ing, else those already resident.
+    // Built here rather than on a worker: only a pin or a hot reload of the
+    // Shader reaches them. All are built before any is installed, so a
+    // failure keeps the live family whole.
+    fn build_family(
+        &self,
+        shader: u32,
         programs: &concinnity_engine::components::ShaderPrograms,
-    ) -> RenderResult<()> {
-        let twins = self.cull.world_pipelines.grass_twins();
-        for (twin, grass) in [
-            (twins.canopy, GrassShading::Canopy),
-            (twins.ground, GrassShading::Ground),
-        ] {
-            let Some(twin) = twin else {
+        install: bool,
+    ) -> RenderResult<Vec<(u32, BucketPipelines)>> {
+        let mut built = Vec::new();
+        for bucket in self.cull.world_pipelines.family(shader) {
+            let variant = self.cull.world_pipelines.variant(bucket as usize);
+            let live = self.cull.world_pipelines.get(bucket as usize);
+            if !install && live.is_none() {
                 continue;
-            };
-            let live_prepass = (self.cull.world_pipelines.get(twin as usize))
-                .is_some_and(|live| live.prepass.is_some());
-            let pipelines = self.bucket_pipelines(twin, programs, grass, None, live_prepass)?;
-            self.cull.world_pipelines.install(twin, pipelines)?;
+            }
+            let live_prepass = live.is_some_and(|live| live.prepass.is_some());
+            built.push((
+                bucket,
+                self.bucket_pipelines(bucket, programs, variant, None, live_prepass)?,
+            ));
+        }
+        Ok(built)
+    }
+
+    // Install a family `build_family` built.
+    fn install_family(&mut self, built: Vec<(u32, BucketPipelines)>) -> RenderResult<()> {
+        for (bucket, pipelines) in built {
+            self.cull.world_pipelines.install(bucket, pipelines)?;
         }
         Ok(())
     }
@@ -223,7 +240,7 @@ impl VkContext {
             let source = BucketSource {
                 programs: live.programs.as_ref(),
                 deferred: false,
-                grass: live.grass,
+                variant: live.variant,
             };
             let pipelines =
                 build_bucket_pipeline(&self.hw.device, targets, bucket, &source, engine)?;
@@ -241,7 +258,7 @@ impl VkContext {
             gate: self.pipeline_gate.clone(),
             world: self.bucket_pipeline_targets(),
             volumes: self.volume_pipeline_targets(),
-            grass: self.cull.world_pipelines.grass_shadings(),
+            variants: self.cull.world_pipelines.variants(),
         })
     }
 
@@ -249,22 +266,25 @@ impl VkContext {
     // which destroys them only once every frame in flight that recorded against
     // them has retired.
     pub(in crate::vulkan) fn evict_world_shader(&mut self, bucket: u32) {
+        let family = self.cull.world_pipelines.family(bucket);
+        for b in family {
+            self.cull.world_pipelines.evict(b);
+        }
         self.cull.world_pipelines.evict(bucket);
     }
 
     // Issue the bucket 1.. regions of `indirect`, each under its own material
     // shader's pipeline. Bucket 0's region is issued by the caller (it runs under
     // the pipeline the pass already bound), so this covers only the
-    // material-referenced shaders. `draw_count` is the record prefix each region
-    // draws, matching bucket 0's. Returns the number of indirect draws issued, and
-    // leaves the last bucket's pipeline bound.
+    // material-referenced shaders and grass variants. Returns the number of
+    // indirect draws issued, and leaves the last bucket's pipeline bound.
     pub(in crate::vulkan) fn draw_bucket_regions(
         &self,
         cmd: vk::CommandBuffer,
         indirect: vk::Buffer,
-        draw_count: u32,
+        frame_idx: usize,
     ) -> u32 {
-        self.for_each_resident_bucket(|bucket| {
+        self.for_each_resident_bucket(frame_idx, |bucket| {
             let Some(pipelines) = self.cull.world_pipelines.get(bucket) else {
                 return;
             };
@@ -280,7 +300,7 @@ impl VkContext {
                     pipeline.handle(),
                 );
             }
-            self.draw_bucket_region(cmd, indirect, draw_count, bucket);
+            self.draw_bucket_region(cmd, indirect, bucket);
         })
     }
 
@@ -295,10 +315,10 @@ impl VkContext {
         &self,
         cmd: vk::CommandBuffer,
         indirect: vk::Buffer,
-        draw_count: u32,
+        frame_idx: usize,
     ) -> u32 {
         let mut issued = 0;
-        for bucket in self.cull.world_pipelines.resident_buckets() {
+        for bucket in self.drawn_buckets(frame_idx) {
             let Some(prepass) = self
                 .cull
                 .world_pipelines
@@ -316,7 +336,7 @@ impl VkContext {
                     prepass.handle(),
                 );
             }
-            self.draw_bucket_region(cmd, indirect, draw_count, bucket);
+            self.draw_bucket_region(cmd, indirect, bucket);
             issued += 1;
         }
         issued
@@ -326,30 +346,59 @@ impl VkContext {
     // returning how many ran. A bucket whose scene has not pinned yet has no
     // pipeline: skip it until warmup builds one rather than drawing it with the
     // wrong program.
-    fn for_each_resident_bucket(&self, mut f: impl FnMut(usize)) -> u32 {
+    fn for_each_resident_bucket(&self, frame_idx: usize, mut f: impl FnMut(usize)) -> u32 {
         let mut issued = 0;
-        for bucket in self.cull.world_pipelines.resident_buckets() {
+        for bucket in self.drawn_buckets(frame_idx) {
             f(bucket);
             issued += 1;
         }
         issued
     }
 
-    fn draw_bucket_region(
-        &self,
-        cmd: vk::CommandBuffer,
-        indirect: vk::Buffer,
-        draw_count: u32,
-        bucket: usize,
-    ) {
+    // The buckets past the default whose regions draw in frame `frame_idx`:
+    // resident, holding records, and pickable in that frame's view.
+    fn drawn_buckets(&self, frame_idx: usize) -> impl Iterator<Item = usize> + '_ {
+        let live = self
+            .cull
+            .live_buckets
+            .get(frame_idx)
+            .map_or(u64::MAX, |l| l.load(std::sync::atomic::Ordering::Relaxed));
+        self.cull
+            .world_pipelines
+            .resident_buckets()
+            .filter(move |&b| {
+                (live >> b) & 1 != 0
+                    && self
+                        .cull
+                        .variants
+                        .regions
+                        .get(b)
+                        .is_some_and(|r| !r.is_empty())
+            })
+    }
+
+    // Draw bucket `bucket`'s region of `indirect`: the commands of the records
+    // the cull can route to it.
+    fn draw_bucket_region(&self, cmd: vk::CommandBuffer, indirect: vk::Buffer, bucket: usize) {
+        let Some(region) = self
+            .cull
+            .variants
+            .regions
+            .get(bucket)
+            .filter(|r| !r.is_empty())
+        else {
+            return;
+        };
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
+        // these commands name is live for the call; the region lies inside `indirect`, which
+        // was sized for every region.
         unsafe {
             self.hw.device.cmd_draw_indexed_indirect(
                 cmd,
                 indirect,
-                self.bucket_region_offset(bucket),
-                draw_count,
+                vk::DeviceSize::from(region.offset)
+                    * vk::DeviceSize::from(super::cull::INDIRECT_COMMAND_STRIDE),
+                region.len(),
                 super::cull::INDIRECT_COMMAND_STRIDE,
             );
         }

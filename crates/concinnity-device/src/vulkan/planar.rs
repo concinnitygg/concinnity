@@ -131,9 +131,22 @@ pub(in crate::vulkan) struct PlanarReflectionSet {
 pub(in crate::vulkan) struct PlanarCullSources<'a> {
     pub(in crate::vulkan) frame_object_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) frame_draw_args_buffers: &'a [PooledBuffer],
+    // The variant block every cull set binds; a single stream never reads it.
+    pub(in crate::vulkan) frame_variant_buffers: &'a [PooledBuffer],
     pub(in crate::vulkan) cull_set_layout: vk::DescriptorSetLayout,
     pub(in crate::vulkan) cull_count: usize,
     pub(in crate::vulkan) hiz: Option<(vk::DescriptorSetLayout, vk::ImageView)>,
+}
+
+// The planar pool: per (plane, frame) a global, a binning and a cull set, and
+// one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
+fn planar_pool_sizes(ring_sets: u32, has_hiz: u32) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&global_set(), ring_sets)
+        .sets(&light_cull_set_bindings(), ring_sets)
+        .sets(&crate::vulkan::init::main_cull_set(), ring_sets)
+        .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
+        .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
 }
 
 // SAFETY: The mapped view-ring pointers are POD raw pointers; the upload buffers stay
@@ -481,13 +494,7 @@ impl PlanarReflectionSet {
         // one Hi-Z set (an image and a UBO) when the world runs Hi-Z.
         let has_hiz = u32::from(cull.hiz.is_some());
         let ring_sets = u32::saturating_from(ring);
-        let pool_sizes = PoolSizes::default()
-            .sets(&global_set(), ring_sets)
-            .sets(&light_cull_set_bindings(), ring_sets)
-            .add(vk::DescriptorType::STORAGE_BUFFER, ring_sets * 4)
-            .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
-            .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
-            .build();
+        let pool_sizes = planar_pool_sizes(ring_sets, has_hiz).build();
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
             .max_sets(ring_sets * 3 + has_hiz);
@@ -537,6 +544,11 @@ impl PlanarReflectionSet {
                 .storage_buffer(1, cull.frame_draw_args_buffers[frame].buffer(), args_range)
                 .storage_buffer(2, cull_indirect_bufs[i].buffer(), indirect_size)
                 .storage_buffer(3, cull_status_bufs[i].buffer(), status_size)
+                .storage_buffer(
+                    4,
+                    cull.frame_variant_buffers[frame].buffer(),
+                    crate::vulkan::init::VARIANT_BUFFER_BYTES,
+                )
                 .apply(device);
         }
 
@@ -962,6 +974,19 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The pool holds every binding of every set the planar pass allocates.
+    #[test]
+    fn the_planar_pool_covers_its_sets() {
+        let cull = crate::vulkan::init::main_cull_set();
+        for ring in [1, 2, 6] {
+            assert!(planar_pool_sizes(ring, 1).covers(&[
+                (&global_set(), ring),
+                (&light_cull_set_bindings(), ring),
+                (&cull, ring),
+            ]));
+        }
+    }
 
     #[test]
     fn planar_capacity_is_four() {

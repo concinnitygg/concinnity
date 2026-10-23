@@ -679,10 +679,10 @@ fn bucket_bits_ride_above_the_cull_decision_bits() {
     assert_eq!(draw_args_bucket_bits(0), 0);
     assert_eq!(draw_args_bucket_bits(1), 1 << 8);
     assert_eq!(draw_args_bucket_bits(3), 3 << 8);
-    // A bucket past the routing budget clamps to the last routable one.
-    let last = u32::saturating_from(MAX_DRAW_BUCKETS - 1);
+    // A bucket past the cap clamps to the last routable one.
+    let last = u32::saturating_from(MAX_SHADER_BUCKETS - 1);
     assert_eq!(
-        draw_args_bucket_bits(u32::saturating_from(MAX_DRAW_BUCKETS)),
+        draw_args_bucket_bits(u32::saturating_from(MAX_SHADER_BUCKETS)),
         last << 8
     );
     assert_eq!(draw_args_bucket_bits(u32::MAX), last << 8);

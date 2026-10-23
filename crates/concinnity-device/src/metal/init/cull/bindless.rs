@@ -5,7 +5,7 @@ use super::CullInputs;
 use crate::metal::init::InitGpu;
 use crate::metal::init::pipelines::{self, BucketPipelines};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{BucketPlan, WorldPipelines};
 
 pub(super) struct BindlessPass {
@@ -42,15 +42,15 @@ pub(super) fn build_bindless_pass(
             inputs.vert_desc,
             0,
             world_shaders[0].programs,
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build,
         )?)
     } else {
         None
     };
 
-    // Material-referenced shaders (ShaderHandle 1..), and the default's
-    // canopy twin, each get a bindless pipeline; the cull kernel routes their
+    // Material-referenced shaders (ShaderHandle 1..), and each Shader's grass
+    // variants, each get a bindless pipeline; the cull kernel routes their
     // draws into per-bucket ICBs.
     let plan = BucketPlan::new(world_shaders)?;
     let world_pipelines = if inputs.features.scene && !plan.extra().is_empty() {
@@ -67,7 +67,7 @@ pub(super) fn build_bindless_pass(
                 inputs.vert_desc,
                 bucket,
                 source.programs,
-                source.grass,
+                source.variant,
                 build,
             )
         })?

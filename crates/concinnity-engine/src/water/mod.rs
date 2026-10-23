@@ -154,6 +154,11 @@ impl WaterBody {
             let cascades = water.ocean.as_ref().map(|o| &o.cascades);
             ShoreWaves::new(planet, f64::from(water.surface.sea_level), &shape, cascades)
         });
+        body.sway = water.reach()[1]
+            + body
+                .shore
+                .as_ref()
+                .map_or(0.0, |s| concinnity_core::math::narrow_f32(s.max_shift()));
         water.sea = Some(body);
         water
     }

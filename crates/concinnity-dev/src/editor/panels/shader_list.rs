@@ -99,7 +99,7 @@ pub(crate) fn can_add_shader(count: usize) -> bool {
 
 // Why "+ New Shader" is unavailable at the limit.
 pub(crate) fn limit_reason() -> String {
-    format!("{MAX_SHADER_BUCKETS} Shaders is the most a world can declare")
+    format!("a world draws with at most {MAX_SHADER_BUCKETS} shader buckets, one per Shader")
 }
 
 fn entry_type(e: &serde_json::Value) -> Option<&str> {

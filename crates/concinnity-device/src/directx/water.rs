@@ -47,6 +47,14 @@ const SEA: WaterPrograms = WaterPrograms {
     frag_rt_textured: &builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
 };
 
+// A planet sea lit from its own sky, where it reaches.
+const SEA_DAYLIGHT: WaterPrograms = WaterPrograms {
+    vert: &builtin_shaders::WATER_SEA_VERT,
+    frag: &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG,
+    frag_rt: &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT,
+    frag_rt_textured: &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+};
+
 // Compile a shape's vertex + fragment shaders. The fragment comes in an MSAA
 // pair, which keeps its depth SRV declaration in sync with the resource's sample
 // count; the vertex reads no depth and serves both pipelines. Used at init and
@@ -133,7 +141,7 @@ pub(in crate::directx) fn build_water_producer(
     let sea = surfaces
         .iter()
         .any(|b| b.sea.is_some())
-        .then(|| build.shape(&SEA))
+        .then(|| -> RenderResult<_> { Ok([build.shape(&SEA)?, build.shape(&SEA_DAYLIGHT)?]) })
         .transpose()?;
 
     let mut records = Vec::with_capacity(surfaces.len());
@@ -239,7 +247,7 @@ mod tests {
     #[test]
     fn water_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for programs in [&super::RECTANGLE, &super::SEA] {
+        for programs in [&super::RECTANGLE, &super::SEA, &super::SEA_DAYLIGHT] {
             for msaa in [1u32, 4] {
                 super::compile_water_shaders(programs, msaa, false)
                     .unwrap_or_else(|e| panic!("water shaders (msaa={msaa}) must compile: {e}"));
@@ -252,7 +260,7 @@ mod tests {
     #[test]
     fn water_rt_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for programs in [&super::RECTANGLE, &super::SEA] {
+        for programs in [&super::RECTANGLE, &super::SEA, &super::SEA_DAYLIGHT] {
             for msaa in [1u32, 4] {
                 super::compile_water_rt_shaders(programs, msaa, false)
                     .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));

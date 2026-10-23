@@ -564,6 +564,7 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
+                    regions: self.main_regions(),
                 },
             )?,
             PassId::Shadow => {
@@ -604,6 +605,7 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
+                    regions: self.main_regions(),
                 },
                 crate::metal::draw::main::MainPassExtras {
                     world_hidden: params.world_hidden,
@@ -858,8 +860,12 @@ impl MtlContext {
             cmd_buf,
             object_buffer,
             draw_args_buffer,
-            params.frustum,
-            params.cam_pos,
+            super::cull::CullView {
+                frustum: params.frustum,
+                cam_pos: params.cam_pos,
+                daylight: &self.state.view.daylight,
+                variants: &self.cull.variants,
+            },
             self.draw_record_counts(),
         )?;
         // GPU-driven shadow views: fill the cascade and spot-slice ICBs

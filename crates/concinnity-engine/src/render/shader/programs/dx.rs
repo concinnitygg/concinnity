@@ -44,6 +44,8 @@ static SHADER_MODEL_6_5: &[&ShaderProgram] = &[
     &shared::WATER_FRAG_RT_TEXTURED,
     &shared::WATER_SEA_FRAG_RT,
     &shared::WATER_SEA_FRAG_RT_TEXTURED,
+    &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+    &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
 ];
 
 /// Whether `program` compiles at shader model 6.5.

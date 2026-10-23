@@ -124,6 +124,31 @@ impl PoolSizes {
         self
     }
 
+    // Descriptors of type `ty` these sizes hold.
+    #[cfg(test)]
+    pub(in crate::vulkan) fn count(&self, ty: vk::DescriptorType) -> u32 {
+        self.0
+            .iter()
+            .filter(|s| s.ty == ty)
+            .map(|s| s.descriptor_count)
+            .sum()
+    }
+
+    // Whether these sizes hold `sets` of each table, every binding of every
+    // set, beside the descriptors any other set takes.
+    #[cfg(test)]
+    pub(in crate::vulkan) fn covers(&self, sets: &[(&[Binding], u32)]) -> bool {
+        let need = sets
+            .iter()
+            .fold(Self::default(), |acc, &(table, n)| acc.sets(table, n));
+        need.0.iter().all(|n| {
+            self.0
+                .iter()
+                .any(|s| s.ty == n.ty && s.descriptor_count >= n.descriptor_count)
+                || n.descriptor_count == 0
+        })
+    }
+
     // The pool sizes, leaving out every type with no descriptor: a zero
     // `descriptorCount` is invalid.
     pub(in crate::vulkan) fn build(self) -> Vec<vk::DescriptorPoolSize> {

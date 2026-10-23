@@ -25,6 +25,7 @@ use super::encode::ComputeEncode;
 use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
+use concinnity_engine::render::uniforms::DaylightBlock;
 use concinnity_engine::render::uniforms::metal::{CullUniforms, EncodeParams};
 
 // One shadow pass's GPU-driven views: an ICB with one region of `cull_count()`
@@ -94,8 +95,11 @@ pub(crate) struct CullState {
     // decision dispatch on the same encoder.
     pub encode_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     // How many shader buckets this world routes between: the world Shader
-    // count plus any grass twins. Fixed at init.
+    // count plus each Shader's grass variants. Fixed at init.
     pub bucket_count: usize,
+    // The routes and bucket regions every routed cull dispatch reads, its view
+    // set per dispatch. The regions follow the runtime draws each frame.
+    pub variants: render_types::GpuCullVariants,
     // One indirect command buffer per shader bucket (index = bucket); the
     // cull kernel encodes each record's draw into its bucket's ICB and resets
     // its slot everywhere else. Empty until `ensure_icb_capacity` builds them.
@@ -160,12 +164,42 @@ pub(crate) struct CullState {
 
 impl CullState {
     // The main pipeline a planar mirror's single stream draws under in place
-    // of the default's: the canopy twin's, when the world has one.
-    pub(in crate::metal) fn mirror_canopy_pipeline(
+    // of the default's: the default's fullest grass variant, when the world
+    // has one.
+    pub(in crate::metal) fn mirror_superset_pipeline(
         &self,
     ) -> Option<&Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
-        let twin = self.world_pipelines.canopy_twin()?;
-        Some(&self.world_pipelines.get(twin as usize)?.main)
+        let bucket = self.world_pipelines.superset_bucket()?;
+        Some(&self.world_pipelines.get(bucket as usize)?.main)
+    }
+
+    // The live frame's regions, every bucket drawn.
+    pub(in crate::metal) fn live_regions(&self) -> BucketRegions<'_> {
+        BucketRegions {
+            variants: &self.variants,
+            live: u64::MAX,
+        }
+    }
+}
+
+// The bucket regions a set of ICBs was encoded with, and the buckets its view
+// can pick: the live frame's, or a probe capture's snapshot.
+#[derive(Clone, Copy)]
+pub(in crate::metal) struct BucketRegions<'a> {
+    pub(in crate::metal) variants: &'a render_types::GpuCullVariants,
+    // A bit per bucket (see `GpuCullVariants::live_buckets`); the others skip.
+    pub(in crate::metal) live: u64,
+}
+
+impl BucketRegions<'_> {
+    // The commands bucket `b` executes from its ICB's start, `None` for the
+    // default, which executes the whole record set; none for a bucket the view
+    // cannot pick.
+    pub(in crate::metal) fn commands(&self, b: usize) -> Option<std::ops::Range<usize>> {
+        (b > 0).then(|| {
+            let len = self.variants.regions.get(b).map_or(0, |r| r.len() as usize);
+            0..if (self.live >> b) & 1 != 0 { len } else { 0 }
+        })
     }
 }
 
@@ -187,6 +221,8 @@ pub(super) const CULL_ICB_BUFFER_INDEX: usize = 4;
 const CULL_STATUS_BUFFER_INDEX: usize = 5;
 // Buffer index of the encode kernel's inline `EncodeParams`.
 const CULL_ENCODE_PARAMS_INDEX: usize = 7;
+// Buffer index of the inline `GpuCullVariants` both cull kernels read.
+const CULL_VARIANTS_BUFFER_INDEX: usize = 8;
 
 // The four texture-pool indices the Metal bindless fragment shader
 // (`fragment_main_bindless`, main_bindless.hlsl) reads for one surface. Albedo,
@@ -336,11 +372,15 @@ struct CullSceneBuffers<'a> {
 }
 
 // The camera the cull kernel tests records against: the frustum planes plus the
-// eye position for the distance-based LOD pick.
+// eye position for the distance-based LOD pick, and the planet sky the eye's
+// view is lit by, which picks each draw's grass variant.
 #[derive(Clone, Copy)]
-struct CullView<'a> {
-    frustum: &'a Frustum,
-    cam_pos: [f32; 3],
+pub(in crate::metal) struct CullView<'a> {
+    pub(in crate::metal) frustum: &'a Frustum,
+    pub(in crate::metal) cam_pos: [f32; 3],
+    pub(in crate::metal) daylight: &'a DaylightBlock,
+    // The routes and regions of the record set being culled.
+    pub(in crate::metal) variants: &'a render_types::GpuCullVariants,
 }
 
 // The output the cull kernel encodes survivors into: the target ICB, its
@@ -451,7 +491,7 @@ impl MtlContext {
         history: HistoryMode,
     ) -> RenderResult<Option<RecordBuffers>> {
         use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData, draw_args_flags};
-        use concinnity_engine::render::record_pack::{GrassRoute, PackView, StaticPack};
+        use concinnity_engine::render::record_pack::{PackView, StaticPack};
         let n_cull = self.cull_count();
         if n_cull == 0 {
             return Ok(None);
@@ -465,10 +505,7 @@ impl MtlContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_route: GrassRoute {
-                twins: self.cull.world_pipelines.grass_twins(),
-                far_start: self.grass_lod.map_or(0.0, |l| l.fade_start()),
-            },
+            routes: self.cull.world_pipelines.routes(),
             tile_morph: self.state.tile_morph,
         };
         let texture_count = self.scene.textures.len();
@@ -545,6 +582,14 @@ impl MtlContext {
         // indexing); the cull kernel routes records at/after
         // `skinned_record_base()` through that buffer.
         let skinned_base = n_static + n_instances;
+        // The runtime draws past the build-time ones, which every bucket past
+        // the default can take, and the record set the default executes.
+        let n_built = self.state.draw.n_objects.min(n_static);
+        self.cull.variants.cover_runtime(
+            self.cull.world_pipelines.bucket_count(),
+            n_cull,
+            n_built..n_static,
+        );
         let skinned = self
             .state
             .skinned
@@ -586,8 +631,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
         draw_args_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
-        frustum: &Frustum,
-        cam_pos: [f32; 3],
+        view: CullView<'_>,
         counts: DrawRecordCounts,
     ) -> RenderResult<()> {
         let (Some(arg_buf), Some(status)) = (&self.cull.icb_arg_buffer, &self.cull.status_buffer)
@@ -604,7 +648,7 @@ impl MtlContext {
                 draw_args_buffer,
                 counts,
             },
-            CullView { frustum, cam_pos },
+            view,
             CullOutputTarget {
                 icbs: &self.cull.icbs,
                 arg_buf,
@@ -655,6 +699,8 @@ impl MtlContext {
             CullView {
                 frustum,
                 cam_pos: eye,
+                daylight: &self.state.view.daylight,
+                variants: &self.cull.variants,
             },
             CullOutputTarget {
                 icbs: std::slice::from_ref(&mirror.icb),
@@ -667,6 +713,42 @@ impl MtlContext {
                 label: ns_string!("mirror cull"),
             },
         )
+    }
+
+    // `base`'s variant block for a view lit by `daylight`, the grass handing
+    // over to the canopy where this frame's blades do.
+    fn view_variants(
+        &self,
+        base: &render_types::GpuCullVariants,
+        daylight: &DaylightBlock,
+    ) -> render_types::GpuCullVariants {
+        let mut variants = *base;
+        variants.set_view(self.grass_lod.map_or(0.0, |l| l.fade_start()), daylight);
+        variants
+    }
+
+    // A probe capture's snapshot `variants`, drawing only the buckets its
+    // faces (lit by no planet sky) can pick.
+    pub(in crate::metal) fn probe_regions<'a>(
+        &self,
+        variants: &'a render_types::GpuCullVariants,
+    ) -> BucketRegions<'a> {
+        let live = self
+            .view_variants(variants, &DaylightBlock::OFF)
+            .live_buckets(self.cull.world_pipelines.bucket_count());
+        BucketRegions { variants, live }
+    }
+
+    // The live frame's regions for the main view, drawing only the buckets
+    // that view can pick.
+    pub(in crate::metal) fn main_regions(&self) -> BucketRegions<'_> {
+        let live = self
+            .view_variants(&self.cull.variants, &self.state.view.daylight)
+            .live_buckets(self.cull.world_pipelines.bucket_count());
+        BucketRegions {
+            variants: &self.cull.variants,
+            live,
+        }
     }
 
     // Shared body of every phase-1 cull dispatch (main + per-planar mirror): one
@@ -689,7 +771,12 @@ impl MtlContext {
             draw_args_buffer,
             counts,
         } = scene;
-        let CullView { frustum, cam_pos } = view;
+        let CullView {
+            frustum,
+            cam_pos,
+            daylight,
+            variants,
+        } = view;
         let CullOutputTarget {
             icbs,
             arg_buf,
@@ -770,6 +857,12 @@ impl MtlContext {
         // harmless placeholder when no skinned mesh is folded (skinned_base ==
         // object_count then, so the skinned branch never fires).
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        // The routes and regions for this view: the decision kernel picks each
+        // record's bucket, the encode kernel writes it where its regions say.
+        enc.set_value(
+            &self.view_variants(variants, daylight),
+            CULL_VARIANTS_BUFFER_INDEX,
+        );
         // Hi-Z depth pyramid at texture(0). Bound directly (not via an
         // argument buffer), so Metal tracks its residency automatically.
         // Always bound when present; `hiz_enabled` decides whether it's read.
@@ -881,6 +974,10 @@ impl MtlContext {
         // of two-pass occlusion re-tests the same records, so the skinned
         // tail is handled here too.
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        enc.set_value(
+            &self.view_variants(&self.cull.variants, &self.state.view.daylight),
+            CULL_VARIANTS_BUFFER_INDEX,
+        );
         enc.set_texture(hiz.texture.as_ref(), 0);
         // The encode kernel writes draw commands into the phase-2 ICBs through
         // the argument buffer, so each must be declared resident here too.
@@ -955,6 +1052,9 @@ impl MtlContext {
         // Skinned index buffer at buffer(6); the encode kernel bakes it into
         // the skinned-tail commands exactly like the main cull.
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        // The encode kernel declares the variant block; a single stream never
+        // reads it.
+        enc.set_value(&self.cull.variants, CULL_VARIANTS_BUFFER_INDEX);
 
         // Same cascade set the shadow render pass refreshes this frame; a skipped
         // cascade keeps its prior depth slice, so its cull dispatch + ICB region
@@ -1372,5 +1472,69 @@ mod tests {
         let idx = metal_flat_pool_indices(cap + 5, 9999, 9999, &MaterialUniforms::DEFAULT);
         assert_eq!(idx.albedo, u32::saturating_from(cap - 1));
         assert_eq!(idx.normal, u32::saturating_from(cap - 1));
+    }
+
+    // A probe face draws the record set its capture snapshotted: after the live
+    // draw list grows, the snapshot's regions still hold each of its records
+    // once and execute exactly its count, while the live ones have moved on.
+    #[test]
+    fn a_snapshot_keeps_its_regions_as_the_live_list_grows() {
+        use super::BucketRegions;
+        use concinnity_engine::gfx::render_types::{BucketSpans, GpuCullVariants, bucket_regions};
+        let spans = [
+            BucketSpans {
+                records: 0..40,
+                runtime: 0..0,
+            },
+            BucketSpans {
+                records: 4..10,
+                runtime: 0..0,
+            },
+            BucketSpans {
+                records: 12..20,
+                runtime: 0..0,
+            },
+        ];
+        let mut live = GpuCullVariants {
+            regions: bucket_regions(&spans),
+            ..GpuCullVariants::default()
+        };
+        live.cover_runtime(3, 40, 30..34);
+        let snapshot = live;
+        live.cover_runtime(3, 48, 30..42);
+        let face = BucketRegions {
+            variants: &snapshot,
+            live: u64::MAX,
+        };
+        assert_eq!(face.commands(1), Some(0..6 + 4));
+        assert_eq!(face.commands(2), Some(0..8 + 4));
+        for record in 30..34 {
+            for b in 1..3 {
+                let r = &snapshot.regions[b];
+                let slot = r
+                    .command(record)
+                    .expect("the snapshot holds its runtime records");
+                assert!(slot - r.offset < r.len());
+            }
+        }
+        assert!(
+            snapshot.regions[1].command(36).is_none(),
+            "grown past the snapshot"
+        );
+        assert_ne!(live.regions[2].offset, snapshot.regions[2].offset);
+        let skipped = BucketRegions {
+            variants: &snapshot,
+            live: 0b101,
+        };
+        assert_eq!(
+            skipped.commands(1),
+            Some(0..0),
+            "a bucket the view cannot pick"
+        );
+        assert_eq!(
+            skipped.commands(0),
+            None,
+            "the default executes every record"
+        );
     }
 }

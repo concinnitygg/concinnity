@@ -245,8 +245,92 @@ mod tests {
     }
 
     #[test]
-    fn the_bucket_count_matches_render_types() {
-        use concinnity_engine::gfx::render_types::MAX_DRAW_BUCKETS;
-        assert_eq!(encode_const("MAX_DRAW_BUCKETS") as usize, MAX_DRAW_BUCKETS);
+    fn the_bucket_limits_match_render_types() {
+        use concinnity_engine::gfx::cull_status::CullStatus;
+        use concinnity_engine::gfx::render_types::{
+            GpuCullVariants, MAX_SHADER_BUCKETS, MAX_VARIANT_ROUTES,
+        };
+        assert_eq!(
+            encode_const("MAX_SHADER_BUCKETS") as usize,
+            MAX_SHADER_BUCKETS
+        );
+        assert_eq!(
+            encode_const("MAX_VARIANT_ROUTES") as usize,
+            MAX_VARIANT_ROUTES
+        );
+        assert_eq!(encode_const("CULL_BUCKET_SHIFT"), CullStatus::BUCKET_SHIFT);
+        // Bound with setBytes, which takes at most 4 KB.
+        assert!(size_of::<GpuCullVariants>() <= 4096);
+    }
+
+    // The hand-written `BucketRegion` and `CullVariants` in the encode kernel
+    // lay out as their Rust twins: the kernel's source, compiled with a probe
+    // that writes their sizes and offsets.
+    #[test]
+    fn the_encode_kernels_variant_block_matches_render_types() {
+        use concinnity_engine::gfx::render_types::{GpuBucketRegion, GpuCullVariants};
+        use objc2_foundation::NSString;
+        use objc2_metal::{
+            MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCommandQueue as _,
+            MTLComputeCommandEncoder as _, MTLDevice as _, MTLLibrary as _, MTLResourceOptions,
+            MTLSize,
+        };
+        use std::mem::offset_of;
+        let Some(device) = objc2_metal::MTLCreateSystemDefaultDevice() else {
+            return;
+        };
+        let probe = "
+kernel void layout_probe(device uint *out [[buffer(0)]]) {
+    out[0] = sizeof(BucketRegion);
+    out[1] = __builtin_offsetof(BucketRegion, runtime_first);
+    out[2] = __builtin_offsetof(BucketRegion, offset);
+    out[3] = sizeof(CullVariants);
+    out[4] = __builtin_offsetof(CullVariants, day_reach);
+    out[5] = __builtin_offsetof(CullVariants, routes);
+    out[6] = __builtin_offsetof(CullVariants, regions);
+}
+";
+        let source = format!("{}{probe}", cull_encode_source(false));
+        let library = device
+            .newLibraryWithSource_options_error(&NSString::from_str(&source), None)
+            .expect("the encode kernel compiles with the probe");
+        let function = library
+            .newFunctionWithName(&NSString::from_str("layout_probe"))
+            .expect("probe");
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&function)
+            .expect("probe pipeline");
+        let out = device
+            .newBufferWithLength_options(7 * 4, MTLResourceOptions::StorageModeShared)
+            .expect("buffer");
+        let queue = device.newCommandQueue().expect("queue");
+        let cmd = queue.commandBuffer().expect("command buffer");
+        let enc = cmd.computeCommandEncoder().expect("encoder");
+        enc.setComputePipelineState(&pipeline);
+        // SAFETY: `out` is a live buffer at index 0, the probe's one argument.
+        unsafe { enc.setBuffer_offset_atIndex(Some(&out), 0, 0) };
+        let one = MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(one, one);
+        enc.endEncoding();
+        cmd.commit();
+        cmd.waitUntilCompleted();
+        // SAFETY: the command buffer completed, so the shared buffer holds the
+        // probe's seven words and nothing writes it.
+        let got = unsafe { std::slice::from_raw_parts(out.contents().as_ptr().cast::<u32>(), 7) };
+        let want = [
+            size_of::<GpuBucketRegion>(),
+            offset_of!(GpuBucketRegion, runtime_first),
+            offset_of!(GpuBucketRegion, offset),
+            size_of::<GpuCullVariants>(),
+            offset_of!(GpuCullVariants, day_reach),
+            offset_of!(GpuCullVariants, routes),
+            offset_of!(GpuCullVariants, regions),
+        ];
+        let got: Vec<usize> = got.iter().map(|&w| w as usize).collect();
+        assert_eq!(got, want);
     }
 }

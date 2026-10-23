@@ -10,7 +10,7 @@
 use crate::metal::cull::ShadowViewIcb;
 use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 
@@ -148,7 +148,7 @@ impl MtlContext {
                 device,
                 0,
                 self.world_shader.as_ref(),
-                GrassShading::None,
+                SurfaceVariant::Plain,
                 build,
                 self.cull.main_pipeline.as_ref(),
                 None,
@@ -353,7 +353,7 @@ impl MtlContext {
                 &self.hw.device,
                 0,
                 Some(programs),
-                GrassShading::None,
+                SurfaceVariant::Plain,
                 self.bucket_build(),
                 self.cull.main_pipeline.as_ref(),
                 prepared,

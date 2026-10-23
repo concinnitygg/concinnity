@@ -225,7 +225,7 @@ impl VkContext {
             self.inc_draw_calls(self.draw_bucket_regions(
                 cmd,
                 self.cull.indirect_buffers[frame_idx].buffer(),
-                u32::saturating_from(self.state.draw.skinned_record_base()),
+                frame_idx,
             ));
             // Restore the default bindless pipeline for the sub-paths below.
             if self.shader_bucket_count() > 1 {
@@ -485,7 +485,7 @@ impl VkContext {
         self.inc_draw_calls(self.draw_bucket_regions(
             cmd,
             self.cull.indirect_buffers2[frame_idx].buffer(),
-            u32::saturating_from(self.state.draw.skinned_record_base()),
+            frame_idx,
         ));
 
         // Indirect draw #2: the skinned tail against the deformed VB + skinned IB.

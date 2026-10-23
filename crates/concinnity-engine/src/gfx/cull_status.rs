@@ -31,6 +31,22 @@ impl CullStatus {
     pub const REDRAW: u32 = 3;
     /// A candidate phase 2 found still occluded by this frame's own depth.
     pub const HIZ_CULLED: u32 = 4;
+
+    /// The bits of a status word holding the outcome.
+    pub const OUTCOME_MASK: u32 = 0xFF;
+    /// Where the shader bucket phase 1 routed the record to starts in a
+    /// status word.
+    pub const BUCKET_SHIFT: u32 = 8;
+
+    /// The outcome a status word holds.
+    pub fn outcome(word: u32) -> u32 {
+        word & Self::OUTCOME_MASK
+    }
+
+    /// The shader bucket a status word holds.
+    pub fn bucket(word: u32) -> u32 {
+        word >> Self::BUCKET_SHIFT
+    }
 }
 
 /// A tally of one frame's cull-status buffer: how many objects landed in each
@@ -83,8 +99,8 @@ impl CullStatusCounts {
 /// Reduce a raw cull-status readback to per-outcome counts.
 pub fn tally(raw: &[u32]) -> CullStatusCounts {
     let mut c = CullStatusCounts::default();
-    for &status in raw {
-        let slot = match status {
+    for &word in raw {
+        let slot = match CullStatus::outcome(word) {
             CullStatus::DRAWN => &mut c.drawn,
             CullStatus::CULLED => &mut c.frustum_culled,
             CullStatus::HIZ_CANDIDATE => &mut c.hiz_candidate,
@@ -210,6 +226,25 @@ mod tests {
                 .unwrap_or_else(|| panic!("cull.hlsl declares no {name}"));
             assert_eq!(found.1, value, "{name} disagrees with cull.hlsl");
         }
+    }
+
+    // The bucket rides above the outcome in a status word, as cull.hlsl packs
+    // it, and a tally counts the outcome alone.
+    #[test]
+    fn a_status_word_carries_its_bucket_above_the_outcome() {
+        let src = crate::render::shader::embedded::CULL;
+        assert_eq!(
+            crate::render::shader::consts::uint(src, "CULL_OUTCOME_MASK"),
+            CullStatus::OUTCOME_MASK as usize
+        );
+        assert_eq!(
+            crate::render::shader::consts::uint(src, "CULL_BUCKET_SHIFT"),
+            CullStatus::BUCKET_SHIFT as usize
+        );
+        let word = CullStatus::REDRAW | (63 << CullStatus::BUCKET_SHIFT);
+        assert_eq!(CullStatus::outcome(word), CullStatus::REDRAW);
+        assert_eq!(CullStatus::bucket(word), 63);
+        assert_eq!(tally(&[word]).redrawn, 1);
     }
 
     // Scrape `static const uint STATUS_<NAME> = <N>u;` declarations.

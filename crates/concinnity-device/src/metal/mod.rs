@@ -21,6 +21,8 @@ mod fault_log;
 // bake can name the shared main-pass param structs (MainPassCamera, DrawInputs,
 // GpuFrameBuffers, FaceTargets) defined in draw/main.rs.
 mod builtin_shaders;
+#[cfg(test)]
+mod cull_variants_test;
 pub(in crate::metal) mod draw;
 mod fog;
 mod frame_pacing;

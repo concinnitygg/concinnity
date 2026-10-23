@@ -746,12 +746,7 @@ impl DxContext {
         // command buffer, each drawn under its own pre-pass PSO; a bucket whose
         // Shader is not resident is skipped, matching what the color pass will
         // draw.
-        self.inc_draw_calls(self.execute_prepass_bucket_regions(
-            cmd,
-            cmd_sig,
-            indirect,
-            u32::saturating_from(prefix),
-        ));
+        self.inc_draw_calls(self.execute_prepass_bucket_regions(cmd, cmd_sig, indirect, frame_idx));
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
         // deformed VB (slot 1) + the skinned IB, then one `ExecuteIndirect`

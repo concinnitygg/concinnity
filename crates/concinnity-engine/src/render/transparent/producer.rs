@@ -4,17 +4,30 @@
 //! backend's pipeline handle and `R` its per-record GPU state.
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use crate::planet::Rebase;
 use crate::render::environment::water::frame::WaterMotion;
 use crate::render::transparent::Producer;
-use crate::render::uniforms::WaterParams;
+use crate::render::uniforms::{DaylightBlock, WaterParams};
 
 /// A backend record that accepts a water surface's per-frame params into its
 /// frame slot's copy.
 pub trait WaterParamsSink {
     /// Overwrite frame slot `frame_idx`'s params copy with `params`.
     fn write_water_params(&self, frame_idx: usize, params: &WaterParams);
+}
+
+/// What a frame's record draws are picked by: whether the trace is live, and
+/// textured, and the planet sky the view is lit by.
+#[derive(Clone, Copy)]
+pub struct RecordFrame<'a> {
+    /// The trace is live this frame.
+    pub rt_live: bool,
+    /// The trace shades hits from the bindless texture pool.
+    pub textured: bool,
+    /// The view's planet sky.
+    pub daylight: &'a DaylightBlock,
 }
 
 /// One drawable record of a static producer: the backend's geometry and params
@@ -91,30 +104,64 @@ pub struct TransparentProducer<P, R> {
     /// The glass reflection pre-pass pipeline (textured).
     pub reflection_textured: Option<P>,
     /// A planet sea's own shape pipelines, for the water producer's sea
-    /// records; `None` when no record is one.
-    pub sea: Option<ShapePipelines<P>>,
+    /// records, without and with the planet's own sky; `None` when no record
+    /// is one.
+    pub sea: Option<[ShapePipelines<P>; 2]>,
     /// The records, in declaration order.
     pub records: Vec<TransparentRecord<R>>,
     /// Each water record's motion, parallel to `records`.
     pub water: Vec<WaterMotion>,
 }
 
+/// One draw of a record: the pipeline and the range of its indices.
+pub struct RecordDraw<'a, P> {
+    /// The pipeline the draw binds.
+    pub pipeline: &'a P,
+    /// The record's indices the draw takes.
+    pub indices: Range<u32>,
+}
+
 impl<P, R> TransparentProducer<P, R> {
-    /// The pipeline record `i` draws with: a planet sea's own, or the
-    /// producer's.
-    pub fn record_pipeline(&self, i: usize, rt_live: bool, textured: bool) -> &P {
-        match &self.sea {
-            Some(sea) if self.water.get(i).is_some_and(|w| w.body().sea.is_some()) => {
-                sea.pick(rt_live, textured)
+    /// The draws record `i`, of `index_count` indices, takes this frame, in
+    /// order. A planet sea draws its outer rings lit from the planet's own
+    /// sky under `daylight`, then the inner rings the sky cannot reach without
+    /// it, so the nearer water draws over the farther; any other record draws
+    /// whole with the producer's pipeline.
+    pub fn record_draws(
+        &self,
+        i: usize,
+        frame: RecordFrame<'_>,
+        index_count: u32,
+    ) -> [Option<RecordDraw<'_, P>>; 2] {
+        let sea = self.water.get(i).and_then(|w| w.body().sea.as_ref());
+        match (&self.sea, sea) {
+            (Some([lean, daylight]), Some(body)) => {
+                let [inner, outer] = body.sky_split(frame.daylight);
+                [(daylight, outer), (lean, inner)].map(|(shape, indices)| {
+                    (!indices.is_empty()).then(|| RecordDraw {
+                        pipeline: shape.pick(frame.rt_live, frame.textured),
+                        indices,
+                    })
+                })
             }
-            _ => self.shape.pick(rt_live, textured),
+            _ => [
+                Some(RecordDraw {
+                    pipeline: self.shape.pick(frame.rt_live, frame.textured),
+                    indices: 0..index_count,
+                }),
+                None,
+            ],
         }
     }
 
     /// Whether every record can trace: the producer's and its sea's variant
     /// `textured` names.
     pub fn traces(&self, textured: bool) -> bool {
-        self.shape.traces(textured) && self.sea.as_ref().is_none_or(|s| s.traces(textured))
+        self.shape.traces(textured)
+            && self
+                .sea
+                .as_ref()
+                .is_none_or(|pair| pair.iter().all(|s| s.traces(textured)))
     }
 
     /// This producer's reflection pre-pass pipeline, or `None` when it traces in
@@ -293,10 +340,31 @@ mod tests {
             WaterMotion::new(&body(), false),
             WaterMotion::new(&sea, false)
         ];
-        p.sea = Some(shape(10, Some(20), None));
-        assert_eq!(*p.record_pipeline(0, true, false), 2);
-        assert_eq!(*p.record_pipeline(1, true, false), 20);
-        assert_eq!(*p.record_pipeline(1, false, false), 10);
+        p.sea = Some([shape(10, Some(20), None), shape(11, Some(21), None)]);
+        let frame = |rt_live, daylight| RecordFrame {
+            rt_live,
+            textured: false,
+            daylight,
+        };
+        let draws = |i, f| -> Vec<(u8, Range<u32>)> {
+            p.record_draws(i, f, 600)
+                .into_iter()
+                .flatten()
+                .map(|d| (*d.pipeline, d.indices))
+                .collect()
+        };
+        assert_eq!(draws(0, frame(true, &DaylightBlock::OFF)), [(2, 0..600)]);
+        // No planet sky lights the view: the whole sea draws without it.
+        let all = sea.sea.as_ref().unwrap().grid.ring_indices(u32::MAX);
+        assert_eq!(draws(1, frame(true, &DaylightBlock::OFF)), [(20, 0..all)]);
+        assert_eq!(draws(1, frame(false, &DaylightBlock::OFF)), [(10, 0..all)]);
+        // A camera high enough for the sky to reach everywhere: all with it.
+        let high = DaylightBlock {
+            center: [0.0, 0.0, 0.0, 1.0],
+            camera_up: [0.0, 1.0, 0.0, 1.0],
+            ..DaylightBlock::OFF
+        };
+        assert_eq!(draws(1, frame(false, &high)), [(11, 0..all)]);
         // The sea's textured variant is missing, so the producer cannot trace
         // textured even though its own shape would not either.
         assert!(p.traces(false));

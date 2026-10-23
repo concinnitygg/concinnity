@@ -72,6 +72,27 @@ impl SceneData<'_> {
             + clone_reserve(n_objects)
             + self.n_skinned
     }
+
+    /// The records of the runtime reserve, past the static objects and the
+    /// instances: the streamed-chunk window and the runtime-clone budget.
+    pub fn runtime_records(&self) -> core::ops::Range<usize> {
+        let n_objects = self.draw_objects.len();
+        let base = n_objects + self.instance_count();
+        base..base + self.n_chunk_max + clone_reserve(n_objects)
+    }
+
+    /// The command regions every shader bucket of `pipelines` takes, as a
+    /// backend with a fixed runtime reserve sizes its indirect buffers.
+    pub fn cull_variants<P>(
+        &self,
+        pipelines: &crate::render::shader::world_pipelines::WorldPipelines<P>,
+    ) -> crate::gfx::render_types::GpuCullVariants {
+        pipelines.cull_variants(&pipelines.bucket_spans(
+            &self.draw_objects,
+            self.runtime_records(),
+            self.cull_records(),
+        ))
+    }
 }
 
 /// One world Shader as the backend receives it: the cook's compiled programs,
@@ -87,11 +108,11 @@ pub struct WorldShader<'a> {
     /// scene owns it: the backend leaves the bucket's pipeline unbuilt and the
     /// streaming pump installs it when that scene pins.
     pub deferred: bool,
-    /// A surface shading its ground from the canopy block
-    /// (`FarFieldTint::shades_ground`) draws under this Shader, so its draws
-    /// need the canopy (see
+    /// The grass variants this Shader's draws route between: any when a
+    /// surface shading its ground from the canopy block
+    /// (`FarFieldTint::shades_ground`) draws under it (see
     /// [`crate::render::shader::world_pipelines`]).
-    pub canopy: bool,
+    pub grass: crate::render::shader::world_pipelines::GrassVariants,
 }
 
 /// Decoded image payloads: texture pools, glyph atlases, and the serialized
@@ -394,7 +415,7 @@ impl<'a> BackendInit<'a> {
             shaders: vec![WorldShader {
                 programs: None,
                 deferred: false,
-                canopy: false,
+                grass: crate::render::shader::world_pipelines::GrassVariants::None,
             }],
             media: MediaPayloads {
                 textures: &[],

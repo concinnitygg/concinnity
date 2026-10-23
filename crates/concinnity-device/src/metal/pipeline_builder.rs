@@ -10,7 +10,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
@@ -25,8 +25,8 @@ use super::raymarch::{VolumePipelines, build_volume_pipelines};
 pub(super) struct MtlPipelineBuilder {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub targets: BucketBuild,
-    // Per bucket: what of the grass its main fragment shades.
-    pub grass: Vec<GrassShading>,
+    // Per bucket: which of its Shader's main fragments it draws with.
+    pub variants: Vec<SurfaceVariant>,
 }
 
 // A world Shader's main-pass and pre-pass pipelines and what they were built
@@ -63,7 +63,10 @@ impl PipelineBuilder for MtlPipelineBuilder {
                 &make_vertex_descriptor(),
                 bucket as usize,
                 Some(programs),
-                self.grass.get(bucket as usize).copied().unwrap_or_default(),
+                self.variants
+                    .get(bucket as usize)
+                    .copied()
+                    .unwrap_or_default(),
                 self.targets,
             )
         })?;
@@ -155,7 +158,7 @@ mod tests {
                 main: pipeline.clone(),
                 prepass: Some(pipeline.clone()),
                 programs: None,
-                grass: GrassShading::None,
+                variant: SurfaceVariant::Plain,
             },
         })
     }

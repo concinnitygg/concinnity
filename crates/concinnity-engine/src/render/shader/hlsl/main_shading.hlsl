@@ -268,9 +268,13 @@ float ltc_evaluate(float3 N, float3 V, float3 P, float3x3 m_inv, float3 corners[
 #define DAYLIGHT VIEW.daylight
 {DAYLIGHT}
 
-// Only a planet's ground is lit from its own sky; every other surface keeps
-// the camera's, and compiles without it.
+// A planet's ground skips a body too faint to show. Only its daylight
+// variants light it from its own sky; every other surface keeps the camera's,
+// and compiles without it.
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
+#define FAINT_BODY_SKIP 1
+#endif
+#if defined(FAINT_BODY_SKIP) && defined(SURFACE_DAYLIGHT)
 #define DAYLIGHT_SURFACE 1
 #endif
 
@@ -413,6 +417,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         {
             radiance = lerp(radiance, daylight_body_light(uint(i), day_up), day_reach);
         }
+#endif
+#ifdef FAINT_BODY_SKIP
         // A body too faint to show (the sun by night, the moon by day).
         if (daylight_on() && max(radiance.r, max(radiance.g, radiance.b)) * VIEW.pre_exposure < 1e-4)
         {

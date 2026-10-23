@@ -6,7 +6,7 @@
 
 use concinnity_engine::components::ShaderPrograms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::shader::programs::surface::GrassShading;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::programs::{ShaderProgram, shared, surface};
 use concinnity_engine::render::shader::world_pipelines::replace_bucket;
 use objc2::rc::Retained;
@@ -28,8 +28,8 @@ pub(crate) struct BucketPipelines {
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
     pub programs: Option<ShaderPrograms>,
-    // What of the grass the main fragment shades.
-    pub grass: GrassShading,
+    // Which of its Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
 // What every bucket's pipelines are built under.
@@ -79,7 +79,7 @@ fn bucket_context(bucket: usize) -> impl Fn(RenderError) -> RenderError {
 
 // Build shader bucket `bucket`'s pipelines: the engine's own programs for
 // bucket 0 of a world without a default Shader, else `world`'s, the main
-// fragment with the canopy when `canopy`. Both opt into indirect command
+// fragment `variant`. Both opt into indirect command
 // buffers, since every bucket draws through its ICB. A pre-pass that fails to
 // build leaves the bucket without one.
 pub(crate) fn build_bucket_pipelines(
@@ -87,10 +87,10 @@ pub(crate) fn build_bucket_pipelines(
     vert_desc: &MTLVertexDescriptor,
     bucket: usize,
     world: Option<&ShaderPrograms>,
-    grass: GrassShading,
+    variant: SurfaceVariant,
     build: BucketBuild,
 ) -> RenderResult<BucketPipelines> {
-    let main = build_bucket_main(device, vert_desc, bucket, world, grass, build)?;
+    let main = build_bucket_main(device, vert_desc, bucket, world, variant, build)?;
     let prepass = if build.prepass {
         build_bucket_prepass(device, bucket, world, build.hot_reload)
     } else {
@@ -100,7 +100,7 @@ pub(crate) fn build_bucket_pipelines(
         main,
         prepass,
         programs: world.cloned(),
-        grass,
+        variant,
     })
 }
 
@@ -111,7 +111,7 @@ pub(crate) fn replacement(
     device: &ProtocolObject<dyn MTLDevice>,
     bucket: usize,
     world: Option<&ShaderPrograms>,
-    grass: GrassShading,
+    variant: SurfaceVariant,
     build: BucketBuild,
     live: Option<&BucketPipelines>,
     prepared: Option<BucketPipelines>,
@@ -122,14 +122,14 @@ pub(crate) fn replacement(
             &make_vertex_descriptor(),
             bucket,
             world,
-            grass,
+            variant,
             build,
         )
     };
     replace_bucket(
         bucket,
         live.is_some_and(|l| l.prepass.is_some()),
-        prepared.filter(|p| p.grass == grass),
+        prepared.filter(|p| p.variant == variant),
         |p: &BucketPipelines| p.prepass.is_some(),
         make,
     )
@@ -140,7 +140,7 @@ fn build_bucket_main(
     vert_desc: &MTLVertexDescriptor,
     bucket: usize,
     world: Option<&ShaderPrograms>,
-    grass: GrassShading,
+    variant: SurfaceVariant,
     build: BucketBuild,
 ) -> RenderResult<Pipeline> {
     let (vert_fn, frag_fn) = bucket_stages(
@@ -148,9 +148,9 @@ fn build_bucket_main(
         world,
         [
             &engine::MAIN_BINDLESS_VERT,
-            shared::main_bindless_frag(grass),
+            shared::main_bindless_frag(variant),
         ],
-        [&surface::MAIN_VERTEX, surface::main_fragment(grass)],
+        [&surface::MAIN_VERTEX, surface::main_fragment(variant)],
         build.hot_reload,
     )
     .map_err(bucket_context(bucket))?;
@@ -234,7 +234,7 @@ impl MtlContext {
                 &self.hw.device,
                 bucket,
                 programs,
-                live.grass,
+                live.variant,
                 build,
                 Some(live),
                 None,
@@ -341,7 +341,7 @@ mod tests {
             &vert_desc,
             1,
             Some(&broken),
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build(true),
         )
         .expect("the main pipeline builds");
@@ -351,7 +351,7 @@ mod tests {
             &vert_desc,
             1,
             Some(&world()),
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build(true),
         )
         .expect("a world bucket builds");
@@ -362,7 +362,7 @@ mod tests {
                 &device,
                 1,
                 Some(&broken),
-                GrassShading::None,
+                SurfaceVariant::Plain,
                 build(true),
                 Some(live),
                 prepared,
@@ -377,7 +377,7 @@ mod tests {
             &device,
             1,
             Some(&world()),
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build(true),
             Some(&healthy),
             None,
@@ -400,7 +400,7 @@ mod tests {
             &make_vertex_descriptor(),
             1,
             Some(&world),
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build(false),
         )
         .expect("a world bucket builds");
@@ -431,7 +431,7 @@ mod tests {
             &make_vertex_descriptor(),
             1,
             Some(&world),
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build(true),
         )
         .expect("a world bucket builds");
@@ -445,15 +445,15 @@ mod tests {
             &make_vertex_descriptor(),
             1,
             Some(&world),
-            GrassShading::None,
+            SurfaceVariant::Plain,
             build(false),
         )
         .expect("a world bucket builds");
         assert!(without.prepass.is_none());
     }
 
-    // The default's grass twins build from the engine's own programs and
-    // remember what of the grass they shade, as do a world Shader's.
+    // The grass variants build from the engine's own programs and remember
+    // which they are, as do a world Shader's.
     #[test]
     fn grass_buckets_build_and_keep_their_shading() {
         concinnity_shader::require_dxc!();
@@ -462,14 +462,14 @@ mod tests {
         };
         let vert_desc = make_vertex_descriptor();
         let world = world();
-        for grass in [GrassShading::Canopy, GrassShading::Ground] {
-            let twin = build_bucket_pipelines(&device, &vert_desc, 2, None, grass, build(false))
-                .expect("an engine grass twin builds");
-            assert!(twin.grass == grass && twin.programs.is_none());
+        for variant in SurfaceVariant::ALL {
+            let twin = build_bucket_pipelines(&device, &vert_desc, 2, None, variant, build(false))
+                .expect("an engine grass variant builds");
+            assert!(twin.variant == variant && twin.programs.is_none());
             let shaded =
-                build_bucket_pipelines(&device, &vert_desc, 1, Some(&world), grass, build(false))
+                build_bucket_pipelines(&device, &vert_desc, 1, Some(&world), variant, build(false))
                     .expect("a world grass bucket builds");
-            assert_eq!(shaded.grass, grass);
+            assert_eq!(shaded.variant, variant);
         }
     }
 }

@@ -2279,17 +2279,7 @@ impl VkContext {
         set_flipped_viewport(device, cmd, extent);
         self.bind_transparent_sets(transparent, &frame, transparent.view_sets[frame_idx].scene);
         let mut bound: Option<vk::Pipeline> = None;
-        for &(kind, i) in order {
-            let pipeline = match kind {
-                Producer::GlassMesh => transparent
-                    .glass_mesh
-                    .as_ref()
-                    .expect("the draw order only names live producers")
-                    .pipeline(textured),
-                _ => transparent
-                    .producer(kind)
-                    .record_pipeline(i, rt_live, textured),
-            };
+        let mut bind = |pipeline: &OwnedPipeline| {
             if bound != Some(pipeline.handle()) {
                 // SAFETY: `cmd` is a command buffer in the recording state, and the pipeline is
                 // live for the call.
@@ -2302,7 +2292,34 @@ impl VkContext {
                 }
                 bound = Some(pipeline.handle());
             }
-            self.draw_transparent_entry(transparent, &frame, kind, i);
+        };
+        let record_frame = producer::RecordFrame {
+            rt_live,
+            textured,
+            daylight: &self.state.view.daylight,
+        };
+        for &(kind, i) in order {
+            if kind == Producer::GlassMesh {
+                bind(
+                    transparent
+                        .glass_mesh
+                        .as_ref()
+                        .expect("the draw order only names live producers")
+                        .pipeline(textured),
+                );
+                self.draw_transparent_entry(transparent, &frame, kind, i, None);
+                continue;
+            }
+            let p = transparent.producer(kind);
+            let index_count = p.records.get(i).map_or(0, |r| r.gpu.index_count);
+            for draw in p
+                .record_draws(i, record_frame, index_count)
+                .into_iter()
+                .flatten()
+            {
+                bind(draw.pipeline);
+                self.draw_transparent_entry(transparent, &frame, kind, i, Some(draw.indices));
+            }
         }
         // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
         // above.
@@ -2367,7 +2384,7 @@ impl VkContext {
                         pipeline.handle(),
                     );
                 }
-                self.draw_transparent_entry(transparent, frame, kind, i);
+                self.draw_transparent_entry(transparent, frame, kind, i, None);
             }
             // SAFETY: `frame.cmd` is a command buffer in the recording state inside the render
             // pass begun above.
@@ -2421,13 +2438,15 @@ impl VkContext {
 
     // Bind one draw-order entry's params set and geometry and draw it under the
     // bound pipeline. A mesh draws its DrawObject slice of the shared scene
-    // buffers; a pane or water surface draws its record's own pair.
+    // buffers; a pane or water surface draws its record's own pair, `indices`
+    // of it or all of it.
     fn draw_transparent_entry(
         &self,
         transparent: &TransparentResources,
         frame: &TransparentFrame<'_>,
         kind: Producer,
         i: usize,
+        indices: Option<std::ops::Range<u32>>,
     ) {
         let device = &self.hw.device;
         let cmd = frame.cmd;
@@ -2488,8 +2507,12 @@ impl VkContext {
                     vk::IndexType::UINT16,
                 );
             }
-            // SAFETY: the record's set and its own buffers are bound above.
-            unsafe { device.cmd_draw_indexed(cmd, r.gpu.index_count, 1, 0, 0, 0) };
+            let indices = indices.unwrap_or(0..r.gpu.index_count);
+            // SAFETY: the record's set and its own buffers are bound above, and `indices` lies
+            // within its index buffer.
+            unsafe {
+                device.cmd_draw_indexed(cmd, indices.end - indices.start, 1, indices.start, 0, 0);
+            }
         }
         self.inc_draw_calls(1);
     }

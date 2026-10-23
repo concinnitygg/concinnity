@@ -92,6 +92,37 @@ impl OceanGrid {
         inner + (x.abs() - half).max(0.0) * widening
     }
 
+    /// The square rings of cells around the anchor: ring `r` is the cells
+    /// that lie `r` whole cells out from the four around it.
+    pub fn rings(&self) -> u32 {
+        OCEAN_GRID_HALF_LINES
+    }
+
+    /// Indices the first `k` rings take in [`Self::ring_mesh`]: the square
+    /// block of cells out to grid line `k` on each side.
+    pub fn ring_indices(&self, k: u32) -> u32 {
+        let k = k.min(OCEAN_GRID_HALF_LINES);
+        24 * k * k
+    }
+
+    /// [`Self::mesh`] with its triangles in rings out from the anchor, the
+    /// innermost first, so the block within any ring is a prefix.
+    pub fn ring_mesh(&self) -> (Vec<Vertex>, Vec<u16>) {
+        let (vertices, rows) = self.mesh();
+        let cells = 2 * OCEAN_GRID_HALF_LINES as usize;
+        let ring = |c: usize| {
+            let u = i32::saturating_from(c) - i32::saturating_from(OCEAN_GRID_HALF_LINES);
+            u32::saturating_from(if u >= 0 { u } else { -u - 1 })
+        };
+        let mut order: Vec<usize> = (0..cells * cells).collect();
+        order.sort_by_key(|&cell| ring(cell / cells).max(ring(cell % cells)));
+        let indices = order
+            .iter()
+            .flat_map(|&cell| rows[cell * 6..cell * 6 + 6].iter().copied())
+            .collect();
+        (vertices, indices)
+    }
+
     /// The grid's vertices, relative to the anchor, and its triangles.
     pub fn mesh(&self) -> (Vec<Vertex>, Vec<u16>) {
         let n = i32::saturating_from(OCEAN_GRID_HALF_LINES);
@@ -222,6 +253,42 @@ mod tests {
             assert!((cells - cells.round()).abs() < 1e-6);
         }
         assert!((a[0] - (1.0e6 + 0.3)).abs() <= 0.5 * cell + 1e-9);
+    }
+
+    // The ring mesh holds every triangle of the row mesh once, and its first
+    // `k` rings are exactly the cells within grid line `k` of the anchor.
+    #[test]
+    fn the_ring_mesh_reorders_the_triangles_into_nested_blocks() {
+        let g = ocean();
+        let (rows_v, rows) = g.mesh();
+        let (rings_v, rings) = g.ring_mesh();
+        assert_eq!(rows_v.len(), rings_v.len());
+        let triangles = |idx: &[u16]| {
+            let mut t: Vec<[u16; 3]> = idx.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+            t.sort_unstable();
+            t
+        };
+        assert_eq!(triangles(&rows), triangles(&rings));
+        assert_eq!(g.ring_indices(g.rings()) as usize, rings.len());
+        for k in [0, 1, 2, 16, 40, g.rings()] {
+            let prefix = &rings[..g.ring_indices(k) as usize];
+            let half = g.line(i32::saturating_from(k));
+            for &i in prefix {
+                let p = rings_v[i as usize].pos;
+                assert!(p[0].abs() <= half && p[2].abs() <= half, "ring {k}: {p:?}");
+            }
+            let outside = &rings[g.ring_indices(k) as usize..];
+            for tri in outside.chunks_exact(3) {
+                let inside = tri.iter().all(|&i| {
+                    let p = rings_v[i as usize].pos;
+                    p[0].abs() <= half && p[2].abs() <= half
+                });
+                assert!(
+                    !inside,
+                    "ring {k}: a triangle within the block is past its prefix"
+                );
+            }
+        }
     }
 
     #[test]

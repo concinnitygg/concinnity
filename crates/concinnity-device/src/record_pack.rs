@@ -115,7 +115,7 @@ mod tests {
             cam_pos: [0.0; 3],
             mesh_glass_active: false,
             horizon: None,
-            grass_route: concinnity_engine::render::record_pack::GrassRoute::default(),
+            routes: concinnity_engine::render::shader::world_pipelines::ShaderRoutes::default(),
             tile_morph: None,
         };
         packer.pack(

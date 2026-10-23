@@ -2,11 +2,11 @@
 
 use crate::gfx::lod;
 use crate::gfx::render_types::{
-    DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_bucket_bits,
-    draw_args_flags, normal_pool_index, pack_object_record,
+    DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_flags,
+    normal_pool_index, pack_object_record,
 };
 use crate::planet::{Horizon, TileMorphFrame};
-use crate::render::shader::world_pipelines::GrassTwins;
+use crate::render::shader::world_pipelines::ShaderRoutes;
 use crate::render::temporal::model_history::HistoryWindow;
 use concinnity_core::math::SaturatingFrom;
 
@@ -21,8 +21,8 @@ pub struct PackView {
     /// A planet's horizon seen from the eye: a bounded draw wholly behind it
     /// is disabled in every pass.
     pub horizon: Option<Horizon>,
-    /// Where the default Shader's draws growing grass route this frame.
-    pub grass_route: GrassRoute,
+    /// The variant route each Shader's draws shading their ground take.
+    pub routes: ShaderRoutes,
     /// The camera a planet's tiles morph by, which their vertices
     /// morph by.
     pub tile_morph: Option<TileMorphFrame>,
@@ -36,58 +36,6 @@ impl PackView {
             .map(|m| m.row(obj.planet_tile, obj.base_vertex.cast_unsigned()))
             .unwrap_or_default()
     }
-}
-
-/// Where a frame's draws growing grass route: the default Shader's grass twins
-/// (see [`crate::render::shader::world_pipelines`]) and where the blades start handing
-/// the field to the canopy this frame.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct GrassRoute {
-    /// The buckets the grass twins take.
-    pub twins: GrassTwins,
-    /// Distance from the eye, in meters, where the blades start thinning out
-    /// and the ground's canopy starts to show
-    /// ([`GrassLodView::fade_start`](crate::render::environment::grass::GrassLodView::fade_start));
-    /// 0 routes every draw growing grass to the canopy twin.
-    pub far_start: f32,
-}
-
-/// The shader bucket `obj` draws under from `cam_pos`: its own, except that a
-/// default-Shader draw whose ground shades from the canopy block goes to a
-/// grass twin. One growing grass whose bounds reach past where the frame's
-/// band starts goes to the canopy twin, which shades the ground and the
-/// canopy; one wholly nearer, where no pixel can be in the band, or growing no
-/// grass, goes to the ground twin. An unbounded draw counts as reaching the
-/// band.
-pub fn draw_bucket(obj: &DrawObject, cam_pos: [f32; 3], route: GrassRoute) -> u32 {
-    let far_field = obj.material.far_field;
-    if obj.shader_bucket != 0 || !far_field.shades_ground() {
-        return obj.shader_bucket;
-    }
-    let twins = route.twins;
-    let twin = if far_field.grows_grass() && reaches_far_band(obj, cam_pos, route.far_start) {
-        twins.canopy
-    } else {
-        twins.ground.or(twins.canopy)
-    };
-    twin.unwrap_or(obj.shader_bucket)
-}
-
-// Whether the farthest corner of `obj`'s bounds lies past `start`, seen from
-// `cam_pos`.
-fn reaches_far_band(obj: &DrawObject, cam_pos: [f32; 3], start: f32) -> bool {
-    if !obj.cullable() {
-        return true;
-    }
-    let farthest_sq: f32 = (0..3)
-        .map(|i| {
-            let d = (cam_pos[i] - obj.bb_min[i])
-                .abs()
-                .max((obj.bb_max[i] - cam_pos[i]).abs());
-            d * d
-        })
-        .sum();
-    farthest_sq > start * start
 }
 
 /// One pack of the static draws: draw `i` fills record `i` of both outputs,
@@ -200,10 +148,10 @@ fn draw_args(
         index_count: u32::saturating_from(index_count),
         index_offset: u32::saturating_from(index_offset),
         base_vertex: obj.base_vertex.cast_unsigned(),
-        // The shader bucket rides the upper flag bits so the cull kernel can
-        // route the record's command into that bucket's region.
+        // The shader bucket and variant route ride the upper flag bits so the
+        // cull kernel can route the record's command into its bucket's region.
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-            | draw_args_bucket_bits(draw_bucket(obj, view.cam_pos, view.grass_route))
+            | view.routes.draw_bits(obj)
             | history.draw_flags(index, index),
     }
 }
@@ -227,7 +175,8 @@ mod tests {
 
     use super::*;
     use crate::gfx::render_types::{
-        DrawArgsFlags, DrawIndex, FarFieldTint, LodSlice, PlanetTileDraw, draw_args_no_history,
+        DrawArgsFlags, DrawIndex, FarFieldTint, LodSlice, PlanetTileDraw, draw_args_bucket_bits,
+        draw_args_no_history,
     };
     use crate::planet::HorizonOccluder;
     use crate::render::record_pack::MAX_PACK_CHUNKS;
@@ -279,7 +228,7 @@ mod tests {
             cam_pos: [0.0, 0.0, 0.0],
             mesh_glass_active: true,
             horizon: None,
-            grass_route: GrassRoute::default(),
+            routes: ShaderRoutes::default(),
             tile_morph: None,
         }
     }
@@ -354,207 +303,37 @@ mod tests {
         assert_eq!(enabled, vec![false, true, true]);
     }
 
-    // A ground draw 100 m wide growing grass.
-    fn far_banded(center_z: f32) -> DrawObject {
-        let mut obj = objects(1).remove(0);
-        obj.shader_bucket = 0;
-        obj.bb_min = [-50.0, 0.0, center_z - 50.0];
-        obj.bb_max = [50.0, 1.0, center_z + 50.0];
-        obj.material.far_field = FarFieldTint::of(1 << 8);
-        obj
-    }
-
-    const TWINS: GrassTwins = GrassTwins {
-        canopy: Some(3),
-        ground: Some(4),
-    };
-
-    // The blades start handing over at 60 m.
-    const ROUTE: GrassRoute = GrassRoute {
-        twins: TWINS,
-        far_start: 60.0,
-    };
-
-    fn tile(half: f32) -> DrawObject {
-        let mut obj = far_banded(0.0);
-        obj.bb_min = [-half, 0.0, -half];
-        obj.bb_max = [half, 1.0, half];
-        obj
-    }
-
-    // A draw whose bounds reach past its band's start goes to the canopy twin;
-    // one wholly within it, to the ground twin.
+    // The record's flags carry its Shader's bucket and, for a ground shading
+    // from the canopy block, its Shader's route and whether it grows grass.
     #[test]
-    fn a_far_band_in_reach_routes_to_the_canopy_twin() {
-        let eye = [0.0, 2.0, 0.0];
-        // Its far corner is ~71 m away: past the band's start.
-        assert_eq!(draw_bucket(&far_banded(0.0), eye, ROUTE), 3);
-        assert_eq!(draw_bucket(&far_banded(5_000.0), eye, ROUTE), 3);
-        // Wholly within 60 m of the eye: no pixel can reach the band.
-        assert_eq!(draw_bucket(&tile(20.0), eye, ROUTE), 4);
-        // Unbounded: counts as reaching it.
-        let mut unbounded = tile(20.0);
-        unbounded.bb_min = [f32::NAN; 3];
-        assert_eq!(draw_bucket(&unbounded, eye, ROUTE), 3);
-    }
-
-    // The band follows the frame: the same draw takes the ground twin while
-    // the blades hand over past its far corner, the canopy twin once they
-    // hand over within it.
-    #[test]
-    fn routing_follows_the_frames_band() {
-        let eye = [0.0, 2.0, 0.0];
-        let far = GrassRoute {
-            far_start: 120.0,
-            ..ROUTE
-        };
-        let near = GrassRoute {
-            far_start: 20.0,
-            ..ROUTE
-        };
-        assert_eq!(draw_bucket(&tile(40.0), eye, far), 4);
-        assert_eq!(draw_bucket(&tile(40.0), eye, near), 3);
-        // No band yet: every draw growing grass takes the canopy twin.
-        let unset = GrassRoute {
-            far_start: 0.0,
-            ..ROUTE
-        };
-        assert_eq!(draw_bucket(&tile(1.0), eye, unset), 3);
-    }
-
-    // A planet's ground growing no grass has no band: it takes the ground twin
-    // wherever it lies, the canopy twin only without one.
-    #[test]
-    fn a_grassless_planet_ground_routes_to_the_ground_twin() {
-        use crate::render::environment::grass::CanopyRange;
-        let eye = [0.0, 2.0, 0.0];
-        let bare = CanopyRange {
-            first: 0,
-            count: 0,
-            planet: true,
-        };
-        let mut ground = far_banded(5_000.0);
-        ground.material.far_field = FarFieldTint::of(bare.packed());
-        assert!(ground.material.far_field.shades_ground());
-        assert!(!ground.material.far_field.grows_grass());
-        assert_eq!(draw_bucket(&ground, eye, ROUTE), 4);
-        let unset = GrassRoute {
-            far_start: 0.0,
-            ..ROUTE
-        };
-        assert_eq!(draw_bucket(&ground, eye, unset), 4);
-        ground.bb_min = [f32::NAN; 3];
-        assert_eq!(draw_bucket(&ground, eye, ROUTE), 4);
-        let canopy_only = GrassRoute {
-            twins: GrassTwins {
-                canopy: Some(3),
-                ground: None,
-            },
-            ..ROUTE
-        };
-        assert_eq!(draw_bucket(&ground, eye, canopy_only), 3);
-    }
-
-    // Without a ground twin every far band takes the canopy twin; without
-    // either, its own bucket.
-    #[test]
-    fn a_missing_twin_falls_back() {
-        let canopy_only = GrassTwins {
-            canopy: Some(3),
-            ground: None,
-        };
-        let route = |twins| GrassRoute { twins, ..ROUTE };
-        assert_eq!(draw_bucket(&tile(20.0), [0.0; 3], route(canopy_only)), 3);
-        let none = route(GrassTwins::default());
-        assert_eq!(draw_bucket(&tile(20.0), [0.0; 3], none), 0);
-        assert_eq!(draw_bucket(&far_banded(0.0), [0.0; 3], none), 0);
-    }
-
-    // A draw without a band, or under a world Shader, keeps its bucket.
-    #[test]
-    fn only_default_shader_far_bands_route_to_a_twin() {
-        let eye = [0.0, 2.0, 0.0];
-        let mut plain = far_banded(500.0);
-        plain.material.far_field = FarFieldTint::NONE;
-        assert_eq!(draw_bucket(&plain, eye, ROUTE), 0);
-        let mut shaded = far_banded(500.0);
-        shaded.shader_bucket = 2;
-        assert_eq!(draw_bucket(&shaded, eye, ROUTE), 2);
-    }
-
-    // Points over `obj`'s bounds, corners included.
-    fn box_points(obj: &DrawObject) -> Vec<[f32; 3]> {
-        let steps = 8;
-        let at = |i: usize, t: usize| {
-            let f = t as f32 / steps as f32;
-            obj.bb_min[i] + (obj.bb_max[i] - obj.bb_min[i]) * f
-        };
-        let mut points = Vec::new();
-        for x in 0..=steps {
-            for y in 0..=steps {
-                for z in 0..=steps {
-                    points.push([at(0, x), at(1, y), at(2, z)]);
-                }
-            }
-        }
-        points
-    }
-
-    fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
-    }
-
-    // An eye walking away from a 40 m tile and back: the tile takes the ground
-    // twin only while no point of it is past the band's start, so the canopy's
-    // weight is 0 over every pixel the ground twin draws and the switch shows
-    // no seam; past that it takes the canopy twin, and the switch happens once
-    // each way.
-    #[test]
-    fn routing_follows_the_eye_across_the_band_without_a_seam() {
-        let tile = tile(20.0);
-        let start = ROUTE.far_start;
-        let points = box_points(&tile);
-        let walk: Vec<f32> = (0..=120).chain((0..120).rev()).map(|x| x as f32).collect();
-        let mut routes = Vec::new();
-        for x in walk {
-            let eye = [x, 1.7, 0.0];
-            let bucket = draw_bucket(&tile, eye, ROUTE);
-            let farthest = points
-                .iter()
-                .map(|p| distance(eye, *p))
-                .fold(0.0_f32, f32::max);
-            match bucket {
-                4 => assert!(
-                    farthest <= start,
-                    "x {x}: ground twin, a pixel at {farthest} m"
-                ),
-                3 => assert!(
-                    farthest > start - 1e-3,
-                    "x {x}: canopy twin, all within {farthest} m"
-                ),
-                other => panic!("x {x}: routed to {other}"),
-            }
-            routes.push(bucket);
-        }
-        routes.dedup();
-        assert_eq!(routes, [4, 3, 4]);
-    }
-
-    // The routed bucket is what the record's flags carry.
-    #[test]
-    fn the_record_carries_the_routed_bucket() {
+    fn the_record_carries_its_route() {
+        use crate::render::shader::world_pipelines::{BucketPlan, GrassVariants, WorldPipelines};
+        let shaders = [crate::render::backend::init::WorldShader {
+            programs: None,
+            deferred: false,
+            grass: GrassVariants::PlanetSky,
+        }];
+        let plan = BucketPlan::new(&shaders).unwrap();
+        let table = WorldPipelines::build(&plan, |b, _| Ok::<_, ()>(b)).unwrap();
         let view = PackView {
-            cam_pos: [0.0, 2.0, 0.0],
-            grass_route: ROUTE,
+            routes: table.routes(),
             ..view()
         };
         let mut tracker = ModelHistory::new();
         tracker.begin(HistoryMode::Untracked, 1);
         let mut window = tracker.window();
-        let args = draw_args(&far_banded(0.0), 0, &view, &mut window);
-        assert_eq!(args.flags >> DrawArgsFlags::BUCKET_SHIFT, 3);
-        let args = draw_args(&tile(20.0), 0, &view, &mut window);
-        assert_eq!(args.flags >> DrawArgsFlags::BUCKET_SHIFT, 4);
+        let mut grass = objects(1).remove(0);
+        grass.shader_bucket = 0;
+        grass.material.far_field = FarFieldTint::of(1 << 8);
+        let args = draw_args(&grass, 0, &view, &mut window);
+        assert_eq!(
+            (args.flags >> DrawArgsFlags::ROUTE_SHIFT) & DrawArgsFlags::ROUTE_MASK,
+            1
+        );
+        assert_ne!(args.flags & DrawArgsFlags::FAR_BAND, 0);
+        grass.material.far_field = FarFieldTint::NONE;
+        let args = draw_args(&grass, 0, &view, &mut window);
+        assert_eq!(args.flags >> DrawArgsFlags::BUCKET_SHIFT, 0);
     }
 
     #[test]

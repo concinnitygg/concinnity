@@ -91,6 +91,7 @@ const CULL_REGISTERS: &[(&str, &str)] = &[
     ("objects", "t0"),
     ("draw_args", "t1"),
     ("hiz_tex", "t2"),
+    ("variants", "t3"),
     ("commands", "u0"),
     ("cull_status", "u1"),
 ];
@@ -122,7 +123,15 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: MAIN_BINDLESS_REGISTERS,
     },
     DxilAbi {
+        program: &shared::MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::MAIN_BINDLESS_GROUND_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
         registers: MAIN_BINDLESS_REGISTERS,
     },
     // The draw cull. Its registers are pinned in the source because declaration
@@ -373,11 +382,23 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT,
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_OCEAN_REGISTERS,
     },
     // The simulated ocean's kernels, under their own root signature in
@@ -441,11 +462,23 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: GLASS_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: GLASS_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG,
         registers: WATER_BODY_LIGHT_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
         registers: WATER_BODY_LIGHT_REGISTERS,
     },
     DxilAbi {
@@ -453,7 +486,15 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: WATER_RT_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: WATER_RT_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: WATER_RT_TEXTURED_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
     // The compute families whose root signatures live in
@@ -975,6 +1016,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("draw_args", "buffer(1)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+            ("variants", "buffer(8)"),
             ("hiz_tex", "texture(0)"),
         ]],
         argument_ids: &[],
@@ -1256,7 +1298,17 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
     },
     MetalAbi {
+        program: &shared::MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG,
+        slots: &[MAIN_BINDLESS_SLOTS, CANOPY_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
+    },
+    MetalAbi {
         program: &shared::MAIN_BINDLESS_GROUND_FRAG,
+        slots: &[MAIN_BINDLESS_SLOTS, GRASS_GROUND_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
+    },
+    MetalAbi {
+        program: &shared::MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
         slots: &[MAIN_BINDLESS_SLOTS, GRASS_GROUND_SLOTS],
         argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
     },
@@ -1393,12 +1445,27 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     MetalAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        slots: WATER_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
         program: &shared::WATER_SEA_FRAG_RT,
         slots: WATER_RT_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        slots: WATER_RT_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        slots: WATER_RT_TEXTURED_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         slots: WATER_RT_TEXTURED_SLOTS,
         argument_ids: &[],
     },

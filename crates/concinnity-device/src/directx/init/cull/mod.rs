@@ -85,14 +85,14 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
+            world,
             bindless: &bindless,
             plan,
             descriptors,
             targets,
         },
     )?;
-    let two_pass =
-        two_pass::build_two_pass_cull(gpu, &bindless, &compute, plan, occlusion_two_pass)?;
+    let two_pass = two_pass::build_two_pass_cull(gpu, &bindless, &compute, occlusion_two_pass)?;
     let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_enabled, spot_slices)?;
     let gbuffer_pass = gbuffer::build_gbuffer_pass(gpu, &compute, plan, gbuffer_enabled)?;
     write_instance_records(world, plan, albedo_count, &bindless, &compute);
@@ -117,6 +117,12 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         main_prepass_pso: bindless.psos.prepass,
         world_pipelines: bindless.world_pipelines,
         bucket_stride: plan.n_cull,
+        variants: compute.variants,
+        variant_buffers: compute.variant_buffers,
+        variant_ptrs: compute.variant_ptrs,
+        live_buckets: (0..=gpu.hw.frames())
+            .map(|_| std::sync::atomic::AtomicU64::new(u64::MAX))
+            .collect(),
         bindless_main_shaders: bindless.shaders,
         object_buffer_resources: bindless.object_buffers,
         object_buffer_ptrs: bindless.object_ptrs,

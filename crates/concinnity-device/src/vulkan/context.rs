@@ -336,10 +336,18 @@ pub(super) struct VkCull {
     pub(super) world_pipelines: concinnity_engine::render::shader::world_pipelines::WorldPipelines<
         super::pipeline::BucketPipelines,
     >,
-    // Commands reserved per shader-bucket region in the indirect buffers, fixed at
-    // init to the record capacity the buffers were sized for. Bucket `b`'s region
-    // starts at command `b * bucket_stride`.
+    // Commands reserved per single-stream region (a probe face, a spot slice),
+    // fixed at init to the record capacity the buffers were sized for.
     pub(super) bucket_stride: usize,
+    // The routes and the bucket regions of the indirect buffers, fixed at
+    // init: each bucket's region holds the records it can take.
+    pub(super) variants: concinnity_engine::gfx::render_types::GpuCullVariants,
+    // Per-frame copies of `variants` with this frame's view, at set 0
+    // binding 4 of every cull dispatch.
+    pub(super) variant_buffers: Vec<PooledBuffer>,
+    // Per frame, the buckets its view can pick, a bit each (see
+    // `GpuCullVariants::live_buckets`); the others' regions skip drawing.
+    pub(super) live_buckets: Vec<std::sync::atomic::AtomicU64>,
     // The engine's compiled bindless main-pass and pre-pass SPIR-V, retained so
     // a bucket that resolves to the engine default can build its pipelines
     // without recompiling.
@@ -463,6 +471,7 @@ impl VkCull {
         self.draw_args_buffers.clear();
         self.indirect_buffers.clear();
         self.cull_status_buffers.clear();
+        self.variant_buffers.clear();
         self.indirect_buffers2.clear();
         self.shadow_indirect_buffers.clear();
         self.spot_indirect_buffers.clear();

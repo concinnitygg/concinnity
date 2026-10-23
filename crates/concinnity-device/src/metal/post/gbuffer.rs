@@ -431,11 +431,12 @@ impl MtlContext {
         );
 
         let counts = self.draw_record_counts();
+        let regions = self.main_regions();
         let mut draw_calls = 0u32;
 
         // Static + instance + chunk prefix: static u32 IB resident. Each
-        // bucket's ICB executes under that bucket's pre-pass pipeline; together
-        // the buckets cover the whole record range exactly once. A bucket the
+        // bucket's ICB executes its region under that bucket's pre-pass
+        // pipeline; the cull drew each record in exactly one region. A bucket the
         // main pass skips (Shader not resident) is skipped here too, so depth
         // and velocity never carry geometry the color pass leaves out.
         if let Some(prefix) = counts.prefix(0) {
@@ -444,10 +445,14 @@ impl MtlContext {
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = crate::metal::context::ns_range(prefix);
             // A bucket without a pre-pass pipeline (one failed to build) is
             // skipped too: it shades, but adds nothing to the G-buffer.
             for (b, icb) in self.cull.icbs.iter().enumerate() {
+                let range = match regions.commands(b) {
+                    Some(region) if region.is_empty() => continue,
+                    Some(region) => region,
+                    None => prefix.clone(),
+                };
                 let pipelines = match b {
                     0 => Some(default),
                     b => self.cull.world_pipelines.get(b),
@@ -456,10 +461,14 @@ impl MtlContext {
                     continue;
                 };
                 enc.set_pipeline(prepass);
-                // SAFETY: the prefix spans the static + instance + chunk command
-                // slots; every reused main ICB is sized for `counts.total`.
+                // SAFETY: the default's prefix spans the static + instance +
+                // chunk command slots and a later bucket's region its own
+                // records; every reused main ICB is sized for `counts.total`.
                 unsafe {
-                    enc.executeCommandsInBuffer_withRange(icb, range);
+                    enc.executeCommandsInBuffer_withRange(
+                        icb,
+                        crate::metal::context::ns_range(range),
+                    );
                 }
                 draw_calls += 1;
             }

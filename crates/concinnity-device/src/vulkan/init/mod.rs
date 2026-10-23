@@ -55,6 +55,7 @@ pub(in crate::vulkan) mod bootstrap;
 mod commands;
 mod composite;
 mod cull;
+pub(in crate::vulkan) use cull::{VARIANT_BUFFER_BYTES, main_cull_set};
 mod descriptors;
 mod effects;
 mod ray_tracing;

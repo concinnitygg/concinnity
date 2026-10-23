@@ -46,7 +46,7 @@ use super::builtin_shaders;
 use super::context::MtlContext;
 use super::error::allocation_failed;
 use super::glass::build_transparent_pipeline_stages;
-use super::transparent::{TransparentDraw, bytes_of};
+use super::transparent::{DrawSlice, TransparentDraw, bytes_of};
 
 // Per-surface GPU state: a static tessellated grid VB + IB, and the motion its
 // params take each frame.
@@ -113,16 +113,17 @@ pub(in crate::metal) fn build_water_surface_record(
 }
 
 // The pipelines a planet sea draws with, the same three as a rectangle's
-// from the sea's own programs.
+// from the sea's own programs, each without and with the planet's own sky.
 pub(in crate::metal) struct SeaPipelines {
-    pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
-    pub(in crate::metal) pipeline_rt: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    pub(in crate::metal) pipeline: [Retained<ProtocolObject<dyn MTLRenderPipelineState>>; 2],
+    pub(in crate::metal) pipeline_rt:
+        Option<[Retained<ProtocolObject<dyn MTLRenderPipelineState>>; 2]>,
     pub(in crate::metal) pipeline_rt_textured:
-        Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+        Option<[Retained<ProtocolObject<dyn MTLRenderPipelineState>>; 2]>,
 }
 
 impl SeaPipelines {
-    // The sea's pipelines, the traced pair only where the device can `trace`.
+    // The sea's pipelines, the traced pairs only where the device can `trace`.
     pub(in crate::metal) fn build(
         device: &ProtocolObject<dyn MTLDevice>,
         hot_reload: bool,
@@ -130,16 +131,27 @@ impl SeaPipelines {
     ) -> RenderResult<Self> {
         let vert = &builtin_shaders::WATER_SEA_VERT;
         let build = |frag| build_water_pipeline_with(device, hot_reload, vert, frag);
+        let pair =
+            |lean, daylight| -> RenderResult<[_; 2]> { Ok([build(lean)?, build(daylight)?]) };
         let (pipeline_rt, pipeline_rt_textured) = if trace {
             (
-                Some(build(&builtin_shaders::WATER_SEA_FRAG_RT)?),
-                Some(build(&builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED)?),
+                Some(pair(
+                    &builtin_shaders::WATER_SEA_FRAG_RT,
+                    &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT,
+                )?),
+                Some(pair(
+                    &builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
+                    &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+                )?),
             )
         } else {
             (None, None)
         };
         Ok(Self {
-            pipeline: build(&builtin_shaders::WATER_SEA_FRAG)?,
+            pipeline: pair(
+                &builtin_shaders::WATER_SEA_FRAG,
+                &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG,
+            )?,
             pipeline_rt,
             pipeline_rt_textured,
         })
@@ -205,10 +217,16 @@ impl MtlContext {
         // still takes the planar mirror over its own trace where the surface has
         // a slot, so this picks the fragment, not the reflection source.
         let rt_on = self.rt.accel.is_some();
-        let pick = |base, rt, rt_textured| match (rt_on && bindless, rt_textured, rt_on, rt) {
-            (true, Some(p), _, _) | (_, _, true, Some(p)) => Some(p),
-            _ => base,
-        };
+        fn pick_for<T>(
+            rt_on: bool,
+            bindless: bool,
+        ) -> impl Fn(Option<T>, Option<T>, Option<T>) -> Option<T> {
+            move |base, rt, rt_textured| match (rt_on && bindless, rt_textured, rt_on, rt) {
+                (true, Some(p), _, _) | (_, _, true, Some(p)) => Some(p),
+                _ => base,
+            }
+        }
+        let pick = pick_for(rt_on, bindless);
         let Some(rectangle) = pick(
             self.water.pipeline.as_ref(),
             self.water.pipeline_rt.as_ref(),
@@ -217,21 +235,31 @@ impl MtlContext {
             return;
         };
         let sea = self.water.sea.as_ref().and_then(|s| {
-            pick(
+            pick_for(rt_on, bindless)(
                 Some(&s.pipeline),
                 s.pipeline_rt.as_ref(),
                 s.pipeline_rt_textured.as_ref(),
             )
         });
+        // A sea draws its inner rings, which a planet's own sky cannot reach,
+        // without the sky's code, and the rest with it.
+        let sky_split = |surface: &WaterSurfaceRecord| {
+            surface
+                .motion
+                .body()
+                .sea
+                .as_ref()
+                .map(|sea| sea.sky_split(&view.daylight))
+        };
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();
         for surface in &self.water.surfaces {
             if !surface.visible {
                 continue;
             }
-            let pipeline = match (surface.motion.body().sea.is_some(), sea) {
-                (false, _) => rectangle,
-                (true, Some(p)) => p,
+            let pipelines = match (surface.motion.body().sea.is_some(), sea) {
+                (false, _) => [rectangle, rectangle],
+                (true, Some([lean, daylight])) => [lean, daylight],
                 (true, None) => continue,
             };
             // Everything but the motion and the planar flag below is
@@ -262,19 +290,40 @@ impl MtlContext {
             }
             let c = surface.center;
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
+            // The outer rings first, then the inner ones over them: the nearer
+            // water draws over the farther.
+            let [lean, daylight] = sky_split(surface).unwrap_or([0..surface.index_count, 0..0]);
+            let slice =
+                |range: core::ops::Range<u32>,
+                 pipeline: &Retained<ProtocolObject<dyn MTLRenderPipelineState>>| {
+                    DrawSlice {
+                        pipeline: pipeline.clone(),
+                        index_count: range.end - range.start,
+                        index_offset_bytes: range.start as usize * size_of::<u16>(),
+                    }
+                };
+            let (first, then) = match (daylight.is_empty(), lean.is_empty()) {
+                (false, false) => (
+                    slice(daylight, pipelines[1]),
+                    Some(slice(lean, pipelines[0])),
+                ),
+                (false, true) => (slice(daylight, pipelines[1]), None),
+                _ => (slice(lean, pipelines[0]), None),
+            };
             out.push(TransparentDraw {
-                pipeline: pipeline.clone(),
+                pipeline: first.pipeline,
                 reflection_pipeline: None,
                 vertex_buffer: surface.vertex_buffer.clone(),
                 index_buffer: surface.index_buffer.clone(),
-                index_count: surface.index_count,
+                index_count: first.index_count,
                 index_type: objc2_metal::MTLIndexType::UInt16,
-                index_offset_bytes: 0,
+                index_offset_bytes: first.index_offset_bytes,
                 base_vertex: 0,
                 params: bytes_of(&params),
                 fragment_textures,
                 fragment_samplers: vec![(0, self.composite.sampler.clone())],
                 sort_distance,
+                then,
             });
         }
     }

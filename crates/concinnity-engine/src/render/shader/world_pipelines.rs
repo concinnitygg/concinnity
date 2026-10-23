@@ -8,54 +8,154 @@
 //!
 //! Only a bucket that draws a surface growing grass (one with a far band), or a
 //! planet's ground, compiles the grass ground and canopy into its main
-//! fragment, since that code costs every pixel of the program carrying it. A
-//! world Shader that draws one compiles it into its own bucket. The default
-//! keeps its bucket without it and gains two twins past the last world Shader:
-//! a canopy twin for the far-band draws that reach their band, and a ground
-//! twin, without the canopy, for those wholly nearer and for a planet's ground
-//! growing no grass. The twins share one Shader's place in the budget.
+//! fragment, since that code costs every pixel of the program carrying it. So
+//! every Shader keeps a plain bucket, and one under which such a surface draws
+//! gains a family of variants past the last Shader's plain bucket: a canopy
+//! variant for the draws that reach their far band, a ground variant without
+//! the canopy for those wholly nearer and for a planet's ground growing no
+//! grass, and on a planet each of those with and without the planet's own sky.
+//! The draw cull picks each draw's variant (see
+//! [`GpuCullVariants`](crate::gfx::render_types::GpuCullVariants)).
 
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use concinnity_core::math::SaturatingFrom;
+use core::ops::Range;
 
 use crate::components::ShaderPrograms;
-use crate::gfx::render_types::MAX_SHADER_BUCKETS;
+use crate::gfx::render_types::{
+    BucketSpans, DrawObject, GpuCullVariants, GpuVariantRoute, MAX_SHADER_BUCKETS,
+    MAX_VARIANT_ROUTES, VARIANT_DAYLIGHT, VARIANT_FAR, bucket_regions, draw_args_bucket_bits,
+    draw_args_route_bits,
+};
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::WorldShader;
-use crate::render::shader::programs::surface::GrassShading;
+use crate::render::shader::programs::surface::SurfaceVariant;
+
+/// The grass variants a Shader's draws route between.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GrassVariants {
+    /// None: no draw under the Shader shades its ground from the canopy block.
+    #[default]
+    None,
+    /// The canopy and the ground, each lit from a planet's own sky where one
+    /// lights the view.
+    Grass,
+    /// The canopy and the ground, each with and without a planet's own sky,
+    /// so a draw the sky cannot reach shades without its code.
+    PlanetSky,
+}
+
+impl GrassVariants {
+    // The family's variants, in bucket order.
+    fn variants(self) -> &'static [SurfaceVariant] {
+        match self {
+            Self::None => &[],
+            Self::Grass => &[
+                SurfaceVariant::CanopyDaylight,
+                SurfaceVariant::GroundDaylight,
+            ],
+            Self::PlanetSky => &[
+                SurfaceVariant::Canopy,
+                SurfaceVariant::CanopyDaylight,
+                SurfaceVariant::Ground,
+                SurfaceVariant::GroundDaylight,
+            ],
+        }
+    }
+
+    // The route over the family from `first`: the bucket per feature
+    // combination and the features tested.
+    fn route(self, first: u32) -> GpuVariantRoute {
+        let at = |v: SurfaceVariant| {
+            first
+                + u32::saturating_from(
+                    self.variants()
+                        .iter()
+                        .position(|&x| x == v)
+                        .unwrap_or_default(),
+                )
+        };
+        use SurfaceVariant::{Canopy, CanopyDaylight, Ground, GroundDaylight};
+        match self {
+            Self::None => GpuVariantRoute::default(),
+            Self::Grass => {
+                let (ground, canopy) = (at(GroundDaylight), at(CanopyDaylight));
+                GpuVariantRoute::new([ground, canopy, ground, canopy], VARIANT_FAR)
+            }
+            Self::PlanetSky => GpuVariantRoute::new(
+                [
+                    at(Ground),
+                    at(Canopy),
+                    at(GroundDaylight),
+                    at(CanopyDaylight),
+                ],
+                VARIANT_FAR | VARIANT_DAYLIGHT,
+            ),
+        }
+    }
+}
 
 /// What one shader bucket compiles: a world Shader's programs or the engine's
-/// own, and what of the grass its main fragment shades.
+/// own, and which of its variants the main fragment is.
 #[derive(Debug, Clone, Copy)]
 pub struct BucketSource<'a> {
     /// The world Shader's programs; `None` for the engine's own.
     pub programs: Option<&'a ShaderPrograms>,
     /// The Shader's payload waits on a scene other than the start scene.
     pub deferred: bool,
-    /// What of the grass the main fragment shades.
-    pub grass: GrassShading,
+    /// Which of the Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
-/// The buckets the default Shader's far-band draws route to, when any draw
-/// under it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GrassTwins {
-    /// Shades the ground under the grass and the canopy past the blades.
-    pub canopy: Option<u32>,
-    /// Shades the ground alone, for draws wholly nearer than their band.
-    pub ground: Option<u32>,
+/// Per Shader (by `ShaderHandle` value): the variant route its draws shading
+/// their ground take, if it has one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShaderRoutes([u8; MAX_SHADER_BUCKETS]);
+
+impl Default for ShaderRoutes {
+    fn default() -> Self {
+        Self([0; MAX_SHADER_BUCKETS])
+    }
+}
+
+impl ShaderRoutes {
+    /// The route Shader `shader`'s draws shading their ground take.
+    pub fn route(&self, shader: u32) -> Option<u32> {
+        let r = *self.0.get(shader as usize)?;
+        r.checked_sub(1).map(u32::from)
+    }
+
+    /// `obj`'s variant flag bits: its Shader's bucket, and the route the cull
+    /// picks its bucket by when its ground shades from the canopy block.
+    pub fn draw_bits(&self, obj: &DrawObject) -> u32 {
+        let far_field = obj.material.far_field;
+        let route = if far_field.shades_ground() {
+            self.route(obj.shader_bucket)
+        } else {
+            None
+        };
+        draw_args_bucket_bits(obj.shader_bucket)
+            | draw_args_route_bits(route, far_field.grows_grass())
+    }
+}
+
+/// One Shader's grass variants: its buckets, and the route over them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Family {
+    buckets: Range<u32>,
+    route: GpuVariantRoute,
 }
 
 /// Every shader bucket a world draws with.
 #[derive(Debug, Clone)]
 pub struct BucketPlan<'a> {
-    /// By bucket index: one per world Shader, then the default's canopy and
-    /// ground twins.
+    /// By bucket index: one plain bucket per world Shader, then each Shader's
+    /// grass variants.
     pub sources: Vec<BucketSource<'a>>,
-    /// Where the default Shader's far-band draws route.
-    pub twins: GrassTwins,
+    routes: ShaderRoutes,
+    families: Vec<Family>,
 }
 
 impl<'a> BucketPlan<'a> {
@@ -65,49 +165,51 @@ impl<'a> BucketPlan<'a> {
     /// # Errors
     ///
     /// Returns an error if the buckets exceed what a cull dispatch can route
-    /// between: [`MAX_SHADER_BUCKETS`], the default's two twins counted as one.
+    /// between: [`MAX_SHADER_BUCKETS`].
     pub fn new(shaders: &[WorldShader<'a>]) -> RenderResult<Self> {
         let mut sources: Vec<BucketSource<'a>> = shaders
             .iter()
-            .enumerate()
-            .map(|(bucket, s)| BucketSource {
+            .map(|s| BucketSource {
                 programs: s.programs,
                 deferred: s.deferred,
-                grass: if bucket > 0 && s.canopy {
-                    GrassShading::Canopy
-                } else {
-                    GrassShading::None
-                },
+                variant: SurfaceVariant::Plain,
             })
             .collect();
-        let mut twins = GrassTwins::default();
-        if let Some(default) = shaders.first().filter(|d| d.canopy) {
-            for grass in [GrassShading::Canopy, GrassShading::Ground] {
-                sources.push(BucketSource {
-                    programs: default.programs,
-                    deferred: default.deferred,
-                    grass,
-                });
+        let mut routes = ShaderRoutes::default();
+        let mut families = Vec::new();
+        for (shader, s) in shaders.iter().enumerate() {
+            let variants = s.grass.variants();
+            if variants.is_empty() {
+                continue;
             }
-            let ground = sources.len() - 1;
-            twins = GrassTwins {
-                canopy: Some(u32::saturating_from(ground) - 1),
-                ground: Some(u32::saturating_from(ground)),
-            };
+            let first = u32::saturating_from(sources.len());
+            sources.extend(variants.iter().map(|&variant| BucketSource {
+                programs: s.programs,
+                deferred: s.deferred,
+                variant,
+            }));
+            if let Some(slot) = routes.0.get_mut(shader) {
+                *slot = u8::saturating_from(families.len() + 1);
+            }
+            families.push(Family {
+                buckets: first..u32::saturating_from(sources.len()),
+                route: s.grass.route(first),
+            });
         }
-        let budgeted = sources.len() - usize::from(twins.ground.is_some());
-        if budgeted > MAX_SHADER_BUCKETS {
+        if sources.len() > MAX_SHADER_BUCKETS || families.len() > MAX_VARIANT_ROUTES {
             return Err(RenderError::Other(format!(
-                "world needs {budgeted} shader buckets ({} Shaders{}) but at most \
+                "world needs {} shader buckets ({} Shaders and {} grass variants) but at most \
                  {MAX_SHADER_BUCKETS} are supported",
+                sources.len(),
                 shaders.len(),
-                match twins.canopy {
-                    Some(_) => " and the default Shader's grass canopy",
-                    None => "",
-                }
+                sources.len() - shaders.len(),
             )));
         }
-        Ok(Self { sources, twins })
+        Ok(Self {
+            sources,
+            routes,
+            families,
+        })
     }
 
     /// The buckets past the default.
@@ -120,9 +222,10 @@ impl<'a> BucketPlan<'a> {
 #[derive(Debug)]
 pub struct WorldPipelines<P> {
     slots: Vec<Option<P>>,
-    // Per slot: what of the grass the bucket's main fragment shades.
-    grass: Vec<GrassShading>,
-    twins: GrassTwins,
+    // Per slot: which of its Shader's main fragments the bucket draws with.
+    variants: Vec<SurfaceVariant>,
+    routes: ShaderRoutes,
+    families: Vec<Family>,
 }
 
 impl<P> Default for WorldPipelines<P> {
@@ -132,13 +235,14 @@ impl<P> Default for WorldPipelines<P> {
 }
 
 impl<P> WorldPipelines<P> {
-    /// A table over `slots`, slot `i` holding bucket `i + 1`, none of which
-    /// shades grass.
+    /// A table over `slots`, slot `i` holding bucket `i + 1`, each a plain
+    /// bucket.
     pub fn new(slots: Vec<Option<P>>) -> Self {
         Self {
-            grass: vec![GrassShading::None; slots.len()],
+            variants: vec![SurfaceVariant::Plain; slots.len()],
             slots,
-            twins: GrassTwins::default(),
+            routes: ShaderRoutes::default(),
+            families: Vec::new(),
         }
     }
 
@@ -161,35 +265,122 @@ impl<P> WorldPipelines<P> {
             });
         }
         Ok(Self {
-            grass: plan.extra().iter().map(|s| s.grass).collect(),
+            variants: plan.extra().iter().map(|s| s.variant).collect(),
             slots,
-            twins: plan.twins,
+            routes: plan.routes,
+            families: plan.families.clone(),
         })
     }
 
-    /// What of the grass `bucket`'s main fragment shades. The default shades
-    /// none.
-    pub fn grass(&self, bucket: usize) -> GrassShading {
+    /// Which of its Shader's main fragments `bucket` draws with. The default
+    /// draws with the plain one.
+    pub fn variant(&self, bucket: usize) -> SurfaceVariant {
         bucket
             .checked_sub(1)
-            .and_then(|slot| self.grass.get(slot))
+            .and_then(|slot| self.variants.get(slot))
             .copied()
             .unwrap_or_default()
     }
 
-    /// What of the grass every bucket shades, the default's first.
-    pub fn grass_shadings(&self) -> Vec<GrassShading> {
-        (0..self.bucket_count()).map(|b| self.grass(b)).collect()
+    /// Which main fragment every bucket draws with, the default's first.
+    pub fn variants(&self) -> Vec<SurfaceVariant> {
+        (0..self.bucket_count()).map(|b| self.variant(b)).collect()
     }
 
-    /// The buckets the default Shader's far-band draws route to.
-    pub fn grass_twins(&self) -> GrassTwins {
-        self.twins
+    /// The route each Shader's draws shading their ground take.
+    pub fn routes(&self) -> ShaderRoutes {
+        self.routes
     }
 
-    /// The bucket that shades the default Shader's far bands with the canopy.
-    pub fn canopy_twin(&self) -> Option<u32> {
-        self.twins.canopy
+    /// Shader `shader`'s grass variant buckets; none when it has no family.
+    pub fn family(&self, shader: u32) -> Range<u32> {
+        self.routes
+            .route(shader)
+            .and_then(|r| self.families.get(r as usize))
+            .map_or(0..0, |f| f.buckets.clone())
+    }
+
+    /// The bucket a single command stream (a probe face, a mirror) draws every
+    /// record under: the default Shader's fullest variant, the canopy lit from
+    /// a planet's own sky, so a far band seen in it keeps its canopy.
+    pub fn superset_bucket(&self) -> Option<u32> {
+        let default = self.routes.route(0)?;
+        let family = self.families.get(default as usize)?;
+        family
+            .buckets
+            .clone()
+            .find(|&b| self.variant(b as usize) == SurfaceVariant::CanopyDaylight)
+    }
+
+    /// The buckets a record of `obj` can draw under: its Shader's grass
+    /// variants when its ground shades from the canopy block and the Shader
+    /// has them, else its Shader's own.
+    pub fn candidates(&self, obj: &DrawObject) -> Range<u32> {
+        let family = obj
+            .material
+            .far_field
+            .shades_ground()
+            .then(|| self.routes.route(obj.shader_bucket))
+            .flatten()
+            .and_then(|r| self.families.get(r as usize));
+        if let Some(f) = family {
+            return f.buckets.clone();
+        }
+        let last = u32::saturating_from(self.bucket_count().saturating_sub(1));
+        let base = obj.shader_bucket.min(last);
+        base..base + 1
+    }
+
+    /// The records each bucket can take. `draws` are the build-time draws, each
+    /// at its own record; `runtime` the reserve streamed chunks and clones
+    /// fill, which every bucket past the default covers, since a clone takes
+    /// its template's Shader and a chunk the default's. The default covers all
+    /// `records`.
+    pub fn bucket_spans(
+        &self,
+        draws: &[DrawObject],
+        runtime: Range<usize>,
+        records: usize,
+    ) -> Vec<BucketSpans> {
+        let count = self.bucket_count();
+        let mut lo = vec![usize::MAX; count];
+        let mut hi = vec![0usize; count];
+        for (record, obj) in draws.iter().enumerate() {
+            for b in self.candidates(obj) {
+                if let (Some(l), Some(h)) = (lo.get_mut(b as usize), hi.get_mut(b as usize)) {
+                    *l = (*l).min(record);
+                    *h = (*h).max(record + 1);
+                }
+            }
+        }
+        (0..count)
+            .map(|b| {
+                if b == 0 {
+                    return BucketSpans {
+                        records: 0..records,
+                        runtime: 0..0,
+                    };
+                }
+                let records = if lo[b] < hi[b] { lo[b]..hi[b] } else { 0..0 };
+                // A runtime span overlapping the build-time one would hand a
+                // record two commands in one region.
+                let runtime = runtime.start.max(records.end)..runtime.end;
+                BucketSpans { records, runtime }
+            })
+            .collect()
+    }
+
+    /// The cull's variant block over `spans`: the routes and the bucket
+    /// regions, with no view set yet.
+    pub fn cull_variants(&self, spans: &[BucketSpans]) -> GpuCullVariants {
+        let mut block = GpuCullVariants {
+            regions: bucket_regions(spans),
+            ..GpuCullVariants::default()
+        };
+        for (slot, family) in block.routes.iter_mut().zip(&self.families) {
+            *slot = family.route;
+        }
+        block
     }
 
     /// Shader buckets, the default included.
@@ -417,103 +608,303 @@ mod tests {
         assert_eq!(t.resident_buckets().collect::<Vec<_>>(), [1, 2]);
     }
 
-    fn shader(canopy: bool, deferred: bool) -> WorldShader<'static> {
+    fn shader(grass: GrassVariants, deferred: bool) -> WorldShader<'static> {
         WorldShader {
             programs: None,
             deferred,
-            canopy,
+            grass,
         }
     }
 
-    use GrassShading::{Canopy, Ground, None as Bare};
+    use GrassVariants::{Grass, None as NoGrass, PlanetSky};
+    use SurfaceVariant::{Canopy, CanopyDaylight, Ground, GroundDaylight, Plain};
 
-    fn grass_of(plan: &BucketPlan<'_>) -> Vec<GrassShading> {
-        plan.sources.iter().map(|s| s.grass).collect()
+    fn variants_of(plan: &BucketPlan<'_>) -> Vec<SurfaceVariant> {
+        plan.sources.iter().map(|s| s.variant).collect()
     }
 
-    // A world with no far band has one bucket per Shader, none shading grass.
-    #[test]
-    fn without_a_far_band_no_bucket_shades_grass() {
-        let plan = BucketPlan::new(&[shader(false, false), shader(false, false)]).unwrap();
-        assert_eq!(grass_of(&plan), [Bare, Bare]);
-        assert_eq!(plan.twins, GrassTwins::default());
+    fn table_of(plan: &BucketPlan<'_>) -> WorldPipelines<usize> {
+        WorldPipelines::build(plan, |bucket, _| Ok::<_, ()>(bucket)).unwrap()
     }
 
-    // A far band under the default adds a canopy twin and a ground twin past
-    // the last Shader and leaves the default bucket itself without grass.
+    // A world with no far band has one plain bucket per Shader.
     #[test]
-    fn a_far_band_under_the_default_adds_both_twins_past_the_last_shader() {
-        let plan = BucketPlan::new(&[shader(true, false), shader(false, false)]).unwrap();
-        assert_eq!(grass_of(&plan), [Bare, Bare, Canopy, Ground]);
+    fn without_a_far_band_every_bucket_is_plain() {
+        let plan = BucketPlan::new(&[shader(NoGrass, false), shader(NoGrass, false)]).unwrap();
+        assert_eq!(variants_of(&plan), [Plain, Plain]);
+        let t = table_of(&plan);
+        assert_eq!(t.routes(), ShaderRoutes::default());
+        assert_eq!(t.superset_bucket(), None);
+    }
+
+    // A far band under the default adds today's twins, the canopy then the
+    // ground, both lit from a planet's sky, past the last Shader, and leaves
+    // the default bucket plain.
+    #[test]
+    fn a_far_band_under_the_default_adds_its_variants_past_the_last_shader() {
+        let plan = BucketPlan::new(&[shader(Grass, false), shader(NoGrass, false)]).unwrap();
         assert_eq!(
-            plan.twins,
-            GrassTwins {
-                canopy: Some(2),
-                ground: Some(3),
-            }
+            variants_of(&plan),
+            [Plain, Plain, CanopyDaylight, GroundDaylight]
         );
-        assert_eq!(plan.extra().len(), 3);
+        let t = table_of(&plan);
+        assert_eq!(t.routes().route(0), Some(0));
+        assert_eq!(t.routes().route(1), None);
+        assert_eq!(t.superset_bucket(), Some(2));
+        let route = t.cull_variants(&[]).routes[0];
+        assert_eq!(route.features, VARIANT_FAR);
+        assert_eq!(
+            (0..4).map(|f| route.bucket(f)).collect::<Vec<_>>(),
+            [3, 2, 3, 2],
+            "near -> ground, far -> canopy, whatever the sky"
+        );
     }
 
-    // A world Shader under a far band compiles the canopy into its own bucket.
+    // On a planet the family has each variant with and without the sky, and
+    // the route picks by both features.
     #[test]
-    fn a_far_band_under_a_world_shader_compiles_into_its_bucket() {
+    fn a_planet_family_splits_by_the_sky() {
+        let plan = BucketPlan::new(&[shader(PlanetSky, false)]).unwrap();
+        assert_eq!(
+            variants_of(&plan),
+            [Plain, Canopy, CanopyDaylight, Ground, GroundDaylight]
+        );
+        let t = table_of(&plan);
+        assert_eq!(t.superset_bucket(), Some(2));
+        let route = t.cull_variants(&[]).routes[0];
+        assert_eq!(route.features, VARIANT_FAR | VARIANT_DAYLIGHT);
+        let pick = |far: bool, day: bool| {
+            let f = u32::from(far) * VARIANT_FAR + u32::from(day) * VARIANT_DAYLIGHT;
+            t.variant(route.bucket(f) as usize)
+        };
+        assert_eq!(pick(false, false), Ground);
+        assert_eq!(pick(true, false), Canopy);
+        assert_eq!(pick(false, true), GroundDaylight);
+        assert_eq!(pick(true, true), CanopyDaylight);
+    }
+
+    // A world Shader under a far band keeps a plain bucket and gains its own
+    // family, as the default does.
+    #[test]
+    fn a_far_band_under_a_world_shader_gives_it_a_family() {
         let plan = BucketPlan::new(&[
-            shader(false, false),
-            shader(true, false),
-            shader(false, false),
+            shader(NoGrass, false),
+            shader(Grass, false),
+            shader(NoGrass, false),
         ])
         .unwrap();
-        assert_eq!(grass_of(&plan), [Bare, Canopy, Bare]);
-        assert_eq!(plan.twins, GrassTwins::default());
+        assert_eq!(
+            variants_of(&plan),
+            [Plain, Plain, Plain, CanopyDaylight, GroundDaylight]
+        );
+        let t = table_of(&plan);
+        assert_eq!(t.routes().route(1), Some(0));
+        assert_eq!(t.routes().route(0), None);
+        assert_eq!(t.family(1), 3..5);
+        assert_eq!(
+            t.family(1)
+                .map(|b| t.variant(b as usize))
+                .collect::<Vec<_>>(),
+            [CanopyDaylight, GroundDaylight]
+        );
+        assert!(t.family(0).is_empty());
+        assert_eq!(t.superset_bucket(), None, "only the default's family");
+        let route = t.cull_variants(&[]).routes[0];
+        assert_eq!((route.bucket(0), route.bucket(VARIANT_FAR)), (4, 3));
     }
 
-    // The twins take one Shader's place in the budget between them, and the
-    // error names them.
+    // The cap counts every bucket, variants included, and the error says how
+    // many of each the world needs.
     #[test]
-    fn the_twins_count_once_toward_the_bucket_budget() {
-        let full = vec![shader(false, false); MAX_SHADER_BUCKETS];
+    fn the_cap_counts_every_variant() {
+        let full = vec![shader(NoGrass, false); MAX_SHADER_BUCKETS];
         assert!(BucketPlan::new(&full).is_ok());
         let mut over = full.clone();
-        over[0].canopy = true;
+        over[0].grass = Grass;
         let err = BucketPlan::new(&over).unwrap_err().to_string();
-        assert!(err.contains("grass canopy"), "{err}");
-        assert!(err.contains("needs 9 shader buckets"), "{err}");
-        let fits = BucketPlan::new(&over[..MAX_SHADER_BUCKETS - 1]).unwrap();
-        assert_eq!(fits.sources.len(), MAX_SHADER_BUCKETS + 1);
-        assert!(fits.sources.len() <= crate::gfx::render_types::MAX_DRAW_BUCKETS);
+        assert!(err.contains("needs 66 shader buckets"), "{err}");
+        assert!(err.contains("64 Shaders and 2 grass variants"), "{err}");
+        let fits = BucketPlan::new(&over[..MAX_SHADER_BUCKETS - 2]).unwrap();
+        assert_eq!(fits.sources.len(), MAX_SHADER_BUCKETS);
+        // Every Shader with a family, at the cap.
+        let families = vec![shader(PlanetSky, false); MAX_SHADER_BUCKETS / 5];
+        let plan = BucketPlan::new(&families).unwrap();
+        assert_eq!(plan.sources.len(), MAX_SHADER_BUCKETS / 5 * 5);
     }
 
-    // The table builds every bucket past the default except deferred ones,
-    // remembers what of the grass each shades, and where the twins are.
+    // The table builds every bucket past the default except deferred ones and
+    // remembers which variant each draws with.
     #[test]
-    fn the_table_built_from_a_plan_keeps_its_grass_shadings() {
+    fn the_table_built_from_a_plan_keeps_its_variants() {
         let plan = BucketPlan::new(&[
-            shader(true, false),
-            shader(true, true),
-            shader(false, false),
+            shader(Grass, false),
+            shader(Grass, true),
+            shader(NoGrass, false),
         ])
         .unwrap();
         let mut built = Vec::new();
         let t = WorldPipelines::build(&plan, |bucket, source| {
-            built.push((bucket, source.grass));
+            built.push((bucket, source.variant));
             Ok::<_, ()>(bucket)
         })
         .unwrap();
-        assert_eq!(built, [(2, Bare), (3, Canopy), (4, Ground)]);
-        assert_eq!(t.bucket_count(), 5);
+        assert_eq!(
+            built,
+            [(2, Plain), (3, CanopyDaylight), (4, GroundDaylight),]
+        );
+        assert_eq!(t.bucket_count(), 7);
         assert_eq!(t.resident_buckets().collect::<Vec<_>>(), [2, 3, 4]);
-        assert_eq!(t.grass_shadings(), [Bare, Canopy, Bare, Canopy, Ground]);
-        assert_eq!(t.canopy_twin(), Some(3));
-        assert_eq!(t.grass_twins().ground, Some(4));
-        assert_eq!(t.grass(0), Bare);
-        assert_eq!(t.grass(9), Bare);
+        assert_eq!(
+            t.variants(),
+            [
+                Plain,
+                Plain,
+                Plain,
+                CanopyDaylight,
+                GroundDaylight,
+                CanopyDaylight,
+                GroundDaylight
+            ]
+        );
+        assert_eq!(t.variant(99), Plain);
     }
 
     #[test]
-    fn a_plain_table_shades_no_grass() {
+    fn a_plain_table_has_no_variants() {
         let t = table();
-        assert_eq!(t.grass_shadings(), [Bare; 4]);
-        assert_eq!(t.grass_twins(), GrassTwins::default());
+        assert_eq!(t.variants(), [Plain; 4]);
+        assert_eq!(t.routes(), ShaderRoutes::default());
+    }
+
+    fn draw(shader: u32, far_field: u32) -> DrawObject {
+        let mut obj = crate::test_support::draw_object();
+        obj.shader_bucket = shader;
+        obj.material.far_field = crate::gfx::render_types::FarFieldTint::of(far_field);
+        obj
+    }
+
+    // A grass layer packed as the canopy block's first layer: a far band.
+    const GRASS: u32 = 1 << 8;
+    // A ground shading from the block with no layer: a planet's covers.
+    const COVERS: u32 = 1 << 16;
+
+    // A draw shading its ground takes its Shader's family, a draw growing grass
+    // marks its far band, and any other draw keeps its Shader's bucket.
+    #[test]
+    fn a_draw_routes_by_its_ground_and_its_shader() {
+        let plan = BucketPlan::new(&[shader(PlanetSky, false), shader(NoGrass, false)]).unwrap();
+        let t = table_of(&plan);
+        let routes = t.routes();
+        let bits = |obj: &DrawObject| routes.draw_bits(obj);
+        use crate::gfx::render_types::DrawArgsFlags;
+        let route_of = |b: u32| (b >> DrawArgsFlags::ROUTE_SHIFT) & DrawArgsFlags::ROUTE_MASK;
+        assert_eq!(route_of(bits(&draw(0, GRASS))), 1);
+        assert_ne!(bits(&draw(0, GRASS)) & DrawArgsFlags::FAR_BAND, 0);
+        assert_eq!(route_of(bits(&draw(0, COVERS))), 1);
+        assert_eq!(bits(&draw(0, COVERS)) & DrawArgsFlags::FAR_BAND, 0);
+        assert_eq!(bits(&draw(0, 0)), 0);
+        assert_eq!(bits(&draw(1, GRASS)), 1 << DrawArgsFlags::BUCKET_SHIFT);
+        assert_eq!(t.candidates(&draw(0, GRASS)), 2..6);
+        assert_eq!(t.candidates(&draw(1, GRASS)), 1..2);
+        assert_eq!(t.candidates(&draw(0, 0)), 0..1);
+        assert_eq!(
+            t.candidates(&draw(9, 0)),
+            5..6,
+            "clamped to the last bucket"
+        );
+    }
+
+    // Each bucket past the default spans the build-time draws that can route to
+    // it, then the runtime reserve; the default spans every record. Regions
+    // never overlap, and every record lands in each of its candidates'
+    // regions exactly once.
+    #[test]
+    fn regions_hold_each_record_in_its_candidates_once() {
+        let plan = BucketPlan::new(&[
+            shader(PlanetSky, false),
+            shader(NoGrass, false),
+            shader(Grass, false),
+        ])
+        .unwrap();
+        let t = table_of(&plan);
+        let draws = [
+            draw(0, 0),
+            draw(1, 0),
+            draw(0, GRASS),
+            draw(2, 0),
+            draw(1, 0),
+            draw(2, COVERS),
+            draw(0, 0),
+        ];
+        let runtime = 10..14;
+        let records = 16;
+        let spans = t.bucket_spans(&draws, runtime.clone(), records);
+        assert_eq!(spans[0].records, 0..records);
+        assert_eq!(spans[1].records, 1..5);
+        assert_eq!(spans[2].records, 3..4, "its covers take the family");
+        assert_eq!(spans[3].records, 2..3, "the default's family");
+        assert_eq!(spans[8].records, 5..6, "Shader 2's family");
+        for s in &spans[1..] {
+            assert_eq!(s.runtime, runtime);
+        }
+        let block = t.cull_variants(&spans);
+        assert_regions_sound(&block.regions[..t.bucket_count()], records);
+        for (record, obj) in draws.iter().enumerate() {
+            for b in t.candidates(obj) {
+                let r = &block.regions[b as usize];
+                assert!(
+                    r.command(u32::saturating_from(record)).is_some(),
+                    "{record} in {b}"
+                );
+            }
+        }
+        for record in runtime {
+            for r in &block.regions[..t.bucket_count()] {
+                assert!(r.command(u32::saturating_from(record)).is_some());
+            }
+        }
+    }
+
+    // No two regions share a command, a region's commands are its spans'
+    // records one to one, and the regions pack back to back.
+    fn assert_regions_sound(regions: &[crate::gfx::render_types::GpuBucketRegion], records: usize) {
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut next = 0;
+        for (b, r) in regions.iter().enumerate() {
+            assert_eq!(r.offset, next, "bucket {b} packs after the last");
+            next += r.len();
+            let mut mine = Vec::new();
+            for record in 0..u32::saturating_from(records) {
+                if let Some(c) = r.command(record) {
+                    assert!(seen.insert(c), "command {c} is taken twice");
+                    mine.push(c);
+                }
+            }
+            assert_eq!(
+                mine.len(),
+                r.len() as usize,
+                "bucket {b}: one command per record"
+            );
+        }
+    }
+
+    // At the cap, with every bucket spanning the whole build-time list and the
+    // reserve, the regions still never overlap and their total is what the
+    // indirect buffers are sized by.
+    #[test]
+    fn regions_at_the_cap_never_overlap() {
+        let shaders = vec![shader(NoGrass, false); MAX_SHADER_BUCKETS];
+        let t = table_of(&BucketPlan::new(&shaders).unwrap());
+        let draws: Vec<DrawObject> = (0..MAX_SHADER_BUCKETS * 3)
+            .map(|i| draw(u32::saturating_from(i % MAX_SHADER_BUCKETS), 0))
+            .collect();
+        let records = draws.len() + 40;
+        let runtime = draws.len()..draws.len() + 32;
+        let spans = t.bucket_spans(&draws, runtime, records);
+        let block = t.cull_variants(&spans);
+        assert_regions_sound(&block.regions, records);
+        let total = crate::gfx::render_types::region_commands(&block.regions, MAX_SHADER_BUCKETS);
+        let per_bucket = 2 * MAX_SHADER_BUCKETS + 1 + 32;
+        assert_eq!(total, records + (MAX_SHADER_BUCKETS - 1) * per_bucket);
     }
 }

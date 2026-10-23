@@ -33,13 +33,26 @@ use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
 
 impl VkContext {
-    // Where this frame's draws growing grass route: the grass twins, and where
-    // the blades start handing the field to the canopy.
-    fn grass_route(&self) -> concinnity_engine::render::record_pack::GrassRoute {
-        concinnity_engine::render::record_pack::GrassRoute {
-            twins: self.cull.world_pipelines.grass_twins(),
-            far_start: self.grass_lod.map_or(0.0, |l| l.fade_start()),
+    // Write this frame's variant block into frame `frame_idx`'s buffer: the
+    // routes and bucket regions, seen from the main view, where the grass
+    // hands over to the canopy and under the view's planet sky; and note which
+    // buckets that view can pick.
+    fn write_cull_variants(&self, frame_idx: usize) {
+        let Some(buffer) = self.cull.variant_buffers.get(frame_idx) else {
+            return;
+        };
+        let mut variants = self.cull.variants;
+        variants.set_view(
+            self.grass_lod.map_or(0.0, |l| l.fade_start()),
+            &self.state.view.daylight,
+        );
+        if let Some(live) = self.cull.live_buckets.get(frame_idx) {
+            live.store(
+                variants.live_buckets(self.shader_bucket_count()),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
+        buffer.write_val(0, &variants);
     }
 
     // Pack this frame's bindless cull records into frame `frame_idx`'s
@@ -63,6 +76,7 @@ impl VkContext {
         };
         let packing = self.build_records_into(objects, args, cam_pos, history);
         self.patch_instance_lod_into(args, cam_pos);
+        self.write_cull_variants(frame_idx);
         packing
     }
 
@@ -114,12 +128,10 @@ impl VkContext {
         history: HistoryMode,
     ) -> FanOutTiming {
         use concinnity_engine::gfx::render_types::{
-            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
-            normal_pool_index, pack_skinned_record,
+            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_flags, normal_pool_index,
+            pack_skinned_record,
         };
-        use concinnity_engine::render::record_pack::{
-            PackView, StaticPack, draw_bucket, pool_object_record,
-        };
+        use concinnity_engine::render::record_pack::{PackView, StaticPack, pool_object_record};
         let texture_count = u32::saturating_from(self.scene.textures.len());
         let record_stride = size_of::<GpuObjectData>();
         let args_stride = size_of::<GpuDrawArgs>();
@@ -142,7 +154,7 @@ impl VkContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_route: self.grass_route(),
+            routes: self.cull.world_pipelines.routes(),
             tile_morph: self.state.tile_morph,
         };
 
@@ -185,7 +197,7 @@ impl VkContext {
         // one draws unconditionally; a freed slot's `resident` clear disables
         // it, and the cull kernel skips a disabled record's stale object.
         let runtime_base = self.state.draw.runtime_record_base();
-        let grass_route = self.grass_route();
+        let routes = self.cull.world_pipelines.routes();
         let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
             let mut record = pool_object_record(obj, texture_count);
             record.tile_morph = view.tile_morph_row(obj);
@@ -205,7 +217,7 @@ impl VkContext {
                 index_offset: u32::saturating_from(index_offset),
                 base_vertex: obj.base_vertex.cast_unsigned(),
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
+                    | routes.draw_bits(obj)
                     | model_history.draw_flags(runtime_base + k, i),
             };
             args.write_val((runtime_base + k) * args_stride, &rec);

@@ -104,6 +104,9 @@ pub(crate) struct RenderingBake {
     // spawns grow the live draw list while the faces render, so every face culls
     // and draws against this snapshot instead.
     counts: crate::metal::context::DrawRecordCounts,
+    // The routes and bucket regions of that record set, which the live ones
+    // re-span as the draw list grows.
+    variants: concinnity_engine::gfx::render_types::GpuCullVariants,
 }
 
 pub(crate) struct PrefilteringBake {
@@ -291,6 +294,7 @@ impl MtlContext {
                 deformed,
             },
             counts,
+            variants: self.cull.variants,
         })
     }
 
@@ -345,8 +349,12 @@ impl MtlContext {
             &cull_cb,
             &gpu.object_buffer,
             &gpu.draw_args,
-            &frustum,
-            eye,
+            super::cull::CullView {
+                frustum: &frustum,
+                cam_pos: eye,
+                daylight: &concinnity_engine::render::uniforms::DaylightBlock::OFF,
+                variants: &bake.variants,
+            },
             counts,
         )?;
         super::fault_log::attach_fault_logger(&cull_cb, "reflection probe cull");
@@ -376,6 +384,7 @@ impl MtlContext {
                 bindless_tex_args: Some(tex_args),
                 deformed_skinned: gpu.deformed.as_ref(),
                 counts,
+                regions: self.probe_regions(&bake.variants),
             },
             crate::metal::draw::main::FacePass::PROBE,
         )?;
