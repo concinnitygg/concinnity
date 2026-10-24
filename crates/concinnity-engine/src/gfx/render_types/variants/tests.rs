@@ -267,19 +267,21 @@ fn the_live_buckets_hold_every_pick_of_the_view() {
     b.routes[1] = GpuVariantRoute::new([6, 6, 6, 6], 0);
     let plain =
         !((1 << CANOPY) | (1 << CANOPY_SKY) | (1 << GROUND) | (1 << GROUND_SKY)) & all_eight;
-    assert_eq!(b.live_buckets(8), all_eight);
-    b.set_view(60.0, &sky(0.2));
+    assert_eq!(b.live_buckets(8, &sky(0.0)), all_eight);
     assert_eq!(
-        b.live_buckets(8),
+        b.live_buckets(8, &sky(0.2)),
         plain | (1 << CANOPY_SKY) | (1 << GROUND_SKY)
     );
-    b.set_view(60.0, &DaylightBlock::OFF);
-    assert_eq!(b.live_buckets(8), plain | (1 << CANOPY) | (1 << GROUND));
-    assert_eq!(b.live_buckets(3), 0b111, "within the world's buckets");
+    let off = &DaylightBlock::OFF;
+    assert_eq!(
+        b.live_buckets(8, off),
+        plain | (1 << CANOPY) | (1 << GROUND)
+    );
+    assert_eq!(b.live_buckets(3, off), 0b111, "within the world's buckets");
     // Every pick of every view lies in its live set.
     for view in [sky(0.0), sky(0.2), DaylightBlock::OFF] {
         b.set_view(60.0, &view);
-        let live = b.live_buckets(8);
+        let live = b.live_buckets(8, &view);
         for half in [5.0, 50.0, 300.0, 600.0] {
             for args in [grass(), args(FarFieldTint::NONE)] {
                 let bucket = b.bucket(&args, tile(half), EYE);

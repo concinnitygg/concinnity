@@ -48,7 +48,7 @@ impl VkContext {
         );
         if let Some(live) = self.cull.live_buckets.get(frame_idx) {
             live.store(
-                variants.live_buckets(self.shader_bucket_count()),
+                variants.live_buckets(self.shader_bucket_count(), &self.state.view.daylight),
                 std::sync::atomic::Ordering::Relaxed,
             );
         }

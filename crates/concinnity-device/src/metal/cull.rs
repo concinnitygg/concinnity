@@ -769,9 +769,10 @@ impl MtlContext {
         &'a self,
         variants: &'a render_types::GpuCullVariants,
     ) -> BucketRegions<'a> {
-        let live = self
-            .view_variants(variants, &DaylightBlock::OFF)
-            .live_buckets(self.cull.world_pipelines.bucket_count());
+        let live = variants.live_buckets(
+            self.cull.world_pipelines.bucket_count(),
+            &DaylightBlock::OFF,
+        );
         BucketRegions {
             variants,
             live,
@@ -782,9 +783,10 @@ impl MtlContext {
     // The live frame's regions for the main view over phase 1's lists,
     // drawing only the buckets that view can pick.
     pub(in crate::metal) fn main_regions(&self) -> BucketRegions<'_> {
-        let live = self
-            .view_variants(&self.cull.variants, &self.state.view.daylight)
-            .live_buckets(self.cull.world_pipelines.bucket_count());
+        let live = self.cull.variants.live_buckets(
+            self.cull.world_pipelines.bucket_count(),
+            &self.state.view.daylight,
+        );
         BucketRegions {
             variants: &self.cull.variants,
             live,

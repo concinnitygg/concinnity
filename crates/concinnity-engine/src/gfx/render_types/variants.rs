@@ -180,14 +180,14 @@ impl GpuCullVariants {
     }
 
     /// The buckets of the first `buckets`, a bit each, a record can draw
-    /// under in this view: every bucket no route picks, and of a route's,
-    /// those its features can reach. Aloft every routed record takes the
-    /// planet's sky and without one none does, so the others draw nothing and
-    /// need not execute.
-    pub fn live_buckets(&self, buckets: usize) -> u64 {
-        let days: &[u32] = if self.day_center[3] <= 0.5 {
+    /// under in a view lit by `daylight`: every bucket no route picks, and of
+    /// a route's, those its features can reach. Aloft every routed record
+    /// takes the planet's sky and without one none does, so the others draw
+    /// nothing and need not execute.
+    pub fn live_buckets(&self, buckets: usize, daylight: &DaylightBlock) -> u64 {
+        let days: &[u32] = if !daylight.is_on() {
             &[0]
-        } else if self.day_camera_up[3] > 0.0 {
+        } else if daylight.camera_up[3] > 0.0 {
             &[VARIANT_DAYLIGHT]
         } else {
             &[0, VARIANT_DAYLIGHT]

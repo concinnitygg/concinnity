@@ -341,7 +341,7 @@ impl DxContext {
         );
         if let Some(live) = self.cull.live_buckets.get(slot) {
             live.store(
-                variants.live_buckets(self.shader_bucket_count()),
+                variants.live_buckets(self.shader_bucket_count(), &self.state.view.daylight),
                 std::sync::atomic::Ordering::Relaxed,
             );
         }
