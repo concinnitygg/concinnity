@@ -903,8 +903,12 @@ fn zip_tree(src_dir: &Path, top: &str, exe_rel: &str, zip_path: &Path) -> io::Re
             .to_string_lossy()
             .replace('\\', "/");
         let mode = if rel == exe_rel { 0o755 } else { 0o644 };
+        // Marked as made on Unix: zip defaults to DOS on a Windows host, and
+        // unzip ignores the mode bits of a DOS entry, which would drop the
+        // executable bit.
         let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
+            .system(zip::System::Unix)
             .unix_permissions(mode);
         zw.start_file(format!("{top}/{rel}"), options)
             .map_err(io::Error::other)?;
