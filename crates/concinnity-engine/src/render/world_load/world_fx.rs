@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use crate::components::{
     Atmosphere, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
-    VolumetricFog, WaterShape, WaterSurface, Wind,
+    VolumetricFog, WaterSurface, Wind,
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
@@ -18,9 +18,9 @@ use crate::render::environment::ground::GroundCovers;
 use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
 use crate::render::{decal, environment::volumetric_fog, particles};
-use crate::water::WaterBody;
 use crate::water::ocean::OceanQuality;
 use crate::water::sea::shore::ShoreWaves;
+use crate::water::{WaterBody, split_water};
 use crate::wind::WindField;
 
 /// What a planet's ground is laid with: the grass its layers grow and the
@@ -66,15 +66,13 @@ pub fn drain_world_fx(
     let wind_field = WindField::new(wind.as_ref());
     let (planet, surface) = planet.unzip();
     let planet_shape = planet.map(Planet::shape);
-    let surfaces = ctx.drain::<WaterSurface>();
-    if planet_shape.is_none() && surfaces.iter().any(|s| s.shape == WaterShape::PlanetSea) {
-        tracing::warn!(
-            "a WaterSurface is a planet_sea but the world has no Planet; it is \
-             not drawn"
-        );
+    let surfaces = ctx.drain_with_ids::<WaterSurface>();
+    let (rectangles, sea) = split_water(surfaces.iter().map(|(id, s)| (*id, s)), planet);
+    if planet.is_some_and(|p| p.sea.is_some()) && sea.is_none() {
+        tracing::warn!("the Planet's sea names no WaterSurface; it is not drawn");
     }
     let (water_surfaces, ocean) =
-        WaterBody::resolve_all(&surfaces, &wind_field, ocean_quality, planet_shape.as_ref());
+        WaterBody::resolve_all(rectangles, &wind_field, ocean_quality, sea);
     let grass: hashbrown::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()

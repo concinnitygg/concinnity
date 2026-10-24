@@ -186,6 +186,7 @@ pub enum Call {
         normal_map_slot: usize,
     },
     SetDrawCullDistance(DrawIndex, f32),
+    ReshapePlanet,
     SetMaterialParams {
         row: u32,
         params: [f32; render_types::MATERIAL_PARAM_COUNT],
@@ -773,6 +774,10 @@ impl LiveEdit for RecordingBackend {
 
     fn set_material_params(&mut self, row: u32, params: [f32; render_types::MATERIAL_PARAM_COUNT]) {
         self.record(Call::SetMaterialParams { row, params });
+    }
+
+    fn reshape_planet(&mut self, _shape: &crate::planet::PlanetShape) {
+        self.record(Call::ReshapePlanet);
     }
 }
 

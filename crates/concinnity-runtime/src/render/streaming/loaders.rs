@@ -4,10 +4,9 @@
 //! `StreamingRuntime` resource.
 
 use concinnity_engine::bake::texture::TextureImage;
-use concinnity_engine::planet::{TileId, TileMesh};
 use concinnity_engine::render::streaming::pools::{
     ChunkLoad, ChunkRequest, DecodedMesh, ItemLoad, LoadPool, ShaderPump, StreamLoaders,
-    StreamingState,
+    StreamingState, TileBuild, TileBuilt,
 };
 
 use crate::render::streaming::shader::ShaderWarmup;
@@ -20,7 +19,7 @@ pub(crate) struct StreamWorkers {
     pub(crate) texture: Option<Worker<usize, ItemLoad<TextureImage>>>,
     pub(crate) mesh: Option<Worker<usize, ItemLoad<DecodedMesh>>>,
     pub(crate) chunk: Option<Worker<ChunkRequest, ChunkLoad>>,
-    pub(crate) planet: Option<Worker<TileId, (TileId, TileMesh)>>,
+    pub(crate) planet: Option<Worker<TileBuild, TileBuilt>>,
     pub(crate) shaders: Option<ShaderWarmup>,
 }
 

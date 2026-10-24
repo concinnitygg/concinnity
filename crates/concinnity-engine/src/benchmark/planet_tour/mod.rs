@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use crate::components::{
     BenchmarkPhase, CameraBoom, CameraPose, CameraTravel, CameraTurn, DirectionalLight, DriveKey,
-    Planet, SkyRotation, WaterShape, WaterSurface,
+    Planet, SkyRotation,
 };
 use crate::ecs::World;
 use concinnity_core::math::dvec3::{self, DVec3};
@@ -90,11 +90,9 @@ pub(crate) fn plan(
     warmup_seconds: f32,
     rolls: bool,
 ) -> Option<TourPlan> {
-    let shape = world.query::<Planet>().next()?.shape();
-    let sea_level = world
-        .query::<WaterSurface>()
-        .find(|w| w.shape == WaterShape::PlanetSea)
-        .map(|w| f64::from(w.sea_level));
+    let planet = world.query::<Planet>().next()?;
+    let shape = planet.shape();
+    let sea_level = planet.sea.map(|s| f64::from(s.level));
     let sky = world.query::<SkyRotation>().next().cloned();
     let light = world
         .query::<DirectionalLight>()

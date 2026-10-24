@@ -147,6 +147,7 @@
 - [PassResolution](PassResolution.md) - Internal resolution a screen-space pass renders at before its result is upsampled to native. `half` (the default) shades a quarter of the pixels; `full` keeps the pass at native resolution; `quarter` is the cheapest.
 - [PhysicsJointKind](PhysicsJointKind.md) - The constraint shape a `PhysicsJoint` declares.
 - [PlanetDetail](PlanetDetail.md) - How finely a planet's terrain tiles are drawn. The `planet_detail` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
+- [PlanetSea](PlanetSea.md) - The ocean of a [Planet](Planet.md): a sphere of water `level` meters above the planet's radius, so every valley whose ground lies lower floods, and the coast is wherever the hills rise out of it.
 - [PlanetTour](PlanetTour.md) - How a [`BenchmarkConfig`](BenchmarkConfig.md) tours a [`Planet`](Planet.md).
 - [PrefabEntry](PrefabEntry.md) - One entry in a [Prefab](Prefab.md)'s `props` list. The fields consulted depend on `kind`: a `prop` uses the render / collision / transform fields, a `point_light` uses the `light_*` fields, and a `prefab` uses `prefab`. The assets named by `model` / `mesh` / `material` / `parent` / `prefab` resolve when the entry expands.
 - [PrefabKind](PrefabKind.md) - Which kind of asset a [`PrefabEntry`] expands into.
@@ -192,6 +193,5 @@
 - [VariableDecl](VariableDecl.md) - One variable declared by the world's [Variables](Variables.md). The declared value fixes both the variable's type and the value it holds at world start.
 - [VertexData](VertexData.md) - A single vertex as supplied in raw Mesh args.
 - [Vignette](Vignette.md) - Darkening toward the corners of the frame. The `vignette` section of [`GraphicsConfig`](GraphicsConfig.md); left unset, there is no vignette.
-- [WaterShape](WaterShape.md) - What a [`WaterSurface`](WaterSurface.md) covers.
 - [WaterWave](WaterWave.md) - One authored swell wave on a water surface, on top of the waves the wind raises. Swell is the long, regular motion left by distant weather: it rolls along `direction`, rising and falling `amplitude` around the rest height, `wavelength` between crests, at the speed deep water carries a wave that long (about 1.25 m/s times the square root of the wavelength in meters). `steepness` in [0, 1] pinches the crests and broadens the troughs.
 - [WindowMode](WindowMode.md) - How the application window is presented.

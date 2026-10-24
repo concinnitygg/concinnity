@@ -11,12 +11,12 @@
 //!
 //! One module per surface: `asset_tree`, `behavior`, `character_shape`,
 //! `console`, `content`, `export`, `import`, `lighting`, `map`, `overrides`,
-//! `palette`, `select`, `shaders` (with its `shader_edits`, `shader_form` and
+//! `palette`, `planet`, `select`, `shaders` (with its `shader_edits`, `shader_form` and
 //! `shader_source`), `story`, `variables` and `worlds`.
 //!
 //! Each panel keeps its session state in a `*_state` sibling (`assets_state`,
 //! `behavior_state`, `console_state`, `content_state`, `import_state`,
-//! `lighting_state`, `map_state`, `palette_state`, `shape_state`,
+//! `lighting_state`, `map_state`, `palette_state`, `planet_state`, `shape_state`,
 //! `shaders_state`, `story_state`, `templates_state`, `variables_state` and
 //! `worlds_state`), a plain struct with the resets that touch nothing else.
 //! Whether a panel is open is the hook's (`EditorHook::open`), not its state's.
@@ -41,6 +41,8 @@ pub(super) mod overrides;
 pub(super) mod palette;
 pub(super) mod palette_state;
 pub(super) mod path_cache;
+pub(super) mod planet;
+pub(super) mod planet_state;
 pub(super) mod sdf_edits;
 pub(super) mod sdf_form;
 pub(super) mod select;

@@ -31,7 +31,7 @@ use concinnity::components::{
     Atmosphere, BackgroundOverrides, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource,
     BloomOverrides, DirectionalLight, ExposureOverrides, FramePacingOverrides, GraphicsConfig,
     IndirectLightingOverrides, NightSky, ProceduralMesh, Prop, SkyRotation, VignetteOverrides,
-    WaterShape, WaterSurface, Wind, Window,
+    WaterSurface, Wind, Window,
 };
 use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
@@ -209,8 +209,6 @@ fn cube_world() -> Result<World, concinnity::Error> {
     // green light. The grid itself is the engine's to build: the backends
     // tessellate it at start from nothing but this component.
     world.add_component(WaterSurface {
-        shape: WaterShape::Rectangle,
-        sea_level: 0.0,
         center: [0.0, 0.0, 0.0],
         extent: [WATER_HALF_EXTENT, WATER_HALF_EXTENT],
         subdivisions: 240,

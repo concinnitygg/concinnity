@@ -7,12 +7,14 @@
 
 mod face;
 pub mod shore;
+mod source;
 
 use core::ops::Range;
 
 use concinnity_core::math::{acos, narrow_f32};
 pub use face::SeaFace;
 use shore::ShoreWaves;
+pub use source::{PlanetWater, split_water};
 
 use super::ocean::grid::OceanGrid;
 use crate::gfx::render_types::DAYLIGHT_COS_MARGIN;
@@ -44,11 +46,11 @@ pub struct SeaSphere {
 }
 
 impl SeaSphere {
-    /// The sea `sea_level` meters above `planet`'s radius.
-    pub fn new(planet: &PlanetShape, sea_level: f32) -> Self {
+    /// The sea `level` meters above `planet`'s radius.
+    pub fn new(planet: &PlanetShape, level: f32) -> Self {
         Self {
             center: planet.center,
-            radius: planet.radius + f64::from(sea_level),
+            radius: planet.radius + f64::from(level),
         }
     }
 
@@ -162,16 +164,17 @@ mod tests {
             strength: 7.0,
             ..Default::default()
         }));
-        let surface = WaterSurface {
-            shape: crate::components::WaterShape::PlanetSea,
-            sea_level: 0.0,
-            ..WaterSurface::default()
+        let surface = WaterSurface::default();
+        let sea = PlanetWater {
+            planet,
+            level: 0.0,
+            surface: &surface,
         };
         let (bodies, _) = WaterBody::resolve_all(
-            [&surface],
+            [],
             &wind,
             crate::water::ocean::OceanQuality::FULL,
-            Some(&planet),
+            Some(sea),
         );
         let body = &bodies[0];
         let sea = body.sea.as_ref().expect("a planet sea");

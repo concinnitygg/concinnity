@@ -45,7 +45,7 @@ pub use crate::physics::prop_body::PropBody;
 pub use crate::physics::rigid_body::RigidBody;
 pub use crate::physics::rolling_drive::RollingDrive;
 pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
-pub use crate::planet::{GroundCover, Planet};
+pub use crate::planet::{GroundCover, Planet, PlanetSea};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::grass::Grass;
@@ -106,7 +106,7 @@ pub use crate::ui::scroll_panel::{ScrollGroup, ScrollPanel, ScrollRow};
 pub use crate::ui::sprite::{Sprite, SpriteFit};
 pub use crate::ui::text_input::TextInput;
 pub use crate::ui::text_label::{TextAlign, TextLabel};
-pub use crate::water::{WaterShape, WaterSurface, WaterWave};
+pub use crate::water::{WaterSurface, WaterWave};
 pub use crate::wind::Wind;
 pub use crate::window::{Window, WindowMode};
 

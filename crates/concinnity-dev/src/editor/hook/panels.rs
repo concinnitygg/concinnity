@@ -18,8 +18,8 @@ use crate::editor::panels::template::{self, TemplatesAction};
 use crate::editor::panels::view::{self, ViewAction};
 use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
-    lighting, lighting_panel, shader_list_panel, shader_source_panel, story_panel, template_panel,
-    variables_panel,
+    lighting, lighting_panel, planet_panel, shader_list_panel, shader_source_panel, story_panel,
+    template_panel, variables_panel,
 };
 use crate::editor::text_area::layout::Metrics;
 use crate::editor::viewport::snap;
@@ -541,6 +541,58 @@ impl Panel for LightingPanel {
         let data = hook.lighting_data();
         let view = hook.make_lighting_view(&data, mouse);
         lighting_panel::place(world, &view, o, s);
+    }
+}
+
+pub(crate) struct PlanetPanel;
+
+impl Panel for PlanetPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Planet
+    }
+    fn ids(&self) -> &'static HudIds {
+        planet_panel::ids()
+    }
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.planet.focus = None;
+        hook.planet.status = None;
+        hook.seed_planet(world);
+    }
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        planet_panel::size(hook.planet_rows().len())
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        planet_panel::default_origin(vp)
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::Planet);
+        let action = {
+            let rows = hook.planet_rows();
+            let view = hook.make_planet_view(&rows, [mx, my]);
+            planet_panel::hit_test(&view, mx, my, o, s)
+        };
+        handled(action, |a| hook.apply_planet_action(a, world))
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Planet);
+        let rows = hook.planet_rows().len();
+        widget::point_in(mx, my, planet_panel::body_rect(o, s[0], rows))
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_planet(delta);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Planet);
+        let rows = hook.planet_rows();
+        let view = hook.make_planet_view(&rows, mouse);
+        planet_panel::place(world, &view, o, s);
     }
 }
 

@@ -180,6 +180,20 @@ impl MtlContext {
         self.water.wake.rebase(rebase);
     }
 
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    pub(in crate::metal) fn reshape_planet(
+        &mut self,
+        shape: &concinnity_engine::planet::PlanetShape,
+    ) {
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            self.water.surfaces.iter_mut().map(|s| &mut s.motion),
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
+    }
+
     // Advance the wake to this frame when a sea runs one and the `WaterSim`
     // node will, so the node and the draws read the same frame of it.
     pub(in crate::metal) fn prepare_water_wake(

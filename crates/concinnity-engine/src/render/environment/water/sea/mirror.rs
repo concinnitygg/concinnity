@@ -87,7 +87,7 @@ pub(super) fn ripple_cell(params: &WaterParams, face: usize, r: usize, s: [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{Planet, WaterShape, WaterSurface, Wind};
+    use crate::components::{Planet, WaterSurface, Wind};
     use crate::planet::{DVec3, LocalFrame};
     use crate::render::environment::water::frame::WaterMotion;
     use crate::water::WaterBody;
@@ -99,8 +99,6 @@ mod tests {
 
     fn sea() -> WaterBody {
         let surface = WaterSurface {
-            shape: WaterShape::PlanetSea,
-            sea_level: 12.0,
             fetch_meters: 1.0e5,
             ..Default::default()
         };
@@ -108,9 +106,12 @@ mod tests {
             strength: 9.0,
             ..Wind::default()
         }));
-        let planet = Planet::default().shape();
-        let (mut bodies, _) =
-            WaterBody::resolve_all([&surface], &wind, OceanQuality::FULL, Some(&planet));
+        let sea = crate::water::PlanetWater {
+            planet: Planet::default().shape(),
+            level: 12.0,
+            surface: &surface,
+        };
+        let (mut bodies, _) = WaterBody::resolve_all([], &wind, OceanQuality::FULL, Some(sea));
         bodies.remove(0)
     }
 

@@ -256,6 +256,14 @@ impl World {
         C::column(&self.components).map_or(&[][..], |c| c).iter()
     }
 
+    /// Iterate every component of type C paired with its owning entity.
+    /// Mirror of `PipelineContext::query_with_entity`.
+    pub fn query_with_entity<C: ComponentSlot>(&self) -> impl Iterator<Item = (Entity, &C)> {
+        C::column(&self.components)
+            .into_iter()
+            .flat_map(super::column::Column::iter_with_entities)
+    }
+
     /// Mutable iteration over all components of type C. Mirror of
     /// `PipelineContext::query_mut` for code holding a `World` directly rather
     /// than a per-system `PipelineContext`.

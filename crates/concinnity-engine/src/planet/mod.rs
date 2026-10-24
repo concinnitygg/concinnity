@@ -33,6 +33,7 @@ mod horizon;
 mod lod;
 mod morph;
 mod rebase;
+mod sea;
 mod seams;
 mod shape;
 mod system;
@@ -57,11 +58,12 @@ pub use lod::{
 };
 pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
+pub use sea::PlanetSea;
 pub use seams::{DrawnTile, TileSeams};
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
 pub(crate) use shape::{OCTAVE_TURN, fbm, octave_cells, octave_weight_sum};
 pub use system::{
-    GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetSystem, StartBuilder,
+    GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetEdit, PlanetSystem, StartBuilder,
     inline_ground,
 };
 pub use tile::{
@@ -154,9 +156,9 @@ pub struct PlanetGround {
 /// and out to sea the floor falls away at the beach's slope across a shallow
 /// shelf before it levels off toward the ocean depth. The ground then spans
 /// from `ocean_depth` below the radius to `amplitude` above it, or to the top
-/// of the beach where the hills are lower than that. The water
-/// itself is a [`WaterSurface`](#watersurface) whose `shape` is `planet_sea`,
-/// with a `sea_level` of 0 to fill the basins to the coasts.
+/// of the beach where the hills are lower than that. Its `sea` fills the
+/// basins with water; a `level` of 0 fills them to the coasts. A planet
+/// with no `sea` keeps its basins dry.
 ///
 /// Gravity points at the center from wherever a body is, `gravity` meters per
 /// second squared, so a first-person camera with a [`RigidBody`](#rigidbody)
@@ -235,6 +237,9 @@ pub struct Planet {
     /// in meters. At least 1.
     #[asset(default = 60.0)]
     pub beach_width: f32,
+    /// The [`PlanetSea`](#planetsea) that floods the low ground. None leaves it
+    /// dry.
+    pub sea: Option<PlanetSea>,
     /// The [Material](#material) the ground renders with.
     pub material: Option<MaterialHandle>,
     /// Looks laid over `material` in order, each where its rule holds. At
@@ -252,6 +257,21 @@ pub struct Planet {
 }
 
 impl Planet {
+    /// The fields an edit can change while the world runs: the ground's shape,
+    /// which keeps its center and radius, and the pull. Any other field is
+    /// read once when the world loads.
+    pub const LIVE_FIELDS: &'static [&'static str] = &[
+        "amplitude",
+        "feature_size",
+        "octaves",
+        "seed",
+        "land_share",
+        "continent_size",
+        "ocean_depth",
+        "beach_width",
+        "gravity",
+    ];
+
     /// The surface this planet's args describe.
     pub fn shape(&self) -> PlanetShape {
         let radius = f64::from(self.radius);

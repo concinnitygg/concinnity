@@ -7,14 +7,11 @@ use concinnity_core::math::vec3;
 // the start, a sea, and a sun the sky turns.
 fn world(sea: bool) -> World {
     let mut world = World::new();
-    world.push(from_json::<Planet>(
+    let mut planet = from_json::<Planet>(
         r#"{"center":[0.0,-50000.0,0.0],"radius":50000.0,"amplitude":40.0,"feature_size":2000.0,"octaves":4,"seed":95,"land_share":0.4,"continent_size":20000.0,"ocean_depth":60.0,"beach_width":60.0}"#,
-    ));
-    if sea {
-        world.push(from_json::<WaterSurface>(
-            r#"{"shape":"planet_sea","sea_level":0.0}"#,
-        ));
-    }
+    );
+    planet.sea = sea.then(crate::components::PlanetSea::default);
+    world.push(planet);
     world.push(from_json::<SkyRotation>(
         r#"{"axis":[0.0,0.0,-1.0],"degrees_per_second":1.5}"#,
     ));

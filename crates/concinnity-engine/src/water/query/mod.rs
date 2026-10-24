@@ -18,10 +18,10 @@ mod tests;
 
 use crate::components::WaterSurface;
 use crate::planet::{DVec3, LocalFrame, PlanetShape};
-use crate::water::WaterBody;
 use crate::water::ocean::OceanQuality;
 use crate::water::ocean::band::OceanBand;
 use crate::water::sea::shore::{ShoreNoise, ShorePoint};
+use crate::water::{PlanetWater, WaterBody};
 use crate::wind::WindField;
 use alloc::vec::Vec;
 
@@ -119,15 +119,16 @@ pub(crate) struct WaterQuery {
 }
 
 impl WaterQuery {
-    /// The water of `surfaces` moved by `wind`, a planet sea lying on
-    /// `planet`. The simulated seas are resolved at the full quality: the
-    /// waves the query reads are the same at every preset.
+    /// The water of `rectangles` and `sea` moved by `wind`. The simulated
+    /// seas are resolved at the full quality: the waves the query reads are
+    /// the same at every preset.
     pub(crate) fn new<'a>(
-        surfaces: impl IntoIterator<Item = &'a WaterSurface>,
+        rectangles: impl IntoIterator<Item = &'a WaterSurface>,
         wind: &WindField,
-        planet: Option<&PlanetShape>,
+        sea: Option<PlanetWater<'_>>,
     ) -> Self {
-        let (bodies, plan) = WaterBody::resolve_all(surfaces, wind, OceanQuality::FULL, planet);
+        let planet = sea.map(|s| s.planet);
+        let (bodies, plan) = WaterBody::resolve_all(rectangles, wind, OceanQuality::FULL, sea);
         let bands = plan
             .simulations
             .iter()
@@ -144,7 +145,19 @@ impl WaterQuery {
         Self {
             bodies,
             bands,
-            planet: planet.copied(),
+            planet,
+        }
+    }
+
+    /// The sea laid on `planet` again where the planet was reshaped, its
+    /// center and radius kept (see [`WaterBody::reshape`]).
+    pub(crate) fn reshape(&mut self, planet: &PlanetShape) {
+        if self.planet.is_none_or(|p| p == *planet) {
+            return;
+        }
+        self.planet = Some(*planet);
+        for b in &mut self.bodies {
+            b.body.reshape(planet);
         }
     }
 

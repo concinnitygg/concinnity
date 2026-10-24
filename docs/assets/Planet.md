@@ -23,9 +23,9 @@ rises a few meters, the hills grow in behind it over half their width,
 and out to sea the floor falls away at the beach's slope across a shallow
 shelf before it levels off toward the ocean depth. The ground then spans
 from `ocean_depth` below the radius to `amplitude` above it, or to the top
-of the beach where the hills are lower than that. The water
-itself is a [`WaterSurface`](WaterSurface.md) whose `shape` is `planet_sea`,
-with a `sea_level` of 0 to fill the basins to the coasts.
+of the beach where the hills are lower than that. Its `sea` fills the
+basins with water; a `level` of 0 fills them to the coasts. A planet
+with no `sea` keeps its basins dry.
 
 Gravity points at the center from wherever a body is, `gravity` meters per
 second squared, so a first-person camera with a [`RigidBody`](RigidBody.md)
@@ -61,6 +61,7 @@ longitude grows eastward, toward `+X`. Altitude is measured above
 - `continent_size`: A float. Width of the broadest continents and oceans, in meters. At least 100. Defaults to `20000.0`.
 - `ocean_depth`: A float. Deepest the sea floor lies below sea level, in meters. Defaults to `60.0`.
 - `beach_width`: A float. Width of the gentle rise from the waterline to where the hills begin, in meters. At least 1. Defaults to `60.0`.
+- `sea`: A [PlanetSea](PlanetSea.md) object. The [`PlanetSea`](PlanetSea.md) that floods the low ground. None leaves it dry.
 - `material`: A string. The [Material](Material.md) the ground renders with. Optional.
 - `covers`: An array of [GroundCover](GroundCover.md) objects. Looks laid over `material` in order, each where its rule holds. At most 4; later ones are dropped. Defaults to `[]`.
 - `gravity`: A float. Pull toward the center, in meters per second squared. Defaults to `20.0`.

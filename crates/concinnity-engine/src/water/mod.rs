@@ -11,7 +11,7 @@ pub mod spectrum;
 pub mod spray;
 pub mod stir;
 
-use crate::components::{ParticleEmitter, Vocabulary};
+use crate::components::ParticleEmitter;
 use crate::ecs::Ref;
 use crate::planet::PlanetShape;
 use crate::wind::WindField;
@@ -21,6 +21,7 @@ use ocean::grid::OceanGrid;
 use ocean::{BodyOcean, OCEAN_CHOPPINESS, OceanPlan, OceanQuality, OceanSea};
 use ripples::{RIPPLES, Ripple};
 use sea::shore::ShoreWaves;
+pub use sea::{PlanetWater, split_water};
 use sea::{SeaBody, SeaSphere};
 use spectrum::{GRAVITY, WIND_SEA_WAVES, Wave, unit_hash, wind_sea};
 
@@ -101,48 +102,44 @@ impl WaterBody {
 
     /// Every surface moved by `wind`, each large one taking its wind sea from
     /// a simulated ocean at `quality` while there is room for its sea, and
-    /// the simulations they share. A planet sea lies on `planet`; with no
-    /// planet it is left out.
+    /// the simulations they share. `rectangles` are drawn as rectangles and
+    /// `sea`, first, around its planet.
     pub fn resolve_all<'a>(
-        surfaces: impl IntoIterator<Item = &'a WaterSurface>,
+        rectangles: impl IntoIterator<Item = &'a WaterSurface>,
         wind: &WindField,
         quality: OceanQuality,
-        planet: Option<&PlanetShape>,
+        sea: Option<PlanetWater<'_>>,
     ) -> (Vec<Self>, OceanPlan) {
         let mut plan = OceanPlan::new(quality);
-        let bodies = surfaces
+        let mut bodies: Vec<Self> = sea
+            .map(|sea| Self::resolve_sea(sea, wind, &mut plan))
             .into_iter()
-            .filter(|s| s.shape != WaterShape::PlanetSea || planet.is_some())
-            .map(|s| {
-                let surface = crate::components::validate::water_surface(s.clone());
-                if let (WaterShape::PlanetSea, Some(planet)) = (surface.shape, planet) {
-                    return Self::resolve_sea(surface, wind, &mut plan, planet);
-                }
-                let simulated = OceanSea::of(&surface, wind.strength, wind.direction)
-                    .and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
-                match simulated {
-                    Some((sea, index)) => Self::resolve_ocean(surface, wind, &sea, &plan, index),
-                    None => Self::resolve(&surface, wind),
-                }
-            })
             .collect();
+        bodies.extend(rectangles.into_iter().map(|s| {
+            let surface = crate::components::validate::water_surface(s.clone());
+            let simulated = OceanSea::of(&surface, wind.strength, wind.direction)
+                .and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
+            match simulated {
+                Some((sea, index)) => Self::resolve_ocean(surface, wind, &sea, &plan, index),
+                None => Self::resolve(&surface, wind),
+            }
+        }));
         (bodies, plan)
     }
 
-    // `surface` as the sea of `planet`: simulated whenever the wind raises a
-    // sea at all and there is room for it, however large its peak, and drawn
-    // on a grid reaching the horizon.
-    fn resolve_sea(
-        surface: WaterSurface,
-        wind: &WindField,
-        plan: &mut OceanPlan,
-        planet: &PlanetShape,
-    ) -> Self {
+    // `water` around its planet: simulated whenever the wind raises a sea at
+    // all and there is room for it, however large its peak, and drawn on a
+    // grid reaching the horizon. A sea carries no swell.
+    fn resolve_sea(source: PlanetWater<'_>, wind: &WindField, plan: &mut OceanPlan) -> Self {
+        let mut surface = crate::components::validate::water_surface(source.surface.clone());
+        surface.waves.clear();
+        let planet = &source.planet;
+        let level = source.level;
         let sea = OceanSea::open(&surface, wind.strength, wind.direction);
         let peak = sea
             .and_then(|s| s.shape())
             .map_or(1.0, |s| s.peak_wavelength());
-        let mut body = SeaBody::new(SeaSphere::new(planet, surface.sea_level), peak);
+        let body = SeaBody::new(SeaSphere::new(planet, level), peak);
         let shared = sea.and_then(|sea| Some((sea, plan.share(sea, surface.whitecaps > 0.0)?)));
         plan.wake |= shared.is_some() && plan.quality.wake;
         let mut water = if let Some((sea, index)) = shared {
@@ -154,17 +151,36 @@ impl WaterBody {
         if let Some(ocean) = water.ocean.as_mut() {
             ocean.grid = body.grid;
         }
-        body.shore = sea.and_then(|s| s.shape()).and_then(|shape| {
-            let cascades = water.ocean.as_ref().map(|o| &o.cascades);
-            ShoreWaves::new(planet, f64::from(water.surface.sea_level), &shape, cascades)
-        });
-        body.sway = water.reach()[1]
-            + body
-                .shore
-                .as_ref()
-                .map_or(0.0, |s| concinnity_core::math::narrow_f32(s.max_shift()));
         water.sea = Some(body);
+        water.lay_shore(planet, level);
         water
+    }
+
+    /// The sea laid on `planet` reshaped: its shore waves follow the new
+    /// coasts. The planet keeps its center and radius, so the sea's sphere
+    /// stands where it was. A rectangle is left as it is.
+    pub fn reshape(&mut self, planet: &PlanetShape) {
+        let Some(sea) = &self.sea else {
+            return;
+        };
+        let level = concinnity_core::math::narrow_f32(sea.sphere.radius - planet.radius);
+        self.lay_shore(planet, level);
+    }
+
+    // Lay a sea's shore waves on `planet`, its water `level` meters above the
+    // radius, and the sway they add to its own.
+    fn lay_shore(&mut self, planet: &PlanetShape, level: f32) {
+        let open = OceanSea::open(&self.surface, self.wind.strength, self.wind.direction);
+        let shore = open.and_then(|s| s.shape()).and_then(|shape| {
+            let cascades = self.ocean.as_ref().map(|o| &o.cascades);
+            ShoreWaves::new(planet, f64::from(level), &shape, cascades)
+        });
+        let own = self.reach()[1];
+        if let Some(sea) = self.sea.as_mut() {
+            let shift = shore.as_ref().map_or(0.0, ShoreWaves::max_shift);
+            sea.sway = own + concinnity_core::math::narrow_f32(shift);
+            sea.shore = shore;
+        }
     }
 
     // `surface` with its wind sea simulated by `plan`'s simulation `index`:
@@ -364,23 +380,6 @@ pub struct WaterWave {
     pub steepness: f32,
 }
 
-/// What a [`WaterSurface`](#watersurface) covers.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, Vocabulary,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum WaterShape {
-    /// A horizontal rectangle `extent` around `center`.
-    #[default]
-    #[vocab("rectangle")]
-    Rectangle,
-    /// The sea of the world's [Planet](#planet): water all the way around
-    /// it, `sea_level` meters above its radius, filling every hollow of the
-    /// ground below that height.
-    #[vocab("planet_sea")]
-    PlanetSea,
-}
-
 /// A translucent animated water surface.
 ///
 /// A flat, subdivided horizontal surface moved by the world's `Wind`. The wind
@@ -420,34 +419,12 @@ pub enum WaterShape {
 /// A [`PropBody`](#propbody) with `buoyancy` floats in the water on the waves
 /// it draws, buoyed by the water's `density`.
 ///
-/// A `rectangle` surface is positioned by `center` and sized by `extent` (XZ
+/// The surface is a rectangle positioned by `center` and sized by `extent` (XZ
 /// half-widths). The mesh itself is flat; all height variation comes from the
 /// animated waves.
 ///
-/// A `planet_sea` is the ocean of the world's [Planet](#planet): a sphere of
-/// water `sea_level` meters above the planet's radius, so every valley whose
-/// ground lies lower floods, and the coast is wherever the hills rise out of
-/// it. It is always a simulated ocean, its waves fixed to the planet's ground
-/// wherever on it the camera roams, and it curves away to the horizon with
-/// the ground. Its gusts follow the wind in step with the planet's grass. It
-/// reflects the scene by ray tracing, reflection probes or the sky, never by
-/// a planar mirror, and it takes no authored swell: `waves` must be empty.
-/// `center`, `extent` and `subdivisions` do not apply. A world without a
-/// planet draws no planet sea.
-///
-/// Where the planet has continents and the sea meets their beaches, its waves
-/// come ashore as at a real coast. Over the shelf the open sea's longest
-/// waves give way to long swell lines running in toward the land; they slow
-/// and bunch up as the water shallows, turn to meet the beach nearly square,
-/// a little askew so the breakers peel along it, and grow taller until they
-/// break, about where a wave stands four fifths as tall as the water under
-/// it. Bigger waves come in sets and break farther out. A breaking crest
-/// pitches forward into a bore of white water that trails foam, and the
-/// wash of each wave runs on up the sand and drains back, leaving the beach
-/// darker and glossy where it reached, drying back between sets. The height
-/// and rhythm of the surf follow the wind sea: a stronger wind or a higher
-/// `wind_response` brings bigger, slower waves ashore. A sea standing over
-/// the planet's beaches, or around a planet without seas, has no surf.
+/// A [`PlanetSea`](#planetsea) takes its look from the surface it names, and
+/// that surface is drawn as the sea rather than as a rectangle.
 ///
 /// Its sun glint rides the waves, and its reflection and refraction move with
 /// neither the surface nor what they show, so temporal anti-aliasing and
@@ -474,11 +451,6 @@ pub enum WaterShape {
 )]
 #[serde(default)]
 pub struct WaterSurface {
-    /// What the surface covers: `rectangle` (the default) or `planet_sea`.
-    pub shape: WaterShape,
-    /// Height of a `planet_sea` above the [Planet](#planet)'s radius, in
-    /// meters, at least 0.
-    pub sea_level: f32,
     /// World-space position of a rectangle's center.
     pub center: [f32; 3],
     /// Half-width and half-depth of a rectangle `[x, z]`, in world units.
@@ -507,7 +479,7 @@ pub struct WaterSurface {
     #[asset(default = 10.0)]
     pub depth_meters: f32,
     /// Extra swell rolling over the wind's waves, up to 4. None by default,
-    /// and none on a planet sea.
+    /// and none on a planet's sea.
     pub waves: Vec<WaterWave>,
     /// Linear-space RGB reflectance of deep water's body, each channel in
     /// [0, 1]: the share of the light reaching the surface that a deep column
@@ -718,13 +690,13 @@ mod tests {
         let (_, flat) =
             WaterBody::resolve_all(&[open_sea([0.0; 3])], &wind, OceanQuality::FULL, None);
         assert!(!flat.wake);
-        let sea = WaterSurface {
-            shape: WaterShape::PlanetSea,
-            sea_level: 10.0,
-            ..Default::default()
+        let surface = WaterSurface::default();
+        let sea = PlanetWater {
+            planet: crate::components::Planet::default().shape(),
+            level: 10.0,
+            surface: &surface,
         };
-        let planet = crate::components::Planet::default().shape();
-        let resolve = |quality| WaterBody::resolve_all([&sea], &wind, quality, Some(&planet)).1;
+        let resolve = |quality| WaterBody::resolve_all([], &wind, quality, Some(sea)).1;
         assert!(resolve(OceanQuality::FULL).wake);
         let off = OceanQuality {
             wake: false,
@@ -732,8 +704,65 @@ mod tests {
         };
         assert!(!resolve(off).wake);
         let (_, still) =
-            WaterBody::resolve_all([&sea], &WindField::STILL, OceanQuality::FULL, Some(&planet));
+            WaterBody::resolve_all([], &WindField::STILL, OceanQuality::FULL, Some(sea));
         assert!(!still.wake);
+    }
+
+    // The sea is resolved first, ahead of the rectangles, and drops its
+    // surface's swell.
+    #[test]
+    fn a_planet_sea_comes_first_without_swell() {
+        let surface = open_sea([0.0; 3]);
+        let sea = PlanetWater {
+            planet: crate::components::Planet::default().shape(),
+            level: 0.0,
+            surface: &surface,
+        };
+        let pond = WaterSurface::default();
+        let (bodies, _) =
+            WaterBody::resolve_all([&pond], &fresh_breeze(), OceanQuality::FULL, Some(sea));
+        assert_eq!(bodies.len(), 2);
+        assert!(bodies[0].sea.is_some() && bodies[1].sea.is_none());
+        assert!(bodies[0].surface.waves.is_empty());
+        assert!(bodies[0].waves.is_empty());
+    }
+
+    // A reshaped sea's shore follows the new coasts, and reshaping back to
+    // the planet it was laid on gives the sea it had.
+    #[test]
+    fn a_reshaped_sea_lays_its_shore_on_the_new_coasts() {
+        let planet = crate::components::Planet {
+            land_share: 0.4,
+            ..crate::components::Planet::default()
+        };
+        let surface = open_sea([0.0; 3]);
+        let sea = PlanetWater {
+            planet: planet.shape(),
+            level: 0.0,
+            surface: &surface,
+        };
+        let (bodies, _) =
+            WaterBody::resolve_all([], &fresh_breeze(), OceanQuality::FULL, Some(sea));
+        let mut body = bodies[0].clone();
+        let laid = body.sea.clone().unwrap();
+        assert!(laid.shore.is_some(), "the coasts have surf");
+        let other = crate::components::Planet {
+            seed: 9,
+            ..planet.clone()
+        };
+        body.reshape(&other.shape());
+        assert_ne!(body.sea.as_ref().unwrap().shore, laid.shore);
+        body.reshape(&planet.shape());
+        assert_eq!(body.sea.as_ref().unwrap(), &laid);
+        let dry = crate::components::Planet {
+            land_share: 1.0,
+            ..planet
+        };
+        body.reshape(&dry.shape());
+        assert!(
+            body.sea.as_ref().unwrap().shore.is_none(),
+            "no coasts, no surf"
+        );
     }
 
     // A sea foams only once a body sharing it asks for whitecaps; a pond's

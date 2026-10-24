@@ -8,7 +8,9 @@
 //! A tile's vertices are relative to its own origin, held in double precision,
 //! so its model matrix is the only thing that changes when the simulated frame
 //! moves: every resident tile is re-placed in the new frame on the frame it
-//! moves.
+//! moves. A planet reshaped while the world runs drops every tile and streams
+//! the new shape's in, coarsest first; a mesh built for the old shape is
+//! discarded when it arrives.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
@@ -19,7 +21,7 @@ use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms};
 use crate::planet::{
     DVec3, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame, MAX_RESIDENT_TILES,
     PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh, TileMorphFrame,
-    TileSeams, TileView,
+    TileSeams, TileView, tile_mesh,
 };
 use crate::render::backend::error;
 use crate::render::backend::{ChunkMesh, PlanetChunk};
@@ -34,6 +36,40 @@ const MAX_IN_FLIGHT: usize = 96;
 // Frames a choice of tiles holds after a tile arrives or leaves, so a stream
 // of arrivals does not choose again every frame.
 const ARRIVAL_REPLAN_FRAMES: u32 = 4;
+
+/// One tile mesh to build: `tile` of a planet of `shape`, for the pool's
+/// `generation` of shapes.
+#[derive(Debug, Clone, Copy)]
+pub struct TileBuild {
+    /// The tile.
+    pub tile: TileId,
+    /// The planet's surface.
+    pub shape: PlanetShape,
+    /// Which of the pool's shapes it is built for.
+    pub generation: u32,
+}
+
+impl TileBuild {
+    /// The mesh, built on the calling thread.
+    pub fn build(self) -> TileBuilt {
+        TileBuilt {
+            tile: self.tile,
+            generation: self.generation,
+            mesh: tile_mesh(&self.shape, self.tile),
+        }
+    }
+}
+
+/// A built tile mesh, for the generation of shapes it was asked for.
+#[derive(Debug, Clone)]
+pub struct TileBuilt {
+    /// The tile.
+    pub tile: TileId,
+    /// Which of the pool's shapes it was built for.
+    pub generation: u32,
+    /// The mesh.
+    pub mesh: TileMesh,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tile {
@@ -209,7 +245,9 @@ pub struct PlanetTiles {
     lod: TileLod,
     // The finest cell size `lod` was built for.
     finest_cell_size: f64,
-    mail: Mailbox<TileId, (TileId, TileMesh)>,
+    mail: Mailbox<TileBuild, TileBuilt>,
+    // Counts the shapes the tiles were built for: a mesh of another is stale.
+    generation: u32,
     tiles: BTreeMap<TileId, Tile>,
     // Tiles whose build failed for good, never requested again.
     failed: BTreeSet<TileId>,
@@ -227,8 +265,8 @@ pub struct PlanetTiles {
     morph_sent: Option<TileMorphFrame>,
     // The frame every resident tile's model matrix places it in.
     placed_in: LocalFrame,
-    // The frame the renderer's horizon occluder was last placed in.
-    occluder_in: Option<LocalFrame>,
+    // The planet the renderer's horizon occluder was last placed for.
+    occluder_for: Option<PlanetFrame>,
     texture_slot: usize,
     normal_map_slot: usize,
     material: MaterialUniforms,
@@ -309,21 +347,23 @@ pub fn tile_mesh_size() -> (usize, usize) {
 }
 
 impl LoadPool for PlanetTiles {
-    type Request = TileId;
-    type Result = (TileId, TileMesh);
+    type Request = TileBuild;
+    type Result = TileBuilt;
 
-    fn mailbox(&mut self) -> &mut Mailbox<TileId, (TileId, TileMesh)> {
+    fn mailbox(&mut self) -> &mut Mailbox<TileBuild, TileBuilt> {
         &mut self.mail
     }
 
-    fn request_refused(&mut self, tile: TileId) {
-        if self.tiles.get(&tile) == Some(&Tile::Pending) {
+    fn request_refused(&mut self, build: TileBuild) {
+        let tile = build.tile;
+        if build.generation == self.generation && self.tiles.get(&tile) == Some(&Tile::Pending) {
             self.tiles.remove(&tile);
         }
     }
 
-    fn load_failed(&mut self, tile: TileId) {
-        if self.tiles.get(&tile) == Some(&Tile::Pending) {
+    fn load_failed(&mut self, build: TileBuild) {
+        let tile = build.tile;
+        if build.generation == self.generation && self.tiles.get(&tile) == Some(&Tile::Pending) {
             tracing::warn!("planet tile {tile:?} failed to build for good");
             self.tiles.remove(&tile);
             self.failed.insert(tile);
@@ -339,6 +379,7 @@ impl PlanetTiles {
             lod,
             finest_cell_size: crate::planet::FINEST_CELL_SIZE,
             mail: Mailbox::default(),
+            generation: 0,
             tiles: BTreeMap::new(),
             failed: BTreeSet::new(),
             bounds: TileBoundsCache::new(planet.shape),
@@ -348,16 +389,11 @@ impl PlanetTiles {
             morph_eye: None,
             morph_sent: None,
             placed_in: planet.frame,
-            occluder_in: None,
+            occluder_for: None,
             texture_slot: material.texture_slot,
             normal_map_slot: material.normal_map_slot,
             material: material.material,
         }
-    }
-
-    /// The surface the host's workers build tile meshes from.
-    pub fn shape(&self) -> PlanetShape {
-        self.lod.shape
     }
 
     /// `(resident, pending)` tile counts.
@@ -385,6 +421,9 @@ impl PlanetTiles {
         frame: u64,
         retire_frame: u64,
     ) {
+        if planet.shape != self.lod.shape {
+            self.reshape(planet.shape, ops, slots, retire_frame);
+        }
         if planet.frame != self.placed_in {
             self.placed_in = planet.frame;
             for tile in self.tiles.values() {
@@ -398,8 +437,8 @@ impl PlanetTiles {
                 }
             }
         }
-        if self.occluder_in != Some(planet.frame) {
-            self.occluder_in = Some(planet.frame);
+        if self.occluder_for != Some(*planet) {
+            self.occluder_for = Some(*planet);
             let occluder = HorizonOccluder::of(planet);
             ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
         }
@@ -431,6 +470,40 @@ impl PlanetTiles {
             self.apply(plan, ops, slots, retire_frame);
         }
         self.send_morph(planet, &view, ops);
+    }
+
+    // Drop every tile of the old shape for a planet reshaped to `shape`; the
+    // next plan asks for the new shape's, and the renderer brings what it
+    // keeps of the shape along.
+    fn reshape(
+        &mut self,
+        shape: PlanetShape,
+        ops: &mut RenderOps,
+        slots: &mut RenderSlots,
+        retire_frame: u64,
+    ) {
+        for tile in core::mem::take(&mut self.tiles).into_values() {
+            if let Tile::Resident { draw, .. } = tile {
+                slots.free_draw(draw);
+                ops.record(move |backend| {
+                    if let Err(e) = backend.remove_chunk_mesh(draw, retire_frame) {
+                        tracing::warn!("planet tile remove: {e}");
+                    }
+                });
+            }
+        }
+        self.failed.clear();
+        self.generation = self.generation.wrapping_add(1);
+        self.lod = TileLod::new(shape, self.finest_cell_size);
+        self.bounds = TileBoundsCache::new(shape);
+        self.planned = None;
+        self.residency_changed = true;
+        self.morph_sent = None;
+        ops.record(move |backend| {
+            if let Some(live) = backend.live_edit() {
+                live.reshape_planet(&shape);
+            }
+        });
     }
 
     // Show, hide, re-seam, drop and request tiles as `plan` says.
@@ -471,7 +544,11 @@ impl PlanetTiles {
             }
         }
         for id in plan.request {
-            self.mail.request(id);
+            self.mail.request(TileBuild {
+                tile: id,
+                shape: self.lod.shape,
+                generation: self.generation,
+            });
             self.tiles.insert(id, Tile::Pending);
         }
     }
@@ -500,8 +577,9 @@ impl PlanetTiles {
         slots: &mut RenderSlots,
         frame: u64,
     ) {
-        for (id, mesh) in self.mail.take_results() {
-            if self.tiles.get(&id) != Some(&Tile::Pending) {
+        for built in self.mail.take_results() {
+            let (id, mesh) = (built.tile, built.mesh);
+            if built.generation != self.generation || self.tiles.get(&id) != Some(&Tile::Pending) {
                 continue;
             }
             self.residency_changed = true;
@@ -740,8 +818,13 @@ mod tests {
             frame: LocalFrame::AUTHORED,
         };
         let mut tiles = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
+        let build = TileBuild {
+            tile: top,
+            shape: l.shape,
+            generation: 0,
+        };
         tiles.tiles.insert(top, Tile::Pending);
-        tiles.load_failed(top);
+        tiles.load_failed(build);
         assert!(!tiles.tiles.contains_key(&top));
         let p = plan(
             &l,
@@ -754,8 +837,55 @@ mod tests {
 
         let mut refused = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
         refused.tiles.insert(top, Tile::Pending);
-        refused.request_refused(top);
+        refused.request_refused(build);
         assert!(refused.failed.is_empty());
+    }
+
+    // A reshaped planet drops every tile, tells the renderer, and discards a
+    // mesh built for the old shape when it arrives.
+    #[test]
+    fn a_reshape_drops_every_tile_and_discards_stale_meshes() {
+        use crate::render::backend::recording::{Call, recording_backend};
+        let l = lod();
+        let frame = PlanetFrame {
+            shape: l.shape,
+            frame: LocalFrame::AUTHORED,
+        };
+        let mut tiles = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
+        let mut ops = RenderOps::default();
+        let mut slots = RenderSlots::new(0, true, &[]);
+        let top = TileId::root(CubeFace(2));
+        tiles.tiles.insert(top, Tile::Pending);
+        let stale = TileBuild {
+            tile: top,
+            shape: l.shape,
+            generation: tiles.generation,
+        }
+        .build();
+        let reshaped = PlanetShape {
+            seed: l.shape.seed + 1,
+            ..l.shape
+        };
+        tiles.reshape(reshaped, &mut ops, &mut slots, 0);
+        assert!(tiles.tiles.is_empty());
+        assert_eq!(tiles.lod.shape, reshaped);
+
+        tiles.tiles.insert(top, Tile::Pending);
+        tiles.mail.deliver(stale);
+        let moved = PlanetFrame {
+            shape: reshaped,
+            ..frame
+        };
+        tiles.add_finished(&moved, &mut ops, &mut slots, 0);
+        assert_eq!(
+            tiles.tiles.get(&top),
+            Some(&Tile::Pending),
+            "stale mesh dropped"
+        );
+
+        let (calls, mut backend) = recording_backend();
+        ops.replay(&mut backend);
+        assert!(calls.lock().calls.contains(&Call::ReshapePlanet));
     }
 
     #[test]

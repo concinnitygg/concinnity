@@ -7,9 +7,9 @@
 
 use crate::components::{
     Atmosphere, CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
-    MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PointLight, Prop, RectAreaLight,
-    ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation, SpotLight, Terrain,
-    VolumetricFog, VoxelChunk, WaterShape, WaterSurface, WaterWave, Wind,
+    MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PlanetSea, PointLight, Prop,
+    RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation,
+    SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
 };
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::sqrt;
@@ -171,10 +171,6 @@ pub fn water_surface(mut args: WaterSurface) -> WaterSurface {
     args.density = finite_at_least(args.density, 1.0, 1025.0);
     args.depth_meters = finite_at_least(args.depth_meters, 0.0, 10.0);
     args.whitecaps = finite_at_least(args.whitecaps, 0.0, 0.0).min(1.0);
-    args.sea_level = finite_at_least(args.sea_level, 0.0, 0.0);
-    if args.shape == WaterShape::PlanetSea {
-        args.waves.clear();
-    }
     args.waves.truncate(MAX_WATER_WAVES);
     for w in &mut args.waves {
         *w = water_wave(*w);
@@ -274,6 +270,13 @@ pub fn planet(mut args: Planet) -> Planet {
     for layer in &mut args.layers {
         layer.rule = layer.rule.validated();
     }
+    args.sea = args.sea.map(planet_sea);
+    args
+}
+
+/// Clamp a `PlanetSea`'s level to at least 0.
+pub fn planet_sea(mut args: PlanetSea) -> PlanetSea {
+    args.level = finite_at_least(args.level, 0.0, 0.0);
     args
 }
 
@@ -573,26 +576,20 @@ mod tests {
         }
     }
 
-    // A planet sea's height is never below the planet's radius, and it
-    // carries no swell.
+    // A planet's sea is never below the planet's radius.
     #[test]
-    fn a_planet_sea_clamps_its_level_and_drops_swell() {
+    fn a_planet_sea_clamps_its_level() {
         for (authored, clamped) in [(-3.0, 0.0), (f32::NAN, 0.0), (12.5, 12.5)] {
-            let w = water_surface(WaterSurface {
-                shape: WaterShape::PlanetSea,
-                sea_level: authored,
-                waves: alloc::vec![WaterWave::default()],
-                ..WaterSurface::default()
+            let p = planet(Planet {
+                sea: Some(PlanetSea {
+                    level: authored,
+                    ..PlanetSea::default()
+                }),
+                ..Planet::default()
             });
-            assert_eq!(w.sea_level, clamped, "{authored}");
-            assert!(w.waves.is_empty());
+            assert_eq!(p.sea.map(|s| s.level), Some(clamped), "{authored}");
         }
-        let rect = water_surface(WaterSurface {
-            waves: alloc::vec![WaterWave::default()],
-            ..WaterSurface::default()
-        });
-        assert_eq!(rect.shape, WaterShape::Rectangle);
-        assert_eq!(rect.waves.len(), 1);
+        assert!(planet(Planet::default()).sea.is_none());
     }
 
     // A surface whitecaps only when it asks to.

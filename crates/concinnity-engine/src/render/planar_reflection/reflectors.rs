@@ -186,17 +186,16 @@ mod tests {
     // first one.
     #[test]
     fn a_planet_sea_takes_no_mirror() {
-        use crate::components::WaterShape;
-        let sea = WaterSurface {
-            shape: WaterShape::PlanetSea,
-            ..Default::default()
+        let sea = crate::water::PlanetWater {
+            planet: crate::components::Planet::default().shape(),
+            level: 0.0,
+            surface: &WaterSurface::default(),
         };
-        let planet = crate::components::Planet::default().shape();
         let (mut water, _) = WaterBody::resolve_all(
-            [&sea],
+            [],
             &WindField::STILL,
             crate::water::ocean::OceanQuality::FULL,
-            Some(&planet),
+            Some(sea),
         );
         water.push(pool([0.0, 2.0, 0.0]));
         let r = PlanarReflectors::plan(&water, &[], budget(2));

@@ -45,6 +45,12 @@ impl WaterMotion {
         }
     }
 
+    /// A planet sea's shore laid on the reshaped `planet` (see
+    /// [`WaterBody::reshape`]).
+    pub fn reshape(&mut self, planet: &crate::planet::PlanetShape) {
+        self.body.reshape(planet);
+    }
+
     /// The body it moves.
     pub fn body(&self) -> &WaterBody {
         &self.body
@@ -142,16 +148,14 @@ mod tests {
     // carried through the same moves. A rectangle ignores the moves.
     #[test]
     fn a_planet_sea_carries_its_gusts_like_the_grass() {
-        use crate::components::WaterShape;
         use crate::render::environment::grass::GrassHistory;
         let wind = WindField::new(Some(&Wind::default()));
-        let sea = WaterSurface {
-            shape: WaterShape::PlanetSea,
-            sea_level: 10.0,
-            ..Default::default()
+        let sea = crate::water::PlanetWater {
+            planet: crate::components::Planet::default().shape(),
+            level: 10.0,
+            surface: &WaterSurface::default(),
         };
-        let planet = crate::components::Planet::default().shape();
-        let (bodies, _) = WaterBody::resolve_all([&sea], &wind, OceanQuality::FULL, Some(&planet));
+        let (bodies, _) = WaterBody::resolve_all([], &wind, OceanQuality::FULL, Some(sea));
         let mut motion = WaterMotion::new(&bodies[0], false);
         let mut grass = GrassHistory::default();
         let mut pond =

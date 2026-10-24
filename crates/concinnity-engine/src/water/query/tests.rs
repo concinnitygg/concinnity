@@ -1,18 +1,22 @@
 use super::*;
-use crate::components::{Planet, WaterShape, Wind};
+use crate::components::{Planet, Wind};
 use crate::water::sea::shore::ShoreWaves;
 use concinnity_core::math::{dvec3, narrow_f32};
 
 // The planet example's world: a coast east of the start, its sea in a
 // 4 m/s breeze.
 fn planet() -> PlanetShape {
+    planet_of(95)
+}
+
+fn planet_of(seed: u32) -> PlanetShape {
     Planet {
         center: [0.0, -50_000.0, 0.0],
         radius: 50_000.0,
         amplitude: 40.0,
         feature_size: 2000.0,
         octaves: 8,
-        seed: 95,
+        seed,
         land_share: 0.4,
         continent_size: 20_000.0,
         ocean_depth: 60.0,
@@ -31,13 +35,17 @@ fn breeze() -> WindField {
 }
 
 fn sea_query() -> WaterQuery {
-    let sea = WaterSurface {
-        shape: WaterShape::PlanetSea,
+    let surface = WaterSurface {
         fetch_meters: 5.0e4,
         wind_response: 1.75,
         ..Default::default()
     };
-    WaterQuery::new([&sea], &breeze(), Some(&planet()))
+    let sea = PlanetWater {
+        planet: planet(),
+        level: 0.0,
+        surface: &surface,
+    };
+    WaterQuery::new([], &breeze(), Some(sea))
 }
 
 fn shore(q: &WaterQuery) -> &ShoreWaves {
@@ -347,4 +355,21 @@ fn the_water_runs_on_the_simulation_clock() {
         }
         last = Some((drawn, height));
     }
+}
+
+// A reshaped planet moves the sea's shore the query reads; the same shape
+// changes nothing.
+#[test]
+fn a_reshaped_planet_moves_the_shore() {
+    let mut q = sea_query();
+    let mut expected = q.bodies[0].body.clone();
+    let laid = expected.sea.clone();
+    q.reshape(&planet());
+    assert_eq!(q.bodies[0].body.sea, laid);
+    let reshaped = planet_of(7);
+    expected.reshape(&reshaped);
+    assert_ne!(expected.sea, laid, "the coasts moved");
+    q.reshape(&reshaped);
+    assert_eq!(q.planet(), Some(&reshaped));
+    assert_eq!(q.bodies[0].body.sea, expected.sea);
 }

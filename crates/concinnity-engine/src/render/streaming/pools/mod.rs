@@ -27,7 +27,9 @@ pub use decoded_mesh::{
 pub use deferred_payloads::deferred_mesh_payloads;
 pub use item_pool::{ItemLoad, StreamPool, StreamedItem};
 pub use mailbox::{LoadPool, Mailbox};
-pub use planet_tiles::{PlanetTiles, TileCamera, TileMaterial, tile_mesh_size};
+pub use planet_tiles::{
+    PlanetTiles, TileBuild, TileBuilt, TileCamera, TileMaterial, tile_mesh_size,
+};
 pub use procedural_chunks::ProceduralChunks;
 pub use setup::{ChunkSource, PlanetStream, VoxelStream, streamed_texture_slots};
 pub use shader_residency::{Due, Finished, ShaderResidency};

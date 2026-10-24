@@ -1,37 +1,80 @@
-// Structural validation for WaterSurface args: what a planet sea can use.
+// World-shape validation for WaterSurface: what the surface a planet's sea
+// names can use.
 
-/// Check a `WaterSurface`'s authored args.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    let planet_sea = args.get("shape").and_then(|v| v.as_str()) == Some("planet_sea");
-    let swell = args
-        .get("waves")
-        .and_then(|v| v.as_array())
-        .is_some_and(|w| !w.is_empty());
-    if planet_sea && swell {
-        return Err(format!(
-            "Asset '{name}': WaterSurface is a `planet_sea` with authored `waves`, which a planet \
-             sea does not support; its waves all come from the wind, so drop the swell"
-        ));
+use crate::authoring::registry::RegisteredType;
+use crate::authoring::world::WorldJsonlAsset;
+
+/// Refuse a planet sea whose `WaterSurface` authors swell, which a sea does not
+/// carry.
+pub(crate) fn check_sea_swell(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+    let seas = assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Planet)
+        .filter_map(|p| Some((p, p.args.get("sea")?.get("water")?.as_str()?)));
+    for (planet, water) in seas {
+        let swell = assets
+            .iter()
+            .filter(|a| a.asset_type == RegisteredType::WaterSurface && a.id == water)
+            .filter_map(|a| a.args.get("waves")?.as_array())
+            .any(|w| !w.is_empty());
+        if swell {
+            errors.push(format!(
+                "Asset '{}': Planet's sea takes its look from WaterSurface '{water}', which \
+                 authors `waves`; a planet's sea carries no swell, its waves all come from the \
+                 wind, so drop the swell",
+                planet.id
+            ));
+        }
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_planet_sea_with_swell_is_refused() {
-        let args = serde_json::json!({"shape": "planet_sea", "waves": [{"amplitude": 0.2}]});
-        let err = check("sea", &args).unwrap_err();
-        assert!(err.contains("planet_sea") && err.contains("waves"), "{err}");
+    fn asset(id: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
+        WorldJsonlAsset {
+            id: id.to_string(),
+            asset_type,
+            args,
+        }
+    }
+
+    fn planet() -> WorldJsonlAsset {
+        asset(
+            "world",
+            RegisteredType::Planet,
+            serde_json::json!({"sea": {"level": 2.0, "water": "sea"}}),
+        )
     }
 
     #[test]
-    fn swell_on_a_rectangle_and_a_bare_planet_sea_pass() {
-        let rect = serde_json::json!({"waves": [{"amplitude": 0.2}]});
-        assert!(check("pond", &rect).is_ok());
-        let sea = serde_json::json!({"shape": "planet_sea", "sea_level": 12.0, "waves": []});
-        assert!(check("sea", &sea).is_ok());
+    fn a_sea_whose_surface_has_swell_is_refused() {
+        let sea = asset(
+            "sea",
+            RegisteredType::WaterSurface,
+            serde_json::json!({"waves": [{"amplitude": 0.2}]}),
+        );
+        let mut errors = Vec::new();
+        check_sea_swell(&[planet(), sea], &mut errors);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("'sea'") && errors[0].contains("waves"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn swell_on_a_rectangle_and_a_bare_sea_pass() {
+        let swell = serde_json::json!({"waves": [{"amplitude": 0.2}]});
+        let pond = asset("pond", RegisteredType::WaterSurface, swell);
+        let sea = asset(
+            "sea",
+            RegisteredType::WaterSurface,
+            serde_json::json!({"waves": []}),
+        );
+        let mut errors = Vec::new();
+        check_sea_swell(&[planet(), pond, sea], &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
     }
 }

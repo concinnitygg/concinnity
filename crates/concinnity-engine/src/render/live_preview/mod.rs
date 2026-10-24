@@ -6,6 +6,7 @@
 pub mod draw;
 pub mod lighting;
 pub mod material;
+pub mod planet;
 pub mod shape;
 
 use crate::ecs::World;

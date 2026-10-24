@@ -88,6 +88,13 @@ pub fn inline_ground(shape: PlanetShape) -> Option<Box<dyn GroundBuilder>> {
     Some(Box::new(InlineGround { shape, ready: None }))
 }
 
+/// A planet edited while its world runs, for the planet system to take up on
+/// its next step: the ground reshaped around the camera and the pull
+/// changed. Only the fields [`Planet::LIVE_FIELDS`] names may differ from the
+/// running planet.
+#[derive(Debug, Clone)]
+pub struct PlanetEdit(pub Planet);
+
 /// Starts a planet's [`GroundBuilder`]; `None` when it cannot, which leaves
 /// the ground where init built it.
 pub type StartBuilder = fn(PlanetShape) -> Option<Box<dyn GroundBuilder>>;
@@ -170,6 +177,34 @@ impl PlanetSystem {
         self.rebases.push(rebase);
         carry_world(ctx, &rebase, &self.frame);
         self.publish(ctx);
+    }
+
+    // Take up an edited planet: its pull, and for a new shape, the ground
+    // around the camera built again on it, on a builder started for it.
+    fn adopt(&mut self, ctx: &mut PipelineContext<'_>, planet: Planet) {
+        let planet = crate::components::validate::planet(planet);
+        let shape = planet.shape();
+        let reshaped = shape != self.frame.shape;
+        self.planet = planet;
+        self.frame.shape = shape;
+        self.publish(ctx);
+        if !reshaped {
+            return;
+        }
+        self.pending = None;
+        self.builder = (self.start_builder)(shape);
+        let around = camera_position(ctx)
+            .or_else(|| self.ground.as_ref().map(|g| g.patch.center))
+            .unwrap_or([0.0; 3]);
+        let request = PatchRequest {
+            id: self.next_id,
+            frame: self.frame.frame,
+            around,
+        };
+        self.next_id += 1;
+        if let Some(patch) = request.build(&shape).patch {
+            self.publish_ground(ctx, patch);
+        }
     }
 
     // Take a finished patch: the ground moves, and for a patch built in a new
@@ -256,6 +291,9 @@ impl System for PlanetSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
+        if let Some(PlanetEdit(planet)) = ctx.remove_resource::<PlanetEdit>() {
+            self.adopt(ctx, planet);
+        }
         if ctx.resource::<MenuActive>().is_some_and(|m| m.0) {
             return StepResult::Continue;
         }

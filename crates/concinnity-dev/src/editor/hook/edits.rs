@@ -272,6 +272,9 @@ impl EditorHook {
         if self.open[PanelKey::Lighting] {
             self.seed_lighting(world);
         }
+        if self.open[PanelKey::Planet] {
+            self.seed_planet(world);
+        }
     }
 
     // SAVE: persist the working entries to disk. world.jsonl is the source of

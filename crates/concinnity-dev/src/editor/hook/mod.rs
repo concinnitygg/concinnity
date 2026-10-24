@@ -68,6 +68,7 @@ use edit::import_state::ImportState;
 use edit::lighting_state::LightingState;
 use edit::map_state::MapState;
 use edit::palette_state::PaletteState;
+use edit::planet_state::PlanetState;
 use edit::shaders_state::ShadersState;
 use edit::shape_state::ShapeState;
 use edit::story_state::StoryState;
@@ -136,6 +137,7 @@ pub(crate) struct EditorHook {
     world_shadows: Option<live::ShadowBaselines>,
     templates: TemplatesState,
     lighting: LightingState,
+    planet: PlanetState,
     shape: ShapeState,
     story: StoryState,
     // The Shaders list and the Shader source panel it opens.
@@ -463,6 +465,7 @@ impl EditorHook {
             world_shadows: None,
             templates: TemplatesState::default(),
             lighting: LightingState::default(),
+            planet: PlanetState::default(),
             shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
@@ -618,6 +621,7 @@ impl EditorHook {
             || self.assets.picker_open
             || self.form.selected_type.is_some()
             || self.lighting.focus.is_some()
+            || self.planet.focus.is_some()
             || self.story_typing()
             || self.shader_typing()
             || self.import.focus
@@ -682,6 +686,9 @@ impl FrameHook for EditorHook {
                     Some(PanelKey::Edit) => self.form.touched = true,
                     Some(PanelKey::Lighting) if self.lighting.focus.is_some() => {
                         self.lighting.touched = true;
+                    }
+                    Some(PanelKey::Planet) if self.planet.focus.is_some() => {
+                        self.planet.touched = true;
                     }
                     _ => {}
                 }

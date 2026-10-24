@@ -120,6 +120,7 @@ impl LiveEdit for VkContext {
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
         fn set_material_params(&mut self, row: u32, params: [f32; concinnity_engine::gfx::render_types::MATERIAL_PARAM_COUNT]);
+        fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape);
     }
 
     fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {

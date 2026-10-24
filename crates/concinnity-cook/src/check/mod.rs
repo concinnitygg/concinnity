@@ -74,7 +74,6 @@ fn check_authored_asset(
             audio::check_prop_body(name, args)
         }
         RegisteredType::TextLabel => text_label::check(name, args),
-        RegisteredType::WaterSurface => water_surface::check(name, args),
         RegisteredType::Screenshot => screenshot::check(name, args),
         _ => Ok(()),
     }
@@ -154,6 +153,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
 
     shape::check_shape(assets, &mut errors);
     screenshot::check_unique_files(assets, &mut errors);
+    water_surface::check_sea_swell(assets, &mut errors);
 
     if errors.is_empty() {
         Ok(())

@@ -408,14 +408,15 @@ fn prop_snap(
 // wind and planet the renderer resolves; `None` without water.
 fn water_of(world: &World) -> Option<WaterQuery> {
     use crate::components::{Planet, WaterSurface, Wind};
+    use crate::ecs::identity::Identity;
+    use crate::water::split_water;
     world.query::<WaterSurface>().next()?;
     let wind = WindField::new(world.query::<Wind>().next());
-    let planet = world.query::<Planet>().next().map(Planet::shape);
-    Some(WaterQuery::new(
-        world.query::<WaterSurface>(),
-        &wind,
-        planet.as_ref(),
-    ))
+    let surfaces = world
+        .query_with_entity::<WaterSurface>()
+        .map(|(entity, s)| (world.get::<Identity>(entity).map(|i| i.id()), s));
+    let (rectangles, sea) = split_water(surfaces, world.query::<Planet>().next());
+    Some(WaterQuery::new(rectangles, &wind, sea))
 }
 
 // The entity whose Transform the world's camera track owns, if any: the
@@ -654,9 +655,12 @@ impl System for PhysicsSystem {
         let mode = crate::ecs::schedule_mode(ctx.resources);
 
         let world = self.world.as_mut().expect("world checked above");
-        let frame = ctx
-            .resource::<PlanetFrame>()
-            .map_or(LocalFrame::AUTHORED, |p| p.frame);
+        let planet = ctx.resource::<PlanetFrame>().copied();
+        let frame = planet.map_or(LocalFrame::AUTHORED, |p| p.frame);
+        // A planet reshaped while the world runs moves its sea's shore.
+        if let (Some(water), Some(planet)) = (self.water.as_mut(), planet) {
+            water.reshape(&planet.shape);
+        }
 
         // Reap bodies whose entity was despawned before the step, keeping
         // self.held a valid index into the compacted list.

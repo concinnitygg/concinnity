@@ -16,6 +16,7 @@ mod draw;
 mod lighting;
 mod material;
 mod placement;
+mod planet;
 mod shape;
 
 use concinnity_cook::authoring::registry::{RegisteredType, ScopeResolution};
@@ -65,6 +66,11 @@ pub(crate) enum Apply {
     Draw(draw::DrawChange),
     /// Rewrite a material's row of the renderer's parameter table.
     MaterialParams(material::ParamsChange),
+    /// Reshape the running planet. Boxed like a component.
+    Planet {
+        entity: Entity,
+        planet: Box<concinnity_engine::components::Planet>,
+    },
 }
 
 /// A render-config asset an edit can push at the running renderer.
@@ -107,6 +113,9 @@ pub(crate) fn commit(world: &mut World, plan: Vec<Apply>) {
             Apply::RenderConfig(config) => lighting::commit(world, config),
             Apply::Draw(change) => draw::commit(world, &change),
             Apply::MaterialParams(change) => material::commit(world, &change),
+            Apply::Planet { entity, planet } => {
+                concinnity_engine::render::live_preview::planet::apply(world, entity, *planet);
+            }
         }
     }
 }
@@ -123,6 +132,9 @@ fn plan_one(world: &World, entries: &[Value], change: &diff::ArgsChange) -> Opti
     }
     if ct == RegisteredType::CharacterShape {
         return shape::plan(world, entries, &change.args, &change.keys);
+    }
+    if ct == RegisteredType::Planet {
+        return planet::plan(world, ct, &change.args, &change.keys);
     }
     lighting::plan(world, ct, &change.name, &change.args, &change.keys)
         .or_else(|| component::plan(world, ct, &change.name, &change.before, &change.args))

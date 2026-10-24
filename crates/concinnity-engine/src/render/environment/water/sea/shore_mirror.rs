@@ -414,7 +414,7 @@ pub(super) fn surface(p: &WaterParams, pt: &Point, n: [f32; 4], swell: f32) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{WaterShape, WaterSurface, Wind};
+    use crate::components::{WaterSurface, Wind};
     use crate::planet::PlanetShape;
     use crate::planet::{DVec3, LocalFrame};
     use crate::render::environment::water::frame::WaterMotion;
@@ -436,7 +436,6 @@ mod tests {
 
     fn sea_on(planet: &PlanetShape) -> WaterBody {
         let surface = WaterSurface {
-            shape: WaterShape::PlanetSea,
             fetch_meters: 50_000.0,
             wind_response: 1.75,
             ..Default::default()
@@ -445,8 +444,12 @@ mod tests {
             strength: 4.0,
             ..Wind::default()
         }));
-        let (mut bodies, _) =
-            WaterBody::resolve_all([&surface], &wind, OceanQuality::FULL, Some(planet));
+        let sea = crate::water::PlanetWater {
+            planet: *planet,
+            level: 0.0,
+            surface: &surface,
+        };
+        let (mut bodies, _) = WaterBody::resolve_all([], &wind, OceanQuality::FULL, Some(sea));
         bodies.remove(0)
     }
 

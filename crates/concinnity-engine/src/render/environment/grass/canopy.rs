@@ -475,6 +475,15 @@ impl CanopyField {
         }
     }
 
+    /// The planet's ground reshaped to `shape`, keeping its center and
+    /// radius, its beaches wet by `shore`.
+    pub fn reshape(&mut self, shape: &PlanetShape, shore: Option<ShoreWaves>) {
+        if let Some(planet) = self.planet.as_mut() {
+            planet.shape = *shape;
+        }
+        self.shore = shore;
+    }
+
     /// Wet the planet's beaches with the wash of `shore`, the waves of its
     /// sea.
     pub fn set_shore(&mut self, shore: Option<ShoreWaves>) {

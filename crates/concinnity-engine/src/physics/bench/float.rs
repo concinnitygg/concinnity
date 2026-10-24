@@ -5,7 +5,7 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use crate::components::{Buoyancy, Planet, WaterShape, WaterSurface, Wind};
+use crate::components::{Buoyancy, Planet, WaterSurface, Wind};
 use crate::physics::float::Floater;
 use crate::physics::{BodyHandle, ColliderShape, DynamicParams, LayerMask, SimConfig, Simulation};
 use crate::planet::LocalFrame;
@@ -32,7 +32,6 @@ fn sea() -> WaterQuery {
     }
     .shape();
     let surface = WaterSurface {
-        shape: WaterShape::PlanetSea,
         fetch_meters: 5.0e4,
         wind_response: 1.75,
         ..Default::default()
@@ -42,7 +41,12 @@ fn sea() -> WaterQuery {
         strength: 4.0,
         ..Wind::default()
     }));
-    WaterQuery::new([&surface], &wind, Some(&planet))
+    let sea = crate::water::PlanetWater {
+        planet,
+        level: 0.0,
+        surface: &surface,
+    };
+    WaterQuery::new([], &wind, Some(sea))
 }
 
 // The boxes on a grid from the surf east of the start out to sea.

@@ -154,7 +154,7 @@ impl WaterBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{WaterShape, WaterSurface, Wind};
+    use crate::components::{WaterSurface, Wind};
     use crate::planet::PlanetShape;
     use crate::water::ocean::OceanQuality;
     use crate::wind::WindField;
@@ -165,8 +165,6 @@ mod tests {
 
     fn sea_body() -> WaterBody {
         let surface = WaterSurface {
-            shape: WaterShape::PlanetSea,
-            sea_level: 12.0,
             fetch_meters: 1.0e5,
             ..Default::default()
         };
@@ -174,8 +172,12 @@ mod tests {
             strength: 9.0,
             ..Wind::default()
         }));
-        let (mut bodies, _) =
-            WaterBody::resolve_all([&surface], &wind, OceanQuality::FULL, Some(&planet()));
+        let sea = crate::water::PlanetWater {
+            planet: planet(),
+            level: 12.0,
+            surface: &surface,
+        };
+        let (mut bodies, _) = WaterBody::resolve_all([], &wind, OceanQuality::FULL, Some(sea));
         bodies.remove(0)
     }
 

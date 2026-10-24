@@ -41,34 +41,12 @@ and whitecaps are a lit white surface.
 A [`PropBody`](PropBody.md) with `buoyancy` floats in the water on the waves
 it draws, buoyed by the water's `density`.
 
-A `rectangle` surface is positioned by `center` and sized by `extent` (XZ
+The surface is a rectangle positioned by `center` and sized by `extent` (XZ
 half-widths). The mesh itself is flat; all height variation comes from the
 animated waves.
 
-A `planet_sea` is the ocean of the world's [Planet](Planet.md): a sphere of
-water `sea_level` meters above the planet's radius, so every valley whose
-ground lies lower floods, and the coast is wherever the hills rise out of
-it. It is always a simulated ocean, its waves fixed to the planet's ground
-wherever on it the camera roams, and it curves away to the horizon with
-the ground. Its gusts follow the wind in step with the planet's grass. It
-reflects the scene by ray tracing, reflection probes or the sky, never by
-a planar mirror, and it takes no authored swell: `waves` must be empty.
-`center`, `extent` and `subdivisions` do not apply. A world without a
-planet draws no planet sea.
-
-Where the planet has continents and the sea meets their beaches, its waves
-come ashore as at a real coast. Over the shelf the open sea's longest
-waves give way to long swell lines running in toward the land; they slow
-and bunch up as the water shallows, turn to meet the beach nearly square,
-a little askew so the breakers peel along it, and grow taller until they
-break, about where a wave stands four fifths as tall as the water under
-it. Bigger waves come in sets and break farther out. A breaking crest
-pitches forward into a bore of white water that trails foam, and the
-wash of each wave runs on up the sand and drains back, leaving the beach
-darker and glossy where it reached, drying back between sets. The height
-and rhythm of the surf follow the wind sea: a stronger wind or a higher
-`wind_response` brings bigger, slower waves ashore. A sea standing over
-the planet's beaches, or around a planet without seas, has no surf.
+A [`PlanetSea`](PlanetSea.md) takes its look from the surface it names, and
+that surface is drawn as the sea rather than as a rectangle.
 
 Its sun glint rides the waves, and its reflection and refraction move with
 neither the surface nor what they show, so temporal anti-aliasing and
@@ -78,8 +56,6 @@ keep their history, which holds distant waves still.
 
 ## Parameters
 
-- `shape`: A string (see [WaterShape](WaterShape.md)). What the surface covers: `rectangle` (the default) or `planet_sea`.
-- `sea_level`: A float. Height of a `planet_sea` above the [Planet](Planet.md)'s radius, in meters, at least 0. Defaults to `0.0`.
 - `center`: An array of 3 floats. World-space position of a rectangle's center. Defaults to `[0.0, 0.0, 0.0]`.
 - `extent`: An array of 2 floats. Half-width and half-depth of a rectangle `[x, z]`, in world units. Defaults to `[10.0, 10.0]`.
 - `subdivisions`: An integer. Grid subdivisions across a rectangle. Higher gives smoother waves. Clamped to [8, 255]. Defaults to `64`.
@@ -87,7 +63,7 @@ keep their history, which holds distant waves still.
 - `wind_response`: A float. How strongly the wind moves this surface, at least 0. 0 is sheltered water the wind never touches, 1 the full wind; above 1 exaggerates it. Defaults to `1.0`.
 - `density`: A float. The water's density, in kilograms per cubic meter, at least 1: how strongly it buoys what floats in it. Seawater by default; fresh water is 1000.
 - `depth_meters`: A float. How deep a rectangle's water is, in meters below its rest, at least 0: anything lower is out of the water, so a cave under a pond stays dry. Defaults to `10.0`.
-- `waves`: An array of [WaterWave](WaterWave.md) objects. Extra swell rolling over the wind's waves, up to 4. None by default, and none on a planet sea.
+- `waves`: An array of [WaterWave](WaterWave.md) objects. Extra swell rolling over the wind's waves, up to 4. None by default, and none on a planet's sea.
 - `deep_color`: An array of 3 floats. Linear-space RGB reflectance of deep water's body, each channel in [0, 1]: the share of the light reaching the surface that a deep column scatters back out. Values outside [0, 1] are clamped. Defaults to `[0.02, 0.05, 0.15]`.
 - `shallow_color`: An array of 3 floats. Linear-space RGB reflectance of shallow water's body near the shore, each channel in [0, 1]. The seabed seen through the shallows is filtered by it too. Values outside [0, 1] are clamped. Defaults to `[0.2, 0.5, 0.55]`.
 - `depth_falloff_meters`: A float. Depth over which the reflectance blends from shallow to deep, in meters. Defaults to `4.0`.

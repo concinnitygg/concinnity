@@ -124,3 +124,40 @@ fn without_a_builder_or_behind_a_menu_nothing_moves() {
         0
     );
 }
+
+// An edit taken up on the next step reshapes the ground under the camera and
+// changes the pull; an edit of the pull alone builds no new ground.
+#[test]
+fn an_edit_reshapes_the_ground_and_the_pull() {
+    let mut world = World::new();
+    world.push(Camera3D::bake(Camera3DArgs {
+        position: [300.0, 10.0, 0.0],
+        ..Default::default()
+    }));
+    let planet = Planet {
+        amplitude: 30.0,
+        ..Default::default()
+    };
+    let mut system = system(planet.clone());
+    system.init(&mut world.context());
+    let before = world.resource::<PlanetGround>().cloned().unwrap();
+
+    let pulled = Planet {
+        gravity: 4.0,
+        ..planet
+    };
+    world.insert_resource(PlanetEdit(pulled.clone()));
+    system.step(&mut world.context());
+    assert_eq!(world.resource::<PlanetGravity>().unwrap().strength, 4.0);
+    assert_eq!(world.resource::<PlanetGround>().unwrap(), &before);
+    assert!(world.resource::<PlanetEdit>().is_none(), "taken up once");
+
+    let reseeded = Planet { seed: 9, ..pulled };
+    world.insert_resource(PlanetEdit(reseeded.clone()));
+    system.step(&mut world.context());
+    let frame = world.resource::<PlanetFrame>().unwrap();
+    assert_eq!(frame.shape, reseeded.shape());
+    let after = world.resource::<PlanetGround>().unwrap();
+    assert_eq!(after.revision, before.revision + 1);
+    assert_ne!(after.patch, before.patch);
+}

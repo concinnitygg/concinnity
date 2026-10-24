@@ -388,10 +388,7 @@ impl GraphicsSystem {
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
-        let Some(worker) = started(
-            "Planet terrain",
-            tile_workers::spawn_workers(plan.frame.shape),
-        ) else {
+        let Some(worker) = started("Planet terrain", tile_workers::spawn_workers()) else {
             return;
         };
         if let Err(e) = backend.setup_chunk_streaming(vertex_bytes, index_bytes) {
