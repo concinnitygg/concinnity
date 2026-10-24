@@ -154,8 +154,9 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: MAIN_BINDLESS_REGISTERS,
     },
     // The draw cull. Its registers are pinned in the source because declaration
-    // order would hand `cull_status` u0 and `commands` u1, the reverse of what
-    // `directx/cull.rs` binds; the shadow variant declares no status or Hi-Z.
+    // order would hand `cull_status` u0 and `group_counts` u1, the reverse of
+    // what `directx/cull.rs` binds; the shadow variant declares no Hi-Z or
+    // variant block.
     DxilAbi {
         program: &shared::CULL_PHASE1,
         registers: CULL_REGISTERS,
@@ -170,7 +171,8 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("cull", "b0"),
             ("objects", "t0"),
             ("draw_args", "t1"),
-            ("commands", "u0"),
+            ("group_counts", "u0"),
+            ("cull_status", "u1"),
         ],
     },
     DxilAbi {
@@ -1100,8 +1102,8 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
 const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // The draw cull's decision half. Its buffers are pinned by register() and
     // the Hi-Z texture takes texture(0) from declaration order; the slots are
-    // what `metal/cull.rs` binds once for this dispatch and the ICB encode
-    // dispatch that follows it on the same encoder.
+    // what `metal/cull.rs` binds once for this dispatch and the scan and
+    // scatter that follow it on the same encoder.
     MetalAbi {
         program: &shared::CULL_PHASE1,
         slots: &[&[
@@ -1147,6 +1149,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("draw_args", "buffer(1)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+            ("group_counts", "buffer(9)"),
         ]],
         argument_ids: &[],
     },
