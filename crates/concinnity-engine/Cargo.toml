@@ -37,19 +37,19 @@ concinnity-host = { workspace = true }
 concinnity-device = { workspace = true, optional = true }
 
 ciborium = { workspace = true }
-gilrs = "0.11.2"
+gilrs = { workspace = true }
 kira = { workspace = true, features = ["cpal"] }
-mint = "0.5"
+mint = { workspace = true }
 postcard = { workspace = true, features = ["use-std"] }
-ctrlc = "3.5.2"
+ctrlc = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-crash-handler = "0.8"
-minidump-writer = "0.13"
+crash-handler = { workspace = true }
+minidump-writer = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The macOS run loop for `cn run` (app/run.rs drives NSApplication + the
@@ -62,7 +62,7 @@ objc2-core-foundation = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 # Host-memory queries (app/sysmem.rs): sysctl `hw.memsize` + mach `task_info`
 # on macOS; `/proc` on Linux only needs the page size from here.
-libc = "0.2"
+libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # Host-memory queries (app/sysmem.rs): GlobalMemoryStatusEx + GetProcessMemoryInfo.

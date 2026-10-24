@@ -25,9 +25,9 @@ directx = ["concinnity-engine/directx"]
 vulkan = ["concinnity-engine/vulkan"]
 
 [dependencies]
-anstyle-query = "1"
+anstyle-query = { workspace = true }
 ciborium = { workspace = true }
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true, features = ["derive"] }
 concinnity-engine = { workspace = true }
 concinnity-cook = { workspace = true, features = ["schema"] }
 concinnity-core = { workspace = true, features = ["schema"] }
@@ -35,13 +35,13 @@ concinnity-host = { workspace = true }
 notify = { workspace = true, features = ["macos_fsevent"] }
 png = { workspace = true }
 rayon = { workspace = true }
-rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+rfd = { workspace = true, features = ["xdg-portal"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
-terminal_size = "0.4"
+terminal_size = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-ureq = { version = "3.2.0", default-features = false }
+ureq = { workspace = true }
 zip = { workspace = true, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

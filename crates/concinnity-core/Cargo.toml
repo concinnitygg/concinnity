@@ -31,14 +31,14 @@ test-support = []
 
 bytemuck = { workspace = true, features = ["derive"] }
 concinnity-derive = { workspace = true }
-erased-serde = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
-fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
-hashbrown = "0.17.1"
-libm = "0.2"
+erased-serde = { workspace = true, features = ["alloc"], optional = true }
+fontdue = { workspace = true, features = ["hashbrown", "simd"] }
+hashbrown = { workspace = true }
+libm = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["alloc", "derive"] }
-serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
-spin = { version = "0.12.3", default-features = false, features = ["once", "spin_mutex"] }
+serde_bytes = { workspace = true, features = ["alloc"] }
+spin = { workspace = true, features = ["once", "spin_mutex"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
