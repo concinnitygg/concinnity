@@ -83,6 +83,10 @@ jobs:
       - name: Test Core Default Features
         run: cargo test --locked -p concinnity-core
 
+      - name: Diagnose Wiring Tests
+        if: runner.os == 'Windows'
+        run: cargo test --locked --all-features -p concinnity-runtime --test wiring -- --test-threads=1
+
       - name: Run Tests
         timeout-minutes: 30
         run: cargo test --locked --all-features --all-targets --workspace
