@@ -28,23 +28,23 @@ concinnity-shader = { workspace = true, features = ["spirv-cross"] }
 bytemuck = { workspace = true }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["preserve_order", "raw_value"] }
-serde_path_to_error = "0.1"
+serde_path_to_error = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["std"] }
 postcard = { workspace = true, features = ["use-std"] }
 fbxcel = { workspace = true, features = ["tree"] }
 gltf = { workspace = true, features = ["utils", "names", "extras"] }
 hex = { workspace = true }
-jpeg-decoder = "0.3"
+jpeg-decoder = { workspace = true }
 kira = { workspace = true }
-ktx2 = "0.5"
-basisu = "0.1"
-ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+ktx2 = { workspace = true }
+basisu = { workspace = true }
+ruzstd = { workspace = true, features = ["std"] }
 png = { workspace = true }
-pulldown-cmark = { version = "0.13", default-features = false }
+pulldown-cmark = { workspace = true }
 rayon = { workspace = true }
 sha2 = { workspace = true }
-time = { version = "0.3.47", features = ["formatting", "parsing"] }
+time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
