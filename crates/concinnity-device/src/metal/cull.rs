@@ -1038,7 +1038,7 @@ impl MtlContext {
             hiz_enabled: 1,
             object_count: u32::saturating_from(object_count),
             skinned_base,
-            cascade_base: 0,
+            _pad: 0,
             bucket_count: u32::saturating_from(self.cull.icbs_2.len()),
         };
 
