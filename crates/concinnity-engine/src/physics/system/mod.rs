@@ -836,11 +836,15 @@ impl System for PhysicsSystem {
                 self.layers.mask(LAYER_CHARACTER),
             );
 
-            // the water's push on whatever floats in it
+            // the water's push on whatever floats in it; with nothing afloat
+            // its waves are not built
             if let Some(water) = self.water.as_mut() {
                 let time = timing.tick_start(tick);
-                water.prepare(time);
-                for (handle, floater) in self.props.floaters_mut() {
+                let mut floaters = self.props.floaters_mut().peekable();
+                if floaters.peek().is_some() {
+                    water.prepare(time);
+                }
+                for (handle, floater) in floaters {
                     floater.push(handle, world, water, &frame, time, dt);
                 }
             }

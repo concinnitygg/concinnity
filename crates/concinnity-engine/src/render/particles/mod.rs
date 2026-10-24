@@ -332,6 +332,11 @@ impl ParticleSpawnState {
         ParticleSpawns { first, count }
     }
 
+    // Whether every particle spawned so far has died.
+    fn all_dead(&self) -> bool {
+        self.runs.iter().all(|r| r.dies_by <= self.clock)
+    }
+
     // How many of the next `budget` spawns land on a slot whose last particle
     // has died. Slots come up in the order they were filled, so the dead ones
     // are a prefix.

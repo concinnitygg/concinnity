@@ -98,19 +98,22 @@ impl ParticleBurst {
     // Whether `other` may join this burst.
     fn joins(&self, other: &Self) -> bool {
         let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-        let gap: [f32; 3] = core::array::from_fn(|i| self.position[i] - other.position[i]);
+        // `cos >= ALIGN`, squared so it needs no root.
         let aligned = |a: [f32; 3], b: [f32; 3]| {
-            dot(a, b) >= BURST_MERGE_ALIGN * (dot(a, a) * dot(b, b)).sqrt()
+            let d = dot(a, b);
+            d >= 0.0 && d * d >= BURST_MERGE_ALIGN * BURST_MERGE_ALIGN * dot(a, a) * dot(b, b)
         };
-        let floors = match (self.floor, other.floor) {
-            (Some(a), Some(b)) => aligned(a, b),
-            (None, None) => true,
-            _ => false,
-        };
-        self.emitter == other.emitter
-            && dot(gap, gap) <= BURST_MERGE_REACH * BURST_MERGE_REACH
+        if self.emitter != other.emitter {
+            return false;
+        }
+        let gap: [f32; 3] = core::array::from_fn(|i| self.position[i] - other.position[i]);
+        dot(gap, gap) <= BURST_MERGE_REACH * BURST_MERGE_REACH
             && aligned(self.direction, other.direction)
-            && floors
+            && match (self.floor, other.floor) {
+                (Some(a), Some(b)) => aligned(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     // Take in `other`'s particles, the starts and motions weighed by count.

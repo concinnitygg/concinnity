@@ -32,9 +32,14 @@ struct Emitter<G> {
     spawn_state: ParticleSpawnState,
     spawns: ParticleSpawns,
     bursts: EmitterBursts,
-    // Whether it has ever spawned a burst, which can lie anywhere, so its
-    // bounds no longer hold its particles.
+    // Whether a burst's particles may still be alive, which can lie anywhere,
+    // so its bounds no longer hold its particles.
     fed: bool,
+    // Whether every particle it spawned had died by the last frame.
+    dead: bool,
+    // Whether the pool was already dead a frame ago, so the simulation has
+    // stepped it since and it has nothing left to simulate or draw.
+    idle: bool,
     gpu: G,
 }
 
@@ -108,6 +113,8 @@ impl<G> ParticleSystem<G> {
             spawns: ParticleSpawns::default(),
             bursts: EmitterBursts::default(),
             fed: false,
+            dead: false,
+            idle: false,
             gpu,
         })
     }
@@ -203,7 +210,10 @@ impl<G> ParticleSystem<G> {
                 count: u32::saturating_from(count),
                 spawns: e.spawns.count - room,
             };
-            e.fed |= count > 0;
+            let dead = e.spawns.count == 0 && e.spawn_state.all_dead();
+            e.idle = dead && e.dead;
+            e.dead = dead;
+            e.fed = !dead && (e.fed || count > 0);
         }
         if (capped || crowded.is_some()) && !core::mem::replace(&mut self.dropped_reported, true) {
             if capped {
@@ -231,21 +241,24 @@ impl<G> ParticleSystem<G> {
         self.rows.rows()
     }
 
-    /// Every live emitter with this frame's simulation uniform, in id order.
-    /// The simulation ticks all of them, seen or not, so an off-screen pool
-    /// keeps evolving for when the camera turns back.
+    /// Every live emitter with this frame's simulation uniform, in id order,
+    /// but those whose particles have all died and been stepped dead. The
+    /// simulation ticks the rest, seen or not, so an off-screen pool keeps
+    /// evolving for when the camera turns back.
     pub fn emitters<'a>(
         &'a self,
         frame: &'a ParticleFrame,
     ) -> impl Iterator<Item = ActiveEmitter<'a, G>> + 'a {
         self.emitters
             .iter()
+            .filter(|(_, e)| !e.idle)
             .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
 
     /// The live emitters that draw before the see-through surfaces, or after
     /// them for `after_transparent`, whose spawn bounds meet `frustum`, and
-    /// those that spawn bursts, which can lie anywhere, in id order. Each
+    /// those with bursts' particles alive, which can lie anywhere, in id order;
+    /// an emitter none of whose particles live is never drawn. Each
     /// is tested once: a caller that needs to know whether the draw runs at all
     /// peeks this iterator rather than counting it first.
     pub fn visible<'a>(
@@ -256,7 +269,7 @@ impl<G> ParticleSystem<G> {
     ) -> impl Iterator<Item = ActiveEmitter<'a, G>> + 'a {
         self.emitters
             .iter()
-            .filter(move |(_, e)| e.record.draw_after_transparent == after_transparent)
+            .filter(move |(_, e)| e.record.draw_after_transparent == after_transparent && !e.idle)
             .filter(|(_, e)| e.fed || frustum.intersects_aabb(e.aabb_min, e.aabb_max))
             .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
@@ -546,18 +559,58 @@ mod tests {
         assert_eq!(wide.rows().len(), PARTICLE_FRAME_ROWS);
     }
 
-    // An emitter that has spawned a burst is drawn wherever the camera looks,
-    // since its particles can lie anywhere.
+    // While a burst's particles live the emitter is drawn wherever the camera
+    // looks, since they can lie anywhere; then it is culled by its bounds again.
     #[test]
-    fn a_fed_emitter_is_never_culled() {
+    fn a_fed_emitter_is_drawn_anywhere_until_its_bursts_die() {
         let mut s = ParticleSystem::with_capacity(2);
-        s.insert(named([100.0, 0.0, 0.0], 9, 0.0), ()).unwrap();
+        let mut rec = named([100.0, 0.0, 0.0], 9, 0.0);
+        rec.lifetime_max = 1.0;
+        s.insert(rec, ()).unwrap();
+        let seen = |s: &ParticleSystem<()>, frame: &ParticleFrame| {
+            s.visible(frame, &frustum_left_of_ten(), false).count()
+        };
         let frame = s.prepare(0.1, &[]).unwrap();
-        assert_eq!(s.visible(&frame, &frustum_left_of_ten(), false).count(), 0);
+        assert_eq!(seen(&s, &frame), 0);
         let frame = s.prepare(0.2, &[burst_for(AssetId(9), 0.0, 1)]).unwrap();
-        assert_eq!(s.visible(&frame, &frustum_left_of_ten(), false).count(), 1);
-        let frame = s.prepare(0.3, &[]).unwrap();
-        assert_eq!(s.visible(&frame, &frustum_left_of_ten(), false).count(), 1);
+        assert_eq!(seen(&s, &frame), 1);
+        let frame = s.prepare(1.1, &[]).unwrap();
+        assert_eq!(seen(&s, &frame), 1);
+        let frame = s.prepare(1.3, &[]).unwrap();
+        assert_eq!(seen(&s, &frame), 0);
+    }
+
+    // A pool all of whose particles have died is stepped once more, so the
+    // simulation retires them, then neither simulated nor drawn until it
+    // spawns again.
+    #[test]
+    fn a_dead_pool_is_neither_simulated_nor_drawn() {
+        let mut s = ParticleSystem::with_capacity(2);
+        let mut rec = named([0.0; 3], 9, 0.0);
+        rec.lifetime_max = 1.0;
+        s.insert(rec, ()).unwrap();
+        let counts = |s: &ParticleSystem<()>, frame: &ParticleFrame| {
+            let drawn = s.visible(frame, &frustum_left_of_ten(), false).count();
+            (s.emitters(frame).count(), drawn)
+        };
+        let frame = s.prepare(0.1, &[]).unwrap();
+        assert_eq!(counts(&s, &frame), (1, 1));
+        let frame = s.prepare(0.2, &[]).unwrap();
+        assert_eq!(counts(&s, &frame), (0, 0));
+        let frame = s.prepare(0.3, &[burst_for(AssetId(9), 0.0, 1)]).unwrap();
+        assert_eq!(counts(&s, &frame), (1, 1));
+        let frame = s.prepare(1.2, &[]).unwrap();
+        assert_eq!(counts(&s, &frame), (1, 1));
+        let frame = s.prepare(1.4, &[]).unwrap();
+        assert_eq!(counts(&s, &frame), (1, 1));
+        let frame = s.prepare(1.5, &[]).unwrap();
+        assert_eq!(counts(&s, &frame), (0, 0));
+        // A paused clock keeps a live pool alive.
+        s.prepare(1.6, &[burst_for(AssetId(9), 0.0, 1)]).unwrap();
+        for _ in 0..3 {
+            let frame = s.prepare(1.6, &[]).unwrap();
+            assert_eq!(counts(&s, &frame), (1, 1));
+        }
     }
 
     // A move of the frame carries the emitters and reaches the next frame's

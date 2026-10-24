@@ -381,8 +381,8 @@ uint kept_stream(uint i, uint word)
 }
 
 // Count group `group`'s kept records per stream into `group_counts`, every
-// stream's count written so no stale one survives. Each thread passes the
-// stream its record draws in, NO_STREAM when it draws in none.
+// stream the scan walks written so no stale one survives. Each thread passes
+// the stream its record draws in, NO_STREAM when it draws in none.
 void count_streams(uint gi, uint group, uint stream)
 {
     for (uint s = gi; s < DRAW_STREAMS; s += CULL_GROUP_RECORDS)
@@ -396,9 +396,15 @@ void count_streams(uint gi, uint group, uint stream)
     }
     GroupMemoryBarrierWithGroupSync();
     uint groups = (cull.object_count + CULL_GROUP_RECORDS - 1u) / CULL_GROUP_RECORDS;
-    for (uint t = gi; t < DRAW_STREAMS; t += CULL_GROUP_RECORDS)
+    // One thread a bucket, at most one bucket a thread, and the first the
+    // skinned tail too.
+    if (gi < cull.bucket_count)
     {
-        group_counts[t * groups + group] = group_stream_counts[t];
+        group_counts[gi * groups + group] = group_stream_counts[gi];
+    }
+    if (gi == 0u)
+    {
+        group_counts[SKINNED_STREAM * groups + group] = group_stream_counts[SKINNED_STREAM];
     }
 }
 

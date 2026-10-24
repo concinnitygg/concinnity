@@ -122,3 +122,74 @@ float3 daylight_sky(float3 up, float3 dir)
     }
     return l;
 }
+
+// A point's daylight looked up once for every body, for a shader that lights
+// the same point several ways. Past `reach` 0 the rest is unset.
+struct DaylightPoint
+{
+    float3 up;
+    float reach;
+    // Each body's light reaching the point; zero for one the curves skip.
+    float3 light[DAYLIGHT_BODIES];
+    // The sky's light on a level surface, from every body.
+    float3 irradiance;
+    // The sky's radiance at the horizon and the zenith, from every body.
+    float3 horizon;
+    float3 zenith;
+};
+
+DaylightPoint daylight_point(float3 pos)
+{
+    DaylightPoint p = (DaylightPoint)0;
+    if (!daylight_on())
+    {
+        return p;
+    }
+    p.up = daylight_up(pos);
+    p.reach = daylight_reach(p.up) * daylight_ground(pos);
+    if (p.reach <= 0.0)
+    {
+        return p;
+    }
+    [unroll]
+    for (uint i = 0u; i < DAYLIGHT_BODIES; i++)
+    {
+        if (DAYLIGHT.body_dir[i].w > 0.5)
+        {
+            Daylight d = daylight_at(dot(p.up, DAYLIGHT.body_dir[i].xyz));
+            float3 light = DAYLIGHT.body_light[i].rgb;
+            p.light[i] = light * d.transmittance;
+            p.irradiance += light * d.irradiance;
+            p.horizon += light * d.horizon;
+            p.zenith += light * d.zenith;
+        }
+    }
+    return p;
+}
+
+// The light of body `i` at the point, `i` any directional light's index.
+float3 daylight_point_light(DaylightPoint p, uint i)
+{
+    float3 light = (float3)0.0;
+    [unroll]
+    for (uint b = 0u; b < DAYLIGHT_BODIES; b++)
+    {
+        if (b == i)
+        {
+            light = p.light[b];
+        }
+    }
+    return light;
+}
+
+// `daylight_irradiance` at the point.
+float3 daylight_point_irradiance(DaylightPoint p, float3 n)
+{
+    return p.irradiance * saturate(0.5 + 0.5 * dot(n, p.up));
+}
+
+// `daylight_sky` at the point.
+float3 daylight_point_sky(DaylightPoint p, float3 dir)
+{
+    return lerp(p.horizon, p.zenith, sqrt(saturate(dot(dir, p.up))));
+}

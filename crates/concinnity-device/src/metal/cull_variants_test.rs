@@ -279,6 +279,14 @@ fn the_kernel_routes_every_record_as_the_spec_does() {
         };
         let mut counts = group_counts(&culled.status, CullStatus::DRAWN, &layout);
         let totals = scan_group_counts(&mut counts, &layout);
+        // A stream the scan does not walk is never written.
+        let groups = counts.len() / DRAW_STREAMS;
+        for (word, count) in counts.iter_mut().enumerate() {
+            let stream = u32::try_from(word / groups).expect("stream");
+            if !layout.streams().any(|s| s == stream) {
+                *count = u32::MAX;
+            }
+        }
         assert_eq!(
             culled.group_counts, counts,
             "group places at far start {far_start}"

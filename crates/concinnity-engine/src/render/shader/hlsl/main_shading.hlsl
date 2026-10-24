@@ -398,13 +398,9 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // bodies through the air above it and its own sky, in place of the
     // camera's, as it lies further round the planet or the camera climbs.
 #ifdef DAYLIGHT_SURFACE
-    float3 day_up = (float3)(0.0);
-    float day_reach = 0.0;
-    if (daylight_on())
-    {
-        day_up = daylight_up(v.world_pos);
-        day_reach = daylight_reach(day_up) * daylight_ground(v.world_pos);
-    }
+    DaylightPoint day = daylight_point(v.world_pos);
+    float3 day_up = day.up;
+    float day_reach = day.reach;
 #endif
 
     for (int i = 0; i < LIGHTS.num_dir; i++)
@@ -415,7 +411,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 #ifdef DAYLIGHT_SURFACE
         if (day_reach > 0.0 && daylight_body(uint(i)))
         {
-            radiance = lerp(radiance, daylight_body_light(uint(i), day_up), day_reach);
+            radiance = lerp(radiance, daylight_point_light(day, uint(i)), day_reach);
         }
 #endif
 #ifdef FAINT_BODY_SKIP
@@ -588,7 +584,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 
 #ifdef DAYLIGHT_SURFACE
     // The point's own sky on a level surface, for the ground and the canopy.
-    float3 day_sky = day_reach > 0.0 ? daylight_level_irradiance(day_up) : (float3)(0.0);
+    float3 day_sky = day.irradiance;
 #endif
 
     // What the surface reflects of diffuse light arriving from every side.

@@ -293,8 +293,8 @@ impl PropBodies {
     // that does not float or has no body.
     pub(super) fn submerged_share(&self, entity: Entity) -> f32 {
         self.prop_of(entity)
-            .and_then(|p| p.float)
-            .map_or(0.0, |f| f.submerged_share())
+            .and_then(|p| p.float.as_ref())
+            .map_or(0.0, Floater::submerged_share)
     }
 
     // Hand `entity`'s dynamic body to an outside owner of its Transform, which

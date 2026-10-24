@@ -115,6 +115,10 @@ const WAKE_TRAIL_BEHIND: f32 = 14.0;
 /// not motion.
 const WAKE_CUT: f32 = 50.0;
 
+/// Seconds after the last push by which the waves and foam have died away,
+/// so the wake stops running until something stirs the water again.
+const WAKE_SETTLE_SECONDS: f64 = 30.0;
+
 /// Threads in one FFT group of the wake: one butterfly per pair of cells.
 /// Mirrors `WATER_WAKE_THREADS` in `water_wake.hlsl`.
 pub const WAKE_FFT_THREADS: u32 = WAKE_RESOLUTION / 2;
@@ -154,6 +158,8 @@ pub struct WakeHistory {
     second: bool,
     // Whether the last frame advanced to was run on the GPU.
     ran: Cell<bool>,
+    // When a body last pushed the water.
+    stirred: Option<f64>,
     stirs: StirMemory,
 }
 
@@ -174,6 +180,7 @@ impl Default for WakeHistory {
             offset: [0.0; 2],
             second: false,
             ran: Cell::new(true),
+            stirred: None,
             stirs: StirMemory::default(),
         }
     }
@@ -210,13 +217,15 @@ impl WakeHistory {
     /// a sea whose surface lies at height `sea` in the simulated frame, with
     /// the floating bodies' `stirs`. Unless [`Self::ran`] marked the last
     /// frame run, its state never reached the GPU and this one starts cold.
+    /// `None` while the water is calm: nothing has pushed it, or not for
+    /// [`WAKE_SETTLE_SECONDS`], so there is no wake to run or draw.
     pub fn advance(
         &mut self,
         camera: [f32; 3],
         sea: f32,
         time: f64,
         stirs: &[WaterStir],
-    ) -> WakeFrame {
+    ) -> Option<WakeFrame> {
         if !self.ran.replace(false) {
             self.last = None;
         }
@@ -238,6 +247,17 @@ impl WakeHistory {
         self.second = !self.second;
         let mut list = [WaterWakeStirGpu::default(); MAX_WAKE_STIRS];
         let count = self.stirs.gather(stirs, &window, camera, &mut list);
+        if count > 0 {
+            self.stirred = Some(time);
+        }
+        let stirring = self
+            .stirred
+            .is_some_and(|t| (0.0..WAKE_SETTLE_SECONDS).contains(&(time - t)));
+        if !stirring {
+            self.carry = GRASS_IDENTITY_MAP;
+            self.carried = false;
+            return None;
+        }
         let params = WaterWakeParams {
             window: [
                 window.origin[0],
@@ -269,10 +289,10 @@ impl WakeHistory {
         });
         self.carry = GRASS_IDENTITY_MAP;
         self.carried = false;
-        WakeFrame {
+        Some(WakeFrame {
             params,
             draw: draw_lane(&window),
-        }
+        })
     }
 
     /// Mark the frame last advanced to as run: its kernels were encoded.
@@ -386,11 +406,52 @@ mod tests {
         }
     }
 
-    // Advance over a sea at height 0, run.
+    // Advance over a sea at height `sea` as if a body had just stirred it.
+    fn stirred(
+        h: &mut WakeHistory,
+        camera: [f32; 3],
+        sea: f32,
+        time: f64,
+        stirs: &[WaterStir],
+    ) -> WakeFrame {
+        h.stirred = Some(time);
+        h.advance(camera, sea, time, stirs).expect("stirred water")
+    }
+
+    // Advance over a stirred sea at height 0, run.
     fn step(h: &mut WakeHistory, camera: [f32; 3], time: f64, stirs: &[WaterStir]) -> WakeFrame {
-        let frame = h.advance(camera, 0.0, time, stirs);
+        let frame = stirred(h, camera, 0.0, time, stirs);
         h.ran();
         frame
+    }
+
+    // Water nothing has pushed runs no wake; once a body pushes it the wake
+    // runs until the water has settled, then stops, and starts cold when
+    // stirred again.
+    #[test]
+    fn the_wake_runs_only_while_the_water_is_stirred() {
+        let mut h = WakeHistory::default();
+        assert!(h.advance([0.0; 3], 0.0, 0.0, &[bob(2.0, 0.3)]).is_none());
+        assert!(h.advance([0.0; 3], 0.0, 0.02, &[bob(2.0, 0.3)]).is_none());
+        let pushed = h.advance([0.0; 3], 0.0, 0.04, &[bob(2.0, 0.4)]).unwrap();
+        assert_eq!(pushed.params.grid[2], 1);
+        h.ran();
+        let calm = WAKE_SETTLE_SECONDS - 0.02;
+        let settling = h
+            .advance([0.0; 3], 0.0, 0.04 + calm, &[bob(2.0, 0.4)])
+            .unwrap();
+        assert_eq!(settling.params.grid[2], 0);
+        h.ran();
+        let settled = 0.04 + WAKE_SETTLE_SECONDS;
+        assert!(
+            h.advance([0.0; 3], 0.0, settled, &[bob(2.0, 0.4)])
+                .is_none()
+        );
+        let again = h
+            .advance([0.0; 3], 0.0, settled + 0.02, &[bob(2.5, 0.4)])
+            .unwrap();
+        assert_eq!(again.params.grid[2], 1);
+        assert_eq!(again.params.grid[3] & WAKE_LAST_VALID, 0);
     }
 
     // The first frame has nothing to carry and takes no step; the next steps
@@ -529,7 +590,7 @@ mod tests {
     fn a_frame_never_run_starts_the_next_cold() {
         let mut h = WakeHistory::default();
         step(&mut h, [0.0; 3], 0.0, &[]);
-        let unrun = h.advance([0.0; 3], 0.0, 0.02, &[]);
+        let unrun = stirred(&mut h, [0.0; 3], 0.0, 0.02, &[]);
         assert_eq!(unrun.params.grid[3] & WAKE_LAST_VALID, WAKE_LAST_VALID);
         let cold = step(&mut h, [0.0; 3], 0.04, &[]);
         assert_eq!(cold.params.grid[3] & WAKE_LAST_VALID, 0);
@@ -551,10 +612,10 @@ mod tests {
         let sea = -2.0;
         let camera = [0.0, 100.0, 0.0];
         let mut h = WakeHistory::default();
-        h.advance(camera, sea, 0.0, &[]);
+        stirred(&mut h, camera, sea, 0.0, &[]);
         h.ran();
         h.rebase(&rebase);
-        let moved = h.advance(camera, sea, 0.02, &[]);
+        let moved = stirred(&mut h, camera, sea, 0.02, &[]);
         // A point on the sea in this frame, carried back, lands where the
         // inverse move puts it in the last.
         let here = [3.0, sea, 1.0];

@@ -1232,12 +1232,13 @@ float water_surf_border(float3 p, float period, float3 toward, float stretch)
                                        ground_lattice(at, 0x1b56c4e9u));
                 float3 delta = d + jitter - f;
                 float along = dot(delta, toward);
-                float dist = sqrt(max(dot(delta, delta) - squash * along * along, 0.0));
+                // Squared: the root is taken of the nearest two alone.
+                float dist = max(dot(delta, delta) - squash * along * along, 0.0);
                 nearest = dist < nearest.x ? float2(dist, nearest.x) : float2(nearest.x, min(nearest.y, dist));
             }
         }
     }
-    return nearest.y - nearest.x;
+    return sqrt(nearest.y) - sqrt(nearest.x);
 }
 
 // Three value noises in [0, 1] at lattice position `p`, repeating every
@@ -1279,9 +1280,6 @@ float water_surf_lace(float cover, float age, float3 p, float3 toward, float foo
     q += (water_surf_warp(q / (0.5 * WATER_SURF_CELL), 2.0 * period / WATER_SURF_CELL) - 0.5)
        * (0.4 * WATER_SURF_CELL);
     float stretch = lerp(1.0, WATER_SURF_STRETCH, old);
-    float coarse = WATER_SURF_COARSE
-                 * water_surf_border(q / WATER_SURF_COARSE, period / WATER_SURF_COARSE, toward, stretch);
-    float fine = WATER_SURF_CELL * water_surf_border(q / WATER_SURF_CELL, period / WATER_SURF_CELL, toward, stretch);
     // The foam lies along the borders, as wide as it is thick: thick fresh
     // foam leaves only holes, thin old foam only the webs, their width
     // wandering along them and breaking them into strands as they thin.
@@ -1289,9 +1287,23 @@ float water_surf_lace(float cover, float age, float3 p, float3 toward, float foo
     float vary = water_surf_noise(q / (0.5 * WATER_SURF_CELL), 2.0 * period / WATER_SURF_CELL, 0x165667b1u);
     float width = (0.015 + 0.5 * thick * thick) * lerp(1.0, 0.6, old)
                 * saturate(lerp(0.3 + 1.4 * vary, 2.0 * vary - 0.3, old * (1.0 - smoothstep(0.5, 0.9, thick))));
+    // Each scale's cells are searched only where they show.
     float which = smoothstep(0.35, 0.65, coarseness);
-    float web = lerp(1.0 - smoothstep(0.4 * width, width, fine),
-                     1.0 - smoothstep(0.5 * width, 1.4 * width, coarse), which);
+    float fine_web = 0.0;
+    if (which < 1.0)
+    {
+        float fine = WATER_SURF_CELL
+                   * water_surf_border(q / WATER_SURF_CELL, period / WATER_SURF_CELL, toward, stretch);
+        fine_web = 1.0 - smoothstep(0.4 * width, width, fine);
+    }
+    float coarse_web = 0.0;
+    if (which > 0.0)
+    {
+        float coarse = WATER_SURF_COARSE
+                     * water_surf_border(q / WATER_SURF_COARSE, period / WATER_SURF_COARSE, toward, stretch);
+        coarse_web = 1.0 - smoothstep(0.5 * width, 1.4 * width, coarse);
+    }
+    float web = lerp(fine_web, coarse_web, which);
     // Thin foam gathers into patches, clear water between them, a
     // translucent film inside them laced by the webs; the thicker the foam
     // the more of the sea its patches cover, until behind the bore it is
@@ -1876,16 +1888,37 @@ float water_scene_distance(float2 ndc_xy, float depth01)
 static const float WATER_INV_PI = 0.318309886;
 static const float WATER_FLAT_AMBIENT = 0.03;
 
-float3 water_lambert(float3 n, float shadow, float3 pos)
+// The daylight at a surface point, looked up once for all the ways it is
+// lit; none off a planet's sea.
+#ifdef WATER_SEA_DAYLIGHT
+typedef DaylightPoint WaterDaylight;
+
+WaterDaylight water_daylight(float3 pos)
+{
+    return daylight_point(pos);
+}
+#else
+struct WaterDaylight
+{
+    float reach;
+};
+
+WaterDaylight water_daylight(float3 pos)
+{
+    WaterDaylight day;
+    day.reach = 0.0;
+    return day;
+}
+#endif
+
+float3 water_lambert(float3 n, float shadow, WaterDaylight day)
 {
     float3 sun = view.sun_color.rgb * (saturate(dot(n, view.sun_dir.xyz)) * shadow * WATER_INV_PI);
     float3 sky = view.ambient.x > 0.5
         ? irradiance_cube.SampleLevel(prefilter_cube_sampler, SKY_DIR(n), 0.0).rgb * WATER_INV_PI
         : (float3)(WATER_FLAT_AMBIENT);
 #ifdef WATER_SEA_DAYLIGHT
-    float3 up = daylight_on() ? daylight_up(pos) : (float3)(0.0);
-    float reach = daylight_on() ? daylight_reach(up) * daylight_ground(pos) : 0.0;
-    if (reach > 0.0)
+    if (day.reach > 0.0)
     {
         float3 lit = (float3)(0.0);
         [unroll]
@@ -1894,11 +1927,11 @@ float3 water_lambert(float3 n, float shadow, float3 pos)
             if (daylight_body(b))
             {
                 float s = b == 0u ? shadow : 1.0;
-                lit += daylight_body_light(b, up) * (saturate(dot(n, DAYLIGHT.body_dir[b].xyz)) * s);
+                lit += day.light[b] * (saturate(dot(n, DAYLIGHT.body_dir[b].xyz)) * s);
             }
         }
-        sun = lerp(sun, lit * WATER_INV_PI, reach);
-        sky = lerp(sky, daylight_irradiance(up, n) * WATER_INV_PI, reach);
+        sun = lerp(sun, lit * WATER_INV_PI, day.reach);
+        sky = lerp(sky, daylight_point_irradiance(day, n) * WATER_INV_PI, day.reach);
     }
 #endif
     return sun + sky * view.ambient.y;
@@ -1930,6 +1963,7 @@ struct WaterSurfacePoint
     float2 frag_uv;
     float3 below;
     float camera_distance;
+    WaterDaylight day;
 };
 
 // `dx`, `dy` are the pixel's footprint on the rest plane (`water_footprint`).
@@ -1959,6 +1993,7 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     float water_dist = distance(i.world_pos, view.camera_pos.xyz);
     s.camera_distance = water_dist;
     s.world_pos = i.world_pos;
+    s.day = water_daylight(i.world_pos);
     float water_depth = max(scene_dist - water_dist, 0.0);
 #ifdef WATER_SEA
     // At a grazing view over a seabed a wave can bend the lookup onto ground
@@ -1979,7 +2014,7 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     // The seabed seen through the shallows is filtered by the shallow color.
     float shadow = water_sun_shadow(i.world_pos, i.position.xy);
     float sun_entry = 1.0 - (0.02 + 0.98 * pow(1.0 - saturate(WATER_SUN_HEIGHT(i)), 5.0));
-    float3 body_light = water_lambert(WATER_UP(i), shadow * sun_entry, i.world_pos);
+    float3 body_light = water_lambert(WATER_UP(i), shadow * sun_entry, s.day);
     float depth_t = 1.0 - exp(-water_depth / max(params.depth_falloff, 1e-3));
     float3 scattered = lerp(params.shallow_color.rgb, params.deep_color.rgb, depth_t) * body_light;
     float3 below = lerp(refracted * params.shallow_color.rgb, scattered, depth_t);
@@ -1989,11 +2024,20 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     // intersection line with standing geometry, then the whitecaps over what
     // that leaves.
     float foam_t = saturate(1.0 - water_depth / max(params.foam_width, 1e-3));
-    float3 foam = water_lambert(s.normal, shadow, i.world_pos);
-    s.below = lerp(below, foam, foam_t * foam_t * params.foam_intensity);
+    float shore_foam = foam_t * foam_t * params.foam_intensity;
     if (water_whitecaps())
     {
         s.foam = saturate(WATER_WHITECAP(i, dx, dy) * params.wind_gust.z);
+    }
+    // Foam is lit only where some of it shows.
+    bool foamy = shore_foam > 0.0 || s.foam > 0.0;
+#ifdef WATER_SEA
+    foamy = foamy || water_sea_surf > 0.0 || water_sea_wake > 0.0;
+#endif
+    float3 foam = foamy ? water_lambert(s.normal, shadow, s.day) : (float3)(0.0);
+    s.below = lerp(below, foam, shore_foam);
+    if (water_whitecaps())
+    {
         s.below = lerp(s.below, foam, s.foam);
     }
 #ifdef WATER_SEA
@@ -2034,7 +2078,7 @@ float3 water_planar_reflection(WaterSurfacePoint s)
 // The coverage test matters more here than anywhere else: a pool routinely
 // stretches past every probe box in the world, and the probe set's own
 // out-of-box fallback would hand the whole surface one foreign capture.
-float3 water_environment(float3 world_pos, float3 r, float alpha)
+float3 water_environment(float3 world_pos, float3 r, float alpha, WaterDaylight day)
 {
     float horizon = saturate(r.y * 0.5 + 0.5);
     float3 gradient = lerp(float3(0.55, 0.62, 0.7), float3(0.25, 0.45, 0.7), horizon);
@@ -2042,14 +2086,9 @@ float3 water_environment(float3 world_pos, float3 r, float alpha)
     float3 env = transparent_environment(world_pos, r, saturate(sqrt(alpha)), gradient);
 #ifdef WATER_SEA_DAYLIGHT
     // On a planet's sea away from the camera, the sky over the point.
-    if (daylight_on())
+    if (day.reach > 0.0)
     {
-        float3 up = daylight_up(world_pos);
-        float reach = daylight_reach(up) * daylight_ground(world_pos);
-        if (reach > 0.0)
-        {
-            env = lerp(env, daylight_sky(up, r), reach);
-        }
+        env = lerp(env, daylight_point_sky(day, r), day.reach);
     }
 #endif
     return env;
@@ -2087,13 +2126,11 @@ float3 water_glint(float3 normal, float3 view_dir, float alpha, float3 sun_dir, 
 
 // The glint of the first directional light at `pos`; on a planet's sea, of
 // each body, lit through the air above the point.
-float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, float3 pos)
+float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDaylight day)
 {
     float3 glint = water_glint(normal, view_dir, alpha, view.sun_dir.xyz, view.sun_color.rgb);
 #ifdef WATER_SEA_DAYLIGHT
-    float3 up = daylight_on() ? daylight_up(pos) : (float3)(0.0);
-    float reach = daylight_on() ? daylight_reach(up) * daylight_ground(pos) : 0.0;
-    if (reach > 0.0)
+    if (day.reach > 0.0)
     {
         float3 lit = (float3)(0.0);
         [unroll]
@@ -2101,11 +2138,10 @@ float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, float3 pos)
         {
             if (daylight_body(b))
             {
-                lit += water_glint(normal, view_dir, alpha, DAYLIGHT.body_dir[b].xyz,
-                                   daylight_body_light(b, up));
+                lit += water_glint(normal, view_dir, alpha, DAYLIGHT.body_dir[b].xyz, day.light[b]);
             }
         }
-        glint = lerp(glint, lit, reach);
+        glint = lerp(glint, lit, day.reach);
     }
 #endif
     return glint;
@@ -2131,7 +2167,7 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
     float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
-    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha, s.world_pos);
+    float3 glint = water_sun_glint(s.normal, view_dir, s.alpha, s.day);
     float3 color = lerp(s.below, reflection, fresnel) + glint;
 #ifdef WATER_SEA
     if (water_whitecaps() || water_sea_surf > 0.0 || water_sea_wake > 0.0)
@@ -2187,7 +2223,7 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
                                  view.prefilter_mip_count > 0.5,
                                  view.prefilter_mip_count - 1.0, reflection))
         {
-            reflection = water_environment(i.world_pos, r, s.alpha);
+            reflection = water_environment(i.world_pos, r, s.alpha, s.day);
         }
     }
     return water_resolve(s, view_dir, reflection);
@@ -2214,7 +2250,7 @@ TransparentOut water_fragment(WaterVertexOut i)
     }
     else
     {
-        reflection = water_environment(i.world_pos, reflect(-view_dir, s.normal), s.alpha);
+        reflection = water_environment(i.world_pos, reflect(-view_dir, s.normal), s.alpha, s.day);
     }
     return water_resolve(s, view_dir, reflection);
 }

@@ -200,7 +200,7 @@ impl MtlContext {
             .iter()
             .find_map(|s| s.motion.sea_datum(camera));
         self.water.wake_frame = match (wakes, sea) {
-            (true, Some(sea)) => Some(self.water.wake.advance(camera, sea, time, stirs)),
+            (true, Some(sea)) => self.water.wake.advance(camera, sea, time, stirs),
             _ => None,
         };
     }

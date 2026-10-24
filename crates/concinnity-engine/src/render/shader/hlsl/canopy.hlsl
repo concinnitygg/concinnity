@@ -307,9 +307,11 @@ float4 ground_octaves(float3 dir, float frequency, float cell, uint octaves, uin
     float3x3 to_lattice = turn * frequency;
     float weight = 1.0;
     float4 sum = (float4)(0.0);
+    // Each octave's cells are half the last's, so its fade is a step lower.
+    float level = log2(cell / max(2.0 * footprint, 1e-4));
     for (uint o = 0u; o < octaves; o++)
     {
-        float fade = saturate(log2(cell / max(2.0 * footprint, 1e-4)));
+        float fade = saturate(level - float(o));
         if (fade <= 0.0)
         {
             // This octave and every finer one sit at their mean, and the
@@ -324,7 +326,6 @@ float4 ground_octaves(float3 dir, float frequency, float cell, uint octaves, uin
         sum.w += (n.w * fade + 0.5 * (1.0 - fade)) * weight;
         to_lattice = mul(turn, to_lattice) * 2.0;
         weight *= 0.5;
-        cell *= 0.5;
     }
     return sum;
 }
@@ -441,6 +442,8 @@ struct GroundPlace
     float altitude;
     float steepness;
     float noise;
+    // Whether `noise` was read, which only a pixel near a rule's edge pays for.
+    bool noise_read;
     float covered;
 };
 
@@ -477,6 +480,7 @@ GroundPlace ground_place(float3 pos, float3 normal, float footprint, uint2 layer
     if (near)
     {
         g.noise = ground_rule_noise(g.dir * CANOPY.planet_radius, footprint);
+        g.noise_read = true;
     }
     return g;
 }
@@ -548,18 +552,24 @@ GroundSwash ground_swash(float height, float relief, float noise, float swell)
     float up = smoothstep(0.0, runup, height);
     float soak = 1.0 - GROUND_RUNUP_LIGHTER * up;
     w.wet = GROUND_SATURATED * (1.0 - up);
+    // Each train's phase at the latest cycle, turned back a period per cycle
+    // older rather than taken afresh.
+    float3 amplitudes = CANOPY.swash.amplitudes.xyz;
+    float3 omegas = CANOPY.swash.omegas.xyz;
+    float3 phase_s, phase_c, turn_s, turn_c;
+    sincos(CANOPY.swash.phases.xyz + noise - omegas * since, phase_s, phase_c);
+    sincos(-omegas * period, turn_s, turn_c);
     for (uint j = 0u; j < cycles; j++)
     {
         float ago = since + float(j) * period;
-        float re = 0.0;
-        float im = 0.0;
-        for (uint i = 0u; i < 3u; i++)
+        if (j > 0u)
         {
-            float s, c;
-            sincos(CANOPY.swash.phases[i] + noise - CANOPY.swash.omegas[i] * ago, s, c);
-            re += CANOPY.swash.amplitudes[i] * c;
-            im += CANOPY.swash.amplitudes[i] * s;
+            float3 c = phase_c * turn_c - phase_s * turn_s;
+            phase_s = phase_s * turn_c + phase_c * turn_s;
+            phase_c = c;
         }
+        float re = dot(amplitudes, phase_c);
+        float im = dot(amplitudes, phase_s);
         float reach = runup * sqrt(re * re + im * im) / total;
         if (reach + GROUND_SWASH_SOFT <= height)
         {
@@ -614,9 +624,11 @@ GroundSwash ground_swash_at(GroundPlace place, float height, float footprint)
     {
         return (GroundSwash)0;
     }
+    // The same noise the rules read, at the same footprint.
+    float rule_noise = place.noise_read ? place.noise
+                                        : ground_rule_noise(place.dir * CANOPY.planet_radius, footprint);
     // Saturating smoothly, never flat at a bound (`sand_relief`).
-    float r = ground_rule_noise(place.dir * CANOPY.planet_radius, footprint)
-            / (GROUND_RELIEF_SPREAD * GROUND_RULE_WANDER);
+    float r = rule_noise / (GROUND_RELIEF_SPREAD * GROUND_RULE_WANDER);
     float relief = r * rsqrt(1.0 + r * r);
     // How tall the swell runs along this stretch of shore, which the run-up
     // follows by its square root (`ShoreNoise::swell`).

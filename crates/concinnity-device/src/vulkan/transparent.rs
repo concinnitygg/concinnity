@@ -2024,7 +2024,7 @@ impl VkContext {
             .and_then(|t| t.producers.water.as_ref())
             .and_then(|w| w.sea_datum(camera));
         self.wake_frame = match (wakes, sea) {
-            (true, Some(sea)) => Some(self.wake.advance(camera, sea, time, stirs)),
+            (true, Some(sea)) => self.wake.advance(camera, sea, time, stirs),
             _ => None,
         };
     }
