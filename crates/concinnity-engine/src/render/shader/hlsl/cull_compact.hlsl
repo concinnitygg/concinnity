@@ -29,17 +29,21 @@ struct CompactParams
 
 #if defined(CN_BACKEND_METAL)
 [[vk::push_constant]] ConstantBuffer<CompactParams> params : register(b11);
-#define COMPACT_VARIANTS_REGISTER     t8
 #define COMPACT_GROUP_COUNTS_REGISTER u9
 #define COMPACT_OUT_REGISTER          u10
 #else
 [[vk::push_constant]] ConstantBuffer<CompactParams> params : register(b0);
-#define COMPACT_VARIANTS_REGISTER     t0
 #define COMPACT_GROUP_COUNTS_REGISTER u0
 #define COMPACT_OUT_REGISTER          u2
 #endif
 
-[[vk::binding(0, 0)]] StructuredBuffer<uint4> variants : register(COMPACT_VARIANTS_REGISTER);
+#if defined(CN_BACKEND_METAL)
+[[vk::binding(0, 0)]] ConstantBuffer<CullVariantRows> variants : register(b8);
+#define CULL_VARIANTS variants.rows
+#else
+[[vk::binding(0, 0)]] StructuredBuffer<uint4> variants : register(t0);
+#define CULL_VARIANTS variants
+#endif
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> group_counts : register(COMPACT_GROUP_COUNTS_REGISTER);
 
 uint cull_group_count()
@@ -75,8 +79,8 @@ StreamSlots stream_slots(uint stream)
     }
     else if (stream < params.bucket_count)
     {
-        uint4 spans = CULL_REGION_SPANS(variants, stream);
-        s.region = CULL_REGION_OFFSET(variants, stream);
+        uint4 spans = CULL_REGION_SPANS(CULL_VARIANTS, stream);
+        s.region = CULL_REGION_OFFSET(CULL_VARIANTS, stream);
         s.capacity = spans.y + spans.w;
     }
     return s;
@@ -154,7 +158,7 @@ void cull_scatter(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint 
         {
             uint bucket = min(word >> CULL_BUCKET_SHIFT, MAX_SHADER_BUCKETS - 1u);
             stream = record_stream(i, bucket, params.bucket_count, params.skinned_base,
-                CULL_REGION_SPANS(variants, bucket));
+                CULL_REGION_SPANS(CULL_VARIANTS, bucket));
         }
     }
     group_streams[gi] = stream;

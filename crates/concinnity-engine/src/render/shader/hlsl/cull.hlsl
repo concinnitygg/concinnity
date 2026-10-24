@@ -136,11 +136,12 @@ struct CullHizParams
 #ifndef SHADOW_CULL
 
 #if defined(CN_BACKEND_METAL)
-#define CULL_VARIANTS_REGISTER t8
+[[vk::binding(4, 0)]] ConstantBuffer<CullVariantRows> variants : register(b8);
+#define CULL_VARIANTS variants.rows
 #else
-#define CULL_VARIANTS_REGISTER t3
+[[vk::binding(4, 0)]] StructuredBuffer<uint4> variants : register(t3);
+#define CULL_VARIANTS variants
 #endif
-[[vk::binding(4, 0)]] StructuredBuffer<uint4> variants : register(CULL_VARIANTS_REGISTER);
 
 #endif // !SHADOW_CULL
 
@@ -289,13 +290,13 @@ bool reaches_far(float3 bb_min, float3 bb_max, float start)
 // form a convex cone. Mirrors GpuCullVariants::daylight_reaches.
 bool daylight_reaches(float3 bb_min, float3 bb_max)
 {
-    float4 center = asfloat(variants[1]);
-    float4 camera_up = asfloat(variants[2]);
+    float4 center = asfloat(CULL_VARIANTS[1]);
+    float4 camera_up = asfloat(CULL_VARIANTS[2]);
     if (camera_up.w > 0.0)
     {
         return true;
     }
-    float near_cos = asfloat(variants[3].x) + DAYLIGHT_COS_MARGIN;
+    float near_cos = asfloat(CULL_VARIANTS[3].x) + DAYLIGHT_COS_MARGIN;
     [unroll] for (uint i = 0u; i < 8u; ++i)
     {
         float3 corner = float3(
@@ -327,11 +328,11 @@ uint variant_features(uint4 route, GpuDrawArgs a, uint i)
     }
     uint features = 0u;
     if ((route.y & VARIANT_FAR) != 0u && (a.flags & DRAW_FAR_BAND) != 0u
-        && (!bounded || reaches_far(bb_min, bb_max, asfloat(variants[0].x))))
+        && (!bounded || reaches_far(bb_min, bb_max, asfloat(CULL_VARIANTS[0].x))))
     {
         features |= VARIANT_FAR;
     }
-    if ((route.y & VARIANT_DAYLIGHT) != 0u && asfloat(variants[1].w) > 0.5
+    if ((route.y & VARIANT_DAYLIGHT) != 0u && asfloat(CULL_VARIANTS[1].w) > 0.5
         && (!bounded || daylight_reaches(bb_min, bb_max)))
     {
         features |= VARIANT_DAYLIGHT;
@@ -352,7 +353,7 @@ uint record_bucket(GpuDrawArgs a, uint i)
     {
         return min((a.flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK, cull.bucket_count - 1u);
     }
-    uint4 r = variants[CULL_VARIANT_ROUTE_ROW + route - 1u];
+    uint4 r = CULL_VARIANTS[CULL_VARIANT_ROUTE_ROW + route - 1u];
     uint features = variant_features(r, a, i);
     return min((r.x >> (8u * features)) & 0xFFu, cull.bucket_count - 1u);
 }
@@ -362,7 +363,7 @@ uint kept_stream(uint i, uint word)
 {
     uint bucket = min(word >> CULL_BUCKET_SHIFT, MAX_SHADER_BUCKETS - 1u);
     return record_stream(i, bucket, cull.bucket_count, cull.skinned_base,
-        CULL_REGION_SPANS(variants, bucket));
+        CULL_REGION_SPANS(CULL_VARIANTS, bucket));
 }
 
 #endif // !SHADOW_CULL

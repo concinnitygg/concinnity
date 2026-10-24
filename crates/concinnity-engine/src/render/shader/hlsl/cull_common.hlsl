@@ -37,6 +37,14 @@ static const float DAYLIGHT_COS_MARGIN = 1e-6;
 // records' first and count, its runtime ones', then the region's offset).
 static const uint CULL_VARIANT_ROUTE_ROW  = 4u;
 static const uint CULL_VARIANT_REGION_ROW = 36u;
+static const uint CULL_VARIANT_ROWS       = 164u;
+
+// The whole block as one constant buffer, which is how Metal takes it: it is
+// bound inline there, and inline bytes cannot back a `device` argument.
+struct CullVariantRows
+{
+    uint4 rows[CULL_VARIANT_ROWS];
+};
 
 // The streams a cull packs its draws into: a bucket each, then the skinned
 // tail, counted per 64-record group. Locked to gfx::render_types::{

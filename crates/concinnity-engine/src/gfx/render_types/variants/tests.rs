@@ -420,5 +420,9 @@ fn variant_constants_match_the_cull_shader() {
         consts::uint(src, "CULL_VARIANT_REGION_ROW"),
         offset_of!(GpuCullVariants, regions) / 16
     );
+    assert_eq!(
+        consts::uint(src, "CULL_VARIANT_ROWS") * 16,
+        size_of::<GpuCullVariants>()
+    );
     assert_eq!(size_of::<GpuBucketRegion>(), 2 * 16);
 }
