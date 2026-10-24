@@ -67,8 +67,8 @@ jobs:
         if: runner.os == 'macOS'
         run: xcrun metal --version || xcodebuild -downloadComponent MetalToolchain
 
-      - name: Install Shader Compiler
-        uses: ./.github/actions/install-dxc
+      - name: Vendor Third-Party Binaries
+        uses: ./.github/actions/vendor
 
       - name: Run Clippy
         run: cargo clippy --locked --all-features --all-targets --workspace
@@ -105,8 +105,8 @@ jobs:
       - name: Install Linux Dependencies
         uses: ./.github/actions/install-linux-deps
 
-      - name: Install Shader Compiler
-        uses: ./.github/actions/install-dxc
+      - name: Vendor Third-Party Binaries
+        uses: ./.github/actions/vendor
 
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov
