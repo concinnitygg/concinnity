@@ -61,7 +61,6 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         main_pipeline: bindless.main_pipeline,
         world_pipelines: bindless.world_pipelines,
         pipeline: compute.pipeline,
-        encode_pipeline: compute.encode_pipeline,
         scan_pipeline: compute.scan_pipeline,
         scatter_pipeline: compute.scatter_pipeline,
         group_counts: None,

@@ -220,12 +220,12 @@ mod tests {
 
     #[test]
     fn embedded_cull_encode_holds_its_kernel() {
-        assert!(cull_encode_source(false).contains("kernel void cull_encode("));
+        assert!(cull_encode_source(false).contains("kernel void cull_scatter("));
     }
 
     #[test]
     fn hot_reload_reads_the_checkout_copy() {
-        assert!(cull_encode_source(true).contains("kernel void cull_encode("));
+        assert!(cull_encode_source(true).contains("kernel void cull_scatter("));
     }
 
     // Value of a `constant uint <name> = <N>u;` line in the encode kernel.

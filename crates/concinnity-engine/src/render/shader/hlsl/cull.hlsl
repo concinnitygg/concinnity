@@ -9,16 +9,15 @@
 //                `cull_status` so phase 2 knows what to reconsider
 //   CULL_PHASE2  re-tests only phase 1's Hi-Z candidates against the rebuilt
 //                pyramid, for two-pass occlusion
-//   SHADOW_CULL  light-frustum only, one dispatch per cascade
+//   SHADOW_CULL  light-frustum only, one dispatch per shadow view
 //
-// Single source for all three hosts. Phases 1 and 2 write the outcome into
-// `cull_status` and count each 64-record group's draws per stream into
+// Single source for all three hosts. Every variant writes the outcome into
+// `cull_status` and counts each 64-record group's draws per stream into
 // `group_counts`; cull_compact.hlsl then scans the counts and, on Vulkan and
 // DirectX, scatters every kept record's command into its stream's list. On
 // Metal the hand-written `metal/shaders/cull_encode.metal` is the scatter,
 // since its ICB encoding (`render_command`, `array<command_buffer, N>`) is a
-// declaration HLSL cannot express. The shadow cull packs nothing: it writes
-// every record's command, or its status on Metal, at the record's own slot.
+// declaration HLSL cannot express.
 //
 // The backend define selects the host's constant shape, and here it is a
 // difference in shape rather than in slot numbers, so all three arms stay. Vulkan hands the kernel
@@ -41,7 +40,6 @@
 // Layout matches `metal::uniforms::CullUniforms` (208 B), the inline constant
 // block at buffer(2). `cam_pos` is a whole float4 lane (w unused): MSL sizes a
 // constant-buffer float3 at 16 bytes, so a scalar after it would not pack.
-// `cascade_base` offsets the shadow cull's status by its view.
 struct CullParams
 {
     float4   planes[6];
@@ -52,7 +50,7 @@ struct CullParams
     uint     hiz_enabled;
     uint     object_count;
     uint     skinned_base;
-    uint     cascade_base;
+    uint     _pad;
     uint     bucket_count;
 };
 
@@ -146,33 +144,23 @@ struct CullHizParams
 
 #endif // !SHADOW_CULL
 
-// Per-object outcome of the phase-1 cull, and the decision kernel's only output
-// on Metal, where `metal/cull.rs` and the encode kernel both reach it at
-// buffer(5). Always bound and written so phase 2 sees valid data; under
-// single-pass occlusion the values are simply ignored.
+// Per-object outcome of the cull, which the packing reads, at buffer(5) on
+// Metal. The phase-1 one is read again by phase 2; under single-pass
+// occlusion that is simply ignored.
 //
-// The GPU-driven shadow cull is frustum-only elsewhere -- sun cascades have no
+// The GPU-driven shadow cull is frustum-only -- sun cascades have no
 // light-space depth pyramid, so no Hi-Z test and no two-pass occlusion -- and
-// omits the status buffer along with the whole set-1 Hi-Z block, which is what
-// leaves its Vulkan pipeline layout the lean three-binding set its host
-// creates. On Metal it is the output the encode kernel reads, so the shadow
-// variant declares it there too, at the cascade's region of the shadow status
-// buffer.
+// omits the variant block along with the whole set-1 Hi-Z block, which is what
+// leaves its Vulkan pipeline layout the lean four-binding set its host
+// creates.
 #ifdef CN_BACKEND_METAL
 #define CULL_STATUS_REGISTER u5
 #else
 #define CULL_STATUS_REGISTER u1
 #endif
 
-#if defined(CN_BACKEND_METAL) || !defined(SHADOW_CULL)
 [[vk::binding(3, 0)]] RWStructuredBuffer<uint> cull_status : register(CULL_STATUS_REGISTER);
-#endif
 
-#ifdef SHADOW_CULL
-#ifndef CN_BACKEND_METAL
-[[vk::binding(2, 0)]] RWStructuredBuffer<DrawCommand> commands : register(u0);
-#endif
-#else
 // Each group's draws per stream, stream by stream: the scan's input.
 #ifdef CN_BACKEND_METAL
 #define CULL_GROUP_COUNTS_REGISTER u9
@@ -180,7 +168,6 @@ struct CullHizParams
 #define CULL_GROUP_COUNTS_REGISTER u0
 #endif
 [[vk::binding(2, 0)]] RWStructuredBuffer<uint> group_counts : register(CULL_GROUP_COUNTS_REGISTER);
-#endif
 
 #ifndef SHADOW_CULL
 
@@ -370,8 +357,6 @@ uint record_bucket(GpuDrawArgs a, uint i)
     return min((r.x >> (8u * features)) & 0xFFu, cull.bucket_count - 1u);
 }
 
-groupshared uint group_stream_counts[DRAW_STREAMS];
-
 // The stream record `i`, kept with status `word`, draws in.
 uint kept_stream(uint i, uint word)
 {
@@ -379,6 +364,10 @@ uint kept_stream(uint i, uint word)
     return record_stream(i, bucket, cull.bucket_count, cull.skinned_base,
         CULL_REGION_SPANS(variants, bucket));
 }
+
+#endif // !SHADOW_CULL
+
+groupshared uint group_stream_counts[DRAW_STREAMS];
 
 // Count group `group`'s kept records per stream into `group_counts`, every
 // stream the scan walks written so no stale one survives. Each thread passes
@@ -408,48 +397,36 @@ void count_streams(uint gi, uint group, uint stream)
     }
 }
 
-#endif // !SHADOW_CULL
-
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 {
     uint i = tid.x;
 
-#ifdef SHADOW_CULL
-    if (i >= cull.object_count)
-    {
-        return;
-    }
-    GpuDrawArgs a = draw_args[i];
-    // Light-frustum only, against this cascade's `planes`. Deliberately NO
-    // per-object distance cull: the cascade light frustum already bounds the
-    // shadow draw distance through its extents, and the per-object view
-    // `cull_distance` is a view-LOD-fade concept that must not silence shadows
-    // (an off-screen caster beyond cull_distance can still cast into the
-    // visible scene).
-    bool draw = (a.flags & DRAW_ENABLED) != 0u;
-    if (draw && (a.flags & DRAW_CULLABLE) != 0u)
-    {
-        GpuObjectData obj = objects[i];
-        draw = !frustum_culled(obj.bb_min_cull_distance.xyz, obj.bb_max_alpha_cutoff.xyz);
-    }
-#ifdef CN_BACKEND_METAL
-    cull_status[cull.cascade_base + i] = draw ? STATUS_DRAWN : STATUS_CULLED;
-#else
-    DrawCommand c = make_command(i, a);
-    if (!draw)
-    {
-        c.instance_count = 0u;
-    }
-    commands[i] = c;
-#endif
-#else
     // Every thread of the group reaches the count, past the last record too.
     uint stream = NO_STREAM;
     if (i < cull.object_count)
     {
-#ifdef CULL_PHASE2
+#if defined(SHADOW_CULL)
+        GpuDrawArgs a = draw_args[i];
+        // Light-frustum only, against this view's `planes`. Deliberately NO
+        // per-object distance cull: the cascade light frustum already bounds the
+        // shadow draw distance through its extents, and the per-object view
+        // `cull_distance` is a view-LOD-fade concept that must not silence shadows
+        // (an off-screen caster beyond cull_distance can still cast into the
+        // visible scene). One depth-only stream and the skinned tail.
+        bool draw = (a.flags & DRAW_ENABLED) != 0u;
+        if (draw && (a.flags & DRAW_CULLABLE) != 0u)
+        {
+            GpuObjectData obj = objects[i];
+            draw = !frustum_culled(obj.bb_min_cull_distance.xyz, obj.bb_max_alpha_cutoff.xyz);
+        }
+        cull_status[i] = draw ? STATUS_DRAWN : STATUS_CULLED;
+        if (draw)
+        {
+            stream = i >= cull.skinned_base ? SKINNED_STREAM : 0u;
+        }
+#elif defined(CULL_PHASE2)
         // Runs after the pyramid was rebuilt from this frame's phase-1 depth.
         // Re-tests only the objects phase 1 marked STATUS_HIZ_CANDIDATE against
         // the fresh pyramid (projected through this frame's VP, carried in
@@ -513,5 +490,4 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
 #endif
     }
     count_streams(gi, gid.x, stream);
-#endif
 }

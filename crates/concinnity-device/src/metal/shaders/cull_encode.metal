@@ -8,11 +8,9 @@ using namespace metal;
 // (`render_command`, `array<command_buffer, N>`) is a declaration HLSL cannot
 // express.
 //
-//   cull_scatter  the main, phase-2, mirror and probe culls: every kept record
-//                 drawn at its place in its stream's list, which
-//                 `cull_compact.hlsl`'s scan laid out (mirrors its scatter)
-//   cull_encode   the shadow views: one thread per command slot, a draw for a
-//                 kept record and a reset for any other
+//   cull_scatter  every cull: each kept record drawn at its place in its
+//                 stream's list, which `cull_compact.hlsl`'s scan laid out
+//                 (mirrors its scatter)
 
 // Mirrors gfx::render_types::GpuDrawArgs (16 B).
 struct GpuDrawArgs {
@@ -64,20 +62,12 @@ static bool in_region(constant BucketRegion &r, uint record) {
     return record - r.first < r.count || record - r.runtime_first < r.runtime_count;
 }
 
-// Mirrors metal::uniforms::EncodeParams (32 B). For the shadow views the slot
-// grid is `region_count * object_count`, region `c` the view's block of the
-// shadow ICB, `region_mask` the views re-culled this frame (the others keep
-// their prior commands) and `region_base` the first region a dispatch covers.
-// The scatter covers one record set: `region_count` is 1 there.
-struct EncodeParams {
+// Mirrors metal::uniforms::ScatterParams (16 B).
+struct ScatterParams {
     uint object_count;
-    uint region_count;
-    uint region_mask;
     uint skinned_base;
     uint bucket_count;
     uint draw_status;
-    uint region_base;
-    uint _pad0;
 };
 
 // The per-bucket indirect command buffers, reached through an argument buffer.
@@ -115,7 +105,7 @@ kernel void cull_scatter(
     device ICBContainer    *icb_c             [[buffer(4)]],
     const device uint      *cull_status       [[buffer(5)]],
     const device uint      *skinned_index_buf [[buffer(6)]],
-    constant EncodeParams  &p                 [[buffer(7)]],
+    constant ScatterParams &p                 [[buffer(7)]],
     constant CullVariants  &variants          [[buffer(8)]],
     const device uint      *group_counts      [[buffer(9)]],
     uint                    record            [[thread_position_in_grid]],
@@ -162,31 +152,4 @@ kernel void cull_scatter(
         encode_draw(icb_c->icbs[icb], first + place, record, draw_args[record],
                     skinned_base, index_buf, skinned_index_buf);
     }
-}
-
-kernel void cull_encode(
-    constant GpuDrawArgs   *draw_args         [[buffer(1)]],
-    const device uint      *index_buf         [[buffer(3)]],
-    device ICBContainer    *icb_c             [[buffer(4)]],
-    const device uint      *cull_status       [[buffer(5)]],
-    const device uint      *skinned_index_buf [[buffer(6)]],
-    constant EncodeParams  &p                 [[buffer(7)]],
-    uint                    tid               [[thread_position_in_grid]]
-) {
-    uint slot = p.region_base * p.object_count + tid;
-    if (slot >= p.region_count * p.object_count) {
-        return;
-    }
-    uint region = slot / p.object_count;
-    if ((p.region_mask & (1u << region)) == 0u) {
-        return;
-    }
-    uint record = slot - region * p.object_count;
-    if ((cull_status[slot] & CULL_OUTCOME_MASK) != p.draw_status) {
-        render_command cmd(icb_c->icbs[0], slot);
-        cmd.reset();
-        return;
-    }
-    encode_draw(icb_c->icbs[0], slot, record, draw_args[record], p.skinned_base, index_buf,
-                skinned_index_buf);
 }

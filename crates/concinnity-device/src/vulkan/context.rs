@@ -418,29 +418,26 @@ pub(super) struct VkCull {
     // current resolution exists. Set true at the end of `record_frame` once a
     // build has run.
     // GPU-driven shadow views. `shadow_cull_pipeline` is a frustum-only cull
-    // kernel (`SHADOW_CULL`, no Hi-Z / status) over a lean 3-SSBO set (objects +
-    // draw-args + this view's indirect-command buffer); one dispatch per
-    // re-rendered cascade or spot slice writes that view's indirect buffer.
-    // `shadow_bindless_pipeline` is a depth-only graphics pipeline whose VS reads
-    // `model` from the GpuObjectData SSBO (gl_InstanceIndex) and projects through
-    // `light_vps[cascade_idx]` (a push constant); each cascade is then issued with
-    // one `cmd_draw_indexed_indirect` (static+instance prefix) + one for the
-    // skinned tail. `shadow_indirect_buffers` / `shadow_cull_sets` are indexed
+    // kernel (`SHADOW_CULL`, no Hi-Z) over a lean 4-SSBO set (objects +
+    // draw-args + the view's group counts + status); one dispatch per
+    // re-rendered cascade or spot slice, then that view's packing, writes its
+    // lists. `shadow_bindless_pipeline` is a depth-only graphics pipeline whose
+    // VS reads `model` from the GpuObjectData SSBO (gl_InstanceIndex) and
+    // projects through `light_vps[cascade_idx]` (a push constant); each cascade
+    // is then issued with one indirect draw by count for the static + instance
+    // stream and one for the skinned tail. `shadow_views` is indexed
     // [frame][cascade]. All `Some`/non-empty only when the bindless cull path is
     // active AND shadows are enabled.
     pub(super) shadow_cull_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_cull_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) _shadow_cull_set_layout: Option<OwnedSetLayout>,
-    pub(super) shadow_cull_sets: Vec<Vec<vk::DescriptorSet>>,
+    pub(super) shadow_views: Vec<Vec<super::cull::VkShadowView>>,
     pub(super) shadow_bindless_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) shadow_indirect_buffers: Vec<Vec<PooledBuffer>>,
-    // The spot shadow pass's cull sets and indirect buffers, indexed
-    // [frame][slice], written by the same shadow kernel. Their own, so the spot
-    // pass shares no state with the cascade pass. Empty when the world has no
-    // shadowed spot.
-    pub(super) spot_cull_sets: Vec<Vec<vk::DescriptorSet>>,
-    pub(super) spot_indirect_buffers: Vec<Vec<PooledBuffer>>,
+    // The spot shadow pass's views, indexed [frame][slice], written by the
+    // same shadow kernel. Their own, so the spot pass shares no state with the
+    // cascade pass. Empty when the world has no shadowed spot.
+    pub(super) spot_views: Vec<Vec<super::cull::VkShadowView>>,
     // GPU-driven G-buffer pre-pass. Each bucket's pre-pass pipeline reads the
     // previous-frame model from `prev_model_buffers`; the velocity history for
     // the skinned tail rides the previous-frame deformed buffer. The pass reuses
@@ -469,9 +466,9 @@ impl VkCull {
         if let Some(hiz) = &mut self.hiz {
             hiz.destroy(device);
         }
-        // GPU-driven shadow views. The per-(frame, view) cascade and spot cull
-        // sets are freed with the shared descriptor pool, so only the pipelines,
-        // the set layout, and the per-view indirect buffers are destroyed.
+        // GPU-driven shadow views. The per-(frame, view) cascade and spot sets
+        // are freed with the shared descriptor pool, so only the pipelines, the
+        // set layout, and the per-view buffers are destroyed.
         // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` and the
         // snapshot kernel's sets are freed with the shared descriptor pool, so
         // only the pipelines, layouts, and the per-frame model-history buffers
@@ -485,8 +482,8 @@ impl VkCull {
         self.group_count_buffers.clear();
         self.compact = None;
         self.indirect_buffers2.clear();
-        self.shadow_indirect_buffers.clear();
-        self.spot_indirect_buffers.clear();
+        self.shadow_views.clear();
+        self.spot_views.clear();
         self.prev_model_buffers.clear();
         self.model_history = None;
     }

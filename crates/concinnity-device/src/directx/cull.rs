@@ -131,26 +131,22 @@ pub(in crate::directx) struct CullState {
     // GPU-driven shadow pass. A depth-only bindless pipeline whose VS
     // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
     // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
-    // cull command signature rebuilt against its root sig. `shadow_indirect_buffers`
-    // is one buffer per frame-in-flight sized `NUM_SHADOW_CASCADES * record_count()`
-    // commands -- cascade `c`'s region is `[c*cull_count, (c+1)*cull_count)`,
-    // written by binding the cull output UAV at a per-cascade GPU-address offset.
-    // `shadow_cull_status_buffers` is a per-frame scratch the shadow cull writes
-    // but never reads (kept separate from `cull_status_buffers`, which the
-    // phase-2 main cull consumes AFTER the shadow pass). All `Some`/non-empty
-    // only when the bindless cull path is active AND shadows are enabled.
+    // cull command signature rebuilt against its root sig. `shadow_views` is
+    // one per frame-in-flight with a packed region per cascade, kept apart from
+    // `cull_status_buffers`, which the phase-2 main cull consumes AFTER the
+    // shadow pass. All `Some`/non-empty only when the bindless cull path is
+    // active AND shadows are enabled.
     pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
     pub shadow_bindless_pso: Option<ID3D12PipelineState>,
     pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
     // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
     pub cull_pso_shadow: Option<ID3D12PipelineState>,
-    pub shadow_indirect_buffers: Vec<ID3D12Resource>,
-    pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
-    // The spot shadow pass's indirect buffers, one per frame-in-flight with one
-    // region of `bucket_stride` commands per spot slice, written by the same
-    // shadow kernel. Its own buffer, so the spot pass shares no state with the
-    // cascade pass. Empty when the world has no shadowed spot.
-    pub spot_indirect_buffers: Vec<ID3D12Resource>,
+    pub shadow_views: Vec<DxShadowViews>,
+    // The spot shadow pass's views, one per frame-in-flight with a packed
+    // region per spot slice, written by the same shadow kernel. Its own, so the
+    // spot pass shares no state with the cascade pass. Empty when the world has
+    // no shadowed spot.
+    pub spot_views: Vec<DxShadowViews>,
     // Per-frame model-history buffers (one column-major `float4x4` per cull
     // record), device-local: only the snapshot kernel writes them and only the
     // pre-pass reads them, so the host never touches their bytes. Frame `R`
@@ -302,10 +298,9 @@ struct RegionCullPass<'a> {
     packing: Option<RegionPacking<'a>>,
 }
 
-// Where a run of mirror culls packs each region's kept draws: its own
+// Where a run of region culls packs each region's kept draws: its own
 // group-count scratch, status and lists, each `*_stride` bytes past the last
-// region's. The shadow views pack nothing, writing each record's command at
-// its own slot.
+// region's.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RegionPacking<'a> {
     pub(in crate::directx) group_counts: &'a ID3D12Resource,
@@ -313,6 +308,20 @@ pub(in crate::directx) struct RegionPacking<'a> {
     pub(in crate::directx) status: &'a ID3D12Resource,
     pub(in crate::directx) status_stride: u64,
     pub(in crate::directx) lists_stride: u64,
+}
+
+// One frame's shadow views of one pass, a region of `bucket_stride` records
+// each: their lists, status and group counts. Resting in COMMON until first
+// used, then the lists in INDIRECT_ARGUMENT and the rest in UNORDERED_ACCESS.
+pub(in crate::directx) struct DxShadowViews {
+    pub lists: ID3D12Resource,
+    pub status: ID3D12Resource,
+    pub group_counts: ID3D12Resource,
+}
+
+// Bytes of one shadow view's status: a word per record.
+pub(in crate::directx) fn shadow_status_bytes(n_cull: usize) -> u64 {
+    crate::directx::context::align256((n_cull * size_of::<u32>()) as u64).max(256)
 }
 
 // Per-frame buffer fill + encoder
@@ -837,8 +846,8 @@ impl DxContext {
     // re-rendered cascade tests every record (static + instances + skinned)
     // against that cascade's light frustum, with NO Hi-Z (sun cascades have no
     // light-space depth pyramid) and NO per-object distance cull (the view
-    // `cull_distance` must not silence shadows), into cascade `c`'s region of
-    // this frame's shadow indirect buffer. Skipped cascades (not in
+    // `cull_distance` must not silence shadows), packed into cascade `c`'s
+    // region of this frame's shadow views. Skipped cascades (not in
     // `render_mask`) keep their prior region untouched, as their depth slice is
     // not re-rendered. A no-op when the GPU-driven shadow resources are absent
     // or `draw.record_count() == 0`.
@@ -850,10 +859,9 @@ impl DxContext {
         cam_pos: [f32; 3],
     ) {
         use concinnity_engine::gfx::render_types::NUM_SHADOW_CASCADES;
-        let (Some(pso), Some(indirect), Some(status)) = (
+        let (Some(pso), Some(views)) = (
             self.cull.cull_pso_shadow.as_ref(),
-            self.cull.shadow_indirect_buffers.get(frame_idx),
-            self.cull.shadow_cull_status_buffers.get(frame_idx),
+            self.cull.shadow_views.get(frame_idx),
         ) else {
             return;
         };
@@ -881,22 +889,15 @@ impl DxContext {
         self.encode_region_culls(
             cmd,
             frame_idx,
-            RegionCullPass {
-                pso,
-                indirect,
-                status_gva: com::gpu_va(status),
-                // The cascade pass reads each region at `c * record_count()`.
-                region_stride: self.state.draw.record_count(),
-                packing: None,
-            },
+            self.shadow_cull_pass(pso, views),
             &regions[..kept],
         );
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same frustum-only shadow
     // kernel as the cascades, each refreshed slice's casters kept against that
-    // spot's light frustum into the slice's region of this frame's spot indirect
-    // buffer. The kernel picks no LOD: each caster draws the camera-keyed LOD
+    // spot's light frustum packed into the slice's region of this frame's spot
+    // views. The kernel picks no LOD: each caster draws the camera-keyed LOD
     // the frame's draw args already carry, the one the main pass draws. A no-op
     // when the GPU-driven shadow path is absent.
     pub(in crate::directx) fn encode_spot_culls(
@@ -905,10 +906,9 @@ impl DxContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pso), Some(indirect), Some(status)) = (
+        let (Some(pso), Some(views)) = (
             self.cull.cull_pso_shadow.as_ref(),
-            self.cull.spot_indirect_buffers.get(frame_idx),
-            self.cull.shadow_cull_status_buffers.get(frame_idx),
+            self.cull.spot_views.get(frame_idx),
         ) else {
             return;
         };
@@ -925,15 +925,58 @@ impl DxContext {
         self.encode_region_culls(
             cmd,
             frame_idx,
-            RegionCullPass {
-                pso,
-                indirect,
-                status_gva: com::gpu_va(status),
-                region_stride: self.cull.bucket_stride,
-                packing: None,
-            },
+            self.shadow_cull_pass(pso, views),
             &regions[..kept],
         );
+    }
+
+    // A shadow pass's run of region culls, each view packing its kept draws
+    // into its own region of `views`.
+    fn shadow_cull_pass<'a>(
+        &self,
+        pso: &'a ID3D12PipelineState,
+        views: &'a DxShadowViews,
+    ) -> RegionCullPass<'a> {
+        use crate::directx::compact::{group_count_bytes, indirect_buffer_bytes};
+        let n_cull = self.cull.bucket_stride;
+        RegionCullPass {
+            pso,
+            indirect: &views.lists,
+            status_gva: com::gpu_va(&views.status),
+            region_stride: n_cull,
+            packing: Some(RegionPacking {
+                group_counts: &views.group_counts,
+                group_stride: group_count_bytes(n_cull),
+                status: &views.status,
+                status_stride: shadow_status_bytes(n_cull),
+                lists_stride: indirect_buffer_bytes(n_cull),
+            }),
+        }
+    }
+
+    // View `region`'s lists in `views`, for the shadow draws.
+    pub(in crate::directx) fn shadow_lists<'a>(
+        &self,
+        views: &'a DxShadowViews,
+        region: usize,
+    ) -> DrawLists<'a> {
+        let n_cull = self.cull.bucket_stride;
+        DrawLists {
+            buffer: &views.lists,
+            base: region as u64 * crate::directx::compact::indirect_buffer_bytes(n_cull),
+            commands: n_cull,
+        }
+    }
+
+    // How a shadow view's lists sit in its region: one stream and the skinned
+    // tail, over the records the view's cull covers.
+    pub(in crate::directx) fn shadow_layout(&self) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: culled_records(self.state.draw.record_count(), self.cull.bucket_stride),
+        }
     }
 
     // Reflected-frustum mirror cull for the planar reflection pass, into each

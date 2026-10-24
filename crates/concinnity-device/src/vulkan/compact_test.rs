@@ -4,17 +4,20 @@
 // them. Every stream's list must be the one `render_types::compact` builds,
 // in record order, its count in its slot, and every command past the count a
 // zeroed no-op. A large cull scans more groups per stream than one scan pass
-// holds, carrying each pass's total into the next.
+// holds, carrying each pass's total into the next. The shadow cull ahead of
+// them must leave the status words and group counts the spec does.
 
 use ash::vk;
 use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::render_types::{
-    BucketSpans, DRAW_STREAMS, GpuCompactParams, GpuCullVariants, GpuDrawArgs, MAX_SHADER_BUCKETS,
-    StreamLayout, bucket_regions, compact, count_slot_offset, group_counts, scan_group_counts,
+    BucketSpans, DRAW_STREAMS, GpuCompactParams, GpuCullVariants, GpuDrawArgs, GpuObjectData,
+    MAX_SHADER_BUCKETS, StreamLayout, bucket_regions, compact, count_slot_offset, draw_args_flags,
+    group_count_words, group_counts, scan_group_counts,
 };
+use concinnity_engine::render::uniforms::vulkan::CullParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use super::builtin_shaders::{CULL_SCAN, CULL_SCATTER, CompileProgram as _};
+use super::builtin_shaders::{CULL_SCAN, CULL_SCATTER, CULL_SHADOW, CompileProgram as _};
 use super::compact::{command_bytes, compact_set, indirect_buffer_bytes};
 use super::test_gpu::{TestGpu, test_gpu};
 
@@ -437,5 +440,259 @@ fn pack_and_check(records: u32) {
     // SAFETY: as above.
     unsafe { device.destroy_descriptor_set_layout(set_layout, None) };
     drop((variants_buf, args_buf, counts_buf, status_buf, lists_buf));
+    alloc.destroy();
+}
+
+// Records along x, a unit box each from `r - 150`, some hidden and some never
+// frustum-tested, against a light frustum keeping `-50 <= x <= 50`.
+fn shadow_records(records: u32) -> (Vec<GpuObjectData>, Vec<GpuDrawArgs>, Vec<u32>) {
+    let mut objects = Vec::new();
+    let mut args = Vec::new();
+    let mut expected = Vec::new();
+    for r in 0..records {
+        let x = r as f32 - 150.0;
+        let visible = r % 7 != 3;
+        let cullable = r % 11 != 5;
+        let mut o: GpuObjectData = bytemuck::Zeroable::zeroed();
+        o.bb_min = [x, 0.0, 0.0];
+        o.bb_max = [x + 1.0, 1.0, 1.0];
+        objects.push(o);
+        args.push(GpuDrawArgs {
+            flags: draw_args_flags(visible, true, cullable),
+            ..draw_args(1)[0]
+        });
+        let inside = x + 1.0 >= -50.0 && x <= 50.0;
+        expected.push(if visible && (inside || !cullable) {
+            CullStatus::DRAWN
+        } else {
+            CullStatus::CULLED
+        });
+    }
+    (objects, args, expected)
+}
+
+#[test]
+fn the_shadow_cull_counts_what_it_keeps_as_the_spec_does() {
+    concinnity_shader::require_dxc!();
+    let Some(gpu) = test_gpu() else {
+        return;
+    };
+    let device = &gpu.device;
+    let alloc = DeviceAllocator::new(&gpu.instance, gpu.physical_device, device, 2);
+    let records = 300;
+    let (objects, args, expected) = shadow_records(records);
+    let layout = StreamLayout {
+        regions: &GpuCullVariants::default().regions,
+        bucket_count: 1,
+        skinned_base: skinned_base(records),
+        records,
+    };
+    let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+    let words = group_count_words(records);
+    let objects_buf = buffer(&alloc, bytemuck::cast_slice(&objects), storage);
+    let args_buf = buffer(&alloc, bytemuck::cast_slice(&args), storage);
+    let counts_buf = buffer(
+        &alloc,
+        bytemuck::cast_slice(&vec![u32::MAX; words]),
+        storage,
+    );
+    let status_buf = buffer(
+        &alloc,
+        bytemuck::cast_slice(&vec![u32::MAX; records as usize]),
+        storage,
+    );
+
+    let bindings: Vec<vk::DescriptorSetLayoutBinding<'_>> = super::init::shadow_cull_set()
+        .iter()
+        .map(|&(binding, ty, stages)| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(binding)
+                .descriptor_type(ty)
+                .descriptor_count(1)
+                .stage_flags(stages)
+        })
+        .collect();
+    // SAFETY: every create-info below and the slices it borrows are live for its call, and each
+    // handle it names belongs to this device.
+    let set_layout = unsafe {
+        device.create_descriptor_set_layout(
+            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+            None,
+        )
+    }
+    .expect("set layout");
+    let push = vk::PushConstantRange::default()
+        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        .size(u32::try_from(size_of::<CullParams>()).expect("push bytes"));
+    // SAFETY: as above.
+    let pipeline_layout = unsafe {
+        device.create_pipeline_layout(
+            &vk::PipelineLayoutCreateInfo::default()
+                .set_layouts(std::slice::from_ref(&set_layout))
+                .push_constant_ranges(std::slice::from_ref(&push)),
+            None,
+        )
+    }
+    .expect("pipeline layout");
+    let cull = pipeline(
+        &gpu,
+        pipeline_layout,
+        &CULL_SHADOW.compile(false).expect("shadow cull"),
+    );
+    let sizes = [vk::DescriptorPoolSize {
+        ty: vk::DescriptorType::STORAGE_BUFFER,
+        descriptor_count: 4,
+    }];
+    // SAFETY: as above.
+    let pool = unsafe {
+        device.create_descriptor_pool(
+            &vk::DescriptorPoolCreateInfo::default()
+                .pool_sizes(&sizes)
+                .max_sets(1),
+            None,
+        )
+    }
+    .expect("pool");
+    // SAFETY: as above.
+    let set = unsafe {
+        device.allocate_descriptor_sets(
+            &vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(std::slice::from_ref(&set_layout)),
+        )
+    }
+    .expect("set")[0];
+    let infos =
+        [&objects_buf, &args_buf, &counts_buf, &status_buf].map(|b| vk::DescriptorBufferInfo {
+            buffer: b.buffer(),
+            offset: 0,
+            range: vk::WHOLE_SIZE,
+        });
+    let writes: Vec<vk::WriteDescriptorSet<'_>> = infos
+        .iter()
+        .enumerate()
+        .map(|(b, info)| {
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(u32::try_from(b).expect("binding"))
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(std::slice::from_ref(info))
+        })
+        .collect();
+    // SAFETY: the writes name the live set and buffers above.
+    unsafe { device.update_descriptor_sets(&writes, &[]) };
+
+    let wide = |n: [f32; 3]| [n[0], n[1], n[2], 1.0e6];
+    let params = CullParams {
+        planes: [
+            [1.0, 0.0, 0.0, 50.0],
+            [-1.0, 0.0, 0.0, 50.0],
+            wide([0.0, 1.0, 0.0]),
+            wide([0.0, -1.0, 0.0]),
+            wide([0.0, 0.0, 1.0]),
+            wide([0.0, 0.0, -1.0]),
+        ],
+        cam_pos: [0.0; 3],
+        object_count: records,
+        bucket_count: 1,
+        skinned_base: skinned_base(records),
+    };
+    // SAFETY: family 0 is the one queue family `test_gpu` created a queue in.
+    let cmd_pool = unsafe {
+        device.create_command_pool(
+            &vk::CommandPoolCreateInfo::default().queue_family_index(0),
+            None,
+        )
+    }
+    .expect("command pool");
+    // SAFETY: the pool is live.
+    let cmd = unsafe {
+        device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::default()
+                .command_pool(cmd_pool)
+                .command_buffer_count(1),
+        )
+    }
+    .expect("command buffer")[0];
+    // Every call below records into or submits `cmd`, whose pipeline, set and buffers stay live
+    // until the queue idles.
+    // SAFETY: as above; `cmd` is a fresh command buffer.
+    unsafe { device.begin_command_buffer(cmd, &vk::CommandBufferBeginInfo::default()) }
+        .expect("begin");
+    // SAFETY: as above.
+    unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, cull) };
+    // SAFETY: as above; the set was written against the layout's only set.
+    unsafe {
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::COMPUTE,
+            pipeline_layout,
+            0,
+            &[set],
+            &[],
+        );
+    }
+    // SAFETY: as above; the push range covers the params.
+    unsafe {
+        device.cmd_push_constants(
+            cmd,
+            pipeline_layout,
+            vk::ShaderStageFlags::COMPUTE,
+            0,
+            bytemuck::bytes_of(&params),
+        );
+    }
+    // SAFETY: as above.
+    unsafe { device.cmd_dispatch(cmd, records.div_ceil(64), 1, 1) };
+    // SAFETY: as above.
+    unsafe { device.end_command_buffer(cmd) }.expect("end");
+    // SAFETY: family 0, index 0 is the one queue `test_gpu` created.
+    let queue = unsafe { device.get_device_queue(0, 0) };
+    let commands_to_run = [cmd];
+    let submit = vk::SubmitInfo::default().command_buffers(&commands_to_run);
+    // SAFETY: as above; the submit info borrows a live command buffer.
+    unsafe { device.queue_submit(queue, &[submit], vk::Fence::null()) }.expect("submit");
+    // SAFETY: the queue belongs to this device.
+    unsafe { device.queue_wait_idle(queue) }.expect("wait");
+
+    let read = |buffer: &PooledBuffer, len: usize| -> Vec<u32> {
+        // SAFETY: the queue idled, so the GPU no longer writes the host-visible, coherent buffer,
+        // which holds at least `4 * len` bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(buffer.mapped_ptr(), 4 * len) };
+        bytes
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect()
+    };
+    let status = read(&status_buf, records as usize);
+    assert_eq!(status, expected, "every record's outcome, in bucket 0");
+    let mut want = group_counts(&status, CullStatus::DRAWN, &layout);
+    // A stream the scan does not walk is never written.
+    let groups = want.len() / DRAW_STREAMS;
+    for (word, count) in want.iter_mut().enumerate() {
+        let stream = u32::try_from(word / groups).expect("stream");
+        if !layout.streams().any(|s| s == stream) {
+            *count = u32::MAX;
+        }
+    }
+    assert_eq!(
+        read(&counts_buf, words),
+        want,
+        "each group's kept records per stream"
+    );
+    assert!(expected.contains(&CullStatus::CULLED) && expected.contains(&CullStatus::DRAWN));
+
+    // SAFETY: the queue idled, so nothing created above is in use; each handle is destroyed
+    // once.
+    unsafe { device.destroy_command_pool(cmd_pool, None) };
+    // SAFETY: as above.
+    unsafe { device.destroy_descriptor_pool(pool, None) };
+    // SAFETY: as above.
+    unsafe { device.destroy_pipeline(cull, None) };
+    // SAFETY: as above.
+    unsafe { device.destroy_pipeline_layout(pipeline_layout, None) };
+    // SAFETY: as above.
+    unsafe { device.destroy_descriptor_set_layout(set_layout, None) };
+    drop((objects_buf, args_buf, counts_buf, status_buf));
     alloc.destroy();
 }

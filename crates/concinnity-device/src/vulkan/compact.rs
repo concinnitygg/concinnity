@@ -117,7 +117,7 @@ pub(in crate::vulkan) fn group_count_bytes(records: usize) -> u64 {
 
 // An indirect buffer a cull packs into, and how many commands it holds ahead
 // of its count slots.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(in crate::vulkan) struct DrawLists {
     pub(in crate::vulkan) buffer: vk::Buffer,
     pub(in crate::vulkan) commands: usize,
@@ -156,7 +156,7 @@ pub(in crate::vulkan) fn write_compact_set(
 
 // One cull's packing as a recording runs it: the target's set and lists, and
 // what to pack.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(in crate::vulkan) struct CompactPass {
     pub(in crate::vulkan) set: vk::DescriptorSet,
     pub(in crate::vulkan) lists: DrawLists,
@@ -188,28 +188,103 @@ impl VkContext {
     // scatter its kept records' commands, each list in record order. The
     // caller orders the scatter's writes before the draws that read them.
     pub(in crate::vulkan) fn encode_compaction(&self, cmd: vk::CommandBuffer, pass: CompactPass) {
+        self.encode_compactions(cmd, std::slice::from_ref(&pass));
+    }
+
+    // Pack every cull of `passes` just dispatched on `cmd`, each into its own
+    // lists: every scan, then every scatter, so the passes share their
+    // barriers.
+    pub(in crate::vulkan) fn encode_compactions(
+        &self,
+        cmd: vk::CommandBuffer,
+        passes: &[CompactPass],
+    ) {
         let Some(kernels) = self.cull.compact.as_ref() else {
             return;
         };
+        if passes.is_empty() {
+            return;
+        }
         let device = &self.hw.device;
         compute_barrier(device, cmd);
         if self.hw.draw_count.is_none() {
-            // The last draws that read these lists finish before they are zeroed.
-            let reads = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-            // SAFETY: a global memory barrier on the recording command buffer.
+            self.zero_lists(cmd, passes);
+        }
+        let layout = kernels.layout.handle();
+        let bind = |pass: &CompactPass| {
+            // SAFETY: `pass.set` was written against `kernels.set_layout`, the layout's only set.
             unsafe {
-                device.cmd_pipeline_barrier(
+                device.cmd_bind_descriptor_sets(
                     cmd,
-                    vk::PipelineStageFlags::DRAW_INDIRECT,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    std::slice::from_ref(&reads),
-                    &[],
+                    vk::PipelineBindPoint::COMPUTE,
+                    layout,
+                    0,
+                    std::slice::from_ref(&pass.set),
                     &[],
                 );
             }
+            // SAFETY: `layout` is the bound kernels' layout, and the params are borrowed for the
+            // call.
+            unsafe {
+                cmd_push_constants(
+                    device,
+                    cmd,
+                    layout,
+                    vk::ShaderStageFlags::COMPUTE,
+                    &pass.params,
+                );
+            }
+        };
+        // SAFETY: `cmd` is recording, and the scan pipeline is owned by `self.cull`.
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, kernels.scan.handle());
+        }
+        for pass in passes {
+            bind(pass);
+            // SAFETY: the scan pipeline, this pass's set and push constants are bound above.
+            unsafe { device.cmd_dispatch(cmd, pass.params.bucket_count.clamp(1, 64) + 1, 1, 1) };
+        }
+        compute_barrier(device, cmd);
+        // SAFETY: the scatter pipeline is owned by `self.cull`, and shares the scan's layout.
+        unsafe {
+            device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                kernels.scatter.handle(),
+            );
+        }
+        for pass in passes {
+            // A lone pass's set and push constants stay bound from its scan.
+            if passes.len() > 1 {
+                bind(pass);
+            }
+            let groups = pass.params.object_count.div_ceil(CULL_GROUP_RECORDS);
+            // SAFETY: the scatter pipeline, this pass's set and push constants are bound above.
+            unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        }
+    }
+
+    // Zero every list of `passes` ahead of their scatters, once the last draws
+    // that read them finish, for a device that draws each list at its full
+    // capacity.
+    fn zero_lists(&self, cmd: vk::CommandBuffer, passes: &[CompactPass]) {
+        let device = &self.hw.device;
+        let reads = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+        // SAFETY: a global memory barrier on the recording command buffer.
+        unsafe {
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::DRAW_INDIRECT,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                std::slice::from_ref(&reads),
+                &[],
+                &[],
+            );
+        }
+        for pass in passes {
             // SAFETY: `cmd` is recording outside a render pass, and the lists' buffer is live and
             // was created with TRANSFER_DST.
             unsafe {
@@ -221,63 +296,22 @@ impl VkContext {
                     0,
                 );
             }
-            let barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
-            // SAFETY: a global memory barrier on the recording command buffer.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    vk::DependencyFlags::empty(),
-                    std::slice::from_ref(&barrier),
-                    &[],
-                    &[],
-                );
-            }
         }
-        let layout = kernels.layout.handle();
-        // SAFETY: `cmd` is recording, and the scan pipeline is owned by `self.cull`.
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
+        // SAFETY: a global memory barrier on the recording command buffer.
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, kernels.scan.handle());
-        }
-        // SAFETY: `pass.set` was written against `kernels.set_layout`, the layout's only set.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
+            device.cmd_pipeline_barrier(
                 cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout,
-                0,
-                std::slice::from_ref(&pass.set),
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                std::slice::from_ref(&barrier),
+                &[],
                 &[],
             );
         }
-        // SAFETY: `layout` is the bound kernels' layout, and the params are borrowed for the call.
-        unsafe {
-            cmd_push_constants(
-                device,
-                cmd,
-                layout,
-                vk::ShaderStageFlags::COMPUTE,
-                &pass.params,
-            );
-        }
-        // SAFETY: the scan pipeline, its set and push constants are bound above.
-        unsafe { device.cmd_dispatch(cmd, pass.params.bucket_count.clamp(1, 64) + 1, 1, 1) };
-        compute_barrier(device, cmd);
-        // SAFETY: the scatter pipeline is owned by `self.cull`; the set and push constants stay
-        // bound across the switch, the two kernels sharing one layout.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                kernels.scatter.handle(),
-            );
-        }
-        let groups = pass.params.object_count.div_ceil(CULL_GROUP_RECORDS);
-        // SAFETY: the scatter pipeline, its set and push constants are bound above.
-        unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
     }
 
     // Draw stream `stream`'s list of `lists`, whose commands sit at `slots`.

@@ -783,7 +783,7 @@ pub(super) struct DrawRecordCounts {
 impl DrawRecordCounts {
     // Command slots holding the static objects + folded instances, which draw
     // through the static index buffer. `block` is where the record set starts in
-    // the target ICB: 0 for the main ICB, the cascade's block for the shadow ICB.
+    // the target ICB.
     // `None` when the set has no such records.
     pub(super) fn prefix(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.skinned_base > 0).then(|| block..block + self.skinned_base)
@@ -793,14 +793,6 @@ impl DrawRecordCounts {
     // vertices through the skinned index buffer. `None` when nothing is folded.
     pub(super) fn skinned_tail(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.total > self.skinned_base).then(|| block + self.skinned_base..block + self.total)
-    }
-}
-
-// The `NSRange` an indirect-draw `executeCommandsInBuffer` takes for `r`.
-pub(super) fn ns_range(r: std::ops::Range<usize>) -> objc2_foundation::NSRange {
-    objc2_foundation::NSRange {
-        location: r.start,
-        length: r.end - r.start,
     }
 }
 
@@ -989,76 +981,98 @@ impl MtlContext {
             .ok_or_else(|| super::error::allocation_failed(label))
     }
 
-    // Ensure the GPU-driven shadow view ICBs and their status buffers have a
-    // slot for every view of every record: `views * count` per set (view `v`'s
-    // live at `[v*count, (v+1)*count)`, the same stride `encode_shadow_culls`
-    // writes at and the shadow render passes execute), for the cascades and
-    // for the spot slices. A no-op for non-bindless / no-shadow contexts (no
-    // shadow decision pipeline). First built for every view of the scene's
-    // record reserve; growth past that rounds to a power of two. Called
-    // from `draw_frame` (where `&mut self` is available) right after
-    // `ensure_icb_capacity`, so the encode pass only ever reads sized ICBs.
+    // Ensure the GPU-driven shadow views have a cull slot each with a command
+    // slot for every record, and their shared status scratch a word for every
+    // record, for the cascades and for the spot slices. A no-op for
+    // non-bindless / no-shadow contexts (no shadow decision pipeline). First
+    // built for the scene's record reserve; growth past that rounds to a power
+    // of two. Called from `draw_frame` (where `&mut self` is available) right
+    // after `ensure_icb_capacity`, so the shadow culls only ever write sized
+    // ICBs.
     pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         if self.cull.shadow_pipeline.is_none() {
             return Ok(());
         }
         let mut cascades = std::mem::take(&mut self.cull.shadow_views);
-        let grown = self.grow_shadow_view_icb(&mut cascades, NUM_SHADOW_CASCADES, count);
+        let grown = self.grow_shadow_views(&mut cascades, NUM_SHADOW_CASCADES, count);
         self.cull.shadow_views = cascades;
         grown?;
         let mut spots = std::mem::take(&mut self.cull.spot_views);
-        let grown = self.grow_shadow_view_icb(&mut spots, self.spot_shadow.count as usize, count);
+        let grown = self.grow_shadow_views(&mut spots, self.spot_shadow.count as usize, count);
         self.cull.spot_views = spots;
         grown
     }
 
-    // Grow one view set's ICB, argument buffer and status buffer to hold
-    // `views * count` command slots. A set with no view stays empty.
-    fn grow_shadow_view_icb(
+    // Grow one view set to `views` cull slots of `count` command slots each,
+    // with a status word per command slot. A set with no view stays empty.
+    fn grow_shadow_views(
         &self,
         set: &mut crate::metal::cull::ShadowViewIcb,
         views: usize,
         count: usize,
     ) -> error::RenderResult<()> {
-        let Some(arg_encoder) = &self.cull.icb_arg_encoder else {
-            return Ok(());
-        };
-        let needed = count.saturating_mul(views);
-        if needed == 0 || (set.icb.is_some() && needed <= set.capacity) {
+        if self.cull.icb_arg_encoder.is_none()
+            || views == 0
+            || count == 0
+            || (set.views.len() == views && count <= set.capacity)
+        {
             return Ok(());
         }
-        let reserved = self.cull.reserved_records.saturating_mul(views);
-        let new_cap = super::cull::icb_capacity(needed, reserved);
-        let icb = self.build_cull_icb(new_cap)?;
-        let arg_buf = if let Some(buf) = set.arg_buffer.take() {
-            buf
-        } else {
-            let len = arg_encoder.encodedLength().max(16);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
+        let mut slots = Vec::with_capacity(views);
+        for _ in 0..views {
+            slots.push(self.build_cull_slot(new_cap, "shadow view")?);
+        }
+        set.status = Some(
             self.hw
                 .device
-                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or_else(|| super::error::allocation_failed("shadow view ICB argument buffer"))?
-        };
-        // SAFETY: the shadow view argument buffer was sized to `encodedLength()`.
-        unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buf), 0) };
-        // SAFETY: slot 0 is the single `[[id(0)]]` member of the kernel's
-        // `ICBContainer` struct in `arg_buf`, exactly like the main ICB.
-        unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
-        // One status word per command slot: each view's decision dispatch
-        // writes its region, the encode dispatch reads them all back.
-        let status = self
-            .hw
-            .device
-            .newBufferWithLength_options(
-                new_cap * size_of::<u32>(),
-                MTLResourceOptions::StorageModePrivate,
-            )
-            .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?;
-        set.arg_buffer = Some(arg_buf);
-        set.status = Some(status);
-        set.icb = Some(icb);
+                .newBufferWithLength_options(
+                    new_cap * size_of::<u32>(),
+                    MTLResourceOptions::StorageModePrivate,
+                )
+                .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?,
+        );
+        set.views = slots;
         set.capacity = new_cap;
         Ok(())
+    }
+
+    // One single-stream cull slot of `cap` command slots: its ICB, the
+    // argument buffer wiring it into the scatter, its group counts and its
+    // lists' ranges. Fails on a non-bindless context, which has no argument
+    // encoder.
+    fn build_cull_slot(
+        &self,
+        cap: usize,
+        label: &str,
+    ) -> error::RenderResult<super::cull::CullSlot> {
+        let arg_encoder = self
+            .cull
+            .icb_arg_encoder
+            .as_ref()
+            .ok_or_else(|| super::error::allocation_failed("cull slot argument encoder"))?;
+        let icb = self.build_cull_icb(cap)?;
+        let len = arg_encoder.encodedLength().max(16);
+        let arg_buffer = self
+            .hw
+            .device
+            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| super::error::allocation_failed(label))?;
+        // SAFETY: the slot's argument buffer is sized to `encodedLength()`; the
+        // previous slot's encoding was fully written before re-pointing the encoder.
+        unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0) };
+        // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
+        // member, exactly like the main ICBs.
+        unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
+        Ok(super::cull::CullSlot {
+            icb,
+            arg_buffer,
+            group_counts: self.private_buffer(
+                render_types::group_count_words(concinnity_core::math::saturating_u32(cap)) * 4,
+                label,
+            )?,
+            ranges: self.private_buffer(STREAM_RANGE_BYTES, label)?,
+        })
     }
 
     // Ensure `slot_count` per-planar-slot mirror cull ICBs exist, each with a
@@ -1084,39 +1098,16 @@ impl MtlContext {
         // Reuse the main phase-1 ICB argument encoder: a mirror ICB has the
         // identical `ICBContainer` layout (one `[[id(0)]]` member). Absent on
         // non-bindless contexts, where there is no GPU cull to mirror.
-        let arg_encoder = match &self.cull.icb_arg_encoder {
-            Some(e) => e.clone(),
-            None => return Ok(()),
-        };
+        if self.cull.icb_arg_encoder.is_none() {
+            return Ok(());
+        }
         if self.cull.mirror_slots.len() == slot_count && count <= self.cull.mirror_icb_capacity {
             return Ok(());
         }
         let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
         let mut slots = Vec::with_capacity(slot_count);
         for _ in 0..slot_count {
-            let icb = self.build_cull_icb(new_cap)?;
-            let len = arg_encoder.encodedLength().max(16);
-            let arg_buffer = self
-                .hw
-                .device
-                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or_else(|| super::error::allocation_failed("mirror ICB argument buffer"))?;
-            // SAFETY: this slot's argument buffer is sized to `encodedLength()`; the
-            // previous slot's encoding was fully written before re-pointing the encoder.
-            unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0) };
-            // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
-            // member, exactly like the main + shadow ICBs.
-            unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
-            slots.push(super::cull::MirrorCullSlot {
-                icb,
-                arg_buffer,
-                group_counts: self.private_buffer(
-                    render_types::group_count_words(concinnity_core::math::saturating_u32(new_cap))
-                        * 4,
-                    "mirror cull group counts",
-                )?,
-                ranges: self.private_buffer(STREAM_RANGE_BYTES, "mirror cull list ranges")?,
-            });
+            slots.push(self.build_cull_slot(new_cap, "mirror cull slot")?);
         }
         // Shared single-pass status scratch: the mirror cull writes per-object
         // status the same as phase 1, but nothing reads it (no phase-2 over the
@@ -1522,12 +1513,5 @@ mod tests {
             assert_eq!(c.prefix(block).expect("prefix").start, block);
             assert_eq!(tail.end, block + c.total);
         }
-    }
-
-    #[test]
-    fn ns_range_carries_start_and_length() {
-        let r = ns_range(9..12);
-        assert_eq!(r.location, 9);
-        assert_eq!(r.length, 3);
     }
 }

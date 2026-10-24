@@ -1,8 +1,8 @@
 //! Spot shadow pass: one depth-only render per shadow-casting spot light into its
 //! slice of `spot_shadow.map`. GPU-driven like the cascades: the shadow cull
-//! fills one region of the spot ICB per refreshed slice against that spot's
-//! light frustum, and each slice draws its region through the shared bindless
-//! shadow pipeline (`draw_shadow_view`) with a one-matrix `ShadowUniforms`.
+//! packs each refreshed slice's casters against that spot's light frustum into
+//! the slice's own ICB lists, and each slice draws them through the shared
+//! bindless shadow pipeline (`draw_shadow_view`) with a one-matrix `ShadowUniforms`.
 //!
 //! Local lights are static, so the matrices are built once at init and only the
 //! depth contents refresh here. `spot_shadow.render_mask` (from the frame's

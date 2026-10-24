@@ -72,9 +72,9 @@ impl SpotShadowState {
 
 impl DxContext {
     // One depth-only render per scheduled spot slice, GPU-driven like the
-    // cascades: a per-slice cull against the spot's light frustum writes the
-    // slice's region of this frame's spot indirect buffer, and the slice draws
-    // that region through the shared bindless shadow pipeline. Slices with no
+    // cascades: a per-slice cull against the spot's light frustum packs the
+    // slice's region of this frame's spot views, and the slice draws its lists
+    // through the shared bindless shadow pipeline. Slices with no
     // records still clear, so the main pass samples valid depth.
     // pub(in crate::directx) so the render-graph executor can dispatch this pass.
     pub(in crate::directx) fn encode_spot_shadow_pass(
@@ -91,7 +91,7 @@ impl DxContext {
             Self::clear_shadow_slice(cmd, self.spot_shadow.dsvs[slice as usize]);
         }
 
-        let Some(indirect) = self.cull.spot_indirect_buffers.get(frame_idx) else {
+        let Some(views) = self.cull.spot_views.get(frame_idx) else {
             return;
         };
         if !self.shadow_views_drawable() {
@@ -108,8 +108,7 @@ impl DxContext {
                     ubo_gva: self.spot_shadow.slice_ubo_gva(slice),
                     // Every spot slice carries its own matrix in `light_vps[0]`.
                     vp_index: 0,
-                    indirect,
-                    first_command: slice as usize * self.cull.bucket_stride,
+                    lists: self.shadow_lists(views, slice as usize),
                 },
             );
         }

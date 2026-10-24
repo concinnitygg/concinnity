@@ -17,7 +17,9 @@ use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
 
 mod bindless;
 mod compute;
-pub(in crate::vulkan) use compute::{VARIANT_BUFFER_BYTES, cull_set_bindings, main_cull_set};
+pub(in crate::vulkan) use compute::{
+    VARIANT_BUFFER_BYTES, cull_set_bindings, main_cull_set, shadow_cull_set,
+};
 mod gbuffer;
 mod shadow;
 mod two_pass;
@@ -249,12 +251,10 @@ pub(super) fn build_cull(
         shadow_cull_pipeline: shadow_cull.cull_pipeline,
         shadow_cull_pipeline_layout: shadow_cull.cull_pipeline_layout,
         _shadow_cull_set_layout: shadow_cull.set_layout,
-        shadow_cull_sets: shadow_cull.sets,
+        shadow_views: shadow_cull.views,
         shadow_bindless_pipeline: shadow_cull.bindless_pipeline,
         shadow_bindless_pipeline_layout: shadow_cull.bindless_pipeline_layout,
-        shadow_indirect_buffers: shadow_cull.indirect_buffers,
-        spot_cull_sets: shadow_cull.spot_cull_sets,
-        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
+        spot_views: shadow_cull.spot_views,
         gbuffer_sets: gbuffer_pass.sets,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history: gbuffer_pass.model_history,

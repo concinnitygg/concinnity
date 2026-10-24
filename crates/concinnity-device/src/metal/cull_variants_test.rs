@@ -195,7 +195,7 @@ fn run(
         hiz_enabled: 0,
         object_count: u32::try_from(records.len()).expect("records"),
         skinned_base: SKINNED_BASE,
-        cascade_base: 0,
+        _pad: 0,
         bucket_count: BUCKETS,
     };
     let queue = device.newCommandQueue().expect("queue");

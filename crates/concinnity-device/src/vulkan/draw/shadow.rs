@@ -8,13 +8,13 @@
 //! letting the main pass sample the cascades) before the Main pass. The map rests
 //! sampled between frames, so there is no inline reset.
 //!
-//! The cascades are GPU-driven: a per-cascade cull dispatch writes one indirect
-//! buffer per cascade and each cascade is issued with one
-//! `cmd_draw_indexed_indirect` (static + instance prefix) + one for the skinned
-//! tail. Streamed chunks and runtime clones ride the same records, so the CPU
-//! never walks a caster list here. The spot slices in
+//! The cascades are GPU-driven: a per-cascade cull dispatch and its packing
+//! write each cascade's lists, and each cascade is issued with one indirect
+//! draw of the kept static + instance records and one of the kept skinned tail.
+//! Streamed chunks and runtime clones ride the same records, so the CPU never
+//! walks a caster list here. The spot slices in
 //! [`spot_shadow.rs`](spot_shadow.rs) draw through the same `draw_shadow_view`
-//! from their own indirect buffers.
+//! from their own lists.
 //!
 //! The shape mirrors `metal/draw/shadow.rs::encode_shadow_pass`; the
 //! graph executor in [`graph_exec.rs`](graph_exec.rs) dispatches
@@ -22,22 +22,22 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::{self, SKINNED_STREAM};
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
 use crate::vulkan::owned::VkDevice;
 use crate::vulkan::record::cmd_push_constants;
 
-// One depth-only shadow view to draw from a cull-written indirect buffer: the
-// set 0 holding its `ShadowUniforms`, which of their `light_vps` the vertex
-// shader projects through, and the buffer its commands live in. A cascade and a
-// spot slice differ only in these.
+// One depth-only shadow view to draw from its packed lists: the set 0 holding
+// its `ShadowUniforms`, which of their `light_vps` the vertex shader projects
+// through, and the view its lists live in. A cascade and a spot slice differ
+// only in these.
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct ShadowView {
+pub(in crate::vulkan) struct ShadowView<'a> {
     pub uniforms_set: vk::DescriptorSet,
     pub vp_index: u32,
-    pub indirect: vk::Buffer,
+    pub view: &'a crate::vulkan::cull::VkShadowView,
 }
 
 impl VkContext {
@@ -89,7 +89,7 @@ impl VkContext {
 
         // GPU-driven cull prologue: dispatch every re-rendered cascade's cull
         // before opening any render pass (Vulkan disallows compute inside a
-        // render pass). Each writes that cascade's indirect buffer.
+        // render pass). Each packs that cascade's lists.
         if gpu_driven {
             self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
         }
@@ -101,9 +101,9 @@ impl VkContext {
             self.begin_shadow_slice(cmd, shadow_fb.handle(), self.shadow.map_size);
 
             if gpu_driven
-                && let Some(indirect) = self
+                && let Some(view) = self
                     .cull
-                    .shadow_indirect_buffers
+                    .shadow_views
                     .get(frame_idx)
                     .and_then(|c| c.get(cascade_idx))
             {
@@ -114,7 +114,7 @@ impl VkContext {
                     ShadowView {
                         uniforms_set: self.descriptors.shadow_global_sets[frame_idx],
                         vp_index: u32::saturating_from(cascade_idx),
-                        indirect: indirect.buffer(),
+                        view,
                     },
                 );
             }
@@ -186,16 +186,16 @@ impl VkContext {
     }
 
     // GPU-driven body of one shadow view (inside the render pass the caller
-    // opened): the depth-only bindless pipeline issues the view's static +
-    // instance prefix and the skinned tail with two `cmd_draw_indexed_indirect`
-    // calls over its cull-written indirect buffer, projected through
-    // `light_vps[view.vp_index]`. The CPU never walks the caster lists.
+    // opened): the depth-only bindless pipeline draws the view's kept static +
+    // instance records and its kept skinned tail, one list each by the count
+    // its packing wrote, projected through `light_vps[view.vp_index]`. The CPU
+    // never walks the caster lists.
     pub(in crate::vulkan) fn draw_shadow_view(
         &self,
         device: &VkDevice,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
-        view: ShadowView,
+        view: ShadowView<'_>,
     ) {
         let (Some(sb_pipeline), Some(sb_layout)) = (
             self.cull.shadow_bindless_pipeline.as_ref(),
@@ -203,8 +203,8 @@ impl VkContext {
         ) else {
             return;
         };
-        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
-        let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
+        let layout = self.shadow_layout(view.view);
+        let lists = view.view.lists();
 
         // SAFETY: `cmd` is recording inside the caller's shadow render pass, and the depth-only
         // bindless pipeline is owned by `self.cull`.
@@ -249,15 +249,15 @@ impl VkContext {
                 vk::IndexType::UINT32,
             );
         }
-        if prefix > 0 {
-            // SAFETY: `view.indirect` is this view's cull-written indirect buffer, barriered
-            // ahead of the shadow pass; `prefix` records fit inside it.
-            unsafe { device.cmd_draw_indexed_indirect(cmd, view.indirect, 0, prefix, stride) };
+        let statics = layout.slots(0);
+        if statics.capacity > 0 {
+            self.draw_stream(cmd, lists, 0, statics);
             self.inc_draw_calls(1);
         }
 
         // Skinned tail against the deformed VB + skinned IB.
-        if self.state.draw.n_skinned > 0
+        let skinned = layout.slots(SKINNED_STREAM);
+        if skinned.capacity > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
             // SAFETY: this frame's deformed vertex buffer is owned by `self.skinned` and was
@@ -279,16 +279,7 @@ impl VkContext {
                     vk::IndexType::UINT32,
                 );
             }
-            // SAFETY: the offset addresses the skinned tail inside the view's indirect buffer.
-            unsafe {
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    view.indirect,
-                    (self.state.draw.skinned_record_base() * stride as usize) as u64,
-                    u32::saturating_from(self.state.draw.n_skinned),
-                    stride,
-                );
-            }
+            self.draw_stream(cmd, lists, SKINNED_STREAM, skinned);
             self.inc_draw_calls(1);
         }
     }

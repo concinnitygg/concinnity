@@ -293,7 +293,7 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 hiz_enabled,
                 object_count,
                 skinned_base,
-                cascade_base,
+                _pad,
                 bucket_count,
             }),
         ),

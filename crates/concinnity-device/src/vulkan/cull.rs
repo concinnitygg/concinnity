@@ -24,14 +24,44 @@ use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout}
 use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams};
 
 use crate::vulkan::record::cmd_push_constants;
-use concinnity_engine::transform::IDENTITY;
 
+use super::allocator::PooledBuffer;
 use super::compact::{CompactPass, DrawLists};
 use super::context::VkContext;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
     saturating_u32(size_of::<vk::DrawIndexedIndirectCommand>());
+
+// The most views one shadow pass culls: its cascades or its spot slices.
+const MAX_SHADOW_VIEWS: usize =
+    if render_types::NUM_SHADOW_CASCADES > render_types::MAX_SHADOWED_SPOTS {
+        render_types::NUM_SHADOW_CASCADES
+    } else {
+        render_types::MAX_SHADOWED_SPOTS
+    };
+
+// One shadow view of one frame: the shadow kernel's set over the view's group
+// counts and status, the packing's set over them and the view's lists, and
+// the lists its draws read.
+pub(in crate::vulkan) struct VkShadowView {
+    pub(in crate::vulkan) cull_set: vk::DescriptorSet,
+    pub(in crate::vulkan) compact_set: vk::DescriptorSet,
+    pub(in crate::vulkan) lists: PooledBuffer,
+    pub(in crate::vulkan) _status: PooledBuffer,
+    pub(in crate::vulkan) _group_counts: PooledBuffer,
+    // Commands `lists` holds ahead of its count slots.
+    pub(in crate::vulkan) commands: usize,
+}
+
+impl VkShadowView {
+    pub(in crate::vulkan) fn lists(&self) -> DrawLists {
+        DrawLists {
+            buffer: self.lists.buffer(),
+            commands: self.commands,
+        }
+    }
+}
 
 impl VkContext {
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -222,9 +252,8 @@ impl VkContext {
     // Per-cascade GPU cull for the GPU-driven shadow pass: each re-rendered
     // cascade's frustum test of every record (static + instances + skinned)
     // against that cascade's light frustum (extracted from `light_vps[c]`; no
-    // Hi-Z) writes the cascade's indirect buffer through its (frame, cascade)
-    // cull set. Must run outside any render pass, so the caller dispatches it at
-    // the top of `encode_shadow_pass`. Mirrors
+    // Hi-Z), packed into the cascade's lists. Must run outside any render pass,
+    // so the caller dispatches it at the top of `encode_shadow_pass`. Mirrors
     // `directx/cull.rs::encode_shadow_culls`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
@@ -233,58 +262,67 @@ impl VkContext {
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
-        let Some(sets) = self.cull.shadow_cull_sets.get(frame_idx) else {
+        let Some(views) = self.cull.shadow_views.get(frame_idx) else {
             return;
         };
-        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
-            render_types::NUM_SHADOW_CASCADES];
+        let mut culls = [None; render_types::NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, &set) in sets.iter().enumerate() {
+        for (c, view) in views.iter().enumerate() {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
-            views[kept] = (
-                set,
-                Frustum::from_shadow(self.state.planner.shadow.uniforms.light_vps[c]),
-            );
+            let light_vp = self.state.planner.shadow.uniforms.light_vps[c];
+            culls[kept] = Some((view, Frustum::from_shadow(light_vp)));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+        self.encode_view_culls(cmd, &culls[..kept], cam_pos);
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same shadow kernel, each
     // refreshed slice's casters kept against that spot's light frustum into the
-    // slice's own indirect buffer. The eye stays the camera, so each caster
-    // draws the LOD the main pass does.
+    // slice's own lists. The kernel picks no LOD: each caster draws the
+    // camera-keyed LOD the frame's draw args already carry.
     pub(in crate::vulkan) fn encode_spot_culls(
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let Some(sets) = self.cull.spot_cull_sets.get(frame_idx) else {
+        let Some(views) = self.cull.spot_views.get(frame_idx) else {
             return;
         };
-        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
-            render_types::MAX_SHADOWED_SPOTS];
+        let mut culls = [None; render_types::MAX_SHADOWED_SPOTS];
         let mut kept = 0;
         for slice in self.spot_shadow.refreshed_slices() {
             let slice = slice as usize;
-            views[kept] = (sets[slice], self.spot_shadow.frusta[slice]);
+            culls[kept] = views
+                .get(slice)
+                .map(|view| (view, self.spot_shadow.frusta[slice]));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+        self.encode_view_culls(cmd, &culls[..kept], cam_pos);
+    }
+
+    // What a shadow view's cull and packing cover: this frame's records, at
+    // most as many as the view holds, one stream and the skinned tail.
+    pub(in crate::vulkan) fn shadow_layout(&self, view: &VkShadowView) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: render_types::culled_records(self.state.draw.record_count(), view.commands),
+        }
     }
 
     // One shadow-kernel dispatch per view, each testing every record against
-    // the view's frustum and writing the indirect buffer its cull set binds. Ends
-    // with one memory barrier ordering the writes before the shadow draws'
-    // `cmd_draw_indexed_indirect` reads. A no-op when the GPU-driven shadow
-    // resources are absent, `draw.record_count() == 0`, or no view asked for.
+    // the view's frustum, then every view's packing into its lists. Ends with
+    // one memory barrier ordering the lists' writes before the shadow draws'
+    // indirect reads. A no-op when the GPU-driven shadow resources are absent,
+    // `draw.record_count() == 0`, or no view asked for.
     fn encode_view_culls(
         &self,
         cmd: vk::CommandBuffer,
-        views: &[(vk::DescriptorSet, Frustum)],
+        views: &[Option<(&VkShadowView, Frustum)>],
         cam_pos: [f32; 3],
     ) {
         let (Some(pipeline), Some(layout)) = (
@@ -297,31 +335,30 @@ impl VkContext {
             return;
         }
         let device = &self.hw.device;
-        let object_count = u32::saturating_from(self.state.draw.record_count());
 
         // SAFETY: `cmd` is in the recording state, and the shadow cull pipeline is owned by
         // `self.cull`, which outlives this recording.
         unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
-        for (set, frustum) in views {
+        let mut passes = [CompactPass::default(); MAX_SHADOW_VIEWS];
+        let mut packed_views = 0;
+        for (pass, (view, frustum)) in passes.iter_mut().zip(views.iter().flatten()) {
+            let packed = self.shadow_layout(view);
             let mut params = CullParams {
                 planes: [[0.0; 4]; 6],
                 cam_pos,
-                object_count,
-                // The shadow kernel writes one depth-only stream into the
-                // view's own indirect buffer, so it never strides by bucket.
+                object_count: packed.records,
                 bucket_count: 1,
-                skinned_base: object_count,
+                skinned_base: packed.skinned_base,
             };
             params.planes = frustum.packed_planes();
-            // SAFETY: the caller hands live per-view sets built against the shadow cull layout,
-            // borrowed for the call.
+            // SAFETY: the view's cull set was built against the shadow cull layout.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
                     layout.handle(),
                     0,
-                    std::slice::from_ref(set),
+                    std::slice::from_ref(&view.cull_set),
                     &[],
                 );
             }
@@ -338,8 +375,20 @@ impl VkContext {
             }
             // SAFETY: the pipeline, this view's set and its push constants are bound on the
             // recording command buffer.
-            unsafe { device.cmd_dispatch(cmd, object_count.div_ceil(64), 1, 1) };
+            unsafe { device.cmd_dispatch(cmd, packed.records.div_ceil(64), 1, 1) };
+            *pass = CompactPass {
+                set: view.compact_set,
+                lists: view.lists(),
+                params: GpuCompactParams {
+                    object_count: packed.records,
+                    bucket_count: 1,
+                    skinned_base: packed.skinned_base,
+                    drawn: CullStatus::DRAWN,
+                },
+            };
+            packed_views += 1;
         }
+        self.encode_compactions(cmd, &passes[..packed_views]);
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);

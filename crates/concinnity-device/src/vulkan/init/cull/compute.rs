@@ -67,6 +67,12 @@ pub(in crate::vulkan) fn main_cull_set() -> [Binding; 5] {
     cull_set_bindings()
 }
 
+// Set 0 of the shadow kernel: object, draw-args, group-count and cull-status
+// SSBOs.
+pub(in crate::vulkan) fn shadow_cull_set() -> [Binding; 4] {
+    cull_set_bindings()
+}
+
 // Bytes of one frame's variant SSBO.
 pub(in crate::vulkan) const VARIANT_BUFFER_BYTES: u64 =
     size_of::<render_types::GpuCullVariants>() as u64;
