@@ -1,0 +1,33 @@
+name: Install shader compiler
+description: Vendors the pinned dxc, downloaded on Linux and Windows and built from source on macOS
+runs:
+  using: composite
+  steps:
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+
+    - name: Restore Shader Compiler
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: vendor/dxc-*
+        key: dxc-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/vendor.py') }}
+
+    - name: Install Ninja
+      if: runner.os == 'macOS' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: command -v ninja || brew install ninja
+
+    - name: Vendor Shader Compiler
+      shell: bash
+      run: python scripts/vendor.py ${{ runner.os == 'macOS' && 'build' || 'fetch' }} dxc
+
+    # Saved before the build so a failing test does not throw away a source build.
+    - name: Save Shader Compiler
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: vendor/dxc-*
+        key: ${{ steps.restore.outputs.cache-primary-key }}
