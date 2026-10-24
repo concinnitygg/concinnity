@@ -45,6 +45,7 @@ thiserror = { version = "2.0.18", default-features = false }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
 windows = "0.62.2"
+zip = { version = "9", default-features = false }
 
 [package]
 name = "concinnity"
