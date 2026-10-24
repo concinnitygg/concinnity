@@ -18,7 +18,8 @@
 // the frame's move, which carries every live particle into the frame the
 // world moved to, then the bursts systems asked for this frame. An emitter's
 // bursts spawn the last `burst_spawns` of its run, each from its own point
-// along its own axis.
+// along its own axis, and a burst with a floor kills its particles as they
+// fall back through it.
 //
 // The pool takes its Metal index from the number on its `register()` (see
 // concinnity-shader's `metal_bindings`), which is buffer(0), the slot
@@ -29,15 +30,19 @@
 [[vk::binding(0, 0)]] RWStructuredBuffer<Particle> pool : register(u0);
 
 // Rows of `[R | t]` for the frame's move, then `[moved, _, _, _]`, then per
-// burst `[position, count]` and `[direction, speed scale]`.
+// burst `[position, count]`, `[direction, speed scale]`, `[carry, _]`, the
+// velocity every particle of the burst starts with on top of its own, and
+// `[floor up, has floor]`.
 #ifdef CN_BACKEND_DIRECTX
 StructuredBuffer<float4> frame_rows : register(t1);
 #else
 [[vk::binding(0, 1)]] StructuredBuffer<float4> frame_rows : register(t1);
 #endif
 
-// Mirror `PARTICLE_FRAME_HEADER` and `MAX_EMITTER_BURSTS` in core.
+// Mirror `PARTICLE_FRAME_HEADER`, `PARTICLE_BURST_ROWS` and
+// `MAX_EMITTER_BURSTS` in core.
 static const uint PARTICLE_FRAME_HEADER = 4u;
+static const uint PARTICLE_BURST_ROWS = 4u;
 static const uint PARTICLE_MAX_EMITTER_BURSTS = 16u;
 
 // A host difference, not a target one: DirectX takes the params as root
@@ -96,6 +101,10 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
         float4 v = float4(pt.velocity_lifetime.xyz, 0.0);
         pt.position_age.xyz = float3(dot(frame_rows[0], p), dot(frame_rows[1], p), dot(frame_rows[2], p));
         pt.velocity_lifetime.xyz = float3(dot(frame_rows[0], v), dot(frame_rows[1], v), dot(frame_rows[2], v));
+        float4 n = float4(pt.floor_plane.xyz, 0.0);
+        float3 up = float3(dot(frame_rows[0], n), dot(frame_rows[1], n), dot(frame_rows[2], n));
+        float3 moved = float3(frame_rows[0].w, frame_rows[1].w, frame_rows[2].w);
+        pt.floor_plane = float4(up, pt.floor_plane.w + dot(up, moved));
     }
 
     // Age the particle in this slot, if any. A lifetime of 0 flags a dead slot.
@@ -111,6 +120,11 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
             pt.velocity_lifetime.xyz =
                 pt.velocity_lifetime.xyz + params.gravity_speed_max.xyz * params.dt;
             pt.position_age.xyz = pt.position_age.xyz + pt.velocity_lifetime.xyz * params.dt;
+            float3 up = pt.floor_plane.xyz;
+            if (dot(up, pt.position_age.xyz) < pt.floor_plane.w && dot(up, pt.velocity_lifetime.xyz) < 0.0)
+            {
+                pt.velocity_lifetime.w = 0.0;
+            }
         }
     }
 
@@ -125,6 +139,8 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
         float3 origin = params.position_spread.xyz;
         float3 axis = params.direction_speed_min.xyz;
         float scale = 1.0;
+        float3 carry = (float3)0.0;
+        float3 floor_up = (float3)0.0;
         // The run's last spawns are the bursts', each burst's in turn.
         uint rate_spawns = params.spawn_count - params.burst_spawns;
         if (spawn >= rate_spawns)
@@ -132,7 +148,7 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
             uint left = spawn - rate_spawns;
             for (uint b = 0u; b < min(params.burst_count, PARTICLE_MAX_EMITTER_BURSTS); b++)
             {
-                uint row = PARTICLE_FRAME_HEADER + 2u * (params.burst_first + b);
+                uint row = PARTICLE_FRAME_HEADER + PARTICLE_BURST_ROWS * (params.burst_first + b);
                 float4 at = frame_rows[row];
                 uint count = uint(at.w);
                 if (left < count)
@@ -141,6 +157,9 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
                     origin = at.xyz;
                     axis = along.xyz;
                     scale = along.w;
+                    carry = frame_rows[row + 2u].xyz;
+                    float4 below = frame_rows[row + 3u];
+                    floor_up = below.w > 0.0 ? normalize(below.xyz) : (float3)0.0;
                     break;
                 }
                 left -= count;
@@ -151,7 +170,8 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
             params.direction_speed_min.w, params.gravity_speed_max.w, prng(rng));
         float life = lerp(params.lifetime_min, params.lifetime_max, prng(rng));
         pt.position_age = float4(origin, 0.0);
-        pt.velocity_lifetime = float4(dir * speed, max(life, 0.001));
+        pt.velocity_lifetime = float4(dir * speed + carry, max(life, 0.001));
+        pt.floor_plane = float4(floor_up, dot(floor_up, origin));
     }
 
     pool[id] = pt;

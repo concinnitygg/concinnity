@@ -58,6 +58,8 @@ pub(super) struct ParticleEmitterGpuState {
 pub(super) struct ParticlePipelines {
     pub simulate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub render: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    // The same for a lit emitter.
+    pub render_lit: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     pub sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     // The frame's rows every simulation reads, one buffer per ring slot.
     pub rows: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
@@ -167,9 +169,11 @@ impl MtlContext {
         Ok(())
     }
 
-    // Encode the `ParticlesDraw` node: one alpha-blended camera-facing quad per
-    // live particle, blend-written into `hdr_resolve`. The vertex stage reads
-    // the pool `encode_particles_sim` wrote. Returns the draw-call count.
+    // Encode the `ParticlesDraw` node, or with `late`, the pre-TAA scene, the
+    // `ParticlesLateDraw` one: one alpha-blended camera-facing quad per live
+    // particle of the emitters that draw at that stage, blend-written into
+    // `hdr_resolve` or the scene `late` names. The vertex stage reads the pool
+    // `encode_particles_sim` wrote. Returns the draw-call count.
     pub(in crate::metal) fn encode_particles_draw(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
@@ -177,6 +181,7 @@ impl MtlContext {
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
         reactive: ReactiveWrite,
+        late: Option<&ProtocolObject<dyn objc2_metal::MTLTexture>>,
     ) -> RenderResult<u32> {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(0);
@@ -185,21 +190,19 @@ impl MtlContext {
 
         // Visibility-cull per emitter, for the draw alone: the simulation above
         // ticked every pool.
-        let mut visible = self.particle.system.visible(&frame, frustum).peekable();
+        let mut visible = self
+            .particle
+            .system
+            .visible(&frame, frustum, late.is_some())
+            .peekable();
 
-        // Camera basis for camera-facing billboards: rows 0 and 1 of the view
-        // matrix's 3×3 are the world-space right and up vectors (the view
-        // matrix is column-major, so we read those rows out element-wise).
-        let v = self.state.view.matrix;
-        let cam_right = [v[0][0], v[1][0], v[2][0]];
-        let cam_up = [v[0][1], v[1][1], v[2][1]];
-        let view = ParticleView {
+        let view = ParticleView::new(
             vp,
-            cam_right,
-            pre_exposure: self.pre_exposure.value(),
-            cam_up,
-            _pad1: 0.0,
-        };
+            &self.state.view.matrix,
+            self.pre_exposure.value(),
+            self.lights.uniforms(),
+            &self.state.view.daylight,
+        );
 
         // A fresh Load/Store pass: the prior render pass ended with its own
         // command buffer. When every emitter culls out we skip the encoder
@@ -212,14 +215,21 @@ impl MtlContext {
         // declares.
         unsafe {
             let ca = pass_desc.colorAttachments().objectAtIndexedSubscript(0);
-            ca.setTexture(Some(self.targets.hdr.hdr_resolve.as_ref()));
+            ca.setTexture(Some(
+                late.unwrap_or_else(|| self.targets.hdr.hdr_resolve.as_ref()),
+            ));
             ca.setLoadAction(MTLLoadAction::Load);
             ca.setStoreAction(MTLStoreAction::Store);
         }
         self.attach_reactive_mask(&pass_desc, reactive);
 
         if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_render(&pass_desc, super::pass_timing::PassId::ParticlesDraw);
+            let id = if late.is_some() {
+                super::pass_timing::PassId::ParticlesLateDraw
+            } else {
+                super::pass_timing::PassId::ParticlesDraw
+            };
+            t.attach_render(&pass_desc, id);
         }
         let enc = ScopedEncoder::new(
             cmd_buf
@@ -229,6 +239,7 @@ impl MtlContext {
                 })?,
             ns_string!("particles: draw"),
         );
+        let mut lit = false;
         enc.set_pipeline(&pipelines.render);
         enc.set_vertex_value(&view, 1);
         enc.set_fragment_sampler(&pipelines.sampler, 0);
@@ -239,6 +250,14 @@ impl MtlContext {
         for emitter in visible {
             let (rec, gpu) = (emitter.record, emitter.gpu);
             let params = emitter.params;
+            if rec.lit != lit {
+                lit = rec.lit;
+                enc.set_pipeline(if lit {
+                    &pipelines.render_lit
+                } else {
+                    &pipelines.render
+                });
+            }
             let slot = rec.texture_slot.min(last_tex);
             enc.set_vertex_buffer(gpu.pool.as_ref(), 0, 0);
             enc.set_vertex_value(&params, 2);
@@ -275,39 +294,18 @@ pub(super) fn build_particle_pipelines(
         hot_reload,
     )?;
 
-    // Render pipeline. No vertex descriptor: the vertex shader reads from the
-    // particle pool storage buffer directly via `[[vertex_id]]` + `[[instance_id]]`.
-    // Each entry compiles to its own metallib, so the two stages come from
-    // separate libraries and pair by semantic.
-    let vert_fn = super::builtin_shaders::entry_function(
+    let render = render_pipeline(
         device,
         &super::builtin_shaders::PARTICLE_VERT,
-        hot_reload,
-    )?;
-    let frag_fn = super::builtin_shaders::entry_function(
-        device,
         &super::builtin_shaders::PARTICLE_FRAG,
         hot_reload,
     )?;
-    let desc = MTLRenderPipelineDescriptor::new();
-    desc.setVertexFunction(Some(&vert_fn));
-    desc.setFragmentFunction(Some(&frag_fn));
-    desc.setRasterSampleCount(1);
-    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
-    // declares.
-    unsafe {
-        let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
-        ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
-        ca.setBlendingEnabled(true);
-        ca.setSourceRGBBlendFactor(MTLBlendFactor::SourceAlpha);
-        ca.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
-        ca.setSourceAlphaBlendFactor(MTLBlendFactor::SourceAlpha);
-        ca.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
-    }
-    super::reactive_mask::declare_target(&desc);
-    let render = device
-        .newRenderPipelineStateWithDescriptor_error(&desc)
-        .map_err(|e| RenderError::ShaderCompile(format!("particle render pipeline: {e:?}")))?;
+    let render_lit = render_pipeline(
+        device,
+        &super::builtin_shaders::PARTICLE_LIT_VERT,
+        &super::builtin_shaders::PARTICLE_LIT_FRAG,
+        hot_reload,
+    )?;
 
     // Sampler: linear-clamp, same envelope the decal pass uses.
     let sampler = {
@@ -332,9 +330,44 @@ pub(super) fn build_particle_pipelines(
     Ok(ParticlePipelines {
         simulate,
         render,
+        render_lit,
         sampler,
         rows,
     })
+}
+
+// The render pipeline of the `vert` and `frag` pair. No vertex descriptor:
+// the vertex shader reads from the particle pool storage buffer directly via
+// `[[vertex_id]]` + `[[instance_id]]`. Each entry compiles to its own
+// metallib, so the two stages come from separate libraries and pair by
+// semantic.
+fn render_pipeline(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    vert: &super::builtin_shaders::ShaderProgram,
+    frag: &super::builtin_shaders::ShaderProgram,
+    hot_reload: bool,
+) -> RenderResult<Retained<ProtocolObject<dyn MTLRenderPipelineState>>> {
+    let vert_fn = super::builtin_shaders::entry_function(device, vert, hot_reload)?;
+    let frag_fn = super::builtin_shaders::entry_function(device, frag, hot_reload)?;
+    let desc = MTLRenderPipelineDescriptor::new();
+    desc.setVertexFunction(Some(&vert_fn));
+    desc.setFragmentFunction(Some(&frag_fn));
+    desc.setRasterSampleCount(1);
+    // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
+    // declares.
+    unsafe {
+        let ca = desc.colorAttachments().objectAtIndexedSubscript(0);
+        ca.setPixelFormat(MTLPixelFormat::RGBA16Float);
+        ca.setBlendingEnabled(true);
+        ca.setSourceRGBBlendFactor(MTLBlendFactor::SourceAlpha);
+        ca.setDestinationRGBBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
+        ca.setSourceAlphaBlendFactor(MTLBlendFactor::SourceAlpha);
+        ca.setDestinationAlphaBlendFactor(MTLBlendFactor::OneMinusSourceAlpha);
+    }
+    super::reactive_mask::declare_target(&desc);
+    device
+        .newRenderPipelineStateWithDescriptor_error(&desc)
+        .map_err(|e| RenderError::ShaderCompile(format!("particle render pipeline: {e:?}")))
 }
 
 // Allocate the per-emitter GPU state for one record: a zero-initialized

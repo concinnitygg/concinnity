@@ -15,7 +15,7 @@
 //                       back
 //   WATER_WAKE_INVERSE  transforms two rows per group back into this frame's
 //                       half of `state`
-//   WATER_WAKE_SHADE    takes each cell's slope, foams the steep ones, and
+//   WATER_WAKE_SHADE    takes each cell's slope, foams the steep crests, and
 //                       writes mip 0 of the field the water draw samples:
 //                       (height, slope x, slope z, foam)
 //   WATER_WAKE_MIP      reduces the field's mip `L - 1` into mip `L` by 2x2
@@ -59,7 +59,7 @@ struct WaterWakeParams
 static const uint WATER_WAKE_SIZE = 256u;
 static const uint WATER_WAKE_THREADS = 128u;
 static const uint WATER_WAKE_MAX_STIRS = 64u;
-static const float WATER_WAKE_SPREAD = 2.0;
+static const float WATER_WAKE_SPREAD = 1.75;
 static const uint WATER_WAKE_GROUP = 8u;
 static const uint WATER_WAKE_LAST_VALID = 1u;
 static const uint WATER_WAKE_CARRIED = 2u;
@@ -420,6 +420,10 @@ void water_wake_inverse(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadI
 
 #elif defined(WATER_WAKE_SHADE)
 
+// How sharply a crest must curve over, per meter, to foam fully: a steep
+// wave spills along its crest line, not across its flanks.
+static const float WATER_WAKE_CREST = 0.4;
+
 [shader("compute")]
 [numthreads(WATER_WAKE_GROUP, WATER_WAKE_GROUP, 1)]
 void water_wake_shade(uint3 id : SV_DispatchThreadID)
@@ -444,7 +448,10 @@ void water_wake_shade(uint3 id : SV_DispatchThreadID)
     float2 slope = float2(height_at[0] - height_at[1], height_at[2] - height_at[3]) / (2.0 * params.cell.x);
     uint at = wake_at(write, id.x + id.y * size);
     float4 here = state[at];
-    float steep = max(length(slope) - params.foam.z, 0.0);
+    float bend = (height_at[0] + height_at[1] + height_at[2] + height_at[3] - 4.0 * here.x)
+               / (params.cell.x * params.cell.x);
+    float crest = saturate(-bend / WATER_WAKE_CREST);
+    float steep = max(length(slope) - params.foam.z, 0.0) * crest;
     float foam = min(here.z + steep * params.foam.w * params.cell.y, 1.0);
     state[at] = float4(here.xy, foam, 0.0);
     dst_field[id.xy] = float4(here.x, slope, foam);

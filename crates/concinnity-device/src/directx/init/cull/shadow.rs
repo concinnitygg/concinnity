@@ -81,22 +81,10 @@ pub(super) fn build_shadow_cull(
     let mut spot_indirect_buffers: Vec<ID3D12Resource> = Vec::new();
     for _ in 0..gpu.hw.frames() {
         if spot_indirect_size > 0 {
-            spot_indirect_buffers.push(create_uav_buffer(
-                device,
-                spot_indirect_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
+            spot_indirect_buffers.push(create_uav_buffer(device, spot_indirect_size)?);
         }
-        indirect_buffers.push(create_uav_buffer(
-            device,
-            shadow_indirect_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
-        status_buffers.push(create_uav_buffer(
-            device,
-            status_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
+        indirect_buffers.push(create_uav_buffer(device, shadow_indirect_size)?);
+        status_buffers.push(create_uav_buffer(device, status_size)?);
     }
     Ok(ShadowCull {
         bindless_root_sig: Some(sbrs),

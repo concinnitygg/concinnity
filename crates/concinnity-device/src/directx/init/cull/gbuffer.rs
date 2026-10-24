@@ -43,11 +43,7 @@ pub(super) fn build_gbuffer_pass(
     let prev_model_size = align256((plan.n_cull * size_of::<[[f32; 4]; 4]>()) as u64);
     let mut prev_model_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames());
     for _ in 0..gpu.hw.frames() {
-        prev_model_buffers.push(create_uav_buffer(
-            device,
-            prev_model_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
+        prev_model_buffers.push(create_uav_buffer(device, prev_model_size)?);
     }
     Ok(GbufferPass {
         prev_model_buffers,

@@ -62,8 +62,10 @@ pass_ids! {
     Fog => "fog",
     /// Particle simulation compute.
     ParticlesSim => "particles_sim",
-    /// Particle draw.
+    /// Particle draw, under the see-through surfaces.
     ParticlesDraw => "particles_draw",
+    /// Particle draw over the see-through surfaces.
+    ParticlesLateDraw => "particles_late_draw",
     /// Reflection trace and composite.
     SsrResolve => "ssr_resolve",
     /// Temporal anti-aliasing resolve.

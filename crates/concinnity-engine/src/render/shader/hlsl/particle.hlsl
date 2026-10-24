@@ -27,6 +27,11 @@
 // The pass binds no depth attachment, so the fragment tests the scene depth
 // itself. USE_MSAA is a host difference: Vulkan and DirectX read the
 // multisampled main depth while Metal reads the resolved copy.
+//
+// PARTICLE_LIT compiles the pair for a lit emitter: each particle is lit by
+// the sun and the sky as a small cloud of droplets or dust, brightest seen
+// toward the sun, and fades out where it nears the surface behind it, over
+// its own size, rather than cutting into it.
 
 #ifndef USE_MSAA
 #define USE_MSAA 0
@@ -38,9 +43,9 @@
 
 {REACTIVE_MASK}
 
-// Per-frame view inputs to the render pass, 96 B. Mirrors `ParticleView` in
-// each backend's uniforms module. The two axis vectors are float4 for the
-// reason the params' pairs are: MSL sizes a constant-buffer float3 at 16 bytes.
+// Per-frame view inputs to the render pass, 144 B. Mirrors `ParticleView` in
+// each backend's uniforms module. The vectors are float4 for the reason the
+// params' pairs are: MSL sizes a constant-buffer float3 at 16 bytes.
 struct ParticleView
 {
     float4x4 vp;
@@ -49,7 +54,19 @@ struct ParticleView
     float4 cam_right;
     // xyz = world-space camera up, the second billboard axis.
     float4 cam_up;
+    // xyz = unit direction toward the sun.
+    float4 sun_dir;
+    // rgb = the light a white surface facing the sun reflects, and the light
+    // one under the open sky reflects from it, where the camera is.
+    float4 sun_light;
+    float4 sky_light;
 };
+
+// How much more light a lit particle sends on seen straight toward the sun
+// than across it, and how tightly that glow gathers around the sun.
+static const float PARTICLE_FORWARD_GLOW = 1.5;
+static const float PARTICLE_FORWARD_POWER = 4.0;
+static const float PARTICLE_SIDE_LIGHT = 0.4;
 
 // The per-emitter pool, written by the simulation kernel and read here. Vulkan
 // binds it as a read-only SSBO in the per-emitter set; Metal binds the same
@@ -94,6 +111,11 @@ struct ParticleVertexOut
     // The view block's pre-exposure, handed on because only the vertex stage
     // binds the view.
     [[vk::location(3)]] nointerpolation float pre_exposure : TEXCOORD3;
+#ifdef PARTICLE_LIT
+    // x = the particle's distance along the view, y = how far behind it the
+    // scene must lie for it to show whole.
+    [[vk::location(4)]] float2 soft : TEXCOORD4;
+#endif
     float4 position : SV_Position;
 };
 
@@ -113,6 +135,9 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
         o.color = float4(0.0, 0.0, 0.0, 0.0);
         o.discard_flag = 1.0;
         o.pre_exposure = view.cam_right.w;
+#ifdef PARTICLE_LIT
+        o.soft = float2(1.0, 1.0);
+#endif
         return o;
     }
 
@@ -133,6 +158,13 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
     // 0..1 in each axis; V is flipped at sample time to match the rest of the
     // engine's textures (V = 0 at the top of the image).
     o.uv = corner * 0.5 + 0.5;
+#ifdef PARTICLE_LIT
+    float3 forward = cross(view.cam_up.xyz, view.cam_right.xyz);
+    float toward = pow(saturate(dot(forward, view.sun_dir.xyz)), PARTICLE_FORWARD_POWER);
+    float3 light = view.sun_light.rgb * (PARTICLE_SIDE_LIGHT + PARTICLE_FORWARD_GLOW * toward) + view.sky_light.rgb;
+    color.rgb *= light;
+    o.soft = float2(o.position.w, 0.5 * size);
+#endif
     o.color = color;
     o.discard_flag = 0.0;
     o.pre_exposure = view.cam_right.w;
@@ -162,7 +194,8 @@ ParticleFragmentOut particle_fragment(ParticleVertexOut i)
         discard;
     }
     // Manual depth test: a sprite behind opaque scene geometry draws nothing.
-    if (depth_behind(i.position.z, particle_scene_depth(int2(i.position.xy))))
+    float behind = particle_scene_depth(int2(i.position.xy));
+    if (depth_behind(i.position.z, behind))
     {
         discard;
     }
@@ -170,6 +203,15 @@ ParticleFragmentOut particle_fragment(ParticleVertexOut i)
     float4 sampled = albedo.Sample(albedo_sampler, uv);
     ParticleFragmentOut o;
     float4 color = float4(sampled.rgb * i.color.rgb, sampled.a * i.color.a);
+#ifdef PARTICLE_LIT
+    // Device depth falls as the reciprocal of the distance along the view,
+    // so the scene's distance is the particle's scaled by their depths' ratio.
+    if (depth_is_written(behind))
+    {
+        float gap = i.soft.x * (i.position.z / behind - 1.0);
+        color.a *= saturate(gap / max(i.soft.y, 1e-4));
+    }
+#endif
     // The light a sprite adds counts as much as its coverage: a bright spark
     // fading out is nearly transparent yet still the brightest thing there.
     o.reactive = reactive_write(max(color.a, color.a * reactive_luminance(color.rgb)));

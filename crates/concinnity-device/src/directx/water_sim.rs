@@ -200,16 +200,8 @@ impl OceanKernels {
             .collect();
         let bytes: &[u8] = bytemuck::cast_slice(&texels);
         let spectrum = upload_buffer(alloc, bytes, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)?;
-        let row_data = create_uav_buffer(
-            device,
-            2 * bytes.len() as u64,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        )?;
-        let foam = create_uav_buffer(
-            device,
-            (texels.len() * size_of::<f32>()) as u64,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        )?;
+        let row_data = create_uav_buffer(device, 2 * bytes.len() as u64)?;
+        let foam = create_uav_buffer(device, (texels.len() * size_of::<f32>()) as u64)?;
         let sig = RootSig::new()
             .constants::<OceanFftParams>(0, Visibility::All)
             .srv(5, Visibility::All)

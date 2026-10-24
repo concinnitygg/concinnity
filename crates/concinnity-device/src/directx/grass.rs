@@ -276,7 +276,7 @@ pub(in crate::directx) struct GrassResources {
 // The kernel writes every blade a draw reads, so it starts unset.
 fn blade_buffer(alloc: &DeviceAllocator, count: u32) -> RenderResult<ID3D12Resource> {
     let bytes = u64::from(count.max(1)) * size_of::<GpuGrassBlade>() as u64;
-    let buffer = create_uav_buffer(alloc.device(), bytes, D3D12_RESOURCE_STATE_COMMON)?;
+    let buffer = create_uav_buffer(alloc.device(), bytes)?;
     let to_uav = transition_barrier(
         &buffer,
         D3D12_RESOURCE_STATE_COMMON,
@@ -311,14 +311,13 @@ impl GrassResources {
         let pipelines = GrassPipelines::build(device, roots, msaa_samples, hot_reload)?;
         let draw_signature = create_draw_signature(device)?;
         let blades = blade_buffer(alloc, field.capacity().total())?;
-        let args = create_uav_buffer(device, GRASS_ARGS_BYTES as u64, D3D12_RESOURCE_STATE_COMMON)?;
+        let args = create_uav_buffer(device, GRASS_ARGS_BYTES as u64)?;
         super::particle::zero_default_buffer(alloc, &args, GRASS_ARGS_BYTES as u64)?;
         let shadow_blades = blade_buffer(alloc, field.shadow_capacity())?;
-        let shadow_args =
-            create_uav_buffer(device, GRASS_ARGS_BYTES as u64, D3D12_RESOURCE_STATE_COMMON)?;
+        let shadow_args = create_uav_buffer(device, GRASS_ARGS_BYTES as u64)?;
         super::particle::zero_default_buffer(alloc, &shadow_args, GRASS_ARGS_BYTES as u64)?;
         let bend_bytes = (GRASS_BEND_WORDS * 4) as u64;
-        let bend_field = create_uav_buffer(device, bend_bytes, D3D12_RESOURCE_STATE_COMMON)?;
+        let bend_field = create_uav_buffer(device, bend_bytes)?;
         super::particle::zero_default_buffer(alloc, &bend_field, bend_bytes)?;
         let read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         let heights = upload_buffer(

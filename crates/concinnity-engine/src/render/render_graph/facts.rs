@@ -83,6 +83,8 @@ pub struct FrameContent {
     pub bvh_live: bool,
     /// A particle emitter is live.
     pub emitters: bool,
+    /// A live particle emitter draws after the see-through surfaces.
+    pub late_emitters: bool,
     /// The live fog settings contribute to the image.
     pub fog: bool,
     /// A decal exists.
@@ -147,6 +149,7 @@ impl FrameFacts {
             upscaler_reads_reactive: r.upscaler.is_some_and(|u| u.reads_reactive),
             bvh_live: c.bvh_live,
             particles: r.particles && c.emitters,
+            late_particles: r.particles && c.late_emitters,
             fog: r.fog && c.fog,
             decals: r.decals && c.decals,
             visible_surfaces: c.visible_surfaces,
@@ -205,6 +208,7 @@ mod tests {
             bloom_intensity: 0.5,
             bvh_live: true,
             emitters: true,
+            late_emitters: true,
             fog: true,
             decals: true,
             visible_surfaces: true,

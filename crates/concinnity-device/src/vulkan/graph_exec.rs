@@ -50,6 +50,7 @@ use concinnity_host::thread::jobs;
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
 use super::context::VkContext;
 use super::parallel_encoder::ParallelCtxRef;
+use super::particle::ParticleStage;
 use super::post::gbuffer::GbufferPrepassView;
 use super::record::Recorder;
 
@@ -616,6 +617,7 @@ impl VkContext {
             narrow_f32(params.elapsed),
             params.particle_bursts,
             params.frame_idx,
+            params.vp_mat,
         );
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
@@ -1150,15 +1152,31 @@ impl VkContext {
                         cmd,
                         params.frame_idx,
                         *frame,
-                        params.vp_mat,
                         params.frustum,
-                        write,
+                        ParticleStage {
+                            mask: write,
+                            late: false,
+                        },
                     )
                 });
                 // The pass that was to clear the mask drew nothing to clear it
                 // with.
                 if !drew && write == ReactiveWrite::Clear {
                     self.clear_reactive_mask(cmd, params.frame_idx);
+                }
+            }
+            PassId::ParticlesLateDraw => {
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_draw(
+                        cmd,
+                        params.frame_idx,
+                        *frame,
+                        params.frustum,
+                        ParticleStage {
+                            mask: params.reactive.late_particles,
+                            late: true,
+                        },
+                    );
                 }
             }
             PassId::Raymarch => {

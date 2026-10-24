@@ -507,6 +507,22 @@ pub static PARTICLE_FRAG: ShaderProgram = ShaderProgram {
     gates: &[],
     msaa: true,
 };
+/// `particle_vertex` from `particle.hlsl`, for a lit emitter.
+pub static PARTICLE_LIT_VERT: ShaderProgram = ShaderProgram {
+    file: "particle.hlsl",
+    entry: "particle_vertex",
+    label: "particle_lit_vert.hlsl",
+    gates: &["PARTICLE_LIT"],
+    msaa: false,
+};
+/// `particle_fragment` from `particle.hlsl`, for a lit emitter.
+pub static PARTICLE_LIT_FRAG: ShaderProgram = ShaderProgram {
+    file: "particle.hlsl",
+    entry: "particle_fragment",
+    label: "particle_lit_frag.hlsl",
+    gates: &["PARTICLE_LIT"],
+    msaa: true,
+};
 /// `decal_vertex` from `decal.hlsl`.
 pub static DECAL_VERT: ShaderProgram = ShaderProgram {
     file: "decal.hlsl",
@@ -989,6 +1005,8 @@ pub static ALL: &[&ShaderProgram] = &[
     &PARTICLE_SIMULATE,
     &PARTICLE_VERT,
     &PARTICLE_FRAG,
+    &PARTICLE_LIT_VERT,
+    &PARTICLE_LIT_FRAG,
     &DECAL_VERT,
     &DECAL_FRAG,
     &LINE_VERT,
@@ -1078,6 +1096,7 @@ mod tests {
                 "glass_reflection_frag_textured.hlsl",
                 "line_frag.hlsl",
                 "particle_frag.hlsl",
+                "particle_lit_frag.hlsl",
                 "water_frag.hlsl",
                 "water_frag_rt.hlsl",
                 "water_frag_rt_textured.hlsl",

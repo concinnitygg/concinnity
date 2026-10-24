@@ -46,6 +46,7 @@ mod sky_cube;
 pub use air::AirProfile;
 pub use air_tables::AirTables;
 pub use apparent::{ApparentGround, table_view_angle, zenith_horizon};
+pub(in crate::render) use daylight::knot_coord;
 pub use daylight::{DAYLIGHT_KNOTS, DaylightCurves};
 pub use frame::{AtmosphereFrame, sun_light};
 pub use lut::{

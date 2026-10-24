@@ -236,11 +236,7 @@ impl DxContext {
             let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(frames);
             let mut deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW> = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let buf = create_uav_buffer(
-                    &self.hw.device,
-                    deformed_bytes,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?;
+                let buf = create_uav_buffer(&self.hw.device, deformed_bytes)?;
                 let vbv = D3D12_VERTEX_BUFFER_VIEW {
                     BufferLocation: com::gpu_va(&buf),
                     SizeInBytes: u32::saturating_from(deformed_bytes),

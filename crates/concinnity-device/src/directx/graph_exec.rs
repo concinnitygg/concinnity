@@ -709,7 +709,7 @@ impl DxContext {
         // and Metal's `prepare_particle_pass` hoist.
         let particle_ref = params.particle.as_ref();
         if let Some(frame) = particle_ref {
-            self.write_particle_params(params.frame_idx, frame);
+            self.write_particle_params(params.frame_idx, frame, params.vp_mat);
         }
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
@@ -1280,18 +1280,21 @@ impl DxContext {
                     self.encode_particles_sim(cmd, params.frame_idx, *frame);
                 }
             }
-            PassId::ParticlesDraw => {
-                self.targets
-                    .reactive_mask
-                    .clear(cmd, params.reactive.particles);
+            PassId::ParticlesDraw | PassId::ParticlesLateDraw => {
+                let late = pass_id == PassId::ParticlesLateDraw;
+                let reactive = if late {
+                    params.reactive.late_particles
+                } else {
+                    params.reactive.particles
+                };
+                self.targets.reactive_mask.clear(cmd, reactive);
                 if let Some(frame) = particle_frame {
                     self.encode_particles_draw(
                         cmd,
                         params.frame_idx,
                         frame,
-                        params.vp_mat,
                         params.frustum,
-                        params.reactive.particles,
+                        super::particle::ParticleStage { reactive, late },
                     );
                 }
             }

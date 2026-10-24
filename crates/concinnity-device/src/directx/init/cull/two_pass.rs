@@ -50,11 +50,7 @@ pub(super) fn build_two_pass_cull(
     // the phase-1 indirect buffers.
     let mut indirect_buffers: Vec<ID3D12Resource> = Vec::with_capacity(gpu.hw.frames() + 1);
     for _ in 0..=gpu.hw.frames() {
-        indirect_buffers.push(create_uav_buffer(
-            device,
-            indirect_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
+        indirect_buffers.push(create_uav_buffer(device, indirect_size)?);
     }
     Ok(TwoPassCull {
         pso: Some(pso),

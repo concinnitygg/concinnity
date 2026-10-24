@@ -14,7 +14,8 @@
 //! float on. Stirred and steep water foams, and the foam stays where it formed
 //! as it fades.
 //!
-//! The window follows the camera, led by where it is heading, a whole cell at
+//! The window follows the camera, led by where it is heading, or drawn back
+//! behind a body moving fast near it to hold its trail, a whole cell at
 //! a time and addressed toroidally (see [`window`]), and damps the waves
 //! across a band at its edge so none wrap around. When the simulated frame
 //! moves, the next frame reads the field it inherits through the inverse
@@ -66,9 +67,10 @@ const WAKE_VISCOSITY: f32 = 0.004;
 /// throw a frame's stirs a long way.
 const WAKE_MAX_STEP: f32 = 1.0 / 15.0;
 
-/// How wide a piece's push spreads, as a multiple of its radius. Mirrors
+/// How wide a piece's push spreads, as a multiple of its radius: half its
+/// height at the width a half-sunk sphere stands in the water. Mirrors
 /// `WATER_WAKE_SPREAD` in `water_wake.hlsl`.
-pub const STIR_SPREAD: f32 = 2.0;
+pub const STIR_SPREAD: f32 = 1.75;
 
 /// The share of the water a body displaces that leaves as waves; the rest
 /// only flows around it.
@@ -84,9 +86,9 @@ const WAKE_FOAM_SECONDS: f32 = 4.0;
 /// Foam per meter of water a stir pushes up or down.
 const WAKE_CHURN_FOAM: f32 = 0.4;
 
-/// The wave steepness (rise per meter) past which the wake foams, and the
-/// foam per second per unit of steepness past it.
-const WAKE_STEEP: f32 = 0.45;
+/// The wave steepness (rise per meter) past which the wake's crests foam,
+/// and the foam per second per unit of steepness past it.
+const WAKE_STEEP: f32 = 0.15;
 const WAKE_STEEP_FOAM: f32 = 1.0;
 
 /// How high the wake may stand per meter of water under it, the depth
@@ -94,11 +96,20 @@ const WAKE_STEEP_FOAM: f32 = 1.0;
 pub const WAKE_MAX_DEPTH_RATIO: f32 = 0.78;
 
 /// How far ahead of the camera the window leads, in seconds of its motion,
-/// at most `WAKE_MAX_LEAD` meters, and how quickly the lead follows a change
-/// in its motion, in seconds.
+/// and how quickly the lead follows a change in its motion, in seconds.
 const WAKE_LEAD_SECONDS: f32 = 1.0;
-const WAKE_MAX_LEAD: f32 = 12.0;
 const WAKE_LEAD_SMOOTHING: f32 = 0.5;
+
+/// The farthest the window centers from the camera, in meters, which keeps
+/// the camera well inside the clear water.
+const WAKE_MAX_LEAD: f32 = 12.0;
+
+/// A body moving faster than this through the water, in meters per second,
+/// within `WAKE_TRAIL_REACH` meters of the camera, draws the window back to
+/// center `WAKE_TRAIL_BEHIND` meters behind it, where its trail lies.
+const WAKE_TRAIL_SPEED: f32 = 2.0;
+const WAKE_TRAIL_REACH: f32 = 24.0;
+const WAKE_TRAIL_BEHIND: f32 = 14.0;
 
 /// A camera move between frames this far or farther, in meters, is a cut,
 /// not motion.
@@ -134,8 +145,11 @@ pub struct WakeHistory {
     // Rows taking a point in this frame to last frame's `x` and `z`.
     carry: [[f32; 4]; 2],
     carried: bool,
-    // The window's lead ahead of the camera, in meters along `x` and `z`.
+    // The camera's motion the lead follows, in meters per second along `x`
+    // and `z`.
     lead: [f32; 2],
+    // Where the window centers from the camera, in meters along `x` and `z`.
+    offset: [f32; 2],
     // Whether this frame writes the state's second half.
     second: bool,
     // Whether the last frame advanced to was run on the GPU.
@@ -157,6 +171,7 @@ impl Default for WakeHistory {
             carry: GRASS_IDENTITY_MAP,
             carried: false,
             lead: [0.0; 2],
+            offset: [0.0; 2],
             second: false,
             ran: Cell::new(true),
             stirs: StirMemory::default(),
@@ -186,6 +201,8 @@ impl WakeHistory {
         }
         let lead = rebase.apply_vector([self.lead[0], 0.0, self.lead[1]]);
         self.lead = [lead[0], lead[2]];
+        let offset = rebase.apply_vector([self.offset[0], 0.0, self.offset[1]]);
+        self.offset = [offset[0], offset[2]];
         self.stirs.rebase(rebase);
     }
 
@@ -205,9 +222,8 @@ impl WakeHistory {
         }
         let elapsed = self.last.map_or(0.0, |l| narrow(time - l.time).max(0.0));
         let dt = elapsed.min(WAKE_MAX_STEP);
-        self.follow(camera, elapsed);
-        let lead = self.lead_offset();
-        let window = WakeWindow::around([camera[0] + lead[0], camera[2] + lead[1]]);
+        self.follow(camera, elapsed, stirs);
+        let window = WakeWindow::around([camera[0] + self.offset[0], camera[2] + self.offset[1]]);
         let prev = self.last.map_or(window, |l| l.window);
         let mut flags = 0;
         if self.last.is_some() {
@@ -264,33 +280,68 @@ impl WakeHistory {
         self.ran.set(true);
     }
 
-    // Follow the camera's motion over `elapsed` seconds into the lead.
-    fn follow(&mut self, camera: [f32; 3], elapsed: f32) {
+    // Follow the camera's motion over `elapsed` seconds into the lead, and
+    // ease the window toward where it should center among `stirs`.
+    fn follow(&mut self, camera: [f32; 3], elapsed: f32, stirs: &[WaterStir]) {
         let Some(last) = self.last.filter(|_| elapsed > 0.0) else {
             return;
         };
         let d = [camera[0] - last.camera[0], camera[2] - last.camera[2]];
         if d[0] * d[0] + d[1] * d[1] >= WAKE_CUT * WAKE_CUT {
             self.lead = [0.0; 2];
+            self.offset = [0.0; 2];
             return;
         }
         let k = 1.0 - exp(-elapsed / WAKE_LEAD_SMOOTHING);
         for (lead, step) in self.lead.iter_mut().zip(d) {
             *lead += (step / elapsed - *lead) * k;
         }
+        let aim = self.aim(camera, stirs);
+        for (offset, aim) in self.offset.iter_mut().zip(aim) {
+            *offset += (aim - *offset) * k;
+        }
     }
 
-    // How far ahead of the camera the window centers, in meters.
-    fn lead_offset(&self) -> [f32; 2] {
-        let ahead = self.lead.map(|v| v * WAKE_LEAD_SECONDS);
-        let length = sqrt(ahead[0] * ahead[0] + ahead[1] * ahead[1]);
-        let k = if length > WAKE_MAX_LEAD {
-            WAKE_MAX_LEAD / length
+    // Where the window should center from the camera, in meters: behind the
+    // fastest body plowing through the water near it, else ahead of the
+    // camera along its motion; never farther than `WAKE_MAX_LEAD`.
+    fn aim(&self, camera: [f32; 3], stirs: &[WaterStir]) -> [f32; 2] {
+        let aim = trail(camera, stirs).unwrap_or_else(|| self.lead.map(|v| v * WAKE_LEAD_SECONDS));
+        let length = sqrt(aim[0] * aim[0] + aim[1] * aim[1]);
+        if length > WAKE_MAX_LEAD {
+            aim.map(|v| v * (WAKE_MAX_LEAD / length))
         } else {
-            1.0
-        };
-        ahead.map(|v| v * k)
+            aim
+        }
     }
+}
+
+// Where the trail of the fastest body plowing through the water within
+// `WAKE_TRAIL_REACH` of `camera` lies from it, in meters along `x` and `z`.
+fn trail(camera: [f32; 3], stirs: &[WaterStir]) -> Option<[f32; 2]> {
+    let mut best: Option<(f32, [f32; 2])> = None;
+    for stir in stirs {
+        let pieces = stir.pieces();
+        if pieces.iter().all(|p| p.volume <= 0.0) {
+            continue;
+        }
+        let n = pieces.len() as f32;
+        let x = pieces.iter().map(|p| p.at[0]).sum::<f32>() / n - camera[0];
+        let z = pieces.iter().map(|p| p.at[2]).sum::<f32>() / n - camera[2];
+        if x * x + z * z > WAKE_TRAIL_REACH * WAKE_TRAIL_REACH {
+            continue;
+        }
+        let v = stir.velocity;
+        let rise = v[0] * stir.up[0] + v[1] * stir.up[1] + v[2] * stir.up[2];
+        let along = [v[0] - rise * stir.up[0], v[2] - rise * stir.up[2]];
+        let speed = sqrt(along[0] * along[0] + along[1] * along[1]);
+        if speed <= WAKE_TRAIL_SPEED || best.is_some_and(|(fastest, _)| fastest >= speed) {
+            continue;
+        }
+        let back = WAKE_TRAIL_BEHIND / speed;
+        best = Some((speed, [x - along[0] * back, z - along[1] * back]));
+    }
+    best.map(|(_, at)| at)
 }
 
 /// The draw's lane for a frame whose window is `window`.
@@ -379,6 +430,70 @@ mod tests {
         assert!(center - x <= WAKE_MAX_LEAD + WAKE_CELL_SIZE);
         let cut = step(&mut h, [x + 500.0, 0.0, 0.0], 121.0 / 60.0, &[]);
         assert!((cut.draw.lookup[2] - (x + 500.0)).abs() <= WAKE_CELL_SIZE);
+    }
+
+    // A body at `x` moving along `x` at `speed`.
+    fn plow(x: f32, speed: f32) -> WaterStir {
+        WaterStir {
+            velocity: [speed, 0.0, 0.0],
+            ..bob(x, 0.3)
+        }
+    }
+
+    // Sixty frames a second for `seconds` of a still camera at the origin
+    // over `stirs`; the window's last center along `x` and the most it moved
+    // in one frame.
+    fn settle(h: &mut WakeHistory, seconds: u32, stirs: &[WaterStir]) -> (f32, f32) {
+        let mut center = step(h, [0.0; 3], 0.0, stirs).draw.lookup[2];
+        let mut most = 0.0f32;
+        for i in 1..=seconds * 60 {
+            let next = step(h, [0.0; 3], f64::from(i) / 60.0, stirs).draw.lookup[2];
+            most = most.max((next - center).abs());
+            center = next;
+        }
+        (center, most)
+    }
+
+    // A body plowing past the camera draws the window back over its trail,
+    // a cell or so a frame at most; a slow one does not.
+    #[test]
+    fn a_fast_body_draws_the_window_over_its_trail() {
+        let (center, most) = settle(&mut WakeHistory::default(), 4, &[plow(5.0, 8.0)]);
+        assert!(
+            (center - (5.0 - WAKE_TRAIL_BEHIND)).abs() <= 2.0 * WAKE_CELL_SIZE,
+            "{center}"
+        );
+        assert!(most <= 2.0 * WAKE_CELL_SIZE, "{most}");
+        let (center, _) = settle(&mut WakeHistory::default(), 4, &[plow(5.0, 1.0)]);
+        assert!(center.abs() <= WAKE_CELL_SIZE, "{center}");
+        // Out of reach, or out of the water, it draws nothing.
+        let far = plow(WAKE_TRAIL_REACH + 1.0, 8.0);
+        let (center, _) = settle(&mut WakeHistory::default(), 4, &[far]);
+        assert!(center.abs() <= WAKE_CELL_SIZE, "{center}");
+        let (center, _) = settle(
+            &mut WakeHistory::default(),
+            4,
+            &[WaterStir {
+                velocity: [8.0, 0.0, 0.0],
+                ..bob(5.0, 0.0)
+            }],
+        );
+        assert!(center.abs() <= WAKE_CELL_SIZE, "{center}");
+    }
+
+    // However far behind a body its trail lies, or ahead, the window never
+    // centers farther than `WAKE_MAX_LEAD` from the camera.
+    #[test]
+    fn the_trail_is_held_near_the_camera() {
+        for (x, speed) in [(-10.0, 8.0), (20.0, -12.0), (-20.0, 30.0)] {
+            let (center, most) = settle(&mut WakeHistory::default(), 4, &[plow(x, speed)]);
+            assert!(
+                center.abs() <= WAKE_MAX_LEAD + WAKE_CELL_SIZE,
+                "{x} {speed}: {center}"
+            );
+            assert!(center.abs() >= WAKE_MAX_LEAD - 1.0, "{x} {speed}: {center}");
+            assert!(most <= 2.0 * WAKE_CELL_SIZE, "{most}");
+        }
     }
 
     // A frame move hands the next frame the inverse move to read its field

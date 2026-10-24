@@ -623,10 +623,14 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
+            let scene_views: Vec<vk::ImageView> = (0..self.frames_in_flight)
+                .map(|i| self.post_scene_image(i).view)
+                .collect();
             p.rebuild(
                 &self.hw.device,
                 crate::vulkan::particle::ParticlePassTargets {
                     hdr_resolve_views: &hdr_views,
+                    scene_views: &scene_views,
                     reactive_mask_views: &mask_views,
                     depth_views: &depth_views,
                     extent: render_ext,

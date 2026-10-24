@@ -19,7 +19,8 @@ mod tests;
 use super::settings::AtmosphereSettings;
 use concinnity_core::fanout::FanOut;
 #[cfg(test)]
-use concinnity_core::math::{SaturatingFrom, sqrt};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::sqrt;
 
 /// Knots each curve is sampled at. `DAYLIGHT_KNOTS` in `daylight.hlsl`.
 pub const DAYLIGHT_KNOTS: usize = 32;
@@ -111,8 +112,7 @@ fn knot_mu(i: usize) -> f32 {
 
 // Where a cosine `mu` falls among the knots, as a fractional knot index.
 // Mirrors `daylight_coord` in `daylight.hlsl`.
-#[cfg(test)]
-fn knot_coord(mu: f32) -> f32 {
+pub(in crate::render) fn knot_coord(mu: f32) -> f32 {
     let mu = mu.clamp(-1.0, 1.0);
     let s = if mu < 0.0 { -sqrt(-mu) } else { sqrt(mu) };
     (s + 1.0) * 0.5 * (DAYLIGHT_KNOTS - 1) as f32

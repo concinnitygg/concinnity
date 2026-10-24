@@ -74,9 +74,8 @@ impl WakeSim {
     ) -> RenderResult<Self> {
         let device = alloc.device();
         let cells = u64::from(WAKE_RESOLUTION * WAKE_RESOLUTION);
-        let uav = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-        let state = create_uav_buffer(device, 2 * cells * size_of::<[f32; 4]>() as u64, uav)?;
-        let work = create_uav_buffer(device, cells * size_of::<[f32; 2]>() as u64, uav)?;
+        let state = create_uav_buffer(device, 2 * cells * size_of::<[f32; 4]>() as u64)?;
+        let work = create_uav_buffer(device, cells * size_of::<[f32; 2]>() as u64)?;
         let field = field_texture(device, WAKE_RESOLUTION, WAKE_MIP_LEVELS)?;
         write_field_srv(device, Some(&field), 0, WAKE_MIP_LEVELS, slots.field_cpu);
         let mip_tables = (0..WAKE_MIP_LEVELS)

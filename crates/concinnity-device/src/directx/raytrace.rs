@@ -59,7 +59,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use super::context::DxGeometry;
 use super::error::map_hresult;
-use super::texture::{create_uav_buffer, transition_barrier};
+use super::texture::{create_acceleration_structure_buffer, create_uav_buffer, transition_barrier};
 use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::pso::compute_pso;
 use crate::directx::root_constants::RootConstants;
@@ -231,24 +231,14 @@ fn skinned_triangle_geometry(
     }
 }
 
-// Create an acceleration-structure backing buffer (default heap,
-// `ALLOW_UNORDERED_ACCESS`, initial state `RAYTRACING_ACCELERATION_STRUCTURE`).
 fn create_as_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
-    create_uav_buffer(
-        device,
-        size.max(256),
-        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
-    )
+    create_acceleration_structure_buffer(device, size.max(256))
 }
 
-// Create a build scratch buffer (default heap, `ALLOW_UNORDERED_ACCESS`). D3D12
-// buffers are always created in `COMMON` regardless of the requested state, so
-// pass `COMMON` explicitly to avoid the debug-layer "Ignoring InitialState"
-// warning; the buffer implicitly promotes to `UNORDERED_ACCESS` on the AS
-// build's first UAV access (and decays back to `COMMON` after each
-// `ExecuteCommandLists`, re-promoting on the next reused-scratch rebuild).
+// A build scratch buffer, which promotes to `UNORDERED_ACCESS` on the build's
+// first UAV access and decays back to `COMMON` after each `ExecuteCommandLists`.
 fn create_scratch(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
-    create_uav_buffer(device, size.max(256), D3D12_RESOURCE_STATE_COMMON)
+    create_uav_buffer(device, size.max(256))
 }
 
 // Byte size of a scratch slot covering a build requiring `needed` bytes. D3D12
@@ -876,7 +866,7 @@ pub(super) fn build_rt_accel(geometry: RtInitGeometry<'_>) -> RenderResult<Optio
     // state (so pass COMMON to avoid the debug-layer "Ignoring InitialState"
     // warning); COMMON implicitly promotes to a shader-read state on the trace's
     // first t8/t9 access, so the dummies need no transition.
-    let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE, D3D12_RESOURCE_STATE_COMMON)?;
+    let deformed_verts = create_uav_buffer(device, VERTEX_STRIDE)?;
     let skinned_indices =
         alloc.alloc_buffer(4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON)?;
 
@@ -1434,11 +1424,7 @@ impl RtAccelData {
         let deformed_realloc =
             ring_slot_needs_grow(ring.deformed.is_some(), ring.deformed_cap, deformed_bytes);
         if deformed_realloc {
-            ring.deformed = Some(create_uav_buffer(
-                device,
-                deformed_bytes,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
+            ring.deformed = Some(create_uav_buffer(device, deformed_bytes)?);
             ring.deformed_cap = deformed_bytes;
         }
         let deformed_verts = ring.deformed.clone().ok_or_else(missing_slot_buffer)?;

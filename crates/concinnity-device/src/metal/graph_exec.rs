@@ -799,7 +799,14 @@ impl MtlContext {
             PassId::ParticlesDraw => {
                 let write = params.reactive.particles;
                 let draws = if let Some(frame) = particle_frame {
-                    self.encode_particles_draw(cmd_buf, *frame, params.vp, params.frustum, write)?
+                    self.encode_particles_draw(
+                        cmd_buf,
+                        *frame,
+                        params.vp,
+                        params.frustum,
+                        write,
+                        None,
+                    )?
                 } else {
                     0
                 };
@@ -807,6 +814,24 @@ impl MtlContext {
                     self.clear_reactive_mask(cmd_buf, write)?;
                 }
                 draws
+            }
+            PassId::ParticlesLateDraw => {
+                let scene_pre_taa = pass_input(
+                    params.scene_pre_taa,
+                    PassId::ParticlesLateDraw,
+                    "scene_pre_taa",
+                )?;
+                match particle_frame {
+                    Some(frame) => self.encode_particles_draw(
+                        cmd_buf,
+                        *frame,
+                        params.vp,
+                        params.frustum,
+                        params.reactive.late_particles,
+                        Some(scene_pre_taa),
+                    )?,
+                    None => 0,
+                }
             }
             PassId::Lines => self.encode_lines(cmd_buf, params.vp)?,
             PassId::Composite => {

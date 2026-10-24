@@ -347,8 +347,8 @@ impl VkContext {
         if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
             taa.swap_pipelines(rebuilt);
         }
-        if let (Some((cp, rp)), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
-            p.swap_pipelines(cp, rp);
+        if let (Some(rebuilt), Some(p)) = (particle_rebuilt, self.particle.resources.as_mut()) {
+            p.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(grass)) = (grass_rebuilt, self.grass.as_mut()) {
             grass.swap_pipelines(rebuilt);

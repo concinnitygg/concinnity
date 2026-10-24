@@ -95,6 +95,19 @@ pub struct ParticleEmitter {
     /// Linear-space RGBA multiplier applied to the texture at death.
     #[asset(default = [1.0, 1.0, 1.0, 0.0])]
     pub color_end: [f32; 4],
+    /// Whether the sun and the sky light the particles, as a cloud of
+    /// droplets, dust or smoke, brightest seen toward the sun. A lit particle
+    /// also fades out over its own size as it nears a surface behind it,
+    /// rather than cutting into it. Unlit particles show their color as
+    /// authored, as sparks or embers do.
+    pub lit: bool,
+    /// Whether the particles draw after the see-through surfaces, water and
+    /// glass, so they show over them, rather than before them, where water
+    /// and glass cover them as they do the scene behind. A particle that
+    /// sinks under the water still shows, so such an emitter's particles
+    /// should die before they reach it: by their lifetime, or, as the water's
+    /// spray does, as they fall back to its surface.
+    pub draw_after_transparent: bool,
     /// When false the emitter is skipped each frame.
     #[asset(default = true)]
     pub visible: bool,

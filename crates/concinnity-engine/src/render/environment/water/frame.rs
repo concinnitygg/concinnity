@@ -176,7 +176,9 @@ mod tests {
         let up = [p.sea.up[0], p.sea.up[1], p.sea.up[2]];
         let low = motion.sea_datum([0.0, 30.0, 0.0]).unwrap_or(f32::NAN);
         let high = motion
-            .sea_datum(core::array::from_fn(|i| [0.0, 30.0, 0.0][i] + 3000.0 * up[i]))
+            .sea_datum(core::array::from_fn(|i| {
+                [0.0, 30.0, 0.0][i] + 3000.0 * up[i]
+            }))
             .unwrap_or(f32::NAN);
         assert!((low - high).abs() < 1e-2, "{low} {high}");
         assert!((low - (p.anchor[1])).abs() < 1.0, "{low} {:?}", p.anchor);

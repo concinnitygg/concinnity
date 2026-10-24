@@ -159,21 +159,9 @@ pub(super) fn build_compute_cull(
         // Created in COMMON (D3D12 always makes committed buffers in COMMON
         // regardless of the requested state); the cull pass transitions them
         // to UNORDERED_ACCESS / INDIRECT_ARGUMENT as it writes + executes them.
-        indirect_buffers.push(create_uav_buffer(
-            device,
-            indirect_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
-        status_buffers.push(create_uav_buffer(
-            device,
-            status_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
-        group_count_buffers.push(create_uav_buffer(
-            device,
-            group_count_size,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?);
+        indirect_buffers.push(create_uav_buffer(device, indirect_size)?);
+        status_buffers.push(create_uav_buffer(device, status_size)?);
+        group_count_buffers.push(create_uav_buffer(device, group_count_size)?);
     }
 
     let hiz = build_hiz(gpu, descriptors, targets)?;

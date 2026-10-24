@@ -144,6 +144,8 @@ pub struct FrameFacts {
     pub bvh_live: bool,
     /// A particle emitter is live and the particle pipeline is built.
     pub particles: bool,
+    /// A live particle emitter draws after the see-through surfaces.
+    pub late_particles: bool,
     /// Fog is built and contributes.
     pub fog: bool,
     /// Decals exist and the decal pipeline is built.
@@ -195,6 +197,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         taa_enabled: taa,
         ssr_enabled: path.ssr_resolve(),
         particles_enabled: facts.particles,
+        late_particles_enabled: facts.late_particles,
         fog_enabled: facts.fog,
         decals_enabled: facts.decals,
         ssr_prepass_enabled: gates.ssr || gates.ssgi || gates.ssgi_resolve || gates.rt_pass,

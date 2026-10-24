@@ -121,18 +121,10 @@ impl AutoExposureResources {
         // Histogram: 256 * 4 bytes UAV, cleared by the average kernel each
         // frame. Created in COMMON; a one-shot transition before the first
         // dispatch flips it into UNORDERED_ACCESS for steady state.
-        let histogram = create_uav_buffer(
-            device,
-            (HISTOGRAM_BINS * size_of::<u32>()) as u64,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?;
+        let histogram = create_uav_buffer(device, (HISTOGRAM_BINS * size_of::<u32>()) as u64)?;
 
         // Output: the measurement the average kernel writes into.
-        let output_buf = create_uav_buffer(
-            device,
-            size_of::<ExposureMeasurement>() as u64,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?;
+        let output_buf = create_uav_buffer(device, size_of::<ExposureMeasurement>() as u64)?;
 
         // Per-frame readback buffers. READBACK heap resources start in
         // COPY_DEST and never need a barrier.

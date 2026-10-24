@@ -98,6 +98,8 @@ pub struct ReactiveMaskPlan {
     pub particles: ReactiveWrite,
     /// How the transparent pass treats the mask.
     pub transparent: ReactiveWrite,
+    /// How the particle pass after the transparent one treats the mask.
+    pub late_particles: ReactiveWrite,
     /// Whether TAA or the upscaler reads the mask this frame.
     pub readable: bool,
 }
@@ -110,6 +112,7 @@ impl ReactiveMaskPlan {
             return Self {
                 particles: ReactiveWrite::Unstored,
                 transparent: ReactiveWrite::Unstored,
+                late_particles: ReactiveWrite::Unstored,
                 readable: false,
             };
         }
@@ -118,9 +121,17 @@ impl ReactiveMaskPlan {
         } else {
             ReactiveWrite::Clear
         };
+        // The late particles only draw where the earlier particle pass ran
+        // and cleared it.
+        let late_particles = if inputs.late_particles_enabled {
+            ReactiveWrite::Load
+        } else {
+            ReactiveWrite::Unstored
+        };
         Self {
             particles: ReactiveWrite::Clear,
             transparent,
+            late_particles,
             readable: true,
         }
     }
@@ -146,6 +157,24 @@ mod tests {
         assert_eq!(plan.particles, ReactiveWrite::Clear);
         assert_eq!(plan.transparent, ReactiveWrite::Load);
         assert!(plan.readable);
+    }
+
+    // The late particle pass keeps what the earlier passes wrote, and has
+    // nothing to do with the mask when it does not run.
+    #[test]
+    fn the_late_particle_pass_keeps_the_mask() {
+        assert_eq!(
+            ReactiveMaskPlan::of(&inputs(true, true, true)).late_particles,
+            ReactiveWrite::Unstored
+        );
+        let late = FrameGraphInputs {
+            late_particles_enabled: true,
+            ..inputs(true, true, true)
+        };
+        assert_eq!(
+            ReactiveMaskPlan::of(&late).late_particles,
+            ReactiveWrite::Load
+        );
     }
 
     #[test]

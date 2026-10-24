@@ -20,6 +20,8 @@ use concinnity_core::math::narrow_f32;
 pub(crate) struct ScreenshotSystem {
     schedule: ShotSchedule,
     dir: String,
+    // The last moment the simulation clock reached, in seconds.
+    reached: f32,
 }
 
 impl ScreenshotSystem {
@@ -30,6 +32,7 @@ impl ScreenshotSystem {
         (!shots.is_empty()).then(|| Self {
             schedule: ShotSchedule::new(shots),
             dir: String::from(launch.screenshots_dir()),
+            reached: 0.0,
         })
     }
 }
@@ -110,6 +113,7 @@ impl System for ScreenshotSystem {
         let now = ctx
             .resource::<SimTiming>()
             .map_or(0.0, |t| narrow_f32(t.drawn_time()));
+        self.reached = now;
         let Some(shot) = self.schedule.due(now) else {
             return StepResult::Continue;
         };
@@ -131,14 +135,25 @@ impl System for ScreenshotSystem {
 
 impl Drop for ScreenshotSystem {
     fn drop(&mut self) {
-        for shot in self.schedule.waiting() {
-            tracing::warn!(
-                "screenshot: the run ended before {:.1}s, so {} was not taken",
-                shot.seconds,
-                shot.file
-            );
+        if let Some(line) = untaken(self.reached, self.schedule.waiting()) {
+            tracing::warn!("{line}");
         }
     }
+}
+
+// One line naming the shots still waiting when the run ended at `ended`
+// seconds, if any.
+fn untaken<'a>(ended: f32, waiting: impl Iterator<Item = &'a Shot>) -> Option<String> {
+    let files: Vec<&str> = waiting.map(|s| s.file.as_str()).collect();
+    let (n, s) = match files.len() {
+        0 => return None,
+        1 => (1, "shot"),
+        n => (n, "shots"),
+    };
+    Some(alloc::format!(
+        "screenshot: the run ended at {ended:.1} s; {n} {s} not taken: {}",
+        files.join(", ")
+    ))
 }
 
 #[cfg(test)]
@@ -175,6 +190,25 @@ mod tests {
         });
         system.step(&mut world.context());
         world.remove_resource::<FrameCaptureRequest>()
+    }
+
+    // The shots a run ends before name themselves on one line.
+    #[test]
+    fn the_untaken_shots_share_one_line() {
+        let shot = |file: &str| Shot {
+            seconds: 70.0,
+            file: file.to_string(),
+            hud: true,
+        };
+        assert_eq!(untaken(62.06, [].iter()), None);
+        assert_eq!(
+            untaken(62.06, [shot("a.png")].iter()).as_deref(),
+            Some("screenshot: the run ended at 62.1 s; 1 shot not taken: a.png")
+        );
+        assert_eq!(
+            untaken(62.06, [shot("a.png"), shot("b.png")].iter()).as_deref(),
+            Some("screenshot: the run ended at 62.1 s; 2 shots not taken: a.png, b.png")
+        );
     }
 
     // Plain play takes none of the world's shots; a benchmark or

@@ -283,21 +283,9 @@ impl PlanarReflectionSet {
         let mut planar_status = Vec::with_capacity(frames);
         let mut planar_group_counts = Vec::with_capacity(frames);
         for _ in 0..frames {
-            planar_indirect.push(create_uav_buffer(
-                device,
-                regions * lists_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
-            planar_status.push(create_uav_buffer(
-                device,
-                regions * status_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
-            planar_group_counts.push(create_uav_buffer(
-                device,
-                regions * group_count_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
+            planar_indirect.push(create_uav_buffer(device, regions * lists_size)?);
+            planar_status.push(create_uav_buffer(device, regions * status_size)?);
+            planar_group_counts.push(create_uav_buffer(device, regions * group_count_size)?);
         }
 
         let cluster_lists = planes

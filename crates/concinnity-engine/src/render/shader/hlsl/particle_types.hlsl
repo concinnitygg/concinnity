@@ -6,17 +6,19 @@
 // hazard. Nothing here may spell the marker itself -- the splice would
 // reintroduce it into the assembled source.
 
-// One particle slot, 32 B. Matches `GpuParticle` in each backend's particle
-// module. Both (vec3, float) pairs are spelled as float4: MSL sizes a float3
+// One particle slot, 48 B. Matches `GpuParticle` in each backend's particle
+// module. Each (vec3, float) pair is spelled as float4: MSL sizes a float3
 // at 16 bytes inside a structured buffer as well as inside a constant buffer,
-// so a literal transcription would push the second pair sixteen bytes late on
-// Metal alone.
+// so a literal transcription would push the later pairs late on Metal alone.
 struct Particle
 {
     // xyz = world-space position, w = seconds lived.
     float4 position_age;
     // xyz = world-space velocity, w = total lifetime in seconds.
     float4 velocity_lifetime;
+    // xyz = up of the plane the particle dies falling back through (zero for
+    // none), w = the plane's height along it.
+    float4 floor_plane;
 };
 
 // Per-frame emitter uniform, 128 B. Mirrors `ParticleParams` in

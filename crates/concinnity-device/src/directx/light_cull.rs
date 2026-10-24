@@ -107,7 +107,7 @@ pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12Resource> {
     let len = u64::from(CLUSTER_LIST_LEN) * size_of::<u32>() as u64;
-    create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
+    create_uav_buffer(device, len)
 }
 
 // Allocate + persistently map the per-frame `ClusterParams` constant buffers

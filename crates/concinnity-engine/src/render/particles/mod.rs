@@ -76,6 +76,12 @@ pub struct ParticleEmitterRecord {
     pub color_start: [f32; 4],
     /// Linear-space RGBA at `age = lifetime`.
     pub color_end: [f32; 4],
+    /// Whether the sun and the sky light the particles, which then fade
+    /// softly into surfaces behind them.
+    pub lit: bool,
+    /// Whether the particles draw after the see-through surfaces rather than
+    /// before them.
+    pub draw_after_transparent: bool,
 }
 
 impl ParticleEmitterRecord {
@@ -103,6 +109,8 @@ impl ParticleEmitterRecord {
             size_end: emitter.size_end.max(0.0),
             color_start: sanitized_color(emitter.color_start),
             color_end: sanitized_color(emitter.color_end),
+            lit: emitter.lit,
+            draw_after_transparent: emitter.draw_after_transparent,
         }
     }
 
@@ -696,6 +704,8 @@ mod tests {
             size_end: 0.1,
             color_start: [1.0; 4],
             color_end: [1.0; 4],
+            lit: false,
+            draw_after_transparent: false,
         }
     }
 

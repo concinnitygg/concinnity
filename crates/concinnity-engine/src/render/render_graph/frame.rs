@@ -121,6 +121,10 @@ pub struct FrameGraphInputs {
     /// the frame, so the schedule is free to run it on the async queue
     /// alongside the raster front.
     pub particles_enabled: bool,
+    /// `true` when a live emitter draws after the see-through surfaces. The
+    /// graph adds a `ParticlesLateDraw` render pass after `Transparent` that
+    /// draws those emitters from the same pools over the pre-TAA scene.
+    pub late_particles_enabled: bool,
     /// `true` when a `VolumetricFog` is in the world. The graph adds a
     /// `Fog` render pass between Decals and `ParticlesDraw` on the
     /// `hdr_resolve` RMW chain.
@@ -354,6 +358,7 @@ impl FrameGraphInputs {
             taa_enabled: false,
             ssr_enabled: false,
             particles_enabled: false,
+            late_particles_enabled: false,
             fog_enabled: false,
             decals_enabled: false,
             ssr_prepass_enabled: false,
@@ -402,6 +407,10 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("taa", |i| i.taa_enabled = true),
     ("ssr", |i| i.ssr_enabled = true),
     ("particles", |i| i.particles_enabled = true),
+    ("late_particles", |i| {
+        i.particles_enabled = true;
+        i.late_particles_enabled = true;
+    }),
     ("fog", |i| i.fog_enabled = true),
     ("decals", |i| i.decals_enabled = true),
     ("ssr_prepass", |i| i.ssr_prepass_enabled = true),
@@ -636,6 +645,16 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     let decorated = add_decorations(&mut b, inputs, scene_head, &front, &mut reactive_mask);
     let scene_pre_taa_cur =
         add_reflections_and_transparent(&mut b, inputs, decorated, &front, &mut reactive_mask);
+    let scene_pre_taa_cur = add_late_particles(
+        &mut b,
+        inputs,
+        SceneVersions {
+            resolve: scene_pre_taa_cur,
+            depth: decorated.depth,
+        },
+        &front,
+        &mut reactive_mask,
+    );
     let scene_color_cur = add_temporal(
         &mut b,
         inputs,
@@ -1248,6 +1267,31 @@ fn add_decorations(
         resolve: h,
         depth: depth_cur,
     }
+}
+
+// The emitters that draw over the see-through surfaces: from the pools
+// `ParticlesDraw` read, onto the pre-TAA scene Transparent left, testing the
+// same depth. Returns the pre-TAA scene's next version.
+fn add_late_particles(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    scene: SceneVersions,
+    front: &FrontEnd,
+    reactive_mask: &mut Option<TextureHandle>,
+) -> TextureHandle {
+    let Some(pools) = front
+        .scene_inputs
+        .particle_pool
+        .filter(|_| inputs.late_particles_enabled)
+    else {
+        return scene.resolve;
+    };
+    let mut late = b.add_pass(PassId::ParticlesLateDraw, PassKind::Render);
+    late.read_buffer_in_stage(pools, ReadStages::VERTEX);
+    late.read_texture(scene.depth);
+    let resolve = late.write_texture(scene.resolve);
+    *reactive_mask = reactive_mask.map(|m| late.write_texture(m));
+    resolve
 }
 
 // Planar mirrors, the reflection resolve, and Transparent, returning the
@@ -1890,6 +1934,35 @@ mod tests {
             .iter()
             .position(|r| r.label == label)
             .unwrap_or_else(|| panic!("{label} missing from the graph"))
+    }
+
+    // The late particles draw over what Transparent left, before the temporal
+    // pass takes it, with or without a reflection resolve between; without a
+    // late emitter there is no late pass.
+    #[test]
+    fn late_particles_draw_after_transparent_and_before_taa() {
+        for ssr in [false, true] {
+            let mut i = all_off();
+            i.particles_enabled = true;
+            i.transparent_enabled = true;
+            i.taa_enabled = true;
+            i.ssr_enabled = ssr;
+            let g = build_frame_graph(&i).expect("compiles");
+            assert!(g.passes.iter().all(|p| p.id != PassId::ParticlesLateDraw));
+            i.late_particles_enabled = true;
+            let g = build_frame_graph(&i).expect("compiles");
+            let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+            let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+            assert!(pos(PassId::ParticlesDraw) < pos(PassId::Transparent));
+            assert!(
+                pos(PassId::Transparent) < pos(PassId::ParticlesLateDraw),
+                "ssr {ssr}"
+            );
+            assert!(
+                pos(PassId::ParticlesLateDraw) < pos(PassId::TaaResolve),
+                "ssr {ssr}"
+            );
+        }
     }
 
     #[test]

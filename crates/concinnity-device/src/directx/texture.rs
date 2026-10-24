@@ -87,9 +87,26 @@ where
 // Buffer helpers
 
 // Create a default-heap buffer with `ALLOW_UNORDERED_ACCESS`, suitable for a
-// compute shader to write through a UAV. Used by the compute-cull
-// pass for the per-frame indirect-command buffers.
-pub(super) fn create_uav_buffer(
+// compute shader to write through a UAV. It starts in `COMMON`, as every
+// buffer does, and promotes on first use.
+pub(super) fn create_uav_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
+    committed_uav_buffer(device, size, D3D12_RESOURCE_STATE_COMMON)
+}
+
+// Create an acceleration-structure backing buffer, which alone among buffers
+// must start, and stays, in `RAYTRACING_ACCELERATION_STRUCTURE`.
+pub(super) fn create_acceleration_structure_buffer(
+    device: &ID3D12Device,
+    size: u64,
+) -> RenderResult<ID3D12Resource> {
+    committed_uav_buffer(
+        device,
+        size,
+        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+    )
+}
+
+fn committed_uav_buffer(
     device: &ID3D12Device,
     size: u64,
     initial_state: D3D12_RESOURCE_STATES,

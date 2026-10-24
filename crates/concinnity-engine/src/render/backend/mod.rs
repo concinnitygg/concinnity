@@ -551,6 +551,8 @@ mod tests {
             size_end: 1.0,
             color_start: [1.0; 4],
             color_end: [1.0; 4],
+            lit: false,
+            draw_after_transparent: false,
         }
     }
 }

@@ -639,6 +639,22 @@ float water_foam_lace(float cover, float2 local_xz, float footprint)
     return lerp(cover, cut, water_fade(WATER_FOAM_CELL, footprint));
 }
 
+#ifdef WATER_SEA
+// How much the wake's foam calms the short waves under it, at full foam, and
+// the foam that calms them fully: churned water smooths the ripples, so a
+// trail reads glassy against the sea long after its foam thins.
+static const float WATER_WAKE_SLICK = 0.85;
+static const float WATER_WAKE_SLICK_FOAM = 0.12;
+
+// The cascades the slick calms: all of one whose tile is this many meters
+// or less, none of one this long or longer.
+static const float2 WATER_WAKE_SLICK_TILES = float2(8.0, 32.0);
+
+// How much of the short waves a sea's wake leaves standing at the fragment
+// being shaded: exactly 1 away from it.
+static float water_calm = 1.0;
+#endif
+
 // Every wave and ripple at anchor-relative rest XZ `local_xz`, faded by the
 // pixel's footprint (`dx`, `dy`: how far the rest position moves across one
 // pixel, from `water_footprint`). The analytic partials against (x, z) give
@@ -659,6 +675,11 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
         float4 m = WATER_DAMPED_SLOPES(c, ocean_slopes.SampleGrad(ocean_sampler,
                                                                   float3(water_ocean_uv(local_xz, c), layer),
                                                                   dx * inv_length, dy * inv_length));
+#ifdef WATER_SEA
+        float calm = 1.0 - (1.0 - water_calm) * (1.0 - smoothstep(WATER_WAKE_SLICK_TILES.x,
+                                                                 WATER_WAKE_SLICK_TILES.y, 1.0 / inv_length));
+        m *= float4(calm, calm, calm * calm, calm * calm);
+#endif
         binormal.y += m.x;
         tangent.y += m.y;
         removed += max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0);
@@ -696,6 +717,9 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     Wind wind = wind_unpack(params.wind, params.wind_gust);
     float speed = wind_speed(wind, WATER_GUST_AT(local_xz), view.time) * params.wind_gust.y;
     float variance = water_ripple_variance(speed);
+#ifdef WATER_SEA
+    variance *= water_calm * water_calm;
+#endif
     float per_ripple = sqrt(variance * (1.0 - WATER_UNRESOLVED_RIPPLE) / float(WATER_RIPPLES));
     float2 warp_at = local_xz * WATER_WARP_FREQUENCY + WATER_RIPPLE_WARP;
     float2 warped = local_xz + 0.08 * float2(water_noise_grad(warp_at).x,
@@ -1347,47 +1371,193 @@ bool water_wake_stirs(float4 wake)
            || max(abs(wake.y), abs(wake.z)) > WATER_WAKE_QUIET_SLOPE;
 }
 
-// The lace the wake's foam breaks up on: three octaves of value noise, each
-// cell in meters with its weight, and the cells its lattice repeats over.
-static const float3 WATER_WAKE_LACE_CELLS = float3(1.1, 0.37, 0.13);
-static const float3 WATER_WAKE_LACE_WEIGHTS = float3(0.5, 0.3, 0.2);
-static const float WATER_WAKE_LACE_PERIOD = 256.0;
+// The wake's foam lies in lines through noise drawn out along the way it
+// streaks, on cells this many meters across: strands, finer threads between
+// them, and the patches the foam breaks into as it ages.
+static const float3 WATER_WAKE_LACE_CELLS = float3(0.25, 0.09, 1.6);
 
-// How soft the lace's edge is, as a share of the noise's range.
-static const float WATER_WAKE_LACE_SOFTNESS = 0.12;
+// How much longer than wide the strands' cells are along a streak.
+static const float WATER_WAKE_STREAK = 4.0;
+
+// How wide a web is in meters, the thinnest thread and the thickest clump,
+// for the strands and the finer webs.
+static const float4 WATER_WAKE_WEB = float4(0.004, 0.06, 0.003, 0.016);
+
+// How far, in meters, the foam's outline wanders off the field, on noise
+// cells this wide, so the field's cells never show; and how far the webs
+// wander on finer cells, so they bend and the lattices' rows never show.
+static const float WATER_WAKE_WARP = 0.35;
+static const float WATER_WAKE_WARP_CELL = 0.7;
+static const float WATER_WAKE_FINE_WARP = 0.06;
+static const float WATER_WAKE_FINE_WARP_CELL = 0.3;
+
+// The ragged edge and the bubbly grain of the foam up close: noise cells in
+// meters, and how far the edge frays in meters and the grain darkens it.
+static const float2 WATER_WAKE_GRAIN_CELLS = float2(0.04, 0.02);
+static const float2 WATER_WAKE_GRAIN = float2(0.012, 0.35);
+
+// Patches the foam breaks into, in meters, and the share of the water the
+// patches leave open, in fresh foam and in old.
+static const float WATER_WAKE_PATCH = 5.0;
+static const float2 WATER_WAKE_OPEN = float2(0.05, 0.6);
+
+// The streaky film that clumps between the lines of the thickest foam.
+static const float WATER_WAKE_FILM = 0.45;
 
 // How opaque the thinnest foam is, as a share of the thickest: thin foam is
 // sheer as well as sparse.
-static const float WATER_WAKE_THIN_OPACITY = 0.25;
+static const float WATER_WAKE_THIN_OPACITY = 0.3;
 
-// One octave of the lace at `p` on cells `cell` meters across: ridged, so
-// its highs run in thin threads around darker pools, as foam laces, and its
-// mean once a pixel `footprint` meters across can no longer resolve it.
-float water_wake_lace_octave(float2 p, float cell, float footprint)
+// The wake's foam is wet, thin and full of water: it takes this share of the
+// light the whitecaps do, and that much nearer gray.
+static const float WATER_WAKE_FOAM_LIGHT = 0.82;
+static const float WATER_WAKE_FOAM_GRAY = 0.35;
+
+// How the way the foam streaks is read: off the field's mip this many meters
+// across, at taps this far apart, and how strongly it leans to the frame's x
+// where the foam is too even to tell.
+static const float WATER_WAKE_STREAK_READ = 2.0;
+static const float WATER_WAKE_STREAK_REACH = 2.5;
+static const float WATER_WAKE_STREAK_EVEN = 2e-3;
+
+// Value noise in [0, 1] at frame point `p` on cells `cell` meters across.
+float water_wake_noise(float2 p, float cell)
 {
     float2 q = p / cell;
-    q -= floor(q / WATER_WAKE_LACE_PERIOD) * WATER_WAKE_LACE_PERIOD;
-    float n = water_periodic_noise(q, WATER_WAKE_LACE_PERIOD);
-    float ridge = 1.0 - abs(2.0 * n - 1.0);
-    return lerp(0.5, ridge * ridge, water_fade(cell, footprint));
+    q -= floor(q / 256.0) * 256.0;
+    return water_periodic_noise(q, 256.0);
+}
+
+// A wander of up to `reach` meters at frame point `p`, on noise cells `cell`
+// meters across.
+float2 water_wake_wander(float2 p, float cell, float reach)
+{
+    float2 n = float2(water_wake_noise(p, cell), water_wake_noise(p + float2(37.3, 11.9), cell));
+    return (2.0 * n - 1.0) * reach;
+}
+
+// How far the wake's foam is read off frame point `p`, in meters.
+float2 water_wake_warp(float2 p)
+{
+    return water_wake_wander(p, WATER_WAKE_WARP_CELL, WATER_WAKE_WARP);
+}
+
+// A web `width` meters wide along borders `border` meters off, its edge as
+// sharp as a pixel `footprint` meters across can show, faded by `fade` to
+// `mean` as its cells shrink below the pixel.
+float water_wake_web(float border, float width, float footprint, float fade, float mean)
+{
+    float soft = 0.5 * max(0.8 * width, footprint);
+    return lerp(mean, 1.0 - smoothstep(width - soft, width + soft, border), fade);
+}
+
+// The angle in [0, pi) from the frame's x that the wake's foam streaks along
+// at frame point `p`: across the way it changes most, which behind a body is
+// along its trail. Read off a coarse mip, so it turns only as the trail does.
+float water_wake_streak(float2 p)
+{
+    float r = WATER_WAKE_STREAK_REACH;
+    float d = 0.70710678 * r;
+    float at = water_wake_level(p, WATER_WAKE_STREAK_READ).w;
+    float2 offs[4] = { float2(r, 0.0), float2(d, d), float2(0.0, r), float2(-d, d) };
+    float change[4];
+    for (uint k = 0u; k < 4u; k++)
+    {
+        change[k] = abs(water_wake_level(p + offs[k], WATER_WAKE_STREAK_READ).w - at)
+                  + abs(water_wake_level(p - offs[k], WATER_WAKE_STREAK_READ).w - at);
+    }
+    float most = 0.5 * atan2(change[1] - change[3], change[0] - change[2] + WATER_WAKE_STREAK_EVEN);
+    float along = most + 1.5707963;
+    return along - floor(along / 3.1415927) * 3.1415927;
+}
+
+// How far, in meters, frame point `q` lies from where noise on cells `cell`
+// meters across crosses its middle, the noise drawn out along `along` by
+// the streak: lines that run along the streak, braiding as they go.
+float water_wake_line(float2 q, float2 along, float cell)
+{
+    float2 s = float2(dot(q, along) / WATER_WAKE_STREAK, dot(q, float2(-along.y, along.x))) / cell;
+    s -= floor(s / 256.0) * 256.0;
+    float h = 0.05;
+    float n = water_periodic_noise(s, 256.0);
+    float2 rise = float2(water_periodic_noise(s + float2(h, 0.0), 256.0) - n,
+                         water_periodic_noise(s + float2(0.0, h), 256.0) - n)
+                / (h * cell * float2(WATER_WAKE_STREAK, 1.0));
+    return abs(n - 0.5) / max(length(rise), 1e-3);
+}
+
+// One streaked lace of foam `thick` thick at frame point `q`, its lines drawn
+// out along angle `angle`, seen through a pixel `footprint` meters across;
+// `fray` ragged at its edges.
+float water_wake_streaks(float2 q, float angle, float thick, float footprint, float fray)
+{
+    float2 along = float2(cos(angle), sin(angle));
+    float3 cells = WATER_WAKE_LACE_CELLS;
+    // Threads swell into clumps and pinch out along their length.
+    float2 s = float2(dot(q, along) / WATER_WAKE_STREAK, dot(q, float2(-along.y, along.x)));
+    float vary = water_wake_noise(s, 0.5 * cells.x);
+    float width = lerp(WATER_WAKE_WEB.x, WATER_WAKE_WEB.y, vary * vary) * lerp(0.5, 1.0, thick);
+    float fade = water_fade(cells.x, footprint);
+    float mean = saturate(2.0 * width / cells.x);
+    float lace = fade > 0.0
+        ? water_wake_web(water_wake_line(q, along, cells.x) + fray, width, footprint, fade, mean)
+        : mean;
+    lace *= lerp(0.55, 1.0, vary);
+    float filling = smoothstep(0.1, 0.5, thick);
+    if (filling > 0.0)
+    {
+        float web = lerp(WATER_WAKE_WEB.z, WATER_WAKE_WEB.w, 1.0 - vary) * thick;
+        float fine_fade = water_fade(cells.y, footprint);
+        float fine_mean = saturate(2.0 * web / cells.y);
+        float fine = fine_fade > 0.0
+            ? water_wake_web(water_wake_line(q + 17.3, along, cells.y) + fray, web, footprint, fine_fade, fine_mean)
+            : fine_mean;
+        lace = max(lace, 0.8 * filling * fine);
+        float clump = smoothstep(0.5, 0.85, water_wake_noise(s + 5.3, 2.0 * cells.x));
+        lace = max(lace, WATER_WAKE_FILM * clump * smoothstep(0.4, 1.0, thick) * (0.5 + 0.5 * vary));
+    }
+    return lace;
 }
 
 // How opaque the wake's foam stands at frame point `p` where it covers
-// `cover` of the water, seen through a pixel `footprint` meters across: a
-// soft-edged lace at three scales covering about `cover` of the surface,
-// whose opacity thins with it as the foam ages.
+// `cover` of the water, seen through a pixel `footprint` meters across. Fresh
+// foam right behind a body is a dense run of threads and clumps streaked
+// along its trail; as it ages it breaks into uneven patches over open water,
+// and its opacity thins with it.
 float water_wake_lace(float cover, float2 p, float footprint)
 {
-    float3 cells = WATER_WAKE_LACE_CELLS;
-    float lace = WATER_WAKE_LACE_WEIGHTS.x * water_wake_lace_octave(p, cells.x, footprint)
-               + WATER_WAKE_LACE_WEIGHTS.y * water_wake_lace_octave(p, cells.y, footprint)
-               + WATER_WAKE_LACE_WEIGHTS.z * water_wake_lace_octave(p, cells.z, footprint);
-    // Stretched toward an even spread over [0, 1], so the share above the
-    // cut is about `cover`.
-    lace = saturate(0.5 + 2.2 * (lace - 0.5));
-    float edge = WATER_WAKE_LACE_SOFTNESS;
-    float mask = smoothstep(1.0 - cover - edge, 1.0 - cover + edge, lace);
-    return mask * lerp(WATER_WAKE_THIN_OPACITY, 1.0, cover);
+    cover = saturate(cover);
+    float2 q = p + water_wake_wander(p, WATER_WAKE_FINE_WARP_CELL, WATER_WAKE_FINE_WARP);
+    float patch = 0.65 * water_wake_noise(p, WATER_WAKE_PATCH)
+                + 0.35 * water_wake_noise(q, WATER_WAKE_LACE_CELLS.z);
+    float open = lerp(WATER_WAKE_OPEN.y, WATER_WAKE_OPEN.x, smoothstep(0.03, 0.35, cover));
+    float gather = smoothstep(open - 0.12, open + 0.12, patch);
+    float thick = saturate(2.5 * cover * gather * (0.6 + 0.6 * patch));
+    if (thick <= 0.0)
+    {
+        return 0.0;
+    }
+    float2 grain_fade = float2(water_fade(2.0 * WATER_WAKE_GRAIN_CELLS.x, footprint),
+                               water_fade(2.0 * WATER_WAKE_GRAIN_CELLS.y, footprint));
+    float fray = grain_fade.x > 0.0
+        ? grain_fade.x * WATER_WAKE_GRAIN.x * (water_wake_noise(q, WATER_WAKE_GRAIN_CELLS.x) - 0.5)
+        : 0.0;
+    // Between two of four fixed directions, so no cell slides as the streak
+    // turns.
+    float bin = water_wake_streak(p) / 0.78539816;
+    float first = floor(bin);
+    float turn = smoothstep(0.2, 0.8, bin - first);
+    float lace = water_wake_streaks(q, first * 0.78539816, thick, footprint, fray);
+    if (turn > 0.0)
+    {
+        lace = lerp(lace, water_wake_streaks(q, (first + 1.0) * 0.78539816, thick, footprint, fray), turn);
+    }
+    if (grain_fade.y > 0.0)
+    {
+        float grain = water_wake_noise(q + float2(7.1, 3.7), WATER_WAKE_GRAIN_CELLS.y);
+        lace *= 1.0 - grain_fade.y * WATER_WAKE_GRAIN.y * grain * grain;
+    }
+    return lace * lerp(WATER_WAKE_THIN_OPACITY, 1.0, thick);
 }
 
 // The simulated ocean's displacement at a rest point, each face's read at
@@ -1461,6 +1631,15 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
         surf = water_surf_lace(saturate(waves.foam * params.foam_intensity), waves.age, at, waves.toward,
                                footprint);
     }
+    // The wake, read first: its churned water calms the short waves below.
+    float2 p = (i.rest + params.anchor.xyz).xz;
+    float4 wake = water_wake(p, dx.xz, dy.xz);
+    bool stirred = water_wake_stirs(wake);
+    // From the quiet foam up, so the calm meets 1 where the wake goes quiet.
+    if (stirred)
+    {
+        water_calm = 1.0 - WATER_WAKE_SLICK * smoothstep(WATER_WAKE_QUIET_FOAM, WATER_WAKE_SLICK_FOAM, wake.w);
+    }
     for (uint f = 0u; f < WATER_SEA_FACES; f++)
     {
         if (w[f] <= 0.0)
@@ -1482,9 +1661,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
     }
     // The wake over everything, held to what the depth lets stand; what
     // the shallows break off turns to foam.
-    float2 p = (i.rest + params.anchor.xyz).xz;
-    float4 wake = water_wake(p, dx.xz, dy.xz);
-    if (water_wake_stirs(wake))
+    if (stirred)
     {
         float limit = water_wake_limit(i.shore_field);
         float height = abs(wake.x);
@@ -1492,10 +1669,13 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
         // Breaking in the shallows foams only where the wake stands well over
         // what the depth holds, in a narrow band.
         float broken = WATER_WAKE_BREAK_FOAM * smoothstep(WATER_WAKE_BREAK.x, WATER_WAKE_BREAK.y, height - limit);
-        float churn = saturate((wake.w + broken) * params.foam_intensity);
-        if (churn > WATER_WAKE_QUIET_FOAM)
+        if (saturate((wake.w + broken) * params.foam_intensity) > WATER_WAKE_QUIET_FOAM)
         {
-            water_sea_wake = water_wake_lace(churn, p, footprint);
+            // Read off a wandering point, so the foam's outline never traces
+            // the field's cells.
+            float2 q = p + water_wake_warp(p);
+            float churn = saturate((water_wake(q, dx.xz, dy.xz).w + broken) * params.foam_intensity);
+            water_sea_wake = water_wake_lace(churn, q, footprint);
         }
     }
     water_sea_cover = cover;
@@ -1825,7 +2005,9 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     }
     if (water_sea_wake > 0.0)
     {
-        s.below = lerp(s.below, foam, water_sea_wake);
+        float3 wake_foam = WATER_WAKE_FOAM_LIGHT * lerp(foam, (float3)dot(foam, float3(0.2126, 0.7152, 0.0722)),
+                                                        WATER_WAKE_FOAM_GRAY);
+        s.below = lerp(s.below, wake_foam, water_sea_wake);
         s.foam = 1.0 - (1.0 - s.foam) * (1.0 - water_sea_wake);
     }
 #endif

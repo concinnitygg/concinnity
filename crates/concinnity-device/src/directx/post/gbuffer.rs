@@ -464,11 +464,7 @@ impl DxContext {
             let size = align256((self.cull.bucket_stride * size_of::<[[f32; 4]; 4]>()) as u64);
             let mut ring = Vec::with_capacity(self.hw.frames());
             for _ in 0..self.hw.frames() {
-                ring.push(crate::directx::texture::create_uav_buffer(
-                    device,
-                    size,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?);
+                ring.push(crate::directx::texture::create_uav_buffer(device, size)?);
             }
             self.cull.prev_model_buffers = ring;
             self.cull.model_history_root_sig = Some(root_sig);

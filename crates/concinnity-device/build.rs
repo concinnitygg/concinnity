@@ -629,6 +629,18 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         ],
     },
     DxilAbi {
+        program: &shared::PARTICLE_LIT_VERT,
+        registers: &[("view", "b0"), ("params", "b1"), ("pool", "t0")],
+    },
+    DxilAbi {
+        program: &shared::PARTICLE_LIT_FRAG,
+        registers: &[
+            ("albedo", "t1"),
+            ("albedo_sampler", "s0"),
+            ("scene_depth", "t2"),
+        ],
+    },
+    DxilAbi {
         program: &shared::DECAL_VERT,
         registers: &[("view", "b0"), ("params", "b1")],
     },
@@ -1662,6 +1674,24 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::PARTICLE_FRAG,
+        slots: &[&[
+            ("albedo", "texture(0)"),
+            ("albedo_sampler", "sampler(0)"),
+            ("scene_depth", "texture(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::PARTICLE_LIT_VERT,
+        slots: &[&[
+            ("pool", "buffer(0)"),
+            ("view", "buffer(1)"),
+            ("params", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::PARTICLE_LIT_FRAG,
         slots: &[&[
             ("albedo", "texture(0)"),
             ("albedo_sampler", "sampler(0)"),

@@ -10,7 +10,7 @@ use crate::render::particles::{ParticleBurst, ParticleBursts};
 use crate::water::WaterSurface;
 use crate::water::stir::{WaterStir, WaterStirs};
 use alloc::vec::Vec;
-use concinnity_core::math::vec3::{dot, length, normalize_or, scale, sub};
+use concinnity_core::math::vec3::{cross, dot, length, normalize_or, scale, sub};
 use concinnity_core::math::{SaturatingFrom, floor};
 
 /// How fast a body must gain or lose submerged volume to throw a splash, in
@@ -20,17 +20,31 @@ const SPRAY_PLUNGE: f32 = 2.5;
 
 /// Particles per share of its volume per second a body plunges at, and the
 /// most one splash throws.
-const SPRAY_PER_PLUNGE: f32 = 8.0;
-const SPRAY_MAX_SPLASH: u32 = 64;
+const SPRAY_PER_PLUNGE: f32 = 24.0;
+const SPRAY_MAX_SPLASH: u32 = 240;
 
 /// The speed through the water past which a body throws spray from its bow,
 /// in meters per second, and the particles it throws per second for each
 /// meter per second past it.
 const SPRAY_BOW_SPEED: f32 = 4.0;
-const SPRAY_BOW_RATE: f32 = 12.0;
+const SPRAY_BOW_RATE: f32 = 80.0;
 
-/// How far forward of up a bow's spray leans, as a share of up.
-const SPRAY_BOW_LEAN: f32 = 1.4;
+/// How far a bow's spray leans up and out to each side, as shares of up,
+/// and the share of the body's own speed it keeps: it peels off the bow in a
+/// sheet to either side and rides along with it.
+const SPRAY_BOW_FLARE: f32 = 1.0;
+const SPRAY_BOW_CARRY: f32 = 0.9;
+
+// What one world's spray has thrown since it started.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SprayThrown {
+    // Splashes thrown by plunging or leaping bodies.
+    splashes: u32,
+    // Bursts thrown from fast bows.
+    bow_bursts: u32,
+    // Particles asked for in all.
+    particles: u64,
+}
 
 /// What one body's spray remembers from frame to frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,6 +54,8 @@ struct BodySpray {
     volume: f32,
     // Bow particles owed but not yet thrown.
     owed: f32,
+    // Whether its bow throws spray.
+    bowing: bool,
 }
 
 /// Throws the spray of every floating body on the world's spray emitter.
@@ -52,6 +68,7 @@ pub struct WaterSpraySystem {
     next: Vec<BodySpray>,
     // The frame's stirs, copied out of the world.
     stirs: Vec<WaterStir>,
+    thrown: SprayThrown,
 }
 
 impl WaterSpraySystem {
@@ -67,7 +84,13 @@ impl WaterSpraySystem {
             bodies: Vec::new(),
             next: Vec::new(),
             stirs: Vec::new(),
+            thrown: SprayThrown::default(),
         }
+    }
+
+    #[cfg(test)]
+    fn thrown(&self) -> SprayThrown {
+        self.thrown
     }
 
     /// Push the bursts `stirs` throw over the `dt` seconds since the last
@@ -80,7 +103,7 @@ impl WaterSpraySystem {
                 .binary_search_by_key(&stir.entity, |b| b.entity)
                 .ok()
                 .map(|i| self.bodies[i]);
-            let body = spray_of(stir, last, dt, self.emitter, out);
+            let body = spray_of(stir, last, dt, self.emitter, out, &mut self.thrown);
             self.next.push(body);
         }
         self.next.sort_unstable_by_key(|b| b.entity);
@@ -111,13 +134,15 @@ impl System for WaterSpraySystem {
 }
 
 // One body's spray this frame, from `stir` and what it held `last` frame:
-// pushed onto `out` as bursts on `emitter`. Returns what it remembers.
+// pushed onto `out` as bursts on `emitter` and counted in `thrown`. Returns
+// what it remembers.
 fn spray_of(
     stir: &WaterStir,
     last: Option<BodySpray>,
     dt: f32,
     emitter: AssetId,
     out: &mut ParticleBursts,
+    thrown: &mut SprayThrown,
 ) -> BodySpray {
     let pieces = stir.pieces();
     let volume: f32 = pieces.iter().map(|p| p.volume).sum();
@@ -131,6 +156,7 @@ fn spray_of(
         entity: stir.entity,
         volume,
         owed: last.map_or(0.0, |l| l.owed),
+        bowing: false,
     };
     if volume <= 0.0 && last.is_none_or(|l| l.volume <= 0.0) {
         body.owed = 0.0;
@@ -147,14 +173,27 @@ fn spray_of(
     if let Some(last) = last {
         let plunge = (volume - last.volume) / (dt * whole);
         if plunge.abs() > SPRAY_PLUNGE {
-            let count = u32::saturating_from(floor(plunge.abs() * SPRAY_PER_PLUNGE));
-            out.push(ParticleBurst {
+            let count = u32::saturating_from(floor(plunge.abs() * SPRAY_PER_PLUNGE))
+                .clamp(4, SPRAY_MAX_SPLASH);
+            let taken = out.push(ParticleBurst {
                 emitter,
                 position: at,
                 direction: up,
-                speed: (plunge.abs() / (4.0 * SPRAY_PLUNGE)).clamp(0.5, 1.2),
-                count: count.clamp(4, SPRAY_MAX_SPLASH),
+                speed: (plunge.abs() / (3.0 * SPRAY_PLUNGE)).clamp(0.6, 1.5),
+                carry: [0.0; 3],
+                floor: Some(up),
+                count,
             });
+            if taken {
+                thrown.splashes += 1;
+                thrown.particles += u64::from(count);
+                tracing::debug!(
+                    "spray: splash of {count} at {plunge:.1} body volumes a second \
+                     (splash {}, {} particles thrown)",
+                    thrown.splashes,
+                    thrown.particles
+                );
+            }
         }
     }
     // A bow throws only while it is in the water.
@@ -164,19 +203,39 @@ fn spray_of(
         body.owed = 0.0;
         return body;
     }
+    body.bowing = true;
+    if !last.is_some_and(|l| l.bowing) {
+        tracing::debug!(
+            "spray: a bow throws spray at {speed:.1} m/s ({} bow bursts so far)",
+            thrown.bow_bursts
+        );
+    }
     body.owed += (speed - SPRAY_BOW_SPEED) * SPRAY_BOW_RATE * dt;
-    let count = floor(body.owed);
-    if count >= 1.0 {
-        body.owed -= count;
+    // Thrown in pairs, a sheet to each side.
+    let pairs = floor(0.5 * body.owed);
+    if pairs >= 1.0 {
+        body.owed -= 2.0 * pairs;
         let ahead = normalize_or(along, 1e-6, [0.0; 3]);
-        let lean: [f32; 3] = core::array::from_fn(|i| up[i] + SPRAY_BOW_LEAN * ahead[i]);
-        out.push(ParticleBurst {
-            emitter,
-            position: core::array::from_fn(|i| at[i] + radius * ahead[i]),
-            direction: normalize_or(lean, 1e-6, up),
-            speed: (speed / (3.0 * SPRAY_BOW_SPEED)).clamp(0.4, 1.0),
-            count: u32::saturating_from(count),
-        });
+        let side = normalize_or(cross(up, ahead), 1e-6, [0.0; 3]);
+        let count = u32::saturating_from(pairs);
+        for flare in [SPRAY_BOW_FLARE, -SPRAY_BOW_FLARE] {
+            let throw: [f32; 3] = core::array::from_fn(|i| up[i] + flare * side[i]);
+            let out_side = flare.signum() * 0.5;
+            let off: [f32; 3] =
+                core::array::from_fn(|i| radius * (0.7 * ahead[i] + out_side * side[i]));
+            if out.push(ParticleBurst {
+                emitter,
+                position: core::array::from_fn(|i| at[i] + off[i]),
+                direction: normalize_or(throw, 1e-6, up),
+                speed: (speed / (2.0 * SPRAY_BOW_SPEED)).clamp(0.6, 1.4),
+                carry: scale(ahead, SPRAY_BOW_CARRY * speed),
+                floor: Some(up),
+                count,
+            }) {
+                thrown.bow_bursts += 1;
+                thrown.particles += u64::from(count);
+            }
+        }
     }
     body
 }
@@ -220,6 +279,8 @@ mod tests {
         assert!(run(&mut s, &ball(0.0, [0.0; 3]), 0.02).is_empty());
         let splash = run(&mut s, &ball(0.1, [0.0, -5.0, 0.0]), 0.02);
         assert_eq!(splash.len(), 1);
+        assert_eq!(s.thrown().splashes, 1);
+        assert_eq!(s.thrown().particles, u64::from(splash[0].count));
         let b = splash[0];
         assert_eq!(b.emitter, AssetId(3));
         assert!((b.position[1] - 0.2).abs() < 1e-6, "{:?}", b.position);
@@ -227,7 +288,7 @@ mod tests {
         // A tenth of a cubic meter in a fiftieth of a second, of a 0.9 cubic
         // meter ball.
         let whole = 4.0 / 3.0 * core::f32::consts::PI * 0.6f32.powi(3);
-        let want = floor(0.1 / (0.02 * whole) * SPRAY_PER_PLUNGE);
+        let want = floor(0.1 / (0.02 * whole) * SPRAY_PER_PLUNGE).min(SPRAY_MAX_SPLASH as f32);
         assert_eq!(b.count as f32, want);
         assert!(run(&mut s, &ball(0.105, [0.0; 3]), 0.02).is_empty());
         // Bobbing a tenth of its volume over a second throws nothing.
@@ -237,7 +298,8 @@ mod tests {
     }
 
     // A body plowing through the water faster than the bow speed throws a
-    // steady spray from its front, leaning forward; a slow one throws none.
+    // steady spray from its front in a sheet to each side, carried along
+    // with it; a slow one throws none.
     #[test]
     fn a_fast_body_throws_bow_spray() {
         let mut s = WaterSpraySystem::new(AssetId(3));
@@ -248,16 +310,26 @@ mod tests {
         }
         assert_eq!(slow, 0);
         let mut thrown = 0;
+        let mut sides = [0; 2];
         for _ in 0..50 {
             for b in run(&mut s, &ball(0.3, [10.0, 0.0, 0.0]), 0.02) {
-                assert!((b.position[0] - 0.6).abs() < 1e-6 && (b.position[1] - 0.2).abs() < 1e-6);
-                assert!(b.direction[0] > b.direction[1] && b.direction[1] > 0.0);
+                assert!(b.position[0] > 0.3 && (b.position[1] - 0.2).abs() < 1e-6);
+                assert!(b.direction[1] > 0.0 && b.direction[2].abs() > 0.5);
+                assert!(
+                    (b.carry[0] - SPRAY_BOW_CARRY * 10.0).abs() < 1e-4,
+                    "{:?}",
+                    b.carry
+                );
+                sides[usize::from(b.direction[2] > 0.0)] += b.count;
                 thrown += b.count;
             }
         }
-        // A second at 6 m/s past the bow speed, 12 particles a second each.
+        // A second at 6 m/s past the bow speed, `SPRAY_BOW_RATE` particles a
+        // second each, split evenly between the sides.
         let want = (10.0 - SPRAY_BOW_SPEED) * SPRAY_BOW_RATE;
-        assert!((thrown as f32 - want).abs() <= 1.0, "{thrown}");
+        assert!((thrown as f32 - want).abs() <= 2.0, "{thrown}");
+        assert_eq!(sides[0], sides[1]);
+        assert_eq!(u64::from(thrown), s.thrown().particles);
         // Out of the water the bow throws nothing, and owes nothing after.
         assert!(run(&mut s, &ball(0.0, [10.0, 0.0, 0.0]), 0.02).len() <= 1);
         assert!(run(&mut s, &ball(0.0, [10.0, 0.0, 0.0]), 0.02).is_empty());
