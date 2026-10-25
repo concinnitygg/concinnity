@@ -131,7 +131,7 @@ pub(super) struct LogicalDevice {
     // `VK_KHR_deferred_host_operations` + the matching features AND XeSS does
     // not own the feature chain). Capability is independent of whether the world
     // requested RT: the RT extensions + feature structs are enabled whenever the
-    // device is capable so a live `apply_quality_settings` toggle can bring RT up
+    // device is capable so a live settings rebuild can bring RT up
     // at runtime (a device extension cannot be enabled after `create_device`).
     // The caller decides whether to BUILD RT at launch (`rt_settings.is_some() &&
     // rt_capable`); a capable-but-unused device just carries the inert extension

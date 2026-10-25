@@ -76,7 +76,6 @@ struct Features {
     taa_enabled: bool,
     msaa_samples: u32,
     post_process: PostProcessParams,
-    ssao_enabled: bool,
     gbuffer_enabled: bool,
 }
 
@@ -119,16 +118,10 @@ impl Features {
         // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
         // after `setup` returns is what makes `hw.hdr_mode` the source of truth.
         let post_process = hw.hdr_mode.post_process_params(graphics.post_process());
-        // Hardware ray-tracing capability. RT reflection resources + the
-        // acceleration structure are built only when the world authored
-        // `ray_traced_reflections` AND the GPU reports the DXR 1.1 tier inline
-        // `RayQuery` needs, which the resolved settings already respect.
-        let ssao_enabled = plan.ssao;
         Self {
             taa_enabled,
             msaa_samples,
             post_process,
-            ssao_enabled,
             // The unified G-buffer pre-pass exists when any screen-space
             // consumer needs it: SSR / SSGI / RT, SSAO, or TAA / FSR velocity.
             // `taa_enabled` already folds in temporal upscaling.
@@ -216,7 +209,6 @@ impl DxContext {
             &SrvHeapParams {
                 n_atlases: media.text_atlases.len(),
                 gbuffer_srv_extra: heap_layout::GBUFFER_TARGETS,
-                rt_output_srv_extra: heap_layout::RT_OUTPUT_TARGETS,
                 planar_resolve_srv_extra: planar.planes().len(),
                 // Albedo and normal maps share ONE handle-indexed pool: the real
                 // textures (a 1x1 white fallback stands in when there are none)
@@ -300,7 +292,12 @@ impl DxContext {
         let text = text::build_text(&gpu, &descriptors, &media, swapchain.format)?;
         let composite = composite::build_composite(&gpu, swapchain.format)?;
 
-        let post_descriptors = descriptors::build_post_descriptors(&descriptors, &swapchain, &rtv);
+        let post_descriptors = descriptors::build_post_descriptors(
+            &descriptors,
+            &swapchain,
+            &rtv,
+            gpu.hw.alloc.frames_in_flight(),
+        );
         let quality_slots =
             effects::build_quality_slots(&gpu, &descriptors, &swapchain, &targets, &rtv);
         let post_device = effects::post_device(&gpu, &descriptors, &post_descriptors);
@@ -313,7 +310,7 @@ impl DxContext {
         let ssr = effects::build_ssr(&post_device, &targets, &graphics)?;
         let ssgi = effects::build_ssgi(&post_device, &targets, &graphics)?;
         let rt_reflections =
-            ray_tracing::build_rt_reflections(&gpu, &quality_slots, &targets, &graphics);
+            ray_tracing::build_rt_reflections(&gpu, &post_descriptors, &targets, &graphics);
         let gbuffer =
             effects::build_gbuffer(&gpu, &targets, &quality_slots, features.gbuffer_enabled)?;
 
@@ -368,6 +365,7 @@ impl DxContext {
                 descriptors: &descriptors,
                 targets: &targets,
                 reflection_slots: quality_slots.glass_reflection,
+                post: &post_descriptors,
                 reflection_divisor: graphics.rt_reflections().map_or(1, |rt| rt.divisor),
                 planar_slots: &planar_slots,
                 glass_panels: &fx.glass_panels,
@@ -390,6 +388,9 @@ impl DxContext {
 
         let mut ctx = Self {
             post: post_descriptors,
+            retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool::new(
+                gpu.hw.alloc.frames_in_flight() as u64 + 1,
+            ),
             swapchain,
             targets,
             upscale,

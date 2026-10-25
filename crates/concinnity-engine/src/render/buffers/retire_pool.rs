@@ -73,6 +73,48 @@ impl<T> RetirePool<T> {
     }
 }
 
+/// A [`RetirePool`] that keeps its own frame tick: an item pushed between two
+/// ticks is held for `depth` ticks and dropped by the tick that closes its
+/// window. For a backend that retires whole feature state on a settings change
+/// and advances once per frame, past its frames-in-flight fence.
+pub struct TickedRetirePool<T> {
+    pool: RetirePool<T>,
+    tick: u64,
+    depth: u64,
+}
+
+impl<T> TickedRetirePool<T> {
+    /// An empty pool holding each item for `depth` ticks.
+    pub fn new(depth: u64) -> Self {
+        Self {
+            pool: RetirePool::new(),
+            tick: 0,
+            depth,
+        }
+    }
+
+    /// Park `item` until `depth` more ticks have passed.
+    pub fn push(&mut self, item: T) {
+        self.pool.push(self.tick, item);
+    }
+
+    /// Advance one tick and drop every item whose window has closed.
+    pub fn tick(&mut self) {
+        self.tick += 1;
+        self.pool.collect(self.tick, self.depth);
+    }
+
+    /// How many items are still parked.
+    pub fn len(&self) -> usize {
+        self.pool.len()
+    }
+
+    /// Whether nothing is parked.
+    pub fn is_empty(&self) -> bool {
+        self.pool.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +129,54 @@ mod tests {
             assert_eq!(pool.len(), 1, "tick {now} is inside the window");
         }
         pool.collect(13, 3);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn an_item_retired_at_n_is_freed_at_n_plus_depth_and_not_before() {
+        // A settings apply retires the replaced feature with the next frame's
+        // tick N; frames up to N - 1 may still name it, so it must outlive tick
+        // N + depth - 1 and be gone by N + depth + 1 at the latest.
+        for depth in 1..=4 {
+            let mut pool = RetirePool::new();
+            pool.push(10, 'a');
+            for now in 10..10 + depth {
+                pool.collect(now, depth);
+                assert_eq!(pool.len(), 1, "depth {depth}, tick {now}");
+            }
+            pool.collect(10 + depth, depth);
+            assert!(pool.is_empty(), "depth {depth}");
+        }
+    }
+
+    #[test]
+    fn a_ticked_item_outlives_the_frames_recorded_before_it() {
+        // Pushed after frame N recorded: frames up to N may name it, and the
+        // fence proves frame N retired once N + depth begins.
+        for depth in 1..=4 {
+            let mut pool = TickedRetirePool::new(depth);
+            for _ in 0..5 {
+                pool.tick();
+            }
+            pool.push('a');
+            for held in 1..depth {
+                pool.tick();
+                assert_eq!(pool.len(), 1, "depth {depth}, {held} ticks");
+            }
+            pool.tick();
+            assert!(pool.is_empty(), "depth {depth}");
+        }
+    }
+
+    #[test]
+    fn ticked_items_retire_in_push_order() {
+        let mut pool = TickedRetirePool::new(2);
+        pool.push(1);
+        pool.tick();
+        pool.push(2);
+        pool.tick();
+        assert_eq!(pool.len(), 1);
+        pool.tick();
         assert!(pool.is_empty());
     }
 

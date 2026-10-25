@@ -748,6 +748,11 @@ pub(crate) struct DxContext {
     // targets from. Held once for the backend rather than reserved per effect in
     // `init/heap_layout.rs`.
     pub(super) post: super::post::descriptors::PostDescriptors,
+    // Feature state a settings change replaced, freed once no frame in flight
+    // can name it.
+    pub(super) retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool<
+        super::quality::RetiredEffect,
+    >,
 
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
@@ -887,11 +892,11 @@ pub(crate) struct DxContext {
     // the world's pair rather than the engine's.
     pub(super) world_shader: Option<components::ShaderPrograms>,
 
-    // Fixed descriptor-heap slots for the live-toggleable Quality effects (TAA /
-    // SSAO / SSR / SSGI / RT-reflection output). Minted once at init (the slots
-    // are reserved unconditionally) and stashed so `apply_quality_settings` can
-    // build a launched-off feature into its slot without re-deriving the heap
-    // layout.
+    // Fixed descriptor-heap slots for the live-toggleable features outside the
+    // post block (the G-buffer and the glass reflection render targets). Minted
+    // once at init (the slots are reserved unconditionally) and stashed so a
+    // settings rebuild can build a launched-off feature into its slot without
+    // re-deriving the heap layout.
     pub(super) quality_slots: super::quality::QualitySlotHandles,
 
     // Scene-captured reflection probes. See [`ProbeState`].
@@ -1398,7 +1403,7 @@ impl DxContext {
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
-    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // resolution sizes its targets and rides its rebuild with its ray
     // count, so only its scalar intensity / distance are updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
     pub(crate) fn update_quality_params(

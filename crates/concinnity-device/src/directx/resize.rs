@@ -86,6 +86,9 @@ impl DxContext {
     // slot, and refresh `extent.render_width` / `extent.render_height`.
     fn handle_resize(&mut self, new_w: u32, new_h: u32) -> RenderResult<()> {
         self.wait_idle();
+        // Idle, so a post target this resize replaces returns its descriptor
+        // slots at once.
+        let _idle = self.post.idle_scope();
 
         // 0) Temporal upscaler. `new_w`/`new_h` are the new drawable dims;
         //    rebuild the FFX context for them (its `max_render`/`max_upscale`
@@ -274,19 +277,10 @@ impl DxContext {
         // and SSAO re-view their pooled targets from it. The device is idle at
         // the top of resize, so dropping the old placed resources + heaps is
         // sound.
-        let ssao_enabled = self.ssao.resources.is_some();
-        let gbuffer_enabled = self.gbuffer.is_some();
         self.targets.transient_pool.rebuild(
             &self.hw.device,
             &self.hw.command_queue,
-            &plan_pool_slots(
-                PoolGates {
-                    ssao: ssao_enabled,
-                    gbuffer: gbuffer_enabled,
-                },
-                (render_w, render_h),
-                (new_w, new_h),
-            )?,
+            &plan_pool_slots(PoolGates::REACHABLE, (render_w, render_h), (new_w, new_h))?,
         )?;
 
         // 4) Bloom: the octaves below the pool's top one, and the view of the
@@ -369,17 +363,11 @@ impl DxContext {
             r?;
         }
 
-        // 7-rt) RT reflections output target. Re-uses its pre-reserved RTV/SRV
-        //     slots; the acceleration structure is resolution-independent and is
-        //     left untouched.
+        // 7-rt) RT reflections output target, into its own descriptors; the
+        //     acceleration structure is resolution-independent and is left
+        //     untouched.
         if let Some(rt) = self.rt_reflections.as_mut() {
-            rt.resize_to(
-                &self.hw.device,
-                render_w,
-                render_h,
-                srv_cpu_base,
-                srv_gpu_base,
-            )?;
+            rt.resize_to(&self.hw.device, render_w, render_h)?;
         }
 
         // 7-refl) Reflection composite: the full-res composited output + the
@@ -422,7 +410,7 @@ impl DxContext {
         //     and rewrite its SRV in place. The depth SRV the pass also binds is
         //     the main-depth slot, rewritten by the decal path.
         if let Some(transparent) = self.transparent.as_mut() {
-            transparent.resize_to(&self.hw.device, render_w, render_h)?;
+            transparent.resize_to(&self.hw.device, &self.post, render_w, render_h)?;
         }
 
         // 7d) Planar reflections: recreate the shared mirror color + depth + the

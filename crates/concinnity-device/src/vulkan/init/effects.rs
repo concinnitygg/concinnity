@@ -321,8 +321,13 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     // the 1x1 white fallback stands in when a world built no G-buffer / no
     // SSAO.
     for (i, &set) in composite.sets.iter().enumerate() {
-        let channels =
-            composite_channels(targets, screen.gbuffer.as_ref(), scene.ssao_white.view, i);
+        let channels = composite_channels(
+            targets,
+            screen.gbuffer.as_ref(),
+            screen.ssao.is_some(),
+            scene.ssao_white.view,
+            i,
+        );
         write_composite_channel_set(device, set, &channels);
     }
     Ok(taa)

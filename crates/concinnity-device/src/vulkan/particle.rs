@@ -406,6 +406,32 @@ impl ParticleResources {
         Ok(())
     }
 
+    // Re-point frame slot `frame`'s late framebuffer at `scene`, the post
+    // chain's scene image a settings change moved. The slot's fence has
+    // passed; the replaced framebuffer waits out the owned-handle retire.
+    pub(in crate::vulkan) fn rescene(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        (scene, mask): (vk::ImageView, vk::ImageView),
+        extent: vk::Extent2D,
+    ) -> RenderResult<()> {
+        let attachments = device.writer_targets().views(scene, mask);
+        let fb_info = vk::FramebufferCreateInfo::default()
+            .render_pass(self.render_passes.compatible())
+            .attachments(&attachments)
+            .width(extent.width.max(1))
+            .height(extent.height.max(1))
+            .layers(1);
+        let fb = device
+            .create_framebuffer(&fb_info)
+            .map_err(|e| super::error::map_vk_result(e, "particle framebuffer"))?;
+        if let Some(slot) = self.late_framebuffers.get_mut(frame) {
+            *slot = fb;
+        }
+        Ok(())
+    }
+
     // Construct the compute + render pipelines against the existing
     // layouts. Used by the shader hot-reload pass.
     pub(in crate::vulkan) fn rebuild_pipelines(

@@ -147,6 +147,10 @@ impl DxContext {
         // could still reference a range freed `frames + 1` ticks ago, so those
         // bytes become placeable again here.
         self.hw.alloc.begin_frame();
+        // Same tick for the post block's freed descriptor slots and the feature
+        // state a settings change replaced.
+        self.post.begin_frame();
+        self.retired_effects.tick();
         // Same tick for the staged geometry writes' ring and copy lists.
         self.geometry_uploads.get_mut().begin_frame();
 

@@ -67,10 +67,6 @@ struct InitGpu<'a> {
 
 // The feature gates every stage agrees on, resolved once from the world's post
 // settings, the drawable and the upscaler.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent render feature gates"
-)]
 struct Features {
     // True when the world has 3D scene content, which builds the GPU-driven main
     // pass and the bloom pipelines.
@@ -85,7 +81,6 @@ struct Features {
     // when MetalFX runs, the drawable resolution otherwise.
     render: (u32, u32),
     taa_enabled: bool,
-    ssao_enabled: bool,
     gbuffer_enabled: bool,
     post_process: PostProcessParams,
 }
@@ -126,7 +121,6 @@ impl Features {
             output,
             render,
             taa_enabled,
-            ssao_enabled: plan.ssao,
             gbuffer_enabled: plan.gbuffer,
             // Pair the authored tunables with the resolved mode's output flags.
             // On the SDR path both flags stay 0.0 and the shader runs the full
@@ -392,6 +386,7 @@ impl MtlContext {
             prepared_slot: None,
             frames_in_flight: frames_in_flight.max(1),
             frame_ring_index: 0,
+            retired_effects: concinnity_engine::render::buffers::retire_pool::RetirePool::new(),
             rings,
             water,
             grass,

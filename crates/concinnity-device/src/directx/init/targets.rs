@@ -134,22 +134,15 @@ pub(super) fn build_targets(
         msaa_samples,
     );
 
-    // Transient pool: the graph-owned transient render targets. `bloom_top`
-    // (the bloom chain's top octave) is always managed; `ao_output` is placed
-    // only when SSAO is on (else `resource_for` returns None and the main pass
-    // binding 6 falls back to `ssao_white`). Built before the bloom chain, SSAO
-    // and the G-buffer, which read their placed resources back by label.
+    // Transient pool: the graph-owned transient render targets (`bloom_top`,
+    // `ao_output` and the G-buffer colors), planned for every feature a
+    // settings change can turn on so a toggle never repacks it. Built before
+    // the bloom chain, SSAO and the G-buffer, which read their placed
+    // resources back by label.
     let transient_pool = TransientResourcePool::build(
         hw.alloc.device(),
         hw.alloc.queue(),
-        &plan_pool_slots(
-            PoolGates {
-                ssao: features.ssao_enabled,
-                gbuffer: features.gbuffer_enabled,
-            },
-            (render_w, render_h),
-            (width, height),
-        )?,
+        &plan_pool_slots(PoolGates::REACHABLE, (render_w, render_h), (width, height))?,
     )?;
 
     let reactive_mask = ReactiveMask::new(

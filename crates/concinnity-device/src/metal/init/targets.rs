@@ -20,13 +20,7 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderRes
     let depth_state_inclusive = Depth::write_inclusive().state(device)?;
     let depth_state_read_only = Depth::read_only().state(device)?;
     let hdr = create_hdr_targets(device, render_w, render_h, features.hdr_samples)?;
-    let transient_pool = build_transient_pool(
-        device,
-        features.ssao_enabled,
-        features.gbuffer_enabled,
-        features.render,
-        features.output,
-    )?;
+    let transient_pool = build_transient_pool(device, features.render, features.output)?;
 
     Ok(MtlTargets {
         hdr,
@@ -41,27 +35,18 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderRes
 
 // Render-graph transient texture pool: `ao_output` (SSAO's blurred
 // occlusion), `bloom_top` (the bloom chain's top octave, half output
-// resolution), and the
-// G-buffer pre-pass's normal+depth / roughness / velocity channels. The
-// planner packs whichever of them have disjoint lifetimes onto shared heap
-// slots. The bloom chain, the composite and the pre-pass read their targets
-// back out of it by label.
-pub(in crate::metal) fn build_transient_pool(
+// resolution), and the G-buffer pre-pass's normal+depth / roughness / velocity
+// channels, planned for every feature a settings change can turn on so a
+// toggle never repacks it. The planner packs whichever of them have disjoint
+// lifetimes onto shared heap slots. The bloom chain, the composite and the
+// pre-pass read their targets back out of it by label.
+fn build_transient_pool(
     device: &ProtocolObject<dyn MTLDevice>,
-    ssao_enabled: bool,
-    gbuffer_enabled: bool,
     render: (u32, u32),
     output: (u32, u32),
 ) -> RenderResult<TransientTexturePool> {
     TransientTexturePool::build(
         device,
-        &plan_pool_slots(
-            PoolGates {
-                ssao: ssao_enabled,
-                gbuffer: gbuffer_enabled,
-            },
-            render,
-            output,
-        )?,
+        &plan_pool_slots(PoolGates::REACHABLE, render, output)?,
     )
 }

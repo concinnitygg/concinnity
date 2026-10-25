@@ -169,9 +169,9 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
     }
 
     /// Recreate the blur at a new divisor for a render resolution of `extent`,
-    /// keeping the old blur if creation fails. Returns whether it was recreated,
-    /// which is only when [`Self::blur_scale_differs`]. The caller has already
-    /// idled the device.
+    /// keeping the old blur if creation fails. Returns the replaced blur when it
+    /// was recreated, which is only when [`Self::blur_scale_differs`], so the
+    /// caller can hold it until no frame in flight samples it.
     ///
     /// # Errors
     ///
@@ -181,17 +181,17 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
         device: &D,
         blur_scale: u32,
         extent: PostExtent,
-    ) -> RenderResult<bool>
+    ) -> RenderResult<Option<Target>>
     where
         D: PostPassDevice<Pipeline = Pipeline, Target = Target>,
     {
         if !self.blur_scale_differs(blur_scale) {
-            return Ok(false);
+            return Ok(None);
         }
         let blur_scale = blur_scale.max(1);
-        self.blur = device.create_target(BLUR_LABEL, &blur_desc(blur_scale), extent)?;
+        let blur = device.create_target(BLUR_LABEL, &blur_desc(blur_scale), extent)?;
         self.blur_scale = blur_scale;
-        Ok(true)
+        Ok(Some(core::mem::replace(&mut self.blur, blur)))
     }
 
     /// Swap in freshly built pipelines. Driven by shader hot reload; the caller
@@ -459,7 +459,11 @@ mod tests {
         let device = MockDevice::new();
         let mut pass = ReflectionCompositePass::new(&device, 2, EXTENT).expect("pass");
         assert!(pass.blur_scale_differs(4));
-        assert!(pass.set_blur_scale(&device, 4, EXTENT).expect("rescale"));
+        assert!(
+            pass.set_blur_scale(&device, 4, EXTENT)
+                .expect("rescale")
+                .is_some()
+        );
         assert_eq!(pass.blur_scale(), 4);
         let targets = device.targets.borrow();
         assert_eq!(targets.len(), 3);
@@ -483,7 +487,11 @@ mod tests {
         let device = MockDevice::new();
         let mut pass = ReflectionCompositePass::new(&device, 2, EXTENT).expect("pass");
         assert!(!pass.blur_scale_differs(2));
-        assert!(!pass.set_blur_scale(&device, 2, EXTENT).expect("rescale"));
+        assert!(
+            pass.set_blur_scale(&device, 2, EXTENT)
+                .expect("rescale")
+                .is_none()
+        );
         assert_eq!(device.targets.borrow().len(), 2);
     }
 
@@ -492,9 +500,21 @@ mod tests {
         let device = MockDevice::new();
         let mut pass = ReflectionCompositePass::new(&device, 1, EXTENT).expect("pass");
         assert!(!pass.blur_scale_differs(0));
-        assert!(!pass.set_blur_scale(&device, 0, EXTENT).expect("rescale"));
-        assert!(pass.set_blur_scale(&device, 2, EXTENT).expect("rescale"));
-        assert!(pass.set_blur_scale(&device, 0, EXTENT).expect("rescale"));
+        assert!(
+            pass.set_blur_scale(&device, 0, EXTENT)
+                .expect("rescale")
+                .is_none()
+        );
+        assert!(
+            pass.set_blur_scale(&device, 2, EXTENT)
+                .expect("rescale")
+                .is_some()
+        );
+        assert!(
+            pass.set_blur_scale(&device, 0, EXTENT)
+                .expect("rescale")
+                .is_some()
+        );
         assert_eq!(pass.blur_scale(), 1);
         assert_eq!(
             device.targets.borrow().last().map(|t| t.extent),

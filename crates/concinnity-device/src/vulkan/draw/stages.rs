@@ -107,6 +107,9 @@ impl VkContext {
         self.hw.device.begin_frame();
         // Same tick for the staged geometry writes' ring and command buffers.
         self.geometry_uploads.get_mut().begin_frame();
+        // Past the same fence: re-point this slot's sets and framebuffers at
+        // whatever a settings change since its last frame rebuilt.
+        self.rewire_features(frame)?;
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.

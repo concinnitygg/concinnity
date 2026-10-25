@@ -30,7 +30,7 @@ use crate::render::backend::{
 use crate::render::scene_state::SceneState;
 use crate::render::{backend, environment::volumetric_fog, probe::capture, slots::draw_slot};
 use crate::settings::ResolvedGraphics;
-use crate::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
+use crate::settings::apply::{ApplyPlan, RebuildSet, SettingsTarget, apply_plan};
 use crate::window::display_mode;
 
 /// The parts of an assembled `BackendInit` worth asserting on, captured before
@@ -709,7 +709,11 @@ impl RenderTuning for RecordingBackend {
 
 // The plan's pieces, each recorded as the call it stands for.
 impl SettingsTarget for RecordingBackend {
-    fn rebuild_features(&mut self, _graphics: &ResolvedGraphics) -> RenderResult<()> {
+    fn rebuild_features(
+        &mut self,
+        _graphics: &ResolvedGraphics,
+        _features: RebuildSet,
+    ) -> RenderResult<()> {
         let mut s = self.state.lock();
         s.calls.push(Call::ApplyQualitySettings);
         s.fail_quality.clone().map_or(Ok(()), Err)

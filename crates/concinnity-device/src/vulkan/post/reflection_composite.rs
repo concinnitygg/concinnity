@@ -56,8 +56,8 @@ impl VkContext {
     }
 
     // Drop the composite once no resolve feeds it, reporting whether it went.
-    // The caller rebuilds the swapchain when it did, which re-points every scene
-    // reader at the HDR resolve.
+    // Every scene reader is re-pointed at the HDR resolve per frame slot
+    // (`feature_wires.rs`).
     fn release_unfed_reflection_composite(&mut self) -> bool {
         if self.reflection_path().composite() || self.reflection_composite.is_none() {
             return false;
@@ -70,8 +70,8 @@ impl VkContext {
 
     // Bring the composite in line with the authored SSR and the live RT state,
     // building it at `blur_scale` when a resolve feeds it, or moving a live one
-    // to `blur_scale`. The caller idles the device first and rebuilds the
-    // swapchain after.
+    // to `blur_scale`. A replaced target waits out the frames in flight on its
+    // own, and the sets naming the output are re-pointed per frame slot.
     pub(in crate::vulkan) fn reconcile_reflection_composite(
         &mut self,
         blur_scale: u32,

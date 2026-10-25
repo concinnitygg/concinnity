@@ -935,7 +935,7 @@ pub(super) struct VkHardware {
     // Whether the device is RT-capable (the ray-query extensions + features were
     // enabled at device creation, and XeSS is not active). Enabled whenever
     // capable -- independent of whether RT is on at launch -- so a live
-    // `apply_quality_settings` toggle can bring RT up at runtime (a device
+    // settings rebuild can bring RT up at runtime (a device
     // extension cannot be enabled after `create_device`). Read by `upload_skinned`
     // to add the AS-build / storage / device-address flags to the skinned VB/IB
     // whenever capable, and by the RT toggle to reject an enable on an incapable
@@ -1024,6 +1024,9 @@ pub(crate) struct VkContext {
 
     // Composite (post-process) pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
+    // What each frame slot's sets and framebuffers naming a rebuildable
+    // feature's output were last wired with. See `feature_wires.rs`.
+    pub(super) feature_wires: super::feature_wires::FeatureWires,
 
     // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
     pub(super) shadow: VkShadow,
@@ -1618,7 +1621,7 @@ impl VkContext {
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
-    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // resolution sizes its targets and rides its rebuild with its ray
     // count, so only its scalar intensity / distance are updated.
     pub(crate) fn update_quality_params(
         &mut self,

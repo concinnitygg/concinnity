@@ -215,6 +215,16 @@ pub struct PoolGates {
     pub gbuffer: bool,
 }
 
+impl PoolGates {
+    /// Every gate a running settings change can turn on. A pool planned for
+    /// these is sized once at init or resize and never repacks when a feature
+    /// toggles, so nothing holding a pooled resource has to be re-pointed.
+    pub const REACHABLE: Self = Self {
+        ssao: true,
+        gbuffer: true,
+    };
+}
+
 /// The alias-slot list a pool built for `gates` should allocate, taken straight
 /// from the graph: the grouping and each member's extent, format and usage come
 /// from one planning graph, so init and resize cannot drift apart and neither
@@ -527,16 +537,11 @@ mod tests {
         }
     }
 
-    const ALL_GATES: PoolGates = PoolGates {
-        ssao: true,
-        gbuffer: true,
-    };
-
     #[test]
     fn gbuffer_depth_is_not_pooled_with_the_gbuffer_gate_on() {
         // D3D12 needs a typeless resource format for a shader-readable depth
         // target, so the depth sibling stays feature-owned (see `pooled`).
-        let slots = plan_pool_slots(ALL_GATES, (1024, 768), (1024, 768)).expect("plans");
+        let slots = plan_pool_slots(PoolGates::REACHABLE, (1024, 768), (1024, 768)).expect("plans");
         let labels: Vec<&str> = slots.iter().flat_map(TransientSlot::labels).collect();
         assert!(labels.contains(&"gbuffer_normal_depth"), "{labels:?}");
         assert!(!labels.contains(&"gbuffer_depth"), "{labels:?}");
@@ -548,7 +553,7 @@ mod tests {
         // it is the one that reclaims an earlier member's memory. Its partner
         // must start first: a pool's cyclic predecessor wiring follows
         // lifetime-start order.
-        let slots = plan_pool_slots(ALL_GATES, (1024, 768), (1024, 768)).expect("plans");
+        let slots = plan_pool_slots(PoolGates::REACHABLE, (1024, 768), (1024, 768)).expect("plans");
         let pair = slots
             .iter()
             .map(TransientSlot::labels)
@@ -647,6 +652,40 @@ mod tests {
         assert!(!planned.ssao_enabled);
         assert!(!planned.bloom_enabled);
         assert!(planning_inputs(&build_inputs(true, true)).ssao_enabled);
+    }
+
+    #[test]
+    fn the_reachable_plan_places_every_gated_member_unchanged() {
+        // A toggle never repacks a pool planned for the union, so every
+        // texture a narrower gate would place must be there, with the same
+        // extent, format and usage the gated plan gives it.
+        let union =
+            plan_pool_slots(PoolGates::REACHABLE, (1280, 720), (2560, 1440)).expect("plans");
+        let union_members: Vec<&TransientTexture> =
+            union.iter().flat_map(|slot| &slot.members).collect();
+        for ssao in [false, true] {
+            for gbuffer in [false, true] {
+                let gated = plan_pool_slots(PoolGates { ssao, gbuffer }, (1280, 720), (2560, 1440))
+                    .expect("plans");
+                for member in gated.iter().flat_map(|slot| &slot.members) {
+                    assert!(
+                        union_members.contains(&member),
+                        "{} (ssao {ssao}, gbuffer {gbuffer}) differs in the reachable plan",
+                        member.label
+                    );
+                }
+            }
+        }
+        let labels: Vec<&str> = union_members.iter().map(|m| m.label).collect();
+        for want in [
+            "ao_output",
+            "bloom_top",
+            "gbuffer_normal_depth",
+            "gbuffer_roughness",
+            "gbuffer_velocity",
+        ] {
+            assert!(labels.contains(&want), "{want}: {labels:?}");
+        }
     }
 
     #[test]

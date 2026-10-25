@@ -682,15 +682,6 @@ impl MtlContext {
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
         let bloom_changed = (want_w, want_h) != self.targets.output;
-        // Whether the unified G-buffer pre-pass runs, derived once so the pool
-        // and the pre-pass's own depth target below cannot disagree about it.
-        // Same expression as `EffectSettings::gbuffer_needed`.
-        let needs_gbuffer = self.ssr.settings.is_some()
-            || self.ssgi.settings.is_some()
-            || self.rt.settings.is_some()
-            || self.ssao.settings.is_some()
-            || self.taa.enabled
-            || self.upscale.scaler.is_some();
         // The transient pool backs `ao_output` and the G-buffer channels (all
         // render-resolution) plus `bloom_top` (half output-resolution), so
         // either extent moving invalidates it. Nothing caches a pooled handle:
@@ -701,10 +692,7 @@ impl MtlContext {
             self.targets.transient_pool.rebuild(
                 &self.hw.device,
                 &render_graph::plan_pool_slots(
-                    render_graph::PoolGates {
-                        ssao: self.ssao.settings.is_some(),
-                        gbuffer: needs_gbuffer,
-                    },
+                    render_graph::PoolGates::REACHABLE,
                     (render_w, render_h),
                     (want_w, want_h),
                 )?,
@@ -771,9 +759,8 @@ impl MtlContext {
         }
         // The pre-pass's depth attachment is render-resolution and stays
         // feature-owned; its three color channels were rebuilt with the pool
-        // above. Same gate, so the two halves of the pre-pass's targets are
-        // always present or absent together.
-        if render_changed && needs_gbuffer {
+        // above.
+        if render_changed && self.gbuffer.targets.is_some() {
             self.gbuffer.targets = Some(super::post::create_gbuffer_targets(
                 &self.hw.device,
                 render_w,

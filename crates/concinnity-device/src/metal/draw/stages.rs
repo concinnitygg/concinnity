@@ -200,6 +200,9 @@ impl MtlContext {
         let frame_id = self.frame_ring_index;
         let ring_slot = usize::saturating_from(frame_id % self.frames_in_flight as u64);
         self.frame_ring_index = frame_id.wrapping_add(1);
+        // Settings-replaced feature state the fence now proves no frame reads.
+        self.retired_effects
+            .collect(frame_id, self.frames_in_flight as u64);
 
         // Hand back the pooled ranges whose retire frame has passed and release
         // any heap left holding nothing. Ticked here, past the fence, so a range

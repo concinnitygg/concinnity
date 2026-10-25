@@ -207,7 +207,7 @@ pub(in crate::directx) fn build_model_history(
 
 // Descriptor-slot handles for the three G-buffer SRVs, minted by the caller
 // (which owns the heap layout). `Copy` so the caller can both pass it to `new`
-// and stash a copy for the live `apply_quality_settings` rebuild.
+// and stash a copy for the live settings rebuild.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferSlots {
     pub normal_depth_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,

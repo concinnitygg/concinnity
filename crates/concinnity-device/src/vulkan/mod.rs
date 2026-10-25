@@ -21,6 +21,7 @@ mod descriptor_layout;
 mod device;
 mod draw;
 mod error;
+mod feature_wires;
 mod fog;
 mod geometry_upload;
 mod glass;

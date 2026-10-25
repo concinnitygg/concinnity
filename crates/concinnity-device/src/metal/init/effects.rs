@@ -69,18 +69,8 @@ impl EffectSettings {
 
     // Whether SSR, SSGI or RT reflections run: all three need the reflection
     // targets and the G-buffer the unified pre-pass produces.
-    fn reflections(&self) -> bool {
+    pub(in crate::metal) fn reflections(&self) -> bool {
         self.ssr.is_some() || self.ssgi.is_some() || self.rt_reflection.is_some()
-    }
-
-    // Whether the unified G-buffer pre-pass runs at all. It gates two things
-    // that must agree: the pool (which owns the pre-pass's three color
-    // channels) and the pre-pass's own targets + pipelines. If they disagreed,
-    // a consumer would read a label the pool never created. `needs_velocity` is
-    // true when TAA is on or temporal upscaling is on (the MetalFX scaler
-    // consumes motion vectors).
-    pub(in crate::metal) fn gbuffer_needed(&self, needs_velocity: bool) -> bool {
-        self.reflections() || self.ssao.is_some() || needs_velocity
     }
 }
 

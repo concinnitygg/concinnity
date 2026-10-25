@@ -448,6 +448,11 @@ pub(in crate::vulkan) struct TransparentResources {
     // trace divisor is above 1, and the 1x1 empty layer the first one peels behind.
     reflection_render_pass: OwnedRenderPass,
     reflection: Option<GlassReflectionLayers>,
+    // The divisor the layers were built at, and what each frame slot's view
+    // sets were last written with, so a new divisor rewrites each slot once,
+    // past its own fence.
+    reflection_divisor: u32,
+    wired_reflection: WireCache<ReflectionWire>,
     empty_layer: GpuImage,
 }
 
@@ -862,6 +867,13 @@ impl GlassReflectionLayers {
             extent,
         })
     }
+}
+
+// The reflection images a frame slot's view sets bind.
+#[derive(Clone, Copy, PartialEq)]
+struct ReflectionWire {
+    scene: [vk::ImageView; 2],
+    first: vk::ImageView,
 }
 
 // One frame's set-0 variants, differing only in the reflection layers bound at
@@ -1598,6 +1610,8 @@ impl TransparentResources {
             rt,
             reflection_render_pass,
             reflection: None,
+            reflection_divisor,
+            wired_reflection: WireCache::new(frames),
             empty_layer,
         };
         me.reflection =
@@ -1643,22 +1657,49 @@ impl TransparentResources {
     // reflection layers (the snapshot stands in while there are none, which the
     // shaders never read then); the first pre-pass layer peels behind the empty
     // layer and the second behind the first.
-    fn write_view_sets(&self, device: &VkDevice, depth_views: &[vk::ImageView]) {
-        let empty = self.empty_layer.view;
-        let (scene, first) = match &self.reflection {
-            Some(r) => ([r.layers[0].view, r.layers[1].view], r.layers[0].view),
-            None => ([self.snapshot.view; 2], empty),
-        };
+    fn write_view_sets(&mut self, device: &VkDevice, depth_views: &[vk::ImageView]) {
+        let wire = self.reflection_wire();
         for (i, sets) in self.view_sets.iter().enumerate() {
-            let inputs = |reflection| ViewSetImages {
-                snapshot_view: self.snapshot.view,
-                depth_view: depth_views[i.min(depth_views.len().saturating_sub(1))],
-                reflection,
-            };
-            write_view_set_images(device, sets.scene, inputs(scene));
-            write_view_set_images(device, sets.layers[0], inputs([empty; 2]));
-            write_view_set_images(device, sets.layers[1], inputs([first, empty]));
+            let depth_view = depth_views[i.min(depth_views.len().saturating_sub(1))];
+            self.write_frame_view_sets(device, sets, depth_view, wire);
         }
+        for frame in 0..self.view_sets.len() {
+            self.wired_reflection.changed(frame, wire);
+        }
+    }
+
+    // The reflection images the view sets bind: what the scene pass reads, and
+    // what the second pre-pass layer peels behind.
+    fn reflection_wire(&self) -> ReflectionWire {
+        let empty = self.empty_layer.view;
+        match &self.reflection {
+            Some(r) => ReflectionWire {
+                scene: [r.layers[0].view, r.layers[1].view],
+                first: r.layers[0].view,
+            },
+            None => ReflectionWire {
+                scene: [self.snapshot.view; 2],
+                first: empty,
+            },
+        }
+    }
+
+    fn write_frame_view_sets(
+        &self,
+        device: &VkDevice,
+        sets: &FrameViewSets,
+        depth_view: vk::ImageView,
+        wire: ReflectionWire,
+    ) {
+        let empty = self.empty_layer.view;
+        let inputs = |reflection| ViewSetImages {
+            snapshot_view: self.snapshot.view,
+            depth_view,
+            reflection,
+        };
+        write_view_set_images(device, sets.scene, inputs(wire.scene));
+        write_view_set_images(device, sets.layers[0], inputs([empty; 2]));
+        write_view_set_images(device, sets.layers[1], inputs([wire.first, empty]));
     }
 
     // True when the per-pixel RT pipelines are built (RT-capable device + the
@@ -1814,6 +1855,7 @@ impl TransparentResources {
         self.reflection = None;
         self.reflection =
             self.build_reflection_layers(alloc, device, width, height, reflection_divisor)?;
+        self.reflection_divisor = reflection_divisor;
         self.write_view_sets(device, depth_views);
 
         // Re-point each slotted record's planar binding (binding 1) at its slot's
@@ -1832,6 +1874,74 @@ impl TransparentResources {
             }
         }
         Ok(())
+    }
+
+    // Re-point frame slot `frame`'s framebuffer and scene snapshot source at
+    // `scene`, the post chain's scene image a settings change moved. The
+    // slot's fence has passed; the replaced framebuffer waits out the
+    // owned-handle retire.
+    pub(in crate::vulkan) fn rescene(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        scene: (vk::ImageView, vk::Image),
+        mask: vk::ImageView,
+        extent: vk::Extent2D,
+    ) -> RenderResult<()> {
+        let attachments = device.writer_targets().views(scene.0, mask);
+        let info = vk::FramebufferCreateInfo::default()
+            .render_pass(self.render_passes.compatible())
+            .attachments(&attachments)
+            .width(extent.width.max(1))
+            .height(extent.height.max(1))
+            .layers(1);
+        let fb = device
+            .create_framebuffer(&info)
+            .map_err(|e| super::error::map_vk_result(e, "transparent framebuffer"))?;
+        if let (Some(slot), Some(image)) = (
+            self.framebuffers.get_mut(frame),
+            self.scene_images.get_mut(frame),
+        ) {
+            *slot = fb;
+            *image = scene.1;
+        }
+        Ok(())
+    }
+
+    // Rebuild the glass reflection layers at `divisor` for a `width` x
+    // `height` render. The replaced layers wait out the frames in flight on
+    // their own; every view set naming them is rewritten per frame slot by
+    // `rewire_reflection_views`.
+    pub(in crate::vulkan) fn set_reflection_divisor(
+        &mut self,
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        (width, height): (u32, u32),
+        divisor: u32,
+    ) -> RenderResult<()> {
+        if divisor == self.reflection_divisor {
+            return Ok(());
+        }
+        self.reflection = self.build_reflection_layers(alloc, device, width, height, divisor)?;
+        self.reflection_divisor = divisor;
+        Ok(())
+    }
+
+    // Rewrite frame slot `frame`'s view sets when the reflection layers they
+    // name moved since that slot was last written. The slot's fence has passed.
+    pub(in crate::vulkan) fn rewire_reflection_views(
+        &mut self,
+        device: &VkDevice,
+        frame: usize,
+        depth_view: vk::ImageView,
+    ) {
+        let wire = self.reflection_wire();
+        if !self.wired_reflection.changed(frame, wire) {
+            return;
+        }
+        if let Some(sets) = self.view_sets.get(frame) {
+            self.write_frame_view_sets(device, sets, depth_view, wire);
+        }
     }
 
     // Destroy every owned GPU resource.

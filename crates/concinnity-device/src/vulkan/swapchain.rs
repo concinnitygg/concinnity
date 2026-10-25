@@ -209,10 +209,7 @@ impl VkContext {
             },
             self.frames_in_flight,
             &plan_pool_slots(
-                PoolGates {
-                    ssao: self.ssao.is_some(),
-                    gbuffer: self.gbuffer.is_some(),
-                },
+                PoolGates::REACHABLE,
                 (render_ext.width, render_ext.height),
                 (ext.width, ext.height),
             )?,
@@ -268,7 +265,9 @@ impl VkContext {
 
         self.rebuild_screen_space_targets(render_ext)?;
         self.rebuild_scene_pass_targets(render_ext)?;
-        self.rebuild_ssao_and_composite_inputs(render_ext)
+        self.rebuild_ssao_and_composite_inputs(render_ext)?;
+        self.mark_features_wired();
+        Ok(())
     }
 
     // Rebuild the unified G-buffer and every screen-space reader of it at the new
@@ -689,6 +688,7 @@ impl VkContext {
             let channels = composite_channels(
                 &self.targets,
                 self.gbuffer.as_ref(),
+                self.ssao.is_some(),
                 self.scene.ssao_white.view,
                 i,
             );
@@ -1109,17 +1109,19 @@ pub(super) fn write_composite_channel_set(
     );
 }
 
-// Frame slot `i`'s composite channel sources: the G-buffer's and the pooled
-// SSAO output's views, `white` wherever one does not exist.
+// Frame slot `i`'s composite channel sources: the G-buffer's and, while SSAO
+// is built, the pooled SSAO output's views, `white` wherever one does not
+// exist.
 pub(super) fn composite_channels(
     targets: &VkTargets,
     gbuffer: Option<&super::post::gbuffer::GbufferResources>,
+    ssao_built: bool,
     white: vk::ImageView,
     i: usize,
 ) -> CompositeChannels {
-    let ao = targets
-        .transient_pool
-        .view_for("ao_output", i)
+    let ao = ssao_built
+        .then(|| targets.transient_pool.view_for("ao_output", i))
+        .flatten()
         .unwrap_or(white);
     let reactive = targets
         .reactive_mask_images

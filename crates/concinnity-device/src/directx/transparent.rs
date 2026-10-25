@@ -53,8 +53,8 @@ use super::com;
 use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
-use crate::directx::init::heap_layout::GLASS_REFLECTION_SRV_SLOTS;
 use crate::directx::pipeline::main_input_layout;
+use crate::directx::post::descriptors::{PostDescriptors, PostSrvRun};
 use crate::directx::pso::{Blend, Depth, GraphicsPso, Raster};
 use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
@@ -371,10 +371,12 @@ pub(in crate::directx) struct TransparentResources {
     rt_params_ubo_resources: Vec<PooledBuffer>,
     rt_params_ubo_ptrs: Vec<*mut u8>,
 
-    // The glass reflection pre-pass: its fixed slots, the reduced layers while
-    // the trace divisor is above 1, and that divisor, kept so a resize rebuilds
-    // the layers at the same one.
+    // The glass reflection pre-pass: its fixed render-target slots, the
+    // windows over its layers, the reduced layers while the trace divisor is
+    // above 1, and that divisor, kept so a resize rebuilds the layers at the
+    // same one.
     reflection_slots: GlassReflectionSlots,
+    reflection_windows: GlassReflectionWindows,
     reflection: Option<GlassReflectionLayers>,
     reflection_divisor: u32,
 }
@@ -663,22 +665,45 @@ fn write_scene_copy_srv(
     unsafe { device.CreateShaderResourceView(scene_copy, Some(&raw const desc), srv_cpu) };
 }
 
-// The glass reflection pre-pass's fixed descriptor slots: an RTV per layer, the
-// shared DSV, and the six SRVs that form the three two-descriptor windows the
-// RT signature's t11..t12 table points at (see `GLASS_REFLECTION_SRV_SLOTS`):
-// `windows[0]` for the first layer's pass, `[1]` for the second's, `[2]` for the
-// scene pass.
+// The glass reflection pre-pass's fixed render-target slots: an RTV per layer
+// and the shared DSV. A command list copies both when it records them, so a
+// rebuild rewriting them never races a frame in flight.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GlassReflectionSlots {
     pub rtv: [D3D12_CPU_DESCRIPTOR_HANDLE; 2],
     pub dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub srv_cpu: [D3D12_CPU_DESCRIPTOR_HANDLE; GLASS_REFLECTION_SRV_SLOTS],
-    pub windows: [SrvSlot; 3],
+}
+
+// SRVs in the three two-descriptor windows over the layers.
+const GLASS_REFLECTION_WINDOW_SLOTS: usize = 6;
+
+// The three two-descriptor windows the RT signature's t11..t12 table points
+// at: `windows[0]` for the first layer's pass (both null), `[1]` for the
+// second's (the first layer, null), `[2]` for the scene pass (both layers). A
+// null SRV reads as zero, which is the empty layer the first one peels behind.
+// Shader-visible, so a rebuild writes a fresh run from the post block and the
+// old one waits out the frames in flight.
+struct GlassReflectionWindows {
+    run: PostSrvRun,
+    windows: [SrvSlot; 3],
+}
+
+impl GlassReflectionWindows {
+    fn new(post: &PostDescriptors) -> RenderResult<Self> {
+        let run = post.allocate_srv_run(GLASS_REFLECTION_WINDOW_SLOTS)?;
+        let window = |w: usize| {
+            run.gpu(2 * w).ok_or_else(|| {
+                RenderError::Other("glass reflection window past its descriptor run".into())
+            })
+        };
+        let windows = [window(0)?, window(1)?, window(2)?];
+        Ok(Self { run, windows })
+    }
 }
 
 // The reduced glass reflection layers (rgb the traced reflection, a the
 // surface's distance from the camera) and the depth they share.
-struct GlassReflectionLayers {
+pub(in crate::directx) struct GlassReflectionLayers {
     layers: [ID3D12Resource; 2],
     _depth: ID3D12Resource,
     extent: (u32, u32),
@@ -713,7 +738,7 @@ impl GlassReflectionLayers {
 // `trace_divisor` 1 and never read them. A null SRV reads as zero.
 fn write_reflection_windows(
     device: &ID3D12Device,
-    slots: &GlassReflectionSlots,
+    windows: &GlassReflectionWindows,
     layers: Option<&GlassReflectionLayers>,
 ) {
     let [front, back] = layers.map_or([None, None], |l| [Some(&l.layers[0]), Some(&l.layers[1])]);
@@ -729,7 +754,8 @@ fn write_reflection_windows(
             },
         },
     };
-    for (resource, cpu) in contents.into_iter().zip(slots.srv_cpu) {
+    let slots = (0..GLASS_REFLECTION_WINDOW_SLOTS).filter_map(|i| windows.run.cpu(i));
+    for (resource, cpu) in contents.into_iter().zip(slots) {
         // SAFETY: the view descriptor and the resource it names (or none, for a null view) are
         // live for the call, and the destination handle addresses a slot this context reserved
         // for the view in a heap it owns.
@@ -741,6 +767,8 @@ fn write_reflection_windows(
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct TransparentDeviceCtx<'a> {
     pub alloc: &'a DeviceAllocator,
+    // Where the glass reflection windows' shader-visible SRVs come from.
+    pub post: &'a PostDescriptors,
 }
 
 // Render-target build config: MSAA sample count, render dimensions, and the
@@ -793,7 +821,7 @@ impl TransparentResources {
         content: TransparentContent<'_>,
         info_queue: Option<&ID3D12InfoQueue>,
     ) -> RenderResult<Self> {
-        let TransparentDeviceCtx { alloc } = device_ctx;
+        let TransparentDeviceCtx { alloc, post } = device_ctx;
         let device = alloc.device();
         let TransparentBuildConfig {
             msaa_samples,
@@ -937,55 +965,76 @@ impl TransparentResources {
             rt_params_ubo_resources,
             rt_params_ubo_ptrs,
             reflection_slots,
+            reflection_windows: GlassReflectionWindows::new(post)?,
             reflection: None,
             reflection_divisor,
         };
-        me.rebuild_reflection_layers(device, width, height)?;
+        me.rebuild_reflection_layers(device, post, width, height)?;
         Ok(me)
     }
 
-    // Take a new glass reflection divisor, rebuilding the layers at it. The
-    // caller has idled the device.
+    // Take a new glass reflection divisor, rebuilding the layers at it.
+    // Returns the replaced layers, which a frame in flight may still sample,
+    // for the caller to retire.
     pub(in crate::directx) fn set_reflection_divisor(
         &mut self,
         device: &ID3D12Device,
+        post: &PostDescriptors,
         (width, height): (u32, u32),
         divisor: u32,
-    ) -> RenderResult<()> {
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
         if divisor == self.reflection_divisor {
-            return Ok(());
+            return Ok(None);
         }
+        let replaced = self.rebuild_reflection_layers_at(device, post, (width, height), divisor)?;
         self.reflection_divisor = divisor;
-        self.rebuild_reflection_layers(device, width, height)
+        Ok(replaced)
     }
 
-    // (Re)build the reduced reflection layers for a `width` x `height` render at
-    // the current divisor and rewrite their windows; `None` when glass traces in
-    // place (a divisor of 1, or no glass producer that can trace).
+    // Rebuild the layers at the current divisor (a resize), returning the
+    // replaced ones.
     fn rebuild_reflection_layers(
         &mut self,
         device: &ID3D12Device,
+        post: &PostDescriptors,
         width: u32,
         height: u32,
-    ) -> RenderResult<()> {
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
+        self.rebuild_reflection_layers_at(device, post, (width, height), self.reflection_divisor)
+    }
+
+    // Build the reduced reflection layers for a `width` x `height` render at
+    // `divisor` and fresh windows over them, then swap both in; no layers when
+    // glass traces in place (a divisor of 1, or no glass producer that can
+    // trace). Nothing is replaced if a build fails. Returns the replaced
+    // layers.
+    fn rebuild_reflection_layers_at(
+        &mut self,
+        device: &ID3D12Device,
+        post: &PostDescriptors,
+        (width, height): (u32, u32),
+        divisor: u32,
+    ) -> RenderResult<Option<GlassReflectionLayers>> {
         let traced = self
             .producers
             .glass
             .as_ref()
             .is_some_and(|p| p.reflection_flat.is_some())
             || self.glass_mesh.is_some();
-        let d = self.reflection_divisor;
-        self.reflection = None;
-        if d > 1 && traced {
-            let extent = ((width / d).max(1), (height / d).max(1));
-            self.reflection = Some(GlassReflectionLayers::new(
+        let layers = if divisor > 1 && traced {
+            let extent = ((width / divisor).max(1), (height / divisor).max(1));
+            Some(GlassReflectionLayers::new(
                 device,
                 &self.reflection_slots,
                 extent,
-            )?);
-        }
-        write_reflection_windows(device, &self.reflection_slots, self.reflection.as_ref());
-        Ok(())
+            )?)
+        } else {
+            None
+        };
+        let windows = GlassReflectionWindows::new(post)?;
+        write_reflection_windows(device, &windows, layers.as_ref());
+        self.reflection_windows = windows;
+        Ok(std::mem::replace(&mut self.reflection, layers))
     }
 
     // The shared root signature every base-path PSO is built against, for the
@@ -1043,18 +1092,19 @@ impl TransparentResources {
     }
 
     // Recreate the scene snapshot and the glass reflection layers at new
-    // render-target dimensions and rewrite their descriptors in place. The slots
-    // do not move, so the encoder's GPU handles stay valid. Mirrors
-    // `RaymarchResources::resize_to`.
+    // render-target dimensions. The caller has idled the device, so the
+    // replaced layers drop here. Mirrors `RaymarchResources::resize_to`.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
+        post: &PostDescriptors,
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
         self.scene_copy = create_hdr_resolve_target(device, width.max(1), height.max(1))?;
         write_scene_copy_srv(device, &self.scene_copy, self.scene_copy_srv_cpu);
-        self.rebuild_reflection_layers(device, width, height)
+        self.rebuild_reflection_layers(device, post, width, height)
+            .map(drop)
     }
 
     // True when any record of the pane or water producer is currently visible.
@@ -1532,7 +1582,7 @@ impl DxContext {
             unsafe {
                 cmd.set_graphics_srv_table(
                     GLASS_REFLECTION_ROOT_RT,
-                    transparent.reflection_slots.windows[2],
+                    transparent.reflection_windows.windows[2],
                 );
             }
         }
@@ -1626,9 +1676,10 @@ impl DxContext {
             }
             // SAFETY: the list is recording, which is all `set_viewport` requires.
             unsafe { set_viewport(cmd, layers.extent) };
+            let window = transparent.reflection_windows.windows[layer];
             // SAFETY: the RT signature declares the reflection table here, and the layer's window
-            // descriptors are reserved by this context.
-            unsafe { cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, slots.windows[layer]) };
+            // descriptors are leased from the post block by the live transparent resources.
+            unsafe { cmd.set_graphics_srv_table(GLASS_REFLECTION_ROOT_RT, window) };
             for &(kind, i) in order {
                 let pso = match kind {
                     Producer::GlassMesh => transparent

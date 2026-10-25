@@ -26,6 +26,7 @@ use crate::directx::builtin_shaders::CompileProgram;
 use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
+use crate::directx::post::descriptors::{PostDescriptors, PostTargetDescriptors};
 use crate::directx::pso::{Blend, GraphicsPso};
 use crate::directx::root_sig::{Range, RootSig, SamplerState, Visibility};
 use crate::directx::texture::{
@@ -126,6 +127,34 @@ fn create_rt_psos(
 
 // Resources
 
+// A trace output a new trace resolution replaced, held until no frame in
+// flight samples it.
+pub(in crate::directx) struct RetiredRtOutput {
+    _output: ID3D12Resource,
+    _descriptors: PostTargetDescriptors,
+}
+
+// A trace output at `extent` and the post-block descriptors viewing it.
+fn create_output(
+    device: &ID3D12Device,
+    post: &PostDescriptors,
+    extent: (u32, u32),
+) -> RenderResult<(ID3D12Resource, PostTargetDescriptors)> {
+    let output = create_rt_target(device, extent.0, extent.1, HDR_FORMAT)?;
+    let descriptors = post.allocate()?;
+    write_output_descriptors(device, &output, &descriptors);
+    Ok((output, descriptors))
+}
+
+fn write_output_descriptors(
+    device: &ID3D12Device,
+    output: &ID3D12Resource,
+    descriptors: &PostTargetDescriptors,
+) {
+    write_format_rtv(device, output, descriptors.rtv, HDR_FORMAT);
+    write_format_srv(device, output, descriptors.srv_cpu, HDR_FORMAT);
+}
+
 // Hardware-ray-traced-reflection resources held by `DxContext` when the world's
 // `Reflections` enables `ray_traced` AND the GPU supports the
 // DXR tier AND the DXC compile + acceleration-structure build succeed; otherwise
@@ -141,8 +170,9 @@ pub(in crate::directx) struct RtReflectionsResources {
     pub(in crate::directx) output: ID3D12Resource,
     // The trace resolution: render resolution reduced by `settings.divisor`.
     extent: (u32, u32),
-    output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub(in crate::directx) output_srv_gpu: SrvSlot,
+    // From the post block, so a new trace resolution writes fresh slots while
+    // a frame in flight samples the old output.
+    output_descriptors: PostTargetDescriptors,
 
     // Per-frame `RtParams` UBO (144-byte), persistently mapped.
     params_ubo_resources: Vec<PooledBuffer>,
@@ -163,14 +193,6 @@ pub(in crate::directx) struct RtBuildContext<'a> {
     pub height: u32,
 }
 
-// The RT-reflection output target's descriptor handles: a CPU RTV plus the
-// (CPU, GPU) SRV pair downstream passes sample.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct RtOutputDescriptors {
-    pub output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
-}
-
 // Optional debug info queue plus the shader hot-reload toggle for the build.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RtBuildInit<'a> {
@@ -185,7 +207,7 @@ impl RtReflectionsResources {
     pub(in crate::directx) fn new(
         ctx: RtBuildContext<'_>,
         settings: RtReflectionSettings,
-        descriptors: RtOutputDescriptors,
+        post: &PostDescriptors,
         init: RtBuildInit<'_>,
     ) -> RenderResult<Self> {
         let RtBuildContext {
@@ -194,18 +216,12 @@ impl RtReflectionsResources {
             height,
         } = ctx;
         let device = alloc.device();
-        let RtOutputDescriptors {
-            output_rtv,
-            output_srv,
-        } = descriptors;
         let RtBuildInit {
             info_queue,
             hot_reload,
         } = init;
         let extent = settings.trace_extent(width, height);
-        let output = create_rt_target(device, extent.0, extent.1, HDR_FORMAT)?;
-        write_format_rtv(device, &output, output_rtv, HDR_FORMAT);
-        write_format_srv(device, &output, output_srv.0, HDR_FORMAT);
+        let (output, output_descriptors) = create_output(device, post, extent)?;
 
         let params_size = align256(RT_PARAMS_UBO_SIZE);
         let frames = alloc.frames_in_flight();
@@ -237,8 +253,7 @@ impl RtReflectionsResources {
             settings,
             output,
             extent,
-            output_rtv,
-            output_srv_gpu: output_srv.1,
+            output_descriptors,
             params_ubo_resources,
             params_ubo_ptrs,
             root_sig,
@@ -247,24 +262,48 @@ impl RtReflectionsResources {
         })
     }
 
+    // The shader-visible handle the composite samples the trace output through.
+    pub(in crate::directx) fn output_srv_gpu(&self) -> SrvSlot {
+        self.output_descriptors.srv_gpu
+    }
+
     // Rebuild the output target for a new render resolution, at the trace
-    // resolution `settings` names. The descriptor *slot* stays put; only the
-    // backing resource changes, so the composite's binding (which points at the
-    // SRV slot's GPU handle) stays valid.
+    // resolution `settings` names, into the same descriptors. The caller has
+    // idled the device.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
         width: u32,
         height: u32,
-        srv_cpu_base: D3D12_CPU_DESCRIPTOR_HANDLE,
-        srv_gpu_base: SrvSlot,
     ) -> RenderResult<()> {
-        let srv_cpu = self.output_srv_gpu.cpu_in(srv_cpu_base, srv_gpu_base);
         self.extent = self.settings.trace_extent(width, height);
         self.output = create_rt_target(device, self.extent.0, self.extent.1, HDR_FORMAT)?;
-        write_format_rtv(device, &self.output, self.output_rtv, HDR_FORMAT);
-        write_format_srv(device, &self.output, srv_cpu, HDR_FORMAT);
+        write_output_descriptors(device, &self.output, &self.output_descriptors);
         Ok(())
+    }
+
+    // Take `settings`, rebuilding the output at its trace resolution into
+    // fresh descriptors when that moved. Returns the replaced output, which a
+    // frame in flight may still sample, for the caller to retire.
+    pub(in crate::directx) fn retrace(
+        &mut self,
+        device: &ID3D12Device,
+        post: &PostDescriptors,
+        settings: RtReflectionSettings,
+        (width, height): (u32, u32),
+    ) -> RenderResult<Option<RetiredRtOutput>> {
+        let extent = settings.trace_extent(width, height);
+        if extent == self.extent {
+            self.settings = settings;
+            return Ok(None);
+        }
+        let (output, descriptors) = create_output(device, post, extent)?;
+        self.settings = settings;
+        self.extent = extent;
+        Ok(Some(RetiredRtOutput {
+            _output: std::mem::replace(&mut self.output, output),
+            _descriptors: std::mem::replace(&mut self.output_descriptors, descriptors),
+        }))
     }
 }
 
@@ -323,7 +362,7 @@ impl DxContext {
         };
         // The trace writes reflected radiance + weight into `rt.output`; the
         // reflection composite (below) blurs + composites it over the scene.
-        let reflection_srv = rt.output_srv_gpu;
+        let reflection_srv = rt.output_srv_gpu();
 
         // Upload this frame's RtParams.
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer that
@@ -358,8 +397,9 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[out_to_rt]) };
 
         let (w, h) = rt.extent;
-        // SAFETY: the list is recording, and `rt.output_rtv` names the live trace output.
-        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const rt.output_rtv), false, None) };
+        let output_rtv = rt.output_descriptors.rtv;
+        // SAFETY: the list is recording, and `output_rtv` names the live trace output.
+        unsafe { cmd.OMSetRenderTargets(1, Some(&raw const output_rtv), false, None) };
         let vp = D3D12_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,

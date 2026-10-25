@@ -99,8 +99,8 @@ pub(super) fn build_upscale(
     })
 }
 
-// The fixed descriptor slots of the live-toggleable Quality effects, stashed so
-// the runtime `apply_quality_settings` can build a launched-off feature into
+// The fixed descriptor slots of the live-toggleable features outside the post
+// block, stashed so a settings rebuild can build a launched-off feature into
 // its slot without re-deriving the heap layout. The init builds take their
 // slots from here too.
 pub(super) fn build_quality_slots(
@@ -115,8 +115,6 @@ pub(super) fn build_quality_slots(
     let dsv_descriptor_size =
         heaps::descriptor_size(&gpu.hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     QualitySlotHandles {
-        rt_output_rtv: swapchain.rtv(rtv.rt_output_slot),
-        rt_output_srv: srv(layout.rt_output_srv_slot),
         gbuffer: GbufferSlots {
             normal_depth_rtv: swapchain.rtv(rtv.gbuffer_base_slot),
             normal_depth_srv: srv(layout.gbuffer_srv_base_slot),
@@ -130,21 +128,16 @@ pub(super) fn build_quality_slots(
                 DSV_GBUFFER_DEPTH_SLOT,
             ),
         },
-        glass_reflection: {
-            let base = layout.glass_reflection_srv_base_slot;
-            crate::directx::transparent::GlassReflectionSlots {
-                rtv: [
-                    swapchain.rtv(rtv.glass_reflection_base_slot),
-                    swapchain.rtv(rtv.glass_reflection_base_slot + 1),
-                ],
-                dsv: heaps::cpu_handle(
-                    &targets.depth.heap,
-                    dsv_descriptor_size,
-                    DSV_GLASS_REFLECTION_DEPTH_SLOT,
-                ),
-                srv_cpu: std::array::from_fn(|i| descriptors.slot_cpu(base + i)),
-                windows: std::array::from_fn(|w| descriptors.slot_gpu(base + 2 * w)),
-            }
+        glass_reflection: crate::directx::transparent::GlassReflectionSlots {
+            rtv: [
+                swapchain.rtv(rtv.glass_reflection_base_slot),
+                swapchain.rtv(rtv.glass_reflection_base_slot + 1),
+            ],
+            dsv: heaps::cpu_handle(
+                &targets.depth.heap,
+                dsv_descriptor_size,
+                DSV_GLASS_REFLECTION_DEPTH_SLOT,
+            ),
         },
     }
 }
@@ -703,6 +696,7 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) descriptors: &'a DxDescriptors,
     pub(super) targets: &'a DxTargets,
     pub(super) reflection_slots: crate::directx::transparent::GlassReflectionSlots,
+    pub(super) post: &'a PostDescriptors,
     // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
     pub(super) reflection_divisor: u32,
     pub(super) planar_slots: &'a [Option<usize>],
@@ -728,6 +722,7 @@ pub(super) fn build_transparent(
         descriptors,
         targets,
         reflection_slots,
+        post,
         reflection_divisor,
         planar_slots,
         glass_panels,
@@ -757,7 +752,10 @@ pub(super) fn build_transparent(
             let (water_planar_slots, glass_planar_slots) =
                 planar_slots.split_at(water_surfaces.len());
             Some(TransparentResources::new(
-                crate::directx::transparent::TransparentDeviceCtx { alloc: &hw.alloc },
+                crate::directx::transparent::TransparentDeviceCtx {
+                    alloc: &hw.alloc,
+                    post,
+                },
                 crate::directx::transparent::TransparentBuildConfig {
                     msaa_samples: targets.hdr.msaa_samples,
                     width: targets.extent.render_width,

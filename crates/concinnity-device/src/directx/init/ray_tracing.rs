@@ -9,14 +9,12 @@ use concinnity_engine::settings::ResolvedGraphics;
 
 use super::InitGpu;
 use crate::directx::context::{DxRayTracing, DxSceneAssets, DxTargets};
+use crate::directx::post::descriptors::PostDescriptors;
 use crate::directx::post::post_device::DxPostDevice;
 use crate::directx::post::reflection_composite::{
     DxReflectionCompositePass, build_reflection_composite as build_composite,
 };
-use crate::directx::post::rt_reflections::{
-    RtBuildContext, RtBuildInit, RtOutputDescriptors, RtReflectionsResources,
-};
-use crate::directx::quality::QualitySlotHandles;
+use crate::directx::post::rt_reflections::{RtBuildContext, RtBuildInit, RtReflectionsResources};
 use crate::directx::raytrace;
 use crate::directx::transparent::TransparentResources;
 
@@ -48,7 +46,7 @@ pub(super) fn build_reflection_composite(
 // built separately and gates `rt_reflections_active` alongside this.
 pub(super) fn build_rt_reflections(
     gpu: &InitGpu<'_>,
-    slots: &QualitySlotHandles,
+    post: &PostDescriptors,
     targets: &DxTargets,
     graphics: &ResolvedGraphics,
 ) -> Option<RtReflectionsResources> {
@@ -61,10 +59,7 @@ pub(super) fn build_rt_reflections(
                 height: targets.extent.render_height,
             },
             settings,
-            RtOutputDescriptors {
-                output_rtv: slots.rt_output_rtv,
-                output_srv: slots.rt_output_srv,
-            },
+            post,
             RtBuildInit {
                 info_queue: hw.info_queue.as_ref(),
                 hot_reload: gpu.hot_reload,

@@ -714,6 +714,10 @@ pub(crate) struct MtlContext {
     // Monotonic counter over frames that build per-frame buffers; `% depth`
     // selects this frame's ring slot. Advanced once per such frame.
     pub(super) frame_ring_index: u64,
+    // Feature state a settings change replaced, freed once no frame in flight
+    // can name it.
+    pub(super) retired_effects:
+        concinnity_engine::render::buffers::retire_pool::RetirePool<super::quality::RetiredEffect>,
     pub(super) rings: FrameRings,
     pub(super) water: WaterState,
     // The grass field, when the world grows one. See [`super::grass`].

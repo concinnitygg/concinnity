@@ -214,15 +214,46 @@ fn needs_gbuffer(g: &ResolvedGraphics) -> bool {
         || g.anti_aliasing.upscaling
 }
 
+/// Run `rebuild` once for each feature in `features`, in [`RebuildFeature::ALL`]
+/// order: the G-buffer before the passes that read it, and the ray-traced pass
+/// before the composite that follows what it built. A feature that fails keeps
+/// what it had and does not stop the rest; the first error comes back once every
+/// feature has run.
+///
+/// # Errors
+///
+/// Returns the first error `rebuild` returned.
+pub fn rebuild_each(
+    features: RebuildSet,
+    mut rebuild: impl FnMut(RebuildFeature) -> RenderResult<()>,
+) -> RenderResult<()> {
+    let mut first = Ok(());
+    for feature in features.iter() {
+        if let Err(e) = rebuild(feature) {
+            if first.is_ok() {
+                first = Err(e);
+            } else {
+                tracing::error!("rebuilding {feature:?}: {e}");
+            }
+        }
+    }
+    first
+}
+
 /// The pieces of a renderer a settings plan reaches. Each backend implements
 /// it once; [`apply_plan`] decides what runs and in which order.
 pub trait SettingsTarget {
-    /// Reallocate the runtime-switched features to match `graphics`.
+    /// Reallocate `features` to match `graphics`, leaving every other feature's
+    /// resources untouched.
     ///
     /// # Errors
     ///
     /// Returns an error if a feature's GPU resources cannot be reallocated.
-    fn rebuild_features(&mut self, graphics: &ResolvedGraphics) -> RenderResult<()>;
+    fn rebuild_features(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        features: RebuildSet,
+    ) -> RenderResult<()>;
     /// Push the per-feature sub-quality scalars of the live features.
     fn push_feature_params(&mut self, graphics: &ResolvedGraphics);
     /// Push the composite tunables.
@@ -251,7 +282,7 @@ pub fn apply_plan<T: SettingsTarget + ?Sized>(
     let rebuilt = if plan.rebuild.is_empty() {
         Ok(())
     } else {
-        target.rebuild_features(graphics)
+        target.rebuild_features(graphics, plan.rebuild)
     };
     let live = &plan.live;
     if live.feature_params || !plan.rebuild.is_empty() {

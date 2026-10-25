@@ -97,9 +97,9 @@ impl VkContext {
             return;
         };
         let occlusion = self
-            .targets
-            .transient_pool
-            .view_for("ao_output", frame_idx)
+            .ssao
+            .as_ref()
+            .and_then(|_| self.targets.transient_pool.view_for("ao_output", frame_idx))
             .unwrap_or(self.scene.ssao_white.view);
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),

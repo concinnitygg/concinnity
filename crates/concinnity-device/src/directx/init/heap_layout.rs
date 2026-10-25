@@ -33,9 +33,7 @@
 //!   [probe_cube_uav_base_slot..]   PROBE_MAX_MIPS probe-cube per-mip UAVs
 //!   [probe_mip0_pair_slot..+2]     the mirror copy's (capture mip 0, probe mip 0)
 //!   [transparent_scene_copy_srv_slot] pre-transparent scene snapshot SRV
-//!   [glass_reflection_srv_base_slot..] GLASS_REFLECTION_SRV_SLOTS glass reflection layer windows
 //!   [gbuffer_srv_base_slot..]      (G-buffer) normal+depth, roughness, velocity
-//!   [rt_output_srv_slot]           (RT) reflection output
 //!   [planar_resolve_srv_base_slot..] planar reflector resolves
 //!   [flat_pool_base_slot..]        bindless albedo + normal pool, per frame
 //!   [probe_cubes_srv_slot]         the reflection-probe cube array
@@ -73,9 +71,6 @@ pub(in crate::directx) struct SrvHeapParams {
     // fixed block instead (`post_srv_base_slot`), so no effect drawing through
     // that seam appears here.
     pub gbuffer_srv_extra: usize,
-    // 1 when hardware ray-traced reflections are enabled (the RT output target's
-    // SRV), else 0.
-    pub rt_output_srv_extra: usize,
     // One resolve SRV per distinct planar reflector plane (0..MAX_PLANAR_PLANES),
     // reserved when the world has glass panes assigned to a planar slot, else 0.
     // The glass pass binds these per pane.
@@ -123,11 +118,7 @@ pub(in crate::directx) struct SrvHeapLayout {
     pub probe_cube_uav_base_slot: usize,
     pub probe_mip0_pair_slot: usize,
     pub transparent_scene_copy_srv_slot: usize,
-    // The glass reflection pre-pass's three two-descriptor windows over its
-    // layers (see `GLASS_REFLECTION_SRV_SLOTS`).
-    pub glass_reflection_srv_base_slot: usize,
     pub gbuffer_srv_base_slot: usize,
-    pub rt_output_srv_slot: usize,
     // Planar reflection resolve SRVs (one per distinct reflector plane).
     pub planar_resolve_srv_base_slot: usize,
     pub flat_pool_base_slot: usize,
@@ -190,15 +181,12 @@ impl SrvHeapLayout {
         let probe_cube_uav_base_slot = probe_capture_uav_base_slot + PROBE_MAX_MIPS;
         let probe_mip0_pair_slot = probe_cube_uav_base_slot + PROBE_MAX_MIPS;
         let transparent_scene_copy_srv_slot = probe_mip0_pair_slot + 2;
-        let glass_reflection_srv_base_slot = transparent_scene_copy_srv_slot + 1;
         // Unified G-buffer SRVs (normal+depth, roughness, velocity). 3 slots
         // when any screen-space consumer drives the pre-pass, else 0.
-        let gbuffer_srv_base_slot = glass_reflection_srv_base_slot + GLASS_REFLECTION_SRV_SLOTS;
-        // RT-reflection output SRV: one slot at the heap tail when RT is on.
-        let rt_output_srv_slot = gbuffer_srv_base_slot + p.gbuffer_srv_extra;
+        let gbuffer_srv_base_slot = transparent_scene_copy_srv_slot + 1;
         // Planar reflection resolve SRVs: one per distinct reflector plane, bound
         // per pane by the glass pass.
-        let planar_resolve_srv_base_slot = rt_output_srv_slot + p.rt_output_srv_extra;
+        let planar_resolve_srv_base_slot = gbuffer_srv_base_slot + p.gbuffer_srv_extra;
         // Flat deduplicated bindless pool: [albedo SRVs..] ++ [normal SRVs..],
         // one full copy per frame in flight. The bindless main pass and the RT
         // hit shader bind the current frame's copy and index it by a flat slot.
@@ -244,9 +232,7 @@ impl SrvHeapLayout {
             probe_cube_uav_base_slot,
             probe_mip0_pair_slot,
             transparent_scene_copy_srv_slot,
-            glass_reflection_srv_base_slot,
             gbuffer_srv_base_slot,
-            rt_output_srv_slot,
             planar_resolve_srv_base_slot,
             flat_pool_base_slot,
             probe_cubes_srv_slot,
@@ -263,10 +249,10 @@ impl SrvHeapLayout {
 }
 
 // The live-toggleable features outside the shared post block (the unified
-// G-buffer pre-pass, the RT reflection output and the glass reflection layers)
-// reserve their RTV / DSV / SRV slots UNCONDITIONALLY, independent of the
+// G-buffer pre-pass and the glass reflection layers' render targets) reserve
+// their RTV / DSV / SRV slots UNCONDITIONALLY, independent of the
 // world's init-time gates. The slots are fixed positions the passes bind by
-// absolute index, so a live toggle (`apply_quality_settings`) can build a
+// absolute index, so a live settings rebuild can build a
 // feature that launched off and write into its pre-reserved slot without
 // shifting any other feature's slots. A reserved-but-unbuilt feature leaves its
 // slots unwritten; that is safe because no always-running pass binds them.
@@ -274,15 +260,10 @@ impl SrvHeapLayout {
 // Unified G-buffer pre-pass: normal+depth, roughness, velocity, plus one DSV
 // (`DSV_GBUFFER_DEPTH_SLOT`) for its private depth.
 pub(super) const GBUFFER_TARGETS: usize = 3;
-// RT-reflection output: the trace writes the RTV, the post stack samples the SRV.
-pub(super) const RT_OUTPUT_TARGETS: usize = 1;
-// The glass reflection pre-pass's two layers. Its SRVs are three contiguous
-// two-descriptor windows the RT transparent signature's t11..t12 table points
-// at: the first layer's pass (both null), the second layer's (the first layer,
-// null) and the scene pass's (both layers). A null SRV reads as zero, which is
-// the empty layer the first one peels behind.
+// The glass reflection pre-pass's two layers. An RTV and the DSV are copied
+// when a command list records them, so rewriting them never races a frame in
+// flight; the shader-visible windows over the layers come from the post block.
 pub(in crate::directx) const GLASS_REFLECTION_TARGETS: usize = 2;
-pub(in crate::directx) const GLASS_REFLECTION_SRV_SLOTS: usize = 6;
 // The reactive mask's RTV and the null RTV that stands in for it.
 pub(super) const REACTIVE_MASK_RTVS: usize = 2;
 
@@ -310,7 +291,6 @@ pub(super) struct RtvHeapLayout {
     // under MSAA; the MSAA-off path writes through the HDR scene RTV.
     pub decal_resolve_slot: usize,
     pub gbuffer_base_slot: usize,
-    pub rt_output_slot: usize,
     pub glass_reflection_base_slot: usize,
     // The reactive mask's view, then a null view its writers bind in its place
     // on a frame nothing reads it.
@@ -324,8 +304,7 @@ impl RtvHeapLayout {
         let post_base_slot = hdr_slot + 1;
         let decal_resolve_slot = post_base_slot + POST_TARGET_SLOTS;
         let gbuffer_base_slot = decal_resolve_slot + usize::from(msaa_samples > 1);
-        let rt_output_slot = gbuffer_base_slot + GBUFFER_TARGETS;
-        let glass_reflection_base_slot = rt_output_slot + RT_OUTPUT_TARGETS;
+        let glass_reflection_base_slot = gbuffer_base_slot + GBUFFER_TARGETS;
         let reactive_mask_base_slot = glass_reflection_base_slot + GLASS_REFLECTION_TARGETS;
         let rtv_slots = reactive_mask_base_slot + REACTIVE_MASK_RTVS;
         Self {
@@ -333,7 +312,6 @@ impl RtvHeapLayout {
             post_base_slot,
             decal_resolve_slot,
             gbuffer_base_slot,
-            rt_output_slot,
             glass_reflection_base_slot,
             reactive_mask_base_slot,
             rtv_slots,
@@ -356,7 +334,7 @@ mod tests {
     // with the running total and fails the assert.
     fn assert_gap_free(p: &SrvHeapParams) {
         let l = SrvHeapLayout::compute(p);
-        let blocks: [(usize, usize); 33] = [
+        let blocks: [(usize, usize); 31] = [
             (l.atlas_base_slot, p.n_atlases.max(1)),
             (l.hdr_srv_slot, 1),
             (l.lut_srv_slot, 1),
@@ -377,9 +355,7 @@ mod tests {
             (l.probe_cube_uav_base_slot, PROBE_MAX_MIPS),
             (l.probe_mip0_pair_slot, 2),
             (l.transparent_scene_copy_srv_slot, 1),
-            (l.glass_reflection_srv_base_slot, 6),
             (l.gbuffer_srv_base_slot, p.gbuffer_srv_extra),
-            (l.rt_output_srv_slot, p.rt_output_srv_extra),
             (l.planar_resolve_srv_base_slot, p.planar_resolve_srv_extra),
             (
                 l.flat_pool_base_slot,
@@ -415,7 +391,6 @@ mod tests {
         assert_gap_free(&SrvHeapParams {
             n_atlases: 2,
             gbuffer_srv_extra: 3,
-            rt_output_srv_extra: 1,
             planar_resolve_srv_extra: 2,
             albedo_count: 9,
             normal_count: 4,
@@ -428,7 +403,6 @@ mod tests {
         assert_gap_free(&SrvHeapParams {
             n_atlases: 0,
             gbuffer_srv_extra: 0,
-            rt_output_srv_extra: 0,
             planar_resolve_srv_extra: 0,
             albedo_count: 1,
             normal_count: 1,
@@ -441,7 +415,6 @@ mod tests {
         assert_gap_free(&SrvHeapParams {
             n_atlases: 1,
             gbuffer_srv_extra: 3,
-            rt_output_srv_extra: 1,
             planar_resolve_srv_extra: 1,
             albedo_count: 50,
             normal_count: 12,
@@ -456,7 +429,6 @@ mod tests {
         let params = |frames| SrvHeapParams {
             n_atlases: 1,
             gbuffer_srv_extra: 3,
-            rt_output_srv_extra: 1,
             planar_resolve_srv_extra: 1,
             albedo_count: 7,
             normal_count: 2,
@@ -480,7 +452,6 @@ mod tests {
         let l = SrvHeapLayout::compute(&SrvHeapParams {
             n_atlases: 0,
             gbuffer_srv_extra: 0,
-            rt_output_srv_extra: 0,
             planar_resolve_srv_extra: 0,
             albedo_count: 1,
             normal_count: 1,
@@ -496,12 +467,11 @@ mod tests {
     fn assert_rtv_gap_free(msaa_samples: u32) {
         let l = RtvHeapLayout::compute(msaa_samples);
         let decal_resolve = usize::from(msaa_samples > 1);
-        let blocks: [(usize, usize); 7] = [
+        let blocks: [(usize, usize); 6] = [
             (l.hdr_slot, 1),
             (l.post_base_slot, POST_TARGET_SLOTS),
             (l.decal_resolve_slot, decal_resolve),
             (l.gbuffer_base_slot, 3),
-            (l.rt_output_slot, 1),
             (l.glass_reflection_base_slot, 2),
             (l.reactive_mask_base_slot, 2),
         ];

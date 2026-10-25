@@ -68,6 +68,9 @@ pub(in crate::vulkan) struct GlobalBindings<'a> {
     // SSGI's resolved visibility and bounce, which the main camera samples in
     // place of the occlusion while SSGI is built.
     pub(in crate::vulkan) ssgi_indirect: Option<vk::ImageView>,
+    // Whether SSAO is built. The pool places `ao_output` whatever the
+    // settings, so its presence there says nothing about whether SSAO wrote it.
+    pub(in crate::vulkan) ssao_built: bool,
 }
 
 impl GlobalBindings<'_> {
@@ -79,12 +82,7 @@ impl GlobalBindings<'_> {
             view: self.uniforms.view_ubo_buffers[frame].buffer(),
             light: self.uniforms.light_ubo_buffers[frame].buffer(),
             shadow: self.shadow.ubos[frame].buffer(),
-            screen_indirect: self.ssgi_indirect.unwrap_or_else(|| {
-                self.targets
-                    .transient_pool
-                    .view_for("ao_output", frame)
-                    .unwrap_or(self.scene.ssao_white.view)
-            }),
+            screen_indirect: self.screen_indirect(frame),
             probe_set: self.uniforms.probe_set_ubo_buffers[frame].buffer(),
             probe_cubes: self.probes.bound_cubes().view(),
             probe_records: self.probes.records[frame].buffer(),
@@ -92,6 +90,17 @@ impl GlobalBindings<'_> {
             canopy: self.canopy(frame),
             ..self.shared()
         }
+    }
+
+    // What frame `frame`'s main camera samples as screen-space indirect light:
+    // SSGI's resolve, else SSAO's occlusion, else white.
+    pub(in crate::vulkan) fn screen_indirect(&self, frame: usize) -> vk::ImageView {
+        self.ssgi_indirect.unwrap_or_else(|| {
+            self.ssao_built
+                .then(|| self.targets.transient_pool.view_for("ao_output", frame))
+                .flatten()
+                .unwrap_or(self.scene.ssao_white.view)
+        })
     }
 
     // Frame `frame`'s canopy block and view tables.
@@ -183,6 +192,7 @@ impl VkContext {
                 .ssgi
                 .as_ref()
                 .map(super::post::ssgi::SsgiResources::indirect_view),
+            ssao_built: self.ssao.is_some(),
         }
     }
 }

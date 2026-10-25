@@ -8,7 +8,7 @@ use crate::ecs::asset_fields::AssetFields;
 use crate::settings::{
     QualityCeiling, ResolvedSettings, SettingsLayers, UserGraphicsSettings, WorldSettings,
 };
-use alloc::string::String;
+use alloc::string::{String, ToString};
 
 fn resolved() -> ResolvedSettings {
     SettingsLayers::new(
@@ -238,11 +238,13 @@ fn engine_only_values_plan_nothing_for_the_renderer() {
 struct Recorder {
     calls: Vec<String>,
     fail_rebuild: bool,
+    rebuilt: RebuildSet,
 }
 
 impl SettingsTarget for Recorder {
-    fn rebuild_features(&mut self, _: &ResolvedGraphics) -> RenderResult<()> {
+    fn rebuild_features(&mut self, _: &ResolvedGraphics, features: RebuildSet) -> RenderResult<()> {
         self.calls.push("rebuild".into());
+        self.rebuilt = features;
         if self.fail_rebuild {
             Err(crate::render::backend::error::RenderError::Other(
                 "no".into(),
@@ -311,4 +313,67 @@ fn a_failed_rebuild_still_pushes_the_live_values() {
     };
     assert!(apply_plan(&mut target, &ResolvedGraphics::default(), &plan).is_err());
     assert_eq!(target.calls, ["rebuild", "params", "post"]);
+}
+
+#[test]
+fn the_target_is_handed_exactly_the_planned_features() {
+    let mut plan = ApplyPlan::default();
+    plan.rebuild.insert(RebuildFeature::Ssgi);
+    plan.rebuild.insert(RebuildFeature::GBuffer);
+    let mut target = Recorder::default();
+    apply_plan(&mut target, &ResolvedGraphics::default(), &plan).unwrap();
+    assert_eq!(target.rebuilt, plan.rebuild);
+}
+
+fn set(features: &[RebuildFeature]) -> RebuildSet {
+    let mut set = RebuildSet::default();
+    for &f in features {
+        set.insert(f);
+    }
+    set
+}
+
+#[test]
+fn only_the_planned_features_rebuild_in_dependency_order() {
+    use RebuildFeature::{AutoExposure, GBuffer, ReflectionComposite, RtReflections, Taa};
+    let mut ran = Vec::new();
+    rebuild_each(
+        set(&[ReflectionComposite, Taa, RtReflections, GBuffer]),
+        |f| {
+            ran.push(f);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(ran, [GBuffer, Taa, RtReflections, ReflectionComposite]);
+    assert!(!ran.contains(&AutoExposure));
+}
+
+#[test]
+fn an_empty_set_rebuilds_nothing() {
+    let mut ran = 0;
+    rebuild_each(RebuildSet::default(), |_| {
+        ran += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(ran, 0);
+}
+
+#[test]
+fn a_failed_feature_does_not_stop_the_rest_and_its_error_comes_back() {
+    use crate::render::backend::error::RenderError;
+    use RebuildFeature::{AutoExposure, Ssao, Ssr};
+    let mut ran = Vec::new();
+    let result = rebuild_each(set(&[Ssao, Ssr, AutoExposure]), |f| {
+        ran.push(f);
+        match f {
+            Ssao => Err(RenderError::Other("first".into())),
+            Ssr => Err(RenderError::Other("second".into())),
+            _ => Ok(()),
+        }
+    });
+    assert_eq!(ran, [Ssao, Ssr, AutoExposure]);
+    let err = result.expect_err("the failure is reported");
+    assert!(err.to_string().contains("first"), "{err}");
 }

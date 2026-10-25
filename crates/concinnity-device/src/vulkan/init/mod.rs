@@ -237,7 +237,6 @@ impl VkContext {
                 swapchain: &swapchain,
                 features: &features,
                 render_extent,
-                ssao_enabled: graphics.ssao().is_some(),
             },
         )?;
         let atmosphere_cube = build_atmosphere_cubes(&gpu, fx.atmosphere.is_some(), &mut scene)?;
@@ -263,6 +262,7 @@ impl VkContext {
             probes: &probe_gpu,
             // SSGI is built with the effects below, which rewrite this binding.
             ssgi_indirect: None,
+            ssao_built: false,
         };
         let plan = cull::plan_cull(&gpu, &world, media.textures);
         let descriptors = descriptors::build_descriptors(
@@ -427,6 +427,7 @@ impl VkContext {
             current_frame: 0,
             frame_input_sampled_us: vec![None; frames],
             frames_in_flight: frames,
+            feature_wires: crate::vulkan::feature_wires::FeatureWires::new(frames),
             commands,
             state: SceneState::new(
                 DrawList::with_runtime_reserve(
@@ -472,9 +473,11 @@ impl VkContext {
         self.sync_grass_prepass(false);
         self.state.planner.shadow.cadence = cadence;
         self.refresh_gates(graphics);
-        if self.ssgi.is_some() {
+        // The global sets were written before SSAO and SSGI were built.
+        if self.ssgi.is_some() || self.ssao.is_some() {
             self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
         }
+        self.mark_features_wired();
         // Every init upload above was synchronous (its one-shot idled the
         // queue), so init's remaining staging debris is retirable now; reclaim
         // it so the stats below report the steady footprint, not init's peak.
