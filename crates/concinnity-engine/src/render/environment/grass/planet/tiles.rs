@@ -343,6 +343,7 @@ mod tests {
             octaves: 8,
             seed: 4,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         }
     }
 
@@ -395,7 +396,7 @@ mod tests {
         let s = shape();
         let grid = PlanetGrassGrid::new(&s);
         let frame = LocalFrame::AUTHORED;
-        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
         let cam_world = dvec3::add(
             s.center,
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
@@ -403,7 +404,7 @@ mod tests {
         let sel = lod.select(
             &crate::planet::TileView::nearest(cam_world),
             &|_| true,
-            &mut crate::planet::TileBoundsCache::new(s),
+            &mut crate::planet::TileBoundsCache::new(s.clone()),
         );
         let tiles: Vec<DrawnPlanetTile> =
             sel.draw.iter().map(|d| drawn(&s, &frame, d.id)).collect();
@@ -504,7 +505,7 @@ mod tests {
         let s = shape();
         let grid = PlanetGrassGrid::new(&s);
         let frame = LocalFrame::AUTHORED;
-        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
         let cam_world = dvec3::add(
             s.center,
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 2.5, 0.0],
@@ -512,7 +513,7 @@ mod tests {
         let sel = lod.select(
             &crate::planet::TileView::nearest(cam_world),
             &|_| true,
-            &mut crate::planet::TileBoundsCache::new(s),
+            &mut crate::planet::TileBoundsCache::new(s.clone()),
         );
         let tiles: Vec<DrawnPlanetTile> =
             sel.draw.iter().map(|d| drawn(&s, &frame, d.id)).collect();
@@ -605,9 +606,10 @@ mod tests {
                 octaves: 8,
                 seed: 4,
                 continents: crate::planet::Continents::NONE,
+                edits: None,
             };
             let grid = PlanetGrassGrid::new(&s);
-            let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+            let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
             assert_eq!(lod.max_level, level);
             let frame = LocalFrame::AUTHORED;
             let light = |id: TileId| DrawnPlanetTile {
@@ -642,7 +644,7 @@ mod tests {
                             range_widths: crate::planet::MAX_RANGE_WIDTHS,
                         },
                         &|_| true,
-                        &mut crate::planet::TileBoundsCache::new(s),
+                        &mut crate::planet::TileBoundsCache::new(s.clone()),
                     )
                     .draw
                     .iter()
@@ -681,7 +683,7 @@ mod tests {
         let s = shape();
         let grid = PlanetGrassGrid::new(&s);
         let frame = LocalFrame::AUTHORED;
-        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
         let at = |x: u32| TileId {
             face: CubeFace(2),
             level: lod.max_level,
@@ -716,7 +718,7 @@ mod tests {
         let s = shape();
         let grid = PlanetGrassGrid::new(&s);
         let frame = LocalFrame::AUTHORED;
-        let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+        let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
         let id = TileId {
             face: CubeFace(2),
             level: lod.max_level,

@@ -127,7 +127,7 @@ impl WaterQuery {
         wind: &WindField,
         sea: Option<PlanetWater<'_>>,
     ) -> Self {
-        let planet = sea.map(|s| s.planet);
+        let planet = sea.as_ref().map(|s| s.planet.clone());
         let (bodies, plan) = WaterBody::resolve_all(rectangles, wind, OceanQuality::FULL, sea);
         let bands = plan
             .simulations
@@ -150,12 +150,17 @@ impl WaterQuery {
     }
 
     /// The sea laid on `planet` again where the planet was reshaped, its
-    /// center and radius kept (see [`WaterBody::reshape`]).
+    /// center and radius kept (see [`WaterBody::reshape`]). The sea follows
+    /// the generated coasts, so new edits alone leave it as it is.
     pub(crate) fn reshape(&mut self, planet: &PlanetShape) {
-        if self.planet.is_none_or(|p| p == *planet) {
+        if self
+            .planet
+            .as_ref()
+            .is_none_or(|p| p.same_generated(planet))
+        {
             return;
         }
-        self.planet = Some(*planet);
+        self.planet = Some(planet.clone());
         for b in &mut self.bodies {
             b.body.reshape(planet);
         }

@@ -144,7 +144,7 @@ fn frame_with(
     drive: &DriveView<'_>,
     workers: Workers,
 ) -> (([[f32; 4]; 4], [f32; 3]), ReplayOutcome) {
-    let out = state.drive(queues, *drive, None::<&mut NoShaderPump>);
+    let out = state.drive(queues, drive, None::<&mut NoShaderPump>);
     let mut ops = RenderOps::default();
     queues.ops.drain_into(&mut ops);
     let outcome = ops.replay(backend);
@@ -427,7 +427,7 @@ fn a_visible_world_requests_texture_and_mesh_loads() {
     let mut q = queues();
     state.drive(
         &mut q,
-        view([0.0; 3], IDENTITY4, false),
+        &view([0.0; 3], IDENTITY4, false),
         None::<&mut NoShaderPump>,
     );
     assert!(state.texture_mut().unwrap().mailbox().has_requests());
@@ -806,7 +806,7 @@ fn the_shader_pump_follows_the_scene_pins() {
     let pins = [scene];
     state.drive(
         &mut queues(),
-        DriveView {
+        &DriveView {
             scene_pins: Some(&pins),
             ..view([0.0; 3], IDENTITY4, false)
         },
@@ -849,7 +849,7 @@ fn a_failed_load_is_requested_once_and_its_scene_still_loads() {
         let mut q = queues();
         state.drive(
             &mut q,
-            DriveView {
+            &DriveView {
                 scene_pins: Some(&pins),
                 ..view([0.0; 3], IDENTITY4, false)
             },

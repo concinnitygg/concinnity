@@ -22,7 +22,7 @@ pub fn reshape_planet<'a>(
         }
     }
     if let Some(planet) = grass.and_then(|g| g.planet.as_mut()) {
-        planet.shape = *shape;
+        planet.shape.clone_from(shape);
     }
     if let Some(canopy) = canopy {
         canopy.reshape(shape, shore);

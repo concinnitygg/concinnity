@@ -14,6 +14,7 @@ fn ball() -> PlanetShape {
         octaves: 1,
         seed: 1,
         continents: Continents::NONE,
+        edits: None,
     }
 }
 
@@ -230,13 +231,17 @@ fn a_pick_in_a_far_frame_stays_precise() {
         octaves: 10,
         seed: 3,
         continents: Continents::NONE,
+        edits: None,
     };
     let mut frame = LocalFrame::AUTHORED;
     for _ in 0..40 {
         let at = [900.0, 0.0, -700.0];
         frame = frame.recentered(at, s.up_at(frame.to_world(at))).0;
     }
-    let pf = PlanetFrame { shape: s, frame };
+    let pf = PlanetFrame {
+        shape: s.clone(),
+        frame,
+    };
     let here = frame.to_world([0.0; 3]);
     let ground = s.surface(s.up_at(here));
     let origin = frame.to_local(dvec3::add(ground, dvec3::scale(s.up_at(here), 50.0)));

@@ -1917,6 +1917,7 @@ mod tests {
                 octaves: 8,
                 seed: 4,
                 continents: crate::planet::Continents::NONE,
+                edits: None,
             }
         }
 
@@ -1929,14 +1930,14 @@ mod tests {
         // authored frame.
         fn standing() -> (Vec<DrawnPlanetTile>, [f32; 3]) {
             let s = shape();
-            let lod = TileLod::new(s, crate::planet::FINEST_CELL_SIZE);
+            let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
             let cam = [0.0, narrow_f32(s.height([0.0, 1.0, 0.0])) + 1.7, 0.0];
             let cam_world = LocalFrame::AUTHORED.to_world(cam);
             let tiles = lod
                 .select(
                     &crate::planet::TileView::nearest(cam_world),
                     &|_| true,
-                    &mut crate::planet::TileBoundsCache::new(s),
+                    &mut crate::planet::TileBoundsCache::new(s.clone()),
                 )
                 .draw
                 .into_iter()

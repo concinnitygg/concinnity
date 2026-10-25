@@ -667,6 +667,7 @@ mod tests {
             octaves: 1,
             seed: 0,
             continents: Continents::NONE,
+            edits: None,
         };
         const BALL: AssetId = AssetId(3);
 

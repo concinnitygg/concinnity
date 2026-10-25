@@ -10,18 +10,23 @@
 //! moves: every resident tile is re-placed in the new frame on the frame it
 //! moves. A planet reshaped while the world runs drops every tile and streams
 //! the new shape's in, coarsest first; a mesh built for the old shape is
-//! discarded when it arrives.
+//! discarded when it arrives. New edits over an area build again only the
+//! tiles they touch, at every level, coarsest first, each drawn as it was
+//! until its new mesh takes its place.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use concinnity_core::math::{dvec3, narrow_f32};
 
+mod edits;
+
+use super::state::PlanetView;
 use super::{LoadPool, Mailbox};
 use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms};
 use crate::planet::{
-    DVec3, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame, MAX_RESIDENT_TILES,
-    PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh, TileMorphFrame,
-    TileSeams, TileView, tile_mesh,
+    DVec3, EditArea, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame,
+    MAX_RESIDENT_TILES, PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh,
+    TileMorphFrame, TileSeams, TileView, tile_mesh,
 };
 use crate::render::backend::error;
 use crate::render::backend::{ChunkMesh, PlanetChunk};
@@ -29,6 +34,7 @@ use crate::render::environment::grass::CanopyRange;
 use crate::render::frame::ops::{OpFailure, RenderOps};
 use crate::render::material_entry::MaterialEntry;
 use crate::render::slots::render_slots::RenderSlots;
+use edits::Touch;
 
 // Tiles being built at once, so a jump does not queue work it will discard.
 const MAX_IN_FLIGHT: usize = 96;
@@ -39,7 +45,7 @@ const ARRIVAL_REPLAN_FRAMES: u32 = 4;
 
 /// One tile mesh to build: `tile` of a planet of `shape`, for the pool's
 /// `generation` of shapes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TileBuild {
     /// The tile.
     pub tile: TileId,
@@ -74,7 +80,9 @@ pub struct TileBuilt {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Tile {
     // A worker is building it.
-    Pending,
+    Pending {
+        touch: Touch,
+    },
     // Its mesh is in the chunk pool at `draw`, placed relative to `origin`,
     // matching its neighbors along `seams`.
     Resident {
@@ -82,7 +90,18 @@ enum Tile {
         origin: DVec3,
         visible: bool,
         seams: TileSeams,
+        touch: Touch,
     },
+}
+
+impl Tile {
+    // A worker is building it: its first mesh, or a new one for edits.
+    fn in_flight(&self) -> bool {
+        match self {
+            Self::Pending { .. } => true,
+            Self::Resident { touch, .. } => touch.rebuilding,
+        }
+    }
 }
 
 // One frame's changes to the resident tiles.
@@ -144,12 +163,12 @@ fn plan(
                     out.hide.push(id);
                 }
             }
-            Tile::Pending if !keep.contains(id) => out.evict.push(id),
-            Tile::Pending => {}
+            Tile::Pending { .. } if !keep.contains(id) => out.evict.push(id),
+            Tile::Pending { .. } => {}
         }
     }
 
-    let pending = tiles.values().filter(|t| **t == Tile::Pending).count();
+    let pending = in_flight(tiles);
     let held = tiles.len() - out.evict.len();
     let room = MAX_IN_FLIGHT
         .saturating_sub(pending)
@@ -168,6 +187,11 @@ fn plan(
     wanted.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
     out.request = wanted.into_iter().take(room).map(|(_, _, id)| id).collect();
     out
+}
+
+// How many tiles a worker is building.
+fn in_flight(tiles: &BTreeMap<TileId, Tile>) -> usize {
+    tiles.values().filter(|t| t.in_flight()).count()
 }
 
 // Whether tiles chosen for `planned` still serve `view`: the same ranges,
@@ -267,6 +291,12 @@ pub struct PlanetTiles {
     placed_in: LocalFrame,
     // The planet the renderer's horizon occluder was last placed for.
     occluder_for: Option<PlanetFrame>,
+    // The last change of the edits the tiles were brought to.
+    edit_revision: u64,
+    // Whether any resident tile waits to be built again for new edits, and
+    // the tiles asked for again this frame.
+    any_stale: bool,
+    rebuilds: Vec<(u8, f64, TileId)>,
     texture_slot: usize,
     normal_map_slot: usize,
     material: MaterialUniforms,
@@ -354,19 +384,43 @@ impl LoadPool for PlanetTiles {
         &mut self.mail
     }
 
+    // A refused new mesh is asked for again when the tile next stands
+    // stale.
     fn request_refused(&mut self, build: TileBuild) {
         let tile = build.tile;
-        if build.generation == self.generation && self.tiles.get(&tile) == Some(&Tile::Pending) {
-            self.tiles.remove(&tile);
+        if build.generation != self.generation {
+            return;
+        }
+        match self.tiles.get_mut(&tile) {
+            Some(Tile::Pending { .. }) => {
+                self.tiles.remove(&tile);
+            }
+            Some(Tile::Resident { touch, .. }) => {
+                touch.rebuilding = false;
+                touch.stale = true;
+                self.any_stale = true;
+            }
+            None => {}
         }
     }
 
+    // A new mesh that failed for good leaves the old one drawn.
     fn load_failed(&mut self, build: TileBuild) {
         let tile = build.tile;
-        if build.generation == self.generation && self.tiles.get(&tile) == Some(&Tile::Pending) {
-            tracing::warn!("planet tile {tile:?} failed to build for good");
-            self.tiles.remove(&tile);
-            self.failed.insert(tile);
+        if build.generation != self.generation {
+            return;
+        }
+        match self.tiles.get_mut(&tile) {
+            Some(Tile::Pending { .. }) => {
+                tracing::warn!("planet tile {tile:?} failed to build for good");
+                self.tiles.remove(&tile);
+                self.failed.insert(tile);
+            }
+            Some(Tile::Resident { touch, .. }) => {
+                tracing::warn!("planet tile {tile:?} failed to build again for its edits");
+                touch.rebuilding = false;
+            }
+            None => {}
         }
     }
 }
@@ -374,7 +428,7 @@ impl LoadPool for PlanetTiles {
 impl PlanetTiles {
     /// Tiles of `planet` drawn with `material`.
     pub fn new(planet: &PlanetFrame, material: TileMaterial) -> Self {
-        let lod = TileLod::new(planet.shape, crate::planet::FINEST_CELL_SIZE);
+        let lod = TileLod::new(planet.shape.clone(), crate::planet::FINEST_CELL_SIZE);
         Self {
             lod,
             finest_cell_size: crate::planet::FINEST_CELL_SIZE,
@@ -382,7 +436,7 @@ impl PlanetTiles {
             generation: 0,
             tiles: BTreeMap::new(),
             failed: BTreeSet::new(),
-            bounds: TileBoundsCache::new(planet.shape),
+            bounds: TileBoundsCache::new(planet.shape.clone()),
             planned: None,
             planned_frames: 0,
             residency_changed: false,
@@ -390,6 +444,9 @@ impl PlanetTiles {
             morph_sent: None,
             placed_in: planet.frame,
             occluder_for: None,
+            edit_revision: 0,
+            any_stale: false,
+            rebuilds: Vec::new(),
             texture_slot: material.texture_slot,
             normal_map_slot: material.normal_map_slot,
             material: material.material,
@@ -398,7 +455,11 @@ impl PlanetTiles {
 
     /// `(resident, pending)` tile counts.
     pub fn stats(&self) -> (usize, usize) {
-        let pending = self.tiles.values().filter(|t| **t == Tile::Pending).count();
+        let pending = self
+            .tiles
+            .values()
+            .filter(|t| matches!(t, Tile::Pending { .. }))
+            .count();
         (self.tiles.len() - pending, pending)
     }
 
@@ -411,18 +472,28 @@ impl PlanetTiles {
     }
 
     /// One frame: take the finished meshes, re-place every tile if the frame
-    /// moved, and show, hide, drop and request tiles for `camera`.
+    /// moved, and show, hide, drop and request tiles for `camera`. The
+    /// planet's edits last changed as `edited` says.
     pub fn step(
         &mut self,
-        planet: &PlanetFrame,
-        camera: TileCamera,
+        planet: &PlanetView,
         ops: &mut RenderOps,
         slots: &mut RenderSlots,
-        frame: u64,
-        retire_frame: u64,
+        frames: (u64, u64),
     ) {
-        if planet.shape != self.lod.shape {
-            self.reshape(planet.shape, ops, slots, retire_frame);
+        let (frame, retire_frame) = frames;
+        let (camera, edited) = (planet.camera, planet.edited);
+        let planet = &planet.frame;
+        if !planet.shape.same_generated(&self.lod.shape) {
+            self.reshape(planet.shape.clone(), ops, slots, retire_frame);
+        } else if planet.shape != self.lod.shape {
+            let area = edited
+                .filter(|e| e.revision == self.edit_revision.wrapping_add(1))
+                .map_or(EditArea::EVERYWHERE, |e| e.area);
+            self.touch(&planet.shape, area);
+        }
+        if let Some(e) = edited {
+            self.edit_revision = e.revision;
         }
         if planet.frame != self.placed_in {
             self.placed_in = planet.frame;
@@ -437,19 +508,20 @@ impl PlanetTiles {
                 }
             }
         }
-        if self.occluder_for != Some(*planet) {
-            self.occluder_for = Some(*planet);
+        if self.occluder_for.as_ref() != Some(planet) {
+            self.occluder_for = Some(planet.clone());
             let occluder = HorizonOccluder::of(planet);
             ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
         }
-        self.add_finished(planet, ops, slots, frame);
+        self.add_finished(planet, ops, slots, (frame, retire_frame));
 
         if camera.finest_cell_size != self.finest_cell_size {
             self.finest_cell_size = camera.finest_cell_size;
-            self.lod = TileLod::new(planet.shape, camera.finest_cell_size);
+            self.lod = TileLod::new(planet.shape.clone(), camera.finest_cell_size);
             self.planned = None;
         }
         let view = camera.view(&planet.frame);
+        self.rebuild_touched(view.eye);
         self.planned_frames = self.planned_frames.saturating_add(1);
         let due = PlanState {
             view: self.planned,
@@ -494,11 +566,12 @@ impl PlanetTiles {
         }
         self.failed.clear();
         self.generation = self.generation.wrapping_add(1);
-        self.lod = TileLod::new(shape, self.finest_cell_size);
-        self.bounds = TileBoundsCache::new(shape);
+        self.lod = TileLod::new(shape.clone(), self.finest_cell_size);
+        self.bounds = TileBoundsCache::new(shape.clone());
         self.planned = None;
         self.residency_changed = true;
         self.morph_sent = None;
+        self.any_stale = false;
         ops.record(move |backend| {
             if let Some(live) = backend.live_edit() {
                 live.reshape_planet(&shape);
@@ -546,10 +619,15 @@ impl PlanetTiles {
         for id in plan.request {
             self.mail.request(TileBuild {
                 tile: id,
-                shape: self.lod.shape,
+                shape: self.lod.shape.clone(),
                 generation: self.generation,
             });
-            self.tiles.insert(id, Tile::Pending);
+            self.tiles.insert(
+                id,
+                Tile::Pending {
+                    touch: Touch::new(id),
+                },
+            );
         }
     }
 
@@ -569,20 +647,36 @@ impl PlanetTiles {
     }
 
     // Put every finished mesh still wanted into the chunk pool, hidden until
-    // the plan shows it.
+    // the plan shows it; a tile's new mesh for edits takes its old one's
+    // place, drawn as it was.
     fn add_finished(
         &mut self,
         planet: &PlanetFrame,
         ops: &mut RenderOps,
         slots: &mut RenderSlots,
-        frame: u64,
+        (frame, retire_frame): (u64, u64),
     ) {
         for built in self.mail.take_results() {
             let (id, mesh) = (built.tile, built.mesh);
-            if built.generation != self.generation || self.tiles.get(&id) != Some(&Tile::Pending) {
+            if built.generation != self.generation {
                 continue;
             }
-            self.residency_changed = true;
+            let (touch, replaces) = match self.tiles.get(&id) {
+                Some(Tile::Pending { touch }) => (*touch, None),
+                Some(&Tile::Resident {
+                    draw,
+                    visible,
+                    seams,
+                    touch,
+                    ..
+                }) if touch.rebuilding => (touch, Some((draw, visible, seams))),
+                _ => continue,
+            };
+            if replaces.is_none() {
+                self.residency_changed = true;
+            }
+            let (visible, seams) =
+                replaces.map_or_else(|| (false, TileSeams::default()), |r| (r.1, r.2));
             let dst = slots.allocate_draw();
             let draw = dst.slot();
             self.tiles.insert(
@@ -590,10 +684,18 @@ impl PlanetTiles {
                 Tile::Resident {
                     draw,
                     origin: mesh.origin,
-                    visible: false,
-                    seams: TileSeams::default(),
+                    visible,
+                    seams,
+                    touch: Touch {
+                        rebuilding: false,
+                        ..touch
+                    },
                 },
             );
+            let old = replaces.map(|r| r.0);
+            if let Some(old) = old {
+                slots.free_draw(old);
+            }
             let model = planet.frame.model_at(mesh.origin);
             let (texture_slot, normal_map_slot, material) =
                 (self.texture_slot, self.normal_map_slot, self.material);
@@ -618,7 +720,12 @@ impl PlanetTiles {
                     dst,
                 );
                 match added {
-                    Ok(()) => backend.update_visibility(draw, false),
+                    Ok(()) => {
+                        backend.update_visibility(draw, visible);
+                        if seams != TileSeams::default() {
+                            backend.set_planet_tile_seams(draw, seams);
+                        }
+                    }
                     Err(e) => {
                         tracing::warn!("planet tile add: {e}");
                         out.memory_pressure |=
@@ -626,356 +733,15 @@ impl PlanetTiles {
                         out.failures.push(OpFailure::PlanetTileAdd { tile: id });
                     }
                 }
+                if let Some(old) = old
+                    && let Err(e) = backend.remove_chunk_mesh(old, retire_frame)
+                {
+                    tracing::warn!("planet tile remove: {e}");
+                }
             });
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::planet::{CubeFace, tile_mesh};
-    use alloc::vec;
-    use concinnity_core::math::SaturatingFrom;
-
-    fn lod() -> TileLod {
-        TileLod::new(
-            PlanetShape {
-                center: [0.0, -50_000.0, 0.0],
-                radius: 50_000.0,
-                amplitude: 30.0,
-                feature_size: 2_000.0,
-                octaves: 6,
-                seed: 5,
-                continents: crate::planet::Continents::NONE,
-            },
-            crate::planet::FINEST_CELL_SIZE,
-        )
-    }
-
-    const CAMERA: DVec3 = [0.0, 40.0, 0.0];
-
-    // The camera's view of the ground decides how far its levels reach.
-    #[test]
-    fn the_camera_s_view_sets_its_ranges() {
-        let cells = f64::from(crate::planet::TILE_CELLS) * crate::planet::RANGE_CELL_POINTS;
-        let camera = |ppr| TileCamera {
-            position: [0.0, 40.0, 0.0],
-            points_per_radian: ppr,
-            finest_cell_size: 1.0,
-        };
-        let frame = LocalFrame::AUTHORED;
-        let view = camera(5.5 * cells).view(&frame);
-        assert_eq!(view.range_widths, 5.5);
-        assert_eq!(view.eye, CAMERA);
-        let wider = camera(5.8 * cells).view(&frame);
-        assert!(wider.range_widths > view.range_widths);
-        assert!(!still_serves(&lod(), &view, &wider));
-    }
-
-    fn view(eye: DVec3) -> TileView {
-        TileView::nearest(eye)
-    }
-
-    fn resident(draw: u32, visible: bool) -> Tile {
-        Tile::Resident {
-            draw: DrawIndex::from_usize(draw as usize),
-            origin: [0.0; 3],
-            visible,
-            seams: TileSeams::default(),
-        }
-    }
-
-    // A fresh planet asks for the six faces first, nearest first, and no more
-    // at once than the in-flight bound.
-    #[test]
-    fn a_fresh_planet_asks_for_its_faces_first() {
-        let l = lod();
-        let p = plan(
-            &l,
-            &BTreeMap::new(),
-            &BTreeSet::new(),
-            &view(CAMERA),
-            &mut TileBoundsCache::new(l.shape),
-        );
-        assert_eq!(p.request.len(), MAX_IN_FLIGHT);
-        let mut first: Vec<TileId> = p.request[..6].to_vec();
-        assert_eq!(
-            first[0],
-            TileId::root(CubeFace(2)),
-            "the face under the camera"
-        );
-        first.sort();
-        assert_eq!(first, CubeFace::ALL.map(TileId::root).to_vec());
-        assert!(p.show.is_empty() && p.hide.is_empty() && p.evict.is_empty());
-    }
-
-    // With only the roots resident, the roots show; the next level is asked
-    // for first, nearest first.
-    #[test]
-    fn resident_roots_show_and_their_children_follow() {
-        let l = lod();
-        let tiles: BTreeMap<TileId, Tile> = CubeFace::ALL
-            .iter()
-            .enumerate()
-            .map(|(i, &f)| (TileId::root(f), resident(u32::saturating_from(i), false)))
-            .collect();
-        let p = plan(
-            &l,
-            &tiles,
-            &BTreeSet::new(),
-            &view(CAMERA),
-            &mut TileBoundsCache::new(l.shape),
-        );
-        // From 40 m up the horizon is 3.6 km out: the sides and the bottom
-        // lie wholly behind it.
-        assert_eq!(p.show, vec![TileId::root(CubeFace(2))]);
-        assert_eq!(p.request[0].level, 1);
-        assert!(
-            p.request.windows(2).all(|w| w[0].level <= w[1].level),
-            "coarsest first"
-        );
-        assert_eq!(p.request[0].face, CubeFace(2), "the face under the camera");
-    }
-
-    // A tile nobody wants any more is dropped, built or not; a shown tile the
-    // camera no longer draws is hidden.
-    #[test]
-    fn unwanted_tiles_go_and_undrawn_tiles_hide() {
-        let l = lod();
-        let mut tiles: BTreeMap<TileId, Tile> = CubeFace::ALL
-            .iter()
-            .enumerate()
-            .map(|(i, &f)| (TileId::root(f), resident(u32::saturating_from(i), true)))
-            .collect();
-        // A deep tile on the far side of the planet.
-        let far = TileId {
-            face: CubeFace(3),
-            level: 6,
-            x: 3,
-            y: 3,
-        };
-        tiles.insert(far, resident(40, true));
-        let gone = TileId { x: 4, ..far };
-        tiles.insert(gone, Tile::Pending);
-        // Every child of the top face resident, so the top root hides.
-        for (i, c) in TileId::root(CubeFace(2)).children().iter().enumerate() {
-            tiles.insert(*c, resident(10 + u32::saturating_from(i), false));
-        }
-        let p = plan(
-            &l,
-            &tiles,
-            &BTreeSet::new(),
-            &view(CAMERA),
-            &mut TileBoundsCache::new(l.shape),
-        );
-        assert!(p.evict.contains(&far) && p.evict.contains(&gone));
-        assert_eq!(
-            p.hide,
-            CubeFace::ALL.map(TileId::root).to_vec(),
-            "the top root gives way, the rest are behind the horizon"
-        );
-        assert_eq!(p.show.len(), 4, "to its four children");
-    }
-
-    // Tiles drawn by the quadtree but wholly behind the horizon stay hidden;
-    // those within shadow reach of the camera show, below the horizon or not.
-    #[test]
-    fn tiles_behind_the_horizon_stay_hidden() {
-        let l = lod();
-        let mut bounds = TileBoundsCache::new(l.shape);
-        let camera = [0.0, 32.0, 0.0];
-        let sel = l.select(&view(camera), &|_| true, &mut bounds);
-        let tiles: BTreeMap<TileId, Tile> = sel
-            .wanted
-            .iter()
-            .enumerate()
-            .map(|(i, &t)| (t, resident(u32::saturating_from(i), false)))
-            .collect();
-        let p = plan(&l, &tiles, &BTreeSet::new(), &view(camera), &mut bounds);
-        let horizon = Horizon::of_planet(camera, &l.shape, 0.0).unwrap();
-        let mut hidden = 0;
-        for t in sel.draw.iter().map(|d| d.id) {
-            let b = bounds.get(t);
-            let near =
-                dvec3::length(dvec3::sub(b.center, camera)) - b.radius <= HORIZON_SHADOW_REACH;
-            let behind = horizon.hides_sphere(b.center, b.radius);
-            assert_eq!(p.show.contains(&t), near || !behind, "{t:?}");
-            hidden += usize::from(!p.show.contains(&t));
-        }
-        assert!(hidden > 0, "the far side is hidden");
-        assert!(p.show.len() > hidden / 4, "the near side shows");
-    }
-
-    // A tile whose build failed for good leaves tracking and is never asked
-    // for again; a refused one is asked for again.
-    #[test]
-    fn a_failed_tile_is_never_requested_again() {
-        let l = lod();
-        let top = TileId::root(CubeFace(2));
-        let frame = PlanetFrame {
-            shape: l.shape,
-            frame: LocalFrame::AUTHORED,
-        };
-        let mut tiles = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
-        let build = TileBuild {
-            tile: top,
-            shape: l.shape,
-            generation: 0,
-        };
-        tiles.tiles.insert(top, Tile::Pending);
-        tiles.load_failed(build);
-        assert!(!tiles.tiles.contains_key(&top));
-        let p = plan(
-            &l,
-            &tiles.tiles,
-            &tiles.failed,
-            &view(CAMERA),
-            &mut TileBoundsCache::new(l.shape),
-        );
-        assert!(!p.request.contains(&top));
-
-        let mut refused = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
-        refused.tiles.insert(top, Tile::Pending);
-        refused.request_refused(build);
-        assert!(refused.failed.is_empty());
-    }
-
-    // A reshaped planet drops every tile, tells the renderer, and discards a
-    // mesh built for the old shape when it arrives.
-    #[test]
-    fn a_reshape_drops_every_tile_and_discards_stale_meshes() {
-        use crate::render::backend::recording::{Call, recording_backend};
-        let l = lod();
-        let frame = PlanetFrame {
-            shape: l.shape,
-            frame: LocalFrame::AUTHORED,
-        };
-        let mut tiles = PlanetTiles::new(&frame, TileMaterial::from_entry(None));
-        let mut ops = RenderOps::default();
-        let mut slots = RenderSlots::new(0, true, &[]);
-        let top = TileId::root(CubeFace(2));
-        tiles.tiles.insert(top, Tile::Pending);
-        let stale = TileBuild {
-            tile: top,
-            shape: l.shape,
-            generation: tiles.generation,
-        }
-        .build();
-        let reshaped = PlanetShape {
-            seed: l.shape.seed + 1,
-            ..l.shape
-        };
-        tiles.reshape(reshaped, &mut ops, &mut slots, 0);
-        assert!(tiles.tiles.is_empty());
-        assert_eq!(tiles.lod.shape, reshaped);
-
-        tiles.tiles.insert(top, Tile::Pending);
-        tiles.mail.deliver(stale);
-        let moved = PlanetFrame {
-            shape: reshaped,
-            ..frame
-        };
-        tiles.add_finished(&moved, &mut ops, &mut slots, 0);
-        assert_eq!(
-            tiles.tiles.get(&top),
-            Some(&Tile::Pending),
-            "stale mesh dropped"
-        );
-
-        let (calls, mut backend) = recording_backend();
-        ops.replay(&mut backend);
-        assert!(calls.lock().calls.contains(&Call::ReshapePlanet));
-    }
-
-    #[test]
-    fn a_sorted_list_answers_ascending_questions() {
-        let ids: Vec<TileId> = (0..6)
-            .step_by(2)
-            .map(|x| TileId {
-                face: CubeFace(1),
-                level: 3,
-                x,
-                y: 0,
-            })
-            .collect();
-        let mut sorted = Sorted::new(&ids);
-        let asked: Vec<bool> = (0..7)
-            .map(|x| sorted.contains(TileId { x, ..ids[0] }))
-            .collect();
-        assert_eq!(asked, [true, false, true, false, true, false, false]);
-    }
-
-    // A material entry lends its slots and scalars; no entry draws with the
-    // engine defaults.
-    #[test]
-    fn a_tile_material_comes_from_its_entry_or_the_defaults() {
-        let mut uniforms = MaterialUniforms::DEFAULT;
-        uniforms.roughness = 0.25;
-        let entry = MaterialEntry {
-            albedo_slot: 5,
-            normal_map_slot: 6,
-            uniforms,
-            shader_bucket: 0,
-        };
-        let named = TileMaterial::from_entry(Some(entry));
-        assert_eq!((named.texture_slot, named.normal_map_slot), (5, 6));
-        assert_eq!(named.material.roughness, 0.25);
-        let unnamed = TileMaterial::from_entry(None);
-        assert_eq!(
-            (unnamed.texture_slot, unnamed.normal_map_slot),
-            (0, render_types::NO_NORMAL_MAP_SLOT)
-        );
-    }
-
-    #[test]
-    fn the_largest_tile_mesh_is_what_a_tile_builds() {
-        let mesh = tile_mesh(&lod().shape, TileId::root(CubeFace(0)));
-        assert_eq!((mesh.vertices.len(), mesh.indices.len()), tile_mesh_size());
-    }
-
-    // A choice of tiles holds while the camera drifts less than a twentieth
-    // of its height (or of the finest range near the ground) and the ranges
-    // stay put.
-    #[test]
-    fn a_plan_serves_until_the_camera_drifts_or_the_ranges_change() {
-        let l = lod();
-        let top = l.shape.radius + l.shape.highest_height();
-        let at = |height: f64| view([0.0, top - 50_000.0 + height, 0.0]);
-        let ground = at(2.0);
-        let finest = l.range(l.max_level, &ground);
-        let nudge = |v: TileView, by: f64| TileView {
-            eye: [v.eye[0] + by, v.eye[1], v.eye[2]],
-            ..v
-        };
-        assert!(still_serves(&l, &ground, &ground));
-        assert!(still_serves(&l, &ground, &nudge(ground, finest * 0.049)));
-        assert!(!still_serves(&l, &ground, &nudge(ground, finest * 0.051)));
-        let aloft = at(5_000.0);
-        assert!(still_serves(&l, &aloft, &nudge(aloft, 249.0)));
-        assert!(!still_serves(&l, &aloft, &nudge(aloft, 251.0)));
-        let wider = TileView {
-            range_widths: ground.range_widths + 0.5,
-            ..ground
-        };
-        assert!(!still_serves(&l, &ground, &wider));
-    }
-
-    #[test]
-    fn arrivals_wait_their_frames_before_a_new_plan() {
-        let l = lod();
-        let v = view(CAMERA);
-        let state = |view, frames, residency_changed| PlanState {
-            view,
-            frames,
-            residency_changed,
-        };
-        assert!(state(None, 0, false).needs_plan(&l, &v));
-        assert!(!state(Some(v), 1, false).needs_plan(&l, &v));
-        assert!(!state(Some(v), 100, false).needs_plan(&l, &v));
-        assert!(!state(Some(v), ARRIVAL_REPLAN_FRAMES - 1, true).needs_plan(&l, &v));
-        assert!(state(Some(v), ARRIVAL_REPLAN_FRAMES, true).needs_plan(&l, &v));
-        let moved = view([CAMERA[0] + 1_000.0, CAMERA[1], CAMERA[2]]);
-        assert!(state(Some(v), 1, false).needs_plan(&l, &moved));
-    }
-}
+mod tests;

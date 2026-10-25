@@ -6,7 +6,7 @@
 //!
 //! - [`PlanetShape`]: the ground as one function of direction, the single
 //!   source every tile mesh and collider is built from, its land and seas
-//!   laid out by [`Continents`].
+//!   laid out by [`Continents`] and its stored changes in [`EditPages`].
 //! - [`TileId`], [`tile_mesh`] and [`TileLod`]: the cube-sphere quadtree, one
 //!   tile's mesh, and which tiles a camera wants and can draw, each
 //!   level reaching as far as its cells look a set size on screen.
@@ -25,6 +25,7 @@
 mod carry;
 mod coast;
 mod cover;
+mod edits;
 mod follow;
 mod frame;
 mod geo;
@@ -41,13 +42,19 @@ mod system;
 mod tile;
 
 use crate::components::TerrainLayer;
-use crate::ecs::MaterialHandle;
+use crate::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
+use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 pub use carry::carry_world;
 pub use coast::{BEACH_SLOPE, CONTINENT_OCTAVES, Continents, HILL_RISE, SEABED_RELIEF};
 pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
 pub use cover::{GroundCover, MAX_GROUND_COVERS};
+pub use edits::{
+    EDITS_MAGIC, EDITS_VERSION, EditArea, EditFileError, EditHit, EditPage, EditPages, PAGE_CELLS,
+    PAGE_SAMPLES, PAGE_SIDE, PageFigures, PageSample, TileEdits, decode_edits, encode_edits,
+};
 pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_patch, next_patch};
 pub use frame::LocalFrame;
 pub use geo::{CameraGeo, GeoPose, GeoPosition, geo_axes, geo_direction, geo_lat_lon};
@@ -65,8 +72,8 @@ pub use seams::{DrawnTile, TileSeams};
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
 pub(crate) use shape::{OCTAVE_TURN, fbm, octave_cells, octave_weight_sum};
 pub use system::{
-    GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetEdit, PlanetSystem, StartBuilder,
-    inline_ground,
+    GroundBuilder, InlineGround, PatchRequest, PatchResult, PlanetEdit, PlanetEdited,
+    PlanetEditsChange, PlanetSystem, StartBuilder, inline_ground,
 };
 pub use tile::{
     MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, TileSide, tile_bounds, tile_mesh,
@@ -96,7 +103,7 @@ pub const HORIZON_SHADOW_REACH: f64 = 640.0;
 /// Where a planet world's simulated frame is, and the planet it sits on:
 /// published by the planet system for every system that places things on the
 /// planet.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlanetFrame {
     /// The planet's surface.
     pub shape: PlanetShape,
@@ -145,9 +152,16 @@ pub struct PlanetGround {
 /// the radius, the broadest about `feature_size` meters across, with
 /// `octaves` layers of finer detail on them, each half the width and half the
 /// height of the one before. The same seed gives the same planet on every run.
-/// Nothing about the ground is stored: it is built around the camera as it
-/// moves, finer near it and coarser toward the horizon, so a planet costs the
-/// same to load whatever its size.
+/// The ground is built around the camera as it moves, finer near it and
+/// coarser toward the horizon, so a planet costs the same to load whatever
+/// its size.
+///
+/// Its `edits` change the generated ground where they lie: a file of pages,
+/// each over one square of the planet's quadtree, holding per point a height
+/// change in meters and a detail weight that scales the generated hills, 1
+/// keeping them whole and 0 leaving the smooth continents and coasts. A point
+/// reads the finest page over it, so detail painted into a small area sits on
+/// a coarse page over a wider one.
 ///
 /// With a `land_share` under 1, the planet divides into land and sea around
 /// its `radius`, which becomes sea level: continents about `continent_size`
@@ -256,6 +270,16 @@ pub struct Planet {
     /// layer, and the same every run. A layer's `density_mask` is not
     /// supported on a planet: a world that sets one fails validation.
     pub layers: Vec<TerrainLayer>,
+    /// Path to the file of edits laid over the generated ground, relative to
+    /// the project root. None leaves the ground as generated. A file that is
+    /// missing or does not read as edits fails validation.
+    pub edits: Option<String>,
+    /// Injected at load time from the compiled blob payload.
+    #[serde(skip)]
+    pub locator: Option<PayloadLocator>,
+    /// The edits `edits` holds, read when the world loads.
+    #[serde(skip)]
+    pub edit_pages: Option<Arc<EditPages>>,
 }
 
 impl Planet {
@@ -292,6 +316,33 @@ impl Planet {
                 f64::from(self.ocean_depth),
                 f64::from(self.beach_width),
             ),
+            edits: self.edit_pages.clone(),
         }
     }
 }
+
+/// Read every planet's edits from its compiled payload into its
+/// `edit_pages`, once, before anything builds ground from it.
+///
+/// # Errors
+///
+/// Returns an error when a payload does not read or does not hold edits,
+/// which only a failed build leaves behind.
+pub fn load_edits(ctx: &mut PipelineContext<'_>) -> Result<(), crate::error::WorldError> {
+    let locators: Vec<PayloadLocator> = ctx
+        .query::<Planet>()
+        .filter_map(|p| p.locator.clone().filter(|l| l.len > 0))
+        .collect();
+    let Some(locator) = locators.first() else {
+        return Ok(());
+    };
+    let pages = decode_edits(ctx.read_payload(locator)?)?;
+    let pages = Arc::new(pages);
+    for planet in ctx.query_mut::<Planet>() {
+        planet.edit_pages = Some(Arc::clone(&pages));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod load_tests;

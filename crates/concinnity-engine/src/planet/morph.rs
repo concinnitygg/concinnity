@@ -178,6 +178,7 @@ mod tests {
             octaves: 8,
             seed: 9,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         }
     }
 

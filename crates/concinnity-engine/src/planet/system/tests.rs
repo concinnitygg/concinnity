@@ -161,3 +161,79 @@ fn an_edit_reshapes_the_ground_and_the_pull() {
     assert_eq!(after.revision, before.revision + 1);
     assert_ne!(after.patch, before.patch);
 }
+
+// New edits are taken up on the next step and published with the area they
+// changed; the patch is built again only when that area reaches it, and an
+// edit of the generated ground keeps them.
+#[test]
+fn new_edits_rebuild_the_patch_they_reach() {
+    use crate::planet::{CubeFace, EditArea, EditPage, EditPages, PAGE_SAMPLES, TileId};
+    let mut world = World::new();
+    world.push(Camera3D::bake(Camera3DArgs {
+        position: [300.0, 10.0, 0.0],
+        ..Default::default()
+    }));
+    world.push(Planet::default());
+    let mut system = system(Planet::default());
+    system.init(&mut world.context());
+    let before = world.resource::<PlanetGround>().cloned().unwrap();
+    let raised = |face: u8| {
+        let page = EditPage::from_samples(&[3.0; PAGE_SAMPLES], &[1.0; PAGE_SAMPLES]).unwrap();
+        Arc::new(EditPages::new([(TileId::root(CubeFace(face)), page)]))
+    };
+
+    let far = raised(3);
+    world.insert_resource(PlanetEditsChange::new(
+        Some(Arc::clone(&far)),
+        EditArea::around([0.0, -1.0, 0.0], 100.0, 50_000.0),
+    ));
+    system.step(&mut world.context());
+    system.step(&mut world.context());
+    let edited = *world.resource::<PlanetEdited>().unwrap();
+    assert_eq!(edited.revision, 1);
+    let shape = &world.resource::<PlanetFrame>().unwrap().shape;
+    assert!(shape.edits.as_ref().is_some_and(|e| Arc::ptr_eq(e, &far)));
+    assert_eq!(
+        world.resource::<PlanetGround>().unwrap(),
+        &before,
+        "out of reach"
+    );
+    let component = world.query::<Planet>().next().unwrap();
+    assert!(
+        component
+            .edit_pages
+            .as_ref()
+            .is_some_and(|e| Arc::ptr_eq(e, &far))
+    );
+
+    let near = raised(2);
+    let change = world.resource_mut::<PlanetEditsChange>().unwrap();
+    assert!(!change.is_pending(), "taken, its slot left for the next");
+    change.record(
+        Some(Arc::clone(&far)),
+        EditArea::around([0.0, -1.0, 0.0], 10.0, 50_000.0),
+    );
+    change.record(
+        Some(Arc::clone(&near)),
+        EditArea::around([0.006, 1.0, 0.0], 50.0, 50_000.0),
+    );
+    system.step(&mut world.context());
+    system.step(&mut world.context());
+    assert_eq!(world.resource::<PlanetEdited>().unwrap().revision, 2);
+    assert!(
+        world.resource::<PlanetEdited>().unwrap().area.angle > 1.0,
+        "the two areas joined"
+    );
+    let after = world.resource::<PlanetGround>().cloned().unwrap();
+    assert_eq!(after.revision, before.revision + 1);
+    assert!((after.patch.center[1] - before.patch.center[1] - 3.0).abs() < 0.01);
+
+    world.insert_resource(PlanetEdit(Planet {
+        seed: 9,
+        ..Planet::default()
+    }));
+    system.step(&mut world.context());
+    let shape = &world.resource::<PlanetFrame>().unwrap().shape;
+    assert_eq!(shape.seed, 9);
+    assert!(shape.edits.as_ref().is_some_and(|e| Arc::ptr_eq(e, &near)));
+}

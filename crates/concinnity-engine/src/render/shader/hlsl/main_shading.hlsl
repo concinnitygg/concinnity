@@ -298,9 +298,11 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // annotates it there).
     float4 albedo_samp = pool_sample(od.albedo_index, v.uv);
     surface_cutout(od, albedo_samp.a);
-    // A surface under grass carries its layers' densities in its vertex color
-    // rather than a multiplier on its albedo.
-    float3 albedo = albedo_samp.rgb * tint * (od.far_canopy != 0u ? (float3)(1.0) : v.color);
+    // A surface under grass carries its layers' densities in its vertex color,
+    // and a planet tile the edits under it, rather than a multiplier on its
+    // albedo.
+    bool color_tints = od.far_canopy == 0u && od.tile_morph.eye_range.w <= 0.0;
+    float3 albedo = albedo_samp.rgb * tint * (color_tints ? v.color : (float3)(1.0));
 
     // A surface growing grass has litter on its ground and the leaf above
     // shading it, and past where the blades end it is shaded as the canopy
@@ -317,7 +319,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // A planet's ground takes its covers' look where their rules hold.
     GroundCoverMix covers = ground_no_covers();
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
-    float4 ground = canopy_ground_normal(od, v.world_pos, v.normal, footprint);
+    float4 ground = canopy_ground_normal(od, v.world_pos, v.normal, footprint, v.color, v.tangent);
     ground_normal = ground.xyz;
 #ifdef SURFACE_CANOPY
     float far_w = canopy_band(od, far_dist);

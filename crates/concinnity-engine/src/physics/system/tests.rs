@@ -107,6 +107,7 @@ fn a_walker_on_a_planet_stands_through_a_frame_move() {
         octaves: 1,
         seed: 0,
         continents: crate::planet::Continents::NONE,
+        edits: None,
     };
     let mut world = World::new();
     world.push(RigidBody::default());

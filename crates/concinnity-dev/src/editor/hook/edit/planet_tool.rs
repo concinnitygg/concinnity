@@ -62,7 +62,7 @@ impl EditorHook {
         }
         let mouse = [input.mouse_x, input.mouse_y];
         let stroking = self.planet_tool.stroke.is_some();
-        let planet = world.resource::<PlanetFrame>().copied();
+        let planet = world.resource::<PlanetFrame>();
         self.planet_tool.hover = planet
             .filter(|_| stroking || !self.pointer_over_ui(vp, mouse))
             .and_then(|p| {
@@ -70,10 +70,10 @@ impl EditorHook {
                 p.pick_ground(ray.origin, ray.dir, f64::INFINITY)
             });
         if let (Some(p), Some(hit)) = (planet, self.planet_tool.hover) {
-            self.lay_rings(&p, hit.geo.latitude, hit.geo.longitude, hit.distance);
+            self.lay_rings(p, hit.geo.latitude, hit.geo.longitude, hit.distance);
         }
         if stroking {
-            self.follow_stroke(input.left_button_down, planet.as_ref());
+            self.follow_stroke(input.left_button_down, planet);
         }
     }
 
@@ -132,14 +132,14 @@ impl EditorHook {
         let Some(tool) = self.planet_tool() else {
             return false;
         };
-        let planet = world.resource::<PlanetFrame>().copied();
+        let planet = world.resource::<PlanetFrame>();
         let spacing = f64::from(self.planet_tool.tools.brush.radius) * SPACING;
         let radius = planet.map_or(1.0, |p| p.shape.radius);
         self.planet_tool.stroke = Some(Stroke {
             tool,
             spacer: Spacer::new(spacing, radius),
         });
-        self.follow_stroke(true, planet.as_ref());
+        self.follow_stroke(true, planet);
         true
     }
 

@@ -15,11 +15,14 @@ pub fn is_live<'a>(mut fields: impl Iterator<Item = &'a str>) -> bool {
 
 /// Write `planet` over the running world's at `entity` and hand it to the
 /// planet system. Only [`Planet::LIVE_FIELDS`] may differ from the running
-/// planet. Returns whether `entity` holds a planet.
-pub fn apply(world: &mut World, entity: Entity, planet: Planet) -> bool {
+/// planet; the running planet keeps the edits it read at load.
+/// Returns whether `entity` holds a planet.
+pub fn apply(world: &mut World, entity: Entity, mut planet: Planet) -> bool {
     let Some(slot) = world.get_mut::<Planet>(entity) else {
         return false;
     };
+    planet.locator.clone_from(&slot.locator);
+    planet.edit_pages.clone_from(&slot.edit_pages);
     slot.clone_from(&planet);
     world.insert_resource(PlanetEdit(planet));
     true
@@ -50,5 +53,20 @@ mod tests {
         assert_eq!(world.resource::<PlanetEdit>().unwrap().0.seed, 12);
         let other = world.push(crate::components::Sprite::default());
         assert!(!apply(&mut world, other, Planet::default()));
+    }
+
+    // The edits the running planet read at load stay with it: an edited
+    // planet's fields carry none.
+    #[test]
+    fn an_applied_edit_keeps_the_loaded_edits() {
+        let pages = alloc::sync::Arc::new(crate::planet::EditPages::default());
+        let mut world = World::new();
+        let entity = world.push(Planet {
+            edit_pages: Some(alloc::sync::Arc::clone(&pages)),
+            ..Planet::default()
+        });
+        assert!(apply(&mut world, entity, Planet::default()));
+        let kept = world.get::<Planet>(entity).unwrap().edit_pages.clone();
+        assert!(kept.is_some_and(|k| alloc::sync::Arc::ptr_eq(&k, &pages)));
     }
 }

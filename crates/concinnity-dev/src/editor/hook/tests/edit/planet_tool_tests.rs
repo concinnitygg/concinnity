@@ -39,6 +39,7 @@ fn rig() -> (EditorHook, World) {
             octaves: 1,
             seed: 1,
             continents: Continents::NONE,
+            edits: None,
         },
         frame: LocalFrame::AUTHORED,
     });

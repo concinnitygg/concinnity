@@ -69,11 +69,12 @@ impl PlanetGrass {
                 rule: GroundRuleGpu::of(rule),
             });
         }
+        let meadow_scale = density::meadow_scale(shape.radius);
         (!out.is_empty()).then(|| Self {
             shape,
             grid,
             layers: out,
-            meadow_scale: density::meadow_scale(shape.radius),
+            meadow_scale,
         })
     }
 
@@ -101,6 +102,7 @@ mod tests {
             octaves: 8,
             seed: 4,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         }
     }
 

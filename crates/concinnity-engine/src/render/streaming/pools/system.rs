@@ -13,7 +13,7 @@ use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::components::{Camera3D, FrameInput};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Clock, PipelineContext, StepResult, System, World};
-use crate::planet::{PlanetFrame, points_per_radian};
+use crate::planet::{PlanetEdited, PlanetFrame, points_per_radian};
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::frame::extract::CameraRelativeView;
 use crate::render::frame::ops::OpFailure;
@@ -90,7 +90,7 @@ impl StreamingRuntime {
     pub fn drive(
         &mut self,
         queues: &mut RenderQueues,
-        view: DriveView<'_>,
+        view: &DriveView<'_>,
     ) -> ([[f32; 4]; 4], [f32; 3]) {
         self.loaders.deliver(&mut self.state);
         let out = self.state.drive(queues, view, self.loaders.shaders());
@@ -195,11 +195,13 @@ impl System for StreamingSystem {
             .map_or((IDENTITY, [0.0; 3], 0.0), |c| {
                 (c.view_matrix, c.position, c.fov_y_degrees)
             });
+        let edited = ctx.resource::<PlanetEdited>().copied();
         let planet = ctx
             .resource::<PlanetFrame>()
-            .copied()
+            .cloned()
             .map(|frame| PlanetView {
                 frame,
+                edited,
                 camera: TileCamera {
                     position: cam_pos,
                     // With the viewport the input sampled last tick: how large a
@@ -250,7 +252,7 @@ impl System for StreamingSystem {
         }
         let (view, cam_pos) = runtime.drive(
             &mut queues,
-            DriveView {
+            &DriveView {
                 cam_pos,
                 view: view_matrix,
                 world_hidden,

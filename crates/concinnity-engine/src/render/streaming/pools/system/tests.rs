@@ -106,7 +106,7 @@ fn loads_cross_to_the_loaders_and_back() {
     for _ in 0..3 {
         runtime.drive(
             &mut queues(),
-            DriveView {
+            &DriveView {
                 cam_pos: [0.0; 3],
                 view: IDENTITY,
                 world_hidden: false,

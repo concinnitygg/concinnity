@@ -363,16 +363,27 @@ float3 ground_shore(float inland, float hill)
     return float3(-d_out, lift * fall * fade, -CANOPY.ocean_depth * fall + lift * hill * fall * fade);
 }
 
+// The detail weight a planet tile's corners carry, read between them: a
+// weight of 1 at every corner interpolates to a hair under it, which is 1.
+float ground_edit_weight(float w)
+{
+    return w > 0.999 ? 1.0 : w;
+}
+
 // The planet ground's normal at unit direction `dir`, both in the planet's
 // axes, and its height in meters above the datum (w): PlanetShape::normal,
 // with each octave faded out as its cells shrink below two pixels of
 // `footprint` meters, so the detail a pixel cannot hold averages away rather
-// than aliasing, whatever tile the pixel lies on.
-float4 ground_normal_at(float3 dir, float footprint)
+// than aliasing, whatever tile the pixel lies on. `edit` is the planet's
+// edits there, from its tile's corners: the detail weight the hills are
+// scaled by (x), and the gradient the edits add beyond the weighted hills
+// (yz), along `tangent` with `dir` taken out of it and along `dir` crossed
+// with that. The height leaves out the edits' own height change.
+float4 ground_normal_at(float3 dir, float footprint, float3 edit, float3 tangent)
 {
     float4 hills = ground_octaves(dir, CANOPY.ground_frequency, CANOPY.ground_cell,
                                   min(CANOPY.ground_octaves, 16u), CANOPY.ground_salts, footprint)
-                 * CANOPY.ground_height_scale;
+                 * (CANOPY.ground_height_scale * ground_edit_weight(edit.x));
     float3 gradient = hills.xyz;
     float height = hills.w;
     if (CANOPY.continent_octaves > 0u)
@@ -387,6 +398,11 @@ float4 ground_normal_at(float3 dir, float footprint)
         gradient = field.xyz * shore.x + hills.xyz * shore.y;
         height = shore.z;
     }
+    if (any(edit.yz != 0.0))
+    {
+        float3 across = normalize(tangent - dir * dot(dir, tangent));
+        gradient += across * edit.y + cross(dir, across) * edit.z;
+    }
     float3 along = gradient - dir * dot(dir, gradient);
     return float4(normalize(dir - along / CANOPY.planet_radius), height);
 }
@@ -396,9 +412,11 @@ static const float GROUND_NO_HEIGHT = 1e30;
 
 // The normal surface `od` shades with at `pos`, seen from a pixel covering
 // `footprint` meters, and its ground's height above the planet's datum (w):
-// on a planet, its ground's own, independent of the tile it lies on;
-// elsewhere the interpolated `normal`, at no height.
-float4 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float footprint)
+// on a planet, its ground's own, independent of the tile it lies on, with the
+// edits its vertex color `edit` carries along its world `tangent`; elsewhere
+// the interpolated `normal`, at no height.
+float4 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float footprint,
+                            float3 edit, float3 tangent)
 {
     bool planet = ((od.far_canopy >> 16u) & 1u) != 0u;
     if (!planet || CANOPY.planet_radius <= 0.0 || CANOPY.ground_octaves == 0u)
@@ -408,7 +426,10 @@ float4 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float f
     float4 p = float4(pos, 1.0);
     float3 rel = float3(dot(CANOPY.planet_rows[0], p), dot(CANOPY.planet_rows[1], p),
                         dot(CANOPY.planet_rows[2], p));
-    float4 n = ground_normal_at(normalize(rel), footprint);
+    float3 planet_tangent = float3(dot(CANOPY.planet_rows[0].xyz, tangent),
+                                   dot(CANOPY.planet_rows[1].xyz, tangent),
+                                   dot(CANOPY.planet_rows[2].xyz, tangent));
+    float4 n = ground_normal_at(normalize(rel), footprint, edit, planet_tangent);
     return float4(normalize(CANOPY.planet_rows[0].xyz * n.x + CANOPY.planet_rows[1].xyz * n.y
                             + CANOPY.planet_rows[2].xyz * n.z), n.w);
 }

@@ -49,6 +49,7 @@ mod tests {
                 octaves: 6,
                 seed: 9,
                 continents: Continents::NONE,
+                edits: None,
             },
             frame,
         }
@@ -59,7 +60,7 @@ mod tests {
     #[test]
     fn the_ring_follows_the_ground_at_the_brush_radius() {
         let pf = planet(LocalFrame::AUTHORED);
-        let shape = pf.shape;
+        let shape = pf.shape.clone();
         let center = dvec3::normalize_or([0.1, 1.0, -0.05], [0.0; 3]);
         let mut out = [[0.0; 3]; RING_POINTS];
         lay(&pf, center, 12.0, 0.25, &mut out);

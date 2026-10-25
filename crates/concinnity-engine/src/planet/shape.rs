@@ -1,8 +1,10 @@
 // A planet's surface: a sphere of `radius` around `center`, shaped by seeded
 // noise fields sampled on the sphere itself, so the surface is one function of
-// direction with no seams. Every consumer (render tiles, colliders) reads it
-// from here, so they cannot disagree about where the ground is.
+// direction with no seams, and by the edits stored over it. Every consumer
+// (render tiles, colliders) reads it from here, so they cannot disagree about
+// where the ground is.
 
+use alloc::sync::Arc;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::dmat3::{self, DMat3};
 use concinnity_core::math::dvec3;
@@ -10,6 +12,8 @@ use concinnity_core::math::dvec3::DVec3;
 use concinnity_core::math::noise::lcg_hash;
 
 use super::coast::{Continents, HILL_RISE};
+use super::edits::{EditHit, EditPages, PAGE_CELLS, TileEdits};
+use super::tile::{MAX_TILE_LEVEL, TileId};
 
 /// Fewest octaves a planet's height noise sums.
 pub const MIN_OCTAVES: u32 = 1;
@@ -17,15 +21,16 @@ pub const MIN_OCTAVES: u32 = 1;
 /// Most octaves a planet's height noise sums.
 pub const MAX_OCTAVES: u32 = 16;
 
-/// The surface every part of a planet is built from.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The surface every part of a planet is built from: the generated ground,
+/// changed where `edits` lie over it.
+#[derive(Debug, Clone)]
 pub struct PlanetShape {
     /// The center, in authored coordinates.
     pub center: DVec3,
     /// The radius of the datum heights are measured from, in meters: mean sea
     /// level when the planet has seas, the lowest ground when it has none.
     pub radius: f64,
-    /// The highest ground above `radius`, in meters.
+    /// The highest generated ground above `radius`, in meters.
     pub amplitude: f64,
     /// Width of the broadest hills, in meters.
     pub feature_size: f64,
@@ -35,6 +40,41 @@ pub struct PlanetShape {
     pub seed: u32,
     /// Where the ground lies above the datum and where below it.
     pub continents: Continents,
+    /// The edits stored over the generated ground. Two shapes hold the same
+    /// edits only when they share the one set.
+    pub edits: Option<Arc<EditPages>>,
+}
+
+impl PartialEq for PlanetShape {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_generated(other)
+            && match (&self.edits, &other.edits) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
+/// The ground at one point: its height above the datum, the gradient of the
+/// height over directions, and the part of that gradient the edits add that
+/// the generated hills scaled by the detail weight do not give.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Ground {
+    pub height: f64,
+    pub gradient: DVec3,
+    pub correction: DVec3,
+    pub weight: f64,
+}
+
+// The edits at one point: the height change and the detail weight, each with
+// its gradient over directions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EditAt {
+    e: f64,
+    e_gradient: DVec3,
+    w: f64,
+    w_gradient: DVec3,
 }
 
 /// The turn from one octave's noise lattice to the next, column-major: about a
@@ -49,6 +89,27 @@ pub(crate) const OCTAVE_TURN: DMat3 = [
 ];
 
 impl PlanetShape {
+    /// This shape with `edits` stored over its generated ground.
+    #[must_use]
+    pub fn with_edits(&self, edits: Option<Arc<EditPages>>) -> Self {
+        Self {
+            edits,
+            ..self.clone()
+        }
+    }
+
+    /// Whether `other` generates the same ground, whatever edits either
+    /// holds.
+    pub fn same_generated(&self, other: &Self) -> bool {
+        self.center == other.center
+            && self.radius == other.radius
+            && self.amplitude == other.amplitude
+            && self.feature_size == other.feature_size
+            && self.octaves == other.octaves
+            && self.seed == other.seed
+            && self.continents == other.continents
+    }
+
     /// The ground's height above `radius` in direction `dir` (unit length),
     /// in `[lowest_height, highest_height]`.
     pub fn height(&self, dir: DVec3) -> f64 {
@@ -56,13 +117,19 @@ impl PlanetShape {
     }
 
     /// The lowest the ground gets, in meters above `radius`: the ocean depth
-    /// below it on a planet with seas, 0 on one without.
+    /// below it on a planet with seas, 0 on one without, lowered by as much
+    /// as the edits lower any of it.
     pub fn lowest_height(&self) -> f64 {
-        if self.continents.divides() {
+        let generated = if self.continents.divides() {
             -self.continents.ocean_depth()
         } else {
             0.0
-        }
+        };
+        generated
+            + self
+                .edits
+                .as_ref()
+                .map_or(0.0, |e| e.lowest_change().min(0.0))
     }
 
     /// The radius of the sphere of the lowest ground, in meters: the one
@@ -72,16 +139,65 @@ impl PlanetShape {
     }
 
     /// The highest the ground gets, in meters above `radius`: the hilltops,
-    /// or the top of the beach on a planet with seas whose hills are lower.
+    /// or the top of the beach on a planet with seas whose hills are lower,
+    /// raised by as much as the edits raise any of it.
     pub fn highest_height(&self) -> f64 {
-        self.amplitude.max(self.continents.beach_rise()).max(0.0)
+        let generated = self.amplitude.max(self.continents.beach_rise()).max(0.0);
+        generated
+            + self
+                .edits
+                .as_ref()
+                .map_or(0.0, |e| e.highest_change().max(0.0))
     }
 
     /// The ground's height in direction `dir` (unit length) and its gradient
     /// over directions: how fast the height grows, in meters per unit of
     /// direction, along each authored axis.
     fn height_gradient(&self, dir: DVec3) -> (f64, DVec3) {
+        let ground = self.ground(dir, self.edit_at(dir).as_ref());
+        (ground.height, ground.gradient)
+    }
+
+    // The ground in direction `dir` (unit length), the edits there `edit`.
+    fn ground(&self, dir: DVec3, edit: Option<&EditAt>) -> Ground {
         let (hill, hill_gradient) = self.hills(dir);
+        let Some(edit) = edit else {
+            let (height, gradient) = self.shaped(dir, hill, hill_gradient);
+            return Ground {
+                height,
+                gradient,
+                correction: [0.0; 3],
+                weight: 1.0,
+            };
+        };
+        let weighted = edit.w * hill;
+        let weighted_gradient = dvec3::add(
+            dvec3::scale(hill_gradient, edit.w),
+            dvec3::scale(edit.w_gradient, hill),
+        );
+        let (height, gradient) = self.shaped(dir, weighted, weighted_gradient);
+        let per_hill = if self.continents.divides() {
+            let (inland, _) = self.continents.inland(self.radius, dir);
+            self.continents
+                .shore(inland, weighted, self.amplitude, self.hill_rise())
+                .per_hill_meter
+        } else {
+            1.0
+        };
+        Ground {
+            height: height + edit.e,
+            gradient: dvec3::add(gradient, edit.e_gradient),
+            correction: dvec3::add(
+                dvec3::scale(edit.w_gradient, hill * per_hill),
+                edit.e_gradient,
+            ),
+            weight: edit.w,
+        }
+    }
+
+    // The ground shaped by the coast from hills `hill` high, rising along
+    // `hill_gradient`, in direction `dir`, and its gradient.
+    fn shaped(&self, dir: DVec3, hill: f64, hill_gradient: DVec3) -> (f64, DVec3) {
         if !self.continents.divides() {
             return (hill, hill_gradient);
         }
@@ -94,6 +210,46 @@ impl PlanetShape {
             dvec3::scale(hill_gradient, shore.per_hill_meter),
         );
         (shore.height, gradient)
+    }
+
+    // The edits in direction `dir` (unit length), if any page lies there.
+    fn edit_at(&self, dir: DVec3) -> Option<EditAt> {
+        let edits = self.edits.as_ref()?;
+        let (face, s, t) = CubeFace::of_direction(dir);
+        edits
+            .at(face, s, t)
+            .map(|hit| edit_from_hit(face, s, t, &hit))
+    }
+
+    /// The ground at `(fs, ft)` across `tile`, each in `[0, 1]`, its edits
+    /// read from `over`, the edits over the tile: its direction and the
+    /// ground there. A point on the tile's edge reads the edits as every
+    /// tile sharing it does, so tiles meet whatever pages lie either side.
+    pub(crate) fn ground_on(
+        &self,
+        tile: TileId,
+        over: Option<&TileEdits<'_>>,
+        fs: f64,
+        ft: f64,
+    ) -> (DVec3, Ground) {
+        let dir = tile.direction(fs, ft);
+        let edge = fs <= 0.0 || fs >= 1.0 || ft <= 0.0 || ft >= 1.0;
+        let edit = match over {
+            None => None,
+            Some(_) if edge => self.edit_at(dir),
+            Some(o) if o.is_empty() => None,
+            Some(o) => {
+                let (s0, t0, span) = tile.span();
+                let (s, t) = (s0 + fs * span, t0 + ft * span);
+                o.at(s, t).map(|hit| edit_from_hit(tile.face, s, t, &hit))
+            }
+        };
+        (dir, self.ground(dir, edit.as_ref()))
+    }
+
+    /// The edits over `tile`, resolved once for the points read on it.
+    pub(crate) fn edits_over(&self, tile: TileId) -> Option<TileEdits<'_>> {
+        self.edits.as_ref().map(|e| e.over(tile))
     }
 
     /// How far inland of the coast direction `dir` (unit length) lies, in
@@ -148,8 +304,15 @@ impl PlanetShape {
     /// [`Self::surface`] and [`Self::normal`] in direction `dir` (unit
     /// length), from one evaluation of the height.
     pub fn surface_and_normal(&self, dir: DVec3) -> (DVec3, DVec3) {
-        let (height, gradient) = self.height_gradient(dir);
-        let r = self.radius + height;
+        let ground = self.ground(dir, self.edit_at(dir).as_ref());
+        self.point_and_normal(dir, &ground)
+    }
+
+    /// The ground point and outward unit normal in direction `dir` (unit
+    /// length) of the ground `ground` there.
+    pub(crate) fn point_and_normal(&self, dir: DVec3, ground: &Ground) -> (DVec3, DVec3) {
+        let r = self.radius + ground.height;
+        let gradient = ground.gradient;
         let along = dvec3::sub(gradient, dvec3::scale(dir, dvec3::dot(dir, gradient)));
         let tilt = dvec3::scale(along, 1.0 / r.max(1e-3));
         let point = dvec3::add(self.center, dvec3::scale(dir, r));
@@ -157,21 +320,48 @@ impl PlanetShape {
     }
 
     /// The steepest the ground can rise along it anywhere, in meters per
-    /// meter: a bound from each octave's lattice spacing, not a measurement.
+    /// meter: a bound from each octave's lattice spacing and from the
+    /// steepest steps between the edits' samples, not a measurement.
     pub fn max_slope(&self) -> f64 {
         // Each octave's weight halves as its frequency doubles, so every
         // octave bounds the same, and a value noise's gradient is at most
         // 1.5 along each lattice axis.
         let per_octave = self.noise_scale() * self.base_frequency() * 1.5 * libm::sqrt(3.0);
         let hills = per_octave * f64::from(self.octave_count());
-        if !self.continents.divides() {
-            return hills / self.radius;
-        }
-        let (per_inland, per_hill) = self
-            .continents
-            .shore_bounds(self.amplitude, self.hill_rise());
-        let inland = self.continents.inland_slope_bound(self.radius);
-        (per_inland * inland + per_hill * hills) / self.radius
+        let (generated, per_hill) = if self.continents.divides() {
+            let (per_inland, per_hill) = self
+                .continents
+                .shore_bounds(self.amplitude, self.hill_rise());
+            let inland = self.continents.inland_slope_bound(self.radius);
+            (
+                (per_inland * inland + per_hill * hills) / self.radius,
+                per_hill,
+            )
+        } else {
+            (hills / self.radius, 1.0)
+        };
+        generated + self.edits_slope(per_hill)
+    }
+
+    // The steepest the edits make the ground rise beyond the generated
+    // ground, in meters per meter, where the height changes `per_hill`
+    // meters at most per meter of the hills. A point reads one page, so
+    // the steepest page bounds it.
+    fn edits_slope(&self, per_hill: f64) -> f64 {
+        let Some(edits) = &self.edits else {
+            return 0.0;
+        };
+        (0..=MAX_TILE_LEVEL)
+            .map(|level| {
+                let [e_step, w_step] = edits.level_steps(level);
+                // A sample cell spans this much face coordinate, and a
+                // bilinear cell's gradient is at most its steps along both
+                // sides over the narrowest the face is mapped.
+                let cell = 2.0 / f64::from(1u32 << level) / PAGE_CELLS as f64;
+                let step = e_step + per_hill * self.hill_height() * w_step;
+                core::f64::consts::SQRT_2 * step / (cell * min_face_rate() * self.radius)
+            })
+            .fold(0.0, f64::max)
     }
 
     /// The direction from the center to authored point `p`.
@@ -210,6 +400,63 @@ impl PlanetShape {
     pub(crate) fn octave_salt(&self, octave: u32) -> u32 {
         lcg_hash(self.seed ^ octave.wrapping_mul(0x9e37_79b9))
     }
+}
+
+// The edits at face coordinates `(s, t)` of `face` read from `hit`, their
+// slopes along the face turned into gradients over directions.
+fn edit_from_hit(face: CubeFace, s: f64, t: f64, hit: &EditHit) -> EditAt {
+    let tangents = face.tangents(s, t);
+    let p = &hit.sample;
+    EditAt {
+        e: p.e,
+        e_gradient: gradient_along(tangents, p.e_slope),
+        w: p.w,
+        w_gradient: gradient_along(tangents, p.w_slope),
+    }
+}
+
+// The gradient over directions, lying along `tangents`, that rises `slope`
+// per unit along each.
+fn gradient_along([a, b]: [DVec3; 2], slope: [f64; 2]) -> DVec3 {
+    if slope == [0.0; 2] {
+        return [0.0; 3];
+    }
+    let (aa, ab, bb) = (dvec3::dot(a, a), dvec3::dot(a, b), dvec3::dot(b, b));
+    let det = aa * bb - ab * ab;
+    if det.abs() < 1e-24 {
+        return [0.0; 3];
+    }
+    let x = (slope[0] * bb - slope[1] * ab) / det;
+    let y = (slope[1] * aa - slope[0] * ab) / det;
+    dvec3::add(dvec3::scale(a, x), dvec3::scale(b, y))
+}
+
+// The least a direction moves across a face per unit of face coordinate,
+// any way: the smallest singular value of the face's tangents anywhere, from
+// a dense sampling with a margin for what lies between the samples. Every
+// face is the same, so the first stands for all.
+fn min_face_rate() -> f64 {
+    static RATE: spin::Once<f64> = spin::Once::new();
+    *RATE.call_once(|| {
+        const SAMPLES: u32 = 64;
+        let mut least = f64::INFINITY;
+        for j in 0..=SAMPLES {
+            for i in 0..=SAMPLES {
+                let s = -1.0 + 2.0 * f64::from(i) / f64::from(SAMPLES);
+                let t = -1.0 + 2.0 * f64::from(j) / f64::from(SAMPLES);
+                least = least.min(smallest_singular(CubeFace(0).tangents(s, t)));
+            }
+        }
+        least * 0.98
+    })
+}
+
+// The smaller singular value of the 3x2 matrix of columns `a` and `b`.
+fn smallest_singular([a, b]: [DVec3; 2]) -> f64 {
+    let (aa, ab, bb) = (dvec3::dot(a, a), dvec3::dot(a, b), dvec3::dot(b, b));
+    let (half, apart) = ((aa + bb) * 0.5, (aa - bb) * 0.5);
+    let gap = libm::sqrt(apart * apart + ab * ab);
+    libm::sqrt((half - gap).max(0.0))
 }
 
 // The sum of `octaves` octave weights, each half the last, from 1.
@@ -385,6 +632,73 @@ impl CubeFace {
         let [n, u, v] = self.axes();
         dvec3::add(n, dvec3::add(dvec3::scale(u, s), dvec3::scale(v, t)))
     }
+
+    /// The face unit direction `dir` passes through, and its face coordinates
+    /// `(s, t)` there: [`Self::direction`] inverted. The face is the axis
+    /// `dir` leans along most.
+    pub(crate) fn of_direction(dir: DVec3) -> (Self, f64, f64) {
+        let a = dir.map(f64::abs);
+        let face = if a[0] >= a[1] && a[0] >= a[2] {
+            u8::from(dir[0] < 0.0)
+        } else if a[1] >= a[2] {
+            if dir[1] >= 0.0 { 2 } else { 3 }
+        } else if dir[2] >= 0.0 {
+            4
+        } else {
+            5
+        };
+        let face = Self(face);
+        let [_, u, v] = face.axes();
+        let (x, y) = (dvec3::dot(dir, u), dvec3::dot(dir, v));
+        // The spherify solved for the cube point, written so that no term
+        // cancels near the face's middle.
+        let (x2, y2) = (2.0 * x * x, 2.0 * y * y);
+        let d = (3.0 + x2 - y2) * (3.0 + x2 - y2) - 12.0 * x2;
+        let root = libm::sqrt(d.max(0.0));
+        let s = x * libm::sqrt(12.0 / (3.0 + x2 - y2 + root));
+        let t = y * libm::sqrt(12.0 / (3.0 - x2 + y2 + root));
+        (face, s.clamp(-1.0, 1.0), t.clamp(-1.0, 1.0))
+    }
+
+    /// How the direction through face coordinates `(s, t)` moves per unit
+    /// of `s` and of `t`: the two tangents of [`Self::direction`].
+    pub(crate) fn tangents(self, s: f64, t: f64) -> [DVec3; 2] {
+        let [_, u, v] = self.axes();
+        let c = self.cube_point(s, t);
+        let (p, jacobian) = spherify_jacobian(c);
+        let len = dvec3::length(p).max(1e-12);
+        let dir = dvec3::scale(p, 1.0 / len);
+        [u, v].map(|axis| {
+            let dp = dmat3::mul_vec(&jacobian, axis);
+            dvec3::scale(
+                dvec3::sub(dp, dvec3::scale(dir, dvec3::dot(dir, dp))),
+                1.0 / len,
+            )
+        })
+    }
+}
+
+// The unnormalized spherify of cube point `c` and its Jacobian, column-major.
+fn spherify_jacobian(c: DVec3) -> (DVec3, DMat3) {
+    let [x, y, z] = c;
+    let (x2, y2, z2) = (x * x, y * y, z * z);
+    let roots = [
+        libm::sqrt((1.0 - y2 / 2.0 - z2 / 2.0 + y2 * z2 / 3.0).max(1e-24)),
+        libm::sqrt((1.0 - z2 / 2.0 - x2 / 2.0 + z2 * x2 / 3.0).max(1e-24)),
+        libm::sqrt((1.0 - x2 / 2.0 - y2 / 2.0 + x2 * y2 / 3.0).max(1e-24)),
+    ];
+    let p = [x * roots[0], y * roots[1], z * roots[2]];
+    // d(root_i)/d(c_k) for k != i: (-c_k + 2 c_k c_m^2 / 3) / (2 root_i).
+    let d = |i: usize, k: usize, m: usize| {
+        (c[i] * (-c[k] + 2.0 * c[k] * c[m] * c[m] / 3.0)) / (2.0 * roots[i])
+    };
+    let rows = [
+        [roots[0], d(0, 1, 2), d(0, 2, 1)],
+        [d(1, 0, 2), roots[1], d(1, 2, 0)],
+        [d(2, 0, 1), d(2, 1, 0), roots[2]],
+    ];
+    let columns = [0, 1, 2].map(|k| [rows[0][k], rows[1][k], rows[2][k]]);
+    (p, columns)
 }
 
 // A point on (or near) the unit cube mapped onto the unit sphere.
@@ -402,6 +716,9 @@ fn spherify(c: DVec3) -> DVec3 {
 }
 
 #[cfg(test)]
+mod edit_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -414,6 +731,7 @@ mod tests {
             octaves: 8,
             seed: 7,
             continents: Continents::NONE,
+            edits: None,
         }
     }
 
@@ -624,8 +942,8 @@ mod tests {
         let cases = spots
             .clone()
             .map(|d| (shape(), d))
-            .chain(spots.map(|d| (coast, d)))
-            .chain(near_coast.into_iter().map(|d| (coast, d)));
+            .chain(spots.map(|d| (coast.clone(), d)))
+            .chain(near_coast.into_iter().map(|d| (coast.clone(), d)));
         for (s, dir) in cases {
             let (_, g) = s.height_gradient(dir);
             for axis in 0..3 {

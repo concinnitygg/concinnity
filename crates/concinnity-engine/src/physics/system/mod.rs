@@ -655,8 +655,8 @@ impl System for PhysicsSystem {
         let mode = crate::ecs::schedule_mode(ctx.resources);
 
         let world = self.world.as_mut().expect("world checked above");
-        let planet = ctx.resource::<PlanetFrame>().copied();
-        let frame = planet.map_or(LocalFrame::AUTHORED, |p| p.frame);
+        let planet = ctx.resource::<PlanetFrame>().cloned();
+        let frame = planet.as_ref().map_or(LocalFrame::AUTHORED, |p| p.frame);
         // A planet reshaped while the world runs moves its sea's shore.
         if let (Some(water), Some(planet)) = (self.water.as_mut(), planet) {
             water.reshape(&planet.shape);

@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, dvec3, narrow_f32};
 
-use super::shape::{CubeFace, PlanetShape};
+use super::shape::{CubeFace, Ground, PlanetShape};
 use crate::gfx::mesh_payload::Vertex;
 use concinnity_core::math::dvec3::DVec3;
 
@@ -128,8 +128,29 @@ impl TileId {
         }
     }
 
+    /// The tile at `level` that covers this one: itself at its own level,
+    /// `None` below it.
+    pub fn ancestor_at(self, level: u8) -> Option<Self> {
+        let up = self.level.checked_sub(level)?;
+        Some(Self {
+            face: self.face,
+            level,
+            x: self.x >> up,
+            y: self.y >> up,
+        })
+    }
+
+    /// Whether the tile names a square of its face: its level at most
+    /// [`MAX_TILE_LEVEL`], its column and row within it.
+    pub fn is_valid(self) -> bool {
+        self.face.0 < 6
+            && self.level <= MAX_TILE_LEVEL
+            && self.x < 1u32 << self.level
+            && self.y < 1u32 << self.level
+    }
+
     // The face coordinates the tile spans: (s0, t0, side).
-    fn span(self) -> (f64, f64, f64) {
+    pub(crate) fn span(self) -> (f64, f64, f64) {
         let side = 2.0 / f64::from(1u32 << self.level);
         (
             -1.0 + f64::from(self.x) * side,
@@ -162,10 +183,18 @@ pub struct TileBounds {
 /// tile, widened by how far it can rise between samples.
 pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
     let n = BOUND_SAMPLES - 1;
-    let dirs: [DVec3; BOUND_SAMPLES * BOUND_SAMPLES] = core::array::from_fn(|k| {
+    let over = shape.edits_over(tile);
+    let samples: [(DVec3, f64); BOUND_SAMPLES * BOUND_SAMPLES] = core::array::from_fn(|k| {
         let (i, j) = (k % BOUND_SAMPLES, k / BOUND_SAMPLES);
-        tile.direction(i as f64 / n as f64, j as f64 / n as f64)
+        let (dir, ground) = shape.ground_on(
+            tile,
+            over.as_ref(),
+            i as f64 / n as f64,
+            j as f64 / n as f64,
+        );
+        (dir, ground.height)
     });
+    let dirs = samples.map(|(d, _)| d);
     let at = |i: usize, j: usize| dirs[j * BOUND_SAMPLES + i];
     // The widest step between neighboring samples, along the ground.
     let arc = |a: DVec3, b: DVec3| shape.radius * libm::acos(dvec3::dot(a, b).clamp(-1.0, 1.0));
@@ -182,9 +211,9 @@ pub fn tile_bounds(shape: &PlanetShape, tile: TileId) -> TileBounds {
     let reach = spacing * core::f64::consts::FRAC_1_SQRT_2;
     let slack = shape.max_slope() * reach;
     let sagitta = spacing * spacing / (8.0 * shape.radius);
-    let (lo, hi) = dirs
+    let (lo, hi) = samples
         .iter()
-        .map(|&d| shape.height(d))
+        .map(|&(_, h)| h)
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| {
             (lo.min(h), hi.max(h))
         });
@@ -236,14 +265,21 @@ pub struct TileMesh {
 ///
 /// Normals are the surface's exact ones, from the height's own gradient, so
 /// an edge corner shades the same in every tile that shares it, at any level.
+/// Each corner's color carries what a shader rebuilding the normal from the
+/// generated hills needs of the edits there: the detail weight, then the
+/// gradient the edits add beyond the weighted hills, along the corner's
+/// tangent and the direction crossed with it.
 /// Each cell splits along the same diagonal at every level, so a tile morphed
 /// all the way toward its parent is its parent's mesh, which is how it meets a
 /// coarser neighbor without a gap.
 pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let n = TILE_CELLS as usize;
     let side = n + 1;
-    let corner_dir = |i: usize, j: usize| tile.direction(i as f64 / n as f64, j as f64 / n as f64);
-    let origin = shape.surface(tile.direction(0.5, 0.5));
+    let over = shape.edits_over(tile);
+    let origin = {
+        let (dir, ground) = shape.ground_on(tile, over.as_ref(), 0.5, 0.5);
+        shape.point_and_normal(dir, &ground).0
+    };
     let (s0, t0, span) = tile.span();
     // Meters across the face from its -s/-t corner, less a whole number of
     // periods so the tile's own stay small.
@@ -261,8 +297,13 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     let mut vertices = Vec::with_capacity(side * side);
     for j in 0..side {
         for i in 0..side {
-            let dir = corner_dir(i, j);
-            let (p, normal) = shape.surface_and_normal(dir);
+            let (dir, ground) = shape.ground_on(
+                tile,
+                over.as_ref(),
+                i as f64 / n as f64,
+                j as f64 / n as f64,
+            );
+            let (p, normal) = shape.point_and_normal(dir, &ground);
             let tangent = dvec3::normalize_or(
                 dvec3::sub(u_axis, dvec3::scale(normal, dvec3::dot(normal, u_axis))),
                 dvec3::cross(normal, [0.0, 0.0, 1.0]),
@@ -272,7 +313,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
                 pos: dvec3::to_f32(dvec3::sub(p, origin)),
                 normal: dvec3::to_f32(normal),
                 tangent: dvec3::to_f32(tangent),
-                color: [1.0; 3],
+                color: edit_color(dir, tangent, &ground),
                 uv: uv(i, j),
             });
         }
@@ -321,6 +362,26 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
     }
 }
 
+/// The color of a tile corner in unit direction `dir` with tangent
+/// `tangent` on the ground `ground`: the detail weight, then the gradient the
+/// edits add beyond the weighted hills along the frame a shader rebuilds from
+/// the direction and the tangent: the tangent with the direction taken out of
+/// it, and the direction crossed with that.
+pub(crate) fn edit_color(dir: DVec3, tangent: DVec3, ground: &Ground) -> [f32; 3] {
+    let [gx, gy] = edit_frame(dir, tangent).map(|axis| dvec3::dot(ground.correction, axis));
+    [narrow_f32(ground.weight), narrow_f32(gx), narrow_f32(gy)]
+}
+
+/// The frame a tile corner's edit gradient is held in: `tangent` with unit
+/// direction `dir` taken out of it, and `dir` crossed with that.
+pub(crate) fn edit_frame(dir: DVec3, tangent: DVec3) -> [DVec3; 2] {
+    let along = dvec3::normalize_or(
+        dvec3::sub(tangent, dvec3::scale(dir, dvec3::dot(dir, tangent))),
+        [0.0; 3],
+    );
+    [along, dvec3::cross(dir, along)]
+}
+
 // The farthest any corner of an `n`-cell grid of `points` lies from the middle
 // of the two parent corners it morphs toward.
 fn morph_extent(points: &[DVec3], n: usize) -> f32 {
@@ -354,6 +415,7 @@ mod tests {
             octaves: 6,
             seed: 3,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         }
     }
 

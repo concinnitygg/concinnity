@@ -173,7 +173,7 @@ impl VoxelStream {
 /// A planet's terrain streaming: the frame its tiles are built in, what they
 /// draw with and the vertex / index headroom for the most tiles a planet keeps
 /// resident.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PlanetStream {
     /// The planet's shape in its authored frame.
     pub frame: PlanetFrame,

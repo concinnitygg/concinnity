@@ -180,6 +180,7 @@ const SHAPE: PlanetShape = PlanetShape {
     octaves: 1,
     seed: 0,
     continents: crate::planet::Continents::NONE,
+    edits: None,
 };
 
 fn publish_planet(world: &mut World, frame: &LocalFrame, around: [f32; 3], revision: u64) {

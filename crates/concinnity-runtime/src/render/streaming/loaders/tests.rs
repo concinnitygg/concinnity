@@ -62,7 +62,7 @@ fn the_texture_pool_loads_through_its_thread() {
     let mut runtime = texture_runtime();
     concinnity_testing::eventually("both textures to load", || {
         let mut q = queues();
-        runtime.drive(&mut q, view(None));
+        runtime.drive(&mut q, &view(None));
         q.ops.replay(&mut backend);
         (runtime.state.streaming_stats().texture == Some((2, 0, 0))).then_some(())
     });
@@ -110,7 +110,7 @@ fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
     let pins = [scene];
     let mut drive = |runtime: &mut StreamingRuntime| {
         let mut q = queues();
-        runtime.drive(&mut q, view(Some(&pins)));
+        runtime.drive(&mut q, &view(Some(&pins)));
         q.ops.replay(&mut backend);
     };
     drive(&mut runtime);

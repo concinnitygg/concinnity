@@ -34,7 +34,7 @@ impl PlanetGrassGrid {
     /// The grid for `shape`'s faces, drawn to the quadtree depth the planet's
     /// tiles reach.
     pub fn new(shape: &PlanetShape) -> Self {
-        let max_level = TileLod::new(*shape, FINEST_CELL_SIZE).max_level;
+        let max_level = TileLod::new(shape.clone(), FINEST_CELL_SIZE).max_level;
         let finest = shape.radius * core::f64::consts::FRAC_PI_2 / f64::from(1u32 << max_level);
         let finest_tiles =
             u32::saturating_from(libm::round(finest / f64::from(GRASS_TILE_SIZE)).max(1.0));
@@ -197,6 +197,7 @@ mod tests {
             octaves: 8,
             seed: 4,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         }
     }
 

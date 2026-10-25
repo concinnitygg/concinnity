@@ -112,7 +112,7 @@ impl WaterBody {
     ) -> (Vec<Self>, OceanPlan) {
         let mut plan = OceanPlan::new(quality);
         let mut bodies: Vec<Self> = sea
-            .map(|sea| Self::resolve_sea(sea, wind, &mut plan))
+            .map(|sea| Self::resolve_sea(&sea, wind, &mut plan))
             .into_iter()
             .collect();
         bodies.extend(rectangles.into_iter().map(|s| {
@@ -130,7 +130,7 @@ impl WaterBody {
     // `water` around its planet: simulated whenever the wind raises a sea at
     // all and there is room for it, however large its peak, and drawn on a
     // grid reaching the horizon. A sea carries no swell.
-    fn resolve_sea(source: PlanetWater<'_>, wind: &WindField, plan: &mut OceanPlan) -> Self {
+    fn resolve_sea(source: &PlanetWater<'_>, wind: &WindField, plan: &mut OceanPlan) -> Self {
         let mut surface = crate::components::validate::water_surface(source.surface.clone());
         surface.waves.clear();
         let planet = &source.planet;
@@ -696,7 +696,7 @@ mod tests {
             level: 10.0,
             surface: &surface,
         };
-        let resolve = |quality| WaterBody::resolve_all([], &wind, quality, Some(sea)).1;
+        let resolve = |quality| WaterBody::resolve_all([], &wind, quality, Some(sea.clone())).1;
         assert!(resolve(OceanQuality::FULL).wake);
         let off = OceanQuality {
             wake: false,

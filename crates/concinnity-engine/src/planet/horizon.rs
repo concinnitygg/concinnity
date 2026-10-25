@@ -202,6 +202,7 @@ mod tests {
             octaves: 8,
             seed: 4,
             continents: Continents::new(R, 4, 20_000.0, 0.4, 60.0, 60.0),
+            edits: None,
         };
         let eye = [0.0, 2.0, 0.0];
         let past = round(1_000.0 / R, 0.0);

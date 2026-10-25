@@ -3,7 +3,8 @@
 //!
 //! [`run`] is the [`SystemTable`](crate::ecs::SystemTable) completion pass, so
 //! it happens before the gates read the world and a HUD or overlay it injects
-//! brings its own system into the schedule. Nothing it adds is compiled: the
+//! brings its own system into the schedule. It first reads a planet's stored
+//! edits into the planet, so every system built from it sees them. Nothing it adds is compiled: the
 //! chip font is baked here out of [`crate::bake`], and the names the injected
 //! components cross-reference each other by come from the range
 //! [`AssetId::MINTED_BASE`] reserves.
@@ -37,8 +38,10 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 /// # Errors
 ///
 /// Returns an error if the world declares more than one `EngineDefaults` (which
-/// one applies would be arbitrary), or baking an injected payload fails.
+/// one applies would be arbitrary), baking an injected payload fails, or a
+/// planet's edits do not read.
 pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
+    crate::planet::load_edits(ctx)?;
     let toggles = take_toggles(ctx)?;
     let mut minter = Minter::resume(ctx);
     let result = inject_defaults(ctx, &toggles, &mut minter);

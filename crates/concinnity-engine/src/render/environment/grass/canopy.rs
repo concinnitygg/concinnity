@@ -479,7 +479,7 @@ impl CanopyField {
     /// radius, its beaches wet by `shore`.
     pub fn reshape(&mut self, shape: &PlanetShape, shore: Option<ShoreWaves>) {
         if let Some(planet) = self.planet.as_mut() {
-            planet.shape = *shape;
+            planet.shape.clone_from(shape);
         }
         self.shore = shore;
     }
@@ -1109,9 +1109,13 @@ mod tests {
             octaves: 6,
             seed: 1,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         };
-        let grass =
-            PlanetGrass::everywhere(shape, &vec![Grass::default(); MAX_CANOPY_LAYERS + 4]).unwrap();
+        let grass = PlanetGrass::everywhere(
+            shape.clone(),
+            &vec![Grass::default(); MAX_CANOPY_LAYERS + 4],
+        )
+        .unwrap();
         assert!(grass.layers.len() > MAX_CANOPY_LAYERS);
         let (field, range) =
             CanopyField::for_planet(shape, Some(&grass), GroundCovers::default(), 0.0);
@@ -1131,8 +1135,9 @@ mod tests {
             octaves: 6,
             seed: 1,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         };
-        let grass = PlanetGrass::everywhere(shape, &[Grass::default()]).unwrap();
+        let grass = PlanetGrass::everywhere(shape.clone(), &[Grass::default()]).unwrap();
         let (field, range) =
             CanopyField::for_planet(shape, Some(&grass), GroundCovers::default(), 0.0);
         assert_eq!(range.count, 1);
@@ -1201,12 +1206,12 @@ mod tests {
         };
         let shape = planet.shape();
         let grass = PlanetGrass::resolve(
-            shape,
+            shape.clone(),
             &[(Grass::default(), crate::components::GroundRule::default())],
         )
         .unwrap();
         let covers = GroundCovers::of(&planet, |_| None, 1);
-        let (mut field, _) = CanopyField::for_planet(shape, Some(&grass), covers, 0.0);
+        let (mut field, _) = CanopyField::for_planet(shape.clone(), Some(&grass), covers, 0.0);
         let id = TileId {
             face: CubeFace(2),
             level: 10,
@@ -1259,6 +1264,7 @@ mod tests {
             octaves: 6,
             seed: 1,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         };
         let above = GroundRule {
             altitude: [Some(2.0), None],
@@ -1277,14 +1283,14 @@ mod tests {
         };
         let covers = GroundCovers::of(&planet, |_| None, 1);
         let grass = PlanetGrass::resolve(
-            shape,
+            shape.clone(),
             &[
                 (Grass::default(), GroundRule::default()),
                 (Grass::default(), above),
             ],
         )
         .unwrap();
-        let (field, _) = CanopyField::for_planet(shape, Some(&grass), covers, 0.0);
+        let (field, _) = CanopyField::for_planet(shape.clone(), Some(&grass), covers, 0.0);
         let id = TileId {
             face: CubeFace(2),
             level: 10,
@@ -1363,7 +1369,7 @@ mod tests {
         };
         let shape = planet.shape();
         let covers = GroundCovers::of(&planet, |_| None, 1);
-        let (mut field, range) = CanopyField::for_planet(shape, None, covers, 0.0);
+        let (mut field, range) = CanopyField::for_planet(shape.clone(), None, covers, 0.0);
         assert_eq!(
             range,
             CanopyRange {
@@ -1408,7 +1414,7 @@ mod tests {
             ground_reference(&shape, &tile)
         );
         // The same ground as under grass, but for the layers.
-        let grass = PlanetGrass::everywhere(shape, &[Grass::default()]).unwrap();
+        let grass = PlanetGrass::everywhere(shape.clone(), &[Grass::default()]).unwrap();
         let (mut grassy, _) = CanopyField::for_planet(shape, Some(&grass), covers, 0.0);
         grassy.set_shore(Some(shore));
         let lod = GrassLodView::new(1000.0, 0.5);
@@ -1431,9 +1437,22 @@ mod tests {
         shader_ground(p, dir, footprint).0
     }
 
-    // The shader's `ground_normal_at`, normal and height, line for line.
+    // The shader's `ground_normal_at` where no edits lie, normal and height.
     fn shader_ground(p: &CanopyParams, dir: [f32; 3], footprint: f32) -> ([f32; 3], f32) {
+        shader_edited_ground(p, dir, footprint, [1.0, 0.0, 0.0], [0.0; 3])
+    }
+
+    // The shader's `ground_normal_at`, normal and height, line for line, the
+    // tile's corners carrying `edit` with tangent `tangent`.
+    fn shader_edited_ground(
+        p: &CanopyParams,
+        dir: [f32; 3],
+        footprint: f32,
+        edit: [f32; 3],
+        tangent: [f32; 3],
+    ) -> ([f32; 3], f32) {
         let octaves = p.ground_octaves.min(16);
+        let weight = if edit[0] > 0.999 { 1.0 } else { edit[0] };
         let hills = shader_octaves(
             p,
             dir,
@@ -1443,7 +1462,7 @@ mod tests {
             &p.ground_salts,
             footprint,
         )
-        .map(|v| v * p.ground_height_scale);
+        .map(|v| v * (p.ground_height_scale * weight));
         let mut gradient = [hills[0], hills[1], hills[2]];
         let mut height = hills[3];
         if p.continent_octaves > 0 {
@@ -1461,6 +1480,13 @@ mod tests {
             let shore = shader_shore(p, field[3] - p.continent_offset, hills[3]);
             gradient = core::array::from_fn(|i| field[i] * shore[0] + hills[i] * shore[1]);
             height = shore[2];
+        }
+        if edit[1] != 0.0 || edit[2] != 0.0 {
+            let t = dot(dir, tangent);
+            let across = unit(core::array::from_fn(|i| tangent[i] - dir[i] * t));
+            let side = cross(dir, across);
+            gradient =
+                core::array::from_fn(|i| gradient[i] + across[i] * edit[1] + side[i] * edit[2]);
         }
         let d = dot(dir, gradient);
         let normal = unit(core::array::from_fn(|i| {
@@ -1605,6 +1631,7 @@ mod tests {
             octaves: 8,
             seed: 4,
             continents: crate::planet::Continents::NONE,
+            edits: None,
         }
     }
 
@@ -1665,6 +1692,66 @@ mod tests {
         assert!(checked > 100, "{checked}");
         set_ground_noise(&mut p, &ground_shape());
         assert_eq!(p.continent_octaves, 0);
+    }
+
+    // A planet tile's corners carry what the shader needs of the edits:
+    // with their detail weight and correction, a fine pixel at a corner
+    // shades with the ground's exact edited normal, inland and on the coast.
+    #[test]
+    fn edited_corners_shade_with_the_exact_ground_normal() {
+        use crate::planet::{EditPage, EditPages, PAGE_SAMPLES, PAGE_SIDE, TILE_CELLS, TileId};
+        let coast = crate::planet::Continents::new(50_000.0, 4, 20_000.0, 0.4, 60.0, 60.0);
+        for continents in [crate::planet::Continents::NONE, coast] {
+            let generated = PlanetShape {
+                continents,
+                ..ground_shape()
+            };
+            let mut p = CanopyParams {
+                planet_radius: 50_000.0,
+                ..CanopyParams::default()
+            };
+            set_ground_noise(&mut p, &generated);
+            let page_tile = TileId {
+                face: CubeFace(2),
+                level: 9,
+                x: 260,
+                y: 250,
+            };
+            let at = |k: usize| ((k % PAGE_SIDE) as f64 / 32.0, (k / PAGE_SIDE) as f64 / 32.0);
+            let e: Vec<f64> = (0..PAGE_SAMPLES)
+                .map(|k| 6.0 * libm::sin(at(k).0 * 7.0) * at(k).1)
+                .collect();
+            let w: Vec<f64> = (0..PAGE_SAMPLES)
+                .map(|k| 0.2 + 0.7 * at(k).0 * (1.0 - at(k).1))
+                .collect();
+            let pages = EditPages::new([(page_tile, EditPage::from_samples(&e, &w).unwrap())]);
+            let shape = generated.with_edits(Some(alloc::sync::Arc::new(pages)));
+            let tile = page_tile.children()[1].children()[2];
+            let mesh = crate::planet::tile_mesh(&shape, tile);
+            let side = TILE_CELLS as usize + 1;
+            let mut corrected = 0;
+            for j in 0..side {
+                for i in 0..side {
+                    let v = mesh.vertices[j * side + i];
+                    let dir = tile.direction(i as f64 / 16.0, j as f64 / 16.0);
+                    let (got, _) = shader_edited_ground(
+                        &p,
+                        concinnity_core::math::dvec3::to_f32(dir),
+                        0.01,
+                        v.color,
+                        v.tangent,
+                    );
+                    assert!(
+                        dot(got, v.normal) > 1.0 - 2e-6,
+                        "{i} {j}: {got:?} {:?}",
+                        v.normal
+                    );
+                    corrected += usize::from(v.color[1] != 0.0 || v.color[2] != 0.0);
+                    assert!(v.color[0] < 1.0);
+                }
+            }
+            assert_eq!(corrected, side * side);
+        }
     }
 
     // As a pixel widens, octaves fade out finest first, by the meters it

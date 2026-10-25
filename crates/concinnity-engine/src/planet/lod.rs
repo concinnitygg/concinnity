@@ -11,6 +11,7 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use concinnity_core::math::dvec3;
 
+use super::edits::EditArea;
 use super::seams::{DrawnTile, balance, seams};
 use super::shape::{CubeFace, PlanetShape};
 use super::tile::{MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, tile_bounds};
@@ -84,6 +85,26 @@ impl TileBoundsCache {
         let b = tile_bounds(&self.shape, tile);
         self.bounds.insert(tile, b);
         b
+    }
+
+    /// Take `shape`, whose ground differs from the last one's only within
+    /// `area`: the bounds of the tiles reaching into it are forgotten.
+    pub fn reshape_within(&mut self, shape: PlanetShape, area: &EditArea) {
+        let center = shape.center;
+        self.bounds.retain(|_, b| {
+            let to = dvec3::sub(b.center, center);
+            let distance = dvec3::length(to);
+            let angle = if distance > b.radius {
+                libm::asin(b.radius / distance)
+            } else {
+                core::f64::consts::PI
+            };
+            !area.overlaps(&EditArea {
+                center: dvec3::normalize_or(to, [0.0, 1.0, 0.0]),
+                angle,
+            })
+        });
+        self.shape = shape;
     }
 
     /// How many tiles' bounds are held.
@@ -161,7 +182,7 @@ pub fn points_per_radian(fov_y_degrees: f32, viewport_height: f32) -> f64 {
 
 /// How fine a planet's tiles get: the camera's distance decides each tile's
 /// level, down to `max_level`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TileLod {
     /// The surface the tiles cover.
     pub shape: PlanetShape,
@@ -362,6 +383,7 @@ mod tests {
                 octaves: 8,
                 seed: 1,
                 continents: crate::planet::Continents::NONE,
+                edits: None,
             },
             1.0,
         )
@@ -379,7 +401,7 @@ mod tests {
     }
 
     fn cache(l: &TileLod) -> TileBoundsCache {
-        TileBoundsCache::new(l.shape)
+        TileBoundsCache::new(l.shape.clone())
     }
 
     fn ids(sel: &TileSelection) -> Vec<TileId> {
@@ -455,9 +477,9 @@ mod tests {
     #[test]
     fn coarser_finest_cells_stop_the_quadtree_sooner() {
         let fine = lod();
-        let shape = fine.shape;
+        let shape = fine.shape.clone();
         for (size, shallower) in [(2.0, 1), (4.0, 2)] {
-            let coarse = TileLod::new(shape, size);
+            let coarse = TileLod::new(shape.clone(), size);
             assert_eq!(coarse.max_level + shallower, fine.max_level, "{size} m");
             let finest = coarse.nominal_width(coarse.max_level) / f64::from(TILE_CELLS);
             assert!(finest <= size && finest * 2.0 > size, "{finest}");

@@ -66,6 +66,7 @@ mod tests {
         octaves: 1,
         seed: 0,
         continents: crate::planet::Continents::NONE,
+        edits: None,
     };
 
     // A walk of a kilometer and the frame recentered under it.

@@ -83,6 +83,7 @@ mod tests {
         octaves: 4,
         seed: 1,
         continents: crate::planet::Continents::NONE,
+        edits: None,
     };
 
     fn frame() -> PlanetFrame {

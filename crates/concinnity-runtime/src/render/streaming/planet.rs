@@ -10,5 +10,10 @@ const WORKERS: usize = 3;
 // The threads that build the tiles the pool asks for, each of the shape its
 // request names.
 pub(crate) fn spawn_workers() -> std::io::Result<Worker<TileBuild, TileBuilt>> {
-    Worker::spawn("cn-planet-tiles", WORKERS, TileBuild::build)
+    Worker::spawn_keyed(
+        "cn-planet-tiles",
+        WORKERS,
+        TileBuild::clone,
+        TileBuild::build,
+    )
 }

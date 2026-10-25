@@ -445,7 +445,7 @@ mod tests {
             ..Wind::default()
         }));
         let sea = crate::water::PlanetWater {
-            planet: *planet,
+            planet: planet.clone(),
             level: 0.0,
             surface: &surface,
         };

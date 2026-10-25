@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 /// A planet's sea as the water is resolved from it: the planet it lies on,
 /// its height above the radius, and the surface whose look it takes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PlanetWater<'a> {
     /// The planet.
     pub planet: PlanetShape,

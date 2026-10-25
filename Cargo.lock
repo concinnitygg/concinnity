@@ -509,6 +509,7 @@ dependencies = [
  "libm",
  "postcard",
  "rayon",
+ "ruzstd 0.9.1",
  "serde",
  "serde_bytes",
  "serde_json",

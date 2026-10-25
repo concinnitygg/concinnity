@@ -54,12 +54,14 @@ mod tests {
             octaves: 3,
             seed: 2,
             continents: concinnity_engine::planet::Continents::NONE,
+            edits: None,
         };
-        let mut worker = start_ground_worker(shape).expect("thread");
+        let mut worker = start_ground_worker(shape.clone()).expect("thread");
         let request = PatchRequest {
             id: 7,
             frame: LocalFrame::AUTHORED,
             around: [10.0, 0.0, -4.0],
+            edits: None,
         };
         let expected = request.build(&shape);
         assert!(worker.request(request));

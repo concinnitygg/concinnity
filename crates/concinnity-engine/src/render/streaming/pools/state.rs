@@ -20,7 +20,7 @@ use crate::bake::texture::TextureImage;
 use crate::ecs::asset_id::AssetId;
 use crate::geometry::chunk_coord::{self, ChunkCoord};
 use crate::gfx::render_types::DrawIndex;
-use crate::planet::PlanetFrame;
+use crate::planet::{PlanetEdited, PlanetFrame};
 use crate::render::backend::ChunkMesh;
 use crate::render::backend::error::RenderError;
 use crate::render::frame::ops::{OpFailure, RenderOps};
@@ -163,16 +163,18 @@ pub struct StreamingPressure {
 }
 
 /// A planet's frame and the camera its tiles are chosen for.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PlanetView {
     /// The frame the planet was last published in.
     pub frame: PlanetFrame,
     /// The camera, and how large the ground looks from it.
     pub camera: TileCamera,
+    /// The last change of the planet's edits, if they ever changed.
+    pub edited: Option<PlanetEdited>,
 }
 
 /// What a frame's streaming drive sees.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct DriveView<'a> {
     /// The camera position in absolute world space.
     pub cam_pos: [f32; 3],
@@ -355,12 +357,10 @@ impl StreamingState {
         let retire_frame = self.retire_frame();
         if let Some(tiles) = &mut self.pools.planet {
             tiles.step(
-                &planet.frame,
-                planet.camera,
+                planet,
                 &mut queues.ops,
                 &mut queues.slots,
-                self.frame_count,
-                retire_frame,
+                (self.frame_count, retire_frame),
             );
         }
     }
@@ -375,7 +375,7 @@ impl StreamingState {
     pub fn drive<S: ShaderPump + ?Sized>(
         &mut self,
         queues: &mut RenderQueues,
-        view: DriveView<'_>,
+        view: &DriveView<'_>,
         shaders: Option<&mut S>,
     ) -> ([[f32; 4]; 4], [f32; 3]) {
         if let Some(planet) = &view.planet {
@@ -411,7 +411,7 @@ impl StreamingState {
             self.drive_textures(&mut queues.ops, view.cam_pos, loads_frozen);
             self.drive_meshes(&mut queues.ops, view.cam_pos, loads_frozen);
         }
-        let out = self.drive_chunks(queues, &view, loads_frozen);
+        let out = self.drive_chunks(queues, view, loads_frozen);
         self.frame_count += 1;
         out
     }

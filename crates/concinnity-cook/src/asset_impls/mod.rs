@@ -5,6 +5,7 @@
 // These are trait impls only, so the modules need no re-exports.
 
 mod file;
+mod planet;
 mod procedural_mesh;
 mod room;
 mod sdf_volume;
