@@ -10,9 +10,16 @@ The ground is generated from `seed`: hills up to `amplitude` meters above
 the radius, the broadest about `feature_size` meters across, with
 `octaves` layers of finer detail on them, each half the width and half the
 height of the one before. The same seed gives the same planet on every run.
-Nothing about the ground is stored: it is built around the camera as it
-moves, finer near it and coarser toward the horizon, so a planet costs the
-same to load whatever its size.
+The ground is built around the camera as it moves, finer near it and
+coarser toward the horizon, so a planet costs the same to load whatever
+its size.
+
+Its `edits` change the generated ground where they lie: a file of pages,
+each over one square of the planet's quadtree, holding per point a height
+change in meters and a detail weight that scales the generated hills, 1
+keeping them whole and 0 leaving the smooth continents and coasts. A point
+reads the finest page over it, so detail painted into a small area sits on
+a coarse page over a wider one.
 
 With a `land_share` under 1, the planet divides into land and sea around
 its `radius`, which becomes sea level: continents about `continent_size`
@@ -66,3 +73,4 @@ longitude grows eastward, toward `+X`. Altitude is measured above
 - `covers`: An array of [GroundCover](GroundCover.md) objects. Looks laid over `material` in order, each where its rule holds. At most 4; later ones are dropped. Defaults to `[]`.
 - `gravity`: A float. Pull toward the center, in meters per second squared. Defaults to `20.0`.
 - `layers`: An array of [TerrainLayer](TerrainLayer.md) objects. The grass that grows on the planet, one entry per look. Each grows over the whole planet as a meadow: soft-edged bare patches a couple of dozen meters across are laid over the ground, different for every layer, and the same every run. A layer's `density_mask` is not supported on a planet: a world that sets one fails validation. Defaults to `[]`.
+- `edits`: A string. Path to the file of edits laid over the generated ground, relative to the project root. None leaves the ground as generated. A file that is missing or does not read as edits fails validation.

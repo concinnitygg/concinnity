@@ -386,9 +386,14 @@ pub struct RtGeomEntry {
     /// than the scalar `emissive`; the flat fallback ignores it. Mirrors
     /// `MaterialUniforms::emissive_map_index` / `GpuObjectData::emissive_map_index`.
     pub emissive_map_index: u32,
+    /// The canopy block's layers the surface's ground shades with, packed as
+    /// `FarFieldTint::canopy`; 0 for a surface no far field shades. A hit on
+    /// ground growing grass reflects as the meadow over it rather than the bare
+    /// ground, since no acceleration structure holds the blades.
+    pub far_canopy: u32,
     /// Pads the struct to 128 bytes (a multiple of the 16-byte GPU alignment of
     /// the `float4x4` `model`) so the Rust array stride matches the shader stride.
-    pub _pad: [u32; 3],
+    pub _pad: [u32; 2],
 }
 
 /// Per-frame uniform consumed by the volumetric-fog ray-march. Carries the

@@ -410,15 +410,15 @@ float4 ground_normal_at(float3 dir, float footprint, float3 edit, float3 tangent
 // A height no ground reaches, for surfaces without a planet's ground.
 static const float GROUND_NO_HEIGHT = 1e30;
 
-// The normal surface `od` shades with at `pos`, seen from a pixel covering
-// `footprint` meters, and its ground's height above the planet's datum (w):
-// on a planet, its ground's own, independent of the tile it lies on, with the
-// edits its vertex color `edit` carries along its world `tangent`; elsewhere
-// the interpolated `normal`, at no height.
-float4 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float footprint,
+// The normal a surface of far-field word `far_canopy` shades with at `pos`,
+// seen from a pixel covering `footprint` meters, and its ground's height above
+// the planet's datum (w): on a planet, its ground's own, independent of the
+// tile it lies on, with the edits its vertex color `edit` carries along its
+// world `tangent`; elsewhere the interpolated `normal`, at no height.
+float4 canopy_ground_normal(uint far_canopy, float3 pos, float3 normal, float footprint,
                             float3 edit, float3 tangent)
 {
-    bool planet = ((od.far_canopy >> 16u) & 1u) != 0u;
+    bool planet = ((far_canopy >> 16u) & 1u) != 0u;
     if (!planet || CANOPY.planet_radius <= 0.0 || CANOPY.ground_octaves == 0u)
     {
         return float4(normal, GROUND_NO_HEIGHT);
@@ -434,21 +434,23 @@ float4 canopy_ground_normal(GpuObjectData od, float3 pos, float3 normal, float f
                             + CANOPY.planet_rows[2].xyz * n.z), n.w);
 }
 
-// Whether surface `od` is a planet's ground, and the block holds the planet.
-bool canopy_on_planet(GpuObjectData od)
+// Whether a surface of far-field word `far_canopy` is a planet's ground, and
+// the block holds the planet.
+bool canopy_on_planet(uint far_canopy)
 {
-    return ((od.far_canopy >> 16u) & 1u) != 0u && CANOPY.planet_radius > 0.0;
+    return ((far_canopy >> 16u) & 1u) != 0u && CANOPY.planet_radius > 0.0;
 }
 
-// The canopy block's layers surface `od` grows: the first (x) and how many
-// (y). A block not filled this frame (no grass resolved, or no planet tile
-// drawn) holds no layers and no planet, and the canopy is bare ground.
-uint2 canopy_layers(GpuObjectData od)
+// The canopy block's layers a surface of far-field word `far_canopy` grows:
+// the first (x) and how many (y). A block not filled this frame (no grass
+// resolved, or no planet tile drawn) holds no layers and no planet, and the
+// canopy is bare ground.
+uint2 canopy_layers(uint far_canopy)
 {
-    uint first = min(od.far_canopy & 0xffu, CANOPY.layer_count);
-    uint count = min((od.far_canopy >> 8u) & 0xffu, CANOPY.layer_count - first);
-    bool planet_ground = ((od.far_canopy >> 16u) & 1u) != 0u;
-    return uint2(first, planet_ground && !canopy_on_planet(od) ? 0u : count);
+    uint first = min(far_canopy & 0xffu, CANOPY.layer_count);
+    uint count = min((far_canopy >> 8u) & 0xffu, CANOPY.layer_count - first);
+    bool planet_ground = ((far_canopy >> 16u) & 1u) != 0u;
+    return uint2(first, planet_ground && !canopy_on_planet(far_canopy) ? 0u : count);
 }
 
 // Where on a planet a pixel of ground lies, for its ground rules: its
@@ -708,24 +710,25 @@ GroundCoverMix ground_covers_at(GroundPlace place, float2 uv)
     return m;
 }
 
-// The ground and the canopy at `pos` on surface `od` of albedo `albedo`, the
-// vertex color `color` carrying a terrain's layer densities and `normal` the
-// ground's, seen along `V` from a pixel covering `footprint` meters of ground;
-// on a planet, `place` is where the pixel lies. Every pixel of a surface
-// growing grass takes its ground from here: litter strewn by each layer's
-// density share (on a planet, where its rule holds), broken up by patches of
-// earth and dry litter, and how much of the sky the leaf above lets reach it.
-// Only a pixel past where the blades start handing the field over (`far`),
-// `dist` meters from the camera at screen pixel `pixel`, goes on to the
-// canopy, and only where that pixel shows the canopy rather than the blades.
-CanopyShade canopy_at(GpuObjectData od, GroundPlace place, float3 pos, float3 normal,
+// The ground and the canopy at `pos` on a surface of far-field word
+// `far_canopy` and albedo `albedo`, the vertex color `color` carrying a
+// terrain's layer densities and `normal` the ground's, seen along `V` from a
+// pixel covering `footprint` meters of ground; on a planet, `place` is where
+// the pixel lies. Every pixel of a surface growing grass takes its ground from
+// here: litter strewn by each layer's density share (on a planet, where its
+// rule holds), broken up by patches of earth and dry litter, and how much of
+// the sky the leaf above lets reach it. Only a pixel past where the blades
+// start handing the field over (`far`), `dist` meters from the camera at screen
+// pixel `pixel`, goes on to the canopy, and only where that pixel shows the
+// canopy rather than the blades.
+CanopyShade canopy_at(uint far_canopy, GroundPlace place, float3 pos, float3 normal,
                       float3 color, float3 albedo, float3 V, float footprint, float2 pixel,
                       float dist, bool far)
 {
-    uint2 layers = canopy_layers(od);
+    uint2 layers = canopy_layers(far_canopy);
     uint first = layers.x;
     uint count = layers.y;
-    bool planet = canopy_on_planet(od);
+    bool planet = canopy_on_planet(far_canopy);
 
     CanopyShade c = (CanopyShade)0;
     float3 dir = float3(0.0, 1.0, 0.0);
@@ -937,14 +940,15 @@ float4 canopy_facings_light(float2 tilt, float3 v, float3 l, float3 h, GrassLigh
 // Gather a direct light from `L` at `radiance` (shadowing applied) into the
 // canopy: the facings around the view at each band's height, through the leaf
 // above it, the lower band only where a view can reach it.
-void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance)
+void canopy_add_light(inout CanopyShade c, float3 V, float3 L, float3 radiance,
+                      float pre_exposure)
 {
     // A light below the ground's horizon reaches no blade of the field: near
     // the camera the shadow cascades see the ground take it, past them this
     // does.
     // A light too faint to show once exposed (the moon by day) is skipped.
     radiance *= smoothstep(-0.03, 0.03, dot(L, c.up));
-    if (max(radiance.r, max(radiance.g, radiance.b)) * VIEW.pre_exposure < 1e-3)
+    if (max(radiance.r, max(radiance.g, radiance.b)) * pre_exposure < 1e-3)
     {
         return;
     }
@@ -990,9 +994,9 @@ float3 canopy_albedo_seen(CanopyShade c, float3 ground)
 // How far into this frame's band a surface `dist` from the camera is: 0
 // before the blades start thinning out (and for any surface growing no
 // grass), 1 past where they end.
-float canopy_band(GpuObjectData od, float dist)
+float canopy_band(uint far_canopy, float dist)
 {
-    if (od.far_canopy == 0u)
+    if (far_canopy == 0u)
     {
         return 0.0;
     }

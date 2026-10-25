@@ -1803,7 +1803,7 @@ GbFragmentOut grass_prepass_fragment(GrassPrepassOut p)
     float3 N = grass_shading_normal(normalize(p.normal), normalize(p.side), p.u_depth.x, V);
     GbFragmentOut o;
     o.nd = float4(normalize(mul((float3x3)gb_view.view_mat, N)), p.u_depth.y);
-    o.rough = GRASS_ROUGHNESS;
+    o.spec = gb_spec(GRASS_ROUGHNESS, (float3)(GB_DIELECTRIC_F0));
     o.vel = gb_motion(p.cur_clip, p.prev_clip);
     return o;
 }

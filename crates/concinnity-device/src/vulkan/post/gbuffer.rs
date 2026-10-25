@@ -52,9 +52,9 @@ const MODEL_HISTORY_THREADGROUP: usize = 64;
 pub(in crate::vulkan) const GBUFFER_NORMAL_DEPTH_FORMAT: vk::Format =
     vk::Format::R16G16B16A16_SFLOAT;
 
-// Single-channel perceptual roughness. 1.0 (cleared background) = no reflection;
-// 0.0 = mirror.
-pub(in crate::vulkan) const GBUFFER_ROUGHNESS_FORMAT: vk::Format = vk::Format::R8_UNORM;
+// Perceptual roughness (r) + specular F0 (gba). Roughness 1.0 (cleared
+// background) = no reflection; 0.0 = mirror.
+pub(in crate::vulkan) const GBUFFER_ROUGHNESS_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
 // Screen-space motion (prev_uv - cur_uv). Cleared to 0 (no motion).
 pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;

@@ -54,7 +54,7 @@ struct RtGeomEntry
     float emissive_b;
     float4x4 model;          // object-to-world
     uint emissive_map_index; // bindless emissive-map index (0 = none)
-    uint _pad0;
+    uint far_canopy;         // the far field's packed canopy layers (0 = none)
     uint _pad1;
     uint _pad2;
 };

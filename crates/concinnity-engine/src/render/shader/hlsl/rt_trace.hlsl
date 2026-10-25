@@ -17,11 +17,14 @@
 
 // Dielectric base reflectance for the Fresnel.
 static const float RT_F0 = 0.04;
+// The Lambert normalization the main pass divides a diffuse albedo by.
+static const float RT_INV_PI = 0.31830988618;
 // Floats per `Vertex` (56-byte stride): position, normal, tangent, color, uv,
 // and the float each attribute the trace reads starts at.
 static const uint VERTEX_FLOATS = 14u;
 static const uint VERTEX_NORMAL_FLOAT = 3u;
 static const uint VERTEX_TANGENT_FLOAT = 6u;
+static const uint VERTEX_COLOR_FLOAT = 9u;
 static const uint VERTEX_UV_FLOAT = 12u;
 // Skinned objects flag bit 31 of `normal_index`; the trace then fetches the hit
 // triangle from the deformed-vertex / skinned index buffers, which mirror
@@ -61,6 +64,11 @@ float3 rt_vertex_normal(uint vi)
 float3 rt_vertex_tangent(uint vi)
 {
     uint b = vi * VERTEX_FLOATS + VERTEX_TANGENT_FLOAT;
+    return float3(vert_float(b), vert_float(b + 1u), vert_float(b + 2u));
+}
+float3 rt_vertex_color(uint vi)
+{
+    uint b = vi * VERTEX_FLOATS + VERTEX_COLOR_FLOAT;
     return float3(vert_float(b), vert_float(b + 1u), vert_float(b + 2u));
 }
 float2 rt_vertex_uv(uint vi)
@@ -143,7 +151,7 @@ float3 rt_shade_hit(float3 n, float3 albedo, float hit_rough, float metallic, fl
     float3 f0 = lerp((float3)(RT_F0), albedo, metallic);
     float3 diff_a = albedo * (1.0 - metallic);
     float ndl = saturate(dot(n, rt_params.sun_dir.xyz));
-    float3 sun = diff_a * rt_params.sun_color.xyz * ndl * shadow;
+    float3 sun = diff_a * RT_INV_PI * rt_params.sun_color.xyz * ndl * shadow;
     if (!ibl)
     {
         return sun + (diff_a + f0) * 0.03 + emissive;
@@ -152,6 +160,23 @@ float3 rt_shade_hit(float3 n, float3 albedo, float hit_rough, float metallic, fl
     float3 diff = prefilter_level(n, max_mip) * diff_a;
     return sun + diff + spec * f0 + emissive;
 }
+
+#ifdef RT_CANOPY
+// A hit on ground growing grass, shaded as the main pass shades the far field:
+// the sun on the blades through the leaf above them, the sky through the open
+// canopy, and the ground's share lit by what reaches it under the grass.
+float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_mip, float shadow)
+{
+    float3 L = normalize(rt_params.sun_dir.xyz);
+    float3 sun = rt_params.sun_color.xyz * shadow;
+    canopy_add_light(c, -dir, L, sun, rt_params.pre_exposure);
+    float3 sky = ibl ? prefilter_level(c.along, max_mip) : (float3)(0.03);
+    float3 ground_sky = ibl ? prefilter_level(n, max_mip) : (float3)(0.03);
+    float3 under = sun * RT_INV_PI * saturate(dot(n, L)) * canopy_transmit(c, L);
+    float3 ground = c.ground_albedo * (ground_sky * c.ground_sky + under);
+    return canopy_radiance(c, sky, ground);
+}
+#endif
 
 // Trace one reflection ray from `origin` along `dir` and shade what it hits.
 // Returns false when the ray escaped the scene, with `shaded` zero: the miss
@@ -194,6 +219,7 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
 
     float3 nl, tl;
     float2 huv;
+    float3 hcolor = (float3)(1.0);
     if (skin)
     {
         uint i0 = rt_skinned_index(o);
@@ -211,6 +237,7 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
         nl = rt_vertex_normal(i0) * w0 + rt_vertex_normal(i1) * b.x + rt_vertex_normal(i2) * b.y;
         tl = rt_vertex_tangent(i0) * w0 + rt_vertex_tangent(i1) * b.x + rt_vertex_tangent(i2) * b.y;
         huv = rt_vertex_uv(i0) * w0 + rt_vertex_uv(i1) * b.x + rt_vertex_uv(i2) * b.y;
+        hcolor = rt_vertex_color(i0) * w0 + rt_vertex_color(i1) * b.x + rt_vertex_color(i2) * b.y;
     }
 
     float3x3 m3 = (float3x3)e.model;
@@ -223,7 +250,8 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
 
     float3 tint = float3(e.tint_r, e.tint_g, e.tint_b);
     float3 emissive = float3(e.emissive_r, e.emissive_g, e.emissive_b);
-    float shadow = rt_shadow(origin + dir * hit_t, hit_n);
+    float3 hit_p = origin + dir * hit_t;
+    float shadow = rt_shadow(hit_p, hit_n);
 
 #ifdef RT_TEXTURED
     // Explicit level 0: a reflected ray's screen-space UV gradients are
@@ -253,6 +281,27 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
     {
         emissive *= pool_sample_level0(e.emissive_map_index, huv);
     }
+#ifdef RT_CANOPY
+    // Ground growing grass reflects as the meadow over it: no acceleration
+    // structure holds the blades, so the hit is shaded as the far field past
+    // them, its covers and canopy seen back along the ray.
+    if (e.far_canopy != 0u)
+    {
+        float footprint = hit_t * RT_CANOPY_SPREAD;
+        GroundPlace place = (GroundPlace)0;
+        if (canopy_on_planet(e.far_canopy))
+        {
+            place = ground_place(hit_p, hit_n, footprint, canopy_layers(e.far_canopy));
+            GroundCoverMix covers = ground_covers_at(place, huv);
+            place.covered = 1.0 - covers.keep;
+            albedo = albedo * covers.keep + covers.albedo;
+        }
+        CanopyShade canopy = canopy_at(e.far_canopy, place, hit_p, hit_n, hcolor, albedo, -dir,
+                                       footprint, (float2)(0.0), RT_CANOPY_PAST_BLADES, true);
+        shaded = rt_shade_canopy(canopy, hit_n, dir, ibl, max_mip, shadow) + emissive;
+        return true;
+    }
+#endif
     shaded = rt_shade_hit(n, albedo, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);
 #else
     shaded = rt_shade_hit(hit_n, tint, e.roughness, e.metallic, emissive, dir, ibl, max_mip, shadow);

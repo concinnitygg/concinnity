@@ -1711,14 +1711,15 @@ fn gbuffer_normal_depth_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 }
 
 fn gbuffer_roughness_desc(inputs: &FrameGraphInputs) -> TextureDesc {
-    // R8 perceptual roughness, read by the reflection resolve to pick its
-    // blur radius. Clears to 1.0 (fully rough), so a pixel the pre-pass never
+    // RGBA8 perceptual roughness (r) + head-on specular reflectance (gba), read
+    // by the reflection resolves for their gloss, blur radius and Fresnel.
+    // Clears to roughness 1.0 (fully rough), so a pixel the pre-pass never
     // rasterizes reflects nothing -- the one graph target whose cleared
     // background carries meaning, and the reason `TextureDesc` models a clear
     // value at all.
     render_res_2d(
         inputs,
-        PixelFormat::R8Unorm,
+        PixelFormat::Rgba8Unorm,
         TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
     )
     .with_clear_color([1.0, 0.0, 0.0, 0.0])

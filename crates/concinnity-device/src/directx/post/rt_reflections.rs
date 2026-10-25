@@ -70,8 +70,10 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
 // (deformed skinned verts / skinned indices, for skinned hits). The miss
 // fallback's reflection probes follow: the cube array table t10, the ProbeSet
 // CBV b4, the records t11, and the main camera's cluster grid binning them (the
-// params CBV b5, the per-cluster lists t12). Four static samplers: linear-clamp
-// s0, cube linear-clamp s1, linear-repeat s2, and the probe cube sampler s3.
+// params CBV b5, the per-cluster lists t12). The textured variant's
+// grass-covered hits shade from the canopy CBV b6 and its view tables t13. Four
+// static samplers: linear-clamp s0, cube linear-clamp s1, linear-repeat s2, and
+// the probe cube sampler s3.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::Pixel;
     RootSig::new()
@@ -94,6 +96,8 @@ fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSig
         .srv(11, Pixel) // [14] t11 reflection-probe records
         .cbv(5, Pixel) // [15] b5 ClusterParams
         .srv(12, Pixel) // [16] t12 cluster lists
+        .cbv(6, Pixel) // [17] b6 canopy block
+        .srv(13, Pixel) // [18] t13 canopy view tables
         .static_sampler(SamplerState::LinearClamp, 0, Pixel)
         .static_sampler(SamplerState::LinearClamp, 1, Pixel)
         .static_sampler(SamplerState::LinearWrap, 2, Pixel)
@@ -467,6 +471,12 @@ impl DxContext {
         // the main camera's cluster grid binning them (b5, t12). count == 0
         // keeps the sky path.
         self.probe_bindings(frame_idx).bind(cmd, 12);
+        // The canopy block and view tables a hit on ground growing grass
+        // shades from: this frame's copies, as the main pass binds them.
+        // SAFETY: the list is recording, and this frame's canopy copy is live.
+        unsafe { cmd.SetGraphicsRootConstantBufferView(17, self.canopy.gpu_va(frame_idx)) };
+        // SAFETY: the list is recording, and this frame's canopy tables are live.
+        unsafe { cmd.SetGraphicsRootShaderResourceView(18, self.canopy.tables_gpu_va(frame_idx)) };
         // SAFETY: the list is recording; setting the topology names no resource.
         unsafe {
             cmd.IASetPrimitiveTopology(

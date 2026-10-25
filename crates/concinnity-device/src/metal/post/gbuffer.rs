@@ -94,10 +94,10 @@ pub(crate) fn create_gbuffer_targets(
 // Pipeline
 
 // The color target formats, in attachment order: view normal + linear depth,
-// perceptual roughness, screen-space motion.
+// perceptual roughness + specular F0, screen-space motion.
 pub(in crate::metal) const GBUFFER_FORMATS: [MTLPixelFormat; 3] = [
     MTLPixelFormat::RGBA16Float,
-    MTLPixelFormat::R8Unorm,
+    MTLPixelFormat::RGBA8Unorm,
     MTLPixelFormat::RG16Float,
 ];
 

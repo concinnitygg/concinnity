@@ -437,7 +437,7 @@ GbFragmentOut raymarch_prepass(RaymarchVertexOut input, out float depth)
     float view_depth = -mul(VIEW.view_mat, float4(hit_pos, 1.0)).z;
     GbFragmentOut o;
     o.nd    = float4(normalize(mul((float3x3)VIEW.view_mat, normal)), view_depth);
-    o.rough = roughness;
+    o.spec  = gb_spec_metallic(roughness, surf.albedo, saturate(surf.metallic));
     o.vel   = gb_motion(mul(VIEW.cur_vp, float4(hit_pos, 1.0)),
                         mul(VIEW.prev_vp, float4(hit_pos, 1.0)));
     depth = hit_clip.z / max(hit_clip.w, 1e-6);
@@ -447,7 +447,7 @@ GbFragmentOut raymarch_prepass(RaymarchVertexOut input, out float depth)
 struct RaymarchPrepassBackOut
 {
     float4 nd    : SV_Target0;
-    float  rough : SV_Target1;
+    float4 spec  : SV_Target1;
     float2 vel   : SV_Target2;
     float  depth : DEPTH_CONSERVATIVE_NEARER;
 };
@@ -455,7 +455,7 @@ struct RaymarchPrepassBackOut
 struct RaymarchPrepassFrontOut
 {
     float4 nd    : SV_Target0;
-    float  rough : SV_Target1;
+    float4 spec  : SV_Target1;
     float2 vel   : SV_Target2;
     float  depth : DEPTH_CONSERVATIVE_FARTHER;
 };
@@ -467,7 +467,7 @@ RaymarchPrepassBackOut raymarch_prepass_fragment(RaymarchVertexOut input)
     GbFragmentOut g = raymarch_prepass(input, o.depth);
     o.depth = depth_closer(o.depth, input.sv_pos.z);
     o.nd = g.nd;
-    o.rough = g.rough;
+    o.spec = g.spec;
     o.vel = g.vel;
     return o;
 }
@@ -479,7 +479,7 @@ RaymarchPrepassFrontOut raymarch_prepass_front_fragment(RaymarchVertexOut input)
     GbFragmentOut g = raymarch_prepass(input, o.depth);
     o.depth = depth_farther(o.depth, input.sv_pos.z);
     o.nd = g.nd;
-    o.rough = g.rough;
+    o.spec = g.spec;
     o.vel = g.vel;
     return o;
 }

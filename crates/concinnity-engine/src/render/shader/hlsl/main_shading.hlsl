@@ -135,6 +135,13 @@ float2 env_brdf_approx(float NdV, float rough)
     return float2(-1.04, 1.04) * a004 + r.zw;
 }
 
+// The share of a specular lobe an ambient visibility leaves (Lagarde and de
+// Rousiers): a rough lobe is occluded as the diffuse is, a glossy one less.
+float specular_occlusion(float NdV, float visibility, float rough)
+{
+    return saturate(pow(NdV + visibility, exp2(-16.0 * rough - 1.0)) - 1.0 + visibility);
+}
+
 {SHADOW_CASCADE}
 
 // 3x3 hash-rotated PCF of one spot shadow slice. Returns [0, 1] (1.0 fully
@@ -319,18 +326,18 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // A planet's ground takes its covers' look where their rules hold.
     GroundCoverMix covers = ground_no_covers();
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
-    float4 ground = canopy_ground_normal(od, v.world_pos, v.normal, footprint, v.color, v.tangent);
+    float4 ground = canopy_ground_normal(od.far_canopy, v.world_pos, v.normal, footprint, v.color, v.tangent);
     ground_normal = ground.xyz;
 #ifdef SURFACE_CANOPY
-    float far_w = canopy_band(od, far_dist);
+    float far_w = canopy_band(od.far_canopy, far_dist);
 #else
     const float far_w = 0.0;
 #endif
     GroundPlace place = (GroundPlace)0;
     GroundSwash swash = (GroundSwash)0;
-    if (canopy_on_planet(od))
+    if (canopy_on_planet(od.far_canopy))
     {
-        place = ground_place(v.world_pos, ground_normal, footprint, canopy_layers(od));
+        place = ground_place(v.world_pos, ground_normal, footprint, canopy_layers(od.far_canopy));
         covers = ground_covers_at(place, v.uv);
         place.covered = 1.0 - covers.keep;
         albedo = albedo * covers.keep + covers.albedo;
@@ -339,7 +346,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         swash = ground_swash_at(place, ground.w, footprint);
         albedo = lerp(albedo * lerp(1.0, GROUND_WET_DARKEN, swash.wet), GROUND_SWASH_FOAM, swash.edge);
     }
-    canopy = canopy_at(od, place, v.world_pos, ground_normal, v.color, albedo,
+    canopy = canopy_at(od.far_canopy, place, v.world_pos, ground_normal, v.color, albedo,
                        V_far / max(far_dist, 1e-4), footprint, v.position.xy, far_dist,
                        far_w > 0.0);
     albedo = canopy.ground_albedo;
@@ -441,7 +448,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         if (far_w > 0.0)
         {
             Lo_under += direct * canopy_transmit(canopy, L);
-            canopy_add_light(canopy, V, L, radiance * s);
+            canopy_add_light(canopy, V, L, radiance * s, VIEW.pre_exposure);
         }
     }
 
@@ -620,33 +627,41 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // mirrors; flat close-up pixels have a near-zero footprint, so they keep
     // the plain roughness mip.
     float3 prefiltered;
+    float3 specular_ibl = (float3)(0.0);
+    bool reflections_own = VIEW.reflections_enabled > 0.5;
     if (environment_specular(probes, v.world_pos, reflect(-V, N), roughness, prefiltered))
     {
-
-        float3 specular_ibl = prefiltered * (F0 * ab.x + ab.y);
+        specular_ibl = prefiltered * (F0 * ab.x + ab.y);
 
         // When an SSR / RT reflection composite owns the sharp specular for
         // glossy surfaces this frame, fade the forward probe specular for
         // glossy dielectrics so the two do not double-count. Metals keep
-        // their full albedo-tinted forward specular (the resolve adds only a
-        // faint dielectric term), and surfaces rougher than the cut (which
-        // the resolve skips) keep theirs too.
-        if (VIEW.reflections_enabled > 0.5)
+        // their albedo-tinted forward specular, which the composite blends
+        // toward the traced reflection by its Fresnel weight, and surfaces
+        // rougher than the cut (which the resolve skips) keep theirs too.
+        if (reflections_own)
         {
             float fade = smoothstep(REFLECTION_ROUGHNESS_CUT * 0.7,
                                     REFLECTION_ROUGHNESS_CUT, roughness);
             specular_ibl *= lerp(1.0, fade, 1.0 - metallic);
         }
-
-        ambient += specular_ibl;
     }
 
     // The environment's share is held back where something nearby occludes
     // it, and what those surfaces reflect arrives instead; direct lighting is
     // unaffected. The occluders are the bounce's source, so the occlusion does
-    // not dim the bounce itself.
+    // not dim the bounce itself. Specular takes the occlusion narrowed to its
+    // lobe, and none where the reflection composite's own trace finds the
+    // occluders.
     ScreenIndirect indirect = screen_indirect_at(screen_xy);
-    ambient = ambient * indirect.visibility + diffuse_albedo * indirect.bounce;
+    float specular_visibility = specular_occlusion(NdV, indirect.visibility, roughness);
+    if (reflections_own)
+    {
+        float owned = saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT);
+        specular_visibility = lerp(specular_visibility, 1.0, owned);
+    }
+    ambient = ambient * indirect.visibility + diffuse_albedo * indirect.bounce
+            + specular_ibl * specular_visibility;
 
     // Authored indirect-fill multiplier (IndirectLighting.ambient_intensity);
     // 1.0 is a no-op. Lifts shadow fill without touching sun-lit surfaces.

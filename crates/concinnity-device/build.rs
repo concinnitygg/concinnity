@@ -699,8 +699,12 @@ const RT_REFLECTIONS_REGISTERS: &[(&str, &str)] = &[
     ("probe_cube_sampler", "s3"),
 ];
 
-const RT_REFLECTIONS_TEXTURED_REGISTERS: &[(&str, &str)] =
-    &[("tex_pool", "t0, space1"), ("pool_sampler", "s2")];
+const RT_REFLECTIONS_TEXTURED_REGISTERS: &[(&str, &str)] = &[
+    ("tex_pool", "t0, space1"),
+    ("pool_sampler", "s2"),
+    ("canopy_cb", "b6"),
+    ("canopy_tables_sb", "t13"),
+];
 
 // The transparent pass's root signatures, from `src/directx/transparent.rs`,
 // which glass and water both draw under. The probe cube array, its records and
@@ -2110,11 +2114,13 @@ const RT_REFLECTIONS_SLOTS: &[(&str, &str)] = &[
     ("cluster_list", "buffer(10)"),
 ];
 
-// The textured RT resolve's bindless pool: the main pass's texture block,
-// bound at the pool's offset.
+// The textured RT resolve's bindless pool (the main pass's texture block, bound
+// at the pool's offset) and the canopy block its grass-covered hits shade from.
 const RT_REFLECTIONS_POOL_SLOTS: &[(&str, &str)] = &[
     ("spvDescriptorSet3", "buffer(7)"),
     ("pool_sampler", "sampler(5)"),
+    ("canopy_cb", "buffer(12)"),
+    ("canopy_tables_sb", "buffer(13)"),
 ];
 
 const GLASS_SLOTS: &[&[(&str, &str)]] = &[

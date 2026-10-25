@@ -163,6 +163,44 @@ SamplerState pool_sampler : register(s2);
 [[vk::binding(1, 2)]] Texture2D<float4> tex_pool[] : register(t0, space1);
 [[vk::binding(20, 1)]] SamplerState pool_sampler : register(s2);
 #endif
+
+// The far field's canopy block and view tables, which a hit on ground growing
+// grass is shaded from: the main pass's own on Vulkan, in the global set.
+{GROUND_RULE_TYPES}
+
+{CANOPY_TYPES}
+
+#if defined(CN_BACKEND_DIRECTX)
+ConstantBuffer<CanopyParams> canopy_cb : register(b6);
+StructuredBuffer<float4> canopy_tables_sb : register(t13);
+#else
+[[vk::binding(21, 1)]] ConstantBuffer<CanopyParams> canopy_cb : register(b12);
+[[vk::binding(22, 1)]] StructuredBuffer<float4> canopy_tables_sb : register(t13);
+#endif
+#define CANOPY canopy_cb
+#define CANOPY_TABLES canopy_tables_sb
+
+// The blade model's two shading helpers, which the main pass defines for it.
+static const float PI = 3.14159265358979;
+float3 fresnel_schlick(float cos_theta, float3 f0)
+{
+    return f0 + (1.0 - f0) * pow(saturate(1.0 - cos_theta), 5.0);
+}
+
+// The covers' albedo maps, read at the base mip as every other hit texture is.
+float4 pool_sample(uint idx, float2 uv)
+{
+    return tex_pool[NonUniformResourceIndex(idx)].SampleLevel(pool_sampler, uv, 0.0);
+}
+
+{CANOPY}
+
+#define RT_CANOPY
+// How wide a reflected ray's footprint grows per meter it travels, which the
+// meadow's detail fades by.
+static const float RT_CANOPY_SPREAD = 0.01;
+// A distance past every hand-off band, so a hit always shows the canopy.
+static const float RT_CANOPY_PAST_BLADES = 1e6;
 #endif
 
 // Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no reflection; glossiness
@@ -199,7 +237,8 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
         return float4(base, 0.0);
     }
 
-    float roughness = rough_tex.Sample(rough_tex_sampler, uv).r;
+    float4 spec = rough_tex.Sample(rough_tex_sampler, uv);
+    float roughness = spec.r;
     float gloss = saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT);
     if (gloss <= 0.0)
     {
@@ -216,8 +255,6 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
     bool ibl = rt_params.prefilter_mip_count > 0.5;
     float max_mip = rt_params.prefilter_mip_count - 1.0;
     float ndv = saturate(dot(nw, v));
-    float fresnel = RT_F0 + (1.0 - RT_F0) * pow(1.0 - ndv, 5.0);
-    float weight = saturate(fresnel * gloss * rt_params.intensity);
 
     float3 reflected;
     // Origin nudged off the surface along the normal so the trace cannot
@@ -243,5 +280,6 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
         }
     }
 
-    return float4(reflected * rt_params.pre_exposure, weight);
+    return reflection_resolve_out(reflected * rt_params.pre_exposure, spec.gba, ndv, gloss,
+                                  rt_params.intensity);
 }

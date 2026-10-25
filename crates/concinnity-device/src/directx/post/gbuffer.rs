@@ -39,9 +39,9 @@ use crate::directx::{builtin_shaders, com};
 // the SSR / SSAO G-buffer so the resolve / kernel maths is byte-identical.
 pub(crate) const GBUFFER_NORMAL_DEPTH_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// Single-channel perceptual roughness. 1.0 = fully rough (cleared background),
-// 0.0 = mirror.
-pub(crate) const GBUFFER_ROUGHNESS_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
+// Perceptual roughness (r) + specular F0 (gba). Roughness 1.0 = fully rough
+// (cleared background), 0.0 = mirror.
+pub(crate) const GBUFFER_ROUGHNESS_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 // Screen-space motion (prev_uv - cur_uv). Cleared to 0 (no motion).
 pub(crate) const GBUFFER_VELOCITY_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16_FLOAT;

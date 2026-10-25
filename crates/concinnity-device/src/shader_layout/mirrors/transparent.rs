@@ -200,7 +200,8 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             [emissive] => ["emissive_r", "emissive_g", "emissive_b"],
             model,
             emissive_map_index,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            far_canopy,
+            [_pad] => ["_pad1", "_pad2"],
         })),
     ]
 }

@@ -6,10 +6,10 @@ use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
 use concinnity_engine::window::display_mode::DisplayMode;
 
 // The `--quality-preset` launch flag has to reach the CEILING, not merely the
-// menu label. On a mid-tier GPU `Auto` resolves to the `High` ceiling, which
-// clamps ray-traced reflections off and logs nothing about it, so a probe that
-// forces `ultra` and never checks would measure a non-RT frame and read it as a
-// result. Both halves are asserted on the same GPU and the same authored world.
+// menu label. On an entry-tier GPU `Auto` resolves to the `Medium` ceiling,
+// which clamps ray-traced reflections off and logs nothing about it, so a probe
+// that forces `ultra` and never checks would measure a non-RT frame and read it
+// as a result. Both halves are asserted on the same GPU and the same authored world.
 #[test]
 fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let authored = effects(|e| {
@@ -18,17 +18,17 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Auto);
 
-    let (clamped, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
+    let (clamped, hooks) = recording_hooks_with(profile_at(GpuTier::EntryDiscrete));
     let mut world = effects_scene(authored.clone()).build();
     world.insert_resource(settings.clone());
     init_graphics(&mut world, hooks);
     assert_eq!(settings_state(&world).quality_preset(), QualityPreset::Auto);
     assert!(
         !lock(&clamped).init.as_ref().unwrap().rt_reflections_on,
-        "the Auto -> High ceiling clamps RT off, silently"
+        "the Auto -> Medium ceiling clamps RT off, silently"
     );
 
-    let (forced, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
+    let (forced, hooks) = recording_hooks_with(profile_at(GpuTier::EntryDiscrete));
     let mut world = effects_scene(authored).build();
     world.insert_resource(settings);
     world.insert_resource(LaunchRequest {

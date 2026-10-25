@@ -89,8 +89,6 @@ static const int   SSR_REFINE    = 5;
 // Surfaces rougher than REFLECTION_ROUGHNESS_CUT get no SSR; glossiness ramps
 // in below it.
 {REFLECTION_CUT}
-// Dielectric base reflectance (water, glass, polished stone) for the Fresnel.
-static const float SSR_F0        = 0.04;
 // UV margin over which a hit near the screen border fades out.
 static const float SSR_EDGE_FADE = 0.12;
 
@@ -126,7 +124,8 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
         return float4(base, 0.0);
     }
 
-    float roughness = rough_tex.Sample(rough_tex_samp, uv).r;
+    float4 spec = rough_tex.Sample(rough_tex_samp, uv);
+    float roughness = spec.r;
     // Glossy surfaces reflect sharply; rough ones get nothing.
     float gloss = saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT);
     if (gloss <= 0.0)
@@ -231,9 +230,7 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
     }
 
     float ndv = saturate(dot(n, v));
-    float fresnel = SSR_F0 + (1.0 - SSR_F0) * pow(1.0 - ndv, 5.0);
-    float w = saturate(fresnel * gloss * params.intensity);
     // Reflected radiance (.rgb) + composite weight (.a). The reflection
     // composite blurs this by surface roughness and blends it over the scene.
-    return float4(reflected, w);
+    return reflection_resolve_out(reflected, spec.gba, ndv, gloss, params.intensity);
 }

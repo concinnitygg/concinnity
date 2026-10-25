@@ -8,10 +8,14 @@ hardware ray-traced, or neither. The `reflections` section of
 below.
 
 Both methods are on by default, which is the look on capable hardware. The
-`Auto` graphics quality preset forces screen-space reflections off below
-the high tier and permits ray tracing only on the top tier; where ray
-tracing is not permitted or the GPU lacks it, `screen_space` takes over. A
-ceiling only ever reduces, so turning a method off here holds on every tier.
+`Auto` graphics quality preset forces both off below the high tier, and the
+high tier traces at half resolution; where ray tracing is not permitted or
+the GPU lacks it, `screen_space` takes over. A ceiling only ever reduces, so
+turning a method off here holds on every tier.
+
+The reflection's Fresnel starts from the surface's own head-on reflectance,
+so a metal reflects its surroundings across its whole face, tinted by its
+color, while a dielectric reflects mostly at grazing angles.
 
 ## Parameters
 

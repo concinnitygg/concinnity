@@ -95,7 +95,8 @@ fn entry(
         emissive: material.emissive,
         model,
         emissive_map_index: material.emissive_map_index,
-        _pad: [0; 3],
+        far_canopy: material.far_field.canopy,
+        _pad: [0; 2],
     }
 }
 
@@ -205,6 +206,23 @@ mod tests {
             );
             assert_eq!(bytes % 4, 0, "{count}: {bytes} is not whole words");
         }
+    }
+
+    #[test]
+    fn an_entry_carries_the_far_field_its_ground_shades_with() {
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let mut material = MaterialUniforms::DEFAULT;
+        assert_eq!(entry(0, 0, identity, 0, 0, &material).far_canopy, 0);
+        material.far_field = crate::gfx::render_types::FarFieldTint::of(0x0001_0200);
+        assert_eq!(
+            entry(0, 0, identity, 0, 0, &material).far_canopy,
+            0x0001_0200
+        );
     }
 
     #[test]

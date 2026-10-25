@@ -31,7 +31,7 @@ pub enum QualityPreset {
     Medium,
     /// Fixed high-tier ceiling.
     High,
-    /// Fixed top-tier ceiling; the only one that permits ray-traced reflections.
+    /// Fixed top-tier ceiling.
     Ultra,
     /// No ceiling: the world's authored look and the per-row overrides stand.
     Custom,
@@ -232,7 +232,7 @@ impl QualityCeiling {
         aa_mode: AaMode::Taa,
         ssao: true,
         ssr: true,
-        ray_traced_reflections: false,
+        ray_traced_reflections: true,
         rt_reflection_shadows: true,
         ssgi: true,
         auto_exposure: true,

@@ -3,7 +3,7 @@
 // entries in `main_bindless.hlsl` and the sky's in `gbuffer_sky.hlsl`.
 //
 //   target(0) RGBA16F  view-space normal (xyz) + positive linear view depth (a)
-//   target(1) R8       perceptual roughness
+//   target(1) RGBA8    perceptual roughness (r) + specular reflectance F0 (gba)
 //   target(2) RG16F    screen-space motion (prev_uv - cur_uv)
 //
 // Alpha 0 in target(0) marks "no geometry", the sky included.
@@ -33,9 +33,25 @@ struct GbView
 struct GbFragmentOut
 {
     float4 nd    : SV_Target0;
-    float  rough : SV_Target1;
+    float4 spec  : SV_Target1;
     float2 vel   : SV_Target2;
 };
+
+// The reflectance of a surface seen head-on that is not metal.
+static const float GB_DIELECTRIC_F0 = 0.04;
+
+// Target(1)'s texel: the roughness the reflection resolves key off, and the
+// head-on reflectance their Fresnel starts from.
+float4 gb_spec(float roughness, float3 f0)
+{
+    return float4(roughness, f0);
+}
+
+// Target(1) for a surface of `albedo` and `metallic` under the metalness model.
+float4 gb_spec_metallic(float roughness, float3 albedo, float metallic)
+{
+    return gb_spec(roughness, lerp((float3)(GB_DIELECTRIC_F0), albedo, metallic));
+}
 
 // Any component past 1 lands every pixel off the image, which every reader
 // treats as missing history.

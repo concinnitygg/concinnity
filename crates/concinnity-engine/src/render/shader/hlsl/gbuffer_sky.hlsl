@@ -44,7 +44,7 @@ GbFragmentOut gbuffer_sky_fragment(SkyVertexOut p)
 {
     GbFragmentOut o;
     o.nd    = (float4)(0.0);
-    o.rough = 1.0;
+    o.spec  = gb_spec(1.0, (float3)(0.0));
     o.vel   = gb_motion(p.cur_clip, p.prev_clip);
     return o;
 }

@@ -32,6 +32,7 @@ embed_shaders! {
     AUTO_EXPOSURE => "auto_exposure.hlsl",
     BLOOM => "bloom.hlsl",
     CANOPY => "canopy.hlsl",
+    CANOPY_TYPES => "canopy_types.hlsl",
     CLUSTER_TYPES => "cluster_types.hlsl",
     COMPOSITE => "composite.hlsl",
     CULL => "cull.hlsl",
