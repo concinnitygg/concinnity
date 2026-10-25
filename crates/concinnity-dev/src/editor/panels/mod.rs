@@ -40,6 +40,7 @@ pub(crate) mod lighting_panel;
 pub(crate) mod list_panel;
 pub(crate) mod planet;
 pub(crate) mod planet_panel;
+pub(crate) mod planet_tool_strip;
 pub(crate) mod preview;
 pub(crate) mod registry;
 pub(crate) mod sdf_field_edit;

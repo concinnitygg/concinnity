@@ -57,6 +57,8 @@ mod hook;
 mod hud;
 // The reserved asset-id families every injected HUD element is declared in.
 mod hud_ids;
+// Vector icons drawn from rounded rectangles, sharp at any scale.
+mod icons;
 // Runtime injection of the HUD's reserved assets into a compiled world,
 // between the in-memory compile and `Runtime::start`.
 mod inject;
@@ -79,6 +81,8 @@ mod owned_files;
 mod overrides;
 // The command palette's model: every actionable thing the editor can reach.
 mod palette;
+// The Planet panel's tools and brush, the strokes they lay and the brush ring.
+mod planet_tools;
 // Every floating panel: its layout half, its data half, and the registry
 // each panel is one entry in.
 mod panels;

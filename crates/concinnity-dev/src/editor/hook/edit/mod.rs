@@ -43,6 +43,8 @@ pub(super) mod palette_state;
 pub(super) mod path_cache;
 pub(super) mod planet;
 pub(super) mod planet_state;
+pub(super) mod planet_tool;
+pub(super) mod planet_tool_state;
 pub(super) mod sdf_edits;
 pub(super) mod sdf_form;
 pub(super) mod select;

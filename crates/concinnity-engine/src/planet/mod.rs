@@ -32,6 +32,7 @@ mod ground;
 mod horizon;
 mod lod;
 mod morph;
+mod ray;
 mod rebase;
 mod sea;
 mod seams;
@@ -57,6 +58,7 @@ pub use lod::{
     RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
 };
 pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
+pub use ray::{GroundHit, GroundPick};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use sea::PlanetSea;
 pub use seams::{DrawnTile, TileSeams};

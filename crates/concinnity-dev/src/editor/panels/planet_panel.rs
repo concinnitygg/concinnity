@@ -1,6 +1,7 @@
 //! The Planet panel's layout half: a floating panel over the world's `Planet`
 //! (see `planet.rs` for its rows) with a status line and Apply button in its
-//! header row and a scrolling window of rows below. A row is a caption plus a
+//! header row, the tool strip under it (`planet_tool_strip.rs`), and a scrolling
+//! window of rows below. A row is a caption plus a
 //! text input, a reference picker cycled by clicking, or an add row, with up to
 //! two buttons at its right end. Every number row keeps its own text input, so
 //! a typed edit survives scrolling it out of view until Apply.
@@ -10,8 +11,10 @@ use concinnity_engine::ecs::World;
 
 use super::form::FieldKind;
 use super::planet::{self, Button, Row, RowKind};
+use super::planet_tool_strip::{self, StripAction, StripView};
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};
+use crate::editor::icons;
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
 
@@ -30,6 +33,12 @@ hud_ids! {
         pub(crate) row_bg[VISIBLE_ROWS],
         pub(crate) picker_bg[VISIBLE_ROWS],
         pub(crate) button_bg[VISIBLE_ROWS * ROW_BUTTONS],
+        pub(crate) tool_bg[planet_tool_strip::TOOLS],
+        pub(crate) tool_part[planet_tool_strip::TOOLS * icons::MAX_PARTS],
+        pub(crate) slider_track[planet_tool_strip::SETTINGS],
+        pub(crate) slider_fill[planet_tool_strip::SETTINGS],
+        pub(crate) slider_handle[planet_tool_strip::SETTINGS],
+        pub(crate) PICK_BG,
     ];
     labels: [
         pub(crate) TITLE_LABEL,
@@ -39,6 +48,12 @@ hud_ids! {
         pub(crate) row_label[VISIBLE_ROWS],
         pub(crate) picker_label[VISIBLE_ROWS],
         pub(crate) button_label[VISIBLE_ROWS * ROW_BUTTONS],
+        pub(crate) TOOL_CAPTION,
+        pub(crate) TOOL_HINT,
+        pub(crate) setting_label[planet_tool_strip::SETTINGS],
+        pub(crate) setting_value[planet_tool_strip::SETTINGS],
+        pub(crate) PICK_CAPTION,
+        pub(crate) PICK_LABEL,
     ];
     fields: [pub(crate) input[planet::MAX_ROWS] = ""];
 }
@@ -76,10 +91,18 @@ pub(crate) struct PlanetView<'a> {
     /// Typed edits are waiting on Apply: the heading marks them.
     pub dirty: bool,
     pub mouse: [f32; 2],
+    pub strip: StripView<'a>,
+}
+
+impl PlanetView<'_> {
+    // The tool strip's height.
+    fn strip(&self) -> f32 {
+        planet_tool_strip::height(self.strip.tools)
+    }
 }
 
 /// A resolved Planet-panel click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PlanetAction {
     /// Give row `r`'s text input keyboard focus.
     Focus(usize),
@@ -93,6 +116,8 @@ pub(crate) enum PlanetAction {
     AddSea,
     /// Write every typed box into the planet.
     Apply,
+    /// A press on the tool strip.
+    Strip(StripAction),
     /// Elsewhere on the panel: swallowed so it cannot reach the world.
     Consume,
 }
@@ -102,13 +127,13 @@ pub(crate) fn default_origin(vp: [f32; 2]) -> [f32; 2] {
     [(vp[0] - PLANET_W - 8.0).max(8.0), 48.0]
 }
 
-/// The panel footprint for `n_rows` rows, the window showing at most
-/// [`VISIBLE_ROWS`] of them.
-pub(crate) fn size(n_rows: usize) -> [f32; 2] {
+/// The panel footprint for `n_rows` rows under a tool strip `strip` tall,
+/// the window showing at most [`VISIBLE_ROWS`] of them.
+pub(crate) fn size(n_rows: usize, strip: f32) -> [f32; 2] {
     let shown = n_rows.min(VISIBLE_ROWS);
     [
         PLANET_W,
-        widget::TITLE_H + HEADER_H + shown as f32 * ROW_H + PAD,
+        widget::TITLE_H + HEADER_H + strip + shown as f32 * ROW_H + PAD,
     ]
 }
 
@@ -126,21 +151,21 @@ fn apply_rect(o: [f32; 2], w: f32) -> [f32; 4] {
     ]
 }
 
-// Where the rows start: under the header row.
-fn body_top(o: [f32; 2]) -> f32 {
+/// Where the tool strip starts: under the header row.
+pub(crate) fn strip_top(o: [f32; 2]) -> f32 {
     o[1] + widget::TITLE_H + HEADER_H
 }
 
-/// The window's slot `j`.
-fn slot_rect(o: [f32; 2], w: f32, j: usize) -> [f32; 4] {
-    [o[0], body_top(o) + j as f32 * ROW_H, w, ROW_H]
+/// The window's slot `j`, under a tool strip `strip` tall.
+fn slot_rect(o: [f32; 2], w: f32, strip: f32, j: usize) -> [f32; 4] {
+    [o[0], strip_top(o) + strip + j as f32 * ROW_H, w, ROW_H]
 }
 
-/// The rows' scrolling region.
-pub(crate) fn body_rect(o: [f32; 2], w: f32, n_rows: usize) -> [f32; 4] {
+/// The rows' scrolling region under a tool strip `strip` tall.
+pub(crate) fn body_rect(o: [f32; 2], w: f32, strip: f32, n_rows: usize) -> [f32; 4] {
     [
         o[0],
-        body_top(o),
+        strip_top(o) + strip,
         w,
         n_rows.min(VISIBLE_ROWS) as f32 * ROW_H,
     ]
@@ -193,6 +218,10 @@ pub(crate) fn hit_test(
     if point_in(mx, my, apply_rect(o, w)) {
         return Some(PlanetAction::Apply);
     }
+    if let Some(a) = planet_tool_strip::hit_test(&view.strip, mx, my, o, strip_top(o), w) {
+        return Some(PlanetAction::Strip(a));
+    }
+    let strip = view.strip();
     let window = view
         .rows
         .iter()
@@ -200,7 +229,7 @@ pub(crate) fn hit_test(
         .skip(view.scroll)
         .take(VISIBLE_ROWS);
     for (j, (r, row)) in window.enumerate() {
-        let rect = slot_rect(o, w, j);
+        let rect = slot_rect(o, w, strip, j);
         if !point_in(mx, my, rect) {
             continue;
         }
@@ -236,13 +265,15 @@ pub(crate) fn place(world: &mut World, view: &PlanetView<'_>, o: [f32; 2], s: [f
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
     place_header(world, view, o, w);
+    planet_tool_strip::place(world, &view.strip, o, strip_top(o), w);
+    let strip = view.strip();
 
     for r in 0..planet::MAX_ROWS {
         widget::hide_field(world, input(r));
     }
     for j in 0..VISIBLE_ROWS {
         match view.rows.get(view.scroll + j) {
-            Some(row) => place_row(world, view, view.scroll + j, row, slot_rect(o, w, j)),
+            Some(row) => place_row(world, view, view.scroll + j, row, slot_rect(o, w, strip, j)),
             None => hide_slot(world, j),
         }
     }

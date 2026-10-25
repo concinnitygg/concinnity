@@ -93,6 +93,9 @@ impl EditorHook {
         if self.content.drag.is_some() {
             self.drive_content_drag(input, vp, world);
         }
+        // A picked Planet tool finds the ground under the cursor and carries
+        // its stroke on.
+        self.drive_planet_tool(input, vp, world);
         if input.left_click
             && self.drag.is_none()
             && self.resize.is_none()
@@ -101,6 +104,7 @@ impl EditorHook {
             && self.marquee.is_none()
             && self.content.drag.is_none()
             && self.orbit.is_none()
+            && !self.planet_tool.busy()
         {
             // The confirmation dialog swallows every press first.
             // Behind it, an open Display or create menu is modal: it
@@ -128,6 +132,7 @@ impl EditorHook {
             && self.marquee.is_none()
             && self.content.drag.is_none()
             && self.orbit.is_none()
+            && !self.planet_tool.busy()
         {
             self.open_create_menu(input, vp, world);
         }
@@ -322,12 +327,15 @@ impl EditorHook {
                 return;
             }
         }
-        // Nothing claimed the press: the gizmo's tip handles get it first
-        // (grabbing a handle must not re-pick the object behind it), then the
-        // billboard icons (which arbitrate against the mesh AABBs by camera
-        // distance), then the 3D view as a pick. Only edit mode gets here
-        // (`left_click` stays false while the world holds the cursor in play
-        // mode).
+        // Nothing claimed the press: a picked Planet tool takes it, else the
+        // gizmo's tip handles get it first (grabbing a handle must not re-pick
+        // the object behind it), then the billboard icons (which arbitrate
+        // against the mesh AABBs by camera distance), then the 3D view as a
+        // pick. Only edit mode gets here (`left_click` stays false while the
+        // world holds the cursor in play mode).
+        if self.try_planet_tool_press(world) {
+            return;
+        }
         if self.try_gizmo_press(input, vp, world) {
             return;
         }

@@ -558,8 +558,11 @@ impl Panel for PlanetPanel {
         hook.planet.status = None;
         hook.seed_planet(world);
     }
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.planet_tool.put_down();
+    }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        planet_panel::size(hook.planet_rows().len())
+        planet_panel::size(hook.planet_rows().len(), hook.planet_strip())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         planet_panel::default_origin(vp)
@@ -575,7 +578,7 @@ impl Panel for PlanetPanel {
         let s = hook.effective_size(PanelKey::Planet);
         let action = {
             let rows = hook.planet_rows();
-            let view = hook.make_planet_view(&rows, [mx, my]);
+            let view = hook.make_planet_view(&rows, "", [mx, my]);
             planet_panel::hit_test(&view, mx, my, o, s)
         };
         handled(action, |a| hook.apply_planet_action(a, world))
@@ -583,15 +586,20 @@ impl Panel for PlanetPanel {
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Planet);
         let rows = hook.planet_rows().len();
-        widget::point_in(mx, my, planet_panel::body_rect(o, s[0], rows))
+        let strip = hook.planet_strip();
+        widget::point_in(mx, my, planet_panel::body_rect(o, s[0], strip, rows))
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_planet(delta);
     }
+    fn frame_keys(&self, hook: &mut EditorHook, _world: &mut World, input: &FrameInput) {
+        hook.planet_tool_keys(input);
+    }
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Planet);
         let rows = hook.planet_rows();
-        let view = hook.make_planet_view(&rows, mouse);
+        let pick = hook.planet_pick_label();
+        let view = hook.make_planet_view(&rows, &pick, mouse);
         planet_panel::place(world, &view, o, s);
     }
 }

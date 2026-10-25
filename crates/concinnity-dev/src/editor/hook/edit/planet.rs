@@ -12,6 +12,7 @@ use crate::editor::hook::{EditorHook, declared_id, names_of_types, short_status}
 use crate::editor::panels::form::FieldKind;
 use crate::editor::panels::planet::{self, Button, List, Row, RowKind};
 use crate::editor::panels::planet_panel::{self, PlanetAction, PlanetView};
+use crate::editor::panels::planet_tool_strip::{self, StripView};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
@@ -40,9 +41,15 @@ impl EditorHook {
         rows
     }
 
+    // The tool strip's height.
+    pub(in crate::editor::hook) fn planet_strip(&self) -> f32 {
+        planet_tool_strip::height(&self.planet_tool.tools)
+    }
+
     pub(in crate::editor::hook) fn make_planet_view<'a>(
         &'a self,
         rows: &'a [Row],
+        pick: &'a str,
         mouse: [f32; 2],
     ) -> PlanetView<'a> {
         PlanetView {
@@ -57,6 +64,12 @@ impl EditorHook {
             status: self.planet.status.as_deref(),
             dirty: self.planet.touched,
             mouse,
+            strip: StripView {
+                tools: &self.planet_tool.tools,
+                pick,
+                sliding: self.planet_tool.sliding,
+                mouse,
+            },
         }
     }
 
@@ -92,6 +105,7 @@ impl EditorHook {
             PlanetAction::AddPlanet => self.add_planet(world),
             PlanetAction::AddSea => self.add_planet_sea(world),
             PlanetAction::Apply => self.apply_planet(world),
+            PlanetAction::Strip(a) => self.apply_strip_action(a),
             PlanetAction::Consume => self.planet.focus = None,
         }
     }
