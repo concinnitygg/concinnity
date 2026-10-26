@@ -61,6 +61,8 @@ pub struct MirrorShading {
     pub pre_exposure: f32,
     /// The planet's per-point sky the mirror is lit by.
     pub daylight: crate::render::uniforms::DaylightBlock,
+    /// The camera a planet's tiles morph by.
+    pub tile_morph: crate::gfx::render_types::TileMorphView,
 }
 
 /// The camera reflected across one plane for one frame.
@@ -125,6 +127,7 @@ impl MirrorView {
             irradiance: shading.irradiance,
             pre_exposure: shading.pre_exposure,
             daylight: shading.daylight,
+            tile_morph: shading.tile_morph,
         }
     }
 }
@@ -186,6 +189,7 @@ mod tests {
             irradiance: 1.0,
             pre_exposure: 0.5,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
+            tile_morph: crate::gfx::render_types::TileMorphView::default(),
         });
         assert_eq!(cam.cam_pos, v.matrices.eye);
         assert_eq!((cam.elapsed, cam.pre_exposure), (2.0, 0.5));

@@ -14,7 +14,7 @@
 //! own indirect buffer.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::{NUM_SHADOW_CASCADES, SKINNED_STREAM};
+use concinnity_engine::gfx::render_types::{NUM_SHADOW_CASCADES, SKINNED_STREAM, ShadowPassPush};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -238,11 +238,22 @@ impl DxContext {
         // SAFETY: the command list is recording, and the caller cleared the live slice `view.dsv`
         // names.
         unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const view.dsv)) };
-        // [1] the view's light_vps, [2] the slot of it this view projects through.
+        // [1] the view's light_vps, [2] the slot of it this view projects through and the
+        // camera planet tiles morph by.
         // SAFETY: `view.ubo_gva` addresses the view's live light_vps buffer.
         unsafe { cmd.SetGraphicsRootConstantBufferView(1, view.ubo_gva) };
-        // SAFETY: root param 2 of the shadow root signature is one root-constant DWORD.
-        unsafe { cmd.set_graphics_root_constants(2, &view.vp_index) };
+        // SAFETY: root param 2 of the shadow root signature is a `ShadowPassPush` of root
+        // constants.
+        unsafe {
+            cmd.set_graphics_root_constants(
+                2,
+                &ShadowPassPush {
+                    cascade_idx: view.vp_index,
+                    _pad: [0; 3],
+                    tile_morph: self.state.tile_morph_view(),
+                },
+            );
+        };
         // SAFETY: the static vertex buffer is owned by `self.scene` and outlives the frame.
         unsafe { cmd.IASetVertexBuffers(0, Some(&[self.scene.geometry.vertex_buffer_view])) };
         // SAFETY: the static index buffer is owned by `self.scene`; the view is read in the call.

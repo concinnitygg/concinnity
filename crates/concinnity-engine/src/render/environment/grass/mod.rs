@@ -49,7 +49,7 @@ use alloc::vec::Vec;
 
 use crate::components::Wind;
 use crate::gfx::frustum::Frustum;
-use crate::planet::Rebase;
+use crate::planet::{Rebase, TileMorphFrame};
 use crate::render::uniforms::grass::{
     GRASS_ARGS_SLOTS, GRASS_GROUND_PLANET, GRASS_GROUND_TERRAIN, GRASS_IDENTITY_MAP,
     GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
@@ -185,6 +185,8 @@ pub struct GrassFrameInputs<'a> {
     pub benders: &'a [GrassBender],
     /// The planet tiles drawn this frame, when the grass grows on a planet.
     pub planet_tiles: &'a [DrawnPlanetTile],
+    /// The camera those tiles morph by.
+    pub tile_morph: Option<TileMorphFrame>,
 }
 
 /// Tile records one frame's runs can hold together: the view's and the
@@ -239,6 +241,7 @@ impl GrassFrameState {
             shadow: view.shadow,
             benders: view.benders,
             planet_tiles: &self.drawn,
+            tile_morph: scene.view.tile_morph,
         };
         field.frame(&inputs, &mut self.history)
     }
@@ -475,6 +478,7 @@ struct PlanetView<'a> {
     center: [f32; 3],
     model: Mat4,
     tiles: &'a [DrawnPlanetTile],
+    tile_morph: Option<&'a TileMorphFrame>,
 }
 
 impl GrassField {
@@ -672,7 +676,7 @@ impl GrassField {
         let step = history.bend.advance(camera.position, inputs.elapsed);
         let prev_map = core::mem::replace(&mut history.prev_map, GRASS_IDENTITY_MAP);
         let maps = [history.wind_map, prev_map];
-        let planet = self.planet_view(inputs.planet_tiles);
+        let planet = self.planet_view(inputs.planet_tiles, inputs.tile_morph.as_ref());
         let lod = self.lod_view(camera.focal);
         let params = self.view_params(
             camera,
@@ -727,7 +731,11 @@ impl GrassField {
     // The planet's frame this frame, from its finest drawn tile, the one
     // placed nearest the frame's origin; `None` off a planet or before any
     // tile is drawn.
-    fn planet_view<'a>(&'a self, tiles: &'a [DrawnPlanetTile]) -> Option<PlanetView<'a>> {
+    fn planet_view<'a>(
+        &'a self,
+        tiles: &'a [DrawnPlanetTile],
+        tile_morph: Option<&'a TileMorphFrame>,
+    ) -> Option<PlanetView<'a>> {
         let grass = self.planet.as_ref()?;
         let finest = tiles.iter().max_by_key(|t| t.id.level)?;
         Some(PlanetView {
@@ -735,6 +743,7 @@ impl GrassField {
             center: planet_center(&grass.shape, finest),
             model: finest.model,
             tiles,
+            tile_morph,
         })
     }
 
@@ -816,6 +825,10 @@ impl GrassField {
             planet_density: [0.0; MAX_GRASS_LAYERS],
             planet_rules: [GroundRuleGpu::EVERYWHERE; MAX_GRASS_LAYERS],
             layers: [GrassLayerGpu::default(); MAX_GRASS_LAYERS],
+            tile_morph: planet
+                .and_then(|p| p.tile_morph)
+                .map(TileMorphFrame::view)
+                .unwrap_or_default(),
         }
     }
 
@@ -881,7 +894,7 @@ impl GrassField {
             (Some(grass), Some(p)) => {
                 scratch.reach.gather(
                     (&grass.shape, &grass.grid),
-                    p.tiles,
+                    (p.tiles, p.tile_morph),
                     p.center,
                     position,
                     params.cull_distance,
@@ -1325,6 +1338,7 @@ mod tests {
             shadow: None,
             benders: &[],
             planet_tiles: &[],
+            tile_morph: None,
         }
     }
 
@@ -1969,6 +1983,7 @@ mod tests {
                 &GrassFrameInputs {
                     shadow: Some(light()),
                     planet_tiles: &tiles,
+                    tile_morph: None,
                     ..inputs(cam)
                 },
                 &mut history,
@@ -2028,6 +2043,7 @@ mod tests {
             let frame = f.frame(
                 &GrassFrameInputs {
                     planet_tiles: &tiles,
+                    tile_morph: None,
                     ..inputs(cam)
                 },
                 &mut history,
@@ -2073,6 +2089,7 @@ mod tests {
                 &GrassFrameInputs {
                     benders: &benders,
                     planet_tiles: &tiles,
+                    tile_morph: None,
                     ..inputs(cam)
                 },
                 &mut history,

@@ -15,6 +15,7 @@ use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_engine::gfx::{jitter, lod};
+use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
@@ -155,7 +156,6 @@ impl VkContext {
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
             routes: self.cull.world_pipelines.routes(),
-            tile_morph: self.state.tile_morph,
         };
 
         // The static draws, one record each at their own index, packed in
@@ -200,7 +200,7 @@ impl VkContext {
         let routes = self.cull.world_pipelines.routes();
         let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
             let mut record = pool_object_record(obj, texture_count);
-            record.tile_morph = view.tile_morph_row(obj);
+            record.tile_morph = concinnity_engine::render::record_pack::object_tile_morph(obj);
             objects.write_val((runtime_base + k) * record_stride, &record);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
@@ -341,7 +341,12 @@ impl VkContext {
         // Skipped while the world is hidden, which traces nothing; a topology
         // change stays owed to the next frame that draws it.
         if !world_hidden {
+            let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(start_cmd, frame_idx);
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
         }
         // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe {
@@ -712,7 +717,12 @@ impl FrameDevice for VkContext {
         // frame whose plan runs the cull, so the `PassId::Cull` dispatch the
         // graph executor records below sees fresh data.
         if let Some(history) = plan.records {
+            let packed = std::time::Instant::now();
             let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
             let mut stats = self.frame_stats.get();
             stats.packing_fan_out = packing;
             self.frame_stats.set(stats);

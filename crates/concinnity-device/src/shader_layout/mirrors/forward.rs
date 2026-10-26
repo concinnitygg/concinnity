@@ -4,7 +4,7 @@
 
 use concinnity_engine::gfx::render_types::{
     AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuMaterialParams, GpuObjectData,
-    LightUniforms, PointLightData, ShadowUniforms, SpotShadowData,
+    LightUniforms, PointLightData, ShadowUniforms, SpotShadowData, TileMorphView,
 };
 use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, ShoreSwashGpu};
 use concinnity_engine::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
@@ -30,6 +30,11 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             screen_bounce,
             [_pad] => ["_pad_view2"],
             daylight,
+            tile_morph,
+        })),
+        everywhere(mirror!(TileMorphView => "TileMorphView" {
+            [eye, level0_range] => ["eye_range0"],
+            [prev_eye, coarsest_level] => ["prev_eye_coarsest"],
         })),
         everywhere(mirror!(DaylightBlock => "DaylightBlock" {
             center,

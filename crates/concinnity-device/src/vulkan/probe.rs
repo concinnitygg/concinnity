@@ -27,6 +27,7 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::TileMorphView;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
@@ -164,6 +165,7 @@ impl VkContext {
                 self.scene.prefilter_mip_count,
                 self.irradiance_lane(),
                 self.state.view.sky_rot,
+                self.state.tile_morph_view(),
             );
         }
     }
@@ -792,6 +794,7 @@ impl ProbeBakeDevice for VkContext {
             self.scene.prefilter_mip_count,
             self.irradiance_lane(),
             self.state.view.sky_rot,
+            self.state.tile_morph_view(),
         );
         Ok(rendering)
     }
@@ -938,7 +941,13 @@ impl RenderingBake {
     // the sky the capture lights with. reflections_enabled stays 0: no resolve
     // runs over a probe face, so the bake captures the full forward probe
     // specular -- here the sky, since the bake binds an EMPTY ProbeSet.
-    fn write_face_views(&self, prefilter_mip_count: u32, irradiance: f32, sky_rot: [[f32; 4]; 3]) {
+    fn write_face_views(
+        &self,
+        prefilter_mip_count: u32,
+        irradiance: f32,
+        sky_rot: [[f32; 4]; 3],
+        tile_morph: TileMorphView,
+    ) {
         let eye = self.eye;
         for (face, buf) in self.bake.view_bufs.iter().enumerate() {
             let view = ViewUniforms::face(FaceCamera {
@@ -951,6 +960,7 @@ impl RenderingBake {
                 irradiance,
                 pre_exposure: FaceStorage::PROBE.scale(),
                 daylight: DaylightBlock::OFF,
+                tile_morph,
             });
             buf.write_val(0, &view);
         }

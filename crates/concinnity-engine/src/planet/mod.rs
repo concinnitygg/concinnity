@@ -64,7 +64,10 @@ pub use lod::{
     MAX_CELL_SAG, MAX_RANGE_WIDTHS, MIN_RANGE_WIDTHS, MORPH_START, RANGE_CELL_POINTS, REPLAN_DRIFT,
     RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
 };
-pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
+pub use morph::{
+    TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span, tile_morph_row,
+    tile_range,
+};
 pub use planet_ground::{PlanetGround, PlanetGroundArgs, PlanetGroundError};
 pub use ray::{GroundHit, GroundPick};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};

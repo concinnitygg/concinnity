@@ -44,7 +44,8 @@ impl GraphicsSystem {
         self.extract(ctx, &mut snapshot);
         let submitted = Instant::now();
         let outcome = submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
-        ctx.profile.record_render_handoff(micros_since(submitted));
+        ctx.profile
+            .record_render_handoff(snapshot.extract_us.saturating_add(micros_since(submitted)));
         outcome::settle(
             ctx,
             &mut self.extractor,
@@ -87,11 +88,13 @@ impl GraphicsSystem {
         self.extract(ctx, &mut snapshot);
         // The rendezvous blocks until the render thread has finished the frame
         // before and takes this one, which is render-side time.
+        let extract_us = snapshot.extract_us;
         let sent = Instant::now();
         if pipe.snapshot_tx.send(snapshot).is_err() {
             return StepResult::Stop;
         }
-        ctx.profile.record_render_handoff(micros_since(sent));
+        ctx.profile
+            .record_render_handoff(extract_us.saturating_add(micros_since(sent)));
         // The rendezvous send completed, so the render half has this snapshot
         // and submits it unconditionally: count the frame here, once per world
         // step, the way the serial path and StreamingSystem's clock do. Counting
@@ -127,10 +130,13 @@ impl GraphicsSystem {
     }
 
     // Fill `snap` with everything this frame's draw consumes: a requested
-    // screenshot burst starts, then core extracts the frame.
+    // screenshot burst starts, then core extracts the frame. The extraction
+    // is render-side work, so it is timed onto the snapshot.
     pub(crate) fn extract(&mut self, ctx: &mut PipelineContext<'_>, snap: &mut RenderSnapshot) {
+        let started = Instant::now();
         screenshot::start_requested(ctx, &mut self.extractor);
         self.extractor.extract(ctx, snap, self.frames.frames());
+        snap.extract_us = micros_since(started);
     }
 
     // Gray out and disable every settings row whose feature the device cannot

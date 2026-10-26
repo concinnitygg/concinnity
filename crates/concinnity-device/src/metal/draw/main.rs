@@ -383,6 +383,7 @@ impl MtlContext {
             irradiance: self.irradiance_lane(),
             pre_exposure: pass.storage.scale(),
             daylight: *pass.daylight,
+            tile_morph: self.state.tile_morph_view(),
         });
 
         self.bind_clusters(&encoder, pass.clusters);
@@ -627,6 +628,7 @@ impl MtlContext {
             screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
             _pad: 0.0,
             daylight: self.state.view.daylight,
+            tile_morph: self.state.tile_morph_view(),
         }
     }
 

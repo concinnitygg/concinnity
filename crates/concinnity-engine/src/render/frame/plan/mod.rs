@@ -298,6 +298,7 @@ impl FramePlanner {
                 screen_bounce: f32::from(u8::from(inputs.surface.screen_bounce)),
                 _pad: 0.0,
                 daylight: view.daylight,
+                tile_morph: view.tile_morph_view(),
             },
             cluster: ClusterParams::for_camera(
                 &ClusterCamera {

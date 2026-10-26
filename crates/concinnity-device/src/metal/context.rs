@@ -1177,6 +1177,7 @@ impl MtlContext {
         let mut stats = self.diagnostics.frame_stats;
         // `gpu_wait_us` was written by `draw_frame` itself and rides along in
         // `frame_stats`.
+        stats.spans = self.state.spans.get();
         stats.gpu_frame_us = self
             .diagnostics
             .gpu_time_us

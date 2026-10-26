@@ -20,7 +20,6 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
-use concinnity_engine::render::buffers::range_alloc::RangeAllocator;
 use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
 
 use super::super::context::VkContext;
@@ -90,8 +89,7 @@ impl VkContext {
         self.geometry.vertex_buffer_bytes = new_v_bytes;
         self.geometry.index_buffer = new_ibuf;
         self.geometry.index_buffer_bytes = new_i_bytes;
-        self.state.placement.mesh_vtx = RangeAllocator::new();
-        self.state.placement.mesh_idx = RangeAllocator::new();
+        self.state.placement.forget_layout();
         for (layout, obj) in repacked
             .layouts
             .into_iter()

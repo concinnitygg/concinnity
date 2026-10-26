@@ -827,6 +827,7 @@ impl VkContext {
             irradiance: self.irradiance_lane(),
             pre_exposure: storage.scale(),
             daylight: self.state.view.daylight,
+            tile_morph: self.state.tile_morph_view(),
         };
         let extent = vk::Extent2D {
             width: set.width,

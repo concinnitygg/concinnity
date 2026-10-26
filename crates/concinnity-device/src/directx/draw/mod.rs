@@ -12,6 +12,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{
     LightUniforms, LineVertex, ShadowUniforms, TextDrawCall,
 };
+use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::frame::plan::FramePlan;
@@ -152,7 +153,12 @@ impl DxContext {
         // static this frame. Skipped while the world is hidden, which traces
         // nothing; a topology change stays owed to the next frame that draws it.
         if !world_hidden {
+            let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(&start_cmd, frame);
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
         }
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
@@ -249,7 +255,12 @@ impl DxContext {
         // so the graph's `PassId::Cull` node writes the indirect command buffer
         // ahead of Main from fresh data.
         if let Some(history) = plan.records {
+            let packed = std::time::Instant::now();
             let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
             let mut stats = self.diagnostics.frame_stats.get();
             stats.packing_fan_out = packing;
             self.diagnostics.frame_stats.set(stats);

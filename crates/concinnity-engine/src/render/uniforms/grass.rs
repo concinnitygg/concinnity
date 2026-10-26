@@ -201,6 +201,9 @@ pub struct GrassParams {
     pub planet_rules: [GroundRuleGpu; MAX_GRASS_LAYERS],
     /// The layers this frame grows.
     pub layers: [GrassLayerGpu; MAX_GRASS_LAYERS],
+    /// The camera the planet's tiles morph by, so blades root on the ground
+    /// the tiles draw; all zero on terrain.
+    pub tile_morph: crate::gfx::render_types::TileMorphView,
 }
 
 /// [`GrassParams::ground`] for layers grown on terrains.
@@ -357,7 +360,7 @@ mod tests {
 
     #[test]
     fn grass_params_layout_matches_msl() {
-        assert_eq!(size_of::<GrassParams>(), 1104 + 128 * MAX_GRASS_LAYERS);
+        assert_eq!(size_of::<GrassParams>(), 1104 + 128 * MAX_GRASS_LAYERS + 32);
         assert_eq!(offset_of!(GrassParams, cam_pos), 0);
         assert_eq!(offset_of!(GrassParams, draw_distance), 12);
         assert_eq!(offset_of!(GrassParams, frustum), 16);
@@ -396,6 +399,10 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, planet_density), 528);
         assert_eq!(offset_of!(GrassParams, planet_rules), 592);
         assert_eq!(offset_of!(GrassParams, layers), 1104);
+        assert_eq!(
+            offset_of!(GrassParams, tile_morph),
+            1104 + 128 * MAX_GRASS_LAYERS
+        );
         // Metal sets the block inline, which caps it at 4 KiB.
         assert!(size_of::<GrassParams>() <= 4096);
     }
@@ -431,7 +438,7 @@ mod tests {
 
     #[test]
     fn planet_grass_tile_layout_matches_msl() {
-        assert_eq!(size_of::<PlanetGrassTileGpu>(), 128);
+        assert_eq!(size_of::<PlanetGrassTileGpu>(), 96);
         assert_eq!(offset_of!(PlanetGrassTileGpu, model), 0);
         assert_eq!(offset_of!(PlanetGrassTileGpu, vertex_base), 48);
         assert_eq!(offset_of!(PlanetGrassTileGpu, face_level), 52);

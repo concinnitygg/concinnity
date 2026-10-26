@@ -963,7 +963,7 @@ impl DxContext {
         reason = "keeps the `RenderBackend::draw_frame` signature it serves"
     )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
-        drive_frame(self, params)
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
     }
 
     // Drain any queued D3D12 validation messages and emit them via tracing.
@@ -979,7 +979,10 @@ impl DxContext {
     // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
     // stale" reading).
     pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        self.diagnostics.frame_stats.get()
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.diagnostics.frame_stats.get()
+        }
     }
 
     // Current GPU memory residency in bytes. `Local` is the dedicated VRAM
@@ -1682,6 +1685,7 @@ impl FrameDevice for DxContext {
         let capture = self.record_frame_capture(&end_cmd, &back_buffer);
 
         self.finish_frame_stats();
+        let waited_before_submit = gpu_wait.micros();
         let started = std::time::Instant::now();
         let mut pass_lists = recorded.pass_cmd_lists;
         let submitted = self.close_end_list(frame).and_then(|()| {
@@ -1691,7 +1695,10 @@ impl FrameDevice for DxContext {
         pass_lists.clear();
         self.pass_lists.set(pass_lists);
         let mut stats = self.diagnostics.frame_stats.get();
-        stats.submit_present_us = concinnity_host::clock::micros_since(started);
+        // The present's block on the display already counts as GPU wait.
+        let present_wait = stats.gpu_wait_us.saturating_sub(waited_before_submit);
+        stats.submit_present_us =
+            concinnity_host::clock::micros_since(started).saturating_sub(present_wait);
         self.diagnostics.frame_stats.set(stats);
         // A submitted frame's capture waits for the fence value it signaled; a
         // failed one is reported as a dropped frame by the caller.

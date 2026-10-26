@@ -14,7 +14,7 @@
 
 {TILE_MORPH_TYPES}
 
-// Mirrors `GpuObjectData` in concinnity-engine/src/gfx/render_types.rs (208 B).
+// Mirrors `GpuObjectData` in concinnity-engine/src/gfx/render_types.rs (176 B).
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16
 // bytes in a structured buffer as well as in a constant buffer, so a literal
 // transcription pushes every following field four bytes late on Metal alone.

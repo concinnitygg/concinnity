@@ -8,7 +8,7 @@ use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::SaturatingFrom;
 
 use crate::frame_report::histogram::Histogram;
-use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS};
+use crate::frame_report::sample::{FrameSample, MAX_SYSTEM_TIMINGS, RENDER_PARTS};
 use crate::frame_report::stats::{Column, Mean};
 
 /// How many of the run's slowest frames are kept whole.
@@ -68,6 +68,8 @@ pub(super) struct PhaseTally {
     pub overlap: Histogram,
     pub systems: [Mean; MAX_SYSTEM_TIMINGS],
     pub render_cpu: Mean,
+    /// The render submission's parts, in [`FrameSample::render_parts`] order.
+    pub render_parts: [Mean; RENDER_PARTS],
     pub fan_outs: [FanOutMeans; FAN_OUT_SLOTS],
 }
 
@@ -93,6 +95,7 @@ impl PhaseTally {
             overlap: Histogram::new(),
             systems: [Mean::default(); MAX_SYSTEM_TIMINGS],
             render_cpu: Mean::default(),
+            render_parts: [Mean::default(); RENDER_PARTS],
             fan_outs: [FanOutMeans::default(); FAN_OUT_SLOTS],
         }
     }
@@ -137,6 +140,9 @@ impl PhaseTally {
             mean.record(us);
         }
         self.render_cpu.record(sample.render_cpu_us);
+        for (mean, us) in self.render_parts.iter_mut().zip(sample.render_parts()) {
+            mean.record(us);
+        }
         self.fan_outs[0].record(sample.recording_fan_out);
         self.fan_outs[1].record(sample.packing_fan_out);
         for (means, timing) in self.fan_outs[2..].iter_mut().zip(sample.system_fan_out) {

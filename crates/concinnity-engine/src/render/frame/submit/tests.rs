@@ -52,7 +52,8 @@ fn fake_clock() -> u64 {
 }
 
 // The submission's time spans come from the host clock: the replay is its
-// own span, and the frame's GPU wait is taken out of the whole.
+// own span, the frame's GPU wait is taken out of the whole, and the
+// snapshot's extraction is added to it.
 #[test]
 fn the_time_spans_come_from_the_clock_with_the_gpu_wait_taken_out() {
     let (state, mut backend) = recording_backend();
@@ -63,7 +64,10 @@ fn the_time_spans_come_from_the_clock_with_the_gpu_wait_taken_out() {
         }));
         s.render_stats.gpu_wait_us = 3_000;
     }
-    let mut snap = RenderSnapshot::default();
+    let mut snap = RenderSnapshot {
+        extract_us: 1_500,
+        ..Default::default()
+    };
     snap.ops.record(|_| {
         FAKE_US.fetch_add(2_000, Ordering::Relaxed);
     });
@@ -76,7 +80,8 @@ fn the_time_spans_come_from_the_clock_with_the_gpu_wait_taken_out() {
     .render_stats
     .expect("a drawn frame");
     assert_eq!(stats.replay_us, 2_000);
-    assert_eq!(stats.render_cpu_us, 7_000 - 3_000);
+    assert_eq!(stats.extract_us, 1_500);
+    assert_eq!(stats.render_cpu_us, 7_000 - 3_000 + 1_500);
 }
 
 #[test]

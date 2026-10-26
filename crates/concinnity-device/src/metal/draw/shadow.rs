@@ -209,6 +209,7 @@ impl MtlContext {
             &ShadowPassPush {
                 cascade_idx: view.vp_index,
                 _pad: [0; 3],
+                tile_morph: self.state.tile_morph_view(),
             },
             7,
         );

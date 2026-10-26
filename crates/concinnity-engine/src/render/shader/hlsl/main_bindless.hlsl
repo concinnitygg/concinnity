@@ -68,8 +68,9 @@ VertexOut vertex_main_bindless(
     surface_params_row = OBJECTS[oid].params_index;
     float4x4 model = OBJECTS[oid].model;
     GpuTileMorph m = OBJECTS[oid].tile_morph;
-    TileVertex tv = tile_morph_draw(m, model, tile_vertex_in(v.pos, v.normal, v.tangent), vertex_id,
-                                    m.eye_range.xyz);
+    TileMorphView mv = view_cb.tile_morph;
+    TileVertex tv = tile_morph_draw(m, mv, model, tile_vertex_in(v.pos, v.normal, v.tangent),
+                                    vertex_id, mv.eye_range0.xyz);
     VertexOut o = transform(model, tv.position, tv.normal, tv.tangent, v.color, v.uv);
     o.object_id = oid;
     return o;
@@ -154,8 +155,9 @@ PrepassVertexOut vertex_prepass_bindless(
     // frame's, so the morph moves with the motion vectors. Both are measured through this frame's model: a tile
     // stands still in the world.
     GpuTileMorph m = OBJECTS[oid].tile_morph;
-    TileVertex tv = tile_morph_draw(m, model, tile_vertex_in(v.pos, v.normal, v.tangent), vertex_id,
-                                    m.eye_range.xyz);
+    TileMorphView mv = view_cb.tile_morph;
+    TileVertex tv = tile_morph_draw(m, mv, model, tile_vertex_in(v.pos, v.normal, v.tangent),
+                                    vertex_id, mv.eye_range0.xyz);
     VertexOut cur = transform(model, tv.position, tv.normal, tv.tangent, v.color, v.uv);
     float3 prev_world = cur.world_pos;
     if (gb_view.motion != 0u)
@@ -164,8 +166,9 @@ PrepassVertexOut vertex_prepass_bindless(
         surface_view.cam_x = gb_view.prev_cam_x;
         surface_view.cam_y = gb_view.prev_cam_y;
         surface_view.cam_z = gb_view.prev_cam_z;
-        TileVertex prev = tile_morph_draw(m, model, tile_vertex_in(v.prev_pos, v.normal, v.tangent),
-                                          vertex_id, m.prev_eye_seams.xyz);
+        TileVertex prev = tile_morph_draw(m, mv, model,
+                                          tile_vertex_in(v.prev_pos, v.normal, v.tangent),
+                                          vertex_id, mv.prev_eye_coarsest.xyz);
         prev_world = transform(prepass_prev_model(oid, model), prev.position, prev.normal,
                                prev.tangent, v.color, v.uv).world_pos;
     }

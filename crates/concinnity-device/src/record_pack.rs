@@ -116,7 +116,6 @@ mod tests {
             mesh_glass_active: false,
             horizon: None,
             routes: concinnity_engine::render::shader::world_pipelines::ShaderRoutes::default(),
-            tile_morph: None,
         };
         packer.pack(
             StaticPack {

@@ -75,6 +75,48 @@ pub struct GeometryPlacement {
     pub chunk_vtx: RangeAllocator,
     /// Chunk index ranges.
     pub chunk_idx: RangeAllocator,
+    /// The index range every planet tile draws through its own `base_vertex`:
+    /// all tiles share one grid topology, so it is written once and never
+    /// freed with a tile.
+    pub planet_tile_indices: Option<SharedIndices>,
+}
+
+/// An index range in the chunk pool that many chunks draw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedIndices {
+    /// First index, in `u32` elements.
+    pub offset: usize,
+    /// The mesh-relative indices written there.
+    pub indices: Vec<u16>,
+}
+
+impl GeometryPlacement {
+    /// Forget every pool's free space and the shared tile range once the static
+    /// buffers are repacked to fit their draws exactly: both named offsets in
+    /// the old layout. Resident meshes and chunks own their repacked ranges and
+    /// hand them back to the pools as they leave.
+    pub fn forget_layout(&mut self) {
+        self.mesh_vtx = RangeAllocator::new();
+        self.mesh_idx = RangeAllocator::new();
+        self.chunk_vtx = RangeAllocator::new();
+        self.chunk_idx = RangeAllocator::new();
+        self.planet_tile_indices = None;
+    }
+
+    // The shared planet tile range, when `idxs` is the topology it holds.
+    fn shared_tile_range(&self, idxs: &[u16]) -> Option<usize> {
+        self.planet_tile_indices
+            .as_ref()
+            .filter(|shared| shared.indices == idxs)
+            .map(|shared| shared.offset)
+    }
+
+    // Whether a chunk's index range at byte `offset` is the shared one.
+    fn is_shared_index_range(&self, offset: u64) -> bool {
+        self.planet_tile_indices
+            .as_ref()
+            .is_some_and(|shared| (shared.offset * size_of::<u32>()) as u64 == offset)
+    }
 }
 
 // Place `v_len` vertex bytes and `i_len` index bytes, all or nothing, each on
@@ -124,6 +166,31 @@ fn write_placed(
         idx.free(index.0 as u64, index.1.len() as u64, frame);
     }
     written
+}
+
+// Place and write a chunk's vertices alone, for a chunk drawing a shared index
+// range. A failed write hands the range back at `frame`.
+fn place_chunk_vertices(
+    placement: &mut GeometryPlacement,
+    verts: &[Vertex],
+    frame: u64,
+    writer: &mut dyn GeometryWriter,
+) -> RenderResult<usize> {
+    let len = size_of_val(verts);
+    let v_off = placement
+        .chunk_vtx
+        .alloc_aligned(len as u64, VERTEX_STRIDE)
+        .ok_or_else(|| {
+            RenderError::OutOfDeviceMemory(format!(
+                "add_chunk_mesh: no free vertex space for {len} bytes"
+            ))
+        })?;
+    let v_off = usize::saturating_from(v_off);
+    if let Err(e) = writer.write(GeometryBuffer::Vertex, v_off, bytemuck::cast_slice(verts)) {
+        placement.chunk_vtx.free(v_off as u64, len as u64, frame);
+        return Err(e);
+    }
+    Ok(v_off)
 }
 
 // `indices` widened to the shared buffer's `u32` stride, offset by `base`.
@@ -342,34 +409,60 @@ impl SceneState {
         let placement = &mut self.placement;
         placement.chunk_vtx.reclaim(frame);
         placement.chunk_idx.reclaim(frame);
-        let (v_off, i_off) = place_mesh(
-            &mut placement.chunk_vtx,
-            &mut placement.chunk_idx,
-            size_of_val(verts),
-            idxs.len() * size_of::<u32>(),
-            || "add_chunk_mesh".into(),
-        )?;
-        let widened = widen(idxs, 0);
-        write_placed(
-            writer,
-            &mut placement.chunk_vtx,
-            &mut placement.chunk_idx,
-            (v_off, bytemuck::cast_slice(verts)),
-            (i_off, bytemuck::cast_slice(&widened)),
-            frame,
-        )?;
+        let shared = planet_tile.and_then(|_| placement.shared_tile_range(idxs));
+        let (v_off, index_offset) = if let Some(index_offset) = shared {
+            (
+                place_chunk_vertices(placement, verts, frame, writer)?,
+                index_offset,
+            )
+        } else {
+            let (v_off, i_off) = place_mesh(
+                &mut placement.chunk_vtx,
+                &mut placement.chunk_idx,
+                size_of_val(verts),
+                idxs.len() * size_of::<u32>(),
+                || "add_chunk_mesh".into(),
+            )?;
+            let widened = widen(idxs, 0);
+            write_placed(
+                writer,
+                &mut placement.chunk_vtx,
+                &mut placement.chunk_idx,
+                (v_off, bytemuck::cast_slice(verts)),
+                (i_off, bytemuck::cast_slice(&widened)),
+                frame,
+            )?;
+            let index_offset = i_off / size_of::<u32>();
+            if planet_tile.is_some() && placement.planet_tile_indices.is_none() {
+                placement.planet_tile_indices = Some(SharedIndices {
+                    offset: index_offset,
+                    indices: idxs.to_vec(),
+                });
+            }
+            (v_off, index_offset)
+        };
+        // A recycled slot's BLAS is matched by its geometry's signature, which
+        // a tile placed where the last one was would otherwise repeat.
+        let geometry_generation = match dst {
+            SlotAlloc::Reuse(slot) => self
+                .draw
+                .objects
+                .get(slot.index())
+                .map_or(0, |old| old.geometry_generation.wrapping_add(1)),
+            SlotAlloc::Append(_) => 0,
+        };
 
         let obj = DrawObject {
             vertex_offset: v_off,
             vertex_count: verts.len(),
-            index_offset: i_off / size_of::<u32>(),
+            index_offset,
             index_count: idxs.len(),
             planet_tile: planet_tile.map(|t| PlanetTileDraw {
                 level: t.tile.level,
                 seams: crate::planet::TileSeams::default(),
             }),
             base_vertex: i32::saturating_from(vertex_base(v_off)),
-            geometry_generation: 0,
+            geometry_generation,
             model,
             texture_slot,
             normal_map_slot,
@@ -410,18 +503,24 @@ impl SceneState {
         self.planet_chunks.remove(&draw_idx);
         // The slot is already hidden, so its ranges go back first: a failed
         // release below must not strand them.
+        let shared = self.placement.is_shared_index_range(region.index_offset);
         self.placement
             .chunk_vtx
             .free(region.vertex_offset, region.vertex_bytes, retire_frame);
-        self.placement
-            .chunk_idx
-            .free(region.index_offset, region.index_bytes, retire_frame);
+        if !shared {
+            self.placement
+                .chunk_idx
+                .free(region.index_offset, region.index_bytes, retire_frame);
+        }
         self.gpu_dirty.rt_topology = true;
         writer.release(
             GeometryBuffer::Vertex,
             usize::saturating_from(region.vertex_offset),
             usize::saturating_from(region.vertex_bytes),
         )?;
+        if shared {
+            return Ok(());
+        }
         writer.release(
             GeometryBuffer::Index,
             usize::saturating_from(region.index_offset),
@@ -931,6 +1030,206 @@ mod tests {
         assert!(scene.planet_chunks.is_empty());
         scene.drawn_planet_tiles_into(&mut drawn);
         assert!(drawn.is_empty());
+    }
+
+    fn tile_chunk<'a>(verts: &'a [Vertex], idxs: &'a [u16], level: u8) -> ChunkMesh<'a> {
+        use crate::planet::{CubeFace, TileId};
+        ChunkMesh {
+            planet_tile: Some(crate::render::backend::PlanetChunk {
+                tile: TileId {
+                    face: CubeFace(1),
+                    level,
+                    x: 0,
+                    y: 0,
+                },
+                radial: [0.0, 1.0],
+                morph_extent: 0.0,
+                origin_altitude: 0.0,
+            }),
+            ..chunk(verts, idxs)
+        }
+    }
+
+    // Planet tiles share one grid topology, so only the first writes it and
+    // every tile draws that range through its own first vertex.
+    #[test]
+    fn planet_tiles_draw_one_shared_index_range() {
+        let mut scene = chunked(12, 6);
+        let verts = vertices(3);
+        let mut w = Recorder::default();
+        for slot in 0..3 {
+            scene
+                .add_chunk_mesh(
+                    &tile_chunk(&verts, &[0, 1, 2], 5),
+                    SlotAlloc::Append(DrawIndex(slot)),
+                    &mut w,
+                )
+                .expect("room for the tile");
+        }
+        let index_writes = w
+            .writes
+            .iter()
+            .filter(|(buffer, ..)| *buffer == GeometryBuffer::Index)
+            .count();
+        assert_eq!(index_writes, 1);
+        let objects = &scene.draw.objects;
+        assert!(
+            objects
+                .iter()
+                .all(|o| o.index_offset == objects[0].index_offset)
+        );
+        assert!(objects.iter().all(|o| o.index_count == 3));
+        assert_eq!(
+            objects.iter().map(|o| o.base_vertex).collect::<Vec<_>>(),
+            vec![0, 3, 6]
+        );
+        // A chunk that is not a tile keeps a range of its own.
+        scene
+            .add_chunk_mesh(
+                &chunk(&verts, &[0, 1, 2]),
+                SlotAlloc::Append(DrawIndex(3)),
+                &mut WriteOnly,
+            )
+            .expect("room for the chunk");
+        assert_ne!(scene.draw.objects[3].index_offset, objects_offset(&scene));
+    }
+
+    fn objects_offset(scene: &SceneState) -> usize {
+        scene.draw.objects[0].index_offset
+    }
+
+    // Removing a tile frees its vertices and leaves the shared range in place
+    // for the tiles still drawing it.
+    #[test]
+    fn removing_a_tile_keeps_the_shared_index_range() {
+        let mut scene = chunked(6, 3);
+        let verts = vertices(3);
+        for slot in 0..2 {
+            scene
+                .add_chunk_mesh(
+                    &tile_chunk(&verts, &[0, 1, 2], 5),
+                    SlotAlloc::Append(DrawIndex(slot)),
+                    &mut WriteOnly,
+                )
+                .expect("room for the tile");
+        }
+        let mut w = Recorder::default();
+        scene
+            .remove_chunk_mesh(DrawIndex(0), 1, &mut w)
+            .expect("a placed tile");
+        assert_eq!(w.releases, vec![(GeometryBuffer::Vertex, 0, 3 * VERTEX)]);
+        scene.placement.chunk_idx.reclaim(1);
+        assert_eq!(scene.placement.chunk_idx.free_bytes(), 0);
+        // The freed vertices take the next tile, still on the shared range.
+        scene
+            .add_chunk_mesh(
+                &ChunkMesh {
+                    frame: 1,
+                    ..tile_chunk(&verts, &[0, 1, 2], 6)
+                },
+                SlotAlloc::Reuse(DrawIndex(0)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile");
+        assert_eq!(
+            scene.draw.objects[0].index_offset,
+            scene.draw.objects[1].index_offset
+        );
+    }
+
+    // After a repack every tile owns a copy of the grid, so forgetting the
+    // layout drops the old free space and a leaving tile frees its own copy.
+    #[test]
+    fn a_forgotten_layout_frees_each_tiles_own_indices() {
+        let mut scene = chunked(9, 6);
+        let verts = vertices(3);
+        for slot in 0..2 {
+            scene
+                .add_chunk_mesh(
+                    &tile_chunk(&verts, &[0, 1, 2], 5),
+                    SlotAlloc::Append(DrawIndex(slot)),
+                    &mut WriteOnly,
+                )
+                .expect("room for the tile");
+        }
+        // The repack gives the second tile its own copy past the first.
+        scene.draw.objects[1].index_offset = 3;
+        scene.placement.forget_layout();
+        assert_eq!(scene.placement.planet_tile_indices, None);
+        assert_eq!(scene.placement.chunk_vtx.free_bytes(), 0);
+        assert_eq!(scene.placement.chunk_idx.free_bytes(), 0);
+        let mut w = Recorder::default();
+        scene
+            .remove_chunk_mesh(DrawIndex(1), 1, &mut w)
+            .expect("a placed tile");
+        assert!(w.releases.contains(&(GeometryBuffer::Index, 3 * 4, 3 * 4)));
+        scene.placement.chunk_idx.reclaim(1);
+        assert_eq!(scene.placement.chunk_idx.free_bytes(), 3 * 4);
+    }
+
+    // A tile whose topology differs from the shared one keeps a range of its
+    // own, which goes back with it.
+    #[test]
+    fn a_tile_of_another_topology_keeps_its_own_index_range() {
+        let mut scene = chunked(6, 6);
+        let verts = vertices(3);
+        scene
+            .add_chunk_mesh(
+                &tile_chunk(&verts, &[0, 1, 2], 5),
+                SlotAlloc::Append(DrawIndex(0)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile");
+        scene
+            .add_chunk_mesh(
+                &tile_chunk(&verts, &[2, 1, 0], 5),
+                SlotAlloc::Append(DrawIndex(1)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile");
+        let objects = &scene.draw.objects;
+        assert_ne!(objects[0].index_offset, objects[1].index_offset);
+        scene
+            .remove_chunk_mesh(DrawIndex(1), 1, &mut WriteOnly)
+            .expect("a placed tile");
+        scene.placement.chunk_idx.reclaim(1);
+        assert_eq!(scene.placement.chunk_idx.free_bytes(), 12);
+    }
+
+    // A chunk in a recycled slot moves its geometry generation on, so a BLAS
+    // matched by slot and geometry is never reused for different vertices.
+    #[test]
+    fn a_recycled_slot_moves_its_geometry_generation_on() {
+        let mut scene = chunked(3, 3);
+        let verts = vertices(3);
+        scene
+            .add_chunk_mesh(
+                &tile_chunk(&verts, &[0, 1, 2], 5),
+                SlotAlloc::Append(DrawIndex(0)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile");
+        let first = &scene.draw.objects[0];
+        let (first_sig, first_offsets) = (
+            crate::render::rt_accel::topology::GeomSig::of(first),
+            (first.vertex_offset, first.index_offset),
+        );
+        scene
+            .remove_chunk_mesh(DrawIndex(0), 0, &mut WriteOnly)
+            .expect("a placed tile");
+        scene
+            .add_chunk_mesh(
+                &tile_chunk(&verts, &[0, 1, 2], 5),
+                SlotAlloc::Reuse(DrawIndex(0)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile");
+        let second = &scene.draw.objects[0];
+        assert_eq!((second.vertex_offset, second.index_offset), first_offsets);
+        assert_ne!(
+            crate::render::rt_accel::topology::GeomSig::of(second),
+            first_sig
+        );
     }
 
     #[test]

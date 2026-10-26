@@ -132,6 +132,8 @@ struct GrassLayer
 
 {GROUND_RULE_TYPES}
 
+{TILE_MORPH_TYPES}
+
 // Mirrors `GrassParams` in render::uniforms::grass.
 struct GrassParams
 {
@@ -200,6 +202,8 @@ struct GrassParams
     // Where on a planet each layer grows.
     GroundRule planet_rules[GRASS_MAX_LAYERS];
     GrassLayer layers[GRASS_MAX_LAYERS];
+    // The camera the planet's tiles morph by.
+    TileMorphView tile_morph;
 };
 
 // Matches GRASS_GROUND_TERRAIN and GRASS_GROUND_PLANET in
@@ -207,9 +211,7 @@ struct GrassParams
 #define GRASS_GROUND_TERRAIN 0u
 #define GRASS_GROUND_PLANET 1u
 
-{TILE_MORPH_TYPES}
-
-// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (128 B).
+// Mirrors `PlanetGrassTileGpu` in render::uniforms::grass (96 B).
 struct PlanetGrassTile
 {
     // The model matrix's first three rows: local = dot(row.xyz, v) + row.w.
@@ -885,7 +887,8 @@ float3 grass_tile_corner(PlanetGrassTile T, uint2 c, float3 p, float distance)
     {
         return p;
     }
-    float k = tile_morph_factor(T.tile_morph, c, distance);
+    float k = tile_morph_factor(T.tile_morph, tile_morph_range(T.tile_morph, grass.tile_morph), c,
+                                distance);
     return k > 0.0 ? lerp(p, tile_parent_position(T.vertex_base, c), k) : p;
 }
 
@@ -918,9 +921,9 @@ GrassMeshPoint grass_mesh_point(PlanetGrassTile T, float2 f)
     float3 p10 = c10.position;
     float3 p01 = c01.position;
     float3 p11 = c11.position;
-    if (T.tile_morph.eye_range.w > 0.0)
+    if (T.tile_morph.planet_tile != 0u && grass.tile_morph.eye_range0.w > 0.0)
     {
-        float d = length(grass_tile_point(T, p00) - T.tile_morph.eye_range.xyz);
+        float d = length(grass_tile_point(T, p00) - grass.tile_morph.eye_range0.xyz);
         uint2 c = uint2(cell);
         p00 = grass_tile_corner(T, c, p00, d);
         p10 = grass_tile_corner(T, c + uint2(1u, 0u), p10, d);

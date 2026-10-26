@@ -15,5 +15,5 @@ mod pack;
 mod static_slots;
 
 pub use chunk::{MAX_PACK_CHUNKS, MIN_CHUNK_RECORDS, chunk_count, chunk_range};
-pub use pack::{PackChunk, PackView, StaticPack, pool_object_record};
+pub use pack::{PackChunk, PackView, StaticPack, object_tile_morph, pool_object_record};
 pub use static_slots::StaticSlots;

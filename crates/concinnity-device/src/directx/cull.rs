@@ -443,7 +443,6 @@ impl DxContext {
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
             routes: self.cull.world_pipelines.routes(),
-            tile_morph: self.state.tile_morph,
         };
 
         let n_static = self
@@ -484,7 +483,7 @@ impl DxContext {
                 return;
             };
             *rec = pool_object_record(obj, texture_count);
-            rec.tile_morph = view.tile_morph_row(obj);
+            rec.tile_morph = concinnity_engine::render::record_pack::object_tile_morph(obj);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits

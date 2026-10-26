@@ -152,8 +152,8 @@ pub(super) fn create_main_bindless_root_signature(
 // Mirrors the bindless main root signature's object-id delivery so the shared
 // cull command signature works against it: [0] is the per-command b0 object-id
 // root constant (set by the `ExecuteIndirect` command signature, so it MUST stay
-// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] a per-cascade b2
-// cascade-index root constant (set once per cascade's `ExecuteIndirect`), [3]
+// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] the per-view b2
+// `ShadowPassPush` root constants (set once per view's `ExecuteIndirect`), [3]
 // the per-frame `StructuredBuffer<GpuObjectData>` root SRV the VS reads `model`
 // from, and [4] the shared vertex stream. All vertex-stage only (depth-only pass, no pixel shader).
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
@@ -164,8 +164,14 @@ pub(in crate::directx) fn create_shadow_bindless_root_signature(
         .constant_dwords(0, 1, Visibility::Vertex)
         // [1] b1: shadow UBO (light_vps[4] + cascade_splits).
         .cbv(1, Visibility::Vertex)
-        // [2] b2: cascade index (set per cascade's ExecuteIndirect).
-        .constant_dwords(2, 1, Visibility::Vertex)
+        // [2] b2: the view's `ShadowPassPush` (set per view's ExecuteIndirect).
+        .constant_dwords(
+            2,
+            crate::directx::root_constants::root_dwords::<
+                concinnity_engine::gfx::render_types::ShadowPassPush,
+            >(),
+            Visibility::Vertex,
+        )
         // [3] t0: per-frame StructuredBuffer<GpuObjectData>.
         .srv(0, Visibility::Vertex)
         // [4] t1: the shared vertex stream, where a planet tile's morph reads

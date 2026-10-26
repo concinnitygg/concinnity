@@ -5,7 +5,7 @@ use crate::gfx::render_types::{
     DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_flags,
     normal_pool_index, pack_object_record,
 };
-use crate::planet::{Horizon, TileMorphFrame};
+use crate::planet::{Horizon, tile_morph_row};
 use crate::render::shader::world_pipelines::ShaderRoutes;
 use crate::render::temporal::model_history::HistoryWindow;
 use concinnity_core::math::SaturatingFrom;
@@ -23,19 +23,13 @@ pub struct PackView {
     pub horizon: Option<Horizon>,
     /// The variant route each Shader's draws shading their ground take.
     pub routes: ShaderRoutes,
-    /// The camera a planet's tiles morph by, which their vertices
-    /// morph by.
-    pub tile_morph: Option<TileMorphFrame>,
 }
 
-impl PackView {
-    /// How `obj`'s vertices morph this frame: by the frame's planet tile
-    /// camera when it is a planet tile, not at all otherwise.
-    pub fn tile_morph_row(&self, obj: &DrawObject) -> GpuTileMorph {
-        self.tile_morph
-            .map(|m| m.row(obj.planet_tile, obj.base_vertex.cast_unsigned()))
-            .unwrap_or_default()
-    }
+/// How `obj`'s vertices morph: its tile's row when it is a planet tile, the
+/// still row otherwise. Independent of the camera, which the view blocks
+/// carry, so the record changes only when the tiles are chosen again.
+pub fn object_tile_morph(obj: &DrawObject) -> GpuTileMorph {
+    tile_morph_row(obj.planet_tile, obj.base_vertex.cast_unsigned())
 }
 
 /// One pack of the static draws: draw `i` fills record `i` of both outputs,
@@ -122,7 +116,7 @@ impl PackChunk<'_> {
         let first = history.first();
         for (k, ((obj, rec), arg)) in objects.iter().zip(records).zip(args).enumerate() {
             *rec = record(obj);
-            rec.tile_morph = view.tile_morph_row(obj);
+            rec.tile_morph = object_tile_morph(obj);
             *arg = draw_args(obj, first + k, view, &mut history);
         }
     }
@@ -229,7 +223,6 @@ mod tests {
             mesh_glass_active: true,
             horizon: None,
             routes: ShaderRoutes::default(),
-            tile_morph: None,
         }
     }
 
@@ -476,20 +469,11 @@ mod tests {
         );
     }
 
-    // A planet tile's record carries the frame's morph at its level's range;
+    // A planet tile's record carries its level, seams and first vertex;
     // every other draw's carries none.
     #[test]
     fn a_planet_tile_record_carries_its_morph() {
-        let morph = TileMorphFrame {
-            eye: [1.0, 2.0, 3.0],
-            prev_eye: [1.5, 2.0, 3.0],
-            level0_range: 4096.0,
-            coarsest_level: 0,
-        };
-        let view = PackView {
-            tile_morph: Some(morph),
-            ..view()
-        };
+        let view = view();
         let mut objs = objects(2);
         objs[0].planet_tile = Some(PlanetTileDraw {
             level: 4,
@@ -514,9 +498,13 @@ mod tests {
         chunk.pack(&view, &|obj| pool_object_record(obj, TEXTURES));
         assert_eq!(
             records[0].tile_morph,
-            morph.row(objs[0].planet_tile, objs[0].base_vertex.cast_unsigned())
+            GpuTileMorph {
+                vertex_base: objs[0].base_vertex.cast_unsigned(),
+                seams: 0b0010_0001,
+                level: 4,
+                planet_tile: 1,
+            }
         );
-        assert_eq!(records[0].tile_morph.range, 256.0);
         assert_eq!(records[1].tile_morph, GpuTileMorph::default());
     }
 }

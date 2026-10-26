@@ -43,6 +43,24 @@ impl GpuDone {
     }
 }
 
+/// CPU microseconds the backend's draw spent in its larger steps, each part
+/// of [`RenderStats::render_cpu_us`] and none overlapping another. All zero on a
+/// backend that times none of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameSpans {
+    /// Rebuilds owed ahead of the frame and the world's content carried into
+    /// a rebased one.
+    pub prepare_us: u32,
+    /// Planning the frame: its render graph, camera, lights and effects.
+    pub plan_us: u32,
+    /// Packing the per-draw object and draw-argument records the cull reads.
+    pub record_pack_us: u32,
+    /// Placing the grass tiles the frame's grass kernel visits.
+    pub grass_us: u32,
+    /// Planning and filling the ray-tracing acceleration structure's update.
+    pub rt_accel_us: u32,
+}
+
 /// Per-frame render-backend statistics.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderStats {
@@ -93,21 +111,26 @@ pub struct RenderStats {
     /// the same frame's submission with this taken out.
     pub gpu_wait_us: u32,
     /// Microseconds of CPU work the render side spent submitting this frame:
-    /// replaying its recorded backend effects, updating backend state, and
-    /// recording and submitting the draw, less `gpu_wait_us`. Measured on the
+    /// extracting its snapshot, replaying its recorded backend effects,
+    /// updating backend state, and recording and submitting the draw, less
+    /// `gpu_wait_us`. Measured on the
     /// thread that submits, around the same frame as the wait, so the two
     /// always describe one frame. Left at zero by the backend itself, which
     /// cannot see the whole submission.
     pub render_cpu_us: u32,
+    /// Microseconds the world side spent extracting the frame's snapshot from
+    /// world state. Part of `render_cpu_us`; left at zero by the backend.
+    pub extract_us: u32,
     /// Microseconds the render side spent replaying the frame's recorded
     /// backend effects (slot ops, settings appliers, streaming uploads) before
     /// drawing it. Part of `render_cpu_us`; left at zero by the backend.
     pub replay_us: u32,
-    /// Wall microseconds the backend spent in its queue submit and present.
-    /// Part of the submission, and on a backend that counts its present as a
-    /// wait on the display, part of `gpu_wait_us` too. Zero on a backend that
-    /// does not time it.
+    /// Wall microseconds the backend spent in its queue submit and present,
+    /// less any present block it counts in `gpu_wait_us`, so it is part of
+    /// `render_cpu_us` alone. Zero on a backend that does not time it.
     pub submit_present_us: u32,
+    /// The draw's larger CPU steps.
+    pub spans: FrameSpans,
     /// The render thread's wait on this frame's parallel pass recording,
     /// against the recording work the workers did. Part of `render_cpu_us`.
     /// All zero on a backend that records serially.
@@ -170,8 +193,10 @@ impl Default for RenderStats {
             gpu_done: None,
             gpu_wait_us: 0,
             render_cpu_us: 0,
+            extract_us: 0,
             replay_us: 0,
             submit_present_us: 0,
+            spans: FrameSpans::default(),
             recording_fan_out: FanOutTiming::default(),
             packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
@@ -257,9 +282,9 @@ impl FrameProfile {
     }
 
     /// Record time the step in progress spent handing its frame to the
-    /// renderer: the whole submission when it runs on the stepping thread, or
-    /// the wait for the render thread to take the frame when that runs on its
-    /// own. Either way the time belongs to the render side, which reports its
+    /// renderer: extracting the frame, then the whole submission when it runs
+    /// on the stepping thread, or the wait for the render thread to take the
+    /// frame when that runs on its own. Either way the time belongs to the render side, which reports its
     /// own CPU work as [`RenderStats::render_cpu_us`], so a reader takes it out
     /// of the step's span to leave the step's own work.
     pub fn record_render_handoff(&mut self, micros: u32) {

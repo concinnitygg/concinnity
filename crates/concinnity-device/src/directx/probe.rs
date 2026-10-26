@@ -91,7 +91,7 @@ pub(crate) struct RenderingBake {
     _dsv_heap: ID3D12DescriptorHeap,
     rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     dsv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    // Per-face: a 208-byte ViewUniforms CBV (kept mapped) + its GVA.
+    // Per-face: a ViewUniforms CBV (kept mapped) + its GVA.
     _view_cbvs: Vec<PooledBuffer>,
     view_gvas: Vec<u64>,
     // Per-capture light + shadow snapshots (so the six faces share one consistent
@@ -334,6 +334,7 @@ impl DxContext {
                     irradiance: self.irradiance_lane(),
                     pre_exposure: FaceStorage::PROBE.scale(),
                     daylight: concinnity_engine::render::uniforms::DaylightBlock::OFF,
+                    tile_morph: self.state.tile_morph_view(),
                 });
             let cbv = alloc.alloc_buffer(
                 VIEW_CBV_BYTES,

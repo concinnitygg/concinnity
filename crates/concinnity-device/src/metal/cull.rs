@@ -533,7 +533,6 @@ impl MtlContext {
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
             routes: self.cull.world_pipelines.routes(),
-            tile_morph: self.state.tile_morph,
         };
         let texture_count = self.scene.textures.len();
         let (objects, objects_fresh) = self.rings.object.slot_fresh(

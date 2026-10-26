@@ -87,6 +87,7 @@ impl MtlContext {
         {
             layout.apply_to(obj);
         }
+        self.state.placement.forget_layout();
 
         self.scene.vertex_buffer = new_vertex_buffer;
         self.scene.index_buffer = new_index_buffer;

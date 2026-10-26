@@ -11,8 +11,9 @@
 // Locked to TILE_CELLS in planet::tile and MORPH_START in planet::lod.
 static const uint PLANET_TILE_CELLS = 16u;
 static const float TILE_MORPH_START = 0.85;
-// Locked to SEAM_RAMP_CELLS in planet::morph.
+// Locked to SEAM_RAMP_CELLS and UNBOUNDED_RANGE in planet::morph.
 static const float TILE_SEAM_RAMP_CELLS = 4.0;
+static const float TILE_UNBOUNDED_RANGE = 1e30;
 
 // Floats in one vertex of the shared stream and where each attribute the
 // morph moves starts. Matches `Vertex` in gfx::mesh_payload.
@@ -66,17 +67,27 @@ uint tile_seam_side(uint2 c)
     return 0u;
 }
 
-// How far corner `c` of tile `m` has morphed, `distance` meters from the
-// eye: by distance over the last stretch of the range, all the way on a
-// side beside a coarser tile, not at all on one beside finer tiles. Inside,
-// each pin fades out over TILE_SEAM_RAMP_CELLS from its side; a corner on an
-// edge takes no fade, so same-level neighbors morph it alike.
-// Mirrors planet::morph_factor.
-float tile_morph_factor(GpuTileMorph m, uint2 c, float distance)
+// How far from view `v`'s eye tile `m`'s level reaches: without end at the
+// coarsest level, 0 for a view with no range. Halving by the exponent is exact,
+// as ldexpf is on the CPU. Mirrors planet::tile_range.
+float tile_morph_range(GpuTileMorph m, TileMorphView v)
 {
-    float range = m.eye_range.w;
+    float range0 = v.eye_range0.w;
+    if (range0 <= 0.0) return 0.0;
+    if (m.level <= asuint(v.prev_eye_coarsest.w)) return TILE_UNBOUNDED_RANGE;
+    return asfloat(asuint(range0) - (m.level << 23u));
+}
+
+// How far corner `c` of tile `m` has morphed, `distance` meters from the
+// eye, `range` its level's reach: by distance over the last stretch of the
+// range, all the way on a side beside a coarser tile, not at all on one beside
+// finer tiles. Inside, each pin fades out over TILE_SEAM_RAMP_CELLS from its
+// side; a corner on an edge takes no fade, so same-level neighbors morph it
+// alike. Mirrors planet::morph_factor.
+float tile_morph_factor(GpuTileMorph m, float range, uint2 c, float distance)
+{
     float k = saturate((distance - TILE_MORPH_START * range) / ((1.0 - TILE_MORPH_START) * range));
-    uint seams = asuint(m.prev_eye_seams.w);
+    uint seams = m.seams;
     uint side = tile_seam_side(c);
     if ((seams & side) != 0u) return 1.0;
     if (((seams >> 4u) & side) != 0u) return 0.0;
@@ -156,22 +167,24 @@ TileVertex tile_vertex_in(float3 position, float3 normal, float3 tangent)
 }
 
 // The vertex stage's vertex `vertex_id` (from SV_VertexID), `v`, of a draw
-// with morph row `m` placed by `model`, morphed for a camera at `eye`; as it
-// is for a draw that is not a planet tile. DirectX counts the id from the
-// draw's first vertex, the other backends from the stream's.
-TileVertex tile_morph_draw(GpuTileMorph m, float4x4 model, TileVertex v, uint vertex_id, float3 eye)
+// with morph row `m` placed by `model`, morphed by view `view` for a camera at
+// `eye`; as it is for a draw that is not a planet tile. DirectX counts the id
+// from the draw's first vertex, the other backends from the stream's.
+TileVertex tile_morph_draw(GpuTileMorph m, TileMorphView view, float4x4 model, TileVertex v,
+                           uint vertex_id, float3 eye)
 {
-    if (m.eye_range.w <= 0.0)
+    float range = tile_morph_range(m, view);
+    if (m.planet_tile == 0u || range <= 0.0)
     {
         return v;
     }
-    uint base = m.base.x;
+    uint base = m.vertex_base;
 #ifdef CN_BACKEND_DIRECTX
     uint vertex = base + vertex_id;
 #else
     uint vertex = vertex_id;
 #endif
     float distance = length(mul(model, float4(v.position, 1.0)).xyz - eye);
-    float k = tile_morph_factor(m, tile_grid_corner(vertex - base), distance);
+    float k = tile_morph_factor(m, range, tile_grid_corner(vertex - base), distance);
     return tile_morph_vertex(v, base, vertex, k);
 }

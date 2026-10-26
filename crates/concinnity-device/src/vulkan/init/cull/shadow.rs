@@ -3,6 +3,7 @@
 //! its own lists, and the depth-only bindless pipeline both draw with.
 
 use ash::vk;
+use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::RenderResult;
 
@@ -101,11 +102,13 @@ pub(super) fn build_shadow_cull(
         let sc_pipeline = compute_pipeline(device, sc_pl.handle(), &sc_spv, "shadow cull")?;
 
         // Depth-only bindless shadow graphics pipeline: shadow-global set 0 +
-        // the bindless GpuObjectData set 1 + a cascade-index push constant.
+        // the bindless GpuObjectData set 1 + the per-view `ShadowPassPush`.
         let sb_push = vk::PushConstantRange::default()
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .offset(0)
-            .size(4);
+            .size(u32::saturating_from(
+                size_of::<render_types::ShadowPassPush>(),
+            ));
         let shadow_global_set_layout = &shadow.global_set_layout;
         let sb_layouts = [shadow_global_set_layout.handle(), bl_set_layout.handle()];
         let sb_pl = device

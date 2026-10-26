@@ -4,7 +4,9 @@ use alloc::format;
 use alloc::string::String;
 use core::fmt::{self, Write};
 
-use crate::frame_report::reduce::{FanOutCost, FrameCost, PhaseReport, Report, SlowFrame};
+use crate::frame_report::reduce::{
+    FanOutCost, FrameCost, PhaseReport, RENDER_SUBMIT, Report, SlowFrame,
+};
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;
@@ -87,6 +89,24 @@ pub(super) fn write_report(out: &mut impl Write, report: &Report) -> fmt::Result
                 .systems
                 .iter()
                 .map(|s| (s.name.clone(), s.mean_us, s.share)),
+        )?;
+        write_block(
+            out,
+            &format!(
+                "{} {RENDER_SUBMIT}, mean {:.2} ms",
+                phase.name,
+                phase
+                    .render
+                    .iter()
+                    .map(|r| r.mean_us)
+                    .fold(0, u32::saturating_add) as f32
+                    / MICROS_PER_MILLI,
+            ),
+            "of the submission",
+            phase
+                .render
+                .iter()
+                .map(|r| (r.name.clone(), r.mean_us, r.share)),
         )?;
         write_fan_outs(out, &phase.name, &phase.fan_outs)?;
     }
@@ -318,8 +338,10 @@ mod tests {
             input_latency_us: 0,
             gpu_wait_us: 250,
             render_cpu_us: 0,
+            extract_us: 0,
             replay_us: 0,
             submit_present_us: 0,
+            spans: crate::profile::FrameSpans::default(),
             recording_fan_out: FanOutTiming::default(),
             packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
@@ -540,10 +562,35 @@ mod tests {
         assert!(text.contains("    gpu: main 4.00\n"), "{text}");
         assert!(text.contains("    record: main 2.50\n"), "{text}");
         assert!(
-            text.contains("    render: submit and present 0.30, replay 0.15\n"),
+            text.contains("    render: submit and present 0.30, other 0.25, replay 0.15\n"),
             "{text}"
         );
         assert!(text.contains("10.00 ms at 0.00 s in approach"), "{text}");
+    }
+
+    #[test]
+    fn the_render_block_splits_the_submission() {
+        let mut only = sample(0.0, Some(0), 10_000);
+        only.render_cpu_us = 2_000;
+        only.spans.grass_us = 1_500;
+        let run = Recorded {
+            samples: vec![only],
+            phases: vec!["approach".to_string()],
+            ..Recorded::default()
+        };
+        let text = to_text(&report_of(&run));
+        assert!(
+            text.contains("approach render submit, mean 2.00 ms:\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  grass placement        1.500 ms   75.0% of the submission\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  other                  0.500 ms   25.0% of the submission\n"),
+            "{text}"
+        );
     }
 
     #[test]

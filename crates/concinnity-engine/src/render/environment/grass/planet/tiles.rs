@@ -10,7 +10,7 @@ use concinnity_core::math::{SaturatingFrom, dvec3, narrow_f32};
 
 use super::cells::PlanetGrassGrid;
 use crate::gfx::render_types::GpuTileMorph;
-use crate::planet::{PlanetShape, TileId};
+use crate::planet::{PlanetShape, TileId, TileMorphFrame};
 use crate::render::environment::grass::nest::GRASS_NEST_LEVELS;
 use crate::render::environment::grass::tiles::{GrassBox, NestView, NestedTiles, nested_tiles};
 use crate::render::uniforms::grass::{MAX_PLANET_GRASS_TILES, PlanetGrassTileGpu};
@@ -122,14 +122,24 @@ fn morph_reach(shape: &PlanetShape, grid: &PlanetGrassGrid, tile: &DrawnPlanetTi
 }
 
 // Whether no vertex of a tile with morph row `morph`, every point of it
-// within `reach` of `origin`, has begun to morph: it meets no tile of another
-// level, and all of it lies short of where its level's morph starts.
-fn unmorphed(morph: &GpuTileMorph, origin: [f64; 3], reach: f64) -> bool {
-    if morph.range <= 0.0 {
+// within `reach` of `origin`, has begun to morph by `frame`: it meets no tile
+// of another level, and all of it lies short of where its level's morph
+// starts.
+fn unmorphed(
+    frame: Option<&TileMorphFrame>,
+    morph: &GpuTileMorph,
+    origin: [f64; 3],
+    reach: f64,
+) -> bool {
+    let Some(frame) = frame.filter(|_| morph.planet_tile != 0) else {
+        return true;
+    };
+    let range = frame.range(morph.level);
+    if range <= 0.0 {
         return true;
     }
-    let start = crate::planet::MORPH_START * f64::from(morph.range);
-    let gap = dvec3::length(dvec3::sub(origin, dvec3::from_f32(morph.eye)));
+    let start = crate::planet::MORPH_START * f64::from(range);
+    let gap = dvec3::length(dvec3::sub(origin, dvec3::from_f32(frame.eye)));
     morph.seams == 0 && gap + reach < start
 }
 
@@ -140,18 +150,18 @@ impl PlanetGrassTiles {
     /// tiles the reach covers. A block is a square around the camera in the
     /// tile's own face coordinates, a grass tile wider than the reach on every
     /// side; the nested tiles within it are culled against the reach itself
-    /// (see [`nested_planet_tiles`]).
+    /// (see [`nested_planet_tiles`]). The tiles morph by `morph`.
     pub fn gather(
         &mut self,
         (shape, grid): (&PlanetShape, &PlanetGrassGrid),
-        drawn: &[DrawnPlanetTile],
+        (drawn, morph): (&[DrawnPlanetTile], Option<&TileMorphFrame>),
         center: [f32; 3],
         camera: [f32; 3],
         distance: f32,
     ) {
         records_in_reach(
             (shape, grid),
-            drawn,
+            (drawn, morph),
             [center, camera],
             distance,
             &mut self.near,
@@ -237,7 +247,7 @@ type InReach = (f64, usize, PlanetGrassTileGpu, [[u32; 2]; 2]);
 // Every record within reach, nearest first, into `near`.
 fn records_in_reach(
     (shape, grid): (&PlanetShape, &PlanetGrassGrid),
-    drawn: &[DrawnPlanetTile],
+    (drawn, morph): (&[DrawnPlanetTile], Option<&TileMorphFrame>),
     [center, camera]: [[f32; 3]; 2],
     distance: f32,
     near: &mut Vec<InReach>,
@@ -253,7 +263,7 @@ fn records_in_reach(
         }
         let (mut record, block) = block(grid, tile, center, cam, f64::from(distance))?;
         if tile.morph_extent < GRASS_MORPH_TOLERANCE
-            || unmorphed(&tile.morph, origin, morph_reach(shape, grid, tile))
+            || unmorphed(morph, &tile.morph, origin, morph_reach(shape, grid, tile))
         {
             record.tile_morph = GpuTileMorph::default();
         }
@@ -330,7 +340,7 @@ mod tests {
         distance: f32,
     ) -> PlanetGrassTiles {
         let mut run = PlanetGrassTiles::default();
-        run.gather((shape, grid), drawn, center, camera, distance);
+        run.gather((shape, grid), (drawn, None), center, camera, distance);
         run
     }
 
@@ -651,7 +661,13 @@ mod tests {
                     .map(|d| light(d.id))
                     .collect();
                 let mut near = Vec::new();
-                records_in_reach((&s, &grid), &selected, [center, cam], REACH, &mut near);
+                records_in_reach(
+                    (&s, &grid),
+                    (&selected, None),
+                    [center, cam],
+                    REACH,
+                    &mut near,
+                );
                 worst = worst.max(near.len());
             }
         }
@@ -663,17 +679,36 @@ mod tests {
     // morph, or on a seam, keeps its row.
     #[test]
     fn only_tiles_reaching_their_morph_keep_it() {
-        let row = |eye: [f32; 3], seams: u32| GpuTileMorph {
+        // Level 2 of a frame whose level 0 reaches 400 m reaches 100 m.
+        let frame = |eye: [f32; 3]| TileMorphFrame {
             eye,
-            range: 100.0,
+            prev_eye: eye,
+            level0_range: 400.0,
+            coarsest_level: 0,
+        };
+        let row = |seams: u32| GpuTileMorph {
             seams,
+            level: 2,
+            planet_tile: 1,
             ..GpuTileMorph::default()
         };
         let origin = [0.0; 3];
-        assert!(unmorphed(&row([10.0, 0.0, 0.0], 0), origin, 20.0));
-        assert!(!unmorphed(&row([70.0, 0.0, 0.0], 0), origin, 20.0));
-        assert!(!unmorphed(&row([10.0, 0.0, 0.0], 1), origin, 20.0));
-        assert!(unmorphed(&GpuTileMorph::default(), origin, 1e9));
+        let near = frame([10.0, 0.0, 0.0]);
+        assert!(unmorphed(Some(&near), &row(0), origin, 20.0));
+        assert!(!unmorphed(
+            Some(&frame([70.0, 0.0, 0.0])),
+            &row(0),
+            origin,
+            20.0
+        ));
+        assert!(!unmorphed(Some(&near), &row(1), origin, 20.0));
+        assert!(unmorphed(
+            Some(&near),
+            &GpuTileMorph::default(),
+            origin,
+            1e9
+        ));
+        assert!(unmorphed(None, &row(1), origin, 1e9));
     }
 
     // More drawn tiles in reach than a run holds keeps the nearest and says
@@ -701,11 +736,11 @@ mod tests {
         let mut tiles = alloc::vec![far; MAX_PLANET_GRASS_TILES];
         tiles.push(near);
         let mut run = PlanetGrassTiles::default();
-        run.gather((&s, &grid), &tiles, center, cam, 90.0);
+        run.gather((&s, &grid), (&tiles, None), center, cam, 90.0);
         assert!(run.clipped);
         assert_eq!(run.records.len(), MAX_PLANET_GRASS_TILES);
         assert_eq!(run.blocks[0].0, MAX_PLANET_GRASS_TILES);
-        run.gather((&s, &grid), &tiles[1..], center, cam, 90.0);
+        run.gather((&s, &grid), (&tiles[1..], None), center, cam, 90.0);
         assert!(!run.clipped);
         assert_eq!(run.records.len(), MAX_PLANET_GRASS_TILES);
     }
@@ -730,16 +765,26 @@ mod tests {
             [0.0, s.radius + s.height([0.0, 1.0, 0.0]) + 1.7, 0.0],
         ));
         let center = frame.to_local(s.center);
+        // A frame whose range at the tile's level is a meter.
+        let morph = TileMorphFrame {
+            eye: cam,
+            prev_eye: cam,
+            level0_range: libm::ldexpf(1.0, i32::from(id.level)),
+            coarsest_level: 0,
+        };
         let morphing = |extent: f32| {
             let mut tile = drawn(&s, &frame, id);
-            tile.morph = GpuTileMorph {
-                eye: cam,
-                range: 1.0,
-                ..GpuTileMorph::default()
-            };
+            tile.morph = crate::planet::tile_morph_row(
+                Some(crate::gfx::render_types::PlanetTileDraw {
+                    level: id.level,
+                    seams: crate::planet::TileSeams::default(),
+                }),
+                0,
+            );
             tile.morph_extent = extent;
-            let run = tiles_in_reach(&s, &grid, &[tile], center, cam, 90.0);
-            run.records[0].tile_morph.range > 0.0
+            let mut run = PlanetGrassTiles::default();
+            run.gather((&s, &grid), (&[tile], Some(&morph)), center, cam, 90.0);
+            run.records[0].tile_morph.planet_tile != 0
         };
         assert!(!morphing(GRASS_MORPH_TOLERANCE * 0.5));
         assert!(morphing(GRASS_MORPH_TOLERANCE * 2.0));

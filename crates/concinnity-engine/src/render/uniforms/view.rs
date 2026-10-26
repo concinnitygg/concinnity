@@ -3,6 +3,7 @@
 //! motion vectors.
 
 use super::daylight::{DaylightBlock, VIEW_BLOCK_LIMIT};
+use crate::gfx::render_types::TileMorphView;
 
 /// The camera a screen-space pass reconstructs world positions from, as the
 /// per-frame view blocks of the raymarch and transparent passes take it.
@@ -102,6 +103,9 @@ pub struct ViewUniforms {
     /// The planet's per-point sky, [`DaylightBlock::OFF`] for a world
     /// without one.
     pub daylight: DaylightBlock,
+    /// The camera a planet's tiles morph by: the main camera's in every view,
+    /// so a reflection shows the tiles as the screen does.
+    pub tile_morph: TileMorphView,
 }
 
 const _: () = assert!(size_of::<ViewUniforms>() <= VIEW_BLOCK_LIMIT);
@@ -129,6 +133,8 @@ pub struct FaceCamera {
     pub pre_exposure: f32,
     /// The planet's per-point sky the face is lit by.
     pub daylight: DaylightBlock,
+    /// The camera a planet's tiles morph by.
+    pub tile_morph: TileMorphView,
 }
 
 impl ViewUniforms {
@@ -152,6 +158,7 @@ impl ViewUniforms {
             screen_bounce: 0.0,
             _pad: 0.0,
             daylight: face.daylight,
+            tile_morph: face.tile_morph,
         }
     }
 }
@@ -248,7 +255,12 @@ mod tests {
             irradiance: 1.0,
             pre_exposure: 0.5,
             daylight: DaylightBlock::OFF,
+            tile_morph: TileMorphView {
+                level0_range: 7.0,
+                ..TileMorphView::default()
+            },
         });
+        assert_eq!(u.tile_morph.level0_range, 7.0);
         assert_eq!(
             (u.vp, u.view, u.cam_pos),
             ([[2.0; 4]; 4], [[3.0; 4]; 4], [1.0, 2.0, 3.0])
@@ -274,7 +286,7 @@ mod tests {
     // moved.
     #[test]
     fn view_uniforms_layout_matches_msl() {
-        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664);
+        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664 + 32);
         assert_eq!(offset_of!(ViewUniforms, vp), 0);
         assert_eq!(offset_of!(ViewUniforms, view), 64);
         assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
@@ -290,6 +302,7 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, screen_bounce), 216);
         assert_eq!(offset_of!(ViewUniforms, _pad), 220);
         assert_eq!(offset_of!(ViewUniforms, daylight), 224);
+        assert_eq!(offset_of!(ViewUniforms, tile_morph), 224 + 1664);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 

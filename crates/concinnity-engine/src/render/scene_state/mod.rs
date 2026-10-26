@@ -15,7 +15,7 @@ use core::cell::RefCell;
 
 use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_reserve_full};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
-use crate::planet::{HorizonOccluder, TileMorphFrame};
+use crate::planet::{HorizonOccluder, TileMorphFrame, tile_morph_row};
 use crate::render::backend::PlanetChunk;
 use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
 use crate::render::frame::plan::FramePlanner;
@@ -53,11 +53,11 @@ pub struct SceneState {
     /// A planet world's lowest ground, which hides the draws wholly behind
     /// its horizon.
     pub horizon_occluder: Option<HorizonOccluder>,
-    /// The camera a planet's tiles morph by, which their vertices
-    /// morph by; `None` for a world without one.
-    pub tile_morph: Option<TileMorphFrame>,
     /// Plans each frame the backend executes.
     pub planner: FramePlanner,
+    /// The current frame's larger CPU steps, reset as each frame starts.
+    /// Interior mutability because a backend times some of them from `&self`.
+    pub spans: core::cell::Cell<crate::profile::FrameSpans>,
 }
 
 impl SceneState {
@@ -72,9 +72,15 @@ impl SceneState {
             gpu_dirty: GpuDirty::default(),
             planet_chunks: BTreeMap::new(),
             horizon_occluder: None,
-            tile_morph: None,
             planner: FramePlanner::default(),
+            spans: core::cell::Cell::new(crate::profile::FrameSpans::default()),
         }
+    }
+
+    /// The block every pass drawing a planet tile morphs it by: all zero, which
+    /// morphs nothing, for a world without one.
+    pub fn tile_morph_view(&self) -> crate::gfx::render_types::TileMorphView {
+        self.view.tile_morph_view()
     }
 
     /// Set where planet tile `draw` meets tiles of other levels. A no-op for
@@ -123,10 +129,7 @@ impl SceneState {
                 radial: chunk.radial,
                 origin_altitude: chunk.origin_altitude,
                 morph_extent: chunk.morph_extent,
-                morph: self
-                    .tile_morph
-                    .map(|m| m.row(obj.planet_tile, obj.base_vertex.cast_unsigned()))
-                    .unwrap_or_default(),
+                morph: tile_morph_row(obj.planet_tile, obj.base_vertex.cast_unsigned()),
             })
         })
     }
@@ -262,9 +265,17 @@ pub struct SceneView {
     /// A planet's per-point sky, uploaded into the view blocks of the passes
     /// that shade its ground and sea; off without one.
     pub daylight: crate::render::uniforms::DaylightBlock,
+    /// The camera a planet's tiles morph by; `None` for a world without one.
+    pub tile_morph: Option<TileMorphFrame>,
 }
 
 impl SceneView {
+    /// The block every pass drawing a planet tile morphs it by: all zero, which
+    /// morphs nothing, for a world without one.
+    pub fn tile_morph_view(&self) -> crate::gfx::render_types::TileMorphView {
+        self.tile_morph.map(|m| m.view()).unwrap_or_default()
+    }
+
     /// An identity view with no fade, cleared to `clear_color`.
     pub fn new(clear_color: [f32; 4]) -> Self {
         Self {
@@ -278,6 +289,7 @@ impl SceneView {
             sky_rot: SkyOrientation::IDENTITY_ROWS,
             sunlight: 1.0,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
+            tile_morph: None,
         }
     }
 }

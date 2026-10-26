@@ -227,7 +227,7 @@ impl DrawObject {
 /// cull kernel can read object bounds straight from this buffer without a
 /// layout change.
 ///
-/// Layout (208 bytes) must stay in sync with the shader-side record, declared
+/// Layout (176 bytes) must stay in sync with the shader-side record, declared
 /// once in `shaders/object_common.hlsl` and spliced into every pass that
 /// strides the buffer; `shader_layout` in concinnity-device pins this struct
 /// against the compiled module's layout of it on every target.
@@ -293,31 +293,45 @@ pub struct PlanetTileDraw {
 }
 
 /// How a planet tile's vertices morph toward its parent's mesh, as its
-/// object record carries it. 48 bytes, declared in `tile_morph_types.hlsl`
-/// as two `float4`s and a `uint4`.
+/// object record carries it: only what changes when the tiles are chosen
+/// again, so a moving camera leaves the record as it is. 16 bytes, declared in
+/// `tile_morph_types.hlsl`.
 ///
-/// A vertex `d` meters from `eye` morphs from none at
-/// [`crate::planet::MORPH_START`] of `range` to all of the way at `range`;
-/// the motion vectors measure last frame's morph from `prev_eye`. A `range`
-/// of 0 leaves every vertex where it is.
-#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+/// The camera the morph is measured from rides the frame's
+/// [`TileMorphView`]: a vertex `d` meters from its eye morphs from none at
+/// [`crate::planet::MORPH_START`] of the level's range to all of the way at
+/// the range.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct GpuTileMorph {
-    /// The camera, in the simulated frame.
-    pub eye: [f32; 3],
-    /// How far from `eye` the tile's level reaches, in meters.
-    pub range: f32,
-    /// The camera last frame, in this frame's
-    /// coordinates.
-    pub prev_eye: [f32; 3],
-    /// The sides beside a coarser tile in the low four bits (by
-    /// [`crate::planet::TileSide::bit`]), beside finer tiles in the next four.
-    pub seams: u32,
     /// The tile's first vertex in the shared vertex stream, where the morph
     /// reads its neighbors.
     pub vertex_base: u32,
-    /// Keeps the row a whole number of `float4`s.
-    pub _pad: [u32; 3],
+    /// The sides beside a coarser tile in the low four bits (by
+    /// [`crate::planet::TileSide::bit`]), beside finer tiles in the next four.
+    pub seams: u32,
+    /// The tile's quadtree level.
+    pub level: u32,
+    /// 1 for a planet tile's draw, 0 for every other draw, which never morphs.
+    pub planet_tile: u32,
+}
+
+/// The camera a planet's tiles morph by, as the frame's view blocks carry it
+/// to every pass that draws a tile. 32 bytes, declared in
+/// `tile_morph_types.hlsl` as two `float4`s.
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct TileMorphView {
+    /// The camera, in the simulated frame.
+    pub eye: [f32; 3],
+    /// How far level 0 reaches from it, in meters; each level reaches half
+    /// as far as the one above it. 0 morphs nothing.
+    pub level0_range: f32,
+    /// The camera last frame, in this frame's coordinates, which the motion
+    /// vectors measure last frame's morph from.
+    pub prev_eye: [f32; 3],
+    /// The coarsest level tiles are drawn at, which reaches without end.
+    pub coarsest_level: u32,
 }
 
 // The world bound and per-object cull range a packed record carries. The

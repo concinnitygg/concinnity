@@ -190,6 +190,7 @@ impl DxContext {
         {
             layout.apply_to(obj);
         }
+        self.state.placement.forget_layout();
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: u32::saturating_from(new_v_bytes),

@@ -53,17 +53,16 @@ pub fn chunk_record_reserve(voxel_far_radius: Option<u32>, planet: bool) -> usiz
     }
 }
 
-/// The vertex and index bytes a planet's terrain takes with every resident
-/// tile at its largest mesh.
+/// The vertex and index bytes a planet's terrain takes: every resident tile's
+/// vertices at its largest mesh, and the one grid of indices they all draw.
 pub fn planet_tile_headroom() -> (usize, usize) {
     let (vertices, indices) = tile_mesh_size();
-    let tiles = MAX_RESIDENT_TILES as u64;
-    let bytes = |count: usize, size: usize| {
+    let bytes = |tiles: u64, count: usize, size: usize| {
         usize::try_from(tiles * count as u64 * size as u64).unwrap_or(usize::MAX)
     };
     (
-        bytes(vertices, size_of::<Vertex>()),
-        bytes(indices, size_of::<u32>()),
+        bytes(MAX_RESIDENT_TILES as u64, vertices, size_of::<Vertex>()),
+        bytes(1, indices, size_of::<u32>()),
     )
 }
 
@@ -157,11 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn the_planet_headroom_holds_every_resident_tile_at_full_size() {
+    fn the_planet_headroom_holds_every_tiles_vertices_and_one_shared_grid() {
         let (vertices, indices) = tile_mesh_size();
         let (vtx, idx) = planet_tile_headroom();
         assert_eq!(vtx, MAX_RESIDENT_TILES * vertices * size_of::<Vertex>());
-        assert_eq!(idx / MAX_RESIDENT_TILES, indices * 4);
+        assert_eq!(idx, indices * size_of::<u32>());
     }
 
     // Impostors cost less headroom than full chunks over the same window, and

@@ -4,6 +4,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::LineVertex;
 use concinnity_engine::profile;
+use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error;
 use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
@@ -542,10 +543,15 @@ impl MtlContext {
             // compute pass consume. They must outlive the command buffer,
             // hence the bindings handed back to the caller, which holds them
             // through to `cmd_buf.commit()`.
+            let packed = std::time::Instant::now();
             let records = match records {
                 Some(history) => self.build_record_buffers(ring_slot, cam_pos, history)?,
                 None => None,
             };
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
             let (object_buffer, draw_args) = match records {
                 Some(records) => {
                     self.diagnostics.frame_stats.packing_fan_out = records.packing;
@@ -597,6 +603,7 @@ impl MtlContext {
             // fully static scene pays just a matrix compare here. Non-fatal: a
             // transient rebuild failure keeps last frame's BVH rather than stopping
             // the renderer.
+            let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(
                 crate::metal::raytrace::RtFrame {
                     id: frame_id,
@@ -604,6 +611,10 @@ impl MtlContext {
                 },
                 skinned_joint_bufs,
             );
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
 
             (
                 object_buffer,

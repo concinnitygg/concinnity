@@ -1353,7 +1353,7 @@ impl VkContext {
         reason = "keeps the `RenderBackend::draw_frame` signature it serves"
     )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        drive_frame(self, params)
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
     }
 
     // The live platform window. Present for every constructed context; `None`
@@ -1448,7 +1448,10 @@ impl VkContext {
     // construction, matching DirectX / Metal). Per-pass GPU timing is
     // still a follow-up.
     pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        self.frame_stats.get()
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.frame_stats.get()
+        }
     }
 
     // Current device-local memory residency in bytes, via

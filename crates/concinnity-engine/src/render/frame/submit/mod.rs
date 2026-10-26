@@ -173,7 +173,10 @@ pub fn submit(
     }
 
     let mut render_stats = backend.render_stats();
-    render_stats.render_cpu_us = since(started).saturating_sub(render_stats.gpu_wait_us);
+    render_stats.render_cpu_us = since(started)
+        .saturating_sub(render_stats.gpu_wait_us)
+        .saturating_add(snap.extract_us);
+    render_stats.extract_us = snap.extract_us;
     render_stats.replay_us = replay_us;
     // The backend saves a capture from the frame it rode; a dropped frame
     // presented nothing to save.

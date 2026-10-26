@@ -21,6 +21,7 @@ mod spot_shadow;
 mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::environment::grass::lod as grass_lod;
 use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
@@ -62,7 +63,9 @@ impl MtlContext {
         reason = "keeps the `RenderBackend::draw_frame` signature it serves"
     )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        objc2::rc::autoreleasepool(|_| drive_frame(self, params))
+        objc2::rc::autoreleasepool(|_| {
+            drive_frame(self, params, concinnity_host::clock::monotonic_micros)
+        })
     }
 }
 
@@ -269,6 +272,7 @@ impl FrameDevice for MtlContext {
         )?;
         // The grass kernel's inputs, advanced only on a frame whose graph runs it,
         // so the draw-argument slot it fills alternates frame to frame.
+        let grass_started = std::time::Instant::now();
         let grass_frame = (plan.inputs.grass_enabled && !plan.inputs.world_hidden)
             .then(|| {
                 self.prepare_grass_frame(crate::metal::grass::GrassRequest {
@@ -281,6 +285,10 @@ impl FrameDevice for MtlContext {
                 })
             })
             .flatten();
+        self.state.spans.set(FrameSpans {
+            grass_us: concinnity_host::clock::micros_since(grass_started),
+            ..self.state.spans.get()
+        });
         let HistoryBuffers {
             deformed_this_frame,
             deformed_prev_frame,
@@ -428,6 +436,7 @@ impl FrameDevice for MtlContext {
         if let Some(timing) = self.diagnostics.pass_timing.as_ref() {
             active_mask.store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
         }
+        let started = std::time::Instant::now();
         self.submit_and_present(PresentFrame {
             cmd_buf,
             drawable,
@@ -436,6 +445,8 @@ impl FrameDevice for MtlContext {
             pending_terminal: submission.pending_terminal,
             submission_token,
         });
+        self.diagnostics.frame_stats.submit_present_us =
+            concinnity_host::clock::micros_since(started);
 
         Ok(())
     }

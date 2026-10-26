@@ -22,7 +22,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::{self, SKINNED_STREAM};
+use concinnity_engine::gfx::render_types::{self, SKINNED_STREAM, ShadowPassPush};
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
@@ -223,15 +223,20 @@ impl VkContext {
                 &[],
             );
         }
-        // SAFETY: `sb_layout` is the live layout of the pipeline bound above, and the view's
-        // `vp_index` is borrowed for the call.
+        let push = ShadowPassPush {
+            cascade_idx: view.vp_index,
+            _pad: [0; 3],
+            tile_morph: self.state.tile_morph_view(),
+        };
+        // SAFETY: `sb_layout` is the live layout of the pipeline bound above, whose push range
+        // holds a `ShadowPassPush`, and `push` is borrowed for the call.
         unsafe {
             cmd_push_constants(
                 device,
                 cmd,
                 sb_layout.handle(),
                 vk::ShaderStageFlags::VERTEX,
-                &view.vp_index,
+                &push,
             );
         }
 

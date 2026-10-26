@@ -1,6 +1,9 @@
 //! The order every backend's frame runs in: the view snapped, the history
 //! reset or carried, the frame acquired, planned, executed and closed.
 
+use concinnity_core::math::SaturatingFrom;
+
+use crate::profile::FrameSpans;
 use crate::render::backend::FrameParams;
 use crate::render::backend::error::RenderResult;
 use crate::render::probe::radiance::with_sky_cube_scale;
@@ -76,12 +79,19 @@ pub fn camera_inputs(scene: &SceneState, params: &FrameParams<'_>) -> CameraInpu
     }
 }
 
-/// Run one frame on `device`.
+/// Run one frame on `device`, timing its preparation and plan into the
+/// scene's [`SceneState::spans`] by `now_us`, a monotonic clock in
+/// microseconds.
 ///
 /// # Errors
 ///
 /// Returns an error if any of the device's steps fails.
-pub fn drive_frame<D: FrameDevice>(device: &mut D, params: FrameParams<'_>) -> RenderResult<()> {
+pub fn drive_frame<D: FrameDevice>(
+    device: &mut D,
+    params: FrameParams<'_>,
+    now_us: fn() -> u64,
+) -> RenderResult<()> {
+    let since = |start: u64| u32::saturating_from(now_us().saturating_sub(start));
     let atmosphere = device.draws_atmosphere();
     let view = &mut device.frame_scene().view;
     view.mode = params.view_mode;
@@ -91,8 +101,16 @@ pub fn drive_frame<D: FrameDevice>(device: &mut D, params: FrameParams<'_>) -> R
     view.sky_rot = with_sky_cube_scale(params.sky_rot, atmosphere);
     view.sunlight = params.sunlight;
     view.daylight = *params.daylight;
+    device.frame_scene().spans.set(FrameSpans::default());
 
+    let prepared = now_us();
     device.prepare(&params)?;
+    let prepare_us = since(prepared);
+    let spans = &device.frame_scene().spans;
+    spans.set(FrameSpans {
+        prepare_us,
+        ..spans.get()
+    });
     if params.history_reset {
         device.frame_scene().planner.reset_history();
         device.reset_history();
@@ -105,7 +123,14 @@ pub fn drive_frame<D: FrameDevice>(device: &mut D, params: FrameParams<'_>) -> R
     let Some(frame) = device.begin(&params)? else {
         return Ok(());
     };
+    let planned = now_us();
     let plan = device.plan(&frame, &params)?;
+    let plan_us = since(planned);
+    let spans = &device.frame_scene().spans;
+    spans.set(FrameSpans {
+        plan_us,
+        ..spans.get()
+    });
     device.execute(frame, &plan, &params)?;
     device.finish(&plan);
     device.frame_scene().planner.finish(plan);
@@ -238,10 +263,17 @@ mod tests {
         }
     }
 
+    // A clock that moves on a millisecond each time it is read. Only one test
+    // reads it, so the spans it measures are exact.
+    fn ticking_clock() -> u64 {
+        static NOW: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        NOW.fetch_add(1_000, core::sync::atomic::Ordering::Relaxed)
+    }
+
     #[test]
     fn a_frame_runs_every_step_in_order_and_snaps_the_view() {
         let mut device = Recorder::new(true);
-        drive_frame(&mut device, params(true)).unwrap();
+        drive_frame(&mut device, params(true), ticking_clock).unwrap();
         assert_eq!(
             device.steps,
             [
@@ -257,12 +289,14 @@ mod tests {
         assert_eq!(device.scene.view.near, 0.25);
         assert_eq!(device.scene.view.view_distance, Some(90.0));
         assert_eq!(device.scene.view.sunlight, 3.0);
+        assert_eq!(device.scene.spans.get().prepare_us, 1_000);
+        assert_eq!(device.scene.spans.get().plan_us, 1_000);
     }
 
     #[test]
     fn a_frame_without_a_target_stops_after_begin() {
         let mut device = Recorder::new(false);
-        drive_frame(&mut device, params(false)).unwrap();
+        drive_frame(&mut device, params(false), || 0).unwrap();
         assert_eq!(device.steps, [Step::Prepare, Step::Begin]);
     }
 }

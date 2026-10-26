@@ -1,6 +1,7 @@
 // How a planet tile's vertices morph toward its parent's mesh near the end of
-// their level's range: the row a tile's draw carries to the GPU, and the
-// morph itself, which `tile_morph.hlsl` mirrors.
+// their level's range: the row a tile's draw carries to the GPU, the camera
+// the frame's view blocks carry beside it, and the morph itself, which
+// `tile_morph.hlsl` mirrors.
 //
 // A child tile's even grid corners are its parent's corners. Each odd corner
 // moves toward the middle of the two neighbors that bound it on the parent's
@@ -9,7 +10,7 @@
 
 use super::seams::TileSeams;
 use super::tile::{TILE_CELLS, TileSide};
-use crate::gfx::render_types::{GpuTileMorph, PlanetTileDraw};
+use crate::gfx::render_types::{GpuTileMorph, PlanetTileDraw, TileMorphView};
 use concinnity_core::math::narrow_f32;
 
 /// The camera a planet's tiles morph by, this frame and the last, in
@@ -31,26 +32,46 @@ pub struct TileMorphFrame {
 }
 
 impl TileMorphFrame {
-    /// The morph row of a draw that is `tile`, its first vertex at
-    /// `vertex_base` in the shared stream, or the still row of one that is
-    /// not.
-    pub fn row(&self, tile: Option<PlanetTileDraw>, vertex_base: u32) -> GpuTileMorph {
-        let Some(tile) = tile else {
-            return GpuTileMorph::default();
-        };
-        let range = if tile.level <= self.coarsest_level {
-            UNBOUNDED_RANGE
-        } else {
-            libm::ldexpf(self.level0_range, -i32::from(tile.level))
-        };
-        GpuTileMorph {
+    /// The block the frame's passes morph tiles by.
+    pub fn view(&self) -> TileMorphView {
+        TileMorphView {
             eye: self.eye,
-            range,
+            level0_range: self.level0_range,
             prev_eye: self.prev_eye,
-            seams: packed_seams(tile.seams),
-            vertex_base,
-            _pad: [0; 3],
+            coarsest_level: u32::from(self.coarsest_level),
         }
+    }
+
+    /// How far from the eye a tile at `level` reaches, in meters.
+    pub fn range(&self, level: u32) -> f32 {
+        tile_range(&self.view(), level)
+    }
+}
+
+/// The morph row of a draw that is `tile`, its first vertex at `vertex_base`
+/// in the shared stream, or the still row of one that is not.
+pub fn tile_morph_row(tile: Option<PlanetTileDraw>, vertex_base: u32) -> GpuTileMorph {
+    let Some(tile) = tile else {
+        return GpuTileMorph::default();
+    };
+    GpuTileMorph {
+        vertex_base,
+        seams: packed_seams(tile.seams),
+        level: u32::from(tile.level),
+        planet_tile: 1,
+    }
+}
+
+/// How far from `view`'s eye a tile at `level` reaches, in meters: without
+/// end at the coarsest level, and 0, which morphs nothing, for a view with no
+/// range.
+pub fn tile_range(view: &TileMorphView, level: u32) -> f32 {
+    if view.level0_range <= 0.0 {
+        0.0
+    } else if level <= view.coarsest_level {
+        UNBOUNDED_RANGE
+    } else {
+        libm::ldexpf(view.level0_range, -i32::try_from(level).unwrap_or(i32::MAX))
     }
 }
 
@@ -68,19 +89,20 @@ pub fn packed_seams(seams: TileSeams) -> u32 {
 }
 
 /// How far vertex `(i, j)` of a tile's grid has morphed, `distance` meters
-/// from the eye of `row`: by distance across the last stretch of the range,
+/// from the eye, `range` its level's reach: by distance across the last
+/// stretch of the range,
 /// all the way on a side beside a coarser tile, and not at all on a side
 /// beside finer ones, so the tile's edge matches its neighbor's there.
 ///
 /// Inside the tile each pin fades out over a few cells from its
 /// side. A corner on any edge takes no fade, so neighbors of one level, which
 /// share it, morph it alike whatever their other sides meet.
-pub fn morph_factor(row: &GpuTileMorph, i: usize, j: usize, distance: f32) -> f32 {
-    if row.range <= 0.0 {
+pub fn morph_factor(row: &GpuTileMorph, range: f32, i: usize, j: usize, distance: f32) -> f32 {
+    if range <= 0.0 {
         return 0.0;
     }
     let start = narrow_f32(super::MORPH_START);
-    let k = ((distance - start * row.range) / ((1.0 - start) * row.range)).clamp(0.0, 1.0);
+    let k = ((distance - start * range) / ((1.0 - start) * range)).clamp(0.0, 1.0);
     match side_of(i, j) {
         Some(side) if row.seams & u32::from(side.bit()) != 0 => 1.0,
         Some(side) if (row.seams >> 4) & u32::from(side.bit()) != 0 => 0.0,
@@ -277,6 +299,8 @@ mod tests {
         assert_eq!(start, narrow_f32(crate::planet::MORPH_START));
         let ramp = crate::render::shader::consts::float(src, "TILE_SEAM_RAMP_CELLS");
         assert_eq!(ramp, SEAM_RAMP_CELLS);
+        let unbounded = crate::render::shader::consts::float(src, "TILE_UNBOUNDED_RANGE");
+        assert_eq!(unbounded, UNBOUNDED_RANGE);
     }
 
     #[test]
@@ -287,29 +311,19 @@ mod tests {
         assert_eq!(parent_span(3, 7), Some([(4, 6), (2, 8)]));
     }
 
-    fn row(range: f32, seams: TileSeams) -> GpuTileMorph {
-        GpuTileMorph {
-            eye: [0.0; 3],
-            range,
-            prev_eye: [0.0; 3],
-            seams: packed_seams(seams),
-            vertex_base: 0,
-            _pad: [0; 3],
-        }
+    fn row(seams: TileSeams) -> GpuTileMorph {
+        tile_morph_row(Some(PlanetTileDraw { level: 3, seams }), 0)
     }
 
     #[test]
     fn the_factor_runs_over_the_end_of_the_range() {
-        let r = row(100.0, TileSeams::default());
+        let r = row(TileSeams::default());
         let start = narrow_f32(crate::planet::MORPH_START) * 100.0;
-        assert_eq!(morph_factor(&r, 3, 5, 0.0), 0.0);
-        assert_eq!(morph_factor(&r, 3, 5, start), 0.0);
-        assert!((morph_factor(&r, 3, 5, (start + 100.0) * 0.5) - 0.5).abs() < 1e-5);
-        assert_eq!(morph_factor(&r, 3, 5, 100.0), 1.0);
-        assert_eq!(
-            morph_factor(&row(0.0, TileSeams::default()), 3, 5, 1e6),
-            0.0
-        );
+        assert_eq!(morph_factor(&r, 100.0, 3, 5, 0.0), 0.0);
+        assert_eq!(morph_factor(&r, 100.0, 3, 5, start), 0.0);
+        assert!((morph_factor(&r, 100.0, 3, 5, (start + 100.0) * 0.5) - 0.5).abs() < 1e-5);
+        assert_eq!(morph_factor(&r, 100.0, 3, 5, 100.0), 1.0);
+        assert_eq!(morph_factor(&r, 0.0, 3, 5, 1e6), 0.0);
     }
 
     // On a side beside a coarser tile the edge is all the way morphed, beside
@@ -321,14 +335,14 @@ mod tests {
             coarser: TileSide::MinS.bit() | TileSide::MaxT.bit(),
             finer: TileSide::MaxS.bit(),
         };
-        let r = row(100.0, seams);
+        let r = row(seams);
         let mid = (narrow_f32(crate::planet::MORPH_START) * 100.0 + 100.0) * 0.5;
-        assert_eq!(morph_factor(&r, 0, 3, 0.0), 1.0);
-        assert_eq!(morph_factor(&r, 5, n, 0.0), 1.0);
-        assert_eq!(morph_factor(&r, n, 3, 1e6), 0.0);
-        let k = morph_factor(&r, 3, 0, mid);
+        assert_eq!(morph_factor(&r, 100.0, 0, 3, 0.0), 1.0);
+        assert_eq!(morph_factor(&r, 100.0, 5, n, 0.0), 1.0);
+        assert_eq!(morph_factor(&r, 100.0, n, 3, 1e6), 0.0);
+        let k = morph_factor(&r, 100.0, 3, 0, mid);
         assert!(k > 0.0 && k < 1.0, "an unpinned side follows distance");
-        let k = morph_factor(&r, 9, 9, mid);
+        let k = morph_factor(&r, 100.0, 9, 9, mid);
         assert!(k > 0.0 && k < 1.0, "the inside follows distance");
     }
 
@@ -338,15 +352,14 @@ mod tests {
     fn a_pin_fades_inward_from_its_side() {
         let n = TILE_CELLS as usize;
         let ramp = usize::saturating_from(SEAM_RAMP_CELLS);
-        let near = row(
-            100.0,
-            TileSeams {
-                coarser: TileSide::MinS.bit(),
-                finer: TileSide::MaxS.bit(),
-            },
-        );
+        let near = row(TileSeams {
+            coarser: TileSide::MinS.bit(),
+            finer: TileSide::MaxS.bit(),
+        });
         // The eye at the tile: distance alone would leave every corner still.
-        let fades: Vec<f32> = (0..=n).map(|i| morph_factor(&near, i, 7, 0.0)).collect();
+        let fades: Vec<f32> = (0..=n)
+            .map(|i| morph_factor(&near, 100.0, i, 7, 0.0))
+            .collect();
         assert_eq!(fades[0], 1.0);
         for i in 1..ramp {
             assert!(fades[i] < fades[i - 1] && fades[i] > 0.0, "{fades:?}");
@@ -357,18 +370,22 @@ mod tests {
         );
         // Far out, the morph by distance reaches 1, and the finer side pulls
         // its rows back down to its unmorphed edge.
-        let far: Vec<f32> = (0..=n).map(|i| morph_factor(&near, i, 7, 1e6)).collect();
+        let far: Vec<f32> = (0..=n)
+            .map(|i| morph_factor(&near, 100.0, i, 7, 1e6))
+            .collect();
         assert_eq!(far[n], 0.0);
         for i in (n - ramp + 1)..n {
             assert!(far[i] < far[i - 1] && far[i] < 1.0, "{far:?}");
         }
         // An odd corner on an unpinned edge follows distance alone.
-        assert_eq!(morph_factor(&near, 3, 0, 0.0), 0.0);
-        assert_eq!(morph_factor(&near, 3, n, 1e6), 1.0);
+        assert_eq!(morph_factor(&near, 100.0, 3, 0, 0.0), 0.0);
+        assert_eq!(morph_factor(&near, 100.0, 3, n, 1e6), 1.0);
     }
 
+    // A row carries only what the choice of tiles sets, so a moving camera
+    // leaves it as it was; the camera and the ranges ride the view.
     #[test]
-    fn a_row_carries_its_level_s_range_and_seams() {
+    fn a_row_carries_its_level_and_seams_and_the_view_its_camera() {
         let frame = TileMorphFrame {
             eye: [1.0, 2.0, 3.0],
             prev_eye: [4.0, 5.0, 6.0],
@@ -379,13 +396,23 @@ mod tests {
             coarser: 0b0101,
             finer: 0b0010,
         };
-        let row = frame.row(Some(PlanetTileDraw { level: 3, seams }), 77);
-        assert_eq!(row.eye, [1.0, 2.0, 3.0]);
-        assert_eq!(row.prev_eye, [4.0, 5.0, 6.0]);
-        assert_eq!(row.range, 128.0);
-        assert_eq!(row.seams, 0b0010_0101);
-        assert_eq!(row.vertex_base, 77);
-        assert_eq!(frame.row(None, 77), GpuTileMorph::default());
+        let row = tile_morph_row(Some(PlanetTileDraw { level: 3, seams }), 77);
+        assert_eq!(
+            row,
+            GpuTileMorph {
+                vertex_base: 77,
+                seams: 0b0010_0101,
+                level: 3,
+                planet_tile: 1,
+            }
+        );
+        assert_eq!(tile_morph_row(None, 77), GpuTileMorph::default());
+        let view = frame.view();
+        assert_eq!(view.eye, [1.0, 2.0, 3.0]);
+        assert_eq!(view.prev_eye, [4.0, 5.0, 6.0]);
+        assert_eq!(view.coarsest_level, 2);
+        assert_eq!(frame.range(3), 128.0);
+        assert_eq!(tile_range(&TileMorphView::default(), 3), 0.0);
     }
 
     // A tile at the coarsest drawn level never morphs by distance, however
@@ -403,11 +430,15 @@ mod tests {
             coarser: TileSide::MinS.bit(),
             finer: 0,
         };
-        let row = frame.row(Some(PlanetTileDraw { level: 2, seams }), 0);
-        assert!(row.range > 0.0);
-        assert_eq!(morph_factor(&row, 5, 3, 1e9), 0.0);
-        assert_eq!(morph_factor(&row, 0, 3, 1e9), 1.0);
-        let finer = frame.row(Some(PlanetTileDraw { level: 3, seams }), 0);
-        assert_eq!(morph_factor(&finer, 5, 3, 1e9), 1.0);
+        let row = tile_morph_row(Some(PlanetTileDraw { level: 2, seams }), 0);
+        let range = frame.range(row.level);
+        assert!(range > 0.0);
+        assert_eq!(morph_factor(&row, range, 5, 3, 1e9), 0.0);
+        assert_eq!(morph_factor(&row, range, 0, 3, 1e9), 1.0);
+        let finer = tile_morph_row(Some(PlanetTileDraw { level: 3, seams }), 0);
+        assert_eq!(
+            morph_factor(&finer, frame.range(finer.level), 5, 3, 1e9),
+            1.0
+        );
     }
 }

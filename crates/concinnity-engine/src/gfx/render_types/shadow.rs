@@ -74,14 +74,10 @@ pub struct ShadowUniforms {
     pub _pad: [u32; 3],
 }
 
-/// Per-shadow-pass push constant identifying which cascade is being rendered.
-/// Used so the shadow vertex shader can index `ShadowUniforms.light_vps[i]`
-/// from a single bound UBO instead of re-binding a different uniform per pass.
-///
-/// Consumed at runtime only by the Metal shadow pass (Vulkan and DirectX each
-/// define their own private push-constant layouts in their respective `draw.rs`
-/// modules), but kept un-gated like the rest of this module so the shared
-/// shader-layout contract can validate its MSL layout on every platform.
+/// Per-view constants of the scene shadow pass, pushed once per cascade or
+/// spot slice on every backend: which of `ShadowUniforms.light_vps` the view
+/// projects through, and the camera a planet tile casts as the main pass draws
+/// it. 48 bytes.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct ShadowPassPush {
@@ -89,6 +85,8 @@ pub struct ShadowPassPush {
     pub cascade_idx: u32,
     /// Padding so the field layout matches the shader-side struct.
     pub _pad: [u32; 3],
+    /// The camera a planet's tiles morph by.
+    pub tile_morph: super::TileMorphView,
 }
 
 /// One shadowed spot light's slice of the spot shadow map array. Indexed by

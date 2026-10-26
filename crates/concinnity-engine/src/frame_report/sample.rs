@@ -3,7 +3,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::profile::{MAX_PASS_TIMINGS, RenderStats};
+use crate::profile::{FrameSpans, MAX_PASS_TIMINGS, RenderStats};
 use concinnity_core::fanout::FanOutTiming;
 
 use crate::frame_report::reduce::ReduceOptions;
@@ -12,6 +12,22 @@ use crate::frame_report::tally::RunTally;
 /// How many per-system CPU timings a sample carries. The engine's own table is
 /// well inside this, and a world registering its own systems has headroom.
 pub(super) const MAX_SYSTEM_TIMINGS: usize = 32;
+
+/// How many parts a frame's render submission is split into.
+pub(super) const RENDER_PARTS: usize = 9;
+
+/// The render submission's parts, in the order it runs them.
+pub(super) const RENDER_PART_NAMES: [&str; RENDER_PARTS] = [
+    "extract",
+    "replay",
+    "prepare",
+    "plan",
+    "record packing",
+    "grass placement",
+    "rt accel",
+    "recording",
+    "submit and present",
+];
 
 /// One measured frame.
 ///
@@ -58,11 +74,15 @@ pub(super) struct FrameSample {
     /// Microseconds of CPU work the render side spent submitting the frame,
     /// its wait on the GPU excluded.
     pub render_cpu_us: u32,
+    /// The part of `render_cpu_us` spent extracting the frame's snapshot.
+    pub extract_us: u32,
     /// The part of `render_cpu_us` spent replaying the frame's recorded
     /// backend effects before the draw.
     pub replay_us: u32,
     /// Wall microseconds the backend spent in its queue submit and present.
     pub submit_present_us: u32,
+    /// The draw's larger CPU steps.
+    pub spans: FrameSpans,
     /// The render thread's wait on the parallel pass recording, against the
     /// recording work inside it.
     pub recording_fan_out: FanOutTiming,
@@ -136,8 +156,10 @@ impl FrameSample {
             input_latency_us: timing.shown.latency_us,
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
+            extract_us: render.extract_us,
             replay_us: render.replay_us,
             submit_present_us: render.submit_present_us,
+            spans: render.spans,
             recording_fan_out: render.recording_fan_out,
             packing_fan_out: render.packing_fan_out,
             pass_record_us: render.pass_record_us,
@@ -149,6 +171,24 @@ impl FrameSample {
             system_us,
             system_fan_out,
         }
+    }
+}
+
+impl FrameSample {
+    /// The render submission's parts, in [`RENDER_PART_NAMES`] order. What
+    /// they leave of `render_cpu_us` was its other work.
+    pub(super) fn render_parts(&self) -> [u32; RENDER_PARTS] {
+        [
+            self.extract_us,
+            self.replay_us,
+            self.spans.prepare_us,
+            self.spans.plan_us,
+            self.spans.record_pack_us,
+            self.spans.grass_us,
+            self.spans.rt_accel_us,
+            self.recording_fan_out.wall_us,
+            self.submit_present_us,
+        ]
     }
 }
 
@@ -446,6 +486,25 @@ mod tests {
         assert_eq!(s.pass_record_us, render.pass_record_us);
         assert_eq!(s.system_fan_out[0], FanOutTiming::default());
         assert_eq!(s.system_fan_out[1], fan_out(800));
+    }
+
+    #[test]
+    fn a_sample_names_the_render_submission_s_parts() {
+        let mut render = render_with(&[]);
+        render.extract_us = 10;
+        render.replay_us = 20;
+        render.spans = FrameSpans {
+            prepare_us: 30,
+            plan_us: 40,
+            record_pack_us: 50,
+            grass_us: 60,
+            rt_accel_us: 70,
+        };
+        render.recording_fan_out.wall_us = 80;
+        render.submit_present_us = 90;
+        let s = FrameSample::new(timing(16_000), &render, &[], &[], &[]);
+        assert_eq!(s.render_parts(), [10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        assert_eq!(RENDER_PART_NAMES[4], "record packing");
     }
 
     #[test]

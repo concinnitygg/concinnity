@@ -397,7 +397,7 @@ fn gpu_object_data_layout_matches_shaders() {
     // `object_common.hlsl` spells each (vec3, scalar)
     // pair as one 16-byte lane; the four indices fill the lane between the
     // material block and the cull bounds.
-    assert_eq!(size_of::<GpuObjectData>(), 208);
+    assert_eq!(size_of::<GpuObjectData>(), 176);
     assert_eq!(offset_of!(GpuObjectData, model), 0);
     assert_eq!(offset_of!(GpuObjectData, tint), 64);
     assert_eq!(offset_of!(GpuObjectData, roughness), 76);
@@ -417,13 +417,30 @@ fn gpu_object_data_layout_matches_shaders() {
     assert_eq!(offset_of!(FarFieldTint, _pad), 4);
     assert_eq!(size_of::<FarFieldTint>(), 12);
     assert_eq!(offset_of!(GpuObjectData, tile_morph), 160);
-    assert_eq!(offset_of!(GpuTileMorph, eye), 0);
-    assert_eq!(offset_of!(GpuTileMorph, range), 12);
-    assert_eq!(offset_of!(GpuTileMorph, prev_eye), 16);
-    assert_eq!(offset_of!(GpuTileMorph, seams), 28);
-    assert_eq!(offset_of!(GpuTileMorph, vertex_base), 32);
-    assert_eq!(offset_of!(GpuTileMorph, _pad), 36);
-    assert_eq!(size_of::<GpuTileMorph>(), 48);
+    assert_eq!(offset_of!(GpuTileMorph, vertex_base), 0);
+    assert_eq!(offset_of!(GpuTileMorph, seams), 4);
+    assert_eq!(offset_of!(GpuTileMorph, level), 8);
+    assert_eq!(offset_of!(GpuTileMorph, planet_tile), 12);
+    assert_eq!(size_of::<GpuTileMorph>(), 16);
+}
+
+#[test]
+fn tile_morph_view_layout_matches_shaders() {
+    // `tile_morph_types.hlsl` declares it as two float4s.
+    assert_eq!(size_of::<TileMorphView>(), 32);
+    assert_eq!(offset_of!(TileMorphView, eye), 0);
+    assert_eq!(offset_of!(TileMorphView, level0_range), 12);
+    assert_eq!(offset_of!(TileMorphView, prev_eye), 16);
+    assert_eq!(offset_of!(TileMorphView, coarsest_level), 28);
+}
+
+#[test]
+fn shadow_pass_push_layout_matches_shaders() {
+    // `shadow.hlsl` declares the view slot padded to a float4, then the morph view.
+    assert_eq!(size_of::<ShadowPassPush>(), 48);
+    assert_eq!(offset_of!(ShadowPassPush, cascade_idx), 0);
+    assert_eq!(offset_of!(ShadowPassPush, _pad), 4);
+    assert_eq!(offset_of!(ShadowPassPush, tile_morph), 16);
 }
 
 #[test]

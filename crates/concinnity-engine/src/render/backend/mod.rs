@@ -249,7 +249,7 @@ pub trait RenderBackend:
     /// the simulated frame moves.
     fn set_tile_morph(&mut self, morph: Option<crate::planet::TileMorphFrame>) {
         if let Some(scene) = self.scene_mut() {
-            scene.tile_morph = morph;
+            scene.view.tile_morph = morph;
         }
     }
 

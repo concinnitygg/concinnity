@@ -45,6 +45,7 @@
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{ClusterParams, TextDrawCall};
+use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
 use concinnity_engine::render::particles::ParticleFrame;
@@ -714,6 +715,7 @@ impl DxContext {
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
+        let grass_started = std::time::Instant::now();
         let grass_frame = graph
             .pass(PassId::Grass)
             .is_some()
@@ -728,6 +730,10 @@ impl DxContext {
                 })
             })
             .flatten();
+        self.state.spans.set(FrameSpans {
+            grass_us: concinnity_host::clock::micros_since(grass_started),
+            ..self.state.spans.get()
+        });
 
         // Resolve every graph-driven resource's barrier target and every pass's
         // aliasing barriers once, on the main thread, then share the tables

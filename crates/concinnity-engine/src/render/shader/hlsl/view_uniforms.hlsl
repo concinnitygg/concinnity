@@ -6,6 +6,8 @@
 
 {DAYLIGHT_TYPES}
 
+{TILE_MORPH_TYPES}
+
 struct ViewUniforms
 {
     float4x4 vp;
@@ -38,6 +40,8 @@ struct ViewUniforms
     float _pad_view2;
     // The planet's per-point sky, off for a world without one.
     DaylightBlock daylight;
+    // The camera a planet's tiles morph by, the main camera's in every view.
+    TileMorphView tile_morph;
 };
 
 // A world direction in the environment cubemaps' own frame. Every sky tap goes

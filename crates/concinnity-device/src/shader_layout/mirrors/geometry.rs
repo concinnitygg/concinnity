@@ -50,13 +50,11 @@ pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
             active_cascades,
             [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
-        on(
-            METAL,
-            mirror!(ShadowPassPush => "ShadowPassPush" {
-                cascade_idx,
-                [_pad] => ["_pad0", "_pad1", "_pad2"],
-            }),
-        ),
+        everywhere(mirror!(ShadowPassPush => "ShadowPassPush" {
+            cascade_idx,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            tile_morph,
+        })),
     ]
 }
 
@@ -129,6 +127,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             planet_density,
             planet_rules,
             layers,
+            tile_morph,
         })),
         everywhere(mirror!(PlanetGrassTileGpu => "PlanetGrassTile" {
             model,

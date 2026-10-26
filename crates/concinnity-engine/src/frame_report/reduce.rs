@@ -7,7 +7,7 @@ use crate::render::render_graph::PassId;
 use concinnity_core::fanout::FanOutTiming;
 use serde::Serialize;
 
-use crate::frame_report::sample::{FrameRun, FrameSample};
+use crate::frame_report::sample::{FrameRun, FrameSample, RENDER_PART_NAMES, RENDER_PARTS};
 use crate::frame_report::stats::Distribution;
 use crate::frame_report::tally::{FanOutMeans, PhaseTally};
 
@@ -39,10 +39,10 @@ const OVERLAP: &str = "overlap with previous frame";
 const SYSTEM_FLOOR_SHARE: f32 = 0.01;
 
 /// The row that stands for the render side's CPU work beside the systems:
-/// replaying the frame's backend effects and recording and submitting its
-/// draw. It runs on the stepping thread or on its own render thread, and in
+/// extracting the frame's snapshot, replaying its backend effects, and
+/// recording and submitting its draw. It runs on the stepping thread or on its own render thread, and in
 /// neither case inside any one system's share.
-const RENDER_SUBMIT: &str = "render submit";
+pub(super) const RENDER_SUBMIT: &str = "render submit";
 
 /// The row for the render thread's parallel pass recording among the
 /// fan-outs.
@@ -54,6 +54,12 @@ const RENDER_PACKING: &str = "render packing";
 
 /// How many CPU rows, and how many passes, a slow frame lists.
 const SLOW_FRAME_ROWS: usize = 4;
+
+/// How many parts of the render submission a slow frame lists.
+const SLOW_FRAME_RENDER_ROWS: usize = 6;
+
+/// The row for the render submission's work no named part covers.
+const OTHER_RENDER: &str = "other";
 
 /// What a run is reduced against.
 #[derive(Debug, Clone, Copy)]
@@ -205,10 +211,8 @@ pub(super) struct SlowFrame {
     /// The passes that took longest to record on the CPU, largest first: which
     /// jobs made up the render recording's job sum.
     pub recording: Vec<FrameCost>,
-    /// The render submission's own spans, largest first: replaying the
-    /// frame's backend effects, waiting on the pass recording, and the queue
-    /// submit and present. What they leave of the submission was the draw's
-    /// other work.
+    /// The render submission's parts, largest first, with what they leave of
+    /// it as `other`.
     pub render: Vec<FrameCost>,
 }
 
@@ -258,6 +262,10 @@ pub(super) struct PhaseReport {
     /// otherwise read as faster than any one of its fan-outs. Ones that never
     /// ran are left out.
     pub fan_outs: Vec<FanOutCost>,
+    /// The render submission's parts in the order it runs them, each as a
+    /// mean with its share of the submission's, closed by the work no part
+    /// covers. Parts that never ran are left out.
+    pub render: Vec<SystemCost>,
 }
 
 /// How much run time each finished frame showed against the time since the
@@ -398,15 +406,46 @@ fn slow_frame(sample: &FrameSample, run: &FrameRun) -> SlowFrame {
                 .iter()
                 .map(|id| (id.name(), sample.pass_record_us[*id as usize])),
         ),
-        render: largest(
-            [
-                ("replay", sample.replay_us),
-                ("recording", sample.recording_fan_out.wall_us),
-                ("submit and present", sample.submit_present_us),
-            ]
-            .into_iter(),
+        render: largest_n(
+            with_other(
+                sample.render_cpu_us,
+                RENDER_PART_NAMES.into_iter().zip(sample.render_parts()),
+            ),
+            SLOW_FRAME_RENDER_ROWS,
         ),
     }
+}
+
+// `parts` followed by what they leave of `total` as the `other` row.
+fn with_other<'a>(
+    total: u32,
+    parts: impl Iterator<Item = (&'a str, u32)> + Clone,
+) -> impl Iterator<Item = (&'a str, u32)> {
+    let covered = parts
+        .clone()
+        .fold(0, |sum: u32, (_, us)| sum.saturating_add(us));
+    parts.chain(core::iter::once((
+        OTHER_RENDER,
+        total.saturating_sub(covered),
+    )))
+}
+
+// The render submission's parts over a stretch, as means in the order it runs
+// them, each with its share of the submission's mean.
+fn render_costs(tally: &PhaseTally) -> Vec<SystemCost> {
+    let total = tally.render_cpu.get();
+    if total == 0 {
+        return Vec::new();
+    }
+    let means: [u32; RENDER_PARTS] = core::array::from_fn(|i| tally.render_parts[i].get());
+    with_other(total, RENDER_PART_NAMES.into_iter().zip(means))
+        .filter(|(_, mean_us)| *mean_us > 0)
+        .map(|(name, mean_us)| SystemCost {
+            name: name.to_string(),
+            mean_us,
+            share: mean_us as f32 / total as f32,
+        })
+        .collect()
 }
 
 // Where a sample keeps one fan-out's timing.
@@ -468,16 +507,21 @@ fn fan_out_means(tally: &PhaseTally, run: &FrameRun) -> Vec<FanOutCost> {
 
 // The nonzero costs, largest first, cut to what a slow frame lists.
 fn largest<'a>(costs: impl Iterator<Item = (&'a str, u32)>) -> Vec<FrameCost> {
-    let mut rows: Vec<FrameCost> = costs
+    largest_n(costs, SLOW_FRAME_ROWS)
+}
+
+// The nonzero costs, largest first, cut to `rows`.
+fn largest_n<'a>(costs: impl Iterator<Item = (&'a str, u32)>, rows: usize) -> Vec<FrameCost> {
+    let mut out: Vec<FrameCost> = costs
         .filter(|(_, us)| *us > 0)
         .map(|(name, us)| FrameCost {
             name: name.to_string(),
             us,
         })
         .collect();
-    rows.sort_by_key(|row| core::cmp::Reverse(row.us));
-    rows.truncate(SLOW_FRAME_ROWS);
-    rows
+    out.sort_by_key(|row| core::cmp::Reverse(row.us));
+    out.truncate(rows);
+    out
 }
 
 // The pass the named one's time is already counted in: the pass whose timing
@@ -518,6 +562,7 @@ fn summarize(name: String, tally: &PhaseTally, run: &FrameRun) -> PhaseReport {
         passes: pass_shares(tally, run, gpu.p50_us),
         systems: system_costs(tally, run),
         fan_outs: fan_out_means(tally, run),
+        render: render_costs(tally),
     }
 }
 
@@ -698,8 +743,10 @@ mod tests {
             input_latency_us: 0,
             gpu_wait_us: 100,
             render_cpu_us: 0,
+            extract_us: 0,
             replay_us: 0,
             submit_present_us: 0,
+            spans: crate::profile::FrameSpans::default(),
             recording_fan_out: FanOutTiming::default(),
             packing_fan_out: FanOutTiming::default(),
             pass_record_us: [0; MAX_PASS_TIMINGS],
@@ -1510,13 +1557,51 @@ mod tests {
             .map(|p| (p.name.as_str(), p.us))
             .collect();
         assert_eq!(passes, [("main", 5_000), ("shadow", 1_000)]);
-        // The submission's own spans; a span that took nothing is left out.
+        // The submission's own parts and what they leave of it; a part that
+        // took nothing is left out.
         let render: Vec<(&str, u32)> = frame
             .render
             .iter()
             .map(|r| (r.name.as_str(), r.us))
             .collect();
-        assert_eq!(render, [("recording", 350), ("replay", 200)]);
+        assert_eq!(
+            render,
+            [("recording", 350), ("replay", 200), (OTHER_RENDER, 150)]
+        );
+    }
+
+    // A phase splits the submission's mean into its parts, in the order the
+    // submission runs them, closed by the work no part covers.
+    #[test]
+    fn a_phase_splits_the_render_submission_into_its_parts() {
+        let frame = |extract_us, record_pack_us| {
+            let mut s = sample(3.0, Some(0), 10_000);
+            s.render_cpu_us = 4_000;
+            s.extract_us = extract_us;
+            s.spans.record_pack_us = record_pack_us;
+            s.spans.grass_us = 500;
+            s.recording_fan_out.wall_us = 1_000;
+            s
+        };
+        let run = run_of(vec![frame(200, 1_000), frame(400, 2_000)]);
+        let report = run.reduce(no_warmup()).expect("measured frames");
+        let render: Vec<(&str, u32)> = report.phases[0]
+            .render
+            .iter()
+            .map(|r| (r.name.as_str(), r.mean_us))
+            .collect();
+        assert_eq!(
+            render,
+            [
+                ("extract", 300),
+                ("record packing", 1_500),
+                ("grass placement", 500),
+                ("recording", 1_000),
+                (OTHER_RENDER, 700),
+            ]
+        );
+        let shares: f32 = report.phases[0].render.iter().map(|r| r.share).sum();
+        assert!((shares - 1.0).abs() < 1e-6, "{shares}");
     }
 
     #[test]

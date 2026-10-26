@@ -308,7 +308,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // A surface under grass carries its layers' densities in its vertex color,
     // and a planet tile the edits under it, rather than a multiplier on its
     // albedo.
-    bool color_tints = od.far_canopy == 0u && od.tile_morph.eye_range.w <= 0.0;
+    bool color_tints = od.far_canopy == 0u && od.tile_morph.planet_tile == 0u;
     float3 albedo = albedo_samp.rgb * tint * (color_tints ? v.color : (float3)(1.0));
 
     // A surface growing grass has litter on its ground and the leaf above

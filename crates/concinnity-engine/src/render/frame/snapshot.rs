@@ -207,6 +207,8 @@ pub struct RenderSnapshot {
     pub capture: Option<String>,
     /// Draw the frame without its overlay, for a screenshot without its HUD.
     pub hide_ui: bool,
+    /// Microseconds the world side spent extracting this snapshot.
+    pub extract_us: u32,
 }
 
 impl RenderSnapshot {
@@ -226,6 +228,7 @@ impl RenderSnapshot {
         self.particle_bursts.clear();
         self.capture = None;
         self.hide_ui = false;
+        self.extract_us = 0;
     }
 }
 
