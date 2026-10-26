@@ -21,6 +21,7 @@ pub(crate) mod mesh;
 pub(crate) mod physics;
 /// `Planet` argument checks.
 pub(crate) mod planet;
+pub(crate) mod planet_ground;
 /// `Prop` argument checks.
 pub(crate) mod prop;
 /// `Screenshot` checks.
@@ -58,6 +59,7 @@ fn check_authored_asset(
         RegisteredType::Shader => shader::check(name, args),
         RegisteredType::Prop => prop::check(name, args),
         RegisteredType::Planet => planet::check(name, args),
+        RegisteredType::PlanetGround => planet_ground::check(name, args),
         RegisteredType::Terrain => {
             terrain::warn(name, args);
             Ok(())
@@ -154,6 +156,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     shape::check_shape(assets, &mut errors);
     screenshot::check_unique_files(assets, &mut errors);
     water_surface::check_sea_swell(assets, &mut errors);
+    planet_ground::check_squares(assets, &mut errors);
 
     if errors.is_empty() {
         Ok(())

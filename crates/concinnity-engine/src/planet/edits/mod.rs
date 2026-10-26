@@ -7,8 +7,8 @@
 //! detail into a small area starts from what the area already reads.
 
 mod area;
-mod file;
 mod page;
+mod payload;
 
 use alloc::sync::Arc;
 use hashbrown::{HashMap, HashSet};
@@ -19,8 +19,8 @@ use super::shape::CubeFace;
 use super::tile::{MAX_TILE_LEVEL, TileId};
 
 pub use area::EditArea;
-pub use file::{EDITS_MAGIC, EDITS_VERSION, EditFileError, decode_edits, encode_edits};
 pub use page::{EditPage, PAGE_CELLS, PAGE_SAMPLES, PAGE_SIDE, PageFigures, PageSample};
+pub use payload::{PagePayloadError, decode_page, encode_page};
 
 // One quadtree level for every level a tile can sit at.
 const LEVELS: usize = MAX_TILE_LEVEL as usize + 1;

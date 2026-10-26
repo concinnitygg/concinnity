@@ -1,11 +1,11 @@
-// A planet's edits read from its compiled payload when the world loads.
+// A world's sculpted ground read from its compiled pages when it loads.
 
 use super::*;
-use crate::ecs::{PayloadStore, World};
+use crate::ecs::{PayloadLocator, PayloadStore, World};
 use crate::error::{PayloadError, WorldError};
 use alloc::boxed::Box;
 
-// A store handing back one fixed payload.
+// A store handing back one fixed payload for every locator.
 struct OnePayload(Vec<u8>);
 
 impl PayloadStore for OnePayload {
@@ -20,51 +20,60 @@ impl PayloadStore for OnePayload {
     }
 }
 
-fn planet_with(payload: Vec<u8>) -> World {
-    let len = payload.len() as u64;
+const TOP: TileId = TileId {
+    face: CubeFace(2),
+    level: 3,
+    x: 4,
+    y: 3,
+};
+
+fn world_with(payload: Vec<u8>) -> World {
     let mut world = World::from_payloads(Box::new(OnePayload(payload)));
-    world.push(Planet {
+    world.push(Planet::default());
+    world.push(PlanetGround {
+        tile: [2, 3, 4, 3],
         locator: Some(PayloadLocator {
             blob_index: 0,
             offset: 0,
-            len,
+            len: 1,
         }),
-        ..Planet::default()
     });
     world
 }
 
 #[test]
-fn a_planet_reads_its_edits_once_at_load() {
+fn the_planet_reads_its_ground_once_and_keeps_it() {
     let page = EditPage::from_samples(&[4.0; PAGE_SAMPLES], &[1.0; PAGE_SAMPLES]).unwrap();
-    let top = TileId::root(CubeFace(2));
-    let mut world = planet_with(encode_edits(&EditPages::new([(top, page)])));
+    let mut world = world_with(encode_page(&page));
     load_edits(&mut world.context()).unwrap();
+    assert_eq!(
+        world.query::<PlanetGround>().count(),
+        0,
+        "drained into the planet"
+    );
     let planet = world.query::<Planet>().next().unwrap();
     let pages = planet.edit_pages.clone().unwrap();
-    assert!(pages.get(top).is_some());
+    assert_eq!(pages.get(TOP).map(|p| &**p), Some(&page));
     let shape = planet.shape();
     assert!(shape.edits.as_ref().is_some_and(|e| Arc::ptr_eq(e, &pages)));
-    let dir = top.direction(0.3, 0.6);
+    let dir = TOP.direction(0.3, 0.6);
     assert!((shape.height(dir) - shape.with_edits(None).height(dir) - 4.0).abs() < 1e-9);
 }
 
 #[test]
-fn a_planet_without_edits_reads_none() {
-    let mut world = planet_with(Vec::new());
+fn a_world_without_ground_reads_none() {
+    let mut world = World::new();
+    world.push(Planet::default());
     load_edits(&mut world.context()).unwrap();
     assert!(world.query::<Planet>().next().unwrap().edit_pages.is_none());
-    let mut bare = World::new();
-    bare.push(Planet::default());
-    load_edits(&mut bare.context()).unwrap();
 }
 
 #[test]
-fn a_payload_that_is_not_edits_refuses_the_world() {
-    let mut world = planet_with(b"not edits at all".to_vec());
+fn a_payload_that_holds_no_page_refuses_the_world() {
+    let mut world = world_with(b"not a page".to_vec());
     let err = load_edits(&mut world.context()).unwrap_err();
     assert!(
-        matches!(err, WorldError::PlanetEdits(EditFileError::Magic)),
+        matches!(err, WorldError::PlanetGround(PagePayloadError::Compressed)),
         "{err:?}"
     );
 }

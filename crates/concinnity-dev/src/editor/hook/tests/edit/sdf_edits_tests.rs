@@ -142,24 +142,30 @@ fn deleting_the_open_field_closes_it() {
     assert_eq!(volume_names(&h), ["left", "right"]);
 }
 
-// A volume included from another file is not the editor's to remove, so it
-// stays, still reading the file: the box cannot be checked.
+// A volume from a file the world includes twice is not the editor's to
+// remove, so it stays, still reading the file: the box cannot be checked.
 #[test]
-fn an_included_volume_keeps_the_file() {
+fn a_read_only_volume_keeps_the_file() {
     let dir = tempfile::tempdir().unwrap();
     let blob = dir.path().join("blob.hlsl");
     std::fs::write(&blob, "blob").unwrap();
     let mut h = hook(Vec::new());
-    h.entries = EntryList::with_includes(vec![
-        SourcedEntry {
-            entry: volume("own", &blob),
-            file: None,
-        },
-        SourcedEntry {
-            entry: volume("shared", &blob),
-            file: Some("lib.jsonl".into()),
-        },
-    ]);
+    let own = |entry| SourcedEntry { entry, file: None };
+    let shared = || SourcedEntry {
+        entry: volume("shared", &blob),
+        file: Some("lib.jsonl".into()),
+    };
+    let include = serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}});
+    h.entries = EntryList::with_includes(
+        vec![
+            own(volume("own", &blob)),
+            own(include.clone()),
+            shared(),
+            own(include),
+            shared(),
+        ],
+        Path::new(&h.world_path),
+    );
     h.baseline = h.entries.clone();
     let mut world = world_with_name_field();
     pick(&mut h, &mut world, &RowKind::Field(0), MenuItem::Delete);
@@ -167,9 +173,9 @@ fn an_included_volume_keeps_the_file() {
     assert!(!check.enabled);
     assert_eq!(
         check.note.as_deref(),
-        Some("blob.hlsl is still read by 'shared'")
+        Some("blob.hlsl is still read by 'shared' and 'shared'")
     );
     press_modal(&mut h, &mut world, "Delete");
-    assert_eq!(volume_names(&h), ["shared"]);
+    assert_eq!(volume_names(&h), ["shared", "shared"]);
     assert!(blob.exists());
 }

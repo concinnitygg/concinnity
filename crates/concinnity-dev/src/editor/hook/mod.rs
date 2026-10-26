@@ -419,6 +419,7 @@ mod drop_floor;
 mod duplicate;
 mod editing;
 mod edits;
+mod entry_home;
 mod fly;
 mod form_extras;
 mod form_state;

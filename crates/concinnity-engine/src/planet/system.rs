@@ -21,7 +21,7 @@ use crate::components::{Camera3D, Planet, SkyRotation};
 use crate::ecs::{MenuActive, PipelineContext, StepResult, System};
 use crate::planet::{
     CameraGeo, EditArea, EditPages, FrameRebases, GroundPatch, LocalFrame, PATCH_HALF_WIDTH,
-    PatchPurpose, PlanetFrame, PlanetGravity, PlanetGround, PlanetShape, Rebase, build_patch,
+    PatchPurpose, PlanetFrame, PlanetGravity, PlanetGroundPatch, PlanetShape, Rebase, build_patch,
     carry_world, next_patch,
 };
 use crate::sky::{SkyFrame, SkyOrientation};
@@ -157,7 +157,7 @@ pub struct PlanetSystem {
     frame: PlanetFrame,
     rebases: FrameRebases,
     // The patch the physics collides with, by revision.
-    ground: Option<PlanetGround>,
+    ground: Option<PlanetGroundPatch>,
     // Starts the builder at init; without one the ground stays where init
     // built it.
     start_builder: StartBuilder,
@@ -221,7 +221,7 @@ impl PlanetSystem {
 
     fn publish_ground(&mut self, ctx: &mut PipelineContext<'_>, patch: GroundPatch) {
         let revision = self.ground.as_ref().map_or(0, |g| g.revision + 1);
-        let ground = PlanetGround { revision, patch };
+        let ground = PlanetGroundPatch { revision, patch };
         ctx.insert_resource(ground.clone());
         self.ground = Some(ground);
     }

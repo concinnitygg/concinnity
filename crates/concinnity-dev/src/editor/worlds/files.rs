@@ -93,7 +93,7 @@ pub(crate) fn read_entries(path: &Path) -> Result<EntryList, String> {
         Err(e) => return Err(format!("Open failed: {e}")),
     };
     let lines = parse_world_jsonl(&content).map_err(|e| format!("{e}"))?;
-    with_includes(lines, Some(path)).map(EntryList::with_includes)
+    with_includes(lines, Some(path)).map(|sourced| EntryList::with_includes(sourced, path))
 }
 
 // Check a typed world name, returning the name to create or the reason it was

@@ -33,6 +33,7 @@ mod ground;
 mod horizon;
 mod lod;
 mod morph;
+mod planet_ground;
 mod ray;
 mod rebase;
 mod sea;
@@ -42,8 +43,7 @@ mod system;
 mod tile;
 
 use crate::components::TerrainLayer;
-use crate::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
-use alloc::string::String;
+use crate::ecs::{MaterialHandle, PipelineContext};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 pub use carry::carry_world;
@@ -52,8 +52,8 @@ pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
 pub use cover::{GroundCover, MAX_GROUND_COVERS};
 pub use edits::{
-    EDITS_MAGIC, EDITS_VERSION, EditArea, EditFileError, EditHit, EditPage, EditPages, PAGE_CELLS,
-    PAGE_SAMPLES, PAGE_SIDE, PageFigures, PageSample, TileEdits, decode_edits, encode_edits,
+    EditArea, EditHit, EditPage, EditPages, PAGE_CELLS, PAGE_SAMPLES, PAGE_SIDE, PageFigures,
+    PagePayloadError, PageSample, TileEdits, decode_page, encode_page,
 };
 pub use follow::{PATCH_CELLS, PATCH_HALF_WIDTH, PatchPlan, PatchPurpose, build_patch, next_patch};
 pub use frame::LocalFrame;
@@ -65,6 +65,7 @@ pub use lod::{
     RETAIN_RANGE, TileBoundsCache, TileLod, TileSelection, TileView, points_per_radian,
 };
 pub use morph::{TileMorphFrame, morph_factor, morph_point, packed_seams, parent_span};
+pub use planet_ground::{PlanetGround, PlanetGroundArgs, PlanetGroundError};
 pub use ray::{GroundHit, GroundPick};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use sea::PlanetSea;
@@ -137,7 +138,7 @@ pub struct PlanetGravity {
 /// The ground bodies near the camera collide with: published by the planet
 /// system each time it builds a new patch, `revision` counting them.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PlanetGround {
+pub struct PlanetGroundPatch {
     /// Bumped with every new patch.
     pub revision: u64,
     /// The patch, in the simulated frame.
@@ -156,12 +157,9 @@ pub struct PlanetGround {
 /// coarser toward the horizon, so a planet costs the same to load whatever
 /// its size.
 ///
-/// Its `edits` change the generated ground where they lie: a file of pages,
-/// each over one square of the planet's quadtree, holding per point a height
-/// change in meters and a detail weight that scales the generated hills, 1
-/// keeping them whole and 0 leaving the smooth continents and coasts. A point
-/// reads the finest page over it, so detail painted into a small area sits on
-/// a coarse page over a wider one.
+/// The world's [`PlanetGround`](#planetground) entries sculpt the generated
+/// ground: each raises, lowers or smooths one square of it. Everywhere else
+/// the ground is as generated.
 ///
 /// With a `land_share` under 1, the planet divides into land and sea around
 /// its `radius`, which becomes sea level: continents about `continent_size`
@@ -270,14 +268,8 @@ pub struct Planet {
     /// layer, and the same every run. A layer's `density_mask` is not
     /// supported on a planet: a world that sets one fails validation.
     pub layers: Vec<TerrainLayer>,
-    /// Path to the file of edits laid over the generated ground, relative to
-    /// the project root. None leaves the ground as generated. A file that is
-    /// missing or does not read as edits fails validation.
-    pub edits: Option<String>,
-    /// Injected at load time from the compiled blob payload.
-    #[serde(skip)]
-    pub locator: Option<PayloadLocator>,
-    /// The edits `edits` holds, read when the world loads.
+    /// The world's sculpted ground, read from its `PlanetGround` entries
+    /// when the world loads.
     #[serde(skip)]
     pub edit_pages: Option<Arc<EditPages>>,
 }
@@ -321,22 +313,27 @@ impl Planet {
     }
 }
 
-/// Read every planet's edits from its compiled payload into its
-/// `edit_pages`, once, before anything builds ground from it.
+/// Read every `PlanetGround` page from its compiled payload into the
+/// world's planet's `edit_pages`, once, before anything builds ground from it,
+/// and drain the `PlanetGround` column: the planet holds them from here.
 ///
 /// # Errors
 ///
-/// Returns an error when a payload does not read or does not hold edits,
-/// which only a failed build leaves behind.
+/// Returns an error when a page's payload does not read or does not hold a
+/// page, which only a failed build leaves behind.
 pub fn load_edits(ctx: &mut PipelineContext<'_>) -> Result<(), crate::error::WorldError> {
-    let locators: Vec<PayloadLocator> = ctx
-        .query::<Planet>()
-        .filter_map(|p| p.locator.clone().filter(|l| l.len > 0))
-        .collect();
-    let Some(locator) = locators.first() else {
+    let grounds = ctx.drain::<PlanetGround>();
+    if grounds.is_empty() {
         return Ok(());
-    };
-    let pages = decode_edits(ctx.read_payload(locator)?)?;
+    }
+    let mut pages = EditPages::default();
+    for ground in grounds {
+        let (Some(tile), Some(locator)) = (ground.tile_id(), ground.locator) else {
+            continue;
+        };
+        let page = decode_page(ctx.read_payload(&locator)?)?;
+        pages.insert(tile, Arc::new(page));
+    }
     let pages = Arc::new(pages);
     for planet in ctx.query_mut::<Planet>() {
         planet.edit_pages = Some(Arc::clone(&pages));

@@ -48,8 +48,7 @@ fn every_planet_arg_has_a_row() {
     for (key, default) in form::base_args(TY) {
         match key.as_str() {
             "center" => expected.extend((0..3).map(|i| format!("center.{i}"))),
-            // The edits file is the paint tools' to write, not a row's.
-            "covers" | "layers" | "sea" | "edits" => {}
+            "covers" | "layers" | "sea" => {}
             _ => expected.extend(leaf_paths(&key, &default)),
         }
     }

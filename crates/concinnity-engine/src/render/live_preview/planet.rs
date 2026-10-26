@@ -21,7 +21,6 @@ pub fn apply(world: &mut World, entity: Entity, mut planet: Planet) -> bool {
     let Some(slot) = world.get_mut::<Planet>(entity) else {
         return false;
     };
-    planet.locator.clone_from(&slot.locator);
     planet.edit_pages.clone_from(&slot.edit_pages);
     slot.clone_from(&planet);
     world.insert_resource(PlanetEdit(planet));

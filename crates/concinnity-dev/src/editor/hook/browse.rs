@@ -3,8 +3,11 @@
 
 use concinnity_engine::ecs::World;
 
-use super::{EditorHook, FormOverridesData, PanelData, TemplateDetailData, declared_id};
+use super::{
+    EditorHook, FormOverridesData, FormTarget, PanelData, TemplateDetailData, declared_id,
+};
 use crate::editor::asset_handle::AssetHandle;
+use crate::editor::entry_list::paths;
 use crate::editor::hud::HudAction;
 use crate::editor::overrides;
 use crate::editor::panels::form_panel::{self, FormView};
@@ -46,6 +49,9 @@ impl EditorHook {
             (false, Some(t)) => format!("New {t}"),
             _ => "New asset".to_string(),
         };
+        if let Some(file) = self.form_entry_file() {
+            form_title = format!("{form_title} ({file})");
+        }
         if self.form.touched {
             form_title.push_str(" *");
         }
@@ -68,6 +74,16 @@ impl EditorHook {
             form_extras,
             form_blocked,
         }
+    }
+
+    // The included file the open form's entry lives in, as the title shows it.
+    // `None` for an entry of the world file and for a form on no entry.
+    fn form_entry_file(&self) -> Option<String> {
+        let FormTarget::Entry(key) = self.form.target else {
+            return None;
+        };
+        let file = self.entries.included_from(self.entries.index_of(key)?)?;
+        Some(paths::shown(file))
     }
 
     // The open form's override state (marks, summary count, any open menu's

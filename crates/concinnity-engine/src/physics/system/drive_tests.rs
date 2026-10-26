@@ -6,7 +6,7 @@ use crate::components::{
 };
 use crate::ecs::World;
 use crate::planet::{
-    FrameRebases, LocalFrame, PlanetGravity, PlanetGround, PlanetShape, Rebase, ground_patch,
+    FrameRebases, LocalFrame, PlanetGravity, PlanetGroundPatch, PlanetShape, Rebase, ground_patch,
 };
 use concinnity_core::math::narrow_f32;
 use concinnity_core::math::vec3::{dot, length, sub};
@@ -185,7 +185,7 @@ const SHAPE: PlanetShape = PlanetShape {
 
 fn publish_planet(world: &mut World, frame: &LocalFrame, around: [f32; 3], revision: u64) {
     let patch = ground_patch(&SHAPE, frame, around, 64, 32.0).unwrap();
-    world.insert_resource(PlanetGround { revision, patch });
+    world.insert_resource(PlanetGroundPatch { revision, patch });
     world.insert_resource(PlanetGravity {
         center: frame.to_local(SHAPE.center),
         strength: 20.0,

@@ -45,7 +45,7 @@ pub use crate::physics::prop_body::PropBody;
 pub use crate::physics::rigid_body::RigidBody;
 pub use crate::physics::rolling_drive::RollingDrive;
 pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
-pub use crate::planet::{GroundCover, Planet, PlanetSea};
+pub use crate::planet::{GroundCover, Planet, PlanetGround, PlanetSea};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::grass::Grass;

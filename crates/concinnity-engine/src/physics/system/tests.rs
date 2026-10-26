@@ -97,7 +97,7 @@ fn third_person_camera_gets_no_player_capsule() {
 #[test]
 fn a_walker_on_a_planet_stands_through_a_frame_move() {
     use crate::planet::{
-        FrameRebases, LocalFrame, PlanetGravity, PlanetGround, PlanetShape, ground_patch,
+        FrameRebases, LocalFrame, PlanetGravity, PlanetGroundPatch, PlanetShape, ground_patch,
     };
     let shape = PlanetShape {
         center: [0.0, -5_000.0, 0.0],
@@ -122,7 +122,7 @@ fn a_walker_on_a_planet_stands_through_a_frame_move() {
     });
     let publish = |world: &mut World, frame: &LocalFrame, around: [f32; 3], revision| {
         let patch = ground_patch(&shape, frame, around, 32, 16.0).unwrap();
-        world.insert_resource(PlanetGround { revision, patch });
+        world.insert_resource(PlanetGroundPatch { revision, patch });
         world.insert_resource(PlanetGravity {
             center: frame.to_local(shape.center),
             strength: 20.0,

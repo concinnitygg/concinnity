@@ -17,7 +17,9 @@ pub mod build_only;
 
 use crate::authoring::AuthoringError;
 pub use build_only::BuildOnlyAsset;
-use concinnity_engine::components::{AppConfig, Camera3D, CameraTrack, File, Room, Spawner};
+use concinnity_engine::components::{
+    AppConfig, Camera3D, CameraTrack, File, PlanetGround, Room, Spawner,
+};
 use concinnity_engine::ecs::{
     ActionField, AssetFields, ComponentTag, EnumField, FieldTable, RefField, ResourceKind,
 };
@@ -780,6 +782,12 @@ pub fn bake_divergent(
             )
         }
         RegisteredType::Room => bake!(Room, concinnity_engine::components::cook::Room),
+        RegisteredType::PlanetGround => {
+            bake!(
+                PlanetGround,
+                concinnity_engine::components::cook::PlanetGround
+            )
+        }
         RegisteredType::File => bake!(File, concinnity_engine::components::cook::File),
         RegisteredType::Spawner => {
             bake!(Spawner, concinnity_engine::components::cook::Spawner)

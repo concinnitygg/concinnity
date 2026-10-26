@@ -31,7 +31,7 @@ fn init_publishes_the_frame_gravity_and_ground() {
     let gravity = ctx.resource::<PlanetGravity>().unwrap();
     assert_eq!(gravity.strength, 9.0);
     assert_eq!(gravity.center, [0.0, -50_000.0, 0.0]);
-    let ground = ctx.resource::<PlanetGround>().unwrap();
+    let ground = ctx.resource::<PlanetGroundPatch>().unwrap();
     assert_eq!(ground.revision, 0);
     assert_eq!(ground.patch.center[0], 300.0);
     assert_eq!(ctx.resource::<FrameRebases>().unwrap().count(), 0);
@@ -77,7 +77,7 @@ fn straying_far_moves_the_world_into_a_new_frame() {
         "{:?}",
         camera.position
     );
-    let ground = ctx.resource::<PlanetGround>().unwrap();
+    let ground = ctx.resource::<PlanetGroundPatch>().unwrap();
     assert_eq!(ground.revision, 1);
     assert!(
         ground.patch.center[0].abs() < 1e-2,
@@ -120,7 +120,11 @@ fn without_a_builder_or_behind_a_menu_nothing_moves() {
     paused.step(&mut world.context());
     paused.step(&mut world.context());
     assert_eq!(
-        world.context().resource::<PlanetGround>().unwrap().revision,
+        world
+            .context()
+            .resource::<PlanetGroundPatch>()
+            .unwrap()
+            .revision,
         0
     );
 }
@@ -140,7 +144,7 @@ fn an_edit_reshapes_the_ground_and_the_pull() {
     };
     let mut system = system(planet.clone());
     system.init(&mut world.context());
-    let before = world.resource::<PlanetGround>().cloned().unwrap();
+    let before = world.resource::<PlanetGroundPatch>().cloned().unwrap();
 
     let pulled = Planet {
         gravity: 4.0,
@@ -149,7 +153,7 @@ fn an_edit_reshapes_the_ground_and_the_pull() {
     world.insert_resource(PlanetEdit(pulled.clone()));
     system.step(&mut world.context());
     assert_eq!(world.resource::<PlanetGravity>().unwrap().strength, 4.0);
-    assert_eq!(world.resource::<PlanetGround>().unwrap(), &before);
+    assert_eq!(world.resource::<PlanetGroundPatch>().unwrap(), &before);
     assert!(world.resource::<PlanetEdit>().is_none(), "taken up once");
 
     let reseeded = Planet { seed: 9, ..pulled };
@@ -157,7 +161,7 @@ fn an_edit_reshapes_the_ground_and_the_pull() {
     system.step(&mut world.context());
     let frame = world.resource::<PlanetFrame>().unwrap();
     assert_eq!(frame.shape, reseeded.shape());
-    let after = world.resource::<PlanetGround>().unwrap();
+    let after = world.resource::<PlanetGroundPatch>().unwrap();
     assert_eq!(after.revision, before.revision + 1);
     assert_ne!(after.patch, before.patch);
 }
@@ -176,7 +180,7 @@ fn new_edits_rebuild_the_patch_they_reach() {
     world.push(Planet::default());
     let mut system = system(Planet::default());
     system.init(&mut world.context());
-    let before = world.resource::<PlanetGround>().cloned().unwrap();
+    let before = world.resource::<PlanetGroundPatch>().cloned().unwrap();
     let raised = |face: u8| {
         let page = EditPage::from_samples(&[3.0; PAGE_SAMPLES], &[1.0; PAGE_SAMPLES]).unwrap();
         Arc::new(EditPages::new([(TileId::root(CubeFace(face)), page)]))
@@ -194,7 +198,7 @@ fn new_edits_rebuild_the_patch_they_reach() {
     let shape = &world.resource::<PlanetFrame>().unwrap().shape;
     assert!(shape.edits.as_ref().is_some_and(|e| Arc::ptr_eq(e, &far)));
     assert_eq!(
-        world.resource::<PlanetGround>().unwrap(),
+        world.resource::<PlanetGroundPatch>().unwrap(),
         &before,
         "out of reach"
     );
@@ -224,7 +228,7 @@ fn new_edits_rebuild_the_patch_they_reach() {
         world.resource::<PlanetEdited>().unwrap().area.angle > 1.0,
         "the two areas joined"
     );
-    let after = world.resource::<PlanetGround>().cloned().unwrap();
+    let after = world.resource::<PlanetGroundPatch>().cloned().unwrap();
     assert_eq!(after.revision, before.revision + 1);
     assert!((after.patch.center[1] - before.patch.center[1] - 3.0).abs() < 0.01);
 

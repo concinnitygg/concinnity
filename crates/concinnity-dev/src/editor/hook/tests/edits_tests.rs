@@ -10,6 +10,8 @@ use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields, world_with_input};
+use crate::editor::asset_handle::AssetHandle;
+use crate::editor::hook::entry_home::EntryHome;
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::frame_hook::FrameHook;
 
@@ -132,7 +134,7 @@ fn write_jsonl_persists_entries_atomically() {
     h.form.selected_type = Some("PointLight".to_string());
     set_field(&mut world, form_panel::NAME_INPUT, "lamp");
     h.apply_form(FormAction::Confirm, &mut world);
-    h.write_jsonl().unwrap();
+    h.write_files().unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
     let parsed = parse_world_jsonl(&content).unwrap();
@@ -154,7 +156,7 @@ fn write_jsonl_creates_the_worlds_directory() {
         "type": "GraphicsConfig", "args": {"$id": "scene"}
     })]);
     h.world_path = path.to_str().unwrap().to_string();
-    h.write_jsonl().expect("the write creates its directory");
+    h.write_files().expect("the write creates its directory");
 
     let content = std::fs::read_to_string(&path).unwrap();
     assert_eq!(parse_world_jsonl(&content).unwrap().len(), 1);
@@ -388,18 +390,28 @@ fn included_entries_take_the_labels_the_build_gives_them() {
     );
 }
 
-// An included entry belongs to its own file, and an `Include` line decides what
-// that file brings in, so an edit that reaches either is undone and the world
-// stays clean.
+// An included entry edits like any other, one undo step, and dirties the world.
 #[test]
-fn an_edit_to_an_included_entry_or_include_line_is_refused() {
+fn an_edit_to_an_included_entry_stands() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    h.entries[2]["args"]["intensity"] = serde_json::json!(5.0);
+    h.mark_changed();
+    assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
+    assert!(h.dirty && h.can_undo());
+}
+
+// An `Include` line decides what its file brings in, so an edit that reaches
+// it is undone and the world stays clean.
+#[test]
+fn an_edit_to_an_include_line_is_refused() {
     let tree = concinnity_testing::TempTree::new();
     let mut h = hook_with_an_include(&tree);
     let before = h.entries.clone();
 
-    h.entries[2]["args"]["intensity"] = serde_json::json!(5.0);
+    h.entries[1]["args"]["path"] = serde_json::json!("other.jsonl");
     h.mark_changed();
-    assert_eq!(h.entries, before, "the included light is put back");
+    assert_eq!(h.entries, before, "the Include line is put back");
     assert!(!h.dirty && !h.can_undo(), "nothing was recorded");
     assert!(
         h.rebuild_required,
@@ -411,26 +423,143 @@ fn an_edit_to_an_included_entry_or_include_line_is_refused() {
     assert!(!h.dirty);
 }
 
-// A save writes the world file's own lines, the `Include` line among them, and
-// never what the include brought in.
+// A save writes the world file and each included file whose entries changed,
+// and leaves an untouched included file alone.
 #[test]
-fn a_save_writes_only_the_world_file_and_keeps_the_include_line() {
+fn a_save_writes_each_changed_file_and_only_those() {
     let tree = concinnity_testing::TempTree::new();
     let mut h = hook_with_an_include(&tree);
     h.entries[4]["args"]["fov_y_degrees"] = serde_json::json!(60.0);
     h.mark_changed();
-    assert!(h.dirty);
-    h.write_jsonl().unwrap();
-
+    std::fs::remove_file(tree.join("lights.jsonl")).unwrap();
+    h.save();
+    assert!(!h.dirty);
     assert_eq!(
         std::fs::read_to_string(tree.join("world.jsonl")).unwrap(),
         "[\"PointLight\",{}]\n[\"Include\",{\"path\":\"lights.jsonl\"}]\n[\"Camera3D\",{\"$id\":\"mine\",\"fov_y_degrees\":60.0}]\n"
     );
+    assert!(
+        !tree.join("lights.jsonl").exists(),
+        "the unchanged included file is not written"
+    );
+
+    h.entries[3]["args"]["intensity"] = serde_json::json!(2.0);
+    h.mark_changed();
+    h.save();
     assert_eq!(
         std::fs::read_to_string(tree.join("lights.jsonl")).unwrap(),
-        "[\"PointLight\",{\"$id\":\"lamp\"}]\n[\"PointLight\"]\n",
-        "the included file is not the editor's to write"
+        "[\"PointLight\",{\"$id\":\"lamp\"}]\n[\"PointLight\",{\"intensity\":2.0}]\n"
     );
+}
+
+// An entry added to a file the world does not include yet lands in that file,
+// created by the save beside the `Include` line naming it, and the world reads
+// back as the session held it.
+#[test]
+fn an_entry_added_to_a_new_file_saves_into_it_and_reads_back() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    let file = tree.join("assets/ground/a.jsonl");
+    let light = serde_json::json!({"type": "PointLight", "args": {"$id": "far"}});
+    let key = h
+        .add_entry(light, EntryHome::File(&file))
+        .expect("a new file takes the entry");
+    h.mark_changed();
+    assert_eq!(h.entries.index_of(key), Some(6));
+    h.save();
+
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "[\"PointLight\",{\"$id\":\"far\"}]\n"
+    );
+    let world = std::fs::read_to_string(tree.join("world.jsonl")).unwrap();
+    assert!(
+        world.ends_with("[\"Include\",{\"path\":\"assets/ground/a.jsonl\"}]\n"),
+        "{world}"
+    );
+    let reread = crate::editor::worlds::files::read_entries(&tree.join("world.jsonl")).unwrap();
+    assert_eq!(
+        reread, h.entries,
+        "the files read back as the session held them"
+    );
+}
+
+// Undo and redo step across edits to different files, and the dirty flag
+// follows the saved state of all of them.
+#[test]
+fn undo_steps_back_across_files() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    let mut world = World::new();
+    let saved = h.entries.clone();
+    h.entries[2]["args"]["intensity"] = serde_json::json!(5.0);
+    h.mark_changed();
+    h.entries[4]["args"]["fov_y_degrees"] = serde_json::json!(60.0);
+    h.mark_changed();
+
+    h.undo(&mut world);
+    assert!(h.entries[4]["args"].get("fov_y_degrees").is_none());
+    assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
+    h.undo(&mut world);
+    assert_eq!(h.entries, saved);
+    assert!(!h.dirty, "back at what both files hold");
+    h.redo(&mut world);
+    assert_eq!(h.entries[2]["args"]["intensity"], 5.0);
+    assert!(h.dirty);
+}
+
+// A save that cannot write an included file leaves the world dirty, and the
+// next save writes it.
+#[test]
+fn a_failed_included_write_leaves_the_world_dirty() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    std::fs::write(tree.join("blocker"), b"not a directory").unwrap();
+    let light = serde_json::json!({"type": "PointLight"});
+    h.add_entry(light, EntryHome::File(&tree.join("blocker/a.jsonl")))
+        .unwrap();
+    h.mark_changed();
+    h.save();
+    assert!(h.dirty);
+    assert!(
+        !std::fs::read_to_string(tree.join("world.jsonl"))
+            .unwrap()
+            .contains("blocker"),
+        "the world never names a file the save could not write"
+    );
+}
+
+// A duplicate of an included entry goes into the same file.
+#[test]
+fn a_duplicate_stays_in_its_originals_file() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    let lamp = h.entries.key_at(2).unwrap();
+    assert_eq!(h.duplicate(vec![AssetHandle::Entry(lamp)]), 1);
+    assert_eq!(h.entries.len(), 6);
+    assert_eq!(h.entries[4]["args"]["$id"], "lamp_1");
+    assert_eq!(h.entries.included_from(4), h.entries.included_from(2));
+}
+
+// The form on an included entry names the file it lives in.
+#[test]
+fn the_form_title_names_an_included_entrys_file() {
+    let tree = concinnity_testing::TempTree::new();
+    let mut h = hook_with_an_include(&tree);
+    let mut world = world_with_fields();
+    let lamp = h.entries.key_at(2).unwrap();
+    h.open_form(
+        &mut world,
+        "PointLight".to_string(),
+        FormTarget::Entry(lamp),
+    );
+    let title = h.panel_data(&world).form_title;
+    assert!(title.starts_with("Edit PointLight ("), "{title}");
+    assert!(title.ends_with("lights.jsonl)"), "{title}");
+
+    let mine = h.entries.key_at(4).unwrap();
+    h.open_form(&mut world, "Camera3D".to_string(), FormTarget::Entry(mine));
+    assert_eq!(h.panel_data(&world).form_title, "Edit Camera3D");
 }
 
 // The preview compiles the included entries from the list, without reading the

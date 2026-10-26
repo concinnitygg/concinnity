@@ -200,7 +200,7 @@ impl EditorHook {
         }
         let committed = self.commit_form_entry(ty, typed, args);
         extras.edit_entries(&mut self.entries, &committed);
-        let stood = self.entries.changed_read_only(&self.baseline).is_none();
+        let stood = self.refusal().is_none();
         let written = stood && self.write_new_files(files);
         if !stood {
             // Refused: `mark_changed` puts the entries back and says why.

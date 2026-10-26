@@ -4,7 +4,7 @@
 use crate::asset::{BuildAsset, BuildCtx, CacheInputs};
 use crate::authoring::registry::RegisteredType;
 use concinnity_engine::components::{
-    File, Planet, ProceduralMesh, Room, SdfVolume, Shader, Terrain, VoxelChunk,
+    File, PlanetGround, ProceduralMesh, Room, SdfVolume, Shader, Terrain, VoxelChunk,
 };
 
 type CompileFn = fn(&serde_json::Value, &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
@@ -48,7 +48,7 @@ pub(super) fn build_asset(ct: RegisteredType) -> Option<BuildAssetEntry> {
         RegisteredType::Shader => BuildAssetEntry::of::<Shader>(),
         RegisteredType::SdfVolume => BuildAssetEntry::of::<SdfVolume>(),
         RegisteredType::Terrain => BuildAssetEntry::of::<Terrain>(),
-        RegisteredType::Planet => BuildAssetEntry::of::<Planet>(),
+        RegisteredType::PlanetGround => BuildAssetEntry::of::<PlanetGround>(),
         _ => return None,
     })
 }

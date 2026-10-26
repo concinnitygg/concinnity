@@ -24,7 +24,7 @@ use crate::ecs::{
     WorldPhysicsBudget,
 };
 use crate::planet::{
-    FrameRebases, LocalFrame, PlanetFrame, PlanetGravity, PlanetGround, RebaseCursor,
+    FrameRebases, LocalFrame, PlanetFrame, PlanetGravity, PlanetGroundPatch, RebaseCursor,
 };
 use crate::water::query::WaterQuery;
 use crate::water::stir::WaterStirs;
@@ -360,9 +360,10 @@ impl PhysicsSystem {
             world.set_gravity_center(Some(gravity.center));
             self.gravity = gravity.strength;
         }
-        if let (Some((handle, revision)), Some(ground)) =
-            (self.planet_ground.as_mut(), ctx.resource::<PlanetGround>())
-            && ground.revision != *revision
+        if let (Some((handle, revision)), Some(ground)) = (
+            self.planet_ground.as_mut(),
+            ctx.resource::<PlanetGroundPatch>(),
+        ) && ground.revision != *revision
             && super::terrain::replace_patch(world, *handle, &ground.patch)
         {
             *revision = ground.revision;
@@ -370,7 +371,7 @@ impl PhysicsSystem {
         // The ground is only the patch: a prop off it is held until it is
         // back on, rather than falling into the planet.
         if self.planet_ground.is_some()
-            && let Some(ground) = ctx.resource::<PlanetGround>()
+            && let Some(ground) = ctx.resource::<PlanetGroundPatch>()
         {
             let carried = self.held.and_then(|i| self.props.get(i)).map(|p| p.handle);
             let bodies = self
@@ -478,7 +479,7 @@ impl System for PhysicsSystem {
 
         // The ground: every terrain's heightfield and the planet's patch, or a
         // flat slab when the world lays down neither.
-        self.planet_ground = ctx.resource::<PlanetGround>().and_then(|ground| {
+        self.planet_ground = ctx.resource::<PlanetGroundPatch>().and_then(|ground| {
             let handle = super::terrain::add_patch(&mut world, &ground.patch, world_mask)?;
             Some((handle, ground.revision))
         });

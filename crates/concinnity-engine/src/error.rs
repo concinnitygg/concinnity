@@ -152,9 +152,9 @@ pub enum WorldError {
     #[error(transparent)]
     Payload(#[from] PayloadError),
 
-    /// A planet's compiled edits did not read as edits.
-    #[error("the planet's edits do not read: {0}")]
-    PlanetEdits(#[from] crate::planet::EditFileError),
+    /// A planet's compiled ground page did not read as a page.
+    #[error("the planet's sculpted ground does not read: {0}")]
+    PlanetGround(#[from] crate::planet::PagePayloadError),
 
     /// The world is meant to be seen and the machine has a GPU, but the
     /// renderer could not be built on it. Distinct from a machine with no GPU

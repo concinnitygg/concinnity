@@ -89,7 +89,7 @@ pub use crate::physics::rolling_drive::{RollingControl, RollingDrive};
 pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
 pub use crate::physics::volume_event::VolumeEvent;
 pub use crate::physics::wake_request::WakeRequest;
-pub use crate::planet::{GroundCover, Planet, PlanetSea};
+pub use crate::planet::{GroundCover, Planet, PlanetGround, PlanetSea};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::grass::Grass;
