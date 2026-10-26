@@ -2,8 +2,10 @@
 // transparent passes write beside the scene and TAA, the upscalers and the
 // reactive view read. It rests in PIXEL_SHADER_RESOURCE like every sampled
 // color target, and the frame graph moves it while it is in the frame; on a
-// frame it is not, its writers bind a null view in its place, so their writes
-// go nowhere and it never leaves that state.
+// frame it is not, its writers bind a sink in its place, a target of the same
+// size and format that rests in RENDER_TARGET and is never read. D3D12 binds a
+// null view only where the pipeline's format is UNKNOWN, which the writers'
+// pipelines are not.
 
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
@@ -12,7 +14,9 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::descriptor_slot::SrvSlot;
 use super::pso::{Blend, GraphicsPso};
-use super::texture::{create_rt_target, transition_barrier, write_format_rtv, write_format_srv};
+use super::texture::{
+    create_rt_sink, create_rt_target, transition_barrier, write_format_rtv, write_format_srv,
+};
 
 pub(in crate::directx) const REACTIVE_MASK_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
 
@@ -27,13 +31,14 @@ pub(in crate::directx) fn mask_target(pso: GraphicsPso<'_>) -> GraphicsPso<'_> {
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct ReactiveMaskSlots {
     pub rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub null_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
+    pub sink_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     pub srv_gpu: SrvSlot,
 }
 
 pub(in crate::directx) struct ReactiveMask {
     pub(in crate::directx) resource: ID3D12Resource,
+    sink: ID3D12Resource,
     slots: ReactiveMaskSlots,
 }
 
@@ -43,16 +48,9 @@ impl ReactiveMask {
         (width, height): (u32, u32),
         slots: ReactiveMaskSlots,
     ) -> RenderResult<Self> {
-        let null_desc = D3D12_RENDER_TARGET_VIEW_DESC {
-            Format: REACTIVE_MASK_FORMAT,
-            ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
-            ..Default::default()
-        };
-        // SAFETY: a null-resource view with a fully specified descriptor, written
-        // into a slot this context reserved for it in a heap it owns.
-        unsafe { device.CreateRenderTargetView(None, Some(&raw const null_desc), slots.null_rtv) };
         let mask = Self {
             resource: create_rt_target(device, width, height, REACTIVE_MASK_FORMAT)?,
+            sink: create_rt_sink(device, width, height, REACTIVE_MASK_FORMAT)?,
             slots,
         };
         mask.write_views(device);
@@ -67,12 +65,19 @@ impl ReactiveMask {
         (width, height): (u32, u32),
     ) -> RenderResult<()> {
         self.resource = create_rt_target(device, width, height, REACTIVE_MASK_FORMAT)?;
+        self.sink = create_rt_sink(device, width, height, REACTIVE_MASK_FORMAT)?;
         self.write_views(device);
         Ok(())
     }
 
     fn write_views(&self, device: &ID3D12Device) {
         write_format_rtv(device, &self.resource, self.slots.rtv, REACTIVE_MASK_FORMAT);
+        write_format_rtv(
+            device,
+            &self.sink,
+            self.slots.sink_rtv,
+            REACTIVE_MASK_FORMAT,
+        );
         write_format_srv(
             device,
             &self.resource,
@@ -86,12 +91,12 @@ impl ReactiveMask {
     }
 
     // The view a writer binds beside the scene: the mask's own while it is in
-    // the frame, the null view otherwise.
+    // the frame, the sink's otherwise.
     pub(in crate::directx) fn rtv(&self, write: ReactiveWrite) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         if write.stores() {
             self.slots.rtv
         } else {
-            self.slots.null_rtv
+            self.slots.sink_rtv
         }
     }
 

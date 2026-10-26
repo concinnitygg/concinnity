@@ -264,7 +264,7 @@ pub(super) const GBUFFER_TARGETS: usize = 3;
 // when a command list records them, so rewriting them never races a frame in
 // flight; the shader-visible windows over the layers come from the post block.
 pub(in crate::directx) const GLASS_REFLECTION_TARGETS: usize = 2;
-// The reactive mask's RTV and the null RTV that stands in for it.
+// The reactive mask's RTV and its sink's, which stands in for it.
 pub(super) const REACTIVE_MASK_RTVS: usize = 2;
 
 // DSV heap slots: the main depth, one per shadow cascade (a slice each into the
@@ -292,8 +292,8 @@ pub(super) struct RtvHeapLayout {
     pub decal_resolve_slot: usize,
     pub gbuffer_base_slot: usize,
     pub glass_reflection_base_slot: usize,
-    // The reactive mask's view, then a null view its writers bind in its place
-    // on a frame nothing reads it.
+    // The reactive mask's view, then its sink's, which its writers bind in its
+    // place on a frame nothing reads it.
     pub reactive_mask_base_slot: usize,
     pub rtv_slots: usize,
 }

@@ -54,6 +54,16 @@ impl UpscalerAvailability {
         }
     }
 
+    /// Whether `upscaler` is in the set.
+    #[must_use]
+    pub fn contains(self, upscaler: VendorUpscaler) -> bool {
+        match upscaler {
+            VendorUpscaler::Dlss => self.dlss,
+            VendorUpscaler::Xess => self.xess,
+            VendorUpscaler::Fsr => self.fsr,
+        }
+    }
+
     /// Add `upscaler` to the set.
     pub fn mark(&mut self, upscaler: VendorUpscaler) {
         match upscaler {
@@ -72,22 +82,30 @@ pub fn upscaler_order(
     available: UpscalerAvailability,
 ) -> Vec<VendorUpscaler> {
     let mut order = Vec::with_capacity(3);
-    match requested {
-        UpscalerBackend::Dlss if available.dlss => order.push(VendorUpscaler::Dlss),
-        UpscalerBackend::Xess if available.xess => order.push(VendorUpscaler::Xess),
-        UpscalerBackend::Fsr3 if available.fsr => order.push(VendorUpscaler::Fsr),
-        _ => {}
+    if let Some(first) = requested_upscaler(requested).filter(|&u| available.contains(u)) {
+        order.push(first);
     }
-    for (candidate, avail) in [
-        (VendorUpscaler::Dlss, available.dlss),
-        (VendorUpscaler::Xess, available.xess),
-        (VendorUpscaler::Fsr, available.fsr),
+    for candidate in [
+        VendorUpscaler::Dlss,
+        VendorUpscaler::Xess,
+        VendorUpscaler::Fsr,
     ] {
-        if avail && !order.contains(&candidate) {
+        if available.contains(candidate) && !order.contains(&candidate) {
             order.push(candidate);
         }
     }
     order
+}
+
+/// The vendor upscaler `requested` names, or `None` for `Auto`.
+#[must_use]
+pub fn requested_upscaler(requested: UpscalerBackend) -> Option<VendorUpscaler> {
+    match requested {
+        UpscalerBackend::Auto => None,
+        UpscalerBackend::Dlss => Some(VendorUpscaler::Dlss),
+        UpscalerBackend::Xess => Some(VendorUpscaler::Xess),
+        UpscalerBackend::Fsr3 => Some(VendorUpscaler::Fsr),
+    }
 }
 
 /// The upscaler `requested` resolves to before any initialization is tried,
@@ -157,6 +175,23 @@ mod tests {
             upscaler_order(B::Fsr3, UpscalerAvailability::ALL),
             [Fsr, Dlss, Xess]
         );
+    }
+
+    #[test]
+    fn auto_names_no_upscaler_and_the_rest_name_their_own() {
+        use VendorUpscaler::*;
+        assert_eq!(requested_upscaler(B::Auto), None);
+        assert_eq!(requested_upscaler(B::Dlss), Some(Dlss));
+        assert_eq!(requested_upscaler(B::Xess), Some(Xess));
+        assert_eq!(requested_upscaler(B::Fsr3), Some(Fsr));
+    }
+
+    #[test]
+    fn contains_reads_each_member() {
+        let set = avail(false, true, false);
+        assert!(!set.contains(VendorUpscaler::Dlss));
+        assert!(set.contains(VendorUpscaler::Xess));
+        assert!(!set.contains(VendorUpscaler::Fsr));
     }
 
     #[test]

@@ -1105,7 +1105,30 @@ pub(super) fn create_rt_target_with_clear(
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
 ) -> RenderResult<ID3D12Resource> {
-    create_rt_resource(device, (width, height, 1), format, clear_color)
+    create_rt_resource(
+        device,
+        (width, height, 1),
+        format,
+        clear_color,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    )
+}
+
+// As `create_rt_target`, but created in RENDER_TARGET for a target that is
+// drawn into and never read, so it never leaves that state.
+pub(super) fn create_rt_sink(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> RenderResult<ID3D12Resource> {
+    create_rt_resource(
+        device,
+        (width, height, 1),
+        format,
+        [0.0; 4],
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+    )
 }
 
 // As `create_rt_target`, with `levels` mip levels, each of which a draw can
@@ -1117,15 +1140,23 @@ pub(super) fn create_rt_chain(
     format: DXGI_FORMAT,
     levels: u32,
 ) -> RenderResult<ID3D12Resource> {
-    create_rt_resource(device, (width, height, levels), format, [0.0; 4])
+    create_rt_resource(
+        device,
+        (width, height, levels),
+        format,
+        [0.0; 4],
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    )
 }
 
-// A color render target of `width` x `height` with `levels` mips.
+// A color render target of `width` x `height` with `levels` mips, created in
+// `initial_state`.
 fn create_rt_resource(
     device: &ID3D12Device,
     (width, height, levels): (u32, u32, u32),
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
+    initial_state: D3D12_RESOURCE_STATES,
 ) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -1157,7 +1188,7 @@ fn create_rt_resource(
             &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
             &raw const desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            initial_state,
             Some(&raw const clear_value),
             &raw mut res_opt,
         )

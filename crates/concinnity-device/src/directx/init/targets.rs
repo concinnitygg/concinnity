@@ -150,7 +150,7 @@ pub(super) fn build_targets(
         (render_w, render_h),
         ReactiveMaskSlots {
             rtv: swapchain.rtv(rtv.reactive_mask_base_slot),
-            null_rtv: swapchain.rtv(rtv.reactive_mask_base_slot + 1),
+            sink_rtv: swapchain.rtv(rtv.reactive_mask_base_slot + 1),
             srv_cpu: descriptors.slot_cpu(layout.reactive_mask_srv_slot),
             srv_gpu: descriptors.slot_gpu(layout.reactive_mask_srv_slot),
         },
