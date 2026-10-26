@@ -4,7 +4,7 @@
 
 use crate::components::{
     AaMode, GraphicsConfig, IndirectTechnique, PassResolution, StreamingConfig, UpscaleQuality,
-    UpscalerBackend, WindowMode,
+    UpscalerBackend, Window, WindowMode,
 };
 use crate::ecs::Resources;
 use crate::launch::{LaunchArgs, LaunchRequest};
@@ -13,7 +13,7 @@ use crate::settings::quality::resolve_ceiling;
 use crate::settings::{
     QualityPreset, ResolvedGraphics, StoredSettings, WorldAssets, WorldSettings,
 };
-use crate::window::display_mode::DisplayMode;
+use crate::window::display_mode::{DisplayMode, DisplayProbe};
 use alloc::vec::Vec;
 
 use super::{SettingsInit, SettingsState};
@@ -25,6 +25,8 @@ pub(super) struct Launch {
     pub(super) request: LaunchRequest,
     pub(super) graphics: GraphicsConfig,
     pub(super) streaming: Option<StreamingConfig>,
+    pub(super) window: Option<Window>,
+    pub(super) display: Option<DisplayProbe>,
 }
 
 impl Launch {
@@ -36,6 +38,8 @@ impl Launch {
             request: LaunchRequest::default(),
             graphics,
             streaming: None,
+            window: None,
+            display: None,
         }
     }
 
@@ -62,7 +66,8 @@ impl Launch {
             capabilities: DeviceCapabilities::ALL,
             preset,
             ceiling: &ceiling,
-            window: None,
+            window: self.window.clone(),
+            display: self.display,
             authored: WorldSettings::new(WorldAssets {
                 graphics: Some(&self.graphics),
                 lut_strength: None,
@@ -421,5 +426,136 @@ fn persisted_display_and_system_overrides_resolve() {
             height: 1080,
             refresh_hz: 60,
         })
+    );
+}
+
+// A Retina display, sizing a window at 2x.
+const RETINA: DisplayProbe = DisplayProbe {
+    mode: DisplayMode {
+        width: 3456,
+        height: 2234,
+        refresh_hz: 120,
+    },
+    scale: 2.0,
+    fullscreen_scale: 1.0,
+};
+
+// Under `Auto` a high-resolution output upscales at the tier's render scale,
+// while a 1x display, an explicit preset and the user's choice keep it native.
+#[test]
+fn auto_upscales_a_high_resolution_output() {
+    let mid = profile_at(GpuTier::MidDiscrete);
+    let mut launch = Launch::new(GraphicsConfig::default()).on(mid);
+    launch.window = Some(Window {
+        width: 1600,
+        height: 900,
+        ..Window::default()
+    });
+    launch.display = Some(RETINA);
+    let live = launch.state();
+    assert_eq!(live.predicted_output(), [3200, 1800]);
+    let aa = &live.resolved().graphics.anti_aliasing;
+    assert!(aa.upscaling);
+    assert_eq!(aa.upscale_quality, UpscaleQuality::Quality);
+
+    launch.display = None;
+    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+
+    launch.display = Some(RETINA);
+    launch.stored = stored_preset(QualityPreset::High);
+    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+
+    let mut declined = StoredSettings::default();
+    declined.graphics.temporal_upscaling = Some(false);
+    launch.stored = declined;
+    assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
+}
+
+// A mid-tier GPU launching a 1600x900 window onto a Retina display, which
+// Auto upscales.
+fn retina_launch() -> Launch {
+    let mut launch = Launch::new(GraphicsConfig::default()).on(profile_at(GpuTier::MidDiscrete));
+    launch.window = Some(Window {
+        width: 1600,
+        height: 900,
+        ..Window::default()
+    });
+    launch.display = Some(RETINA);
+    launch
+}
+
+fn upscales(launch: &Launch) -> bool {
+    launch.state().resolved().graphics.anti_aliasing.upscaling
+}
+
+// Fullscreen at a stored 1920x1080 opens at that mode, too small to upscale.
+#[test]
+fn a_stored_fullscreen_resolution_decides_the_output() {
+    let mut launch = retina_launch();
+    launch.stored.graphics.window_mode = Some(WindowMode::Fullscreen);
+    launch.stored.graphics.resolution = Some([1920, 1080, 60]);
+    assert_eq!(launch.state().predicted_output(), [1920, 1080]);
+    assert!(!upscales(&launch));
+}
+
+// `--quality-preset` names a preset for this launch, which never upscales on
+// its own, over a stored Auto.
+#[test]
+fn a_launch_preset_over_a_stored_auto_keeps_native() {
+    let mut launch = retina_launch();
+    launch.stored = stored_preset(QualityPreset::Auto);
+    assert!(upscales(&launch));
+    launch.request = LaunchRequest {
+        args: LaunchArgs {
+            quality_preset: Some(QualityPreset::High),
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    };
+    assert!(!upscales(&launch));
+}
+
+// Auto on a top-tier GPU resolves to Ultra, which renders natively.
+#[test]
+fn auto_on_a_top_tier_gpu_keeps_native() {
+    let launch = retina_launch().on(profile_at(GpuTier::HighDiscrete));
+    assert_eq!(launch.state().predicted_output(), [3200, 1800]);
+    assert!(!upscales(&launch));
+}
+
+// A degenerate window predicts no pixels and never upscales.
+#[test]
+fn an_empty_window_never_upscales() {
+    let mut launch = retina_launch();
+    launch.window = Some(Window {
+        width: 0,
+        height: 0,
+        ..Window::default()
+    });
+    assert_eq!(launch.state().predicted_output(), [0, 0]);
+    assert!(!upscales(&launch));
+}
+
+// `--window-mode` beats the stored mode for this launch, and a window filling
+// the display is predicted at the display's own mode.
+#[test]
+fn a_launch_window_mode_beats_the_stored_one() {
+    let mut stored = StoredSettings::default();
+    stored.graphics.window_mode = Some(WindowMode::Windowed);
+    let mut launch = Launch::new(GraphicsConfig::default()).stored(stored);
+    launch.display = Some(RETINA);
+    launch.request = LaunchRequest {
+        args: LaunchArgs {
+            window_mode: Some(WindowMode::Borderless),
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    };
+    let live = launch.state();
+    assert_eq!(live.window().mode, WindowMode::Borderless);
+    assert_eq!(live.predicted_output(), [3456, 2234]);
+    assert_eq!(
+        live.persisted_graphics().window_mode,
+        Some(WindowMode::Windowed)
     );
 }

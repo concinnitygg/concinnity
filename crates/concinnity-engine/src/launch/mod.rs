@@ -12,7 +12,8 @@ mod request;
 
 pub use error::LaunchArgsError;
 pub use flags::{
-    GRAPHICS_API_VALUES, LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, flag, usage,
+    GRAPHICS_API_VALUES, LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, WINDOW_MODE_VALUES, flag,
+    usage,
 };
 pub use pipeline::PipelineMode;
 pub use request::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest, screenshot_path};
@@ -22,6 +23,7 @@ use alloc::vec::Vec;
 
 use crate::platform::Platform;
 use crate::settings::QualityPreset;
+use crate::window::WindowMode;
 use concinnity_core::math::{SaturatingFrom, round};
 
 /// What a launch asks of the run. Each field left at its default leaves the
@@ -41,6 +43,9 @@ pub struct LaunchArgs {
     /// Render with this graphics API, over the one chosen in the saved
     /// settings, without saving it.
     pub graphics_api: Option<Platform>,
+    /// Open the window in this mode, over the world's and the saved settings'
+    /// choice, without saving it.
+    pub window_mode: Option<WindowMode>,
     /// The directory screenshots are written under, instead of
     /// [`DEFAULT_SCREENSHOTS_DIR`].
     pub screenshots_dir: Option<String>,
@@ -116,6 +121,7 @@ impl LaunchArgs {
         fps_cap: None,
         quality_preset: None,
         graphics_api: None,
+        window_mode: None,
         screenshots_dir: None,
         frames: None,
         screenshots: false,
@@ -199,6 +205,15 @@ impl LaunchArgs {
                         .ok_or_else(|| bad(value))?,
                 );
             }
+            ("window-mode", Some(value)) => {
+                self.window_mode = Some(
+                    WindowMode::ALL
+                        .iter()
+                        .copied()
+                        .find(|mode| mode.as_str() == value)
+                        .ok_or_else(|| bad(value))?,
+                );
+            }
             ("screenshots-dir", Some(value)) => {
                 if value.is_empty() {
                     return Err(bad(value));
@@ -248,6 +263,7 @@ mod tests {
             "--quality-preset=ultra",
             "--graphics-api",
             "vulkan",
+            "--window-mode=fullscreen",
             "--screenshots-dir=shots/vk",
             "--frames",
             "600",
@@ -265,6 +281,7 @@ mod tests {
                 fps_cap: Some(144),
                 quality_preset: Some(QualityPreset::Ultra),
                 graphics_api: Some(Platform::Vulkan),
+                window_mode: Some(WindowMode::Fullscreen),
                 screenshots_dir: Some("shots/vk".into()),
                 frames: Some(600),
                 screenshots: true,
@@ -345,6 +362,13 @@ mod tests {
             Err(LaunchArgsError::BadValue {
                 flag: "graphics-api",
                 value: "opengl".into()
+            })
+        );
+        assert_eq!(
+            parse(&["--window-mode", "maximized"]),
+            Err(LaunchArgsError::BadValue {
+                flag: "window-mode",
+                value: "maximized".into()
             })
         );
         assert_eq!(

@@ -31,6 +31,10 @@ pub const QUALITY_PRESET_VALUES: &[&str] = &["auto", "low", "medium", "high", "u
 /// [`Platform::key`](crate::platform::Platform::key).
 pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
 
+/// The window modes `--window-mode` names, by their authored names.
+pub const WINDOW_MODE_VALUES: &[&str] =
+    <crate::window::WindowMode as crate::components::Vocabulary>::VARIANTS;
+
 /// Every flag a launch accepts.
 pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
     LaunchFlag {
@@ -66,6 +70,13 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         value: Some("API"),
         values: GRAPHICS_API_VALUES,
         description: "Render with this graphics API, over the saved settings' choice, unsaved",
+        repeatable: false,
+    },
+    LaunchFlag {
+        name: "window-mode",
+        value: Some("MODE"),
+        values: WINDOW_MODE_VALUES,
+        description: "Open the window in this mode, over the world's and the saved settings' choice, unsaved",
         repeatable: false,
     },
     LaunchFlag {

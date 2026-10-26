@@ -12,7 +12,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{DisplayModes, FrameRateCap, PipelineContext};
 use crate::platform::{CompiledPlatforms, GraphicsApiStatus};
 use crate::render::backend;
-use crate::settings::quality::preset_label;
+use crate::settings::quality::{auto_upscaling, preset_label};
 use crate::settings::registry::{self, DEFAULT_VOLUME};
 use crate::settings::rows::{quality_cycle, quality_toggle};
 use crate::settings::{
@@ -46,6 +46,9 @@ pub struct SettingsInit<'a> {
     pub ceiling: &'a QualityCeiling,
     /// The world's window, when it declares one.
     pub window: Option<Window>,
+    /// The display the window would open on, when it can be read before the
+    /// window exists.
+    pub display: Option<display_mode::DisplayProbe>,
     /// The world's authored graphics values.
     pub authored: WorldSettings,
     /// This launch's overrides, layered over the user's choices and never
@@ -67,7 +70,7 @@ impl SettingsState {
         if let Some(window) = init.window {
             state.window_args = window;
         }
-        if let Some(mode) = user.window_mode {
+        if let Some(mode) = init.session.window_mode.or(user.window_mode) {
             state.window_args.mode = mode;
         }
         // Fullscreen-only: the windowed size stays the world's authored value.
@@ -78,6 +81,9 @@ impl SettingsState {
                 refresh_hz,
             });
         }
+        let fullscreen = state.resolution;
+        state.output = display_mode::predicted_output(&state.window_args, fullscreen, init.display);
+        state.auto_upscaling = auto_upscaling(init.preset, &init.gpu_profile, state.output);
         state.authored = init.authored;
         state.session = init.session;
         state.resolved = state.resolve(user, init.ceiling);
@@ -354,6 +360,7 @@ mod tests {
             preset: QualityPreset::Custom,
             ceiling: &ceiling,
             window: None,
+            display: None,
             authored: WorldSettings::default(),
             session: UserGraphicsSettings::default(),
         });

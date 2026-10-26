@@ -151,11 +151,22 @@ impl GraphicsSystem {
             preset: quality.preset,
             ceiling: &quality.ceiling,
             window,
+            display: self.detect_display(ctx),
             authored,
-            // `--vsync`, `--fps-cap` and `--dlss-preset` win for this launch,
-            // shown on the row and never persisted unless the row itself changes.
+            // `--vsync`, `--fps-cap`, `--window-mode` and `--dlss-preset` win for
+            // this launch, shown on the row and never persisted unless the row
+            // itself changes.
             session: launch.session_overrides(),
         });
+        let [width, height] = settings.predicted_output();
+        tracing::info!(
+            "auto-config: output {width}x{height} predicted, temporal upscaling {}",
+            if settings.resolved().graphics.anti_aliasing.upscaling {
+                "on"
+            } else {
+                "off"
+            },
+        );
         if let Some(sc) = streaming_config.as_mut() {
             settings.apply_to_streaming(sc);
         }

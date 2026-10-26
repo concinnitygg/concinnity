@@ -168,6 +168,30 @@ impl GraphicsSystem {
         // headless and this system was left out of the schedule.
         crate::platform::device::probe_device().unwrap_or(backend::DeviceProbe::UNKNOWN)
     }
+
+    // The display the window would open on. Tests and a host's embedded view
+    // read none: the view is sized by its host, not by the display, so the
+    // predicted output is the authored window size.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "test builds skip the probe through `self`"
+        )
+    )]
+    fn detect_display(
+        &self,
+        ctx: &PipelineContext<'_>,
+    ) -> Option<concinnity_engine::window::display_mode::DisplayProbe> {
+        #[cfg(test)]
+        if self.test_hooks.is_some() {
+            return None;
+        }
+        if ctx.resource::<backend::init::EmbeddedSurface>().is_some() {
+            return None;
+        }
+        crate::platform::device::probe_display()
+    }
 }
 
 impl System for GraphicsSystem {

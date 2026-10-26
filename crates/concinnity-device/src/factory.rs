@@ -8,6 +8,7 @@
 use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::{backend, backend::init};
+use concinnity_engine::window::display_mode::DisplayProbe;
 
 /// The graphics APIs this build can render with, the target's native one
 /// first. Empty on a target with no window layer.
@@ -40,6 +41,27 @@ pub fn probe_device(platform: Platform) -> Option<backend::DeviceProbe> {
         #[cfg(backend_metal)]
         Platform::Metal => crate::metal::probe_device(),
         _ => None,
+    }
+}
+
+/// Read the display a window would open on before any window exists, so the
+/// quality preset can decide upscaling from the output size. `None` where the
+/// window layer does not read it yet (GLFW).
+pub fn probe_display() -> Option<DisplayProbe> {
+    #[cfg(all(target_os = "macos", any(backend_metal, backend_vk)))]
+    {
+        crate::appkit::display_mode::main_display_probe()
+    }
+    #[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]
+    {
+        crate::win32::display_mode::primary_display_probe()
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", any(backend_metal, backend_vk)),
+        all(target_os = "windows", any(backend_dx, backend_vk))
+    )))]
+    {
+        None
     }
 }
 

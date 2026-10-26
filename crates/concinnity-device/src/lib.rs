@@ -73,4 +73,4 @@ mod audit;
 pub(crate) mod rt_report;
 
 mod factory;
-pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device};
+pub use factory::{COMPILED_PLATFORMS, init_backend, probe_device, probe_display};

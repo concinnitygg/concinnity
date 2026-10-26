@@ -138,6 +138,8 @@ impl Fixture {
             quality_preset: QualityPreset::Custom,
             gpu_profile,
             capabilities: crate::render::backend::DeviceCapabilities::ALL,
+            output: [0, 0],
+            auto_upscaling: false,
             perf_sub_row_labels: vec![(SUB_ROW_LABEL, LIT)],
             window_args: Window::default(),
             display_modes: Vec::new(),
@@ -1174,6 +1176,27 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     assert_eq!(cfg.graphics.shadow_map_size, None);
     assert_eq!(cfg.graphics.render_scale, None);
     assert_eq!(cfg.graphics.anisotropy, None);
+}
+
+// The upscaling row stores an explicit choice that outranks every preset, so
+// picking a preset drops it and the next launch decides again. Upscaling
+// applies at restart, so this session keeps rendering as it launched.
+#[test]
+fn a_preset_pick_drops_a_stored_upscaling_choice() {
+    let mut f = Fixture::new();
+    f.next(SettingKey::TemporalUpscaling);
+    assert_eq!(f.persisted().graphics.temporal_upscaling, Some(true));
+    let launched = f.state.resolved.graphics.anti_aliasing.upscaling;
+
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Auto)),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+
+    assert_eq!(f.persisted().graphics.temporal_upscaling, None);
+    assert_eq!(f.state.resolved.graphics.anti_aliasing.upscaling, launched);
 }
 
 // Look tuning is not preset-governed: a preset change keeps a persisted

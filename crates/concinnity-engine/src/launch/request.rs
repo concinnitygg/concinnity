@@ -127,12 +127,13 @@ impl LaunchRequest {
     }
 
     /// The settings this launch overrides for its own run, layered over the
-    /// user's persisted choices and never persisted: vsync, the frame-rate cap
-    /// and the DLSS preset.
+    /// user's persisted choices and never persisted: vsync, the frame-rate cap,
+    /// the window mode and the DLSS preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
         UserGraphicsSettings {
             vsync: self.args.vsync.then_some(true),
             fps_cap: self.args.fps_cap,
+            window_mode: self.args.window_mode,
             dlss_preset: self.dlss_preset,
             ..UserGraphicsSettings::default()
         }

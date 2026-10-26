@@ -9,7 +9,7 @@
 //! windowed resize path is unaffected.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::window::display_mode::DisplayMode;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayProbe};
 use objc2_app_kit::{NSScreen, NSWindow};
 use objc2_core_foundation::{CFDictionary, CFRetained, Type, kCFBooleanTrue};
 use objc2_core_graphics::{
@@ -58,6 +58,24 @@ pub(super) fn enumerate(window: Option<&NSWindow>) -> Vec<DisplayMode> {
 pub(super) fn current(window: Option<&NSWindow>) -> Option<DisplayMode> {
     let mode = CGDisplayCopyDisplayMode(display_id(window))?;
     display_mode_of(&mode)
+}
+
+// The main display's mode and its pixels per point, read before any window
+// exists: a window opens on the main display at its size in points.
+pub(crate) fn main_display_probe() -> Option<DisplayProbe> {
+    let mode = CGDisplayCopyDisplayMode(CGMainDisplayID())?;
+    let points = CGDisplayMode::width(Some(&mode));
+    let pixels = display_mode_of(&mode)?;
+    let scale = if points == 0 {
+        1.0
+    } else {
+        pixels.width as f32 / points as f32
+    };
+    Some(DisplayProbe {
+        mode: pixels,
+        scale,
+        fullscreen_scale: 1.0,
+    })
 }
 
 // Every CGDisplayMode of `display` (including HiDPI duplicates), retained.

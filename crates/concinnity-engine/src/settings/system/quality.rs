@@ -46,6 +46,8 @@ impl SettingsState {
         cfg.graphics.shadow_cascades = None;
         cfg.graphics.anisotropy = None;
         cfg.graphics.render_scale = None;
+        // A stored upscaling choice would otherwise outrank the preset for good.
+        cfg.graphics.temporal_upscaling = None;
         self.resolved
             .set_quality(&self.resolve_quality(&cfg.graphics, &ceiling));
 

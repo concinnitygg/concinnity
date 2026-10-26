@@ -12,7 +12,8 @@
 //! 3. A scene's override ([`SceneOverride`]), the same sparse shape, replacing
 //!    the fields it sets.
 //! 4. The quality ceiling ([`QualityCeiling`]), which caps the quality-governed
-//!    fields of the result, set or not, and only ever reduces.
+//!    fields of the result, set or not, and only ever reduces. The preset
+//!    alone may turn temporal upscaling on, where no layer chose it.
 //! 5. The user's persisted choices ([`UserGraphicsSettings`]), each of which
 //!    beats the ceiling for its own setting.
 //! 6. Session overrides, the same shape as the user's, beating them.
@@ -62,28 +63,35 @@ pub struct WorldSettings {
     pub texture_cap: Option<u32>,
     /// `StreamingConfig.texture_budget`; `None` without a `StreamingConfig`.
     pub texture_budget: Option<u32>,
+    /// `AntiAliasing.upscaling` where the world or a scene sets it; `None`
+    /// leaves it to the quality preset.
+    pub upscaling: Option<bool>,
 }
 
 impl WorldSettings {
     /// The settings a world's declared assets author.
     pub fn new(assets: WorldAssets<'_>) -> Self {
-        let mut graphics = ResolvedGraphics {
-            lut_strength: assets.lut_strength.unwrap_or(0.0),
-            ..ResolvedGraphics::default()
-        };
-        if let Some(authored) = assets.graphics {
-            graphics.apply(authored);
-        }
-        Self {
-            graphics,
+        let mut world = Self {
+            graphics: ResolvedGraphics {
+                lut_strength: assets.lut_strength.unwrap_or(0.0),
+                ..ResolvedGraphics::default()
+            },
             texture_cap: assets.streaming.map(|s| s.texture_cap),
             texture_budget: assets.streaming.map(|s| s.texture_budget),
+            upscaling: None,
+        };
+        if let Some(authored) = assets.graphics {
+            world.apply(authored);
         }
+        world
     }
 
     /// Replace every field `graphics` sets.
     pub fn apply(&mut self, graphics: &GraphicsConfig) {
         self.graphics.apply(graphics);
+        if let Some(upscaling) = graphics.anti_aliasing.upscaling {
+            self.upscaling = Some(upscaling);
+        }
     }
 
     /// The cascade schedule the world's `Shadows` authors.
@@ -130,6 +138,9 @@ pub struct SettingsLayers<'a> {
     pub scene: Option<&'a SceneOverride>,
     /// The active quality ceiling.
     pub ceiling: &'a QualityCeiling,
+    /// Whether the quality preset upscales where neither the world nor the
+    /// user chose.
+    pub auto_upscaling: bool,
     /// The user's persisted choices.
     pub user: &'a UserGraphicsSettings,
     /// This session's overrides.
@@ -150,6 +161,7 @@ impl<'a> SettingsLayers<'a> {
             world,
             scene: None,
             ceiling,
+            auto_upscaling: false,
             user,
             session: None,
             capabilities: &DeviceCapabilities::ALL,
@@ -160,7 +172,7 @@ impl<'a> SettingsLayers<'a> {
     pub fn resolve(&self) -> ResolvedSettings {
         let world = self.world_layer();
         let user = self.user_layer();
-        let mut resolved = resolve_settings(&world, &user, self.ceiling);
+        let mut resolved = resolve_settings(&world, &user, self.ceiling, self.auto_upscaling);
         clamp_to(&mut resolved.graphics, *self.capabilities);
         resolved
     }
@@ -248,11 +260,12 @@ impl Default for ResolvedSettings {
 
 // Each value is the user's choice where they made one, otherwise the world's
 // (the section default where the world sets none), clamped under the ceiling
-// if the preset governs it.
+// if the preset governs it. Upscaling unset by both follows `auto_upscaling`.
 fn resolve_settings(
     world: &WorldSettings,
     user: &UserGraphicsSettings,
     ceiling: &QualityCeiling,
+    auto_upscaling: bool,
 ) -> ResolvedSettings {
     let streaming = StreamingConfig::default();
     let mut graphics = resolve_quality(world, user, ceiling);
@@ -266,7 +279,10 @@ fn resolve_settings(
     display.hdr = user.hdr_display.unwrap_or(display.hdr);
     display.pq = user.hdr_pq.unwrap_or(display.pq);
     let aa = &mut graphics.anti_aliasing;
-    aa.upscaling = user.temporal_upscaling.unwrap_or(aa.upscaling);
+    aa.upscaling = user
+        .temporal_upscaling
+        .or(world.upscaling)
+        .unwrap_or(auto_upscaling);
     aa.upscaler = user.upscale_backend.unwrap_or(aa.upscaler);
     let culling = &mut graphics.culling;
     culling.two_pass_occlusion = user

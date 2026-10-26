@@ -14,6 +14,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use concinnity_core::math::{SaturatingFrom, round};
 
 /// One display mode the hardware supports: pixel dimensions plus refresh rate.
 /// `refresh_hz` of 0 means unknown (some built-in panels report none); the label
@@ -104,6 +105,52 @@ pub fn best_native_index(modes: &[DisplayMode], want: DisplayMode) -> Option<usi
     best.map(|(_, i)| i)
 }
 
+/// The display a window would open on, read before the window exists.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayProbe {
+    /// The output pixels a window filling the display gets at its current
+    /// mode. A process the OS scales for DPI gets fewer than the mode's own.
+    pub mode: DisplayMode,
+    /// Output pixels per unit of a window's authored size: 2 on a Retina
+    /// display, 1 where a window is sized in pixels.
+    pub scale: f32,
+    /// Output pixels per pixel of a fullscreen mode the window switches the
+    /// display to: 1 unless the OS scales the process for DPI.
+    pub fullscreen_scale: f32,
+}
+
+/// The pixel size a window opens at: its authored size at the display's scale
+/// when windowed, the display filled when borderless, and `fullscreen` (else
+/// the display filled) in fullscreen. Without a probe, the authored size, and
+/// `fullscreen` as given.
+pub fn predicted_output(
+    window: &super::Window,
+    fullscreen: Option<DisplayMode>,
+    display: Option<DisplayProbe>,
+) -> [u32; 2] {
+    let scaled = |[w, h]: [u32; 2], scale: f32| {
+        [w, h].map(|v| u32::saturating_from(round(v as f32 * scale)))
+    };
+    let filled = display.map(|d| [d.mode.width, d.mode.height]);
+    let chosen = fullscreen.map(|m| {
+        scaled(
+            [m.width, m.height],
+            display.map_or(1.0, |d| d.fullscreen_scale),
+        )
+    });
+    let output = match window.mode {
+        super::WindowMode::Windowed => None,
+        super::WindowMode::Borderless => filled,
+        super::WindowMode::Fullscreen => chosen.or(filled),
+    };
+    output.unwrap_or_else(|| {
+        scaled(
+            [window.width, window.height],
+            display.map_or(1.0, |d| d.scale),
+        )
+    })
+}
+
 /// The static list used when the backend cannot enumerate the display (DirectX /
 /// Vulkan today, or an embedded view with no window). Common resolutions with no
 /// rate, so the row keeps driving the windowed resize path.
@@ -121,6 +168,7 @@ pub fn fallback_modes() -> Vec<DisplayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::window::{Window, WindowMode};
 
     use alloc::vec;
     fn mode(width: u32, height: u32, refresh_hz: u32) -> DisplayMode {
@@ -208,5 +256,98 @@ mod tests {
         assert!(list.len() > 2, "must expand as a dropdown row");
         assert!(list.iter().all(|m| m.refresh_hz == 0));
         assert!(list.iter().any(|m| (m.width, m.height) == (1920, 1080)));
+    }
+
+    fn window(mode: WindowMode) -> Window {
+        Window {
+            width: 1600,
+            height: 900,
+            mode,
+            ..Window::default()
+        }
+    }
+
+    const RETINA: DisplayProbe = DisplayProbe {
+        mode: DisplayMode {
+            width: 3456,
+            height: 2234,
+            refresh_hz: 120,
+        },
+        scale: 2.0,
+        fullscreen_scale: 1.0,
+    };
+
+    // A 3840x2160 monitor at 150% to a process the OS scales for DPI: a filling
+    // window gets 2560x1440, and a chosen mode two thirds of its pixels.
+    const SCALED_4K: DisplayProbe = DisplayProbe {
+        mode: DisplayMode {
+            width: 2560,
+            height: 1440,
+            refresh_hz: 60,
+        },
+        scale: 1.0,
+        fullscreen_scale: 2560.0 / 3840.0,
+    };
+
+    #[test]
+    fn a_window_opens_at_its_authored_size_on_the_displays_scale() {
+        let windowed = window(WindowMode::Windowed);
+        assert_eq!(
+            predicted_output(&windowed, None, Some(RETINA)),
+            [3200, 1800]
+        );
+        assert_eq!(predicted_output(&windowed, None, None), [1600, 900]);
+        // A fullscreen choice only sizes a fullscreen window.
+        let chosen = mode(1920, 1080, 60);
+        assert_eq!(
+            predicted_output(&windowed, Some(chosen), Some(RETINA)),
+            [3200, 1800]
+        );
+    }
+
+    #[test]
+    fn a_window_filling_the_display_opens_at_its_mode() {
+        let chosen = mode(1920, 1080, 60);
+        let borderless = window(WindowMode::Borderless);
+        assert_eq!(
+            predicted_output(&borderless, None, Some(RETINA)),
+            [3456, 2234]
+        );
+        assert_eq!(
+            predicted_output(&borderless, Some(chosen), Some(RETINA)),
+            [3456, 2234]
+        );
+        let fullscreen = window(WindowMode::Fullscreen);
+        assert_eq!(
+            predicted_output(&fullscreen, None, Some(RETINA)),
+            [3456, 2234]
+        );
+        assert_eq!(
+            predicted_output(&fullscreen, Some(chosen), Some(RETINA)),
+            [1920, 1080]
+        );
+        assert_eq!(
+            predicted_output(&fullscreen, Some(chosen), None),
+            [1920, 1080]
+        );
+        assert_eq!(predicted_output(&borderless, None, None), [1600, 900]);
+    }
+
+    #[test]
+    fn a_dpi_scaled_window_opens_at_the_pixels_the_os_gives_it() {
+        let borderless = window(WindowMode::Borderless);
+        assert_eq!(
+            predicted_output(&borderless, None, Some(SCALED_4K)),
+            [2560, 1440]
+        );
+        let fullscreen = window(WindowMode::Fullscreen);
+        assert_eq!(
+            predicted_output(&fullscreen, Some(mode(3840, 2160, 60)), Some(SCALED_4K)),
+            [2560, 1440]
+        );
+        assert_eq!(
+            predicted_output(&window(WindowMode::Windowed), None, Some(SCALED_4K)),
+            [1600, 900]
+        );
     }
 }

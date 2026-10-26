@@ -10,6 +10,7 @@ use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::backend::{DeviceProbe, RenderBackend};
+use concinnity_engine::window::display_mode::DisplayProbe;
 use std::sync::OnceLock;
 
 /// Whether a rendering backend compiles into this build. False leaves the
@@ -48,6 +49,18 @@ pub(crate) fn probe_device_on(platform: Platform) -> Option<DeviceProbe> {
             None
         }
     })
+}
+
+/// The display a window would open on, read before any window exists.
+pub(crate) fn probe_display() -> Option<DisplayProbe> {
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
+    {
+        concinnity_device::probe_display()
+    }
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    {
+        None
+    }
 }
 
 /// Build the backend the runtime draws through, or report why there is none.

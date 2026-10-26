@@ -327,6 +327,18 @@ pub fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> QualityCe
     }
 }
 
+/// The output size, in pixels, above which `Auto` upscales: 2560x1440.
+pub const AUTO_UPSCALE_PIXELS: u64 = 2560 * 1440;
+
+/// Whether the preset turns temporal upscaling on where neither the world nor
+/// the user chose: `Auto` below its top tier, on an output of more than
+/// [`AUTO_UPSCALE_PIXELS`]. The render scale is the tier's `min_upscale`.
+pub fn auto_upscaling(preset: QualityPreset, profile: &GpuProfile, output: [u32; 2]) -> bool {
+    preset == QualityPreset::Auto
+        && auto_tier(profile).1 != QualityCeiling::ULTRA
+        && u64::from(output[0]) * u64::from(output[1]) > AUTO_UPSCALE_PIXELS
+}
+
 /// The named tier `Auto` resolves to on this GPU, as (label, ceiling). One
 /// table, so the menu label can never disagree with the ceiling applied.
 fn auto_tier(profile: &GpuProfile) -> (&'static str, QualityCeiling) {

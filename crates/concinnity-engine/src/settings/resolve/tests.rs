@@ -162,7 +162,7 @@ fn a_user_override_beats_the_world_value() {
         perf_stats: Some(false),
         ..UserGraphicsSettings::default()
     };
-    let r = resolve_settings(&world, &user, &low());
+    let r = resolve_settings(&world, &user, &low(), false);
     assert!(!r.graphics.frame_pacing.vsync);
     assert_eq!(r.graphics.frame_pacing.fps_cap, 30);
     assert!(!r.graphics.display.hdr);
@@ -171,7 +171,7 @@ fn a_user_override_beats_the_world_value() {
     assert!(!r.perf_stats);
     assert!(r.show_fps, "an untouched stats toggle defaults on");
 
-    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low());
+    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low(), false);
     assert!(r.graphics.frame_pacing.vsync);
     assert_eq!(r.graphics.frame_pacing.fps_cap, 60);
     assert!(r.graphics.display.hdr);
@@ -193,7 +193,7 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
         },
         ..Default::default()
     });
-    let q = resolve_settings(&world, &UserGraphicsSettings::default(), &low()).graphics;
+    let q = resolve_settings(&world, &UserGraphicsSettings::default(), &low(), false).graphics;
     assert_eq!(q.shadows.map_size, 1024);
     assert_eq!(
         q.shadow_cadence(),
@@ -210,7 +210,7 @@ fn the_ceiling_clamps_only_a_knob_the_user_left_alone() {
         shadow_distance: Some(200),
         ..UserGraphicsSettings::default()
     };
-    let q = resolve_settings(&world, &user, &low()).graphics;
+    let q = resolve_settings(&world, &user, &low(), false).graphics;
     assert_eq!(q.shadows.map_size, 4096);
     assert_eq!(q.shadows.distance, 200);
     assert_eq!(q.shadows.cascades, 2);
@@ -225,7 +225,7 @@ fn a_frames_in_flight_override_clamps_to_three() {
         },
         ..Default::default()
     });
-    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low());
+    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low(), false);
     assert_eq!(
         r.graphics.frame_pacing.frames_in_flight, 7,
         "the world value is not clamped"
@@ -235,7 +235,7 @@ fn a_frames_in_flight_override_clamps_to_three() {
         ..UserGraphicsSettings::default()
     };
     assert_eq!(
-        resolve_settings(&world, &user, &low())
+        resolve_settings(&world, &user, &low(), false)
             .graphics
             .frame_pacing
             .frames_in_flight,
@@ -257,7 +257,7 @@ fn render_scale_takes_the_more_aggressive_of_world_and_ceiling() {
             render_scale: user,
             ..UserGraphicsSettings::default()
         };
-        resolve_settings(&world, &user, &low())
+        resolve_settings(&world, &user, &low(), false)
             .graphics
             .anti_aliasing
             .upscale_quality
@@ -288,9 +288,14 @@ fn an_unset_field_resolves_like_its_default_set_explicitly() {
         ..Default::default()
     };
     for ceiling in [low(), QualityCeiling::NONE] {
-        let bare = resolve_settings(&WorldSettings::default(), &none, &ceiling);
-        let empty = resolve_settings(&authored(&GraphicsConfig::default()), &none, &ceiling);
-        let set = resolve_settings(&authored(&every), &none, &ceiling);
+        let bare = resolve_settings(&WorldSettings::default(), &none, &ceiling, false);
+        let empty = resolve_settings(
+            &authored(&GraphicsConfig::default()),
+            &none,
+            &ceiling,
+            false,
+        );
+        let set = resolve_settings(&authored(&every), &none, &ceiling, false);
         assert!(bare.graphics.culling.two_pass_occlusion);
         for r in [&empty, &set] {
             assert_eq!(
@@ -315,7 +320,7 @@ fn texture_overrides_apply_only_where_the_world_streams() {
         ..UserGraphicsSettings::default()
     };
     let defaults = StreamingConfig::default();
-    let r = resolve_settings(&WorldSettings::default(), &user, &low());
+    let r = resolve_settings(&WorldSettings::default(), &user, &low(), false);
     assert_eq!(
         (r.texture_cap, r.texture_budget),
         (defaults.texture_cap, defaults.texture_budget)
@@ -324,7 +329,7 @@ fn texture_overrides_apply_only_where_the_world_streams() {
         streaming: Some(&defaults),
         ..Default::default()
     });
-    let r = resolve_settings(&streaming, &user, &low());
+    let r = resolve_settings(&streaming, &user, &low(), false);
     assert_eq!((r.texture_cap, r.texture_budget), (10, 1));
 }
 
@@ -345,7 +350,7 @@ fn the_lut_strength_comes_from_the_color_lut() {
 fn the_fxaa_flag_follows_the_clamped_aa_mode() {
     let world = WorldSettings::default();
     assert_eq!(world.graphics.anti_aliasing.mode, AaMode::Taa);
-    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low());
+    let r = resolve_settings(&world, &UserGraphicsSettings::default(), &low(), false);
     assert_eq!(r.graphics.anti_aliasing.mode, AaMode::Fxaa);
     assert_eq!(r.graphics.post_process().fxaa, AaMode::Fxaa.fxaa_flag());
 }
@@ -579,7 +584,7 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
     ];
     for (tier, cap) in tiers {
         assert_eq!(ceiling_for(QualityPreset::Auto, tier), cap);
-        let r = resolve_settings(&WorldSettings::default(), &none, &cap);
+        let r = resolve_settings(&WorldSettings::default(), &none, &cap, false);
         let q = &r.graphics;
         let fx = q;
         assert_eq!(q.shadows.map_size, 4096.min(cap.shadow_map_size));
@@ -810,7 +815,7 @@ fn the_planet_cell_size_resolves_under_the_ceiling() {
     use crate::components::PlanetDetailOverrides;
     let none = UserGraphicsSettings::default();
     let cells = |world: &WorldSettings, ceiling: &QualityCeiling| {
-        resolve_settings(world, &none, ceiling)
+        resolve_settings(world, &none, ceiling, false)
             .graphics
             .planet_detail
             .finest_cell_size
@@ -835,8 +840,8 @@ fn the_planet_cell_size_resolves_under_the_ceiling() {
     });
     assert_eq!(cells(&coarse, &QualityCeiling::ULTRA), 8);
 
-    let before = resolve_settings(&bare, &none, &QualityCeiling::NONE);
-    let after = resolve_settings(&bare, &none, &low());
+    let before = resolve_settings(&bare, &none, &QualityCeiling::NONE, false);
+    let after = resolve_settings(&bare, &none, &low(), false);
     let live = after.diff(&before);
     assert!(
         live.class(ApplyClass::Live)
@@ -1008,7 +1013,7 @@ fn the_water_trace_follows_the_ceiling() {
     let none = UserGraphicsSettings::default();
     let world = WorldSettings::default();
     let water = |ceiling: &QualityCeiling| {
-        resolve_settings(&world, &none, ceiling)
+        resolve_settings(&world, &none, ceiling, false)
             .graphics
             .rt_reflections()
             .map(|rt| rt.water_trace)
@@ -1022,12 +1027,96 @@ fn the_water_trace_follows_the_ceiling() {
 fn a_preset_change_that_moves_the_water_trace_rebuilds() {
     let none = UserGraphicsSettings::default();
     let world = WorldSettings::default();
-    let ultra = resolve_settings(&world, &none, &QualityCeiling::ULTRA);
-    let high = resolve_settings(&world, &none, &QualityCeiling::HIGH);
+    let ultra = resolve_settings(&world, &none, &QualityCeiling::ULTRA, false);
+    let high = resolve_settings(&world, &none, &QualityCeiling::HIGH, false);
     let diff = high.diff(&ultra);
     assert!(
         diff.class(ApplyClass::Rebuild)
             .iter()
             .any(|c| (c.asset, c.key) == ("QualityCeiling", "water_trace"))
     );
+}
+
+fn upscaling_world(upscaling: Option<bool>) -> WorldSettings {
+    authored(&GraphicsConfig {
+        anti_aliasing: AntiAliasingOverrides {
+            upscaling,
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
+// The preset upscales only where the world, a scene and the user all left
+// upscaling unset; each explicit choice wins over it, `false` included.
+#[test]
+fn the_preset_upscales_only_where_no_layer_chose() {
+    let ceiling = ceiling_for(QualityPreset::Auto, GpuTier::MidDiscrete);
+    let none = UserGraphicsSettings::default();
+    let upscaled = |world: &WorldSettings, user: &UserGraphicsSettings, auto: bool| {
+        SettingsLayers {
+            auto_upscaling: auto,
+            ..SettingsLayers::new(world, &ceiling, user)
+        }
+        .resolve()
+        .graphics
+        .anti_aliasing
+        .upscaling
+    };
+    let unset = upscaling_world(None);
+    assert!(upscaled(&unset, &none, true));
+    assert!(!upscaled(&unset, &none, false));
+    assert!(!upscaled(&upscaling_world(Some(false)), &none, true));
+    assert!(upscaled(&upscaling_world(Some(true)), &none, false));
+
+    let declined = UserGraphicsSettings {
+        temporal_upscaling: Some(false),
+        ..Default::default()
+    };
+    assert!(!upscaled(&unset, &declined, true));
+    let chose = UserGraphicsSettings {
+        temporal_upscaling: Some(true),
+        ..Default::default()
+    };
+    assert!(upscaled(&upscaling_world(Some(false)), &chose, false));
+
+    // A scene's explicit choice replaces the world's silence.
+    let scene = SceneOverride {
+        graphics: GraphicsConfig {
+            anti_aliasing: AntiAliasingOverrides {
+                upscaling: Some(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    };
+    let layers = SettingsLayers {
+        auto_upscaling: true,
+        scene: Some(&scene),
+        ..SettingsLayers::new(&unset, &ceiling, &none)
+    };
+    assert!(!layers.resolve().graphics.anti_aliasing.upscaling);
+}
+
+// The preset's upscaling renders at the tier's least aggressive scale.
+#[test]
+fn the_preset_upscales_at_the_tiers_render_scale() {
+    let none = UserGraphicsSettings::default();
+    let world = upscaling_world(None);
+    for (tier, scale) in [
+        (GpuTier::MidDiscrete, UpscaleQuality::Quality),
+        (GpuTier::EntryDiscrete, UpscaleQuality::Balanced),
+        (GpuTier::Integrated, UpscaleQuality::Performance),
+    ] {
+        let ceiling = ceiling_for(QualityPreset::Auto, tier);
+        let aa = SettingsLayers {
+            auto_upscaling: true,
+            ..SettingsLayers::new(&world, &ceiling, &none)
+        }
+        .resolve()
+        .graphics
+        .anti_aliasing;
+        assert!(aa.upscaling, "{tier:?}");
+        assert_eq!(aa.upscale_quality, scale, "{tier:?}");
+    }
 }

@@ -115,6 +115,10 @@ pub struct SettingsState {
     pub(crate) gpu_profile: backend::GpuProfile,
     // What the probed device can run, which clamps every resolution.
     pub(crate) capabilities: backend::DeviceCapabilities,
+    // The pixel size the window was predicted to open at, and whether the
+    // launch's preset upscales it where nothing chose.
+    pub(crate) output: [u32; 2],
+    pub(crate) auto_upscaling: bool,
     // The captured stats sub-row labels the "Display performance stats" master
     // toggle grays.
     pub(crate) perf_sub_row_labels: Vec<(AssetId, [f32; 3])>,
@@ -263,6 +267,8 @@ impl SettingsState {
             quality_preset: QualityPreset::Auto,
             gpu_profile: backend::GpuProfile::UNKNOWN,
             capabilities: backend::DeviceCapabilities::ALL,
+            output: [0, 0],
+            auto_upscaling: false,
             perf_sub_row_labels: Vec::new(),
             window_args: Window::default(),
             display_modes: Vec::new(),
@@ -327,6 +333,12 @@ impl SettingsState {
         &self.window_args
     }
 
+    /// The pixel size the window was predicted to open at, which the quality
+    /// preset's upscaling decision read.
+    pub fn predicted_output(&self) -> [u32; 2] {
+        self.output
+    }
+
     /// The mode a freshly built window switches to. A window opens as a
     /// standard titled window, so `None` when that is the configured mode.
     pub fn startup_window_mode(&self) -> Option<WindowMode> {
@@ -386,6 +398,7 @@ impl SettingsState {
         SettingsLayers {
             session: Some(&self.session),
             capabilities: &self.capabilities,
+            auto_upscaling: self.auto_upscaling,
             ..SettingsLayers::new(&self.authored, ceiling, user)
         }
     }

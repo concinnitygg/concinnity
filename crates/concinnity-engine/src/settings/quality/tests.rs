@@ -429,3 +429,35 @@ fn only_full_resolution_tiers_trace_water() {
         assert_eq!(ceiling.water_trace(), traces, "{}", preset.name());
     }
 }
+
+#[test]
+fn auto_upscales_a_high_resolution_output_below_its_top_tier() {
+    let high = profile_with_tier(GpuTier::MidDiscrete);
+    let retina = [3200, 1800];
+    assert!(auto_upscaling(QualityPreset::Auto, &high, retina));
+    for tier in [
+        GpuTier::Integrated,
+        GpuTier::Unknown,
+        GpuTier::EntryDiscrete,
+    ] {
+        assert!(auto_upscaling(
+            QualityPreset::Auto,
+            &profile_with_tier(tier),
+            retina
+        ));
+    }
+    // The top tier renders natively at any size.
+    let ultra = profile_with_tier(GpuTier::HighDiscrete);
+    assert!(!auto_upscaling(QualityPreset::Auto, &ultra, [7680, 4320]));
+    // 2560x1440 itself is not high resolution; one pixel more is.
+    assert!(!auto_upscaling(QualityPreset::Auto, &high, [2560, 1440]));
+    assert!(!auto_upscaling(QualityPreset::Auto, &high, [1600, 900]));
+    assert!(auto_upscaling(QualityPreset::Auto, &high, [2561, 1440]));
+    // A named preset leaves upscaling to the world and the user.
+    for preset in QualityPreset::ALL
+        .into_iter()
+        .filter(|p| *p != QualityPreset::Auto)
+    {
+        assert!(!auto_upscaling(preset, &high, retina), "{preset:?}");
+    }
+}
