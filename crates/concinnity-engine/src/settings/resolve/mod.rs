@@ -326,6 +326,7 @@ fn resolve_quality(
         .planet_detail
         .finest_cell_size
         .max(ceiling.min_planet_cell_size);
+    g.water_trace = ceiling.water_trace();
     g
 }
 

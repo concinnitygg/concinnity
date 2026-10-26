@@ -276,6 +276,13 @@ impl QualityCeiling {
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 1,
     };
+
+    /// Whether water traces its own per-pixel reflection in the transparent
+    /// pass, which only a tier tracing reflections at full resolution affords.
+    /// Below it water takes the probe, sky or planar reflection.
+    pub fn water_trace(&self) -> bool {
+        self.rt_reflection_resolution == PassResolution::Full
+    }
 }
 
 /// The authored anti-aliasing mode under a cap: the cheaper of the two by cost

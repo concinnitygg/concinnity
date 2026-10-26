@@ -254,11 +254,12 @@ impl MtlContext {
         //   RT on + bindless world  -> textured RT trace (bindless albedo)
         //   RT on                   -> flat RT trace (per-object tint)
         //   RT off                  -> box-projected probe cube / sky prefilter
-        // `rt.accel` live means RT is on; `bindless` means the texture pool
-        // exists. Falls back through to the probe pipeline. Either RT pipeline
-        // still takes the planar mirror over its own trace where the surface has
-        // a slot, so this picks the fragment, not the reflection source.
-        let rt_on = self.rt.accel.is_some();
+        // RT is on while `rt.accel` is live and the tier affords the water
+        // trace; `bindless` means the texture pool exists. Falls back through to
+        // the probe pipeline. Either RT pipeline still takes the planar mirror
+        // over its own trace where the surface has a slot, so this picks the
+        // fragment, not the reflection source.
+        let rt_on = self.water_rt_live();
         fn pick_for<T>(
             rt_on: bool,
             bindless: bool,
@@ -304,7 +305,7 @@ impl MtlContext {
                 (true, Some([lean, daylight])) => [lean, daylight],
                 (true, None) => continue,
             };
-            // Everything but the motion and the planar flag below is
+            // Everything but the motion and the planar and trace flags below is
             // asset-side-static.
             let wake = self.water.wake_frame.map(|f| f.draw).unwrap_or_default();
             let mut params = surface
@@ -333,6 +334,7 @@ impl MtlContext {
                     targets.resolve.clone(),
                 ));
             }
+            params.set_trace(rt_on);
             let c = surface.center;
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
             // The outer rings first, then the inner ones over them: the nearer

@@ -1,7 +1,8 @@
 //! What changed between two resolved snapshots, grouped by when each change
 //! takes effect. A resolved value is named by the section field it resolves
 //! (`AmbientOcclusion.enabled`), and takes that field's apply class; the few
-//! the world does not author are named under `UserGraphicsSettings`.
+//! the world does not author are named under `UserGraphicsSettings`, or
+//! `QualityCeiling` for the one only the ceiling sets.
 
 use alloc::vec::Vec;
 
@@ -11,6 +12,7 @@ use crate::ecs::asset_fields::{ApplyClass, AssetFields, ParamChange};
 use super::ResolvedSettings;
 
 const USER: &str = "UserGraphicsSettings";
+const CEILING: &str = "QualityCeiling";
 
 /// The parameters that differ between two resolved snapshots, each once, in
 /// a list per apply class.
@@ -61,6 +63,14 @@ impl SettingsDiff {
             after.texture_budget != before.texture_budget,
             &mut changes,
         );
+
+        if a.water_trace != b.water_trace {
+            changes.push(ParamChange {
+                asset: CEILING,
+                key: "water_trace",
+                apply: ApplyClass::Rebuild,
+            });
+        }
 
         // Values only the user sets: the DLSS preset is chosen when the
         // upscaler is built, and the stats overlay reads its toggles each frame.

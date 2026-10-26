@@ -82,7 +82,7 @@ fn every_rebuild_field_names_a_feature() {
 #[test]
 fn each_feature_toggle_rebuilds_its_own_feature() {
     use RebuildFeature::*;
-    let cases: [Case<&[RebuildFeature]>; 7] = [
+    let cases: [Case<&[RebuildFeature]>; 8] = [
         ("ssao", |g| g.ambient_occlusion.enabled = false, &[Ssao]),
         (
             "ssr",
@@ -99,6 +99,7 @@ fn each_feature_toggle_rebuilds_its_own_feature() {
             |g| g.reflections.ray_traced_resolution = PassResolution::Full,
             &[RtReflections],
         ),
+        ("water trace", |g| g.water_trace = false, &[RtReflections]),
         (
             "blur",
             |g| g.reflections.blur_resolution = PassResolution::Quarter,

@@ -156,7 +156,7 @@ float3 glass_mesh_reflection(float3 world_pos, float3 view_dir, float3 normal)
     float3 r = reflect(-view_dir, normal);
     float3 reflection;
     if (!rt_trace_reflection(world_pos + normal * 0.02, r, ibl,
-                             params.prefilter_mip_count - 1.0, reflection))
+                             params.prefilter_mip_count - 1.0, true, reflection))
     {
         // Glass is smooth, so the fallback is sharp (mip 0), with a white rim
         // where there is neither a probe nor a sky.

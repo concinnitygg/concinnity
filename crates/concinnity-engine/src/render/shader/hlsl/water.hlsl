@@ -2163,22 +2163,33 @@ float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDayligh
 static const float WATER_REACTIVE_FRESNEL = 0.5;
 static const float2 WATER_REACTIVE_FADE_METERS = float2(4.0, 16.0);
 
-TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
+// The share of the surface's color its reflection takes before whitecaps.
+float water_fresnel(WaterSurfacePoint s, float3 view_dir)
 {
     float n_dot_v = saturate(dot(s.normal, view_dir));
-    float fresnel = 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
+    return 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
+}
+
+// The whitecap cover that hides the reflection and the glint, 0 where this
+// surface draws none.
+float water_cover(WaterSurfacePoint s)
+{
+#ifdef WATER_SEA
+    bool covered = water_whitecaps() || water_sea_surf > 0.0 || water_sea_wake > 0.0;
+#else
+    bool covered = water_whitecaps();
+#endif
+    return covered ? s.foam : 0.0;
+}
+
+TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflection)
+{
+    float fresnel = water_fresnel(s, view_dir);
     float3 glint = water_sun_glint(s.normal, view_dir, s.alpha, s.day);
     float3 color = lerp(s.below, reflection, fresnel) + glint;
-#ifdef WATER_SEA
-    if (water_whitecaps() || water_sea_surf > 0.0 || water_sea_wake > 0.0)
-#else
-    if (water_whitecaps())
-#endif
-    {
-        // Whitecaps lie on top of the water: what they cover neither
-        // mirrors nor glints.
-        color = lerp(color, s.below, s.foam);
-    }
+    // Whitecaps lie on top of the water: what they cover neither mirrors nor
+    // glints.
+    color = lerp(color, s.below, water_cover(s));
     float near = 1.0 - smoothstep(WATER_REACTIVE_FADE_METERS.x, WATER_REACTIVE_FADE_METERS.y,
                                   s.camera_distance);
     float reactive = max(reactive_luminance(glint), fresnel * WATER_REACTIVE_FRESNEL * near);
@@ -2195,6 +2206,20 @@ bool water_occluded(WaterVertexOut i)
 }
 
 #ifdef WATER_RT
+
+// The on-screen reflection weight below which the trace is not worth a ray:
+// head-on water reflects 2%, so this skips most of a view looking down.
+static const float WATER_TRACE_MIN_WEIGHT = 0.04;
+// The GGX alpha above which the prefiltered environment is the right answer.
+static const float WATER_TRACE_MAX_ALPHA = 0.25;
+
+// Whether the reflection at `s` shows enough, sharply enough, to trace.
+bool water_trace_worth(WaterSurfacePoint s, float3 view_dir)
+{
+    float weight = water_fresnel(s, view_dir) * (1.0 - water_cover(s));
+    return params.planar.z > 0.5 && weight >= WATER_TRACE_MIN_WEIGHT
+        && s.alpha <= WATER_TRACE_MAX_ALPHA;
+}
 
 [shader("pixel")]
 TransparentOut water_rt_fragment(WaterVertexOut i)
@@ -2213,15 +2238,17 @@ TransparentOut water_rt_fragment(WaterVertexOut i)
     {
         reflection = water_planar_reflection(s);
     }
-    // No mirror plane for this surface, so trace instead. The per-fragment
-    // wave normal makes `R` vary across the surface, so the traced
-    // reflection follows the waves rather than mirroring one flat plane.
+    // No mirror plane for this surface, so trace instead where it shows. The
+    // per-fragment wave normal makes `R` vary across the surface, so the traced
+    // reflection follows the waves rather than mirroring one flat plane, and
+    // the ripples hide the hit's sun shadow, so it casts none.
     else
     {
         float3 r = reflect(-view_dir, s.normal);
-        if (!rt_trace_reflection(i.world_pos + s.normal * 0.02, r,
-                                 view.prefilter_mip_count > 0.5,
-                                 view.prefilter_mip_count - 1.0, reflection))
+        if (!water_trace_worth(s, view_dir)
+            || !rt_trace_reflection(i.world_pos + s.normal * 0.02, r,
+                                    view.prefilter_mip_count > 0.5,
+                                    view.prefilter_mip_count - 1.0, false, reflection))
         {
             reflection = water_environment(i.world_pos, r, s.alpha, s.day);
         }

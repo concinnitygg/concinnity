@@ -199,6 +199,12 @@ impl MtlContext {
         self.reflection_path().rt_trace() && self.transparent_rt_pipelines_ready()
     }
 
+    // Whether water traces its own reflection this frame: the BVH is live and
+    // the resolved settings afford the in-place water trace.
+    pub(in crate::metal) fn water_rt_live(&self) -> bool {
+        self.rt.accel.is_some() && self.rt.settings.is_some_and(|s| s.water_trace)
+    }
+
     // Whether every live transparent producer built its ray-traced pipeline,
     // a planet sea's included.
     pub(in crate::metal) fn transparent_rt_pipelines_ready(&self) -> bool {

@@ -414,3 +414,18 @@ fn more_aggressive_picks_the_lower_resolution() {
         UpscaleQuality::Balanced
     );
 }
+
+#[test]
+fn only_full_resolution_tiers_trace_water() {
+    let cases = [
+        (QualityPreset::Custom, true),
+        (QualityPreset::Ultra, true),
+        (QualityPreset::High, false),
+        (QualityPreset::Medium, false),
+        (QualityPreset::Low, false),
+    ];
+    for (preset, traces) in cases {
+        let ceiling = resolve_ceiling(preset, &GpuProfile::UNKNOWN);
+        assert_eq!(ceiling.water_trace(), traces, "{}", preset.name());
+    }
+}

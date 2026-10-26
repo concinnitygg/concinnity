@@ -39,6 +39,9 @@ pub struct RtReflectionSettings {
     pub divisor: u32,
     /// Whether a reflected hit casts a sun-shadow ray.
     pub sun_shadows: bool,
+    /// Whether water traces its own per-pixel reflection in the transparent
+    /// pass, rather than taking the probe, sky or planar reflection.
+    pub water_trace: bool,
 }
 
 /// Per-frame camera + sun inputs for building the RT-reflection GPU uniform.
@@ -87,13 +90,14 @@ impl RtReflectionSettings {
     }
 
     /// Clamp the authored intensity / distance into a safe range, tracing at
-    /// full resolution with sun shadows.
+    /// full resolution with sun shadows and water traced.
     pub fn resolve(intensity: f32, max_distance: f32) -> Self {
         Self {
             intensity: intensity.clamp(0.0, MAX_INTENSITY),
             max_distance: max_distance.clamp(MIN_DISTANCE, MAX_DISTANCE),
             divisor: 1,
             sun_shadows: true,
+            water_trace: true,
         }
     }
 

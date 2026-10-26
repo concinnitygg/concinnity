@@ -2175,7 +2175,11 @@ impl VkContext {
             .and_then(|t| t.producers.water.as_ref())
         {
             let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
-            water.advance_water(frame_idx, time, camera, &wake);
+            let trace = self
+                .rt_reflections
+                .as_ref()
+                .is_some_and(|rt| rt.settings.water_trace);
+            water.advance_water(frame_idx, time, camera, &wake, trace);
         }
     }
 

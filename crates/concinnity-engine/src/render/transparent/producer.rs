@@ -212,17 +212,20 @@ impl<P, R> TransparentProducer<P, R> {
 impl<P, R: WaterParamsSink> TransparentProducer<P, R> {
     /// Write each visible water surface's params, advanced to `time` seconds
     /// and seen from `camera`, a planet sea's pointed at `wake`, into its
-    /// `frame_idx` copy.
+    /// `frame_idx` copy. `trace` is whether the ray-traced fragment may trace
+    /// (see [`WaterParams::set_trace`]).
     pub fn advance_water(
         &self,
         frame_idx: usize,
         time: f64,
         camera: [f32; 3],
         wake: &WaterWakeGpu,
+        trace: bool,
     ) {
         for (record, water) in self.records.iter().zip(&self.water) {
             if record.visible {
-                let params = water.params_with_wake(time, camera, wake);
+                let mut params = water.params_with_wake(time, camera, wake);
+                params.set_trace(trace);
                 record.gpu.write_water_params(frame_idx, &params);
             }
         }
@@ -434,7 +437,7 @@ mod tests {
             WaterMotion::new(&body(), false),
             WaterMotion::new(&body(), false)
         ];
-        p.advance_water(1, 0.5, [0.0; 3], &WaterWakeGpu::default());
+        p.advance_water(1, 0.5, [0.0; 3], &WaterWakeGpu::default(), true);
         assert_eq!(p.records[0].gpu.get(), 101);
         assert_eq!(p.records[1].gpu.get(), 0);
     }

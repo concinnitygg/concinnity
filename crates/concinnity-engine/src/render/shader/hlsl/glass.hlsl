@@ -203,7 +203,7 @@ float3 glass_rt_reflection(float3 world_pos, float3 view_dir, float3 normal)
     float3 reflection;
     if (!rt_trace_reflection(world_pos + normal * 0.02, r,
                              view.prefilter_mip_count > 0.5,
-                             view.prefilter_mip_count - 1.0, reflection))
+                             view.prefilter_mip_count - 1.0, true, reflection))
     {
         reflection = glass_environment(world_pos, r);
     }

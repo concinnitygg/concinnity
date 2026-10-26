@@ -183,7 +183,8 @@ fn rebuild_change(plan: &mut ApplyPlan, change: &ParamChange) {
             rebuild.insert(RtReflections);
             rebuild.insert(ReflectionComposite);
         }
-        ("Reflections", "ray_traced_resolution" | "ray_traced_shadows") => {
+        ("Reflections", "ray_traced_resolution" | "ray_traced_shadows")
+        | ("QualityCeiling", "water_trace") => {
             rebuild.insert(RtReflections);
         }
         ("Reflections", "blur_resolution") => rebuild.insert(ReflectionComposite),

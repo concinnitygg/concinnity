@@ -1000,3 +1000,34 @@ fn adopting_a_quality_group_keeps_the_rest() {
     assert_eq!(r.graphics.frame_pacing.fps_cap, 30);
     assert!(r.graphics.anti_aliasing.upscaling);
 }
+
+// Water traces in place only under a ceiling that traces at full resolution,
+// even where the world and the user leave ray tracing on.
+#[test]
+fn the_water_trace_follows_the_ceiling() {
+    let none = UserGraphicsSettings::default();
+    let world = WorldSettings::default();
+    let water = |ceiling: &QualityCeiling| {
+        resolve_settings(&world, &none, ceiling)
+            .graphics
+            .rt_reflections()
+            .map(|rt| rt.water_trace)
+    };
+    assert_eq!(water(&QualityCeiling::NONE), Some(true));
+    assert_eq!(water(&QualityCeiling::ULTRA), Some(true));
+    assert_eq!(water(&QualityCeiling::HIGH), Some(false));
+}
+
+#[test]
+fn a_preset_change_that_moves_the_water_trace_rebuilds() {
+    let none = UserGraphicsSettings::default();
+    let world = WorldSettings::default();
+    let ultra = resolve_settings(&world, &none, &QualityCeiling::ULTRA);
+    let high = resolve_settings(&world, &none, &QualityCeiling::HIGH);
+    let diff = high.diff(&ultra);
+    assert!(
+        diff.class(ApplyClass::Rebuild)
+            .iter()
+            .any(|c| (c.asset, c.key) == ("QualityCeiling", "water_trace"))
+    );
+}

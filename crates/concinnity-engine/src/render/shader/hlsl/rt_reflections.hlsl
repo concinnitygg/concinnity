@@ -259,7 +259,7 @@ float4 rt_reflections_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_T
     float3 reflected;
     // Origin nudged off the surface along the normal so the trace cannot
     // self-intersect the pixel's own triangle.
-    if (!rt_trace_reflection(pw + nw * 0.01, dir, ibl, max_mip, reflected))
+    if (!rt_trace_reflection(pw + nw * 0.01, dir, ibl, max_mip, true, reflected))
     {
         // The ray escaped the scene: the local reflection probe (box-parallax,
         // blended across covering probes) when one is baked, fading far outside

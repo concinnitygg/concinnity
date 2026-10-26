@@ -54,6 +54,11 @@ pub struct ResolvedGraphics {
     pub lut_strength: f32,
     /// The DLSS render preset, chosen by the user only.
     pub dlss_preset: DlssPreset,
+    /// Whether water traces its own ray-traced reflection, from the quality
+    /// ceiling only ([`QualityCeiling::water_trace`]).
+    ///
+    /// [`QualityCeiling::water_trace`]: crate::settings::QualityCeiling::water_trace
+    pub water_trace: bool,
 }
 
 impl Default for ResolvedGraphics {
@@ -75,6 +80,7 @@ impl Default for ResolvedGraphics {
             planet_detail: PlanetDetail::default(),
             lut_strength: 0.0,
             dlss_preset: DlssPreset::default(),
+            water_trace: true,
         }
     }
 }
@@ -106,7 +112,7 @@ impl ResolvedGraphics {
 
     /// Take the settings the quality preset governs from `other`: the five
     /// effect sections, the render scale, the shadow map and schedule, the
-    /// texture filtering and the planet terrain detail.
+    /// texture filtering, the planet terrain detail and the water trace.
     pub fn adopt_quality(&mut self, other: &Self) {
         self.ambient_occlusion = other.ambient_occlusion.clone();
         self.reflections = other.reflections.clone();
@@ -117,6 +123,7 @@ impl ResolvedGraphics {
         self.shadows = other.shadows.clone();
         self.texture_filtering = other.texture_filtering.clone();
         self.planet_detail = other.planet_detail.clone();
+        self.water_trace = other.water_trace;
     }
 
     /// Frames in flight, at least one.
@@ -185,7 +192,10 @@ impl ResolvedGraphics {
 
     /// Ray-traced reflections, or `None` when off.
     pub fn rt_reflections(&self) -> Option<RtReflectionSettings> {
-        RtReflectionSettings::from_config(&self.reflections)
+        RtReflectionSettings::from_config(&self.reflections).map(|rt| RtReflectionSettings {
+            water_trace: self.water_trace,
+            ..rt
+        })
     }
 
     /// Screen-space global illumination, or `None` when off or inert.

@@ -126,10 +126,10 @@ bool rt_occluded(RaytracingAccelerationStructure tlas, float3 origin, float3 dir
 
 // Sun visibility at a hit: 0 where a second ray toward the sun is occluded (a
 // cast shadow inside the reflection), 1 where the sun is visible or the
-// shadow ray is switched off.
-float rt_shadow(float3 hp, float3 n)
+// shadow ray is switched off, by the settings or by the caller (`shadowed`).
+float rt_shadow(float3 hp, float3 n, bool shadowed)
 {
-    if (rt_params.sun_shadows < 0.5)
+    if (!shadowed || rt_params.sun_shadows < 0.5)
     {
         return 1.0;
     }
@@ -178,11 +178,12 @@ float3 rt_shade_canopy(CanopyShade c, float3 n, float3 dir, bool ibl, float max_
 }
 #endif
 
-// Trace one reflection ray from `origin` along `dir` and shade what it hits.
-// Returns false when the ray escaped the scene, with `shaded` zero: the miss
-// fallback is the caller's, because a screen-space resolve and a glass pane
-// want different ones.
-bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out float3 shaded)
+// Trace one reflection ray from `origin` along `dir` and shade what it hits,
+// casting the hit's sun-shadow ray only when `shadowed`. Returns false when the
+// ray escaped the scene, with `shaded` zero: the miss fallback is the caller's,
+// because a screen-space resolve and a glass pane want different ones.
+bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, bool shadowed,
+                         out float3 shaded)
 {
     shaded = (float3)(0.0);
 
@@ -251,7 +252,7 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, out
     float3 tint = float3(e.tint_r, e.tint_g, e.tint_b);
     float3 emissive = float3(e.emissive_r, e.emissive_g, e.emissive_b);
     float3 hit_p = origin + dir * hit_t;
-    float shadow = rt_shadow(hit_p, hit_n);
+    float shadow = rt_shadow(hit_p, hit_n, shadowed);
 
 #ifdef RT_TEXTURED
     // Explicit level 0: a reflected ray's screen-space UV gradients are

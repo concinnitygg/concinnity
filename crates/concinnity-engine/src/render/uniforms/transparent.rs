@@ -389,13 +389,14 @@ pub struct WaterParams {
     pub wind_gust: [f32; 4],
     /// Wave coefficients, longest first; the first `wave_count` are live.
     pub waves: [WaterWaveGpu; WATER_MAX_WAVES],
-    /// Planar reflection control: `[strength, distortion, _, _]`. `strength >
+    /// Reflection control: `[strength, distortion, trace, _]`. `strength >
     /// 0.5` selects the sharp planar reflection (the scene re-rendered mirrored
     /// across this surface's rest plane, sampled at screen UV) over the probe /
     /// sky cube; `distortion` scales the wave-normal ripple offset of that
-    /// lookup, see [`WaterParams::planar_lane`]. 0 when planar is off (RT on,
-    /// no planar slot, or the plane overflowed the budget), keeping the probe /
-    /// sky path.
+    /// lookup, see [`WaterParams::planar_lane`]. Both are 0 when planar is off
+    /// (RT on, no planar slot, or the plane overflowed the budget), keeping the
+    /// probe / sky path. `trace > 0.5` lets the ray-traced fragment trace where
+    /// no mirror is selected, see [`WaterParams::set_trace`].
     pub planar: [f32; 4],
     /// The ripple octaves, longest first.
     pub ripples: [WaterRippleGpu; RIPPLES],
@@ -444,6 +445,13 @@ impl WaterParams {
         let distortion =
             (roughness.max(0.0) * PLANAR_DISTORTION_PER_ROUGHNESS).min(PLANAR_DISTORTION_MAX);
         [1.0, distortion, 0.0, 0.0]
+    }
+
+    /// Let the ray-traced fragment trace its reflection (`trace`) or keep the
+    /// probe / sky path where no mirror is selected. The probe fragment never
+    /// traces.
+    pub fn set_trace(&mut self, trace: bool) {
+        self.planar[2] = if trace { 1.0 } else { 0.0 };
     }
 
     /// The per-surface block for a resolved body at the world's start,
@@ -634,6 +642,17 @@ mod tests {
         );
         assert_eq!(WaterParams::planar_lane(-1.0, true)[1], 0.0);
         assert_eq!(WaterParams::planar_lane(0.5, false), [0.0; 4]);
+    }
+
+    #[test]
+    fn the_trace_lane_leaves_the_mirror_alone() {
+        let mut p = WaterParams::from_body(&body(&WaterSurface::default()), true);
+        let mirror = p.planar;
+        p.set_trace(true);
+        assert_eq!(p.planar[2], 1.0);
+        assert_eq!(p.planar[..2], mirror[..2]);
+        p.set_trace(false);
+        assert_eq!(p.planar, mirror);
     }
 
     // Two float4s and four scalars, in one 16-byte-aligned block.
