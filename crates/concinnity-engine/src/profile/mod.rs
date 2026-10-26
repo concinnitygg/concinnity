@@ -59,6 +59,26 @@ pub struct FrameSpans {
     pub grass_us: u32,
     /// Planning and filling the ray-tracing acceleration structure's update.
     pub rt_accel_us: u32,
+    /// The parts of `rt_accel_us`.
+    pub rt: RtAccelSpans,
+}
+
+/// CPU microseconds the ray-tracing acceleration structure's update spent in
+/// its steps, each part of [`FrameSpans::rt_accel_us`] and none overlapping
+/// another.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RtAccelSpans {
+    /// Planning the update: whether the draw set changed and what moved.
+    pub plan_us: u32,
+    /// Refreshing the BLAS head after the draw set changed: planning it and
+    /// encoding its BLAS builds and the TLAS build over the new head, less its
+    /// instance fill.
+    pub refresh_us: u32,
+    /// Laying out the TLAS instances and geometry table.
+    pub fill_us: u32,
+    /// Uploading the instances and encoding the TLAS build or update, skinned
+    /// geometry included, less its instance fill.
+    pub build_us: u32,
 }
 
 /// Per-frame render-backend statistics.

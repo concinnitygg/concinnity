@@ -135,6 +135,22 @@ struct Scratch<I> {
     geom: Vec<RtGeomEntry>,
 }
 
+impl<I> Scratch<I> {
+    // The instance index the next laid-out instance takes.
+    fn next_id(&self) -> u32 {
+        u32::saturating_from(self.instances.len())
+    }
+
+    // Lay out one instance with its geometry-table entry, unless the backend
+    // could not make it.
+    fn push(&mut self, instance: Option<I>, geom: RtGeomEntry) {
+        if let Some(instance) = instance {
+            self.instances.push(instance);
+            self.geom.push(geom);
+        }
+    }
+}
+
 /// The CPU side of a scene acceleration structure: which draw objects and
 /// clusters its BLAS cover and in what order, the transforms its TLAS was built
 /// from, and the update policy over them.
@@ -153,6 +169,7 @@ pub struct AccelBook<B, I> {
     clusters: Vec<ClusterInstance>,
     cluster_count: usize,
     has_skinned: bool,
+    head_generation: u64,
     albedo_count: u32,
     clock: u64,
     // A refresh failed, so the next update refreshes again.
@@ -161,6 +178,10 @@ pub struct AccelBook<B, I> {
     // them until the next one publishes.
     parked: Vec<B>,
     scratch: Scratch<I>,
+    // The clock the instance fills are timed by, and their total since the
+    // last `take_fill_us`.
+    now_us: fn() -> u64,
+    fill_us: u32,
 }
 
 impl<B, I> AccelBook<B, I> {
@@ -208,6 +229,7 @@ impl<B, I> AccelBook<B, I> {
             clusters,
             cluster_count,
             has_skinned: false,
+            head_generation: 0,
             albedo_count,
             clock: 0,
             refresh_owed: false,
@@ -219,6 +241,8 @@ impl<B, I> AccelBook<B, I> {
                 instances: Vec::new(),
                 geom: Vec::new(),
             },
+            now_us: || 0,
+            fill_us: 0,
         })
     }
 
@@ -274,6 +298,22 @@ impl<B, I> AccelBook<B, I> {
         self.albedo_count = albedo_count;
     }
 
+    /// Time the instance fills by `now_us`, a monotonic clock in microseconds.
+    pub fn set_timer(&mut self, now_us: fn() -> u64) {
+        self.now_us = now_us;
+    }
+
+    /// The microseconds the instance fills took since the last call.
+    pub fn take_fill_us(&mut self) -> u32 {
+        core::mem::take(&mut self.fill_us)
+    }
+
+    // Add the time since `started` to the fill total.
+    fn end_fill(&mut self, started: u64) {
+        let elapsed = u32::saturating_from((self.now_us)().saturating_sub(started));
+        self.fill_us = self.fill_us.saturating_add(elapsed);
+    }
+
     /// Advance the update clock deferred frees are timed against, returning the
     /// new tick.
     pub fn tick(&mut self) -> u64 {
@@ -318,8 +358,13 @@ impl<B, I> AccelBook<B, I> {
         skinned: Option<&[SkinnedDrawObject]>,
     ) -> Option<RtUpdatePlan> {
         self.select_skinned(skinned);
-        let dirty = topology_dirty || core::mem::take(&mut self.refresh_owed);
-        plan::plan_update(mode, dirty, !self.scratch.skinned.is_empty())
+        // A mode that never updates leaves the debt for the next one that does.
+        let owed = mode.is_dynamic() && core::mem::take(&mut self.refresh_owed);
+        plan::plan_update(
+            mode,
+            topology_dirty || owed,
+            !self.scratch.skinned.is_empty(),
+        )
     }
 
     /// The refresh this update planned failed; the next update plans another.
@@ -381,15 +426,18 @@ impl<B, I> AccelBook<B, I> {
     }
 
     /// Lay out this frame's TLAS instances and geometry table over the head,
-    /// then the selected skinned objects when `skinned` is given. `make` builds
+    /// then the selected skinned objects when `skinned` is given, keeping the
+    /// head's transforms for the commit that follows. `make` builds
     /// one instance from its transform, its instance index (which indexes the
-    /// geometry table) and the BLAS it references.
+    /// geometry table) and the BLAS it references, or `None` for a BLAS it
+    /// cannot reference, which leaves the instance out.
     pub fn fill_instances(
         &mut self,
         draw_objects: &[DrawObject],
         skinned: Option<&[SkinnedDrawObject]>,
-        mut make: impl FnMut(Mat4, u32, InstanceBlas<'_, B>) -> I,
+        mut make: impl FnMut(Mat4, u32, InstanceBlas<'_, B>) -> Option<I>,
     ) {
+        let started = (self.now_us)();
         let Self {
             blas,
             object_indices,
@@ -401,18 +449,20 @@ impl<B, I> AccelBook<B, I> {
         let blas: &[B] = blas;
         scratch.instances.clear();
         scratch.geom.clear();
+        scratch.models.clear();
         let draw_count = object_indices.len();
         for (index, obj) in object_indices
             .iter()
             .enumerate()
             .filter_map(|(index, &i)| Some((index, draw_objects.get(i)?)))
         {
+            scratch.models.push(obj.model);
             if let Some(b) = blas.get(index) {
-                let id = u32::saturating_from(scratch.instances.len());
-                scratch
-                    .instances
-                    .push(make(obj.model, id, InstanceBlas::Head { index, blas: b }));
-                scratch.geom.push(geom_entry(obj, *albedo_count));
+                let id = scratch.next_id();
+                scratch.push(
+                    make(obj.model, id, InstanceBlas::Head { index, blas: b }),
+                    geom_entry(obj, *albedo_count),
+                );
             }
         }
         push_clusters(
@@ -433,12 +483,13 @@ impl<B, I> AccelBook<B, I> {
                 .enumerate()
             {
                 let id = u32::saturating_from(scratch.instances.len());
-                scratch
-                    .instances
-                    .push(make(obj.model, id, InstanceBlas::Skinned { n }));
-                scratch.geom.push(skinned_geom_entry(obj, *albedo_count));
+                if let Some(instance) = make(obj.model, id, InstanceBlas::Skinned { n }) {
+                    scratch.instances.push(instance);
+                    scratch.geom.push(skinned_geom_entry(obj, *albedo_count));
+                }
             }
         }
+        self.end_fill(started);
     }
 
     /// The TLAS instances [`Self::fill_instances`] or
@@ -496,8 +547,9 @@ impl<B, I> AccelBook<B, I> {
         &mut self,
         refresh: &HeadRefresh,
         draw_objects: &[DrawObject],
-        mut make: impl FnMut(Mat4, u32, InstanceBlas<'_, B>) -> I,
+        mut make: impl FnMut(Mat4, u32, InstanceBlas<'_, B>) -> Option<I>,
     ) {
+        let started = (self.now_us)();
         let Self {
             blas,
             object_indices,
@@ -522,9 +574,8 @@ impl<B, I> AccelBook<B, I> {
                 },
                 None => InstanceBlas::Fresh { index },
             };
-            let id = u32::saturating_from(scratch.instances.len());
-            scratch.instances.push(make(obj.model, id, target));
-            scratch.geom.push(geom_entry(obj, *albedo_count));
+            let id = scratch.next_id();
+            scratch.push(make(obj.model, id, target), geom_entry(obj, *albedo_count));
         }
         push_clusters(
             clusters,
@@ -536,6 +587,7 @@ impl<B, I> AccelBook<B, I> {
             },
             &mut make,
         );
+        self.end_fill(started);
     }
 
     /// Whether `fresh` holds a BLAS for every slot `refresh` builds, and the plan
@@ -610,6 +662,7 @@ impl<B, I> AccelBook<B, I> {
             .collect();
         self.object_indices = refresh.indices;
         self.draw_sigs = refresh.sigs;
+        self.head_generation = self.head_generation.wrapping_add(1);
         orphans
     }
 
@@ -625,9 +678,17 @@ impl<B, I> AccelBook<B, I> {
         core::mem::take(&mut self.parked)
     }
 
+    /// Which BLAS head the book holds, bumped by every refresh that commits:
+    /// the static TLAS instances lay out the same BLAS in the same order for as
+    /// long as it holds, which is when a static TLAS can be refit (see
+    /// [`TlasRefit`](crate::render::rt_accel::refit::TlasRefit)).
+    pub fn head_generation(&self) -> u64 {
+        self.head_generation
+    }
+
     /// The TLAS now covers the head alone, built from the transforms
-    /// [`Self::next_step`] collected. See [`Self::release_skinned`] for what
-    /// comes back.
+    /// [`Self::fill_instances`] laid out. See [`Self::release_skinned`] for
+    /// what comes back.
     pub fn commit_static(&mut self) -> Option<Vec<B>> {
         self.cached_models.clone_from(&self.scratch.models);
         self.release_skinned()
@@ -645,7 +706,7 @@ impl<B, I> AccelBook<B, I> {
     }
 
     /// The TLAS now covers the head plus this frame's skinned BLAS, built from
-    /// the transforms [`Self::next_step`] collected.
+    /// the transforms [`Self::fill_instances`] laid out.
     pub fn commit_skinned(&mut self) {
         self.cached_models.clone_from(&self.scratch.models);
         self.has_skinned = true;
@@ -687,6 +748,34 @@ impl<B, I> AccelBook<B, I> {
         draws.chain(clusters).collect()
     }
 
+    /// Carry a value a backend keeps per head BLAS through `refresh`, into
+    /// `out` in the order of the head it would leave: each kept BLAS keeps its
+    /// value from `old`, each fresh slot `j` takes `fresh(j)`, and the clusters
+    /// keep theirs. A value `old` lacks is taken from `fresh` too.
+    pub fn remap_head<T: Copy>(
+        &self,
+        refresh: &HeadRefresh,
+        old: &[T],
+        mut fresh: impl FnMut(usize) -> T,
+        out: &mut Vec<T>,
+    ) {
+        out.clear();
+        for (j, reuse) in refresh.plan.reuse.iter().enumerate() {
+            out.push(match reuse.and_then(|k| old.get(k)) {
+                Some(&v) => v,
+                None => fresh(j),
+            });
+        }
+        let old_draw_count = self.object_indices.len();
+        for c in 0..self.cluster_count {
+            let j = out.len();
+            out.push(match old.get(old_draw_count + c) {
+                Some(&v) => v,
+                None => fresh(j),
+            });
+        }
+    }
+
     /// Every BLAS the book holds, parked ones included, for teardown.
     pub fn drain_blas(&mut self) -> impl Iterator<Item = B> + '_ {
         self.static_blas_count = 0;
@@ -702,13 +791,12 @@ fn push_clusters<'b, B: 'b, I>(
     draw_count: usize,
     scratch: &mut Scratch<I>,
     target: impl Fn(usize) -> Option<InstanceBlas<'b, B>>,
-    make: &mut impl FnMut(Mat4, u32, InstanceBlas<'b, B>) -> I,
+    make: &mut impl FnMut(Mat4, u32, InstanceBlas<'b, B>) -> Option<I>,
 ) {
     for c in clusters {
         if let Some(t) = target(draw_count + c.cluster) {
-            let id = u32::saturating_from(scratch.instances.len());
-            scratch.instances.push(make(c.model, id, t));
-            scratch.geom.push(c.geom);
+            let id = scratch.next_id();
+            scratch.push(make(c.model, id, t), c.geom);
         }
     }
 }

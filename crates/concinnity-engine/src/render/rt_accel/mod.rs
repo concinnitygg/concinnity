@@ -13,6 +13,7 @@ mod book;
 mod drive;
 pub mod geom;
 mod plan;
+pub mod pool;
 pub mod refit;
 mod rings;
 pub mod topology;

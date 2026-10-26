@@ -18,9 +18,17 @@ use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLGPUFamily};
 // default-device handle, which is dropped immediately. `None` when the machine
 // exposes no Metal device at all, which is what resolves a run to headless.
 pub(crate) fn probe_device() -> Option<DeviceProbe> {
-    MTLCreateSystemDefaultDevice().map(|device| DeviceProbe {
-        profile: device_profile(&device),
-        capabilities: device_capabilities(&device),
+    MTLCreateSystemDefaultDevice().map(|device| {
+        let capabilities = device_capabilities(&device);
+        if device.supportsRaytracing() && !capabilities.ray_tracing {
+            tracing::info!(
+                "ray tracing needs macOS 14 / iOS 17 or later; reflections fall back to screen space"
+            );
+        }
+        DeviceProbe {
+            profile: device_profile(&device),
+            capabilities,
+        }
     })
 }
 

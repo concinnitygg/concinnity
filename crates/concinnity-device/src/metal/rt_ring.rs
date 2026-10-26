@@ -32,7 +32,7 @@ use objc2_metal::{
 };
 
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::rt_accel::refit::SkinnedRefit;
+use concinnity_engine::render::rt_accel::refit::{SkinnedRefit, TlasRefit};
 
 use super::error::allocation_failed;
 use super::frame_rings::grow_to;
@@ -41,15 +41,12 @@ type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 type Structure = Retained<ProtocolObject<dyn MTLAccelerationStructure>>;
 type PrimDesc = Retained<MTLPrimitiveAccelerationStructureDescriptor>;
 
-// Identifies the TLAS descriptor a slot has cached. A descriptor pins the array
-// of referenced BLAS, the instance buffer and the instance count; while all
-// three are unchanged the same descriptor drives every rebuild (a build re-reads
-// the instance buffer's current contents), so it does not have to be rebuilt --
-// which is what keeps the per-frame `Vec` of BLAS references off the heap.
+// Identifies the TLAS descriptor a slot has cached. A descriptor pins the
+// instance buffer and the instance count; while both are unchanged the same
+// descriptor drives every rebuild (a build re-reads the instance buffer's
+// current contents), so it does not have to be rebuilt.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct TlasKey {
-    // Bumped by the owner whenever the persistent BLAS head changes identity.
-    pub head_generation: u64,
     // Bumped by the slot whenever its own BLAS or instance buffer are replaced.
     pub slot_generation: u64,
     pub instance_count: usize,
@@ -75,6 +72,9 @@ pub(super) struct RtFrameSlot {
     blas_scratch: usize,
     // The shapes `blas` were last built over and the refit run since.
     pub refit: SkinnedRefit,
+    // The head the static path last built `tlas` over and the refit run since.
+    // Reset whenever `tlas` or the instance buffer is reallocated.
+    pub tlas_refit: TlasRefit,
     tlas: Option<Structure>,
     tlas_size: usize,
     tlas_desc: Option<(
@@ -158,6 +158,7 @@ impl RtFrameSlot {
                 "RT instance descriptors",
             )?);
             self.generation = self.generation.wrapping_add(1);
+            self.tlas_refit.reset();
         }
         Ok(self
             .instances
@@ -253,6 +254,7 @@ impl RtFrameSlot {
             tlas.setLabel(Some(&super::pipeline::ns_str("rt_tlas")));
             self.tlas = Some(tlas);
             self.tlas_size = size;
+            self.tlas_refit.reset();
         }
         Ok(self
             .tlas
@@ -344,20 +346,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tlas_key_separates_head_slot_and_instance_count() {
+    fn tlas_key_separates_slot_and_instance_count() {
         let base = TlasKey {
-            head_generation: 1,
             slot_generation: 2,
             instance_count: 3,
         };
         assert_eq!(base, base);
-        assert_ne!(
-            base,
-            TlasKey {
-                head_generation: 2,
-                ..base
-            }
-        );
         assert_ne!(
             base,
             TlasKey {

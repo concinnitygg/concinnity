@@ -44,8 +44,9 @@ pub enum RtDynamicMode {
     /// not; only the instanced-cluster BLAS are kept. Diagnostic (`rebuild`); the
     /// most expensive path.
     Rebuild,
-    /// Force a fresh TLAS + table rebuild every frame, dirty or not. Diagnostic
-    /// (`tlas`); the same GPU work `Auto` does, minus the dirty gate.
+    /// Update the TLAS + table every frame, dirty or not, refitting or
+    /// rebuilding it as `Auto` would. Diagnostic (`tlas`); the same GPU work
+    /// `Auto` does, minus the dirty gate.
     Tlas,
 }
 

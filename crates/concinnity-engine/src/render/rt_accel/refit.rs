@@ -1,13 +1,14 @@
-//! Backend-agnostic refit cadence for the per-frame skinned bottom-level
-//! acceleration structures. A skinned object's BLAS traces vertices a compute
-//! pass re-poses every frame, so it has to be updated every frame -- but while
-//! the triangle set is unchanged that update can be a REFIT (Vulkan's
+//! Backend-agnostic refit cadence for the acceleration structures updated
+//! every frame something moves: the skinned bottom-level structures, whose
+//! vertices a compute pass re-poses, and the static top-level structure, whose
+//! instance transforms follow the moving props. While the primitive or instance
+//! set is unchanged that update can be a REFIT (Vulkan's
 //! `VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR`, DXR's `PERFORM_UPDATE`,
-//! Metal's `refitAccelerationStructure`), which re-fits the existing tree's bounding volumes in place instead of
-//! rebuilding it from scratch.
+//! Metal's `refitAccelerationStructure`), which re-fits the existing tree's
+//! bounding volumes instead of rebuilding it from scratch.
 //!
 //! A refit keeps the tree the last full build produced, so traversal quality
-//! decays as the pose drifts away from the one that tree was built for; this
+//! decays as the contents drift away from where that tree was built; this
 //! module bounds that with a periodic full rebuild. It owns only the pure
 //! decision -- the descriptors, the allocation and the recorded build are
 //! per-backend. Split out so the cadence is unit-testable without a GPU.
@@ -19,6 +20,15 @@ use alloc::vec::Vec;
 /// independently and they are touched on different frames, so the rebuilds
 /// stagger rather than landing on one frame.
 pub const REFIT_LIMIT: u32 = 32;
+
+/// Consecutive refits of one static TLAS ring slot before its next update
+/// rebuilds it. Lower than [`REFIT_LIMIT`]: a prop that rolls across the scene
+/// stretches the boxes above it on every refit, while a skinned pose stays near
+/// its origin. Each slot takes every Nth update of a ring N deep, so a slot's
+/// tree is refit across up to N times this many frames of motion, and the
+/// slots' first builds land on consecutive frames, so their rebuilds come in
+/// runs of N.
+pub const TLAS_REFIT_LIMIT: u32 = 16;
 
 /// The geometry one skinned BLAS is built over: its slice of the shared skinned
 /// index buffer plus the vertex range the deformed buffer spans. Equal
@@ -40,10 +50,10 @@ pub struct SkinnedShape {
     pub vertex_extent: u32,
 }
 
-/// Whether a slot's skinned BLAS can be refit from this frame's pose or must be
-/// rebuilt from scratch.
+/// Whether an acceleration structure can be refit from this frame's contents
+/// or must be rebuilt from scratch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BlasUpdate {
+pub enum AccelUpdate {
     /// Rebuild the acceleration structure from scratch.
     Build,
     /// Refit the existing acceleration structure in place.
@@ -53,11 +63,11 @@ pub enum BlasUpdate {
 // Rebuild when the geometry changed (a refit is then illegal), when the slot has
 // no built tree to refit, or once every `limit` refits to bound the quality
 // drift. Pure so the cadence is unit-testable without a GPU.
-fn blas_update(shape_changed: bool, built: bool, refits: u32, limit: u32) -> BlasUpdate {
+fn accel_update(shape_changed: bool, built: bool, refits: u32, limit: u32) -> AccelUpdate {
     if shape_changed || !built || refits >= limit {
-        BlasUpdate::Build
+        AccelUpdate::Build
     } else {
-        BlasUpdate::Refit
+        AccelUpdate::Refit
     }
 }
 
@@ -78,19 +88,19 @@ impl SkinnedRefit {
     /// were (re)allocated this frame, which leaves no tree to refit. Call once the
     /// frame's fallible work has passed: recording a build the backend never
     /// encodes would leave the slot claiming a tree a later refit cannot update.
-    pub fn plan(&mut self, shapes: &[SkinnedShape], storage_changed: bool) -> BlasUpdate {
+    pub fn plan(&mut self, shapes: &[SkinnedShape], storage_changed: bool) -> AccelUpdate {
         let changed = storage_changed || self.shapes != shapes;
-        let update = blas_update(changed, self.built, self.refits, REFIT_LIMIT);
+        let update = accel_update(changed, self.built, self.refits, REFIT_LIMIT);
         if changed {
             self.shapes.clear();
             self.shapes.extend_from_slice(shapes);
         }
         match update {
-            BlasUpdate::Build => {
+            AccelUpdate::Build => {
                 self.built = true;
                 self.refits = 0;
             }
-            BlasUpdate::Refit => self.refits += 1,
+            AccelUpdate::Refit => self.refits += 1,
         }
         update
     }
@@ -111,6 +121,56 @@ impl SkinnedRefit {
     }
 }
 
+/// What a static TLAS is laid out over: the BLAS head generation its instances
+/// name and how many instances it holds. A refit must keep both.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TlasTree {
+    /// The head generation the instances reference.
+    pub head: u64,
+    /// The instance count.
+    pub instances: usize,
+}
+
+/// Refit bookkeeping for one static TLAS ring slot. A slot refits its own
+/// tree in place, so the live TLAS other frames trace is never written, from
+/// the tree it was last fully built as: a new head or instance count rebuilds
+/// it, and so does storage reallocated under it ([`Self::reset`]).
+#[derive(Debug, Default)]
+pub struct TlasRefit {
+    built: Option<TlasTree>,
+    refits: u32,
+}
+
+impl TlasRefit {
+    /// How this slot's TLAS should be updated to hold `tree`.
+    pub fn plan(&self, tree: TlasTree) -> AccelUpdate {
+        accel_update(
+            self.built != Some(tree),
+            self.built.is_some(),
+            self.refits,
+            TLAS_REFIT_LIMIT,
+        )
+    }
+
+    /// The slot's TLAS was updated by `update` to hold `tree`.
+    pub fn published(&mut self, update: AccelUpdate, tree: TlasTree) {
+        match update {
+            AccelUpdate::Build => {
+                self.built = Some(tree);
+                self.refits = 0;
+            }
+            AccelUpdate::Refit => self.refits += 1,
+        }
+    }
+
+    /// Forget the slot's tree, so its next update builds. Call wherever the
+    /// slot's TLAS storage is (re)allocated, before anything that can fail.
+    pub fn reset(&mut self) {
+        self.built = None;
+        self.refits = 0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,26 +187,26 @@ mod tests {
     fn a_changed_triangle_set_forces_a_full_build() {
         // A refit cannot add or remove geometry, so a changed shape always
         // rebuilds even when the slot has a tree and refits to spare.
-        assert_eq!(blas_update(true, true, 0, 32), BlasUpdate::Build);
+        assert_eq!(accel_update(true, true, 0, 32), AccelUpdate::Build);
     }
 
     #[test]
     fn an_unbuilt_slot_cannot_be_refit() {
-        assert_eq!(blas_update(false, false, 0, 32), BlasUpdate::Build);
+        assert_eq!(accel_update(false, false, 0, 32), AccelUpdate::Build);
     }
 
     #[test]
     fn a_stable_shape_refits_until_the_limit() {
-        assert_eq!(blas_update(false, true, 0, 32), BlasUpdate::Refit);
-        assert_eq!(blas_update(false, true, 31, 32), BlasUpdate::Refit);
+        assert_eq!(accel_update(false, true, 0, 32), AccelUpdate::Refit);
+        assert_eq!(accel_update(false, true, 31, 32), AccelUpdate::Refit);
         // The 32nd refit is instead a rebuild, bounding the quality drift.
-        assert_eq!(blas_update(false, true, 32, 32), BlasUpdate::Build);
-        assert_eq!(blas_update(false, true, 99, 32), BlasUpdate::Build);
+        assert_eq!(accel_update(false, true, 32, 32), AccelUpdate::Build);
+        assert_eq!(accel_update(false, true, 99, 32), AccelUpdate::Build);
     }
 
     #[test]
     fn a_zero_limit_never_refits() {
-        assert_eq!(blas_update(false, true, 0, 0), BlasUpdate::Build);
+        assert_eq!(accel_update(false, true, 0, 0), AccelUpdate::Build);
     }
 
     #[test]
@@ -174,42 +234,42 @@ mod tests {
     fn a_fresh_slot_builds_then_refits() {
         let mut slot = SkinnedRefit::default();
         let shapes = [shape(0), shape(1)];
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Build);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Refit);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Refit);
     }
 
     #[test]
     fn reallocated_storage_rebuilds_even_on_an_unchanged_shape() {
         let mut slot = SkinnedRefit::default();
         let shapes = [shape(0)];
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
-        assert_eq!(slot.plan(&shapes, true), BlasUpdate::Build);
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Build);
+        assert_eq!(slot.plan(&shapes, true), AccelUpdate::Build);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Refit);
     }
 
     #[test]
     fn a_changed_object_set_rebuilds_and_restarts_the_run() {
         let mut slot = SkinnedRefit::default();
-        assert_eq!(slot.plan(&[shape(0)], false), BlasUpdate::Build);
-        assert_eq!(slot.plan(&[shape(0)], false), BlasUpdate::Refit);
+        assert_eq!(slot.plan(&[shape(0)], false), AccelUpdate::Build);
+        assert_eq!(slot.plan(&[shape(0)], false), AccelUpdate::Refit);
         // A second skinned object became visible: one more BLAS, so a full build.
-        assert_eq!(slot.plan(&[shape(0), shape(1)], false), BlasUpdate::Build);
-        assert_eq!(slot.plan(&[shape(0), shape(1)], false), BlasUpdate::Refit);
+        assert_eq!(slot.plan(&[shape(0), shape(1)], false), AccelUpdate::Build);
+        assert_eq!(slot.plan(&[shape(0), shape(1)], false), AccelUpdate::Refit);
     }
 
     #[test]
     fn the_refit_run_is_bounded_by_the_limit() {
         let mut slot = SkinnedRefit::default();
         let shapes = [shape(0)];
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Build);
         for _ in 0..REFIT_LIMIT {
-            assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
+            assert_eq!(slot.plan(&shapes, false), AccelUpdate::Refit);
         }
         // The run has reached the limit: the next update is a full rebuild, and
         // the run then restarts.
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Build);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Refit);
     }
 
     #[test]
@@ -223,13 +283,57 @@ mod tests {
         assert!(!slot.matches(&[shape(0)]));
     }
 
+    fn tree(head: u64, instances: usize) -> TlasTree {
+        TlasTree { head, instances }
+    }
+
+    #[test]
+    fn a_tlas_slot_builds_first_then_refits_up_to_its_limit() {
+        let mut slot = TlasRefit::default();
+        assert_eq!(slot.plan(tree(0, 8)), AccelUpdate::Build);
+        slot.published(AccelUpdate::Build, tree(0, 8));
+        for _ in 0..TLAS_REFIT_LIMIT {
+            assert_eq!(slot.plan(tree(0, 8)), AccelUpdate::Refit);
+            slot.published(AccelUpdate::Refit, tree(0, 8));
+        }
+        assert_eq!(slot.plan(tree(0, 8)), AccelUpdate::Build);
+        slot.published(AccelUpdate::Build, tree(0, 8));
+        assert_eq!(slot.plan(tree(0, 8)), AccelUpdate::Refit);
+    }
+
+    #[test]
+    fn a_new_head_rebuilds_the_tlas_slot() {
+        let mut slot = TlasRefit::default();
+        slot.published(AccelUpdate::Build, tree(3, 8));
+        assert_eq!(slot.plan(tree(4, 8)), AccelUpdate::Build);
+        slot.published(AccelUpdate::Build, tree(4, 8));
+        assert_eq!(slot.plan(tree(4, 8)), AccelUpdate::Refit);
+    }
+
+    // A refit cannot change how many instances the tree holds, even over the
+    // same head.
+    #[test]
+    fn a_changed_instance_count_rebuilds_the_tlas_slot() {
+        let mut slot = TlasRefit::default();
+        slot.published(AccelUpdate::Build, tree(0, 8));
+        assert_eq!(slot.plan(tree(0, 7)), AccelUpdate::Build);
+    }
+
+    #[test]
+    fn reallocated_tlas_storage_rebuilds() {
+        let mut slot = TlasRefit::default();
+        slot.published(AccelUpdate::Build, tree(0, 8));
+        slot.reset();
+        assert_eq!(slot.plan(tree(0, 8)), AccelUpdate::Build);
+    }
+
     #[test]
     fn reset_makes_the_next_update_a_build() {
         let mut slot = SkinnedRefit::default();
         let shapes = [shape(0)];
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Refit);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Build);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Refit);
         slot.reset();
-        assert_eq!(slot.plan(&shapes, false), BlasUpdate::Build);
+        assert_eq!(slot.plan(&shapes, false), AccelUpdate::Build);
     }
 }

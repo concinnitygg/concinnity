@@ -18,13 +18,17 @@ enum Target {
 
 type Book = AccelBook<Blas, (u32, Target, [f32; 4])>;
 
-fn make(model: Mat4, id: u32, blas: InstanceBlas<'_, Blas>) -> (u32, Target, [f32; 4]) {
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the instance closure the book takes may leave an instance out"
+)]
+fn make(model: Mat4, id: u32, blas: InstanceBlas<'_, Blas>) -> Option<(u32, Target, [f32; 4])> {
     let target = match blas {
         InstanceBlas::Head { index, blas } => Target::Head(index, *blas),
         InstanceBlas::Fresh { index } => Target::Fresh(index),
         InstanceBlas::Skinned { n } => Target::Skinned(n),
     };
-    (id, target, model[3])
+    Some((id, target, model[3]))
 }
 
 fn at(x: f32) -> Mat4 {
@@ -184,6 +188,20 @@ fn only_visible_skinned_objects_with_triangles_are_selected() {
 }
 
 #[test]
+fn an_instance_the_backend_cannot_make_is_left_out_with_its_table_entry() {
+    let (draw, mut book) = seeded(3);
+    book.fill_instances(&draw, None, |model, id, blas| match blas {
+        InstanceBlas::Head { index: 1, .. } => None,
+        other => make(model, id, other),
+    });
+    // Object 2 (head slot 1) is left out; the cluster's instances close up.
+    let ids: Vec<u32> = book.instances().iter().map(|i| i.0).collect();
+    assert_eq!(ids, [0, 1, 2]);
+    assert_eq!(book.instances()[1].1, Target::Head(2, 12));
+    assert_eq!(book.geom_table().len(), 3);
+}
+
+#[test]
 fn a_still_scene_keeps_its_tlas_and_a_moved_one_rebuilds() {
     let (mut draw, mut book) = seeded(3);
     let mode = RtDynamicMode::Auto;
@@ -193,6 +211,21 @@ fn a_still_scene_keeps_its_tlas_and_a_moved_one_rebuilds() {
     assert_eq!(book.next_step(mode, &plan, &draw), RtStep::Tlas);
     assert_eq!(book.commit_static(), None);
     assert_eq!(book.next_step(mode, &plan, &draw), RtStep::Keep);
+}
+
+#[test]
+fn only_a_committed_refresh_starts_a_new_head() {
+    let (draw, mut book) = seeded(3);
+    let head = book.head_generation();
+    book.replace_tail([77]);
+    book.commit_skinned();
+    assert_eq!(book.commit_static(), Some(vec![77]));
+    assert_eq!(book.head_generation(), head);
+
+    let refresh = book.plan_refresh(&draw, false, RefreshMode::Reuse);
+    let fresh = vec![None; refresh.indices().len()];
+    assert!(book.commit_refresh(refresh, fresh, &draw).is_empty());
+    assert_ne!(book.head_generation(), head);
 }
 
 #[test]
@@ -260,6 +293,19 @@ fn a_refresh_reuses_unchanged_blas_and_orphans_the_rest() {
     let mode = RtDynamicMode::Auto;
     let plan = book.plan(mode, false, None).expect("dynamic");
     assert_eq!(book.next_step(mode, &plan, &draw), RtStep::Keep);
+}
+
+#[test]
+fn per_blas_values_follow_the_refreshed_head() {
+    let (mut draw, book) = seeded(4);
+    // Head: objects 0, 2, 3, then the cluster. Bring 1 back, drop 3.
+    draw[1].resident = true;
+    draw[3].resident = false;
+    let refresh = book.plan_refresh(&draw, false, RefreshMode::Reuse);
+    let old = [100, 102, 103, 900];
+    let mut out = Vec::new();
+    book.remap_head(&refresh, &old, |j| 50 + j, &mut out);
+    assert_eq!(out, [100, 51, 102, 900]);
 }
 
 #[test]
@@ -347,6 +393,21 @@ fn a_failed_refresh_is_planned_again() {
     );
     // Owed once: the refresh it planned settles the debt.
     assert_eq!(book.plan(mode, false, None).expect("dynamic").refresh, None);
+}
+
+// A frame whose mode never updates plans nothing, so the refresh stays owed
+// for the next frame that does.
+#[test]
+fn a_static_mode_keeps_an_owed_refresh() {
+    let (_, mut book) = seeded(1);
+    book.owe_refresh();
+    assert!(book.plan(RtDynamicMode::Off, false, None).is_none());
+    assert_eq!(
+        book.plan(RtDynamicMode::Auto, false, None)
+            .expect("dynamic")
+            .refresh,
+        Some(RefreshMode::Reuse)
+    );
 }
 
 #[test]

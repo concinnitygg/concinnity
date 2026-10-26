@@ -4,7 +4,12 @@
 //! through [`RtAccelSteps`]; the order and the bookkeeping between steps live
 //! here.
 
+use core::cell::Cell;
+
+use concinnity_core::math::SaturatingFrom;
+
 use crate::gfx::render_types::{DrawObject, SkinnedDrawObject};
+use crate::profile::{FrameSpans, RtAccelSpans};
 use crate::render::backend::error::RenderResult;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::render::rt_accel::{AccelBook, EmptyHead, RefreshMode, RtStep, RtUpdate, empty_head};
@@ -80,6 +85,10 @@ pub struct RtDriveInputs<'a> {
     pub draw_objects: &'a [DrawObject],
     /// The frame's skinned objects, when skinned geometry takes part.
     pub skinned: Option<&'a [SkinnedDrawObject]>,
+    /// A monotonic clock in microseconds the steps are timed by.
+    pub now_us: fn() -> u64,
+    /// Where the steps' times are recorded, as [`FrameSpans::rt`].
+    pub spans: &'a Cell<FrameSpans>,
 }
 
 /// Run one frame's update of `device`'s live acceleration structure. A failed
@@ -101,13 +110,21 @@ pub fn drive_update<D: RtAccelSteps>(
         topology_dirty,
         draw_objects,
         skinned,
+        now_us,
+        spans,
     } = inputs;
+    let since = |start: u64| u32::saturating_from(now_us().saturating_sub(start));
+    let mut rt = RtAccelSpans::default();
+    device.book().set_timer(now_us);
+    let planned = now_us();
     let Some(plan) = device.book().plan(mode, topology_dirty, skinned) else {
         return Ok(RtUpdate::Done);
     };
+    rt.plan_us = since(planned);
 
     let mut refreshed = Ok(());
     if let Some(refresh_mode) = plan.refresh {
+        let started = now_us();
         refreshed = device.refresh_topology(RefreshStep {
             mode: refresh_mode,
             skinned_follows: plan.skinned,
@@ -116,9 +133,16 @@ pub fn drive_update<D: RtAccelSteps>(
         if refreshed.is_err() {
             device.book().owe_refresh();
         }
+        let fill_us = device.book().take_fill_us();
+        rt.fill_us = rt.fill_us.saturating_add(fill_us);
+        rt.refresh_us = since(started).saturating_sub(fill_us);
     }
 
-    let stepped = match device.book().next_step(mode, &plan, draw_objects) {
+    let stepping = now_us();
+    let next = device.book().next_step(mode, &plan, draw_objects);
+    rt.plan_us = rt.plan_us.saturating_add(since(stepping));
+    let started = now_us();
+    let stepped = match next {
         RtStep::Keep => Ok(RtUpdate::Done),
         RtStep::Tlas if device.book().is_empty() && skinned.is_none() => {
             device.release_skinned();
@@ -129,6 +153,10 @@ pub fn drive_update<D: RtAccelSteps>(
         RtStep::Tlas => device.rebuild_tlas().map(|()| RtUpdate::Done),
         RtStep::Skinned => device.rebuild_skinned(plan.full_skinned_build),
     };
+    let fill_us = device.book().take_fill_us();
+    rt.fill_us = rt.fill_us.saturating_add(fill_us);
+    rt.build_us = since(started).saturating_sub(fill_us);
+    spans.set(FrameSpans { rt, ..spans.get() });
     if plan.refresh.is_some() && plan.skinned && !matches!(stepped, Ok(RtUpdate::Done)) {
         device.book().owe_refresh();
     }
@@ -228,6 +256,8 @@ mod tests {
             topology_dirty: dirty,
             draw_objects: draw,
             skinned,
+            now_us: || 0,
+            spans: alloc::boxed::Box::leak(alloc::boxed::Box::default()),
         }
     }
 
@@ -236,6 +266,34 @@ mod tests {
             Err(RenderError::Other(s)) => s,
             other => panic!("expected an error, got {other:?}"),
         }
+    }
+
+    // A clock that moves 10 us on every read.
+    fn ticking_clock() -> u64 {
+        use core::sync::atomic::{AtomicU64, Ordering};
+        static NOW: AtomicU64 = AtomicU64::new(0);
+        NOW.fetch_add(10, Ordering::Relaxed)
+    }
+
+    #[test]
+    fn the_update_times_its_plan_refresh_and_build() {
+        let draw = vec![draw_object()];
+        let mut d = Fake::seeded(&draw);
+        let spans = Cell::new(FrameSpans::default());
+        let mut i = inputs(RtDynamicMode::Tlas, true, &draw, None);
+        i.now_us = ticking_clock;
+        i.spans = &spans;
+        drive_update(&mut d, i).unwrap();
+        let rt = spans.get().rt;
+        assert!(rt.plan_us > 0 && rt.refresh_us > 0, "{rt:?}");
+        assert_eq!(rt.build_us, 10, "a refresh leaves no build step");
+        assert_eq!(rt.fill_us, 0);
+
+        i.topology_dirty = false;
+        drive_update(&mut d, i).unwrap();
+        let rt = spans.get().rt;
+        assert_eq!(rt.refresh_us, 0);
+        assert!(rt.build_us > 0, "{rt:?}");
     }
 
     #[test]

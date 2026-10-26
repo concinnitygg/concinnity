@@ -14,7 +14,7 @@ use crate::frame_report::tally::RunTally;
 pub(super) const MAX_SYSTEM_TIMINGS: usize = 32;
 
 /// How many parts a frame's render submission is split into.
-pub(super) const RENDER_PARTS: usize = 9;
+pub(super) const RENDER_PARTS: usize = 13;
 
 /// The render submission's parts, in the order it runs them.
 pub(super) const RENDER_PART_NAMES: [&str; RENDER_PARTS] = [
@@ -24,7 +24,11 @@ pub(super) const RENDER_PART_NAMES: [&str; RENDER_PARTS] = [
     "plan",
     "record packing",
     "grass placement",
-    "rt accel",
+    "rt plan",
+    "rt refresh",
+    "rt instance fill",
+    "rt build",
+    "rt other",
     "recording",
     "submit and present",
 ];
@@ -178,6 +182,7 @@ impl FrameSample {
     /// The render submission's parts, in [`RENDER_PART_NAMES`] order. What
     /// they leave of `render_cpu_us` was its other work.
     pub(super) fn render_parts(&self) -> [u32; RENDER_PARTS] {
+        let rt = self.spans.rt;
         [
             self.extract_us,
             self.replay_us,
@@ -185,7 +190,16 @@ impl FrameSample {
             self.spans.plan_us,
             self.spans.record_pack_us,
             self.spans.grass_us,
-            self.spans.rt_accel_us,
+            rt.plan_us,
+            rt.refresh_us,
+            rt.fill_us,
+            rt.build_us,
+            self.spans.rt_accel_us.saturating_sub(
+                rt.plan_us
+                    .saturating_add(rt.refresh_us)
+                    .saturating_add(rt.fill_us)
+                    .saturating_add(rt.build_us),
+            ),
             self.recording_fan_out.wall_us,
             self.submit_present_us,
         ]
@@ -370,6 +384,7 @@ impl Recorded {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::RtAccelSpans;
     use alloc::vec;
 
     fn timing(frame_us: u32) -> FrameTiming {
@@ -499,11 +514,20 @@ mod tests {
             record_pack_us: 50,
             grass_us: 60,
             rt_accel_us: 70,
+            rt: RtAccelSpans {
+                plan_us: 1,
+                refresh_us: 2,
+                fill_us: 3,
+                build_us: 4,
+            },
         };
         render.recording_fan_out.wall_us = 80;
         render.submit_present_us = 90;
         let s = FrameSample::new(timing(16_000), &render, &[], &[], &[]);
-        assert_eq!(s.render_parts(), [10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        assert_eq!(
+            s.render_parts(),
+            [10, 20, 30, 40, 50, 60, 1, 2, 3, 4, 60, 80, 90]
+        );
         assert_eq!(RENDER_PART_NAMES[4], "record packing");
     }
 

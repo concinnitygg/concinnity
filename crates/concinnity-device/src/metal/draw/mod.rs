@@ -564,6 +564,8 @@ impl MtlContext {
                 topology_dirty,
                 draw_objects: &self.state.draw.objects,
                 skinned: skinned_objects,
+                now_us: concinnity_host::clock::monotonic_micros,
+                spans: &self.state.spans,
             },
         );
         // The last draw + cluster geometry is gone and no skinned geometry can

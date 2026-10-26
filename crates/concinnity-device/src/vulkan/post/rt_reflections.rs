@@ -849,6 +849,7 @@ impl VkContext {
                 frame_idx,
                 shared,
                 skinned,
+                spans: &self.state.spans,
             },
         );
         crate::rt_report::report_rt_update(&mut self.rt.update_streak, updated);
