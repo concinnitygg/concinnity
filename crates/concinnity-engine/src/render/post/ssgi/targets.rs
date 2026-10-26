@@ -36,10 +36,11 @@ pub fn gi_desc(gi_scale: u32) -> TextureDesc {
     gi_shape(gi_scale, PixelFormat::Rgba16Float, 1)
 }
 
-/// The shape of each age slot: how many frames of history a trace pixel's
-/// accumulations hold, at the trace resolution.
+/// The shape of each age slot, at the trace resolution: how many frames of
+/// history a trace pixel's accumulations hold (`r`) and the view normal of the
+/// surface it stands for (`gba`).
 pub fn age_desc(gi_scale: u32) -> TextureDesc {
-    gi_shape(gi_scale, PixelFormat::R16Float, 1)
+    gi_shape(gi_scale, PixelFormat::Rgba16Float, 1)
 }
 
 /// The shape of the resolve's output the main pass samples: the environment's
@@ -99,9 +100,9 @@ mod tests {
     }
 
     #[test]
-    fn the_age_is_one_channel_at_the_trace_resolution() {
+    fn the_age_holds_a_normal_at_the_trace_resolution() {
         let d = age_desc(2);
-        assert_eq!(d.format, PixelFormat::R16Float);
+        assert_eq!(d.format, PixelFormat::Rgba16Float);
         assert_eq!(
             resolve_extent(&d, extent(2560, 1440)),
             resolve_extent(&gi_desc(2), extent(2560, 1440))

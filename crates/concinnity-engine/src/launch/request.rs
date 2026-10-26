@@ -128,12 +128,13 @@ impl LaunchRequest {
 
     /// The settings this launch overrides for its own run, layered over the
     /// user's persisted choices and never persisted: vsync, the frame-rate cap,
-    /// the window mode and the DLSS preset.
+    /// the window mode, temporal upscaling and the DLSS preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
         UserGraphicsSettings {
             vsync: self.args.vsync.then_some(true),
             fps_cap: self.args.fps_cap,
             window_mode: self.args.window_mode,
+            temporal_upscaling: self.args.upscaling,
             dlss_preset: self.dlss_preset,
             ..UserGraphicsSettings::default()
         }
@@ -291,6 +292,24 @@ mod tests {
         let merged = user.overlaid_by(&forced.session_overrides());
         assert_eq!(merged.vsync, Some(true));
         assert_eq!(merged.fps_cap, Some(30));
+    }
+
+    #[test]
+    fn requested_upscaling_is_a_session_override() {
+        let user = UserGraphicsSettings {
+            temporal_upscaling: Some(true),
+            ..Default::default()
+        };
+        let forced = |upscaling| LaunchRequest {
+            args: LaunchArgs {
+                upscaling,
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        };
+        let merged = |upscaling| user.overlaid_by(&forced(upscaling).session_overrides());
+        assert_eq!(merged(Some(false)).temporal_upscaling, Some(false));
+        assert_eq!(merged(None).temporal_upscaling, Some(true));
     }
 
     #[test]

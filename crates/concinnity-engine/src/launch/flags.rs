@@ -35,6 +35,9 @@ pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
 pub const WINDOW_MODE_VALUES: &[&str] =
     <crate::window::WindowMode as crate::components::Vocabulary>::VARIANTS;
 
+/// The states `--upscaling` names.
+pub const UPSCALING_VALUES: &[&str] = &["on", "off"];
+
 /// Every flag a launch accepts.
 pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
     LaunchFlag {
@@ -77,6 +80,13 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         value: Some("MODE"),
         values: WINDOW_MODE_VALUES,
         description: "Open the window in this mode, over the world's and the saved settings' choice, unsaved",
+        repeatable: false,
+    },
+    LaunchFlag {
+        name: "upscaling",
+        value: Some("STATE"),
+        values: UPSCALING_VALUES,
+        description: "Turn temporal upscaling on or off, over the world's and the saved settings' choice, unsaved",
         repeatable: false,
     },
     LaunchFlag {

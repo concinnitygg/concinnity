@@ -7,9 +7,12 @@
 //   SSGI_REDUCE    - one more pyramid level: the closest and farthest of the
 //                    2x2 (3x3 on an odd edge) texels of the level below.
 //   SSGI_AGE       - how many frames of history each trace pixel's
-//                    accumulations hold: last frame's, reprojected by the
-//                    motion vectors and rejected where last frame's pyramid saw
-//                    another surface, plus this one.
+//                    accumulations hold (r): last frame's, reprojected by the
+//                    motion vectors and rejected where last frame saw another
+//                    surface, plus this one. Also the view normal (gba) of the
+//                    surface the pixel stands for, which tells the next frame's
+//                    reprojections one surface from another where depth alone
+//                    cannot, such as where an object meets the ground.
 //   SSGI_TRACE     - per trace pixel, cosine-weighted hemisphere rays traced
 //                    through the depth pyramid, returning the lit scene
 //                    color at each on-screen hit, blended into last frame's
@@ -175,6 +178,9 @@ static const float SSGI_MAX_HISTORY = 32.0;
 static const float SSGI_FAST_HISTORY = 3.0;
 // Relative depth change past which a history texel is another surface.
 static const float SSGI_DEPTH_TOLERANCE = 0.1;
+// Least cosine between a history texel's normal and this pixel's below which it
+// is another surface.
+static const float SSGI_NORMAL_TOLERANCE = 0.9;
 
 #if defined(SSGI_AGE)
 
@@ -197,26 +203,28 @@ static const float SSGI_DEPTH_TOLERANCE = 0.1;
 // the accumulation's fast accumulation from this frame's trace; 1 = the
 // G-buffer; 2 = the motion vectors; 3 = this frame's depth pyramid, every
 // level; 4 = last frame's pyramid; 5 = last frame's accumulation of the kind
-// this variant writes; 6 = this frame's age.
+// this variant writes; 6 = this frame's age; 7 = last frame's age.
 #if defined(SSGI_TRACE)
 [[vk::binding(0, 0)]] Texture2D<float4> scene : register(t0);
-[[vk::binding(7, 0)]] SamplerState scene_samp : register(s0);
+[[vk::binding(8, 0)]] SamplerState scene_samp : register(s0);
 #else
 [[vk::binding(0, 0)]] Texture2D<float4> fast : register(t0);
-[[vk::binding(7, 0)]] SamplerState fast_samp : register(s0);
+[[vk::binding(8, 0)]] SamplerState fast_samp : register(s0);
 #endif
 [[vk::binding(1, 0)]] Texture2D<float4> gbuffer : register(t1);
-[[vk::binding(8, 0)]] SamplerState gbuffer_samp : register(s1);
+[[vk::binding(9, 0)]] SamplerState gbuffer_samp : register(s1);
 [[vk::binding(2, 0)]] Texture2D<float4> velocity : register(t2);
-[[vk::binding(9, 0)]] SamplerState velocity_samp : register(s2);
+[[vk::binding(10, 0)]] SamplerState velocity_samp : register(s2);
 [[vk::binding(3, 0)]] Texture2D<float4> pyramid : register(t3);
-[[vk::binding(10, 0)]] SamplerState pyramid_samp : register(s3);
+[[vk::binding(11, 0)]] SamplerState pyramid_samp : register(s3);
 [[vk::binding(4, 0)]] Texture2D<float4> prev_pyramid : register(t4);
-[[vk::binding(11, 0)]] SamplerState prev_pyramid_samp : register(s4);
+[[vk::binding(12, 0)]] SamplerState prev_pyramid_samp : register(s4);
 [[vk::binding(5, 0)]] Texture2D<float4> history : register(t5);
-[[vk::binding(12, 0)]] SamplerState history_samp : register(s5);
+[[vk::binding(13, 0)]] SamplerState history_samp : register(s5);
 [[vk::binding(6, 0)]] Texture2D<float4> age : register(t6);
-[[vk::binding(13, 0)]] SamplerState age_samp : register(s6);
+[[vk::binding(14, 0)]] SamplerState age_samp : register(s6);
+[[vk::binding(7, 0)]] Texture2D<float4> prev_age : register(t7);
+[[vk::binding(15, 0)]] SamplerState prev_age_samp : register(s7);
 
 #else
 
@@ -240,10 +248,20 @@ static const float SSGI_DEPTH_TOLERANCE = 0.1;
 
 #if !defined(SSGI_RESOLVE)
 
+// Whether last frame's trace texel `tap` saw the surface at `depth` facing
+// `normal`.
+bool ssgi_same_surface(int2 tap, float depth, float3 normal)
+{
+    float prev_depth = prev_pyramid.Load(int3(tap, 0)).r;
+    float3 prev_normal = prev_age.Load(int3(tap, 0)).gba;
+    return abs(prev_depth - depth) <= depth * SSGI_DEPTH_TOLERANCE
+        && dot(prev_normal, normal) >= SSGI_NORMAL_TOLERANCE;
+}
+
 // `source` at `prev_uv` in last frame's trace grid, bilinear over the four
-// texels around it, each kept only where last frame's pyramid saw a surface at
-// `depth`. Zero when none did.
-float4 ssgi_reproject(Texture2D<float4> source, float2 prev_uv, float depth, int2 low)
+// texels around it, each kept only where last frame saw the same surface. Zero
+// when none did.
+float4 ssgi_reproject(Texture2D<float4> source, float2 prev_uv, float depth, float3 normal, int2 low)
 {
     if (params.history_valid < 0.5 || any(prev_uv < 0.0) || any(prev_uv > 1.0))
     {
@@ -262,8 +280,7 @@ float4 ssgi_reproject(Texture2D<float4> source, float2 prev_uv, float depth, int
         {
             continue;
         }
-        float prev_depth = prev_pyramid.Load(int3(tap, 0)).r;
-        if (abs(prev_depth - depth) > depth * SSGI_DEPTH_TOLERANCE)
+        if (!ssgi_same_surface(tap, depth, normal))
         {
             continue;
         }
@@ -275,20 +292,24 @@ float4 ssgi_reproject(Texture2D<float4> source, float2 prev_uv, float depth, int
     return wsum > 1e-3 ? sum / wsum : (float4)(0.0);
 }
 
-// Where trace pixel `p` reprojects from: its closest full-resolution surface's
-// UV moved by that surface's motion.
-float2 ssgi_prev_uv(int2 p, int2 full, int2 low)
+// Where full-resolution texel `q` reprojects from: its UV moved by its motion.
+float2 ssgi_prev_uv(int2 q, int2 full)
 {
-    int2 q = ssgi_closest_texel(gbuffer, p, full, low);
     return (float2(q) + 0.5) / float2(full) + velocity.Load(int3(q, 0)).rg;
+}
+
+// The view normal of full-resolution texel `q`.
+float3 ssgi_normal(int2 q)
+{
+    return normalize(gbuffer.Load(int3(q, 0)).xyz);
 }
 
 #if !defined(SSGI_AGE)
 
 // Last frame's accumulation, reprojected, at this frame's pre-exposure.
-float4 ssgi_history(float2 prev_uv, float depth, int2 low)
+float4 ssgi_history(float2 prev_uv, float depth, float3 normal, int2 low)
 {
-    float4 h = ssgi_reproject(history, prev_uv, depth, low);
+    float4 h = ssgi_reproject(history, prev_uv, depth, normal, low);
     return float4(h.rgb * params.history_scale, h.a);
 }
 
@@ -311,8 +332,10 @@ float4 ssgi_age_fragment(
     }
     int2 low = int2(texture_size(pyramid));
     int2 full = int2(texture_size(gbuffer));
-    float prev = ssgi_reproject(prev_age, ssgi_prev_uv(p, full, low), depth, low).r;
-    return float4(min(prev + 1.0, SSGI_MAX_HISTORY), 0.0, 0.0, 0.0);
+    int2 q = ssgi_closest_texel(gbuffer, p, full, low);
+    float3 normal = ssgi_normal(q);
+    float prev = ssgi_reproject(prev_age, ssgi_prev_uv(q, full), depth, normal, low).r;
+    return float4(min(prev + 1.0, SSGI_MAX_HISTORY), normal);
 }
 
 #elif defined(SSGI_TRACE)
@@ -520,7 +543,7 @@ float4 ssgi_trace_fragment(
     // together often enough that clipping to it would keep resetting sparse
     // light to black. The fast accumulation settles a lighting change within a
     // few frames, and bounds the long one.
-    float4 hist = ssgi_history(uv + velocity.Load(int3(q, 0)).rg, depth, int2(low));
+    float4 hist = ssgi_history(ssgi_prev_uv(q, int2(full)), depth, n, int2(low));
     float len = clamp(age.Load(int3(p, 0)).r, 1.0, SSGI_FAST_HISTORY);
     return lerp(hist, gathered, 1.0 / len);
 }
@@ -575,7 +598,8 @@ float4 ssgi_accumulate_fragment(
     float4 lo = min(mean - SSGI_HISTORY_CLAMP * sigma, current);
     float4 hi = max(mean + SSGI_HISTORY_CLAMP * sigma, current);
 
-    float4 hist = ssgi_history(ssgi_prev_uv(p, full, low), depth, low);
+    int2 q = ssgi_closest_texel(gbuffer, p, full, low);
+    float4 hist = ssgi_history(ssgi_prev_uv(q, full), depth, ssgi_normal(q), low);
     float len = clamp(age.Load(int3(p, 0)).r, 1.0, SSGI_MAX_HISTORY);
     return lerp(clamp(hist, lo, hi), current, 1.0 / len);
 }
@@ -603,7 +627,8 @@ float4 ssgi_resolve_fragment(
     float2 full = texture_size(gbuffer);
     float2 uv = (float2(fp) + 0.5) / full;
     float ao = occlusion.SampleLevel(occlusion_samp, uv, 0.0).r;
-    float depth = gbuffer.Load(int3(fp, 0)).a;
+    float4 surface = gbuffer.Load(int3(fp, 0));
+    float depth = surface.a;
     float2 prev_uv = uv + velocity.Load(int3(fp, 0)).rg;
     if (depth <= 0.0 || params.history_valid < 0.5 || any(prev_uv < 0.0) || any(prev_uv > 1.0))
     {
@@ -617,6 +642,7 @@ float4 ssgi_resolve_fragment(
     float frames = prev_age.Load(int3(nearest, 0)).r;
     float radius = lerp(SSGI_RADIUS_YOUNG, SSGI_RADIUS_CONVERGED, saturate(frames / SSGI_CONVERGE_FRAMES));
 
+    float3 normal = normalize(surface.xyz);
     float4 sum = (float4)(0.0);
     float wsum = 0.0;
     for (int y = -1; y <= 2; y++)
@@ -632,7 +658,9 @@ float4 ssgi_resolve_fragment(
             }
             float tap_depth = prev_pyramid.Load(int3(tap, 0)).r;
             float dd = abs(tap_depth - depth);
-            if (ssgi_is_sky(tap_depth) || dd > depth * SSGI_DEPTH_TOLERANCE)
+            float3 tap_normal = prev_age.Load(int3(tap, 0)).gba;
+            if (ssgi_is_sky(tap_depth) || dd > depth * SSGI_DEPTH_TOLERANCE
+                || dot(tap_normal, normal) < SSGI_NORMAL_TOLERANCE)
             {
                 continue;
             }

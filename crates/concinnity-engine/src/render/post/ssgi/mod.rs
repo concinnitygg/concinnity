@@ -8,7 +8,8 @@
 //! 2. the pyramid's remaining levels, each the depth range of the level below;
 //! 3. the age: how many frames of history each pixel's accumulations hold,
 //!    last frame's reprojected by the G-buffer's motion vectors and rejected
-//!    where last frame's pyramid saw another surface;
+//!    where last frame's pyramid and normals saw another surface, beside the
+//!    normal this frame sees;
 //! 4. the trace: cosine-weighted hemisphere rays walked through the pyramid,
 //!    the lit scene color each one hits and the share of rays that hit,
 //!    blended into last frame's fast accumulation (a few frames long);
@@ -104,7 +105,7 @@ pub fn build_pipelines<D: PostPassDevice>(device: &D) -> RenderResult<SsgiPipeli
     Ok(SsgiPipelines {
         depth: device.create_pipeline(PostProgram::SsgiDepth, depth, replace)?,
         reduce: device.create_pipeline(PostProgram::SsgiReduce, depth, replace)?,
-        age: device.create_pipeline(PostProgram::SsgiAge, PixelFormat::R16Float, replace)?,
+        age: device.create_pipeline(PostProgram::SsgiAge, color, replace)?,
         trace: device.create_pipeline(PostProgram::SsgiTrace, color, replace)?,
         accumulate: device.create_pipeline(PostProgram::SsgiAccumulate, color, replace)?,
         resolve: device.create_pipeline(PostProgram::SsgiResolve, color, replace)?,
@@ -395,6 +396,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         let depth = device.target_ref(pyramid);
         let prev_depth = device.target_ref(targets.depth(read)?);
         let age = device.target_ref(targets.age(write)?);
+        let prev_age = device.target_ref(targets.age(read)?);
         device.encode(
             rec,
             &private_draw(
@@ -406,7 +408,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
                     screen::<D>(inputs.velocity),
                     screen::<D>(depth),
                     screen::<D>(prev_depth),
-                    screen::<D>(device.target_ref(targets.age(read)?)),
+                    screen::<D>(prev_age),
                 ],
                 bytemuck::bytes_of(params),
                 "SSGI age",
@@ -426,6 +428,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
                     screen::<D>(prev_depth),
                     screen::<D>(device.target_ref(targets.fast(read)?)),
                     screen::<D>(age),
+                    screen::<D>(prev_age),
                 ],
                 bytemuck::bytes_of(params),
                 "SSGI trace",
@@ -445,6 +448,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
                     screen::<D>(prev_depth),
                     screen::<D>(device.target_ref(targets.history(read)?)),
                     screen::<D>(age),
+                    screen::<D>(prev_age),
                 ],
                 bytemuck::bytes_of(params),
                 "SSGI accumulate",
@@ -681,6 +685,7 @@ mod tests {
                 MockTexture::Target(depth(1)),
                 MockTexture::Target(fast(1)),
                 MockTexture::Target(age(0)),
+                MockTexture::Target(age(1)),
             ]
         );
         // The long accumulation reads the fast one this frame's trace wrote.
@@ -695,6 +700,7 @@ mod tests {
                 MockTexture::Target(depth(1)),
                 MockTexture::Target(history(1)),
                 MockTexture::Target(age(0)),
+                MockTexture::Target(age(1)),
             ]
         );
     }
@@ -725,7 +731,7 @@ mod tests {
         }
         assert_eq!(p.depth.format, PixelFormat::Rg32Float);
         assert_eq!(p.reduce.format, PixelFormat::Rg32Float);
-        assert_eq!(p.age.format, PixelFormat::R16Float);
+        assert_eq!(p.age.format, PixelFormat::Rgba16Float);
         assert_eq!(p.trace.format, PixelFormat::Rgba16Float);
         assert_eq!(p.accumulate.format, PixelFormat::Rgba16Float);
         assert_eq!(p.resolve.format, PixelFormat::Rgba16Float);
@@ -776,6 +782,7 @@ mod tests {
         let accumulate = binds(&second[n + 2]);
         assert_eq!(accumulate[4], MockTexture::Target(depth(0)));
         assert_eq!(accumulate[5], MockTexture::Target(history(0)));
+        assert_eq!(accumulate[7], MockTexture::Target(age(0)));
     }
 
     #[test]
