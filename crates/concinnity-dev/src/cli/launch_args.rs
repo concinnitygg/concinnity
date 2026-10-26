@@ -12,10 +12,24 @@ impl LaunchArgsArg {
     pub(crate) const NONE: Self = Self(LaunchArgs::NONE);
 }
 
+impl LaunchArgsArg {
+    fn set(&mut self, name: &str, value: Option<&str>) -> Result<(), clap::Error> {
+        self.0.set(name, value).map_err(|e| {
+            let first = e.to_string().lines().next().unwrap_or_default().to_string();
+            clap::Error::raw(clap::error::ErrorKind::ValueValidation, first + "\n")
+        })
+    }
+}
+
 impl clap::Args for LaunchArgsArg {
     fn augment_args(cmd: Command) -> Command {
         LAUNCH_FLAGS.iter().fold(cmd, |cmd, flag| {
             let arg = Arg::new(flag.name).long(flag.name).help(flag.description);
+            let arg = if flag.repeatable {
+                arg.action(ArgAction::Append)
+            } else {
+                arg
+            };
             cmd.arg(match flag.value {
                 None => arg.action(ArgAction::SetTrue),
                 Some(value) if flag.values.is_empty() => arg.value_name(value),
@@ -40,18 +54,15 @@ impl clap::FromArgMatches for LaunchArgsArg {
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
         for flag in LAUNCH_FLAGS {
-            let value = match flag.value {
-                None if matches.get_flag(flag.name) => None,
-                None => continue,
-                Some(_) => match matches.get_one::<String>(flag.name) {
-                    Some(value) => Some(value.as_str()),
-                    None => continue,
-                },
-            };
-            self.0.set(flag.name, value).map_err(|e| {
-                let first = e.to_string().lines().next().unwrap_or_default().to_string();
-                clap::Error::raw(clap::error::ErrorKind::ValueValidation, first + "\n")
-            })?;
+            match flag.value {
+                None if matches.get_flag(flag.name) => self.set(flag.name, None)?,
+                None => {}
+                Some(_) => {
+                    for value in matches.get_many::<String>(flag.name).into_iter().flatten() {
+                        self.set(flag.name, Some(value))?;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -127,6 +138,30 @@ mod tests {
                 )],
             }
         );
+    }
+
+    #[test]
+    fn a_repeatable_flag_keeps_every_value_in_order() {
+        use concinnity_engine::launch::ScreenshotAt;
+        let args = parse(&[
+            "--screenshot-at",
+            "17.5:a.png",
+            "--screenshot-at",
+            "34.5:b.png",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.screenshot_at,
+            vec![
+                ScreenshotAt::new(17.5, "a.png"),
+                ScreenshotAt::new(34.5, "b.png")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_single_value_flag_is_refused_twice() {
+        assert!(parse(&["--frames", "5", "--frames", "6"]).is_err());
     }
 
     #[test]

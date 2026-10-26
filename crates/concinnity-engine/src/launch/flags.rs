@@ -17,6 +17,8 @@ pub struct LaunchFlag {
     pub values: &'static [&'static str],
     /// What the flag does, in one line.
     pub description: &'static str,
+    /// Whether the flag may be given more than once, each value adding to the last.
+    pub repeatable: bool,
 }
 
 /// The quality presets `--quality-preset` names, in [`QualityPreset::ALL`]
@@ -36,54 +38,63 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         value: None,
         values: &[],
         description: "Benchmark the world and print what its frames cost when the run ends",
+        repeatable: false,
     },
     LaunchFlag {
         name: "vsync",
         value: None,
         values: &[],
         description: "Turn vertical sync on, whatever the world or the saved settings say",
+        repeatable: false,
     },
     LaunchFlag {
         name: "fps-cap",
         value: Some("N"),
         values: &[],
         description: "Cap the frame rate at N frames a second (0 leaves it uncapped)",
+        repeatable: false,
     },
     LaunchFlag {
         name: "quality-preset",
         value: Some("PRESET"),
         values: QUALITY_PRESET_VALUES,
         description: "Force the graphics-quality preset for this run, unsaved",
+        repeatable: false,
     },
     LaunchFlag {
         name: "graphics-api",
         value: Some("API"),
         values: GRAPHICS_API_VALUES,
         description: "Render with this graphics API, over the saved settings' choice, unsaved",
+        repeatable: false,
     },
     LaunchFlag {
         name: "screenshots-dir",
         value: Some("DIR"),
         values: &[],
         description: "Write screenshots under DIR (default `screenshots`)",
+        repeatable: false,
     },
     LaunchFlag {
         name: "screenshots",
         value: None,
         values: &[],
         description: "Take the world's authored screenshots, as a benchmark always does",
+        repeatable: false,
     },
     LaunchFlag {
         name: "screenshot-at",
         value: Some("SECONDS[:FILE]"),
         values: &[],
         description: "Save the frame SECONDS into the run as FILE under the screenshot directory (repeatable)",
+        repeatable: true,
     },
     LaunchFlag {
         name: "frames",
         value: Some("N"),
         values: &[],
         description: "Stop after N frames",
+        repeatable: false,
     },
 ];
 
