@@ -2,6 +2,8 @@
 //! block, area lights and their LTC tables, and the cluster grid's depth range.
 
 pub(crate) mod area;
+#[cfg(test)]
+mod bench;
 pub(crate) mod cluster_range;
 pub(crate) mod directional;
 pub mod lights;

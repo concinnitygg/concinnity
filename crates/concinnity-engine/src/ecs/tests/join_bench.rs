@@ -27,7 +27,7 @@ use crate::ecs::entity::{Entities, Entity};
 use crate::ecs::join::JoinIndex;
 use crate::ecs::mask::{ComponentId, ComponentMask};
 use crate::ecs::tick::Tick;
-use crate::test_support::Pace;
+use crate::test_support::{Pace, Rng};
 
 fn transform_id() -> ComponentId {
     ComponentId::new(1)
@@ -50,32 +50,6 @@ struct MeshRenderer {
     material: u32,
 }
 
-// Deterministic xorshift so the layout (and thus the cache behavior) is
-// identical across runs and machines.
-struct Rng(u64);
-
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.0 = x;
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
-
-    fn below(&mut self, n: usize) -> usize {
-        usize::saturating_from(self.next_u64() % n as u64)
-    }
-}
-
-fn shuffle<T>(items: &mut [T], rng: &mut Rng) {
-    for i in (1..items.len()).rev() {
-        let j = rng.below(i + 1);
-        items.swap(i, j);
-    }
-}
-
 struct Bench {
     transforms: Column<Transform>,
     meshes: Column<MeshRenderer>,
@@ -96,7 +70,7 @@ fn build(n: usize, renderable_permil: u32, seed: u64) -> Bench {
     let mut entities = Entities::new();
     let mut transforms = Column::new();
     let mut join = JoinIndex::new();
-    let mut rng = Rng(seed);
+    let mut rng = Rng::new(seed);
     let mut renderable: Vec<Entity> = Vec::new();
 
     for i in 0..n {
@@ -109,7 +83,7 @@ fn build(n: usize, renderable_permil: u32, seed: u64) -> Bench {
         }
     }
 
-    shuffle(&mut renderable, &mut rng);
+    rng.shuffle(&mut renderable);
 
     let mut meshes = Column::new();
     let mut mesh_row_by_index = HashMap::new();

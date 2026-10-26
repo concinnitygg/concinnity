@@ -8,6 +8,8 @@
 //! The background fetch threads live with the host; no thread, file, or clock
 //! belongs in this file.
 
+#[cfg(test)]
+mod bench;
 pub(crate) mod chunk_window;
 pub mod mesh_seed;
 pub mod pools;

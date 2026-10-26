@@ -1,6 +1,5 @@
-// BehaviorSystem's per-frame cost. This lives beside the system rather than
-// under a bench target because `gather` is private: it is measured directly,
-// and it is the reason these benchmarks exist. `gather` used to build
+// BehaviorSystem's per-frame cost, with the private `gather` measured
+// directly; it is the reason these benchmarks exist. `gather` used to build
 // whole-world ordered containers every tick, which made BehaviorSystem's cost a
 // function of world size rather than of how many behaviors were declared;
 // scoping it to what the bodies can actually read took 23-31x off the tick.

@@ -119,11 +119,6 @@ required-features = ["player"]
 name = "cli"
 required-features = ["editor"]
 
-[[bench]]
-name = "suite"
-harness = false
-required-features = ["cook", "player"]
-
 [workspace]
 resolver = "2"
 members = [

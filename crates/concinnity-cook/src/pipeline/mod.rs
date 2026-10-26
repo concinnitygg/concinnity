@@ -29,6 +29,8 @@ mod result;
 mod validate;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod fixtures;
 
 pub(crate) use entry::write_blobs_to;

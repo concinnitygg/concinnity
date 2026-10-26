@@ -117,12 +117,6 @@ pub(crate) fn armed() -> bool {
 mod tests {
     use super::*;
 
-    // `#[global_allocator]` is a per-program item, so a library declares one
-    // only for its own test binary. This crate's tests read the counters the
-    // guard is built on -- here, and in the driver's `run_tests` -- so the test
-    // binary is the one build of this crate that installs the allocator.
-    concinnity_core::install_global_allocator!();
-
     // Drive the guard past its warmup without judging anything.
     fn warmed() -> AllocGuard {
         let mut guard = AllocGuard::new();

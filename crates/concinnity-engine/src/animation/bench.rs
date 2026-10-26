@@ -1,18 +1,22 @@
-//! Benchmarks over the CPU animation pipeline: clip sampling, weighted pose
-//! blending, skinning-matrix resolution, the composed per-character cost, and
-//! the two-bone IK solve. The skeleton is a 64-joint chain in the shape of a
-//! humanoid rig; the realistic clip carries 61 keys per track (two seconds
-//! baked at 30 Hz, what the FBX importer emits), and a 2-key variant isolates
-//! the track scan cost from the interpolation itself. Sample times advance
-//! every iteration so keyframe search never settles on one branch.
+// Measures the CPU animation pipeline: clip sampling, weighted pose blending,
+// skinning-matrix resolution, the composed per-character cost, and the
+// two-bone IK solve. The skeleton is a 64-joint chain in the shape of a
+// humanoid rig; the realistic clip carries 61 keys per track (two seconds
+// baked at 30 Hz, what the FBX importer emits), and a 2-key variant isolates
+// the track scan cost from the interpolation itself. Sample times advance
+// every iteration so keyframe search never settles on one branch.
+//
+//     cargo test -p concinnity-engine --release -- --ignored --nocapture \
+//         --test-threads=1 bench_animation
 
-use crate::support::{Bench, Rng};
-use concinnity_engine::animation::ik::{TwoBoneChain, apply_two_bone_ik};
-use concinnity_engine::animation::pose_blend::PoseBlend;
-use concinnity_engine::animation::skeleton::{
-    AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton,
-};
-use concinnity_engine::transform::Mat4;
+use std::format;
+use std::vec::Vec;
+
+use crate::animation::ik::{TwoBoneChain, apply_two_bone_ik};
+use crate::animation::pose_blend::PoseBlend;
+use crate::animation::skeleton::{AnimationClip, Joint, JointPose, JointTrack, Keyframe, Skeleton};
+use crate::test_support::{Pace, Rng, bench};
+use crate::transform::Mat4;
 
 const JOINTS: usize = 64;
 const BAKED_KEYS: usize = 61;
@@ -63,7 +67,7 @@ fn clip(keys: usize, seed: u64) -> AnimationClip {
     }
 }
 
-pub(crate) fn benches(bench: &mut Bench) {
+fn run(pace: Pace) {
     let skeleton = skeleton();
     let baked = clip(BAKED_KEYS, 1);
     let sparse = clip(2, 2);
@@ -72,7 +76,7 @@ pub(crate) fn benches(bench: &mut Bench) {
     {
         let mut t = 0.0f32;
         let mut out: Vec<Mat4> = Vec::new();
-        bench.run("anim/sample_clip_61key/64j", JOINTS as u64, || {
+        bench(pace, "anim/sample_clip_61key/64j", JOINTS as u64, || {
             t += FRAME_DT;
             baked.sample_looped_into(t, true, &skeleton, &mut out);
             out.len()
@@ -82,7 +86,7 @@ pub(crate) fn benches(bench: &mut Bench) {
     {
         let mut t = 0.0f32;
         let mut out: Vec<Mat4> = Vec::new();
-        bench.run("anim/sample_clip_2key/64j", JOINTS as u64, || {
+        bench(pace, "anim/sample_clip_2key/64j", JOINTS as u64, || {
             t += FRAME_DT;
             sparse.sample_looped_into(t, true, &skeleton, &mut out);
             out.len()
@@ -95,7 +99,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         baked.sample_looped_into(0.3, true, &skeleton, &mut pose_a);
         second.sample_looped_into(0.7, true, &skeleton, &mut pose_b);
         let mut acc: Vec<Mat4> = Vec::new();
-        bench.run("anim/blend_2_poses/64j", JOINTS as u64, || {
+        bench(pace, "anim/blend_2_poses/64j", JOINTS as u64, || {
             let mut fold = PoseBlend::new(&mut acc);
             fold.add(&pose_a, 1.0);
             fold.add(&pose_b, 0.6);
@@ -107,7 +111,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         let mut locals: Vec<Mat4> = Vec::new();
         baked.sample_looped_into(0.5, true, &skeleton, &mut locals);
         let mut out: Vec<Mat4> = Vec::new();
-        bench.run("anim/skin_matrices/64j", JOINTS as u64, || {
+        bench(pace, "anim/skin_matrices/64j", JOINTS as u64, || {
             skeleton.skinning_matrices_into(&locals, &mut out);
             out.len()
         });
@@ -121,7 +125,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         let mut acc: Vec<Mat4> = Vec::new();
         let mut sample: Vec<Mat4> = Vec::new();
         let mut out: Vec<Mat4> = Vec::new();
-        bench.run("anim/character_pose_2clips/64j", 1, || {
+        bench(pace, "anim/character_pose_2clips/64j", 1, || {
             t += FRAME_DT;
             let mut fold = PoseBlend::new(&mut acc);
             baked.sample_looped_into(t, true, &skeleton, &mut sample);
@@ -147,7 +151,7 @@ pub(crate) fn benches(bench: &mut Bench) {
         let mut world: Vec<Mat4> = Vec::new();
         // Reset from a pristine pose each solve (a memcpy) rather than
         // resampling, so the number is the IK solve and not the clip sample.
-        bench.run("anim/two_bone_ik/1", 1, || {
+        bench(pace, "anim/two_bone_ik/1", 1, || {
             t += FRAME_DT;
             locals.clone_from(&pristine);
             let target = [0.1, 0.25 + 0.05 * (t % 1.0), 0.05];
@@ -155,4 +159,15 @@ pub(crate) fn benches(bench: &mut Bench) {
             locals.len()
         });
     }
+}
+
+#[test]
+#[ignore = "benchmark; run with --ignored --test-threads=1"]
+fn bench_animation() {
+    run(Pace::Timed);
+}
+
+#[test]
+fn animation_fixtures_build_and_run() {
+    run(Pace::Once);
 }

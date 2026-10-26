@@ -5,9 +5,6 @@
 // join probes pay a real scattered read rather than a coincidentally
 // sequential one.
 //
-// In-module rather than under a bench target because the storage macro it
-// drives is expanded by its consumers rather than called across a boundary.
-//
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 bench_storage
 
@@ -24,32 +21,7 @@ use std::vec::Vec;
 
 use crate::define_component_storage;
 use crate::ecs::{Entity, EventCursor, Events};
-use crate::test_support::{Pace, bench};
-
-// Deterministic xorshift so fixtures lay out identically across runs.
-struct Rng(u64);
-
-impl Rng {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.0 = x;
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
-
-    fn shuffle<T>(&mut self, items: &mut [T]) {
-        for i in (1..items.len()).rev() {
-            let j = usize::saturating_from(self.next_u64() % (i as u64 + 1));
-            items.swap(i, j);
-        }
-    }
-}
+use crate::test_support::{Pace, Rng, bench};
 
 // A world matrix, the bulky per-entity datum the render prep walks.
 #[derive(Clone, Copy, Default, Debug)]

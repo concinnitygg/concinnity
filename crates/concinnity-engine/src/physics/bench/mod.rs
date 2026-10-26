@@ -1,11 +1,7 @@
 // In-crate microbenchmarks for the simulation, and the fan-out and timing
 // helpers they share.
 //
-// These live inside the crate rather than under a bench target because what
-// they measure is `pub(crate)`: the overflow counters, the pose and sleep
-// readouts, and the kinematic and shape-cast paths are not part of the
-// simulation's public surface, and widening them for a benchmark would be the
-// wrong trade. The measured pass is ignored by default, so a normal test run
+// The measured pass is ignored by default, so a normal test run
 // pays only for the single-run pass beside it, which drives the same
 // fixtures once at a fraction of the size.
 // `--test-threads=1` is required rather than tidy: a benchmark sharing a

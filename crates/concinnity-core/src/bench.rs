@@ -3,6 +3,7 @@
 //! crate's ignored benchmark tests, so it ships behind the `test-support` feature
 //! (and in this crate's own test build) rather than in the `no_std` surface.
 
+use crate::math::SaturatingFrom;
 use std::println;
 use std::time::Instant;
 
@@ -19,6 +20,45 @@ pub enum Pace {
     /// drives, so a fixture that stopped building or started panicking fails on
     /// an ordinary run instead of waiting for someone to pass `--ignored`.
     Once,
+}
+
+/// Deterministic xorshift generator, so benchmark fixtures lay out identically
+/// across runs and machines.
+pub struct Rng(u64);
+
+impl Rng {
+    /// A generator seeded with `seed`; zero, the xorshift fixed point, is
+    /// replaced by a fixed odd constant.
+    pub fn new(seed: u64) -> Self {
+        Self(if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        })
+    }
+
+    /// The next 64-bit value.
+    pub fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// A value in `0..n`.
+    pub fn below(&mut self, n: usize) -> usize {
+        usize::saturating_from(self.next_u64() % n as u64)
+    }
+
+    /// Shuffle `items` in place.
+    pub fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = self.below(i + 1);
+            items.swap(i, j);
+        }
+    }
 }
 
 /// Time `body` over a calibrated iteration count and report its per-item cost
@@ -104,6 +144,26 @@ mod tests {
             runs.load(Ordering::Relaxed) >= 3,
             "a measured pass runs the body far more than a single-run one"
         );
+    }
+
+    #[test]
+    fn rng_shuffle_is_a_deterministic_permutation() {
+        let mut a: std::vec::Vec<u32> = (0..64).collect();
+        let mut b = a.clone();
+        Rng::new(7).shuffle(&mut a);
+        Rng::new(7).shuffle(&mut b);
+        assert_eq!(a, b, "same seed must produce the same order");
+        let mut sorted = a.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..64).collect::<std::vec::Vec<u32>>());
+        assert_ne!(a, sorted, "shuffle must move something");
+    }
+
+    #[test]
+    fn rng_zero_seed_still_advances() {
+        let mut rng = Rng::new(0);
+        assert_ne!(rng.next_u64(), rng.next_u64());
+        assert!((0..100).all(|_| rng.below(3) < 3));
     }
 
     // A body slow enough to fill the window on its first iteration never

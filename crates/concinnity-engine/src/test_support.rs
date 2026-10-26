@@ -18,7 +18,11 @@ use core::cell::RefCell;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawObject, FarFieldTint, MaterialUniforms, SkinnedDrawObject};
 use crate::transform::IDENTITY;
-pub(crate) use concinnity_core::bench::{Pace, bench};
+pub(crate) use concinnity_core::bench::{Pace, Rng, bench};
+
+// `#[global_allocator]` is a per-program item, so the test binary is the one
+// build of this crate that installs it, for the allocation guard and benchmarks.
+concinnity_core::install_global_allocator!();
 
 // Per-thread, like the production interner: the harness runs tests in parallel
 // and each one resets before interning, so a shared table would let them

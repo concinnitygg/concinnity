@@ -3,6 +3,8 @@
 //! two-bone IK, per-joint proportions, character shapes, root motion, and morph
 //! targets with the weights that drive them, and the playback system over them.
 pub mod anim_graph;
+#[cfg(test)]
+mod bench;
 pub(crate) mod character_rig;
 pub mod character_shape;
 pub(crate) mod clip;

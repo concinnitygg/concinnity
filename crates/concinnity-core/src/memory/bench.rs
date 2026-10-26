@@ -2,10 +2,8 @@
 // replaces, pool churn, the inline-vec single-element case, the tracking
 // wrapper's per-allocation price, and the tagged ledger's report cost.
 //
-// In-crate rather than under a bench target because `Arena::alloc_slice` and
-// the ledger's per-realm readout have no consumer outside this crate, and
-// widening them for a benchmark would be the wrong trade. The counters are
-// process-global, so `--test-threads=1` is required rather than tidy.
+// The counters are process-global, so `--test-threads=1` is required rather
+// than tidy.
 //
 //     cargo test -p concinnity-core --release -- --ignored --nocapture \
 //         --test-threads=1 memory::bench
