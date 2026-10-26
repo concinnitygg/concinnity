@@ -215,6 +215,10 @@ impl MtlContext {
             self.ssgi.pass.is_some(),
             concinnity_engine::render::post::ssgi::build_pipelines(&post_device)
         );
+        let disocclusion = rebuild_if_live!(
+            self.disocclusion.is_some(),
+            concinnity_engine::render::post::disocclusion::build_pipelines(&post_device)
+        );
         let rt_reflections = rebuild_if_live!(
             self.rt.pipelines.resolve.is_some(),
             build_rt_reflection_pipeline(
@@ -308,6 +312,9 @@ impl MtlContext {
             pass.swap_pipelines(p);
         }
         if let (Some(p), Some(pass)) = (ssgi, self.ssgi.pass.as_mut()) {
+            pass.swap_pipelines(p);
+        }
+        if let (Some(p), Some(pass)) = (disocclusion, self.disocclusion.as_mut()) {
             pass.swap_pipelines(p);
         }
         if let Some(p) = rt_reflections {

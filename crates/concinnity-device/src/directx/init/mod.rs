@@ -414,6 +414,7 @@ impl DxContext {
             ssao,
             ssr,
             ssgi,
+            disocclusion: None,
             reflection_composite,
             rt_reflections,
             rt,
@@ -461,6 +462,7 @@ impl DxContext {
             hw,
         };
         ctx.state.planner.shadow.cadence = shadows.cadence;
+        ctx.sync_disocclusion()?;
         ctx.refresh_gates(&graphics);
         Ok(ctx)
     }

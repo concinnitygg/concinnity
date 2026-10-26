@@ -114,6 +114,9 @@ impl FrameDevice for MtlContext {
         if let Some(ssgi) = self.ssgi.pass.as_mut() {
             ssgi.reset_history();
         }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.reset_history();
+        }
         self.upscale.reset.request();
     }
 
@@ -461,6 +464,9 @@ impl FrameDevice for MtlContext {
         if let Some(ssgi) = self.ssgi.pass.as_mut() {
             ssgi.advance();
         }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.advance();
+        }
     }
 }
 
@@ -791,6 +797,17 @@ impl MtlContext {
                 },
             );
             self.ssgi.pass = Some(ssgi);
+            r?;
+        }
+        if render_changed && let Some(mut disocclusion) = self.disocclusion.take() {
+            let r = disocclusion.resize(
+                &self.post_device(),
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
+            );
+            self.disocclusion = Some(disocclusion);
             r?;
         }
         // The Hi-Z pyramid matches the render (depth) resolution. Rebuild it

@@ -215,6 +215,10 @@ impl VkContext {
             self.ssgi.is_some(),
             concinnity_engine::render::post::ssgi::build_pipelines(&self.post_device(0))
         );
+        let disocclusion_rebuilt = rebuild_if_live!(
+            self.disocclusion.is_some(),
+            concinnity_engine::render::post::disocclusion::build_pipelines(&self.post_device(0))
+        );
 
         // RT reflections (only when the world opted in + the GPU supports it).
         // Rebuilds the flat + textured ray-query pipelines.
@@ -334,6 +338,9 @@ impl VkContext {
         }
         if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
             ssgi.swap_pipelines(rebuilt);
+        }
+        if let (Some(rebuilt), Some(pass)) = (disocclusion_rebuilt, self.disocclusion.as_mut()) {
+            pass.swap_pipelines(rebuilt);
         }
         if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
             rt.swap_pipelines(rebuilt);

@@ -264,6 +264,7 @@ impl MtlContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.scaler.as_ref().map(|s| ResidentUpscaler {
                 reads_reactive: ReactiveReader::MetalFx.reads() && s.reactive,
+                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.pipelines.is_some(),
             fog: self.fog.pipeline.is_some(),

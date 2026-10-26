@@ -1404,6 +1404,7 @@ impl DxContext {
             PassId::SsgiResolve => {
                 self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
+            PassId::Disocclusion => self.encode_disocclusion(cmd, params.frame_idx)?,
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (DXR inline `RayQuery`). Traces
                 // a reflection ray per glossy pixel against the scene TLAS and

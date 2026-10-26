@@ -276,6 +276,14 @@ pass_ids! {
     /// It reads nothing else in the frame, so the schedule may run it on the
     /// async queue. Gated on `FrameGraphInputs::water_sim_enabled`.
     WaterSim => "water_sim",
+    /// The reactive mask's disocclusion term: after `GBufferPrepass`, each
+    /// pixel followed back along its motion vector into last frame's G-buffer
+    /// snapshot and marked where no surface there matches it by depth and
+    /// normal, so the upscaler drops the history an object leaves on what it
+    /// uncovers. The mask's first writer. Gated on
+    /// `FrameGraphInputs::disocclusion_enabled` and an upscaler that reads the
+    /// mask.
+    Disocclusion => "disocclusion",
 }
 
 impl PassId {

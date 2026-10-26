@@ -393,6 +393,7 @@ impl VkContext {
             ssr: screen.ssr,
             reflection_composite: rt.composite,
             ssgi: screen.ssgi,
+            disocclusion: None,
             gbuffer: screen.gbuffer,
             rt_reflections: rt.reflections,
             rt: rt.state,
@@ -472,6 +473,7 @@ impl VkContext {
         // descriptor sets land before the first frame.
         self.upload_initial_particles(particles)?;
         self.sync_grass_prepass(false);
+        self.sync_disocclusion(self.targets.render_extent)?;
         self.state.planner.shadow.cadence = cadence;
         self.refresh_gates(graphics);
         // The global sets were written before SSAO and SSGI were built.

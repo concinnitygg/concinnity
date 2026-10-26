@@ -140,6 +140,8 @@ pub struct FrameFacts {
     pub upscaler: bool,
     /// The running upscaler reads the reactive mask.
     pub upscaler_reads_reactive: bool,
+    /// The disocclusion pass was built.
+    pub disocclusion: bool,
     /// A ray-tracing acceleration structure is live.
     pub bvh_live: bool,
     /// A particle emitter is live and the particle pipeline is built.
@@ -217,6 +219,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         water_sim_enabled: facts.water_sim,
         reactive_mask_enabled: gates.traits.reactive_mask,
         upscale_reads_reactive: facts.upscaler && facts.upscaler_reads_reactive,
+        disocclusion_enabled: facts.disocclusion,
         ssgi_enabled: gates.ssgi,
         ssgi_resolve_enabled: gates.ssgi_resolve,
         rt_reflections_enabled: if gates.traits.composite_scene_fixed {

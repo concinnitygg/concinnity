@@ -19,9 +19,9 @@
 
 use crate::render::shader::programs::ShaderProgram;
 use crate::render::shader::programs::shared::{
-    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, REFLECTION_BLUR, REFLECTION_COMPOSITE,
-    SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE, SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE,
-    SSGI_RESOLVE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
+    BLOOM_DOWNSAMPLE, BLOOM_PREFILTER, BLOOM_UPSAMPLE, DISOCCLUSION_MARK, DISOCCLUSION_SNAPSHOT,
+    REFLECTION_BLUR, REFLECTION_COMPOSITE, SSAO_BLUR, SSAO_DEPTH, SSAO_KERNEL, SSGI_ACCUMULATE,
+    SSGI_AGE, SSGI_DEPTH, SSGI_REDUCE, SSGI_RESOLVE, SSGI_TRACE, SSR_RESOLVE, TAA_FRAG,
 };
 
 /// A fullscreen post-pass fragment program. The vertex stage is always
@@ -76,6 +76,12 @@ pub enum PostProgram {
     /// `ssao_blur_fragment` from `ssao.hlsl`: the depth-aware blur of that
     /// occlusion.
     SsaoBlur,
+    /// `disocclusion_mark_fragment` from `disocclusion.hlsl`: the reactive
+    /// mask's value where this frame uncovers a surface.
+    DisocclusionMark,
+    /// `disocclusion_snapshot_fragment` from `disocclusion.hlsl`: the G-buffer
+    /// normal and motion kept for the next frame's mark.
+    DisocclusionSnapshot,
 }
 
 /// What a post program binds: the resource counts every backend derives its
@@ -98,7 +104,7 @@ pub struct PostProgramBindings {
 
 impl PostProgram {
     /// Every post program, in declaration order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
         Self::TaaResolve,
         Self::SsrResolve,
         Self::SsgiDepth,
@@ -115,6 +121,8 @@ impl PostProgram {
         Self::SsaoDepth,
         Self::SsaoKernel,
         Self::SsaoBlur,
+        Self::DisocclusionMark,
+        Self::DisocclusionSnapshot,
     ];
 
     /// The pass name a backend reports when this program's pipeline fails to
@@ -137,6 +145,8 @@ impl PostProgram {
             Self::SsaoDepth => "ssao depth",
             Self::SsaoKernel => "ssao kernel",
             Self::SsaoBlur => "ssao blur",
+            Self::DisocclusionMark => "disocclusion mark",
+            Self::DisocclusionSnapshot => "disocclusion snapshot",
         }
     }
 
@@ -159,6 +169,8 @@ impl PostProgram {
             Self::SsaoDepth => &SSAO_DEPTH,
             Self::SsaoKernel => &SSAO_KERNEL,
             Self::SsaoBlur => &SSAO_BLUR,
+            Self::DisocclusionMark => &DISOCCLUSION_MARK,
+            Self::DisocclusionSnapshot => &DISOCCLUSION_SNAPSHOT,
         }
     }
 
@@ -198,15 +210,17 @@ impl PostProgram {
             Self::BloomPrefilter => sources(1, BLOOM_PREFILTER_CONSTANTS),
             // The octave it reduces or expands; no constants.
             Self::BloomDownsample | Self::BloomUpsample => sources(1, 0),
-            // reflection, roughness.
-            Self::ReflectionBlur | Self::SsaoBlur => sources(2, 0),
+            // reflection, roughness; or the G-buffer and velocity the
+            // disocclusion snapshot keeps.
+            Self::ReflectionBlur | Self::SsaoBlur | Self::DisocclusionSnapshot => sources(2, 0),
             // reflection, scene, normal+depth, roughness, blur.
             Self::ReflectionComposite => sources(5, 0),
             // The G-buffer; `SsaoParams`.
             Self::SsaoDepth => sources(1, size_of::<crate::gfx::render_types::SsaoParams>()),
             // G-buffer, depth copy; `SsaoParams`.
             Self::SsaoKernel => sources(2, size_of::<crate::gfx::render_types::SsaoParams>()),
-            // raw occlusion, depth copy; no constants.
+            // G-buffer, velocity, last frame's snapshot; no constants.
+            Self::DisocclusionMark => sources(3, 0),
         }
     }
 }
@@ -495,6 +509,8 @@ mod tests {
             (PostProgram::SsaoDepth, size_of::<SsaoParams>()),
             (PostProgram::SsaoKernel, size_of::<SsaoParams>()),
             (PostProgram::SsaoBlur, 0),
+            (PostProgram::DisocclusionMark, 0),
+            (PostProgram::DisocclusionSnapshot, 0),
         ];
         for (program, size) in blocks {
             assert_eq!(program.bindings().constants, size, "{program:?}");

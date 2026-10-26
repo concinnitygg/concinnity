@@ -6,6 +6,9 @@
 //! its color that does not follow the motion vector under it, so 1 tells TAA or
 //! an upscaler to trust the current frame there over its history:
 //!
+//! - ahead of the main pass, while an upscaler reads the mask, the
+//!   disocclusion pass marks fully what this frame uncovers, which the
+//!   upscaler's own depth test misses where an object meets the ground;
 //! - a particle writes its coverage, the sprite's alpha, or the light it adds
 //!   (alpha times the luminance of its color) where that is larger, so a
 //!   bright spark fading out still marks its pixels;
@@ -94,6 +97,9 @@ impl ReactiveWrite {
 /// The frame's plan for the reactive mask.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ReactiveMaskPlan {
+    /// Whether the disocclusion pass runs. It writes every pixel, so it is the
+    /// mask's clear when it does.
+    pub disocclusion: bool,
     /// How the particle pass treats the mask.
     pub particles: ReactiveWrite,
     /// How the transparent pass treats the mask.
@@ -105,21 +111,26 @@ pub struct ReactiveMaskPlan {
 }
 
 impl ReactiveMaskPlan {
-    /// The plan the frame graph built from `inputs` follows. The particle pass
-    /// precedes the transparent one, so it clears whenever it runs.
+    /// The plan the frame graph built from `inputs` follows. The disocclusion
+    /// pass precedes the particle pass, which precedes the transparent one, so
+    /// the first of them that runs clears the mask.
     pub fn of(inputs: &FrameGraphInputs) -> Self {
         if !inputs.reactive_mask_live() {
             return Self {
+                disocclusion: false,
                 particles: ReactiveWrite::Unstored,
                 transparent: ReactiveWrite::Unstored,
                 late_particles: ReactiveWrite::Unstored,
                 readable: false,
             };
         }
-        let transparent = if inputs.particles_enabled {
-            ReactiveWrite::Load
-        } else {
-            ReactiveWrite::Clear
+        let disocclusion = inputs.disocclusion_live();
+        let after = |earlier: bool| {
+            if earlier {
+                ReactiveWrite::Load
+            } else {
+                ReactiveWrite::Clear
+            }
         };
         // The late particles only draw where the earlier particle pass ran
         // and cleared it.
@@ -129,8 +140,9 @@ impl ReactiveMaskPlan {
             ReactiveWrite::Unstored
         };
         Self {
-            particles: ReactiveWrite::Clear,
-            transparent,
+            disocclusion,
+            particles: after(disocclusion),
+            transparent: after(disocclusion || inputs.particles_enabled),
             late_particles,
             readable: true,
         }
@@ -175,6 +187,35 @@ mod tests {
             ReactiveMaskPlan::of(&late).late_particles,
             ReactiveWrite::Load
         );
+    }
+
+    // The disocclusion pass writes every pixel first, so every later writer
+    // keeps what it wrote, and the mask is declared for it alone.
+    #[test]
+    fn the_disocclusion_pass_clears_the_mask_ahead_of_every_writer() {
+        let upscaled = |particles, transparent| FrameGraphInputs {
+            gbuffer_prepass_enabled: true,
+            velocity_enabled: true,
+            upscale_enabled: true,
+            upscale_reads_reactive: true,
+            disocclusion_enabled: true,
+            ..inputs(particles, transparent, false)
+        };
+        let plan = ReactiveMaskPlan::of(&upscaled(true, true));
+        assert!(plan.disocclusion && plan.readable);
+        assert_eq!(plan.particles, ReactiveWrite::Load);
+        assert_eq!(plan.transparent, ReactiveWrite::Load);
+        let alone = ReactiveMaskPlan::of(&upscaled(false, false));
+        assert!(alone.disocclusion && alone.readable);
+        // TAA alone keeps its own clamp and no disocclusion pass.
+        let taa = FrameGraphInputs {
+            upscale_enabled: false,
+            taa_enabled: true,
+            ..upscaled(true, true)
+        };
+        let plan = ReactiveMaskPlan::of(&taa);
+        assert!(!plan.disocclusion);
+        assert_eq!(plan.particles, ReactiveWrite::Clear);
     }
 
     #[test]

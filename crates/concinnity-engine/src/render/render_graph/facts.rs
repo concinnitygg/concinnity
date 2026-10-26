@@ -60,6 +60,8 @@ pub struct ResidentFeatures {
 pub struct ResidentUpscaler {
     /// It reads the reactive mask.
     pub reads_reactive: bool,
+    /// The disocclusion pass that marks the mask for it was built.
+    pub disocclusion: bool,
 }
 
 /// What the world puts on screen this frame. Each field is one read of the
@@ -147,6 +149,9 @@ impl FrameFacts {
             bloom_intensity: c.bloom_intensity,
             upscaler: r.upscaler.is_some(),
             upscaler_reads_reactive: r.upscaler.is_some_and(|u| u.reads_reactive),
+            disocclusion: r
+                .upscaler
+                .is_some_and(|u| u.reads_reactive && u.disocclusion),
             bvh_live: c.bvh_live,
             particles: r.particles && c.emitters,
             late_particles: r.particles && c.late_emitters,
@@ -190,6 +195,7 @@ mod tests {
             bloom_chain: true,
             upscaler: Some(ResidentUpscaler {
                 reads_reactive: true,
+                disocclusion: true,
             }),
             particles: true,
             fog: true,

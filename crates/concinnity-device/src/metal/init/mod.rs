@@ -280,6 +280,12 @@ impl MtlContext {
             hot_reload,
         )?;
         let ssgi = effects::build_ssgi(&post_device, &settings, features.render)?;
+        let disocclusion = crate::metal::post::build_disocclusion(
+            &post_device,
+            &upscale,
+            features.gbuffer_enabled,
+            features.render,
+        )?;
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
@@ -369,6 +375,7 @@ impl MtlContext {
             ssr,
             gbuffer,
             ssgi,
+            disocclusion,
             rt,
             lines: LineState::new(frames_in_flight),
             decal,

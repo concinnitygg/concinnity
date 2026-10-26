@@ -1116,6 +1116,10 @@ pub(crate) struct VkContext {
     // `ssr`'s pre-pass G-buffer.
     pub(super) ssgi: Option<SsgiResources>,
 
+    // The reactive mask's disocclusion mark. `Some` while an upscaler that
+    // reads the mask runs over the G-buffer pre-pass.
+    pub(super) disocclusion: Option<super::post::VkDisocclusionPass>,
+
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer of the merged buffer is on (SSR resolve OR SSGI OR RT OR SSAO OR
     // velocity for TAA / upscale): one jittered traversal rasterizes the
@@ -1792,6 +1796,9 @@ impl VkContext {
 
         // SSGI resources (pyramids, accumulation and pipelines).
         self.ssgi = None;
+
+        // The disocclusion mark's snapshots and pipelines.
+        self.disocclusion = None;
 
         // Unified G-buffer pre-pass resources (per-frame MRT + pipelines + UBOs).
         if let Some(mut gb) = self.gbuffer.take() {

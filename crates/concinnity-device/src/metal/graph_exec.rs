@@ -693,6 +693,7 @@ impl MtlContext {
                     pass_input(params.ssgi_params, PassId::SsgiResolve, "ssgi_params")?;
                 self.encode_ssgi_resolve(cmd_buf, ssgi_params)?
             }
+            PassId::Disocclusion => self.encode_disocclusion(cmd_buf)?,
             PassId::RtReflections => {
                 let rt_params = pass_input(
                     params.rt_reflection_params,

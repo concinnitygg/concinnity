@@ -368,6 +368,22 @@ pub static SSGI_RESOLVE: ShaderProgram = ShaderProgram {
     gates: &["SSGI_RESOLVE"],
     msaa: false,
 };
+/// `disocclusion_mark_fragment` from `disocclusion.hlsl`.
+pub static DISOCCLUSION_MARK: ShaderProgram = ShaderProgram {
+    file: "disocclusion.hlsl",
+    entry: "disocclusion_mark_fragment",
+    label: "disocclusion_mark.hlsl",
+    gates: &["DISOCCLUSION_MARK"],
+    msaa: false,
+};
+/// `disocclusion_snapshot_fragment` from `disocclusion.hlsl`.
+pub static DISOCCLUSION_SNAPSHOT: ShaderProgram = ShaderProgram {
+    file: "disocclusion.hlsl",
+    entry: "disocclusion_snapshot_fragment",
+    label: "disocclusion_snapshot.hlsl",
+    gates: &["DISOCCLUSION_SNAPSHOT"],
+    msaa: false,
+};
 /// `reflection_blur_fragment` from `reflection.hlsl`.
 pub static REFLECTION_BLUR: ShaderProgram = ShaderProgram {
     file: "reflection.hlsl",
@@ -989,6 +1005,8 @@ pub static ALL: &[&ShaderProgram] = &[
     &SSGI_TRACE,
     &SSGI_ACCUMULATE,
     &SSGI_RESOLVE,
+    &DISOCCLUSION_MARK,
+    &DISOCCLUSION_SNAPSHOT,
     &REFLECTION_BLUR,
     &REFLECTION_COMPOSITE,
     &FOG_FROXEL,

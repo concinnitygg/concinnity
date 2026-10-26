@@ -490,6 +490,7 @@ impl DxContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
+                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),

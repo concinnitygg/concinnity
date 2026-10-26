@@ -324,6 +324,7 @@ impl VkContext {
             self.ssgi = Some(ssgi);
             rebuilt?;
         }
+        self.sync_disocclusion(render_ext)?;
 
         // Rebuild the RT-reflection output target + re-wire its static
         // descriptors (the SSR pre-pass G-buffer / roughness + the HDR resolves

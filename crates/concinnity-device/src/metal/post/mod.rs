@@ -3,6 +3,7 @@
 //! allocator(s), and per-frame encoder(s) co-located:
 //!
 //!   gbuffer.rs              unified normal+depth / roughness / velocity G-buffer pre-pass
+//!   disocclusion.rs         the inputs to the shared reactive-mask disocclusion mark
 //!   ssao.rs                 the SSAO settings + white fallback over the shared kernel + blur
 //!   ssr.rs                  the reflection target, and the inputs to the shared resolve
 //!   `reflection_composite.rs` the inputs to the shared roughness blur + composite
@@ -16,6 +17,7 @@
 //! here so call sites have a single `crate::metal::post::*` import.
 
 pub(super) mod bloom;
+pub(super) mod disocclusion;
 pub(super) mod fullscreen;
 pub(super) mod gbuffer;
 pub(super) mod post_device;
@@ -28,6 +30,7 @@ pub(super) mod taa;
 pub(super) mod upscale;
 
 pub(super) use bloom::{MtlBloomPass, build_bloom_pass};
+pub(super) use disocclusion::{MtlDisocclusionPass, build_disocclusion};
 pub(super) use gbuffer::{GBufferState, build_gbuffer_prepass_pipeline, create_gbuffer_targets};
 pub(super) use reflection_composite::build_reflection_composite;
 pub(super) use rt_reflections::build_rt_reflection_pipeline;

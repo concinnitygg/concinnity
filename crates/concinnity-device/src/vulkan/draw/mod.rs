@@ -371,6 +371,7 @@ impl VkContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
+                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -532,6 +533,9 @@ impl FrameDevice for VkContext {
         }
         if let Some(ssgi) = &mut self.ssgi {
             ssgi.reset_history();
+        }
+        if let Some(disocclusion) = &mut self.disocclusion {
+            disocclusion.reset_history();
         }
         if let Some(upscaler) = &self.upscale {
             upscaler.request_history_reset();
@@ -819,6 +823,9 @@ impl FrameDevice for VkContext {
         }
         if let Some(ssgi) = &mut self.ssgi {
             ssgi.advance();
+        }
+        if let Some(disocclusion) = &mut self.disocclusion {
+            disocclusion.advance();
         }
     }
 }

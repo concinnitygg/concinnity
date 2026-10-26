@@ -289,6 +289,11 @@ pub struct FrameGraphInputs {
     /// [`crate::render::temporal::reactive_mask::ReactiveReader::reads`]). No effect while
     /// `upscale_enabled` is false.
     pub upscale_reads_reactive: bool,
+    /// `true` when the backend built the disocclusion mark. While an upscaler
+    /// that takes the reactive mask runs, the graph adds a `Disocclusion` pass
+    /// after `GBufferPrepass` that writes the mask first, marking what this
+    /// frame uncovers (see [`FrameGraphInputs::disocclusion_live`]).
+    pub disocclusion_enabled: bool,
     /// `true` when the world grows a grass field and the backend built its
     /// pipelines. The graph adds a `Grass` compute pass that writes the
     /// visible-blade buffer and its indirect draw arguments, which
@@ -324,8 +329,27 @@ impl FrameGraphInputs {
     pub fn reactive_mask_live(&self) -> bool {
         self.reactive_mask_enabled
             && !self.world_hidden
-            && (self.particles_enabled || self.transparent_enabled)
+            && (self.particles_enabled || self.transparent_enabled || self.disocclusion_live())
             && (self.temporal_reads_reactive() || self.composite_reads_reactive)
+    }
+
+    /// Whether this frame's `Disocclusion` pass runs: the backend built it, the
+    /// G-buffer pre-pass runs, and the upscaler reads the reactive mask it
+    /// writes.
+    pub fn disocclusion_live(&self) -> bool {
+        self.disocclusion_enabled
+            && self.reactive_mask_enabled
+            && !self.world_hidden
+            && self.gbuffer_live()
+            && self.upscale_enabled
+            && self.upscale_reads_reactive
+    }
+
+    // Whether the G-buffer pre-pass runs: its targets exist and a consumer
+    // reads them.
+    fn gbuffer_live(&self) -> bool {
+        self.gbuffer_prepass_enabled
+            && (self.ssr_prepass_enabled || self.ssao_enabled || self.velocity_enabled)
     }
 
     // The upscaler replaces TAA when it runs, so it alone decides whether the
@@ -383,6 +407,7 @@ impl FrameGraphInputs {
             hiz_build_enabled: false,
             reactive_mask_enabled: false,
             upscale_reads_reactive: false,
+            disocclusion_enabled: false,
             grass_enabled: false,
             grass_shadow_enabled: false,
             atmosphere_enabled: false,
@@ -444,6 +469,14 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("reactive_mask", |i| i.reactive_mask_enabled = true),
     ("upscale_reads_reactive", |i| {
         i.upscale_reads_reactive = true;
+    }),
+    ("disocclusion", |i| {
+        i.gbuffer_prepass_enabled = true;
+        i.velocity_enabled = true;
+        i.reactive_mask_enabled = true;
+        i.upscale_enabled = true;
+        i.upscale_reads_reactive = true;
+        i.disocclusion_enabled = true;
     }),
     ("grass", |i| i.grass_enabled = true),
     ("atmosphere", |i| i.atmosphere_enabled = true),
@@ -602,7 +635,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
         .then(|| b.import_texture("hiz_pyramid", hiz_pyramid_desc(inputs)));
 
     let cull = add_cull_and_grass(&mut b, inputs, two_pass, hiz_pyramid);
-    let prepass = add_prepasses(&mut b, inputs, &cull);
+    let prepass = add_prepasses(&mut b, inputs, &cull, &mut reactive_mask);
     let scene_inputs = add_scene_inputs(&mut b, inputs, &cull);
     let front = FrontEnd {
         cull,
@@ -742,12 +775,14 @@ struct CullOutputs {
     grass_shadow: Option<GrassHandles>,
 }
 
-// The pre-pass outputs: the G-buffer, ambient occlusion, and SSGI's resolve.
+// The pre-pass outputs: the G-buffer, ambient occlusion, SSGI's resolve, and
+// the reactive mask as the disocclusion mark left it.
 #[derive(Copy, Clone)]
 struct PrepassOutputs {
     gbuffer: Option<GBufferHandles>,
     ao_output: Option<TextureHandle>,
     ssgi_indirect: Option<TextureHandle>,
+    disocclusion: Option<TextureHandle>,
 }
 
 impl PrepassOutputs {
@@ -873,14 +908,13 @@ fn add_prepasses(
     b: &mut GraphBuilder,
     inputs: &FrameGraphInputs,
     cull: &CullOutputs,
+    reactive_mask: &mut Option<TextureHandle>,
 ) -> PrepassOutputs {
     // Geometry pre-pass: one node writes the view-space normal+depth /
     // roughness / velocity / depth that SSR, SSAO, SSGI, RT, TAA, and the
     // upscaler read. Runs when the backend built the targets and any of those
     // consumers is on.
-    let gbuffer_v1 = if inputs.gbuffer_prepass_enabled
-        && (inputs.ssr_prepass_enabled || inputs.ssao_enabled || inputs.velocity_enabled)
-    {
+    let gbuffer_v1 = if inputs.gbuffer_live() {
         let normal_depth =
             b.create_texture("gbuffer_normal_depth", gbuffer_normal_depth_desc(inputs));
         let roughness = b.create_texture("gbuffer_roughness", gbuffer_roughness_desc(inputs));
@@ -911,6 +945,21 @@ fn add_prepasses(
     };
 
     let ssr_gbuffer_v1 = gbuffer_v1.map(|g| g.normal_depth);
+
+    // Disocclusion: the reactive mask's first writer, marking where this
+    // frame's G-buffer uncovers a surface last frame's did not show.
+    let disocclusion_v1 = match (gbuffer_v1, *reactive_mask) {
+        (Some(g), Some(mask)) if inputs.disocclusion_live() => {
+            let mut disocclusion = b.add_pass(PassId::Disocclusion, PassKind::Render);
+            disocclusion.read_texture(g.normal_depth);
+            disocclusion.read_texture(g.velocity);
+            Some(disocclusion.write_texture(mask))
+        }
+        _ => None,
+    };
+    if disocclusion_v1.is_some() {
+        *reactive_mask = disocclusion_v1;
+    }
 
     // SSAO bundle writes ao_output. PassId::SsaoBlur is the single
     // graph node for the entire encode_ssao bundle; SsaoDepth +
@@ -949,6 +998,7 @@ fn add_prepasses(
         gbuffer: gbuffer_v1,
         ao_output: ao_output_v1,
         ssgi_indirect: ssgi_indirect_v1,
+        disocclusion: disocclusion_v1,
     }
 }
 
@@ -1098,6 +1148,12 @@ fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVer
         main.read_texture(h);
     }
     if let Some(h) = front.prepass.ssgi_indirect {
+        main.read_texture(h);
+    }
+    // Main does not sample the mask; the read lands the mark ahead of Main
+    // with the other pre-pass consumers, so the compute passes after Main stay
+    // ordered against every render pass.
+    if let Some(h) = front.prepass.disocclusion {
         main.read_texture(h);
     }
     if let Some(g) = front.cull.grass {
@@ -1251,7 +1307,6 @@ fn add_decorations(
         // sprite behind it.
         particles.read_texture(depth_cur);
         h = particles.write_texture(h);
-        // The first writer of the reactive mask clears it.
         *reactive_mask = reactive_mask.map(|m| particles.write_texture(m));
     }
     if inputs.lines_enabled {
@@ -3013,6 +3068,42 @@ mod tests {
                 .iter()
                 .any(|r| r.resource_version() == ssao.writes[0])
         );
+    }
+
+    // The mark is the mask's first writer, ahead of Main like the other
+    // pre-pass consumers, and only an upscaler that reads the mask brings it.
+    #[test]
+    fn the_disocclusion_mark_writes_the_mask_ahead_of_main_and_the_particles() {
+        let mut i = all_off();
+        i.gbuffer_prepass_enabled = true;
+        i.velocity_enabled = true;
+        i.reactive_mask_enabled = true;
+        i.upscale_enabled = true;
+        i.upscale_reads_reactive = true;
+        i.disocclusion_enabled = true;
+        i.particles_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
+        let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
+        assert!(pos(PassId::GBufferPrepass) < pos(PassId::Disocclusion));
+        assert!(pos(PassId::Disocclusion) < pos(PassId::Main));
+        assert!(pos(PassId::Disocclusion) < pos(PassId::ParticlesDraw));
+        let mark = &g.passes[pos(PassId::Disocclusion)];
+        let [mask] = mark.writes[..] else {
+            panic!("the mark writes the mask alone");
+        };
+        assert_eq!(mask.version(), 1);
+        let particles = &g.passes[pos(PassId::ParticlesDraw)];
+        assert!(
+            particles
+                .writes
+                .iter()
+                .any(|w| w.resource_index() == mask.resource_index() && w.version() == 2)
+        );
+
+        i.upscale_reads_reactive = false;
+        let g = build_frame_graph(&i).expect("compiles");
+        assert!(g.pass_index(PassId::Disocclusion).is_none());
     }
 
     #[test]

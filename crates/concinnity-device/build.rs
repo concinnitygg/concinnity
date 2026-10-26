@@ -1754,6 +1754,22 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
+    // The disocclusion stages read by point load, so their samplers are
+    // compiled out.
+    MetalAbi {
+        program: &shared::DISOCCLUSION_MARK,
+        slots: &[&[
+            ("gbuffer", "texture(0)"),
+            ("velocity", "texture(1)"),
+            ("previous", "texture(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::DISOCCLUSION_SNAPSHOT,
+        slots: &[&[("gbuffer", "texture(0)"), ("velocity", "texture(1)")]],
+        argument_ids: &[],
+    },
     // The SSGI stages read every source but the hit radiance and the occlusion
     // by point load, so the samplers those sources declare are compiled out and
     // only the scene's and the occlusion's survive.

@@ -24,6 +24,10 @@ pub mod bloom;
 /// The backend seam: pipelines, persistent targets, and one fullscreen draw.
 pub mod device;
 
+/// The reactive mask's disocclusion term: the mark and the G-buffer snapshot
+/// it reads, written once.
+pub mod disocclusion;
+
 /// The ping-pong ring and history-validity gate a temporal pass accumulates
 /// through, as a pure state machine.
 pub mod history;

@@ -42,6 +42,7 @@ embed_shaders! {
     DAYLIGHT_TYPES => "daylight_types.hlsl",
     DECAL => "decal.hlsl",
     DEPTH_CONVENTION => "depth_convention.hlsl",
+    DISOCCLUSION => "disocclusion.hlsl",
     FOG => "fog.hlsl",
     FULLSCREEN => "fullscreen.hlsl",
     GBUFFER_COMMON => "gbuffer_common.hlsl",

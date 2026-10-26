@@ -773,6 +773,10 @@ pub(crate) struct DxContext {
     // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
 
+    // The reactive mask's disocclusion mark. `Some` while an upscaler that
+    // reads the mask runs over the G-buffer pre-pass.
+    pub(super) disocclusion: Option<super::post::disocclusion::DxDisocclusionPass>,
+
     // Roughness-aware reflection composite: the SSR / RT resolve writes reflected
     // radiance + weight, then this blurs it by surface roughness (a reduced-res blur
     // pass) and composites it over the scene into its own output -- the scene the
@@ -1519,6 +1523,9 @@ impl FrameDevice for DxContext {
         if let Some(ssgi) = self.ssgi.as_mut() {
             ssgi.reset_history();
         }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.reset_history();
+        }
         if let Some(upscaler) = &self.upscale.backend {
             upscaler.request_history_reset();
         }
@@ -1727,6 +1734,9 @@ impl FrameDevice for DxContext {
         }
         if let Some(ssgi) = self.ssgi.as_mut() {
             ssgi.advance();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.advance();
         }
     }
 }

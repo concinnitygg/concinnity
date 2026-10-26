@@ -13,8 +13,15 @@ use concinnity_engine::render::shader::world_pipelines::{
     BucketSource, check_rebuild, replace_bucket,
 };
 
+use concinnity_engine::render::post;
+use concinnity_engine::render::post::disocclusion::DisocclusionPipelines;
+use concinnity_engine::render::post::reflection_composite::ReflectionCompositePipelines;
+use concinnity_engine::render::post::ssao::SsaoPipelines;
+use concinnity_engine::render::post::ssgi::SsgiPipelines;
+
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
+use super::post::post_device::PostPipeline;
 
 // Rebuild a feature's PSO(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -26,6 +33,17 @@ macro_rules! rebuild_if_live {
     ($cond:expr_2021, $build:expr_2021 $(,)?) => {
         if $cond { Some($build?) } else { None }
     };
+}
+
+// The passes drawn through the shared post-pass seam, each rebuilt only when
+// live.
+struct SharedPostPipelines {
+    ssao: Option<SsaoPipelines<PostPipeline>>,
+    ssr: Option<PostPipeline>,
+    ssgi: Option<SsgiPipelines<PostPipeline>>,
+    disocclusion: Option<DisocclusionPipelines<PostPipeline>>,
+    taa: Option<PostPipeline>,
+    reflection_composite: Option<ReflectionCompositePipelines<PostPipeline>>,
 }
 
 impl DxContext {
@@ -90,7 +108,7 @@ impl DxContext {
         // Bloom (live outside a resize).
         let bloom_rebuilt = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_engine::render::post::bloom::build_pipelines(&self.post_device(0))
+            post::bloom::build_pipelines(&self.post_device(0))
         );
 
         // Every shader bucket's main and G-buffer pre-pass PSOs, from the
@@ -282,29 +300,7 @@ impl DxContext {
             })
             .transpose()?;
 
-        // SSAO (only when the world opted in).
-        let ssao_rebuilt = rebuild_if_live!(
-            self.ssao.resources.is_some(),
-            concinnity_engine::render::post::ssao::build_pipelines(&self.post_device(0))
-        );
-
-        // SSR (only when the resolve itself is authored).
-        let ssr_rebuilt = rebuild_if_live!(
-            self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
-            concinnity_engine::render::post::ssr::build_pipeline(&self.post_device(0))
-        );
-
-        // SSGI (only when IndirectLighting.technique == ssgi).
-        let ssgi_rebuilt = rebuild_if_live!(
-            self.ssgi.is_some(),
-            concinnity_engine::render::post::ssgi::build_pipelines(&self.post_device(0))
-        );
-
-        // TAA (only when AntiAliasing.mode).
-        let taa_rebuilt = rebuild_if_live!(
-            self.taa.is_some(),
-            concinnity_engine::render::post::taa::build_pipeline(&self.post_device(0))
-        );
+        let shared_post = self.build_shared_post_pipelines()?;
 
         // RT reflections (only when DXR + DXC compile + accel build all succeeded
         // at init). The shader compiles through DXC (SM 6.5).
@@ -317,14 +313,6 @@ impl DxContext {
                 )
             })
             .transpose()?;
-
-        // Reflection composite (blur + composite PSOs); only when built.
-        let refl_composite_rebuilt = rebuild_if_live!(
-            self.reflection_composite.is_some(),
-            concinnity_engine::render::post::reflection_composite::build_pipelines(
-                &self.post_device(0)
-            )
-        );
 
         // All builds succeeded; swap into the live context. After this
         // point the next frame's draw calls bind the freshly compiled
@@ -379,27 +367,62 @@ impl DxContext {
             fog.pso = render;
             fog.froxel_pso = froxel;
         }
-        if let (Some(rebuilt), Some(ssao)) = (ssao_rebuilt, self.ssao.resources.as_mut()) {
-            ssao.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(ssr)) = (ssr_rebuilt, self.ssr.as_mut()) {
-            ssr.swap_pipeline(rebuilt);
-        }
-        if let (Some(rebuilt), Some(ssgi)) = (ssgi_rebuilt, self.ssgi.as_mut()) {
-            ssgi.swap_pipelines(rebuilt);
-        }
+        self.swap_shared_post_pipelines(shared_post);
         if let (Some(rebuilt), Some(rt)) = (rt_rebuilt, self.rt_reflections.as_mut()) {
             super::post::rt_reflections::swap_rt_reflections_pipelines(rt, rebuilt);
         }
-        if let (Some(rebuilt), Some(rc)) =
-            (refl_composite_rebuilt, self.reflection_composite.as_mut())
-        {
-            rc.swap_pipelines(rebuilt);
-        }
-        if let (Some(rebuilt), Some(taa)) = (taa_rebuilt, self.taa.as_mut()) {
-            taa.pass.swap_pipeline(rebuilt);
-        }
         Ok(())
+    }
+
+    // Rebuild every live pass drawn through the shared post-pass seam.
+    fn build_shared_post_pipelines(&self) -> RenderResult<SharedPostPipelines> {
+        let device = self.post_device(0);
+        Ok(SharedPostPipelines {
+            ssao: rebuild_if_live!(
+                self.ssao.resources.is_some(),
+                post::ssao::build_pipelines(&device)
+            ),
+            // Only when the resolve itself is authored.
+            ssr: rebuild_if_live!(
+                self.ssr.as_ref().is_some_and(|s| s.resolve.is_some()),
+                post::ssr::build_pipeline(&device)
+            ),
+            ssgi: rebuild_if_live!(self.ssgi.is_some(), post::ssgi::build_pipelines(&device)),
+            disocclusion: rebuild_if_live!(
+                self.disocclusion.is_some(),
+                post::disocclusion::build_pipelines(&device)
+            ),
+            taa: rebuild_if_live!(self.taa.is_some(), post::taa::build_pipeline(&device)),
+            reflection_composite: rebuild_if_live!(
+                self.reflection_composite.is_some(),
+                post::reflection_composite::build_pipelines(&device)
+            ),
+        })
+    }
+
+    // Swap the rebuilt shared post passes into the live context.
+    fn swap_shared_post_pipelines(&mut self, rebuilt: SharedPostPipelines) {
+        if let (Some(p), Some(ssao)) = (rebuilt.ssao, self.ssao.resources.as_mut()) {
+            ssao.swap_pipelines(p);
+        }
+        if let (Some(p), Some(ssr)) = (rebuilt.ssr, self.ssr.as_mut()) {
+            ssr.swap_pipeline(p);
+        }
+        if let (Some(p), Some(ssgi)) = (rebuilt.ssgi, self.ssgi.as_mut()) {
+            ssgi.swap_pipelines(p);
+        }
+        if let (Some(p), Some(pass)) = (rebuilt.disocclusion, self.disocclusion.as_mut()) {
+            pass.swap_pipelines(p);
+        }
+        if let (Some(p), Some(rc)) = (
+            rebuilt.reflection_composite,
+            self.reflection_composite.as_mut(),
+        ) {
+            rc.swap_pipelines(p);
+        }
+        if let (Some(p), Some(taa)) = (rebuilt.taa, self.taa.as_mut()) {
+            taa.pass.swap_pipeline(p);
+        }
     }
 }
 

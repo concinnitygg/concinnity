@@ -32,3 +32,4 @@
 ["KeyBinding",{"key":"P","mods":{"shift":true},"action":{"screenshot":8}}]
 ["BenchmarkConfig",{"warmup_seconds":2.5,"subject":"marble"}]
 ["Scene",{"camera_shot":"cam"}]
+["MainMenu",{}]

@@ -22,10 +22,11 @@ use windows::Win32::Graphics::Direct3D12::*;
 // Descriptor sets the shared passes may hold at once: one per target, plus one
 // per level of a target with several, plus one per pooled transient a pass
 // writes, plus the RT output and the glass reflection windows. With every pass
-// on they hold 36: the indirect-light trace's rings and depth pyramids 14, the
+// on they hold 38: the indirect-light trace's rings and depth pyramids 14, the
 // bloom chain and its pooled top 7, the glass reflection windows 6, SSAO's
 // depth copy and its raw and pooled occlusion 3, the temporal resolve's ring 2,
-// the reflection composite 2, the reflection target 1 and the RT output 1. A
+// the disocclusion snapshots 2, the reflection composite 2, the reflection
+// target 1 and the RT output 1. A
 // rebuilt feature takes fresh slots while its old ones wait out the frames in
 // flight, so this leaves room for the widest of those to be held twice.
 pub(in crate::directx) const POST_TARGET_SLOTS: usize = 64;

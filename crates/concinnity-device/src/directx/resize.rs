@@ -362,6 +362,7 @@ impl DxContext {
             self.ssgi = Some(ssgi);
             r?;
         }
+        self.sync_disocclusion()?;
 
         // 7-rt) RT reflections output target, into its own descriptors; the
         //     acceleration structure is resolution-independent and is left
