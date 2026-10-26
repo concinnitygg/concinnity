@@ -121,7 +121,6 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
 }
 
 // The compiled image-based lighting behind a world's environment map.
-#[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 fn environment_payload(world: &mut World) -> Vec<u8> {
     let entry = world
         .resource::<concinnity_engine::resource::EnvironmentMapTable>()
