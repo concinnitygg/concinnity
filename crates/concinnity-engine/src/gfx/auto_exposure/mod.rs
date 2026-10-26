@@ -5,6 +5,7 @@
 mod night_vision;
 mod pre_exposure;
 mod state;
+mod upscaler_exposure;
 
 pub use night_vision::{
     METER_CALIBRATION, PHOTOPIC_LUMINANCE, SCOTOPIC_LUMINANCE, SUNLIGHT_LUX, ev100,
@@ -14,6 +15,7 @@ pub use pre_exposure::PreExposure;
 pub use state::{
     AutoExposureState, ExposureAdaptation, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN,
 };
+pub use upscaler_exposure::UpscalerExposure;
 
 // Smallest legal EMA speed. A zero or negative speed would freeze adaptation
 // at the initial EV, so the authored value is floored here.

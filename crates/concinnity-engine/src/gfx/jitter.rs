@@ -84,9 +84,42 @@ pub fn jitter_projection(
     p
 }
 
+/// The jitter [`jitter_projection`] applied, as the offset from where the
+/// frame sampled back to the pixel center in y-down pixel coordinates: the
+/// convention of upscalers that take the sample position rather than the
+/// projection's shift. The projection moves the scene up in NDC for a positive
+/// `y`, which is down in pixels.
+///
+/// ```
+/// # use concinnity_engine::gfx::jitter::pixel_center_offset;
+/// assert_eq!(pixel_center_offset([0.25, 0.125]), [0.25, -0.125]);
+/// ```
+pub fn pixel_center_offset(jitter_px: [f32; 2]) -> [f32; 2] {
+    [jitter_px[0], -jitter_px[1]]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The scene moves by the projection's jitter; sampling a moved scene at
+    // the pixel center is sampling the still one the opposite way, so the
+    // offset back to the center is the scene's own shift in y-down pixels.
+    #[test]
+    fn the_pixel_center_offset_is_the_scene_shift_in_y_down_pixels() {
+        let (w, h) = (64, 32);
+        // A perspective-shaped matrix: clip w = -view z.
+        let mut proj = [[0.0; 4]; 4];
+        proj[0][0] = 1.0;
+        proj[1][1] = 1.0;
+        proj[2][3] = -1.0;
+        let jitter = [0.25, -0.375];
+        let p = jitter_projection(proj, jitter, w, h);
+        // A point straight ahead at view z = -1 lands at NDC (-p[2][0], -p[2][1]).
+        let ndc = [-p[2][0], -p[2][1]];
+        let shift = [ndc[0] * w as f32 / 2.0, -ndc[1] * h as f32 / 2.0];
+        assert_eq!(pixel_center_offset(jitter), shift);
+    }
 
     // Base 2 halves the interval at each digit, so the first terms are the
     // dyadic rationals in bit-reversed order.

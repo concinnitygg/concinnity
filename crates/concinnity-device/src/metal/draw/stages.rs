@@ -244,6 +244,9 @@ impl MtlContext {
         // exposure multiplier unchanged.
         self.update_auto_exposure(elapsed, ring_slot);
         self.pre_exposure.advance(self.post_process.exposure);
+        if self.upscale.scaler.is_some() && self.upscale.exposure.advance(&self.pre_exposure) {
+            self.upscale.reset.request();
+        }
     }
 
     // What this backend has built, for the frame's graph gates.
@@ -317,6 +320,13 @@ impl MtlContext {
         } = args;
         let resident = self.resident_features();
         let content = self.frame_content(world_hidden, lines);
+        // MetalFX takes the 16-frame Halton cycle, which covers its output
+        // pixels better than the TAA cycle.
+        let upscaler_jitter = self
+            .upscale
+            .scaler
+            .as_ref()
+            .map(|_| concinnity_engine::gfx::jitter::offset(self.state.planner.jitter_phase()));
         let surface = SurfaceInputs {
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
@@ -328,7 +338,7 @@ impl MtlContext {
             render_size,
             resident,
             content,
-            upscaler_jitter: None,
+            upscaler_jitter,
             lights: &self.lights,
             probes: self.probe.book.records(),
             fog: self.fog.settings,
@@ -351,10 +361,10 @@ impl MtlContext {
         self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
         self.cull.cur_view_proj = plan.camera.cur_vp;
         self.cluster_params = plan.cluster;
-        // MetalFX expects the jitter in render pixels; TAA reads it from the
-        // projection itself.
+        // MetalFX expects the jitter in render pixels, measured from the sample
+        // back to the pixel center; TAA reads it from the projection itself.
         if self.upscale.scaler.is_some() {
-            let [x, y] = plan.camera.jitter_px;
+            let [x, y] = concinnity_engine::gfx::jitter::pixel_center_offset(plan.camera.jitter_px);
             self.upscale
                 .jitter
                 .store(x, y, std::sync::atomic::Ordering::Release);

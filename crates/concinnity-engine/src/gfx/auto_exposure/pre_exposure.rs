@@ -13,6 +13,9 @@
 //! - Temporal history written last frame is multiplied by
 //!   [`PreExposure::history_scale`] when read, so a change in pre-exposure
 //!   neither flashes nor lags.
+//! - A temporal upscaler that divides its input by a pre-exposure is handed
+//!   [`UpscalerExposure::value`](super::UpscalerExposure::value), and its
+//!   history resets when that steps.
 //! - Auto-exposure measures luminance with the pre-exposure divided out.
 //! - Bloom and the composite take [`PreExposure::post_params`]: the exposure
 //!   with the pre-exposure divided out.

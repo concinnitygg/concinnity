@@ -132,6 +132,7 @@ pub(super) fn build_upscale(
         scale,
         jitter: UpscaleJitter::default(),
         reset: concinnity_engine::render::temporal::history_reset::UpscalerResetLatch::default(),
+        exposure: auto_exposure::UpscalerExposure::default(),
     }
 }
 
