@@ -13,8 +13,8 @@ mod stages;
 use ash::vk;
 use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::gfx::lod;
 use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::gfx::{jitter, lod};
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
@@ -464,7 +464,8 @@ impl VkContext {
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;
         self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
         if let Some(up) = self.upscale.as_ref() {
-            up.jitter().set(plan.camera.jitter_px);
+            up.jitter()
+                .set(jitter::pixel_center_offset(plan.camera.jitter_px));
         }
         Ok(plan)
     }
@@ -558,6 +559,11 @@ impl FrameDevice for VkContext {
         };
         // Only a frame that renders moves the history's pre-exposure on.
         self.pre_exposure.advance(self.post_process.exposure);
+        if let Some(up) = &self.upscale
+            && self.upscale_exposure.advance(&self.pre_exposure)
+        {
+            up.request_history_reset();
+        }
 
         // The outer "end" buffer: Composite + the post-graph work, submitted
         // after the "start" buffer and every per-pass buffer.

@@ -2,6 +2,7 @@
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::jitter;
 use concinnity_engine::gfx::render_types::LineVertex;
 use concinnity_engine::profile;
 use concinnity_engine::profile::PassTiming;
@@ -177,6 +178,11 @@ impl DxContext {
         // disabled.
         self.update_auto_exposure(elapsed, frame);
         self.pre_exposure.advance(self.post_process.exposure);
+        if let Some(up) = &self.upscale.backend
+            && self.upscale.exposure.advance(&self.pre_exposure)
+        {
+            up.request_history_reset();
+        }
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
@@ -593,7 +599,9 @@ impl DxContext {
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;
         self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
         if self.upscale.backend.is_some() {
-            self.upscale.jitter.set(plan.camera.jitter_px);
+            self.upscale
+                .jitter
+                .set(jitter::pixel_center_offset(plan.camera.jitter_px));
         }
         Ok(plan)
     }

@@ -1081,6 +1081,9 @@ pub(crate) struct VkContext {
     // the reduced `render_extent` and this pass reconstructs the swapchain
     // resolution; bloom + composite sample its output.
     pub(super) upscale: Option<Box<dyn VkUpscaleBackend>>,
+    // The pre-exposure the upscaler divides its input by, stepped between
+    // frames so its history stays in FP16's normal range.
+    pub(super) upscale_exposure: auto_exposure::UpscalerExposure,
 
     // The upscaler and model the world requested. Kept so a swapchain resize
     // rebuilds the same backend via `build_upscaler` (the DLSS / XeSS device

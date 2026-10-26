@@ -6,16 +6,17 @@ use std::cell::Cell;
 /// projection so the rasterized scene and the reconstruction agree.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct UpscaleCamera {
-    /// Sub-pixel jitter of this frame's projection, in render pixels.
+    /// Sub-pixel jitter of this frame's projection, as the offset from the
+    /// sample back to the pixel center in y-down render pixels.
     pub(crate) jitter_offset: [f32; 2],
     /// The frame's elapsed-seconds stamp.
     pub(crate) elapsed: f32,
     /// Distance to the near plane, at least a millimeter.
     pub(crate) near: f32,
     pub(crate) fov_y_radians: f32,
-    /// The scale the color input was written at (the frame's pre-exposure),
-    /// which the upscaler divides out so its history holds steady across
-    /// exposure changes.
+    /// The pre-exposure the upscaler divides the color input by: the frame's
+    /// relative to a stepped reference, so its history holds steady across
+    /// exposure changes without leaving FP16's normal range.
     pub(crate) pre_exposure: f32,
 }
 

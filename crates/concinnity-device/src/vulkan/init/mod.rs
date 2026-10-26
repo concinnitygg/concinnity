@@ -387,6 +387,7 @@ impl VkContext {
             taa: present.taa,
             post: screen.post,
             upscale,
+            upscale_exposure: concinnity_engine::gfx::auto_exposure::UpscalerExposure::default(),
             upscale_requested,
             ssao: screen.ssao,
             ssr: screen.ssr,

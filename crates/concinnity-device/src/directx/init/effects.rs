@@ -96,6 +96,7 @@ pub(super) fn build_upscale(
         backend: upscaler,
         requested,
         jitter: std::cell::Cell::new([0.0, 0.0]),
+        exposure: auto_exposure::UpscalerExposure::default(),
     })
 }
 
