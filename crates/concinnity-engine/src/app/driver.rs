@@ -54,7 +54,7 @@ impl Driver for App {
     }
 
     fn run(mut self: Box<Self>) -> Result<(), WorldError> {
-        Self::run(&mut self).map(|_| ())
+        self.run_to_end().map(|_| ())
     }
 
     fn into_world(self: Box<Self>) -> World {

@@ -1,14 +1,14 @@
-// The partition check for the two vocabulary namespaces, derived from the
-// component registry: `components` is its `stored` group, `cook` its
-// `build_only` and `resource` groups. A type added to the registry, or moved
-// between its groups, fails here until the namespace it is reached through
-// follows.
-//
-// The groups come from two lists: the runtime's (`stored` and `resource`, in
-// concinnity-engine) and the authoring-only one (`build_only`, in
-// concinnity-cook, which the runtime tier never links). One derived check per
-// list, so each name is checked for being both reachable and reachable through
-// the right namespace. The entries' metadata blocks are captured and ignored.
+//! The partition check for the two vocabulary namespaces, derived from the
+//! component registry: `components` is its `stored` group, `cook` its
+//! `build_only` and `resource` groups. A type added to the registry, or moved
+//! between its groups, fails here until the namespace it is reached through
+//! follows.
+//!
+//! The groups come from two lists: the runtime's (`stored` and `resource`, in
+//! concinnity-engine) and the authoring-only one (`build_only`, in
+//! concinnity-cook, which the runtime tier never links). One derived check per
+//! list, so each name is checked for being both reachable and reachable through
+//! the right namespace. The entries' metadata blocks are captured and ignored.
 
 // Bind one runtime-registry entry at a time to the marker trait its group
 // carries.
@@ -21,7 +21,7 @@ macro_rules! assert_runtime_groups_are_partitioned {
 
         #[test]
         fn the_components_namespace_is_the_stored_group() {
-            $( a_world_holds::<crate::components::$variant>(); )+
+            $( a_world_holds::<concinnity::components::$variant>(); )+
         }
 
         #[cfg(feature = "cook")]
@@ -33,7 +33,7 @@ macro_rules! assert_runtime_groups_are_partitioned {
         #[cfg(feature = "cook")]
         #[test]
         fn the_cook_namespace_holds_the_compiled_resources() {
-            $( the_cook_compiles::<crate::cook::$rvariant>(); )+
+            $( the_cook_compiles::<concinnity::cook::$rvariant>(); )+
         }
     };
 }
@@ -50,7 +50,7 @@ macro_rules! assert_the_build_only_group_is_reachable {
 
         #[test]
         fn the_cook_namespace_holds_the_expanded_types() {
-            $( the_cook_expands::<crate::cook::$bvariant>(); )+
+            $( the_cook_expands::<concinnity::cook::$bvariant>(); )+
         }
     };
 }

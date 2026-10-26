@@ -24,8 +24,10 @@ mod driver_tests;
 mod headless_world_tests;
 #[cfg(test)]
 mod run_tests;
+#[cfg(test)]
+mod system_tests;
 
-use crate::ecs::{StepResult, SystemTable, World};
+use crate::ecs::{HEADLESS_SYSTEMS, Phase, StepResult, System, SystemTable, World};
 use crate::error::WorldError;
 use fixed_timestep::FixedTimestep;
 
@@ -65,10 +67,10 @@ impl core::fmt::Debug for App {
 }
 
 impl App {
-    /// An app that runs `world` with no systems over it: what a caller gets
-    /// when the host contributes no system table.
+    /// An app that runs `world` under the headless systems: the simulation
+    /// the engine owns, with no window and no renderer.
     pub fn from_world(world: World) -> Self {
-        Self::with_systems(world, &SystemTable::EMPTY)
+        Self::with_systems(world, HEADLESS_SYSTEMS)
     }
 
     /// An app that runs `world` under `table`, which is what gives it systems.
@@ -92,6 +94,37 @@ impl App {
     /// still add to it: content, or a system, up until `start` reads them.
     pub fn world_mut(&mut self) -> &mut World {
         &mut self.world
+    }
+
+    /// Register a system on the app's world, to run in `phase` under `name`.
+    /// See [`World::add_system`].
+    #[must_use]
+    pub fn with_system<S: System>(mut self, phase: Phase, name: &'static str, system: S) -> Self {
+        self.world.add_system(phase, name, system);
+        self
+    }
+
+    /// The same app, run as `args` ask.
+    #[must_use]
+    pub fn with_args(mut self, args: crate::launch::LaunchArgs) -> Self {
+        self.world.insert_resource(args);
+        self
+    }
+
+    /// The same app: this loop is already headless.
+    #[must_use]
+    pub fn into_headless(self) -> Self {
+        self
+    }
+
+    /// Run the app until a system stops the world or its last system finishes,
+    /// starting it first.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the world fails to start.
+    pub fn run(mut self) -> Result<(), WorldError> {
+        self.run_to_end().map(|_| ())
     }
 
     /// Ticks stepped so far.
@@ -121,7 +154,7 @@ impl App {
     /// counters behind that are process-wide, so the check stands down where it
     /// cannot trust them: where no binary installed the tracking allocator, and
     /// where another thread is allocating alongside the loop.
-    pub(crate) fn run(&mut self) -> Result<StepResult, WorldError> {
+    pub(crate) fn run_to_end(&mut self) -> Result<StepResult, WorldError> {
         self.start_if_created()?;
         loop {
             let result = self.tick();
@@ -133,7 +166,7 @@ impl App {
 
     /// Step at most `ticks` times, returning what the last tick reported:
     /// `Continue` when the full count ran, `Stop` or `Done` when the world
-    /// ended the run early. The bounded form of [`run`](App::run).
+    /// ended the run early. The bounded form of [`run_to_end`](App::run_to_end).
     #[cfg(test)]
     pub(crate) fn run_for(&mut self, ticks: u64) -> Result<StepResult, WorldError> {
         self.start_if_created()?;

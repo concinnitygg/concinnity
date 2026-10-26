@@ -29,9 +29,9 @@ mod logo;
 
 use concinnity::components::{
     Atmosphere, BackgroundOverrides, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource,
-    BloomOverrides, DirectionalLight, ExposureOverrides, FramePacingOverrides, GraphicsConfig,
-    IndirectLightingOverrides, NightSky, ProceduralMesh, Prop, SkyRotation, VignetteOverrides,
-    WaterSurface, Wind, Window,
+    BloomOverrides, Camera3D, DirectionalLight, ExposureOverrides, FramePacingOverrides,
+    GraphicsConfig, IndirectLightingOverrides, NightSky, ProceduralMesh, Prop, SkyRotation,
+    VignetteOverrides, WaterSurface, Wind, Window,
 };
 use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
@@ -84,7 +84,7 @@ fn main() {
     App::from_world(world).run().expect("the app runs");
 }
 
-fn cube_world() -> Result<World, concinnity::Error> {
+fn cube_world() -> Result<World, Box<dyn std::error::Error>> {
     let mut world = World::new();
 
     world.add_component(Window {
@@ -96,7 +96,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
     });
     // No controller: the viewpoint is fixed on the cube, rendering from the
     // view this bakes.
-    world.add_component(bake::camera(bake::Camera3D {
+    world.add_component(Camera3D::bake(bake::Camera3D {
         fov_y_degrees: CAMERA_FOV_Y_DEGREES,
         near: 0.05,
         view_distance: None,

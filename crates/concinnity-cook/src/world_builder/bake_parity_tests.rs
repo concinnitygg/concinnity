@@ -1,9 +1,9 @@
 // The parity oracle between the two ways a world gets its computed data.
 //
-// A payload baked by the `bake` functions and handed to the world's data-entry
-// methods must be the same bytes, at the same handle, as the cook pipeline
-// compiles for the same typed declaration. The two run different code -- the
-// cook goes through an authored JSON form, its expansion passes, and the
+// A payload baked by the engine's `bake::payload` functions and handed to the
+// world's data-entry methods must be the same bytes, at the same handle, as
+// the cook pipeline compiles for the same typed declaration. The two run
+// different code -- the cook goes through an authored JSON form, its expansion passes, and the
 // payload cache; the bake functions work from the typed values directly -- so
 // nothing but a test holds them to each other.
 //
@@ -12,8 +12,13 @@
 // the convolution, the payload format, and the code path either side reaches
 // are the same at any size.
 
-use crate::components::{Camera3D, ProceduralMesh, Prop};
-use crate::{World, bake, cook};
+use concinnity_core::fanout::Inline;
+use concinnity_engine::Driver;
+use concinnity_engine::bake::payload;
+use concinnity_engine::components::cook as authored;
+use concinnity_engine::components::{Camera3D, ProceduralMesh, Prop};
+use concinnity_engine::ecs::World;
+use concinnity_engine::platform::Platform;
 
 const PREFILTER_FACE: u32 = 32;
 const IRRADIANCE_FACE: u32 = 8;
@@ -27,8 +32,8 @@ fn cube_mesh() -> ProceduralMesh {
     }
 }
 
-fn cube_material() -> bake::Material {
-    bake::Material {
+fn cube_material() -> authored::Material {
+    authored::Material {
         roughness: 0.20,
         metallic: 0.30,
         tint: [0.88, 0.86, 0.84],
@@ -36,8 +41,8 @@ fn cube_material() -> bake::Material {
     }
 }
 
-fn camera_args() -> bake::Camera3D {
-    bake::Camera3D {
+fn camera_args() -> authored::Camera3D {
+    authored::Camera3D {
         fov_y_degrees: 40.0,
         near: 0.05,
         view_distance: Some(100.0),
@@ -48,8 +53,8 @@ fn camera_args() -> bake::Camera3D {
     }
 }
 
-fn sky() -> bake::EnvironmentMap {
-    bake::EnvironmentMap {
+fn sky() -> authored::EnvironmentMap {
+    authored::EnvironmentMap {
         generator: "sky".to_string(),
         prefilter_face_size: PREFILTER_FACE,
         irradiance_face_size: IRRADIANCE_FACE,
@@ -61,7 +66,7 @@ fn sky() -> bake::EnvironmentMap {
 // The cube's declarations compiled by the cook: the reference the raw path is
 // held to.
 fn cooked_world() -> World {
-    let mut spec = cook::world();
+    let mut spec = crate::world(Platform::Metal);
     spec.add("camera", &camera_args())
         .add("sky", &sky())
         .add("cube_mesh", &cube_mesh())
@@ -75,11 +80,11 @@ fn cooked_world() -> World {
 // The same declarations baked in place and handed over raw.
 fn raw_world() -> World {
     let mut world = World::new();
-    world.add_component(bake::camera(camera_args()));
-    let ibl = bake::environment_map(&sky()).expect("the sky bakes");
+    world.add_component(Camera3D::bake(camera_args()));
+    let ibl = payload::environment_map(&sky(), &Inline).expect("the sky bakes");
     world.add_environment_map(ibl);
     let mesh = cube_mesh();
-    let payload = bake::procedural_mesh(mesh).expect("the box bakes");
+    let payload = payload::procedural_mesh(mesh).expect("the box bakes");
     let mesh = world.add_mesh(payload).expect("the first mint");
     let material = world.add_material(cube_material());
     world.add_component(Prop {
@@ -95,21 +100,18 @@ fn raw_world() -> World {
 // in the runtime payload store.
 fn mesh_payload(world: &mut World) -> Vec<u8> {
     let (id, mesh) = world
-        .inner()
         .join2::<ProceduralMesh, concinnity_engine::components::Identity>()
         .next()
         .map(|(_, mesh, identity)| (identity.id(), mesh.clone()))
         .expect("the cube's mesh");
     match mesh.locator {
         Some(locator) => world
-            .inner_mut()
             .context()
             .blob
             .read(&locator)
             .expect("the payload reads back")
             .to_vec(),
         None => world
-            .inner()
             .resource::<concinnity_engine::resource::RuntimeMeshPayloads>()
             .expect("the runtime payload store")
             .get(id)
@@ -122,7 +124,6 @@ fn mesh_payload(world: &mut World) -> Vec<u8> {
 #[expect(clippy::panic, reason = "a test helper fails the test that called it")]
 fn environment_payload(world: &mut World) -> Vec<u8> {
     let entry = world
-        .inner()
         .resource::<concinnity_engine::resource::EnvironmentMapTable>()
         .expect("the environment map table")
         .0
@@ -134,7 +135,6 @@ fn environment_payload(world: &mut World) -> Vec<u8> {
     }
     match entry.payload {
         Some(locator) => world
-            .inner_mut()
             .context()
             .blob
             .read(&locator)
@@ -171,7 +171,6 @@ fn the_environment_map_payload_is_byte_identical() {
 fn the_material_data_bytes_are_byte_identical() {
     let bytes = |world: &World| {
         world
-            .inner()
             .resource::<concinnity_engine::resource::MaterialTable>()
             .expect("the material table")
             .data_bytes(0)
@@ -187,7 +186,7 @@ fn the_material_data_bytes_are_byte_identical() {
 #[test]
 fn the_resolved_handles_match() {
     let handles = |world: &World| {
-        let prop = world.inner().query::<Prop>().next().expect("the cube prop");
+        let prop = world.query::<Prop>().next().expect("the cube prop");
         (
             prop.mesh.map(concinnity_engine::ecs::Handle::index),
             prop.material.map(concinnity_engine::ecs::Handle::index),
@@ -202,11 +201,10 @@ fn the_resolved_handles_match() {
 fn the_baked_camera_matches_the_cooked_one() {
     let cooked_world = cooked_world();
     let cooked = cooked_world
-        .inner()
         .query::<Camera3D>()
         .next()
         .expect("the cooked camera");
-    let baked = bake::camera(camera_args());
+    let baked = Camera3D::bake(camera_args());
     assert_eq!(baked.view_matrix, cooked.view_matrix);
     assert_eq!(baked.fov_y_degrees, cooked.fov_y_degrees);
     assert_eq!(baked.position, cooked.position);
@@ -216,6 +214,7 @@ fn the_baked_camera_matches_the_cooked_one() {
 #[test]
 fn both_worlds_start() {
     for world in [raw_world as fn() -> World, cooked_world] {
-        crate::test_support::assert_starts_headless(crate::App::from_world(world()));
+        let mut app = concinnity_engine::App::from_world(world());
+        app.start().expect("the world starts");
     }
 }

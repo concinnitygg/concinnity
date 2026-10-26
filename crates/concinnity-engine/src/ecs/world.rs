@@ -174,6 +174,16 @@ impl World {
         self.components.push(component);
     }
 
+    /// Add one component on an entity identified as the asset `id`, so a
+    /// reference to `id` (a [`Prop`](crate::components::Prop)'s `parent`, say)
+    /// resolves to it. Returns the entity.
+    ///
+    /// An id names one live entity: when `id` is already taken, the component
+    /// is added without an identity.
+    pub fn add_identified<C: RuntimeComponent>(&mut self, id: AssetId, component: C) -> Entity {
+        self.add(component.into(), Some(id))
+    }
+
     /// Every value [`add_component`](Self::add_component) moved into its
     /// declared range since the last call, with its asset type's name.
     pub fn take_clamped_params(&mut self) -> Vec<(&'static str, ClampedParam)> {
@@ -215,24 +225,24 @@ impl World {
         crate::resource::append_material(&mut self.context(), material)
     }
 
-    /// Add a baked image-based-lighting `payload` (see
-    /// [`bake::payload::environment_map`](crate::bake::payload::environment_map))
-    /// with the map's runtime fields `record` (whether it is drawn as the
-    /// background) and return its handle. The renderer lights with the map at
-    /// handle 0.
+    /// Add a baked image-based-lighting payload, from
+    /// [`bake::payload::environment_map`](crate::bake::payload::environment_map),
+    /// and return its handle. The renderer lights with the map at handle 0
+    /// and, unless the map set `background` to `false`, draws it behind all
+    /// geometry.
     pub fn add_environment_map(
         &mut self,
-        payload: Vec<u8>,
-        record: crate::resource::EnvironmentMapRecord,
+        payload: crate::bake::payload::EnvironmentMapPayload,
     ) -> EnvironmentMapHandle {
-        crate::resource::append_environment_map(&mut self.context(), payload, record)
+        let (bytes, record) = payload.into_parts();
+        crate::resource::append_environment_map(&mut self.context(), bytes, record)
     }
 
-    /// Add a baked glyph-atlas `payload` (see
-    /// [`bake::payload::font`](crate::bake::payload::font)) and return the
+    /// Add a baked glyph atlas, from
+    /// [`bake::payload::font`](crate::bake::payload::font), and return the
     /// handle a text component references it by.
-    pub fn add_font(&mut self, payload: Vec<u8>) -> FontHandle {
-        crate::resource::append_font(&mut self.context(), payload)
+    pub fn add_font(&mut self, payload: crate::bake::payload::FontPayload) -> FontHandle {
+        crate::resource::append_font(&mut self.context(), payload.into_bytes())
     }
 
     /// Remove and drop every component of type C.

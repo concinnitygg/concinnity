@@ -28,5 +28,7 @@
 mod install;
 mod tree;
 
+#[cfg(any(windows, unix))]
+pub use install::per_user_base;
 pub use install::tree_for_exe;
 pub use tree::StateTree;

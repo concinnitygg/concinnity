@@ -144,7 +144,6 @@ concinnity-runtime = { workspace = true, optional = true }
 concinnity-host = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }

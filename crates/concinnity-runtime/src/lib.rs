@@ -37,6 +37,7 @@ pub mod platform;
 // it with `Runtime::run`, or hand the run to `run` (`cn run`) or `run_from` (a
 // shipped player, given the world's `BlobSource`).
 pub use app::blob::{BlobSource, WorldLoadError, world_from};
+pub use app::loop_choice::App;
 pub use app::run::{RunOptions, init_logging, run, run_from};
 pub use app::runloop;
 pub use app::runtime::Runtime;

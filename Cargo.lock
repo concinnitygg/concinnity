@@ -378,7 +378,6 @@ dependencies = [
  "concinnity-toolchain",
  "serde_json",
  "tempfile",
- "thiserror 2.0.21",
 ]
 
 [[package]]

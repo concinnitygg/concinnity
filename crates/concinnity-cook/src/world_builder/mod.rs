@@ -317,6 +317,9 @@ fn log_resource_footprint(records: &[ResourceRecord]) {
 }
 
 #[cfg(test)]
+mod bake_parity_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use concinnity_engine::components::{Camera3D, DirectionalLight};

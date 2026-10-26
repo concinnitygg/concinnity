@@ -115,10 +115,27 @@ impl PendingHistoryReset {
     }
 }
 
+/// Mark this tick's move of the camera, or of what it follows, as a cut: the
+/// first frame drawn from the moved camera starts its temporal history afresh.
+pub fn raise_camera_cut(ctx: &mut PipelineContext<'_>) {
+    PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ecs::World;
+
+    #[test]
+    fn raise_camera_cut_queues_a_camera_cut() {
+        let mut world = World::new();
+        let mut ctx = world.context();
+        raise_camera_cut(&mut ctx);
+        assert_eq!(
+            PendingHistoryReset::take(&mut ctx),
+            HistoryResetCauses::CAMERA_CUT
+        );
+    }
 
     #[test]
     fn cause_sets_combine() {

@@ -49,15 +49,13 @@ fn main() {
     }
 }
 
-fn run(args: LaunchArgs) -> Result<(), String> {
+fn run(args: LaunchArgs) -> Result<(), Box<dyn std::error::Error>> {
     let mut world = cook::world();
     world.add_jsonl(WORLD);
     let blob = blob_path();
-    world.write_blob(&blob).map_err(|e| e.to_string())?;
-    App::from_blob(&blob)
-        .map(|app| app.with_args(args))
-        .and_then(App::run)
-        .map_err(|e| e.to_string())
+    world.write_blob(&blob)?;
+    App::from_blob(&blob)?.with_args(args).run()?;
+    Ok(())
 }
 
 // The blob lands beside the executable, inside the build's target dir.

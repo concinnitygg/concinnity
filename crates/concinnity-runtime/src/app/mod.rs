@@ -8,6 +8,7 @@ pub(crate) mod budget;
 // Fixed-timestep accumulator advanced before each world step.
 pub(crate) mod clock;
 pub(crate) mod frame_gate;
+pub(crate) mod loop_choice;
 // The windowed loop's implementation of the core driver trait.
 mod driver;
 pub(crate) mod pacing;

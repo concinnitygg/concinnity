@@ -83,9 +83,60 @@ fn dir_is_writable(dir: &Path) -> bool {
     }
 }
 
+/// The platform base for per-user application state, from the environment the
+/// process was launched with. `None` when it cannot be resolved, in which case
+/// the writable state stays beside the data.
+#[cfg(windows)]
+pub fn per_user_base() -> Option<PathBuf> {
+    // %LOCALAPPDATA% (e.g. C:\Users\<user>\AppData\Local), falling back to the
+    // roaming %APPDATA% if the local one is somehow unset.
+    non_empty_env("LOCALAPPDATA")
+        .or_else(|| non_empty_env("APPDATA"))
+        .map(PathBuf::from)
+}
+
+/// The platform base for per-user application state, from the environment the
+/// process was launched with. `None` when it cannot be resolved, in which case
+/// the writable state stays beside the data.
+#[cfg(target_os = "macos")]
+pub fn per_user_base() -> Option<PathBuf> {
+    non_empty_env("HOME").map(|h| PathBuf::from(h).join("Library").join("Application Support"))
+}
+
+/// The platform base for per-user application state, from the environment the
+/// process was launched with. `None` when it cannot be resolved, in which case
+/// the writable state stays beside the data.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn per_user_base() -> Option<PathBuf> {
+    // The XDG base-directory spec: $XDG_DATA_HOME, else ~/.local/share.
+    non_empty_env("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| non_empty_env("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
+}
+
+// An environment variable's value when set and non-empty, so a base is never
+// rooted at "" (which would place per-user state at the filesystem root).
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the platform's per-user directories are published as environment variables"
+)]
+#[cfg(any(windows, unix))]
+fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
+    std::env::var_os(key).filter(|v| !v.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The host always has a resolvable base (HOME / LOCALAPPDATA), so a
+    // read-only install on it always has somewhere to redirect its writes.
+    #[cfg(any(windows, unix))]
+    #[test]
+    fn the_per_user_base_resolves_to_an_absolute_directory() {
+        let base = per_user_base().expect("a per-user base on the test host");
+        assert!(base.is_absolute(), "{}", base.display());
+    }
 
     #[test]
     fn plain_layout_uses_the_executable_directory() {

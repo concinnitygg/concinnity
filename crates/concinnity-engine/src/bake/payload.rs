@@ -20,7 +20,14 @@ use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
     water_grid,
 };
+use crate::resource::EnvironmentMapRecord;
 use concinnity_core::fanout::FanOut;
+
+/// Why a value could not be baked: usually one that needs the cook module's
+/// importers, which the message names.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct BakeError(String);
 
 // Fallbacks for the generator arguments a `ProceduralMesh` leaves unset. Each
 // matches what the authored path uses for the same absent argument.
@@ -66,13 +73,67 @@ impl core::fmt::Debug for MeshPayload {
     }
 }
 
+/// Baked image-based lighting and the map's runtime fields, for
+/// [`World::add_environment_map`](crate::ecs::World::add_environment_map).
+#[derive(Clone, PartialEq, Eq)]
+pub struct EnvironmentMapPayload {
+    bytes: Vec<u8>,
+    record: EnvironmentMapRecord,
+}
+
+impl EnvironmentMapPayload {
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<u8>, EnvironmentMapRecord) {
+        (self.bytes, self.record)
+    }
+}
+
+impl core::fmt::Debug for EnvironmentMapPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EnvironmentMapPayload")
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A baked glyph atlas, for [`World::add_font`](crate::ecs::World::add_font).
+#[derive(Clone, PartialEq, Eq)]
+pub struct FontPayload(Vec<u8>);
+
+impl FontPayload {
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl core::fmt::Debug for FontPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FontPayload")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
+
 /// Bake a `ProceduralMesh`'s geometry into its payload.
 ///
 /// # Errors
 ///
 /// Returns an error if the generator is missing or unknown, or its arguments do
 /// not build valid geometry.
-pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
+pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, BakeError> {
+    bake_procedural_mesh(mesh).map_err(BakeError)
+}
+
+fn bake_procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
     let (vertices, indices): (Vec<Vert>, Vec<u16>) = match mesh.generator.as_str() {
         "room" => build_room_geometry(mesh.half_width, mesh.half_depth, 0.0, mesh.ceiling_height),
         "box" => build_box(mesh.half_extents.unwrap_or(BOX_HALF_EXTENTS)),
@@ -121,7 +182,11 @@ pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
 ///
 /// Returns an error if the mesh names a `source` file, has no vertices or
 /// indices, or its indices do not form whole triangles.
-pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
+pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, BakeError> {
+    bake_mesh(mesh).map_err(BakeError)
+}
+
+fn bake_mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
     if !mesh.source.is_empty() {
         return Err(
             "a Mesh with a `source` reads a model file; compile it with the cook module"
@@ -150,14 +215,25 @@ pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
     })
 }
 
-/// Bake an `EnvironmentMap`'s IBL cubemaps into its blob payload, spreading
-/// each convolution's rows over `rows`.
+/// Bake an `EnvironmentMap`'s IBL cubemaps into its payload, spreading each
+/// convolution's rows over `rows`.
 ///
 /// # Errors
 ///
 /// Returns an error if the map names a `source` file, its generator is missing
 /// or unknown, or its sizes are out of range.
-pub fn environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
+pub fn environment_map<S: FanOut>(
+    map: &EnvironmentMap,
+    rows: &S,
+) -> Result<EnvironmentMapPayload, BakeError> {
+    let bytes = bake_environment_map(map, rows).map_err(BakeError)?;
+    Ok(EnvironmentMapPayload {
+        bytes,
+        record: EnvironmentMapRecord::from(map),
+    })
+}
+
+fn bake_environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
     if !map.source.is_empty() {
         return Err(
             "an EnvironmentMap with a `source` reads a panorama file; compile it with the \
@@ -188,17 +264,19 @@ pub fn environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<
 ///
 /// Returns an error if the font names a `path`, or the built-in face cannot be
 /// rasterized at its size.
-pub fn font(font: &Font) -> Result<Vec<u8>, String> {
+pub fn font(font: &Font) -> Result<FontPayload, BakeError> {
     if !font.path.is_empty() {
-        return Err(
+        return Err(BakeError(
             "a Font with a `path` reads a TTF file; compile it with the cook module".to_string(),
-        );
+        ));
     }
     crate::bake::font::compile(
         crate::bake::font::BUILTIN_FONT_BYTES,
         font.size_px,
         "<built-in>",
     )
+    .map(FontPayload)
+    .map_err(BakeError)
 }
 
 #[cfg(test)]
@@ -256,7 +334,7 @@ mod tests {
             (mesh("extrude"), "needs a `profile`"),
         ] {
             let err = procedural_mesh(m).expect_err("not bakeable");
-            assert!(err.contains(needle), "{err}");
+            assert!(err.to_string().contains(needle), "{err}");
         }
     }
 
@@ -293,20 +371,23 @@ mod tests {
             ..Default::default()
         };
         let err = super::mesh(&sourced).expect_err("a file source");
-        assert!(err.contains("cook module"), "{err}");
+        assert!(err.to_string().contains("cook module"), "{err}");
 
         let err = super::mesh(&Mesh::default()).expect_err("nothing to bake");
-        assert!(err.contains("needs `vertices` and `indices`"), "{err}");
+        assert!(
+            err.to_string().contains("needs `vertices` and `indices`"),
+            "{err}"
+        );
 
         let mut ragged = triangle();
         ragged.indices.push(0);
         let err = super::mesh(&ragged).expect_err("a partial triangle");
-        assert!(err.contains("multiple of 3"), "{err}");
+        assert!(err.to_string().contains("multiple of 3"), "{err}");
 
         let mut past = triangle();
         past.indices[2] = 7;
         let err = super::mesh(&past).expect_err("an index past the list");
-        assert!(err.contains("indexes past"), "{err}");
+        assert!(err.to_string().contains("indexes past"), "{err}");
     }
 
     #[test]
@@ -319,8 +400,8 @@ mod tests {
             ..Default::default()
         };
         let payload = environment_map(&map, &Inline).expect("the sky bakes");
-        let view =
-            crate::bake::environment_map::deserialize(&payload).expect("the payload reads back");
+        let view = crate::bake::environment_map::deserialize(payload.as_bytes())
+            .expect("the payload reads back");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);
     }
@@ -332,18 +413,25 @@ mod tests {
             ..Default::default()
         };
         let err = environment_map(&with_source, &Inline).expect_err("a file source");
-        assert!(err.contains("cook module"), "{err}");
+        assert!(err.to_string().contains("cook module"), "{err}");
 
         let blank = EnvironmentMap::default();
         let err = environment_map(&blank, &Inline).expect_err("nothing to bake");
-        assert!(err.contains("needs a `source` or a `generator`"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("needs a `source` or a `generator`"),
+            "{err}"
+        );
 
         let unknown = EnvironmentMap {
             generator: "swamp".into(),
             ..Default::default()
         };
         let err = environment_map(&unknown, &Inline).expect_err("unknown generator");
-        assert!(err.contains("unknown EnvironmentMap generator"), "{err}");
+        assert!(
+            err.to_string().contains("unknown EnvironmentMap generator"),
+            "{err}"
+        );
 
         let oversized = EnvironmentMap {
             generator: "sky".into(),
@@ -351,7 +439,7 @@ mod tests {
             ..Default::default()
         };
         let err = environment_map(&oversized, &Inline).expect_err("out of range");
-        assert!(err.contains("prefilter_face_size"), "{err}");
+        assert!(err.to_string().contains("prefilter_face_size"), "{err}");
     }
 
     #[test]
@@ -362,7 +450,7 @@ mod tests {
         })
         .expect("the built-in face bakes");
         let (_, _, _, size_px, _, metrics) =
-            crate::bake::font::deserialize(&payload).expect("the atlas reads back");
+            crate::bake::font::deserialize(payload.as_bytes()).expect("the atlas reads back");
         assert_eq!(size_px, 12);
         assert!(!metrics.is_empty());
 
@@ -371,6 +459,6 @@ mod tests {
             ..Default::default()
         })
         .expect_err("a file face");
-        assert!(err.contains("cook module"), "{err}");
+        assert!(err.to_string().contains("cook module"), "{err}");
     }
 }
