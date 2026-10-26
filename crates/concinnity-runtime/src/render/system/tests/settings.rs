@@ -50,6 +50,45 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     );
 }
 
+// The `--upscaling` and `--rt-reflections` flags reach the backend over the
+// user's persisted choices and the ceiling, in either direction. On a mid-tier
+// GPU `Auto` resolves to the `High` ceiling, which leaves ray tracing off.
+#[test]
+fn the_upscaling_and_ray_tracing_flags_beat_saved_and_preset_choices() {
+    let authored = effects(|e| {
+        e.reflections.ray_traced = true;
+    });
+    let run = |saved: Option<bool>, flag: Option<bool>| {
+        let mut settings = concinnity_engine::settings::StoredSettings::default();
+        settings.graphics.quality_preset = Some(QualityPreset::Auto);
+        settings.graphics.temporal_upscaling = saved;
+        settings.graphics.ray_traced_reflections = saved;
+        let (state, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
+        let mut world = effects_scene(authored.clone()).build();
+        world.insert_resource(settings);
+        world.insert_resource(LaunchRequest {
+            args: LaunchArgs {
+                upscaling: flag,
+                rt_reflections: flag,
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
+        init_graphics(&mut world, hooks);
+        let s = lock(&state);
+        let init = s.init.as_ref().unwrap();
+        (init.upscaling, init.rt_reflections_on)
+    };
+    assert!(!run(None, None).1, "the Auto -> High ceiling leaves RT off");
+    assert_eq!(run(Some(false), Some(true)), (true, true));
+    assert_eq!(run(Some(true), Some(false)), (false, false));
+    assert_eq!(
+        run(Some(true), None),
+        (true, true),
+        "no flag keeps the saved choice"
+    );
+}
+
 // The two ray-tracing launch flags reach the assembled `BackendInit` the
 // backends destructure, and an absent flag lands on the shipping value.
 #[test]

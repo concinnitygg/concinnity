@@ -2,8 +2,9 @@ use super::*;
 use crate::components::{
     AaMode, AmbientOcclusion, AmbientOcclusionOverrides, AntiAliasing, AntiAliasingOverrides,
     Bloom, Culling, Display, DisplayOverrides, Exposure, FramePacing, FramePacingOverrides,
-    IndirectLighting, IndirectTechnique, PassResolution, Reflections, ShadowUpdate, Shadows,
-    ShadowsOverrides, TextureFiltering, TextureFilteringOverrides, UpscaleQuality, Vignette,
+    IndirectLighting, IndirectTechnique, PassResolution, Reflections, ReflectionsOverrides,
+    ShadowUpdate, Shadows, ShadowsOverrides, TextureFiltering, TextureFilteringOverrides,
+    UpscaleQuality, Vignette,
 };
 use crate::ecs::asset_fields::ApplyClass;
 use crate::render::backend::{GpuProfile, GpuTier};
@@ -1007,13 +1008,16 @@ fn adopting_a_quality_group_keeps_the_rest() {
 }
 
 // Water traces in place only under a ceiling that traces at full resolution,
-// even where the world and the user leave ray tracing on.
+// even where the user turns ray tracing on under a ceiling that leaves it off.
 #[test]
 fn the_water_trace_follows_the_ceiling() {
-    let none = UserGraphicsSettings::default();
+    let traced = UserGraphicsSettings {
+        ray_traced_reflections: Some(true),
+        ..Default::default()
+    };
     let world = WorldSettings::default();
     let water = |ceiling: &QualityCeiling| {
-        resolve_settings(&world, &none, ceiling, false)
+        resolve_settings(&world, &traced, ceiling, false)
             .graphics
             .rt_reflections()
             .map(|rt| rt.water_trace)
@@ -1096,6 +1100,88 @@ fn the_preset_upscales_only_where_no_layer_chose() {
         ..SettingsLayers::new(&unset, &ceiling, &none)
     };
     assert!(!layers.resolve().graphics.anti_aliasing.upscaling);
+}
+
+// A launch's session override decides upscaling and ray-traced reflections
+// over every layer below it, in either direction: the world, the user's
+// persisted choice, the quality ceiling and the preset's own upscaling.
+#[test]
+fn a_session_override_beats_the_world_the_user_and_the_ceiling() {
+    for on in [true, false] {
+        let world = authored(&GraphicsConfig {
+            anti_aliasing: AntiAliasingOverrides {
+                upscaling: Some(!on),
+                ..Default::default()
+            },
+            reflections: ReflectionsOverrides {
+                ray_traced: Some(!on),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let user = UserGraphicsSettings {
+            temporal_upscaling: Some(!on),
+            ray_traced_reflections: Some(!on),
+            ..Default::default()
+        };
+        let session = UserGraphicsSettings {
+            temporal_upscaling: Some(on),
+            ray_traced_reflections: Some(on),
+            ..Default::default()
+        };
+        // The High ceiling permits no ray tracing; Ultra permits it.
+        let ceiling = if on {
+            QualityCeiling::HIGH
+        } else {
+            QualityCeiling::ULTRA
+        };
+        let graphics = SettingsLayers {
+            session: Some(&session),
+            auto_upscaling: !on,
+            ..SettingsLayers::new(&world, &ceiling, &user)
+        }
+        .resolve()
+        .graphics;
+        assert_eq!(graphics.anti_aliasing.upscaling, on, "upscaling {on}");
+        assert_eq!(graphics.reflections.ray_traced, on, "ray tracing {on}");
+    }
+}
+
+// The device clamps after every layer: a session cannot turn on ray tracing a
+// GPU cannot run.
+#[test]
+fn a_session_override_cannot_trace_on_a_device_without_ray_tracing() {
+    let session = UserGraphicsSettings {
+        ray_traced_reflections: Some(true),
+        ..Default::default()
+    };
+    let none = UserGraphicsSettings::default();
+    let world = WorldSettings::default();
+    let caps = DeviceCapabilities {
+        ray_tracing: false,
+        ..DeviceCapabilities::ALL
+    };
+    let layers = SettingsLayers {
+        session: Some(&session),
+        capabilities: &caps,
+        ..SettingsLayers::new(&world, &QualityCeiling::ULTRA, &none)
+    };
+    assert!(!layers.resolve().graphics.reflections.ray_traced);
+}
+
+// Auto on a mid-tier GPU, an M2 among them, resolves to the High ceiling,
+// which leaves ray-traced reflections to the top tier.
+#[test]
+fn auto_on_a_mid_tier_gpu_does_not_trace_reflections() {
+    let none = UserGraphicsSettings::default();
+    let world = WorldSettings::default();
+    for (tier, traced) in [(GpuTier::MidDiscrete, false), (GpuTier::HighDiscrete, true)] {
+        let ceiling = ceiling_for(QualityPreset::Auto, tier);
+        let graphics = SettingsLayers::new(&world, &ceiling, &none)
+            .resolve()
+            .graphics;
+        assert_eq!(graphics.reflections.ray_traced, traced, "{tier:?}");
+    }
 }
 
 // The preset's upscaling renders at the tier's least aggressive scale.

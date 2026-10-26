@@ -128,13 +128,15 @@ impl LaunchRequest {
 
     /// The settings this launch overrides for its own run, layered over the
     /// user's persisted choices and never persisted: vsync, the frame-rate cap,
-    /// the window mode, temporal upscaling and the DLSS preset.
+    /// the window mode, temporal upscaling, ray-traced reflections and the DLSS
+    /// preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
         UserGraphicsSettings {
             vsync: self.args.vsync.then_some(true),
             fps_cap: self.args.fps_cap,
             window_mode: self.args.window_mode,
             temporal_upscaling: self.args.upscaling,
+            ray_traced_reflections: self.args.rt_reflections,
             dlss_preset: self.dlss_preset,
             ..UserGraphicsSettings::default()
         }
@@ -295,21 +297,25 @@ mod tests {
     }
 
     #[test]
-    fn requested_upscaling_is_a_session_override() {
+    fn requested_upscaling_and_ray_tracing_are_session_overrides() {
         let user = UserGraphicsSettings {
             temporal_upscaling: Some(true),
+            ray_traced_reflections: Some(true),
             ..Default::default()
         };
-        let forced = |upscaling| LaunchRequest {
+        let forced = |state| LaunchRequest {
             args: LaunchArgs {
-                upscaling,
+                upscaling: state,
+                rt_reflections: state,
                 ..LaunchArgs::NONE
             },
             ..Default::default()
         };
-        let merged = |upscaling| user.overlaid_by(&forced(upscaling).session_overrides());
+        let merged = |state| user.overlaid_by(&forced(state).session_overrides());
         assert_eq!(merged(Some(false)).temporal_upscaling, Some(false));
+        assert_eq!(merged(Some(false)).ray_traced_reflections, Some(false));
         assert_eq!(merged(None).temporal_upscaling, Some(true));
+        assert_eq!(merged(None).ray_traced_reflections, Some(true));
     }
 
     #[test]

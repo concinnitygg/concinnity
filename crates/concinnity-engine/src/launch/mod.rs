@@ -12,7 +12,7 @@ mod request;
 
 pub use error::LaunchArgsError;
 pub use flags::{
-    GRAPHICS_API_VALUES, LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, UPSCALING_VALUES,
+    GRAPHICS_API_VALUES, LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, SWITCH_VALUES,
     WINDOW_MODE_VALUES, flag, usage,
 };
 pub use pipeline::PipelineMode;
@@ -49,6 +49,10 @@ pub struct LaunchArgs {
     /// Turn temporal upscaling on or off, over the world's and the saved
     /// settings' choice, without saving it.
     pub upscaling: Option<bool>,
+    /// Turn ray-traced reflections on or off, over the world's, the saved
+    /// settings' and the quality preset's choice, without saving it. A device
+    /// without ray tracing still runs without them.
+    pub rt_reflections: Option<bool>,
     /// The directory screenshots are written under, instead of
     /// [`DEFAULT_SCREENSHOTS_DIR`].
     pub screenshots_dir: Option<String>,
@@ -126,6 +130,7 @@ impl LaunchArgs {
         graphics_api: None,
         window_mode: None,
         upscaling: None,
+        rt_reflections: None,
         screenshots_dir: None,
         frames: None,
         screenshots: false,
@@ -219,11 +224,10 @@ impl LaunchArgs {
                 );
             }
             ("upscaling", Some(value)) => {
-                self.upscaling = Some(match value {
-                    "on" => true,
-                    "off" => false,
-                    _ => return Err(bad(value)),
-                });
+                self.upscaling = Some(switch(value).ok_or_else(|| bad(value))?);
+            }
+            ("rt-reflections", Some(value)) => {
+                self.rt_reflections = Some(switch(value).ok_or_else(|| bad(value))?);
             }
             ("screenshots-dir", Some(value)) => {
                 if value.is_empty() {
@@ -238,6 +242,15 @@ impl LaunchArgs {
             (_, Some(_)) => return Err(LaunchArgsError::UnexpectedValue(flag.name)),
         }
         Ok(())
+    }
+}
+
+// An on/off flag's state, as [`SWITCH_VALUES`] names it.
+fn switch(value: &str) -> Option<bool> {
+    match value {
+        "on" => Some(true),
+        "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -276,6 +289,8 @@ mod tests {
             "vulkan",
             "--window-mode=fullscreen",
             "--upscaling=off",
+            "--rt-reflections",
+            "on",
             "--screenshots-dir=shots/vk",
             "--frames",
             "600",
@@ -295,6 +310,7 @@ mod tests {
                 graphics_api: Some(Platform::Vulkan),
                 window_mode: Some(WindowMode::Fullscreen),
                 upscaling: Some(false),
+                rt_reflections: Some(true),
                 screenshots_dir: Some("shots/vk".into()),
                 frames: Some(600),
                 screenshots: true,
@@ -384,13 +400,15 @@ mod tests {
                 value: "maximized".into()
             })
         );
-        assert_eq!(
-            parse(&["--upscaling", "true"]),
-            Err(LaunchArgsError::BadValue {
-                flag: "upscaling",
-                value: "true".into()
-            })
-        );
+        for flag in ["upscaling", "rt-reflections"] {
+            assert_eq!(
+                parse(&[&alloc::format!("--{flag}"), "true"]),
+                Err(LaunchArgsError::BadValue {
+                    flag,
+                    value: "true".into()
+                })
+            );
+        }
         assert_eq!(
             parse(&["--quality-preset", "max"]),
             Err(LaunchArgsError::BadValue {

@@ -87,6 +87,8 @@ pub struct InitSnapshot {
     pub ssao_enabled: bool,
     /// Whether ray-traced reflections run.
     pub rt_reflections_on: bool,
+    /// Whether temporal upscaling runs.
+    pub upscaling: bool,
     /// The ray-tracing dynamic-geometry mode.
     pub rt_dynamic: crate::render::rt_accel::geom::RtDynamicMode,
     /// Whether skinned geometry joins the acceleration structure.
@@ -349,6 +351,7 @@ fn record_init(state: &SharedRecording, init: BackendInit<'_>) {
         taa_enabled: init.graphics.taa(),
         ssao_enabled: init.graphics.ssao().is_some(),
         rt_reflections_on: init.graphics.rt_reflections().is_some(),
+        upscaling: init.graphics.anti_aliasing.upscaling,
         rt_dynamic: init.launch.rt_dynamic,
         rt_skinned_geometry: init.launch.rt_skinned_geometry,
         dlss_preset: init.graphics.dlss_preset,

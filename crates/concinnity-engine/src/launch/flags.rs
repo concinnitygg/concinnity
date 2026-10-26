@@ -35,8 +35,8 @@ pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
 pub const WINDOW_MODE_VALUES: &[&str] =
     <crate::window::WindowMode as crate::components::Vocabulary>::VARIANTS;
 
-/// The states `--upscaling` names.
-pub const UPSCALING_VALUES: &[&str] = &["on", "off"];
+/// The states an on/off flag such as `--upscaling` names.
+pub const SWITCH_VALUES: &[&str] = &["on", "off"];
 
 /// Every flag a launch accepts.
 pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
@@ -51,7 +51,7 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         name: "vsync",
         value: None,
         values: &[],
-        description: "Turn vertical sync on, whatever the world or the saved settings say",
+        description: "Turn vertical sync on",
         repeatable: false,
     },
     LaunchFlag {
@@ -65,28 +65,35 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         name: "quality-preset",
         value: Some("PRESET"),
         values: QUALITY_PRESET_VALUES,
-        description: "Force the graphics-quality preset for this run, unsaved",
+        description: "Force the graphics-quality preset for this run",
         repeatable: false,
     },
     LaunchFlag {
         name: "graphics-api",
         value: Some("API"),
         values: GRAPHICS_API_VALUES,
-        description: "Render with this graphics API, over the saved settings' choice, unsaved",
+        description: "Render with this graphics API",
         repeatable: false,
     },
     LaunchFlag {
         name: "window-mode",
         value: Some("MODE"),
         values: WINDOW_MODE_VALUES,
-        description: "Open the window in this mode, over the world's and the saved settings' choice, unsaved",
+        description: "Open the window in this mode",
         repeatable: false,
     },
     LaunchFlag {
         name: "upscaling",
         value: Some("STATE"),
-        values: UPSCALING_VALUES,
-        description: "Turn temporal upscaling on or off, over the world's and the saved settings' choice, unsaved",
+        values: SWITCH_VALUES,
+        description: "Turn temporal upscaling on or off",
+        repeatable: false,
+    },
+    LaunchFlag {
+        name: "rt-reflections",
+        value: Some("STATE"),
+        values: SWITCH_VALUES,
+        description: "Turn ray-traced reflections on or off",
         repeatable: false,
     },
     LaunchFlag {

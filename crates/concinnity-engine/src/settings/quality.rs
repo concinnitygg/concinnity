@@ -232,7 +232,7 @@ impl QualityCeiling {
         aa_mode: AaMode::Taa,
         ssao: true,
         ssr: true,
-        ray_traced_reflections: true,
+        ray_traced_reflections: false,
         rt_reflection_shadows: true,
         ssgi: true,
         auto_exposure: true,
