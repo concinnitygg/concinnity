@@ -12,7 +12,7 @@ use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::window::clipboard::Clipboard;
-use concinnity_engine::window::display_mode::DisplayMode;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
 use crate::win32::window;
@@ -143,6 +143,12 @@ impl Win32Window {
     // row shows before the user ever picks one).
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         display_mode::current(self.win_state.hwnd)
+    }
+
+    // The current mode's rate; the mode list carries no variable-refresh range.
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        self.current_display_mode()
+            .and_then(DisplayRefresh::from_mode)
     }
 
     // Remember the display mode to hold while fullscreen. Applied by the

@@ -119,6 +119,13 @@ pub trait WindowControl {
         None
     }
 
+    /// How fast the display this backend renders to can refresh. Default: the
+    /// current mode's rate, with no variable range.
+    fn display_refresh(&self) -> Option<crate::window::display_mode::DisplayRefresh> {
+        self.current_display_mode()
+            .and_then(crate::window::display_mode::DisplayRefresh::from_mode)
+    }
+
     /// Select the display mode to hold while the window is in fullscreen. The
     /// backend applies it whenever the window is (or becomes) fullscreen and
     /// restores the display's original mode when the window leaves fullscreen

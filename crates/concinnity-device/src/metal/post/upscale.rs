@@ -24,6 +24,7 @@ use objc2_metal_fx::{MTLFXTemporalScaler, MTLFXTemporalScalerBase, MTLFXTemporal
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::error::allocation_failed;
+use crate::metal::pass_timing::{PassId, PassTimer};
 use crate::metal::texture::{REACTIVE_MASK_FORMAT, REACTIVE_MASK_USAGE};
 
 // All MetalFX-temporal-upscaling state grouped into one feature unit: the
@@ -336,15 +337,19 @@ impl MtlContext {
         // SAFETY: the reset flag is a plain boolean the scaler reads at the encode below.
         unsafe { scaler.setReset(reset) };
 
-        // MetalFX's encode is a single dispatch that doesn't go through a render
-        // or compute encoder we own, so the standard `attach_render` /
-        // `attach_compute` plumbing doesn't apply. The pass-timing slot for
-        // Upscale stays at zero until Apple exposes a sampling hook; the chip
-        // simply omits the row.
-
+        // MetalFX encodes into encoders of its own, which no sample buffer can
+        // attach to, so markers reading its color input and its output bracket
+        // it. The reading is the scaler's span, including work that overlaps it.
+        let timing = self.diagnostics.pass_timing.as_ref();
+        if let Some(t) = timing {
+            t.mark(cmd_buf, PassTimer::First(PassId::Upscale), scene_pre_taa);
+        }
         // SAFETY: the scaler's input, output, and parameter slots were all set above, and `cmd_buf`
         // is the live command buffer for this frame.
         unsafe { scaler.encodeToCommandBuffer(cmd_buf) };
+        if let Some(t) = timing {
+            t.mark(cmd_buf, PassTimer::Last(PassId::Upscale), &upscaler.output);
+        }
         Ok(0)
     }
 }

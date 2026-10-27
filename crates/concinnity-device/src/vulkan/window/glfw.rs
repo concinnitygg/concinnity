@@ -545,6 +545,12 @@ impl GlfwWindow {
         self.desktop_mode
     }
 
+    // The desktop mode's rate; GLFW reports no variable-refresh range.
+    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
+        self.desktop_mode
+            .and_then(display_mode::DisplayRefresh::from_mode)
+    }
+
     // Remember the display mode to hold while fullscreen, snapped to a video
     // mode the monitor actually has (a stale persisted choice from another
     // display is ignored with a warning, mirroring Metal / DirectX). While

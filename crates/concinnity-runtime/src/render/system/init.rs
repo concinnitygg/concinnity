@@ -192,8 +192,9 @@ impl GraphicsSystem {
 
     // Apply the persisted window mode, publish the Resolution row's mode list
     // (backend-enumerated, else the static preset fallback), apply a persisted
-    // display-mode choice to the backend, and seed the frame-rate-cap resource +
-    // the Resolution row's dynamic value label. Runs after the backend is built.
+    // display-mode choice to the backend, log and publish the display's refresh
+    // range, and seed the frame-rate-cap resource + the Resolution row's dynamic
+    // value label. Runs after the backend is built.
     fn finalize_display_modes(
         &mut self,
         ctx: &mut PipelineContext<'_>,
@@ -211,8 +212,13 @@ impl GraphicsSystem {
             if let Some(resolution) = settings.resolution() {
                 backend.set_display_mode(resolution);
             }
-            report
+            (report, backend.display_refresh())
         });
+        let (reported, refresh) = reported.unzip();
+        if let Some(refresh) = refresh.flatten() {
+            tracing::info!("display: {}", refresh.label());
+            ctx.insert_resource(refresh);
+        }
         settings.adopt_display(ctx, reported);
     }
 

@@ -18,7 +18,7 @@ use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::window::clipboard::Clipboard;
-use concinnity_engine::window::display_mode::DisplayMode;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSView};
@@ -169,6 +169,10 @@ impl AppKitVkWindow {
 
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         self.win.current_display_mode()
+    }
+
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        self.win.display_refresh()
     }
 
     pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {

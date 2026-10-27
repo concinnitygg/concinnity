@@ -13,6 +13,7 @@ use crate::camera::track::CameraTrackStatus;
 use crate::camera::track::status::TrackPickup;
 use crate::planet::FrameRebases;
 use crate::profile::RenderStats;
+use crate::window::display_mode::DisplayRefresh;
 
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
@@ -68,6 +69,8 @@ pub(crate) struct FrameReportSystem {
     // Where the camera track picked its subject up, once it has.
     pickup: Option<TrackPickup>,
     hidden: HiddenFrames,
+    // The display the run presented to, once the renderer has published it.
+    display: Option<DisplayRefresh>,
 }
 
 // What one step knows about its frame before the profile rotates in the
@@ -106,6 +109,7 @@ impl FrameReportSystem {
             shown: ShownFrames::default(),
             pickup: None,
             hidden: HiddenFrames::default(),
+            display: None,
         }
     }
 
@@ -132,7 +136,7 @@ impl FrameReportSystem {
 
     fn write_text(&self, text: &mut impl Write) -> fmt::Result {
         match Report::of(&self.run) {
-            Some(report) => write_report(text, &report)?,
+            Some(report) => write_report(text, &report, self.display)?,
             None => writeln!(
                 text,
                 "frame report: no frames past the {:.1}s warm-up, so there is nothing to measure",
@@ -168,6 +172,9 @@ impl System for FrameReportSystem {
         let now = ctx.resource::<Clock>().map_or(0, Clock::read);
         let started = *self.started.get_or_insert(now);
         let status = ctx.resource::<CameraTrackStatus>().copied();
+        if let Some(display) = ctx.resource::<DisplayRefresh>() {
+            self.display = Some(*display);
+        }
         if let Some(pickup) = status.and_then(|s| s.pickup) {
             self.pickup = Some(pickup);
         }

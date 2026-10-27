@@ -12,7 +12,7 @@ use concinnity_engine::components::{InputKey, KeyEvent, KeyPress, WindowMode};
 use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::window::clipboard::Clipboard;
-use concinnity_engine::window::display_mode::DisplayMode;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,
@@ -472,6 +472,12 @@ impl AppKitWindow {
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         let window = self.window.as_deref()?;
         display_mode::current(Some(window))
+    }
+
+    // How fast the engine window's screen can refresh. None in embedded mode,
+    // matching display_modes.
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        display_mode::refresh(self.window.as_deref()?)
     }
 
     // Remember the display mode to hold while the window is in native

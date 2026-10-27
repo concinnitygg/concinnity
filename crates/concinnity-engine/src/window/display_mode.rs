@@ -105,6 +105,48 @@ pub fn best_native_index(modes: &[DisplayMode], want: DisplayMode) -> Option<usi
     best.map(|(_, i)| i)
 }
 
+/// How fast the display a window sits on can refresh, as the OS reports it.
+///
+/// This is what the display offers, not what it is running at: a panel the
+/// system holds below its top rate still reports that rate here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayRefresh {
+    /// The highest refresh rate in Hz.
+    pub max_hz: f32,
+    /// The lowest rate a variable-refresh display drops to, equal to `max_hz`
+    /// on a fixed-rate one. `None` when the backend reads only the one rate.
+    pub min_hz: Option<f32>,
+}
+
+impl DisplayRefresh {
+    /// A display whose backend reports only its current mode's rate.
+    pub fn from_mode(mode: DisplayMode) -> Option<Self> {
+        (mode.refresh_hz > 0).then_some(Self {
+            max_hz: mode.refresh_hz as f32,
+            min_hz: None,
+        })
+    }
+
+    /// Whether the display varies its rate below `max_hz`, as adaptive-sync
+    /// panels do.
+    pub fn is_variable(&self) -> bool {
+        self.min_hz.is_some_and(|min| min < self.max_hz - 0.5)
+    }
+
+    /// The text logged at startup and printed with a benchmark's report, e.g.
+    /// "120 Hz, variable down to 24 Hz", "60 Hz fixed", or "144 Hz".
+    pub fn label(&self) -> String {
+        let max = round(self.max_hz);
+        match self.min_hz {
+            Some(min) if self.is_variable() => {
+                format!("{max} Hz, variable down to {} Hz", round(min))
+            }
+            Some(_) => format!("{max} Hz fixed"),
+            None => format!("{max} Hz"),
+        }
+    }
+}
+
 /// The display a window would open on, read before the window exists.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DisplayProbe {
@@ -349,5 +391,33 @@ mod tests {
             predicted_output(&window(WindowMode::Windowed), None, Some(SCALED_4K)),
             [1600, 900]
         );
+    }
+
+    #[test]
+    fn a_variable_display_names_its_range() {
+        let refresh = DisplayRefresh {
+            max_hz: 120.0,
+            min_hz: Some(24.0),
+        };
+        assert!(refresh.is_variable());
+        assert_eq!(refresh.label(), "120 Hz, variable down to 24 Hz");
+    }
+
+    #[test]
+    fn a_fixed_display_says_so() {
+        let refresh = DisplayRefresh {
+            max_hz: 60.0,
+            min_hz: Some(60.0),
+        };
+        assert!(!refresh.is_variable());
+        assert_eq!(refresh.label(), "60 Hz fixed");
+    }
+
+    #[test]
+    fn a_mode_rate_alone_leaves_the_range_unknown() {
+        let refresh = DisplayRefresh::from_mode(mode(2560, 1440, 144)).unwrap();
+        assert!(!refresh.is_variable());
+        assert_eq!(refresh.label(), "144 Hz");
+        assert_eq!(DisplayRefresh::from_mode(mode(2560, 1440, 0)), None);
     }
 }

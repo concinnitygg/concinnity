@@ -7,15 +7,20 @@ use core::fmt::{self, Write};
 use crate::frame_report::reduce::{
     FanOutCost, FrameCost, PhaseReport, RENDER_SUBMIT, Report, SlowFrame,
 };
+use crate::window::display_mode::DisplayRefresh;
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;
 
-/// Write a report as plain text.
+/// Write a report as plain text, naming the `display` it ran on when known.
 ///
 /// Frame time leads every row because it is the number a player feels; the
 /// budget count beside it is what a mean would hide.
-pub(super) fn write_report(out: &mut impl Write, report: &Report) -> fmt::Result {
+pub(super) fn write_report(
+    out: &mut impl Write,
+    report: &Report,
+    display: Option<DisplayRefresh>,
+) -> fmt::Result {
     writeln!(
         out,
         "frame report: {} measured frame(s), {} warm-up frame(s) dropped, budget {:.2} ms",
@@ -23,6 +28,11 @@ pub(super) fn write_report(out: &mut impl Write, report: &Report) -> fmt::Result
         report.warmup_dropped,
         report.budget_us as f32 / MICROS_PER_MILLI,
     )?;
+    // A display that presents at a fixed rate floors the frame time there, so
+    // a 60 Hz run and a 120 Hz run of the same work read differently.
+    if let Some(display) = display {
+        writeln!(out, "display: {}", display.label())?;
+    }
     if !report.completed {
         writeln!(
             out,
@@ -321,7 +331,7 @@ mod tests {
     use concinnity_core::fanout::FanOutTiming;
 
     fn to_text(report: &Report) -> String {
-        fmt::from_fn(|out| write_report(out, report)).to_string()
+        fmt::from_fn(|out| write_report(out, report, None)).to_string()
     }
 
     fn sample(run_seconds: f32, phase: Option<u32>, frame_us: u32) -> FrameSample {
@@ -382,6 +392,30 @@ mod tests {
         assert!(text.contains("2 measured frame(s)"), "{text}");
         assert!(text.contains("0 warm-up frame(s) dropped"), "{text}");
         assert!(text.contains("budget 16.67 ms"), "{text}");
+    }
+
+    #[test]
+    fn the_header_names_the_display_when_it_is_known() {
+        assert!(!rendered().contains("display:"), "{}", rendered());
+        let mut first = sample(0.0, Some(0), 10_000);
+        first.pass_us[0] = 3_000;
+        let run = Recorded {
+            samples: vec![first],
+            phases: vec!["approach".to_string()],
+            pass_names: vec!["main".to_string()],
+            system_names: Vec::new(),
+            completed: true,
+        };
+        let display = DisplayRefresh {
+            max_hz: 120.0,
+            min_hz: Some(24.0),
+        };
+        let text =
+            fmt::from_fn(|out| write_report(out, &report_of(&run), Some(display))).to_string();
+        assert!(
+            text.contains("\ndisplay: 120 Hz, variable down to 24 Hz\n"),
+            "{text}"
+        );
     }
 
     #[test]

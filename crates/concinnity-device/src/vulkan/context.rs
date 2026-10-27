@@ -1566,6 +1566,10 @@ impl VkContext {
         self.window().current_display_mode()
     }
 
+    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
+        self.window().display_refresh()
+    }
+
     pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.window_mut().set_display_mode(mode);
     }
