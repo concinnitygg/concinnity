@@ -41,6 +41,7 @@ mod post;
 mod probe;
 mod probe_prefilter;
 mod probe_set;
+mod prop_probe;
 mod pso;
 mod pso_library;
 mod quality;

@@ -279,15 +279,6 @@ fn execution_range_layout() {
     assert_eq!(core::mem::offset_of!(GpuExecutionRange, length), 4);
 }
 
-#[test]
-fn compact_params_layout() {
-    assert_eq!(size_of::<GpuCompactParams>(), 16);
-    assert_eq!(core::mem::offset_of!(GpuCompactParams, object_count), 0);
-    assert_eq!(core::mem::offset_of!(GpuCompactParams, bucket_count), 4);
-    assert_eq!(core::mem::offset_of!(GpuCompactParams, skinned_base), 8);
-    assert_eq!(core::mem::offset_of!(GpuCompactParams, drawn), 12);
-}
-
 // The constants the shaders lock to these.
 #[test]
 fn shader_constants_match() {
@@ -296,4 +287,42 @@ fn shader_constants_match() {
     assert_eq!(uint("CULL_GROUP_RECORDS"), CULL_GROUP_RECORDS as usize);
     assert_eq!(uint("DRAW_STREAMS"), DRAW_STREAMS);
     assert_eq!(uint("SKINNED_STREAM"), SKINNED_STREAM as usize);
+}
+
+// Matches `CompactParams` in cull_compact.hlsl: eight u32s, two 16-byte rows.
+#[test]
+fn compact_params_layout() {
+    use core::mem::offset_of;
+    assert_eq!(size_of::<GpuCompactParams>(), 32);
+    assert_eq!(offset_of!(GpuCompactParams, object_count), 0);
+    assert_eq!(offset_of!(GpuCompactParams, bucket_count), 4);
+    assert_eq!(offset_of!(GpuCompactParams, skinned_base), 8);
+    assert_eq!(offset_of!(GpuCompactParams, drawn), 12);
+    assert_eq!(offset_of!(GpuCompactParams, coarse_offset), 16);
+    assert_eq!(offset_of!(GpuCompactParams, coarse_count), 20);
+    assert_eq!(offset_of!(GpuCompactParams, full_count), 24);
+    assert_eq!(offset_of!(GpuCompactParams, _pad), 28);
+}
+
+#[test]
+fn a_pack_draws_planet_tiles_coarse_only_when_given_a_grid() {
+    let plain = GpuCompactParams {
+        object_count: 4,
+        bucket_count: 1,
+        skinned_base: 4,
+        drawn: 1,
+        ..GpuCompactParams::default()
+    };
+    assert_eq!(plain.with_capture_tiles(None), plain);
+    let tiles = crate::render::scene_state::CaptureTiles {
+        offset: 1536,
+        count: 96,
+        full_count: 1536,
+    };
+    let coarse = plain.with_capture_tiles(Some(tiles));
+    assert_eq!(
+        (coarse.coarse_offset, coarse.coarse_count, coarse.full_count),
+        (1536, 96, 1536)
+    );
+    assert_eq!(coarse.object_count, 4);
 }

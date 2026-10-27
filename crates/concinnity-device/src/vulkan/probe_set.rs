@@ -372,6 +372,11 @@ impl VkContext {
             if let Some(planar) = self.planar_reflection.as_ref() {
                 planar.rewrite_probe_records(&self.hw.device, &self.global_bindings(), frame_idx);
             }
+            self.probe.prop.rewrite_probe_records(
+                &self.hw.device,
+                &self.global_bindings(),
+                frame_idx,
+            );
         }
         // The records change only when a probe installs or the placements are
         // replaced, so a buffer already holding this revision is left alone.

@@ -108,10 +108,11 @@ pub(in crate::metal) struct PrefilterGpu {
     // downsample's source and mip M+1 its destination, so no dispatch reads the
     // texels it writes.
     capture_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
-    // One single-level 2D-array view per mip of this probe's six slices of the
-    // probe cube array, the destination of the mip-0 copy and of each GGX
-    // dispatch. A view keeps its parent alive, so a bake parked behind the
-    // fence keeps a replaced array alive with it.
+    // One single-level 2D-array view per mip the capture is written into of
+    // this probe's six slices of the probe cube array, from the plan's first
+    // mip: the destination of the mip-0 copy and of each GGX dispatch. A view
+    // keeps its parent alive, so a bake parked behind the fence keeps a
+    // replaced array alive with it.
     probe_mip_views: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
@@ -124,8 +125,9 @@ impl PrefilterGpu {
         slot: usize,
         plan: &PrefilterPlan,
     ) -> RenderResult<Self> {
-        let capture_mip_views = mip_array_views(&capture, 0, plan.mips(), "capture")?;
-        let probe_mip_views = mip_array_views(cubes, slot, plan.mips(), "probe")?;
+        let capture_mip_views = mip_array_views(&capture, 0, 0..plan.mips(), "capture")?;
+        let first = plan.first_mip();
+        let probe_mip_views = mip_array_views(cubes, slot, first..first + plan.mips(), "probe")?;
         Ok(Self {
             capture,
             capture_mip_views,
@@ -140,40 +142,39 @@ impl PrefilterGpu {
     }
 }
 
-// One single-level 2D-array view per mip of cube `cube` of a cube or cube-array
-// texture. A cube is six slices, so the view is what lets a kernel address
-// (x, y, face) directly; the format is the parent's, so no reinterpretation
-// occurs.
+// One single-level 2D-array view per mip in `mips` of cube `cube` of a cube or
+// cube-array texture. A cube is six slices, so the view is what lets a kernel
+// address (x, y, face) directly; the format is the parent's, so no
+// reinterpretation occurs.
 fn mip_array_views(
     texture: &ProtocolObject<dyn MTLTexture>,
     cube: usize,
-    mips: u32,
+    mips: core::ops::Range<u32>,
     label: &str,
 ) -> RenderResult<Vec<Retained<ProtocolObject<dyn MTLTexture>>>> {
     let slices = texture.arrayLength() * 6;
-    if (cube + 1) * 6 > slices || mips as usize > texture.mipmapLevelCount() {
+    if (cube + 1) * 6 > slices || mips.end as usize > texture.mipmapLevelCount() {
         return Err(RenderError::Other(format!(
-            "probe: {label} has no cube {cube} at {mips} mips"
+            "probe: {label} has no cube {cube} at mips {mips:?}"
         )));
     }
-    (0..mips)
-        .map(|mip| {
-            // SAFETY: `mip` is below the texture's level count and cube `cube`'s
-            // six slices are within it, both checked above; the view shares the
-            // parent's pixel format, so it reinterprets nothing.
-            unsafe {
-                texture.newTextureViewWithPixelFormat_textureType_levels_slices(
-                    PROBE_CUBE_FORMAT,
-                    MTLTextureType::Type2DArray,
-                    NSRange::new(mip as usize, 1),
-                    NSRange::new(cube * 6, 6),
-                )
-            }
-            .ok_or_else(|| {
-                RenderError::Other(format!("probe: failed to create {label} mip {mip} view"))
-            })
+    mips.map(|mip| {
+        // SAFETY: `mip` is below the texture's level count and cube `cube`'s
+        // six slices are within it, both checked above; the view shares the
+        // parent's pixel format, so it reinterprets nothing.
+        unsafe {
+            texture.newTextureViewWithPixelFormat_textureType_levels_slices(
+                PROBE_CUBE_FORMAT,
+                MTLTextureType::Type2DArray,
+                NSRange::new(mip as usize, 1),
+                NSRange::new(cube * 6, 6),
+            )
+        }
+        .ok_or_else(|| {
+            RenderError::Other(format!("probe: failed to create {label} mip {mip} view"))
         })
-        .collect()
+    })
+    .collect()
 }
 
 impl super::context::MtlContext {

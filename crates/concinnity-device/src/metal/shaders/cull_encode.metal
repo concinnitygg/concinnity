@@ -62,13 +62,20 @@ static bool in_region(constant BucketRegion &r, uint record) {
     return record - r.first < r.count || record - r.runtime_first < r.runtime_count;
 }
 
-// Mirrors metal::uniforms::ScatterParams (16 B).
+// Mirrors metal::uniforms::ScatterParams (32 B).
 struct ScatterParams {
     uint object_count;
     uint skinned_base;
     uint bucket_count;
     uint draw_status;
+    uint coarse_offset;
+    uint coarse_count;
+    uint full_count;
+    uint _pad;
 };
+
+// Locked to gfx::render_types::DrawArgsFlags::PLANET_TILE.
+constant uint DRAW_PLANET_TILE = 16u;
 
 // The per-bucket indirect command buffers, reached through an argument buffer.
 // Only the first `bucket_count` entries are encoded; the kernels never
@@ -149,7 +156,14 @@ kernel void cull_scatter(
         icb = stream;
     }
     if (place < capacity) {
-        encode_draw(icb_c->icbs[icb], first + place, record, draw_args[record],
+        // A capture draws a planet tile of the full grid through the coarse
+        // one, from the same corners.
+        GpuDrawArgs a = draw_args[record];
+        if (p.coarse_count != 0u && (a.flags & DRAW_PLANET_TILE) != 0u && a.index_count == p.full_count) {
+            a.index_offset = p.coarse_offset;
+            a.index_count = p.coarse_count;
+        }
+        encode_draw(icb_c->icbs[icb], first + place, record, a,
                     skinned_base, index_buf, skinned_index_buf);
     }
 }

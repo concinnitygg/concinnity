@@ -11,22 +11,25 @@ use concinnity_core::math::SaturatingFrom;
 /// and re-anchors the cube sample at the box hit relative to `probe_pos` (the
 /// capture point), so a static captured cube tracks a moving first-person
 /// camera. Four float4s keep every field 16-byte aligned. `box_min.w` is the
-/// enabled flag: 0 disables parallax (and signals no baked probe), so the shader
-/// samples the raw reflection vector. `box_max.w` is the sky fallback flag: 0
-/// keeps the capture at any distance past the box.
+/// parallax flag: 0 samples the raw reflection vector, for a probe whose scene
+/// lies far past its box (one riding on a prop). `box_max.w` is the sky
+/// fallback flag: 0 keeps the capture at any distance past the box.
+/// `probe_pos.w` is the finest mip the probe's cube holds, which a lookup never
+/// reads finer than. `blend_margin.w` marks a probe captured around a prop it
+/// leaves out, whose reflection on that prop already holds what occludes it.
 #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
 #[repr(C)]
 pub struct ProbeUniforms {
-    /// xyz = influence-box min; w = enabled (1.0 = parallax on, 0.0 = off).
+    /// xyz = influence-box min; w = parallax (1.0 = on, 0.0 = off).
     pub box_min: [f32; 4],
     /// xyz = influence-box max; w = sky fallback (1.0 = fade to the
     /// environment past the influence, 0.0 = keep the capture).
     pub box_max: [f32; 4],
-    /// xyz = probe capture position; w unused.
+    /// xyz = probe capture position; w = the cube's finest mip.
     pub probe_pos: [f32; 4],
     /// xyz = distance along each axis the blend weight ramps over across the
     /// box surface, so the probe's influence reaches that far outside the box;
-    /// w unused.
+    /// w = 1.0 for a probe captured around the prop of [`ProbeSet::subject`].
     pub blend_margin: [f32; 4],
 }
 
@@ -54,11 +57,10 @@ impl ProbeUniforms {
     /// computes it: 0 inside [`Self::influence_bounds`], rising smoothly to 1
     /// one largest half-extent of the box beyond them. A capture stands in for
     /// the scenery about as far past its box as the box is wide. 0 for a record
-    /// without parallax (`box_min.w` off) or without the sky fallback
-    /// (`box_max.w` off), which keeps the probe whole.
+    /// without the sky fallback (`box_max.w` off), which keeps the probe whole.
     #[cfg(test)]
     fn sky_share(&self, point: [f32; 3]) -> f32 {
-        if self.box_min[3] <= 0.5 || self.box_max[3] <= 0.5 {
+        if self.box_max[3] <= 0.5 {
             return 0.0;
         }
         let (lo, hi) = self.influence_bounds();
@@ -84,8 +86,9 @@ pub struct ProbeSet {
     /// Mip levels of each probe cube, which map a surface's roughness onto the
     /// cube's prefilter chain independently of the environment map's.
     pub mip_count: u32,
-    /// Padding to one 16-byte constant register.
-    pub _pad: [u32; 2],
+    /// The object records `[first, end)` of the prop a live prop probe rides
+    /// on; empty without one.
+    pub subject: [u32; 2],
 }
 
 impl ProbeSet {
@@ -93,7 +96,7 @@ impl ProbeSet {
     pub const EMPTY: Self = Self {
         count: 0,
         mip_count: 0,
-        _pad: [0; 2],
+        subject: [0; 2],
     };
 
     /// The header for `count` live records of `mip_count`-level cubes.
@@ -218,13 +221,16 @@ mod tests {
         assert!((diagonal - straight).abs() < 1e-5);
     }
 
+    // A probe riding on a prop has no parallax, yet still gives way to the
+    // sky past its reach like any other.
     #[test]
-    fn a_probe_without_parallax_keeps_its_whole_share() {
+    fn a_probe_without_parallax_still_fades_to_the_sky() {
         let probe = ProbeUniforms {
             box_min: [-4.0, 0.0, -2.0, 0.0],
             ..room()
         };
-        assert_eq!(probe.sky_share([100.0, 1.5, 0.0]), 0.0);
+        assert_eq!(probe.sky_share([100.0, 1.5, 0.0]), 1.0);
+        assert_eq!(probe.sky_share([0.0, 1.5, 0.0]), 0.0);
     }
 
     #[test]
@@ -253,14 +259,14 @@ mod tests {
         assert_eq!(off.sky_share([0.0, 1.5, 2.5 + 4.0]), 0.0);
     }
 
-    // `ProbeSet` in `shaders/probe_types.hlsl`: the count and the cube mip
-    // count padded with two scalars, one 16-byte constant register.
+    // `ProbeSet` in `shaders/probe_types.hlsl`: the count, the cube mip count
+    // and the prop's record range, one 16-byte constant register.
     #[test]
     fn probe_set_layout_matches_the_shader() {
         assert_eq!(size_of::<ProbeSet>(), 16);
         assert_eq!(offset_of!(ProbeSet, count), 0);
         assert_eq!(offset_of!(ProbeSet, mip_count), 4);
-        assert_eq!(offset_of!(ProbeSet, _pad), 8);
+        assert_eq!(offset_of!(ProbeSet, subject), 8);
         let set = ProbeSet::new(12, 10);
         assert_eq!((set.count, set.mip_count), (12, 10));
     }

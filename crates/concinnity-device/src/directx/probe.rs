@@ -154,6 +154,11 @@ pub(in crate::directx) struct FaceUniforms<'a> {
     pub canopy_tables_gva: u64,
     pub clusters: Option<ClusterGrid<'a>>,
     pub storage: FaceStorage,
+    // The frame whose probes the face reflects, or `None` for the sky alone.
+    pub probes: Option<usize>,
+    // Whether the sky behind the face is read from the environment's cube
+    // rather than an atmosphere's sky-view table.
+    pub sky_from_cube: bool,
 }
 
 // The indirect draw for one capture region: the command buffer, its byte offset,
@@ -181,9 +186,13 @@ impl DxContext {
     // scene); an empty list bakes none. Resets the staggered bake, and grows the
     // cube array when the list outgrows it; a world whose array cannot grow keeps
     // the sky.
-    pub(super) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
+    pub(super) fn set_reflection_probes(
+        &mut self,
+        placements: &[ProbePlacement],
+        prop_probe: bool,
+    ) {
         let placements = placements.to_vec();
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
         crate::probe_report::report_probe_placement(placed);
     }
 
@@ -259,7 +268,7 @@ impl DxContext {
         let size = PROBE_FACE_SIZE;
 
         // One MSAA (or single-sample) color + depth pair, reused across the six faces.
-        let rtv_heap = create_rtv_heap(device)?;
+        let rtv_heap = create_rtv_heap(device, 1)?;
         let dsv_heap = create_dsv_heap(device)?;
         // SAFETY: a property query on a live descriptor heap; it only reads.
         let rtv = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
@@ -368,7 +377,15 @@ impl DxContext {
             .cubes
             .as_ref()
             .ok_or_else(|| RenderError::Other("probe: no cube array for a placement".into()))?;
-        let prefilter = PrefilterGpu::new(self, &PLAN, cubes, index)?;
+        let prefilter = PrefilterGpu::new(
+            self,
+            &PLAN,
+            cubes,
+            index,
+            super::probe_prefilter::CaptureSetup::copied(
+                super::probe_prefilter::PrefilterSlots::probes(self),
+            ),
+        )?;
 
         Ok(RenderingBake {
             eye,
@@ -454,6 +471,8 @@ impl DxContext {
                 canopy_tables_gva: bake.canopy_tables_gva,
                 clusters: None,
                 storage: FaceStorage::PROBE,
+                probes: None,
+                sky_from_cube: false,
             },
             IndirectDraw {
                 lists: self.main_lists(indirect),
@@ -609,7 +628,7 @@ impl DxContext {
         // allocator alive for the GPU.
         let last = mip + 1 == PLAN.mips();
         self.record_prefilter_step(bake, |ctx, cmd, bake| {
-            ctx.encode_probe_ggx_mip(cmd, &PLAN, mip)?;
+            ctx.encode_probe_ggx_mip(cmd, &bake.gpu, &PLAN, mip)?;
             if last {
                 let barriers = ctx.probe.gpu.bound_cubes().cube_barriers(
                     bake.gpu.cube(),
@@ -705,6 +724,8 @@ impl DxContext {
             canopy_tables_gva,
             clusters,
             storage,
+            probes,
+            sky_from_cube,
         } = uniforms;
         let (cluster_params_gva, cluster_list_gva) = match clusters {
             Some(grid) => (grid.params_gva, com::gpu_va(grid.lists)),
@@ -855,14 +876,21 @@ impl DxContext {
         self.bind_local_light_tables(cmd, super::draw::LocalLightParams::BINDLESS);
         // SAFETY: the SRV heap is set above, and the SSAO output's descriptor is live.
         unsafe { cmd.set_graphics_srv_table(9, self.ssao_ao_srv_gpu()) };
-        // [10] probe cube array + [11] the EMPTY ProbeSet (count 0) + [19] the
-        // stand-in records, so a probe face samples only the sky, not other
-        // probes, and never reads the live ring while it is rewritten.
-        self.bind_main_probe_set(
-            cmd,
-            com::gpu_va(&self.uniforms.probe_set_empty_cbv),
-            self.probe.gpu.stand_in_records.gpu_va(),
-        );
+        // [10] probe cube array + [11] the ProbeSet + [19] the records: the
+        // frame's live ones, or the EMPTY set (count 0) and the stand-in
+        // records, so a bake face samples only the sky, not other probes, and
+        // never reads the live ring while it is rewritten.
+        match probes {
+            Some(frame) => {
+                let live = self.probe_bindings(frame);
+                self.bind_main_probe_set(cmd, live.set_cbv, live.records);
+            }
+            None => self.bind_main_probe_set(
+                cmd,
+                com::gpu_va(&self.uniforms.probe_set_empty_cbv),
+                self.probe.gpu.stand_in_records.gpu_va(),
+            ),
+        }
         // The static + instance stream. Skinned tail omitted (not captured into
         // the probe in V1).
         let face = render_types::StreamLayout {
@@ -878,7 +906,7 @@ impl DxContext {
         ));
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, view_gva, self.current_frame);
+            self.encode_sky(cmd, view_gva, self.current_frame, sky_from_cube);
         }
     }
 }
@@ -1005,11 +1033,15 @@ fn make_snapshot_cbv(alloc: &DeviceAllocator, bytes: &[u8]) -> RenderResult<(Poo
     Ok((cbv, gva))
 }
 
-// A one-entry non-shader-visible RTV heap for a probe face color target.
-fn create_rtv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
+// A non-shader-visible RTV heap of `count` entries for probe face color
+// targets.
+pub(in crate::directx) fn create_rtv_heap(
+    device: &ID3D12Device,
+    count: u32,
+) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-        NumDescriptors: 1,
+        NumDescriptors: count,
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
         NodeMask: 0,
     };
@@ -1020,7 +1052,9 @@ fn create_rtv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> 
 }
 
 // A one-entry non-shader-visible DSV heap for a probe face depth target.
-fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> {
+pub(in crate::directx) fn create_dsv_heap(
+    device: &ID3D12Device,
+) -> RenderResult<ID3D12DescriptorHeap> {
     let desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
         NumDescriptors: 1,
@@ -1036,7 +1070,7 @@ fn create_dsv_heap(device: &ID3D12Device) -> RenderResult<ID3D12DescriptorHeap> 
 // Create a probe face depth target (D32_FLOAT, matching the main pass's DSV format
 // + the face color's sample count) and write its DSV. Created in DEPTH_WRITE and
 // left there (only the bake uses it; it is cleared every face).
-fn create_bake_depth(
+pub(in crate::directx) fn create_bake_depth(
     device: &ID3D12Device,
     size: u32,
     sample_count: u32,

@@ -166,9 +166,13 @@ impl MtlContext {
     // scene); an empty list bakes none. Resets the staggered bake so the next
     // eligible frames re-bake from scratch, and grows the cube array when the
     // list outgrows it; a world whose array cannot grow keeps the sky.
-    pub(in crate::metal) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
+    pub(in crate::metal) fn set_reflection_probes(
+        &mut self,
+        placements: &[ProbePlacement],
+        prop_probe: bool,
+    ) {
         let placements = placements.to_vec();
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
         crate::probe_report::report_probe_placement(placed);
     }
 
@@ -354,6 +358,8 @@ impl MtlContext {
                 cam_pos: eye,
                 daylight: &concinnity_engine::render::uniforms::DaylightBlock::OFF,
                 variants: &bake.variants,
+                exclude: [0, 0],
+                capture_tiles: None,
             },
             counts,
         )?;
@@ -539,7 +545,7 @@ impl ProbeBakeDevice for MtlContext {
 // Multisample HDR color face: RGBA16Float, render-target only -- matches the
 // main pipeline's attachment format + sample count so `self.pipeline_state`
 // binds. Built only when the world resolved to more than one sample.
-fn make_face_color(
+pub(in crate::metal) fn make_face_color(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,
@@ -561,7 +567,7 @@ fn make_face_color(
 
 // Depth face: Depth32Float, render-target only, at the main pipelines' sample
 // count. Cleared per face and discarded -- the probe consumes only the color.
-fn make_face_depth(
+pub(in crate::metal) fn make_face_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,

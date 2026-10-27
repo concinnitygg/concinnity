@@ -9,8 +9,8 @@ use crate::ecs::PipelineContext;
 use crate::gfx::render_types::LightUniforms;
 use crate::planet::PlanetFrame;
 use crate::render::environment::atmosphere::{
-    AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, SurfaceBelow, SurfaceView,
-    sun_light,
+    AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, SeaLook, SurfaceBelow,
+    SurfaceView, sun_light,
 };
 use crate::render::environment::night_sky::{NightFrame, shadowed_first, shadowed_pair};
 use crate::render::light::lights::DirectionalLightSet;
@@ -158,16 +158,25 @@ impl AtmosphereDrive {
             } else {
                 [Some(sun_body), moon_body]
             };
-            DaylightBlock::new(
+            let block = DaylightBlock::new(
                 knots,
                 &daylight_view(&self.settings, &frame, center, bodies),
-            )
+            );
+            match self.sea() {
+                Some(sea) => block.with_sea(sea.deep_color, sea.level),
+                None => block,
+            }
         });
         (frame, set, daylight)
     }
 }
 
 impl AtmosphereDrive {
+    // The planet's sea, when its ground has a palette with one.
+    pub(super) fn sea(&self) -> Option<SeaLook> {
+        self.settings.surface.as_ref()?.sea
+    }
+
     // The ground around a camera at `cam_pos`, sampled again once the camera
     // has moved far enough from where it last was; `None` without a planet
     // or a palette for its ground.

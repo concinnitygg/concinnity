@@ -111,6 +111,8 @@ pub struct FrameContent {
     pub grass: bool,
     /// The SSGI accumulation is built and contributes, so it reprojects.
     pub ssgi_motion: bool,
+    /// A prop reflection probe rides this frame and its capture is built.
+    pub prop_probe: bool,
 }
 
 /// What the planner decides ahead of the graph gates.
@@ -169,6 +171,7 @@ impl FrameFacts {
             grass: c.grass,
             grass_casts: c.grass && r.shadow && planned.cascade_mask & 1 != 0,
             clustered: planned.clustered,
+            prop_probe: c.prop_probe,
         }
     }
 }
@@ -227,6 +230,7 @@ mod tests {
             water_sim: true,
             grass: true,
             ssgi_motion: true,
+            prop_probe: true,
         };
         (resident, content)
     }

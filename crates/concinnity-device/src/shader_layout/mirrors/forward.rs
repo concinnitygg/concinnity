@@ -28,7 +28,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             irradiance,
             pre_exposure,
             screen_bounce,
-            [_pad] => ["_pad_view2"],
+            stand_ins,
             daylight,
             tile_morph,
         })),
@@ -42,7 +42,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             reach,
             body_dir,
             body_light,
-            _pad,
+            sea,
             knots,
         })),
         everywhere(mirror!(LightUniforms => "LightUniforms" {

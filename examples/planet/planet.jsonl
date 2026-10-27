@@ -18,6 +18,7 @@
 ["Prop",{"$id":"marble","mesh":"marble_mesh","material":"chrome","position":[6.0,7.3,0.6],"collider":{"shape":"ball","radius":0.6}}]
 ["PropBody",{"$id":"marble_body","prop_name":"marble","mass":600.0,"friction":0.9,"rolling_resistance":0.04,"angular_damping":0.3,"buoyancy":{}}]
 ["RollingDrive",{"$id":"marble_drive","prop_name":"marble","acceleration":8.0,"max_speed":10.0,"sprint_multiplier":1.8,"jump_speed":6.0,"paddle":0.35}]
+["PropReflectionProbe",{"prop":"marble"}]
 ["ProceduralMesh",{"$id":"crate_mesh","generator":"box","half_extents":[0.5,0.35,0.5]}]
 ["Material",{"$id":"crate_wood","tint":[0.42,0.28,0.15],"roughness":0.8}]
 ["Prop",{"$id":"crate_a","mesh":"crate_mesh","material":"crate_wood","position":[252.0,0.5,29.0],"rotation_deg":[0.0,30.0,0.0],"collider":{"shape":"cuboid","half_extents":[0.5,0.35,0.5]}}]

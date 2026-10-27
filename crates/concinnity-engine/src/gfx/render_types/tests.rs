@@ -318,6 +318,7 @@ fn draw_flags_match_shaders() {
         ("DRAW_ENABLED", DrawArgsFlags::ENABLED),
         ("DRAW_CULLABLE", DrawArgsFlags::CULLABLE),
         ("DRAW_NO_HISTORY", DrawArgsFlags::NO_HISTORY),
+        ("DRAW_PLANET_TILE", DrawArgsFlags::PLANET_TILE),
         ("DRAW_BUCKET_SHIFT", DrawArgsFlags::BUCKET_SHIFT),
     ] {
         assert_eq!(consts::uint(src, name), value as usize, "{name}");
@@ -713,6 +714,21 @@ fn draw_args_flags_packs_cull_decision() {
     assert_eq!(flags & DrawArgsFlags::ENABLED, DrawArgsFlags::ENABLED);
     assert_eq!(flags & DrawArgsFlags::CULLABLE, DrawArgsFlags::CULLABLE);
     assert_eq!((flags >> DrawArgsFlags::BUCKET_SHIFT) & 0xFF, 3);
+}
+
+// A planet tile's mark sits apart from every other bit the cull reads, so
+// only a capture's scatter notices it.
+#[test]
+fn the_planet_tile_bit_collides_with_nothing() {
+    assert_eq!(draw_args_planet_tile(false), 0);
+    let tile = draw_args_planet_tile(true);
+    let others = draw_args_flags(true, true, true)
+        | draw_args_no_history()
+        | DrawArgsFlags::FAR_BAND
+        | draw_args_bucket_bits(63)
+        | (DrawArgsFlags::ROUTE_MASK << DrawArgsFlags::ROUTE_SHIFT);
+    assert_eq!(tile, 16);
+    assert_eq!(tile & others, 0);
 }
 
 // The bucket rides bits 8..16 and never collides with the cull-decision bits,

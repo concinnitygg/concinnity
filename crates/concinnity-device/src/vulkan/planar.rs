@@ -859,7 +859,12 @@ impl VkContext {
                 set.cull_sets[ring],
                 set.hiz_set,
                 packing,
-                (&mirror.frustum, m.eye),
+                super::probe::CaptureCull {
+                    frustum: &mirror.frustum,
+                    eye: m.eye,
+                    exclude: [0, 0],
+                    capture_tiles: None,
+                },
             );
             let cluster_params = mirror.cluster_params(
                 &frame,
@@ -928,6 +933,7 @@ impl VkContext {
                 FaceView {
                     global_set: set.global_sets[ring],
                     storage,
+                    sky_from_cube: false,
                 },
                 bindless_set,
                 packing,

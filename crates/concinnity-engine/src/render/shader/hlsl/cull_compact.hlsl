@@ -16,15 +16,21 @@
 {OBJECT_COMMON}
 {CULL_COMMON}
 
-// Layout matches `gfx::render_types::GpuCompactParams` (16 B): the b0 root
+// Layout matches `gfx::render_types::GpuCompactParams` (32 B): the b0 root
 // constants on DirectX, the push constant on Vulkan, inline at buffer(11) on
-// Metal. `drawn` is the outcome the phase keeps.
+// Metal. `drawn` is the outcome the phase keeps; a nonzero `coarse_count` packs
+// a planet tile drawing the full grid (`full_count` indices) through the
+// capture's coarse grid instead.
 struct CompactParams
 {
     uint object_count;
     uint bucket_count;
     uint skinned_base;
     uint drawn;
+    uint coarse_offset;
+    uint coarse_count;
+    uint full_count;
+    uint _pad;
 };
 
 #if defined(CN_BACKEND_METAL)
@@ -176,7 +182,14 @@ void cull_scatter(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint 
     StreamSlots slots = stream_slots(stream);
     if (place < slots.capacity)
     {
-        commands[slots.region + slots.first + place] = make_command(i, draw_args[i]);
+        GpuDrawArgs a = draw_args[i];
+        if (params.coarse_count != 0u && (a.flags & DRAW_PLANET_TILE) != 0u
+            && a.index_count == params.full_count)
+        {
+            a.index_offset = params.coarse_offset;
+            a.index_count = params.coarse_count;
+        }
+        commands[slots.region + slots.first + place] = make_command(i, a);
     }
 }
 

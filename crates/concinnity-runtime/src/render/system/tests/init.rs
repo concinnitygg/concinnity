@@ -290,7 +290,7 @@ fn init_pushes_startup_backend_state() {
     assert!(
         s.calls
             .iter()
-            .any(|c| matches!(c, Call::SetReflectionProbes(_)))
+            .any(|c| matches!(c, Call::SetReflectionProbes(..)))
     );
     // Windowed start: no window-mode override is applied.
     assert!(!s.calls.iter().any(|c| matches!(c, Call::SetWindowMode(_))));

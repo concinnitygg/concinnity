@@ -39,6 +39,7 @@ pub fn frame_params(
         atmosphere: None,
         daylight: &crate::render::uniforms::DaylightBlock::OFF,
         sunlight: 1.0,
+        prop_probe: None,
         capture: None,
     }
 }

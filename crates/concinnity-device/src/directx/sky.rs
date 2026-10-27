@@ -118,8 +118,10 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         view_gva: u64,
         frame_idx: usize,
+        from_cube: bool,
     ) {
-        if self.encode_atmosphere_sky(cmd, view_gva, frame_idx) {
+        let cube_ready = self.scene.env_map.prefilter_mip_count > 0;
+        if !(from_cube && cube_ready) && self.encode_atmosphere_sky(cmd, view_gva, frame_idx) {
             return;
         }
         // SAFETY: the list is recording, and the sky PSO is owned by `self.sky`.
@@ -152,7 +154,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state and the query heap is live.
             unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start) };
         }
-        self.encode_sky(cmd, view_gva, frame_idx);
+        self.encode_sky(cmd, view_gva, frame_idx, false);
         if let Some(heap) = heap {
             // SAFETY: as above.
             unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end) };

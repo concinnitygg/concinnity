@@ -149,6 +149,9 @@ pub struct FrameParams<'a> {
     /// light), which stands for full sunlight when the scene's luminance is
     /// read in absolute units.
     pub sunlight: f32,
+    /// Where the world's prop reflection probe is this frame, if it has one:
+    /// the backend renders one of its cube faces and keeps its record current.
+    pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,
     /// When the input this frame shows was sampled, in microseconds on the
     /// host's process-wide monotonic clock, or `None` when unknown. A backend
     /// that can tell when the frame's GPU work finished on that clock reports
@@ -371,7 +374,7 @@ mod tests {
         backend.set_ui_cursor_hidden(true);
         backend.set_menu_mode(true);
         backend.set_camera_capture(true);
-        backend.set_reflection_probes(&[]);
+        backend.set_reflection_probes(&[], false);
 
         // Presentation + window no-ops.
         backend.set_vsync(true);

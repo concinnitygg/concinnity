@@ -292,8 +292,10 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 hiz_enabled,
                 object_count,
                 skinned_base,
-                _pad,
+                exclude_first,
                 bucket_count,
+                exclude_end,
+                [_pad] => ["_pad0", "_pad1", "_pad2"],
             }),
         ),
         on(
@@ -304,6 +306,8 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 object_count,
                 bucket_count,
                 skinned_base,
+                exclude_first,
+                exclude_end,
             }),
         ),
         on(
@@ -327,7 +331,8 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 hiz_enabled,
                 bucket_count,
                 skinned_base,
-                [_pad] => ["_pad0", "_pad1"],
+                exclude_first,
+                exclude_end,
             }),
         ),
     ]

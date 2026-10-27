@@ -39,7 +39,9 @@ use super::owned::{
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
-use super::probe_prefilter::{PrefilterGpu, PrefilterTarget, ProbePrefilterPipelines};
+use super::probe_prefilter::{
+    CaptureFaces, PrefilterGpu, PrefilterTarget, ProbePrefilterPipelines,
+};
 use super::probe_set::{self, CubeImage};
 use super::record::Recorder;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -487,8 +489,10 @@ impl VkAtmosphere {
             PrefilterTarget {
                 image: sky_image,
                 cube: 0,
+                first_mip: SKY_CUBE_PLAN.first_mip(),
                 mip_views: &sky_mip_views,
             },
+            CaptureFaces::Copied,
         )?;
         one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
             // The sky cube and its capture rest sampled from the start, the

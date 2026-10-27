@@ -28,8 +28,12 @@ pub struct CullParams {
     pub bucket_count: u32,
     /// The first skinned record, whose draws take the skinned tail's stream.
     pub skinned_base: u32,
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: [u32; 2],
+    /// First of the records `[exclude_first, exclude_end)` the view leaves
+    /// out: a prop's own capture leaves out the prop. Empty for every other
+    /// view.
+    pub exclude_first: u32,
+    /// End of the records the view leaves out.
+    pub exclude_end: u32,
 }
 
 #[cfg(test)]
@@ -53,5 +57,7 @@ mod tests {
         assert_eq!(offset_of!(CullParams, hiz_enabled), 188);
         assert_eq!(offset_of!(CullParams, bucket_count), 192);
         assert_eq!(offset_of!(CullParams, skinned_base), 196);
+        assert_eq!(offset_of!(CullParams, exclude_first), 200);
+        assert_eq!(offset_of!(CullParams, exclude_end), 204);
     }
 }

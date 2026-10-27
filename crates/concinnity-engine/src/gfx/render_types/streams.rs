@@ -55,6 +55,35 @@ pub struct GpuCompactParams {
     /// The outcome the phase keeps: [`CullStatus::DRAWN`] or
     /// [`CullStatus::REDRAW`].
     pub drawn: u32,
+    /// First index of the coarse tile grid a capture draws planet tiles
+    /// through.
+    pub coarse_offset: u32,
+    /// Indices in the coarse grid; 0 draws every tile through its own.
+    pub coarse_count: u32,
+    /// Indices in the full tile grid a draw must hold to be drawn coarse.
+    pub full_count: u32,
+    /// Padding to a whole 16-byte row.
+    pub _pad: u32,
+}
+
+impl GpuCompactParams {
+    /// These params packing planet tiles through `tiles`, a capture's coarse
+    /// grid, or through their own when `None`.
+    #[must_use]
+    pub fn with_capture_tiles(
+        self,
+        tiles: Option<crate::render::scene_state::CaptureTiles>,
+    ) -> Self {
+        let Some(t) = tiles else {
+            return self;
+        };
+        Self {
+            coarse_offset: t.offset,
+            coarse_count: t.count,
+            full_count: t.full_count,
+            ..self
+        }
+    }
 }
 
 /// The records a cull of `live` records covers when its buffers hold

@@ -30,7 +30,7 @@ mod draws;
 // Placement and upload of streamed meshes and chunks in the shared buffers.
 mod geometry;
 
-pub use geometry::{GeometryBuffer, GeometryPlacement, GeometryWriter};
+pub use geometry::{CaptureTiles, GeometryBuffer, GeometryPlacement, GeometryWriter};
 
 /// The scene a backend draws, as the CPU keeps it.
 pub struct SceneState {

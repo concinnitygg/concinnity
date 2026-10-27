@@ -275,6 +275,13 @@ float ltc_evaluate(float3 N, float3 V, float3 P, float3x3 m_inv, float3 corners[
 #define DAYLIGHT VIEW.daylight
 {DAYLIGHT}
 
+// The roughness of the calm sea a capture shades over the ground under it.
+static const float SEA_STAND_IN_ROUGHNESS = 0.08;
+
+// The finest pixel footprint, in meters, a capture shades the canopy at:
+// past the detail of clumps up to 2 m across, short of the meadow's patches.
+static const float CAPTURE_DETAIL_FOOTPRINT = 2.0;
+
 // A planet's ground skips a body too faint to show. Only its daylight
 // variants light it from its own sky; every other surface keeps the camera's,
 // and compiles without it.
@@ -325,11 +332,21 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 ground_normal = v.normal;
     // A planet's ground takes its covers' look where their rules hold.
     GroundCoverMix covers = ground_no_covers();
+    // A view that leaves out the blades and the sea (a capture) shades the
+    // grassy ground as the canopy and the ground under the sea as its surface.
+    // Its small faces cannot resolve the ground's per-pixel detail either: it
+    // takes the drawn surface's own normal, no beach wash, and the canopy's
+    // mean look. The rules' edge noise stays, since it moves where the sand
+    // and the meadow meet by meters.
+    bool capture = VIEW.stand_ins > 0.5;
+    bool under_sea = false;
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
-    float4 ground = canopy_ground_normal(od.far_canopy, v.world_pos, v.normal, footprint, v.color, v.tangent);
+    float4 ground = capture ? float4(v.normal, GROUND_NO_HEIGHT)
+                            : canopy_ground_normal(od.far_canopy, v.world_pos, v.normal, footprint,
+                                                   v.color, v.tangent);
     ground_normal = ground.xyz;
 #ifdef SURFACE_CANOPY
-    float far_w = canopy_band(od.far_canopy, far_dist);
+    float far_w = capture && od.far_canopy != 0u ? 1.0 : canopy_band(od.far_canopy, far_dist);
 #else
     const float far_w = 0.0;
 #endif
@@ -341,14 +358,26 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         covers = ground_covers_at(place, v.uv);
         place.covered = 1.0 - covers.keep;
         albedo = albedo * covers.keep + covers.albedo;
+        under_sea = VIEW.stand_ins > 1.5 && place.altitude < DAYLIGHT.sea.w;
         // Where the sea's waves wash up the beach, the sand is darker and wet
         // and a foam line runs at the wash's front.
-        swash = ground_swash_at(place, ground.w, footprint);
-        albedo = lerp(albedo * lerp(1.0, GROUND_WET_DARKEN, swash.wet), GROUND_SWASH_FOAM, swash.edge);
+        if (!capture)
+        {
+            swash = ground_swash_at(place, ground.w, footprint);
+            albedo = lerp(albedo * lerp(1.0, GROUND_WET_DARKEN, swash.wet), GROUND_SWASH_FOAM,
+                          swash.edge);
+        }
     }
+#ifdef SURFACE_CANOPY
+    far_w = under_sea ? 0.0 : far_w;
+#endif
+    // Past the blades' end the canopy takes every pixel: a view without blades
+    // must not hand the near ones back to them.
+    float handover_dist = capture ? max(far_dist, CANOPY.band.y) : far_dist;
+    float detail_footprint = capture ? max(footprint, CAPTURE_DETAIL_FOOTPRINT) : footprint;
     canopy = canopy_at(od.far_canopy, place, v.world_pos, ground_normal, v.color, albedo,
-                       V_far / max(far_dist, 1e-4), footprint, v.position.xy, far_dist,
-                       far_w > 0.0);
+                       V_far / max(far_dist, 1e-4), detail_footprint, v.position.xy,
+                       handover_dist, far_w > 0.0);
     albedo = canopy.ground_albedo;
 #else
     const float far_w = 0.0;
@@ -380,6 +409,15 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 #endif
 
     float3 N = surface_normal(od, v.uv, ground_normal, v.tangent, v.bitangent);
+#if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
+    if (under_sea)
+    {
+        albedo = DAYLIGHT.sea.rgb;
+        roughness = SEA_STAND_IN_ROUGHNESS;
+        metallic = 0.0;
+        N = place.up;
+    }
+#endif
 
     // Geometric specular antialiasing on the normal map. Minification aliasing
     // is handled by the texture's mip chain (trilinear + anisotropic
@@ -652,12 +690,20 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // unaffected. The occluders are the bounce's source, so the occlusion does
     // not dim the bounce itself. Specular takes the occlusion narrowed to its
     // lobe, and none where the reflection composite's own trace finds the
-    // occluders.
+    // occluders, or, on the prop a prop probe rides on, where that probe's
+    // capture of the prop's surroundings supplies the reflection.
     ScreenIndirect indirect = screen_indirect_at(screen_xy);
     float specular_visibility = specular_occlusion(NdV, indirect.visibility, roughness);
-    if (reflections_own)
+    bool probe_subject = v.object_id >= PROBE_SET.subject.x && v.object_id < PROBE_SET.subject.y;
+    if (reflections_own || probe_subject)
     {
-        float owned = saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT);
+        float owned = reflections_own
+            ? saturate((REFLECTION_ROUGHNESS_CUT - roughness) / REFLECTION_ROUGHNESS_CUT)
+            : 0.0;
+        if (probe_subject)
+        {
+            owned = max(owned, probe_mask_subject_share(probes, v.world_pos));
+        }
         specular_visibility = lerp(specular_visibility, 1.0, owned);
     }
     ambient = ambient * indirect.visibility + diffuse_albedo * indirect.bounce

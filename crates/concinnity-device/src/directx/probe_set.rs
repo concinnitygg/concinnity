@@ -47,6 +47,8 @@ pub(in crate::directx) struct CubeResource<'a> {
     pub mips: u32,
     pub cubes: usize,
     pub state: D3D12_RESOURCE_STATES,
+    // Whether faces render straight into it, besides the kernels writing it.
+    pub render_target: bool,
     pub label: &'a str,
 }
 
@@ -62,6 +64,7 @@ pub(in crate::directx) fn create_cube_resource(
         mips,
         cubes,
         state,
+        render_target,
         label,
     } = shape;
     let desc = D3D12_RESOURCE_DESC {
@@ -76,7 +79,11 @@ pub(in crate::directx) fn create_cube_resource(
             Count: 1,
             Quality: 0,
         },
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        Flags: if render_target {
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+        } else {
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+        },
         ..Default::default()
     };
     let heap_props = D3D12_HEAP_PROPERTIES {
@@ -164,6 +171,7 @@ impl ProbeCubeArray {
                 mips,
                 cubes,
                 state: PROBE_CUBES_STATE,
+                render_target: false,
                 label: "probe cube array",
             },
         )?;
@@ -243,6 +251,11 @@ impl ProbeCubeArray {
     // Mip levels every cube carries.
     pub(in crate::directx) fn mips(&self) -> u32 {
         self.mips
+    }
+
+    // The array resource, which a cube's writers are built against.
+    pub(in crate::directx) fn resource(&self) -> &ID3D12Resource {
+        &self.resource
     }
 }
 

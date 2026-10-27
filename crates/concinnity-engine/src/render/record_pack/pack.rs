@@ -3,7 +3,7 @@
 use crate::gfx::lod;
 use crate::gfx::render_types::{
     DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_flags,
-    normal_pool_index, pack_object_record,
+    draw_args_planet_tile, normal_pool_index, pack_object_record,
 };
 use crate::planet::{Horizon, tile_morph_row};
 use crate::render::shader::world_pipelines::ShaderRoutes;
@@ -146,7 +146,8 @@ fn draw_args(
         // cull kernel can route the record's command into its bucket's region.
         flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
             | view.routes.draw_bits(obj)
-            | history.draw_flags(index, index),
+            | history.draw_flags(index, index)
+            | draw_args_planet_tile(obj.planet_tile.is_some()),
     }
 }
 

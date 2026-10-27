@@ -258,6 +258,7 @@ mod tests {
             atmosphere: None,
             daylight: &crate::render::uniforms::DaylightBlock::OFF,
             sunlight: 3.0,
+            prop_probe: None,
             input_sampled_us: None,
             capture: None,
         }

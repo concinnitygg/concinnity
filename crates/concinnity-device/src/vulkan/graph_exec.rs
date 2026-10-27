@@ -1197,6 +1197,7 @@ impl VkContext {
                 );
                 self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
             }
+            PassId::PropProbe => self.encode_prop_probe(cmd, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).

@@ -139,6 +139,7 @@ pub fn submit(
         atmosphere: snap.frame.atmosphere,
         daylight: &snap.frame.daylight,
         sunlight: snap.frame.sunlight,
+        prop_probe: snap.frame.prop_probe,
         input_sampled_us: snap.frame.input_sampled_us,
         capture: snap.capture.as_deref(),
     }) {

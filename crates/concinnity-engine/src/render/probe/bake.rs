@@ -181,24 +181,30 @@ impl<C, P> ProbeBake<C, P> {
     }
 
     /// Replace the placements: abandon whatever is in flight, make room for
-    /// every placement and queue them all. When the cube array cannot grow,
-    /// no probe is placed and reflections read the sky.
+    /// every placement, and a prop probe's cube after them when `prop_probe`,
+    /// and queue them all. When the cube array cannot grow, no probe is placed
+    /// and reflections read the sky.
     ///
     /// # Errors
     ///
     /// Returns the error from growing the cube array when it cannot grow.
-    pub fn place<D>(&mut self, device: &mut D, placements: Vec<ProbePlacement>) -> RenderResult<()>
+    pub fn place<D>(
+        &mut self,
+        device: &mut D,
+        placements: Vec<ProbePlacement>,
+        prop_probe: bool,
+    ) -> RenderResult<()>
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {
         self.abandon(device);
-        let reserved = device.reserve_cubes(placements.len());
-        let placements = if reserved.is_ok() {
-            placements
+        let reserved = device.reserve_cubes(placements.len() + usize::from(prop_probe));
+        let (placements, prop_probe) = if reserved.is_ok() {
+            (placements, prop_probe)
         } else {
-            Vec::new()
+            (Vec::new(), false)
         };
-        device.book().reset(placements);
+        device.book().reset(placements, prop_probe);
         reserved
     }
 

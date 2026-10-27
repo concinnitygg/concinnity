@@ -109,6 +109,8 @@ pub(super) struct ProbeState {
     // retired.
     pub retire_pool:
         concinnity_engine::render::buffers::retire_pool::RetirePool<super::probe::RetiredBake>,
+    // The world's prop probe, captured a face a frame inside the frame.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when

@@ -37,7 +37,7 @@
 
 #if defined(CN_BACKEND_METAL)
 
-// Layout matches `metal::uniforms::CullUniforms` (208 B), the inline constant
+// Layout matches `metal::uniforms::CullUniforms` (224 B), the inline constant
 // block at buffer(2). `cam_pos` is a whole float4 lane (w unused): MSL sizes a
 // constant-buffer float3 at 16 bytes, so a scalar after it would not pack.
 struct CullParams
@@ -50,8 +50,12 @@ struct CullParams
     uint     hiz_enabled;
     uint     object_count;
     uint     skinned_base;
-    uint     _pad;
+    uint     exclude_first;
     uint     bucket_count;
+    uint     exclude_end;
+    uint     _pad0;
+    uint     _pad1;
+    uint     _pad2;
 };
 
 [[vk::push_constant]] ConstantBuffer<CullParams> cull : register(b2);
@@ -76,8 +80,8 @@ struct CullParams
     uint     hiz_enabled;
     uint     bucket_count;
     uint     skinned_base;
-    uint     _pad0;
-    uint     _pad1;
+    uint     exclude_first;
+    uint     exclude_end;
 };
 
 ConstantBuffer<CullParams> cull : register(b0);
@@ -89,7 +93,7 @@ ConstantBuffer<CullParams> cull : register(b0);
 
 #else
 
-// Layout matches `vulkan::uniforms::CullParams` (120 B), the push constant.
+// Layout matches `vulkan::uniforms::CullParams` (128 B), the push constant.
 struct CullParams
 {
     float4 planes[6];
@@ -97,6 +101,8 @@ struct CullParams
     uint   object_count;
     uint   bucket_count;
     uint   skinned_base;
+    uint   exclude_first;
+    uint   exclude_end;
 };
 
 // Layout matches `vulkan::uniforms::CullHizParams` (80 B), set 1 binding 1.
@@ -454,7 +460,9 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         // against the rebuilt pyramid; everything else is settled here.
         GpuDrawArgs a = draw_args[i];
         uint status = STATUS_DRAWN;
-        if ((a.flags & DRAW_ENABLED) == 0u)
+        // A view may leave out one run of records: a prop's own capture
+        // leaves out the prop.
+        if ((a.flags & DRAW_ENABLED) == 0u || (i >= cull.exclude_first && i < cull.exclude_end))
         {
             status = STATUS_CULLED;
         }

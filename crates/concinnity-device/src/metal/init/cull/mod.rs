@@ -110,6 +110,7 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
         bake: crate::metal::probe::MtlProbeBake::default(),
         prefilter,
         retire_pool: RetirePool::new(),
+        prop: crate::metal::prop_probe::PropProbe::default(),
     })
 }
 

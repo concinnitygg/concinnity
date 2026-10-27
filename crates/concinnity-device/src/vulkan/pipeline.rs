@@ -91,8 +91,9 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
 // Byte size of the cull kernel's `CullParams` push-constant block: six
 // `vec4` planes (96) + `vec3 cam_pos` + `uint object_count` (the trailing
 // scalar shares the camera position's 16-byte std430 slot) + the shader-bucket
-// routing pair (8). Within the 128-byte minimum guaranteed push-constant range.
-pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 120;
+// routing pair (8) + the excluded record range (8): exactly the 128-byte
+// minimum guaranteed push-constant range.
+pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 128;
 
 // Compile the Compute cull compute kernel to SPIR-V.
 pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {

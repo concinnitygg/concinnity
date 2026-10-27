@@ -59,8 +59,10 @@ pub struct DaylightBlock {
     pub body_dir: [[f32; 4]; DAYLIGHT_BODIES],
     /// rgb: body i's light above the air.
     pub body_light: [[f32; 4]; DAYLIGHT_BODIES],
-    /// Pads the header to a whole number of rows.
-    pub _pad: [f32; 4],
+    /// xyz: the planet sea's deep-water albedo; w: the sea's height above
+    /// the ground's datum. Read only by a view that shades the ground under
+    /// the sea as its surface (`ViewUniforms::stand_ins`).
+    pub sea: [f32; 4],
     /// The packed curves (`DaylightCurves::packed`).
     pub knots: [[f32; 4]; DAYLIGHT_KNOTS * 3],
 }
@@ -79,9 +81,20 @@ impl DaylightBlock {
         reach: [0.0; 4],
         body_dir: [[0.0; 4]; DAYLIGHT_BODIES],
         body_light: [[0.0; 4]; DAYLIGHT_BODIES],
-        _pad: [0.0; 4],
+        sea: [0.0; 4],
         knots: [[0.0; 4]; DAYLIGHT_KNOTS * 3],
     };
+
+    /// This block with a sea of deep-water albedo `color` at `level` meters
+    /// above the ground's datum.
+    #[must_use]
+    pub fn with_sea(self, color: [f32; 3], level: f32) -> Self {
+        let [r, g, b] = color;
+        Self {
+            sea: [r, g, b, level],
+            ..self
+        }
+    }
 
     /// The block for `view` over the packed curves `knots`.
     pub fn new(knots: [[f32; 4]; DAYLIGHT_KNOTS * 3], view: &DaylightView) -> Self {
@@ -158,7 +171,7 @@ mod tests {
         assert_eq!(offset_of!(DaylightBlock, reach), 32);
         assert_eq!(offset_of!(DaylightBlock, body_dir), 48);
         assert_eq!(offset_of!(DaylightBlock, body_light), 80);
-        assert_eq!(offset_of!(DaylightBlock, _pad), 112);
+        assert_eq!(offset_of!(DaylightBlock, sea), 112);
         assert_eq!(offset_of!(DaylightBlock, knots), 128);
     }
 

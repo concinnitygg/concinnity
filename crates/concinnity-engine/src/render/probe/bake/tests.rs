@@ -38,6 +38,7 @@ struct Mock {
     faces_retire: bool,
     mips_retire: bool,
     reserve_fails: bool,
+    reserved: usize,
     fault: Option<Fault>,
 }
 
@@ -52,6 +53,7 @@ impl Mock {
             faces_retire: true,
             mips_retire: true,
             reserve_fails: false,
+            reserved: 0,
             fault: None,
         }
     }
@@ -88,6 +90,7 @@ impl ProbeBakeDevice for Mock {
     }
 
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
+        self.reserved = count;
         if self.reserve_fails {
             Err(RenderError::Other(alloc::format!("no room for {count}")))
         } else {
@@ -150,7 +153,7 @@ fn placements(n: usize) -> Vec<ProbePlacement> {
 fn placed(n: usize) -> (Bake, Mock) {
     let mut bake = Bake::default();
     let mut mock = Mock::new();
-    bake.place(&mut mock, placements(n)).unwrap();
+    bake.place(&mut mock, placements(n), false).unwrap();
     (bake, mock)
 }
 
@@ -438,7 +441,7 @@ fn placing_again_abandons_the_bake_in_flight_and_requeues() {
         step(&mut bake, &mut mock);
     }
     mock.drain();
-    bake.place(&mut mock, placements(1)).unwrap();
+    bake.place(&mut mock, placements(1), false).unwrap();
     assert_eq!(
         mock.drain(),
         [Event::Abandon {
@@ -456,9 +459,21 @@ fn a_cube_array_that_cannot_grow_keeps_the_sky() {
     let mut bake = Bake::default();
     let mut mock = Mock::new();
     mock.reserve_fails = true;
-    assert!(bake.place(&mut mock, placements(3)).is_err());
+    assert!(bake.place(&mut mock, placements(3), false).is_err());
     assert!(!mock.book.pending());
     assert_eq!(mock.book.header().count, 0);
+}
+
+#[test]
+fn a_prop_probe_reserves_its_cube_after_the_placements() {
+    let mut bake = Bake::default();
+    let mut mock = Mock::new();
+    bake.place(&mut mock, placements(2), true).unwrap();
+    assert_eq!(mock.reserved, 3);
+    assert_eq!(mock.book.prop_cube(), Some(2));
+    mock.reserve_fails = true;
+    assert!(bake.place(&mut mock, placements(2), true).is_err());
+    assert_eq!(mock.book.prop_cube(), None, "no room keeps the sky");
 }
 
 #[test]

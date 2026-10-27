@@ -103,6 +103,7 @@ pub use crate::render::light::spot::SPOT_MAX_ANGLE_DEG;
 pub use crate::render::light::spot::SpotLight;
 pub use crate::render::model::{Model, SubMeshRef};
 pub use crate::render::particles::emitter::ParticleEmitter;
+pub use crate::render::probe::prop_reflection_probe::PropReflectionProbe;
 pub use crate::render::probe::reflection_probe::ReflectionProbe;
 pub use crate::render::scene::command::SceneCommand;
 pub use crate::render::scene::{Scene, SceneTransition};

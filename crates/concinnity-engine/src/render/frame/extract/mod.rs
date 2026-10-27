@@ -23,6 +23,7 @@ use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
 use crate::render::particles::ParticleBursts;
+use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
 use crate::render::temporal::history_reset::{
     FrameClock, HistoryResetCauses, HistoryResetTracker, HistoryView, PendingHistoryReset,
@@ -155,6 +156,7 @@ pub struct FrameExtractor {
     // exactly once.
     pushed_sky_rows: Option<[[f32; 4]; 3]>,
     rebases: RebaseCursor,
+    prop_probe: Option<PropProbeTarget>,
     history_reset: HistoryResetTracker,
     model_push: ModelPushCache<DrawIndex>,
     skinned_model_push: ModelPushCache<SkinnedIndex>,
@@ -189,6 +191,16 @@ impl FrameExtractor {
     /// `rows`.
     pub fn set_atmosphere<S: FanOut>(&mut self, settings: Option<AtmosphereSettings>, rows: &S) {
         self.atmosphere = settings.map(|s| AtmosphereDrive::new(s, rows));
+    }
+
+    /// The world's prop reflection probe, which each frame places on its prop.
+    pub fn set_prop_probe(&mut self, target: Option<PropProbeTarget>) {
+        self.prop_probe = target;
+    }
+
+    /// The world's prop reflection probe, if it has one.
+    pub fn prop_probe(&self) -> Option<&PropProbeTarget> {
+        self.prop_probe.as_ref()
     }
 
     /// The logical viewport the line builder starts from.
@@ -532,6 +544,10 @@ impl FrameExtractor {
             atmosphere,
             daylight,
             sunlight: lights::sunlight(ctx),
+            prop_probe: self.prop_probe.and_then(|t| {
+                let sea = self.atmosphere.as_ref().is_some_and(|a| a.sea().is_some());
+                t.frame(ctx).map(|f| f.with_sea(sea))
+            }),
             input_sampled_us: ctx.resource::<InputSampledAt>().map(|at| at.0),
         }
     }

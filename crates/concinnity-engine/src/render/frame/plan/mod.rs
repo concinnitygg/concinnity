@@ -296,7 +296,7 @@ impl FramePlanner {
                 irradiance: inputs.surface.irradiance,
                 pre_exposure: inputs.pre_exposure,
                 screen_bounce: f32::from(u8::from(inputs.surface.screen_bounce)),
-                _pad: 0.0,
+                stand_ins: 0.0,
                 daylight: view.daylight,
                 tile_morph: view.tile_morph_view(),
             },

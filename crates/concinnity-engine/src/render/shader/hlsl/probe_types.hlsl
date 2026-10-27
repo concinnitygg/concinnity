@@ -32,6 +32,6 @@ struct ProbeSet
 {
     uint count;
     uint mip_count;
-    uint _pad0;
-    uint _pad1;
+    // The object records [x, y) of the prop a live prop probe rides on.
+    uint2 subject;
 };

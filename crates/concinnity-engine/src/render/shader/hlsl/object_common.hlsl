@@ -62,6 +62,9 @@ static const uint DRAW_CULLABLE   = 2u;
 // The record's history entry in the model-history ring belongs to a different
 // occupant, so a motion vector must fall back to the current model.
 static const uint DRAW_NO_HISTORY = 4u;
+// The record is a planet tile drawing the shared tile grid, which a capture may
+// draw through its coarse grid instead.
+static const uint DRAW_PLANET_TILE = 16u;
 
 // The record's shader bucket rides the upper flag bits; values and layout are
 // locked to gfx::render_types::DrawArgsFlags::BUCKET_SHIFT.

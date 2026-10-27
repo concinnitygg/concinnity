@@ -290,6 +290,7 @@ fn pack_and_check(records: u32) {
         bucket_count: BUCKETS,
         skinned_base: skinned_base(records),
         drawn: CullStatus::DRAWN,
+        ..Default::default()
     };
     let barrier = |src, dst, src_stage, dst_stage| {
         let b = vk::MemoryBarrier::default()
@@ -596,6 +597,8 @@ fn the_shadow_cull_counts_what_it_keeps_as_the_spec_does() {
         object_count: records,
         bucket_count: 1,
         skinned_base: skinned_base(records),
+        exclude_first: 0,
+        exclude_end: 0,
     };
     // SAFETY: family 0 is the one queue family `test_gpu` created a queue in.
     let cmd_pool = unsafe {

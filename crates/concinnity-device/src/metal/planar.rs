@@ -271,6 +271,8 @@ impl MtlContext {
                             eye: m.eye,
                             slot,
                             timer: PassTimer::None,
+                            exclude: [0, 0],
+                            capture_tiles: None,
                         },
                     )?;
                     self.cull.mirror_slots.get(slot)
@@ -324,6 +326,8 @@ impl MtlContext {
                     timer: PassTimer::span(PassId::PlanarReflection, i, crops.len()),
                     storage: FaceStorage::mirror(&self.pre_exposure),
                     daylight: &self.state.view.daylight,
+                    stand_ins: concinnity_engine::render::uniforms::StandIns::None,
+                    sky_from_cube: false,
                 },
             )?;
         }

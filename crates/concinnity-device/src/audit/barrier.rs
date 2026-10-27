@@ -184,6 +184,17 @@ const AUDITS: &[BackendAudit] = &[
             // pass's sample. Neither the targets nor the shared mirror depth is a
             // graph resource.
             ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
+            // The prop probe's faces: one orders each face's cull and packing
+            // after the previous face's packing and indirect draw used the
+            // shared slot, the other each face's render after the previous
+            // face's (and the last frame's convolution's) use of its
+            // attachments. Neither the slot nor the capture is a graph resource.
+            (
+                "prop_probe.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::Ungraphed,
+            ),
             // Each plane's cluster lists, binned over its reflected view: one
             // orders the binning after the plane's previous mirror render read
             // them, the other before this render reads them. Per-plane lists are
@@ -420,6 +431,11 @@ const AUDITS: &[BackendAudit] = &[
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.
             ("planar.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
+            // The prop probe's capture into and out of its face targets' state,
+            // the shared multisampled color around each face's resolve, and its
+            // cube of the probe array back after the convolution. None is a graph
+            // resource.
+            ("prop_probe.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not
             // model, borrowed for the upscaler's read); the other transitions the

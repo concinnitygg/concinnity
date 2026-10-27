@@ -361,6 +361,8 @@ pub(super) struct ProbeState {
     // The three convolution kernels and their root signatures, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+    // The world's prop probe, captured whole every frame it rides.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 impl ProbeState {
@@ -375,6 +377,7 @@ impl ProbeState {
             gpu,
             bake: super::probe::DxProbeBake::default(),
             prefilter,
+            prop: super::prop_probe::PropProbe::default(),
         }
     }
 }
@@ -1591,6 +1594,7 @@ impl FrameDevice for DxContext {
             ],
             lines: params.lines,
             world_hidden: params.world_hidden,
+            prop_probe: params.prop_probe.is_some(),
         })
     }
 
@@ -1620,6 +1624,7 @@ impl FrameDevice for DxContext {
             gpu_wait,
             start_cmd,
         } = frame;
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
         // Reflection-probe count + records into this frame's ring CBV and records
         // buffer, which every probe-reading pass binds. A ring (one of each per
         // frame) so this write never races a prior frame's in-flight GPU read.

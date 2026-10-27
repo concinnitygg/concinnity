@@ -8,8 +8,8 @@
 use crate::components::{
     Atmosphere, CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
     MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PlanetSea, PointLight, Prop,
-    RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume, SkyRotation,
-    SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
+    PropReflectionProbe, RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume,
+    SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
 };
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::sqrt;
@@ -388,6 +388,15 @@ pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     }
     args.capture_distance = args.capture_distance.map(|d| d.max(0.0));
     args.blend_distance = args.blend_distance.map(|d| d.max(0.0));
+    args
+}
+
+/// Round a `PropReflectionProbe`'s face size to one it captures at and keep
+/// its capture distance non-negative.
+pub fn prop_reflection_probe(mut args: PropReflectionProbe) -> PropReflectionProbe {
+    args.resolution =
+        crate::render::probe::prop_reflection_probe::prop_probe_resolution(args.resolution);
+    args.capture_distance = args.capture_distance.map(|d| d.max(0.0));
     args
 }
 

@@ -24,6 +24,7 @@ use concinnity_engine::gfx::render_types::{
     GpuCompactParams, MAX_SHADOWED_SPOTS, StreamLayout, culled_records,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 use concinnity_engine::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -263,13 +264,17 @@ pub(in crate::directx) fn create_cull_command_signature(
 }
 
 // One cull into a region of an indirect buffer: the region that receives the
-// survivors, the frustum to test the frame's records against, and the eye the
-// kernel picks each record's LOD by (and, for the main kernel, its distance).
+// survivors, the frustum to test the frame's records against, the eye the
+// kernel picks each record's LOD by (and, for the main kernel, its distance),
+// the records `[first, end)` it leaves out (a prop's own capture leaves out
+// the prop), and the coarse grid it packs planet tiles through, if any.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RegionCull {
     pub region: usize,
     pub frustum: Frustum,
     pub eye: [f32; 3],
+    pub exclude: [u32; 2],
+    pub capture_tiles: Option<CaptureTiles>,
 }
 
 impl RegionCull {
@@ -283,6 +288,8 @@ impl RegionCull {
             }; 6],
         },
         eye: [0.0; 3],
+        exclude: [0, 0],
+        capture_tiles: None,
     };
 }
 
@@ -641,7 +648,8 @@ impl DxContext {
             hiz_enabled,
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-            _pad: [0; 2],
+            exclude_first: 0,
+            exclude_end: 0,
         };
         cull_params.planes = frustum.packed_planes();
 
@@ -741,6 +749,7 @@ impl DxContext {
                 bucket_count: u32::saturating_from(buckets),
                 skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
                 drawn,
+                ..Default::default()
             },
         })
     }
@@ -789,7 +798,8 @@ impl DxContext {
             // is captured into the probe cube with default shading.
             bucket_count: 1,
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-            _pad: [0; 2],
+            exclude_first: 0,
+            exclude_end: 0,
         };
         cull_params.planes = frustum.packed_planes();
 
@@ -882,6 +892,7 @@ impl DxContext {
                 region: c,
                 frustum: Frustum::from_shadow(*light_vp),
                 eye: cam_pos,
+                ..RegionCull::EMPTY
             };
             kept += 1;
         }
@@ -918,6 +929,7 @@ impl DxContext {
                 region: slice as usize,
                 frustum: self.spot_shadow.frusta[slice as usize],
                 eye: cam_pos,
+                ..RegionCull::EMPTY
             };
             kept += 1;
         }
@@ -1104,7 +1116,8 @@ impl DxContext {
                 hiz_enabled: 0,
                 bucket_count: 1,
                 skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-                _pad: [0; 2],
+                exclude_first: r.exclude[0],
+                exclude_end: r.exclude[1],
             };
             cull_params.planes = r.frustum.packed_planes();
             // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root
@@ -1160,7 +1173,9 @@ impl DxContext {
                         bucket_count: 1,
                         skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
                         drawn: CullStatus::DRAWN,
-                    },
+                        ..Default::default()
+                    }
+                    .with_capture_tiles(r.capture_tiles),
                 },
             );
         }
@@ -1228,7 +1243,8 @@ impl DxContext {
             hiz_enabled: 1,
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-            _pad: [0; 2],
+            exclude_first: 0,
+            exclude_end: 0,
         };
         cull_params.planes = frustum.packed_planes();
 

@@ -34,6 +34,7 @@ use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBake
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::scene_state::CaptureTiles;
 
 use super::allocator::PooledBuffer;
 use super::compact::{CompactPass, DrawLists};
@@ -68,21 +69,36 @@ const PROBE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // with the one default bindless pipeline, so a bucketed record must land in
 // region 0 to appear at all -- with default shading, which is the documented
 // trade the DirectX and Metal capture paths make too.
-fn capture_cull_params(
-    frustum: &Frustum,
-    cam_pos: [f32; 3],
-    n_cull: u32,
-    skinned_base: u32,
-) -> CullParams {
+fn capture_cull_params(view: CaptureCull<'_>, n_cull: u32, skinned_base: u32) -> CullParams {
+    let CaptureCull {
+        frustum,
+        eye: cam_pos,
+        exclude: [exclude_first, exclude_end],
+        ..
+    } = view;
     let mut params = CullParams {
         planes: [[0.0; 4]; 6],
         cam_pos,
         object_count: n_cull,
         bucket_count: 1,
         skinned_base,
+        exclude_first,
+        exclude_end,
     };
     params.planes = frustum.packed_planes();
     params
+}
+
+// The view an off-camera cull tests records against: its frustum, the eye the
+// LOD pick reads, the records `[first, end)` it leaves out (a prop's own
+// capture leaves out the prop), and the coarse grid it draws planet tiles
+// through, if any.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct CaptureCull<'a> {
+    pub(in crate::vulkan) frustum: &'a Frustum,
+    pub(in crate::vulkan) eye: [f32; 3],
+    pub(in crate::vulkan) exclude: [u32; 2],
+    pub(in crate::vulkan) capture_tiles: Option<CaptureTiles>,
 }
 
 // What a capture cull packs: one stream and the skinned tail over its records.
@@ -92,6 +108,7 @@ fn capture_compact_params(n_cull: u32, skinned_base: u32) -> GpuCompactParams {
         bucket_count: 1,
         skinned_base,
         drawn: concinnity_engine::gfx::cull_status::CullStatus::DRAWN,
+        ..Default::default()
     }
 }
 
@@ -123,14 +140,18 @@ impl VkContext {
     // placement; a world whose array cannot grow keeps the sky. Pushed once
     // after construction; the cube capture that fills the probe set runs across
     // later frames.
-    pub(super) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
+    pub(super) fn set_reflection_probes(
+        &mut self,
+        placements: &[ProbePlacement],
+        prop_probe: bool,
+    ) {
         let placements = placements.to_vec();
         // Idle first when probes are installed: the frames in flight may sample
         // the cubes the next bake overwrites.
         if self.probe.book.count() > 0 {
             self.wait_idle();
         }
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
         crate::probe_report::report_probe_placement(placed);
     }
 
@@ -324,7 +345,13 @@ impl VkContext {
             }
         }
         let frustum = capture::face_frustum(eye, face, capture.capture_distance);
-        self.encode_probe_cull(cmd, cull_set, hiz_set, packing, (&frustum, eye));
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye,
+            exclude: [0, 0],
+            capture_tiles: None,
+        };
+        self.encode_probe_cull(cmd, cull_set, hiz_set, packing, view);
         self.encode_main_into_face(
             cmd,
             framebuffer,
@@ -332,6 +359,7 @@ impl VkContext {
             FaceView {
                 global_set,
                 storage: FaceStorage::PROBE,
+                sky_from_cube: false,
             },
             bindless_set,
             packing,
@@ -516,7 +544,7 @@ impl VkContext {
         cull_set: vk::DescriptorSet,
         hiz_set: Option<vk::DescriptorSet>,
         packing: FacePacking,
-        (frustum, cam_pos): (&Frustum, [f32; 3]),
+        view: CaptureCull<'_>,
     ) {
         let Some(kernels) = self.cull.cull_kernels.as_ref() else {
             return;
@@ -525,7 +553,7 @@ impl VkContext {
         let device = &self.hw.device;
         let records = packing.culled(self.state.draw.record_count());
         let skinned_base = u32::saturating_from(self.state.draw.skinned_record_base());
-        let params = capture_cull_params(frustum, cam_pos, records, skinned_base);
+        let params = capture_cull_params(view, records, skinned_base);
         // SAFETY: `cmd` is recording outside a render pass, and the cull kernel pipeline is owned
         // by `self.cull`.
         unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
@@ -570,7 +598,8 @@ impl VkContext {
             CompactPass {
                 set: packing.set,
                 lists: packing.lists,
-                params: capture_compact_params(records, skinned_base),
+                params: capture_compact_params(records, skinned_base)
+                    .with_capture_tiles(view.capture_tiles),
             },
         );
         let barrier = vk::MemoryBarrier::default()
@@ -609,6 +638,7 @@ impl VkContext {
         let FaceView {
             global_set,
             storage,
+            sky_from_cube,
         } = view;
         let (Some(pipeline), Some(layout)) = (
             self.face_bindless_pipeline(),
@@ -693,7 +723,7 @@ impl VkContext {
         self.draw_stream(cmd, packing.lists, 0, face.slots(0));
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, global_set, self.current_frame);
+            self.encode_sky(cmd, global_set, self.current_frame, sky_from_cube);
         }
         // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
         // above.
@@ -778,7 +808,8 @@ impl ProbeBakeDevice for VkContext {
             &self.hw.alloc,
             pipelines,
             &PLAN,
-            super::probe_prefilter::PrefilterTarget::probe(cubes, index, PLAN.mips())?,
+            super::probe_prefilter::PrefilterTarget::probe(cubes, index, &PLAN)?,
+            super::probe_prefilter::CaptureFaces::Copied,
         )?;
 
         let rendering = RenderingBake {
@@ -891,11 +922,14 @@ impl ProbeBakeDevice for VkContext {
 }
 
 // The view an off-camera render draws from: the global set holding its view
-// block, and the scale that block writes the face at, which its clear follows.
+// block, the scale that block writes the face at, which its clear follows, and
+// whether its sky is read from the environment's cube rather than an
+// atmosphere's sky-view table.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FaceView {
     pub(in crate::vulkan) global_set: vk::DescriptorSet,
     pub(in crate::vulkan) storage: FaceStorage,
+    pub(in crate::vulkan) sky_from_cube: bool,
 }
 
 // Where an off-camera render draws in its framebuffer: the full `extent` the
@@ -1489,7 +1523,14 @@ mod tests {
     // material carries a world shader -- so it is pinned rather than eyeballed.
     #[test]
     fn a_capture_cull_routes_every_record_into_one_region() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [0.0; 3], 12, 10);
+        let frustum = Frustum::from_camera(IDENTITY, None);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye: [0.0; 3],
+            exclude: [0, 0],
+            capture_tiles: None,
+        };
+        let p = capture_cull_params(view, 12, 10);
         assert_eq!(p.bucket_count, 1, "one region, whatever the world declares");
         assert_eq!(p.object_count, 12);
         assert_eq!(p.skinned_base, 10);
@@ -1507,9 +1548,16 @@ mod tests {
     // That is how the mirror render lost its draws.
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [1.0, 2.0, 3.0], 4, 3);
+        let frustum = Frustum::from_camera(IDENTITY, None);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye: [1.0, 2.0, 3.0],
+            exclude: [5, 7],
+            capture_tiles: None,
+        };
+        let p = capture_cull_params(view, 4, 3);
         let bytes = bytemuck::bytes_of(&p);
-        assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
+        assert_eq!(bytes.len(), 128, "cull.hlsl's push_constant block is 128 B");
         // The two routing fields live in the last 8 bytes: the exact span a
         // 112-byte push left undefined.
         assert_eq!(
@@ -1522,6 +1570,12 @@ mod tests {
             &3u32.to_le_bytes(),
             "skinned_base written"
         );
+        assert_eq!(
+            &bytes[120..124],
+            &5u32.to_le_bytes(),
+            "exclude_first written"
+        );
+        assert_eq!(&bytes[124..128], &7u32.to_le_bytes(), "exclude_end written");
     }
 
     const IDENTITY: [[f32; 4]; 4] = [

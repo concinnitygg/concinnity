@@ -188,6 +188,7 @@ impl FrameDevice for MtlContext {
             render_size: frame.render_size,
             lines: params.lines,
             world_hidden: params.world_hidden,
+            prop_probe: params.prop_probe.is_some(),
         })
     }
 
@@ -226,6 +227,7 @@ impl FrameDevice for MtlContext {
             ..
         } = frame;
 
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
         let texture_signature = self.refresh_probe_records_and_residency(ring_slot)?;
 
         let SceneBuffers {

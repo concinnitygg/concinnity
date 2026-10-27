@@ -118,19 +118,24 @@ impl MtlContext {
 
     // Draw the environment behind everything `enc` drew so far, from the
     // viewpoint `view` describes. The encoder's targets must be the HDR color
-    // and the depth its geometry tested against.
+    // and the depth its geometry tested against. `from_cube` reads an
+    // atmosphere's sky from the environment's cube, which carries a planet's
+    // surface below the horizon, rather than from its sky-view table.
     pub(super) fn encode_sky(
         &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         view: &ViewUniforms,
+        from_cube: bool,
     ) {
         enc.pushDebugGroup(objc2_foundation::ns_string!("sky"));
         enc.set_depth_stencil(&self.targets.depth_state_read_only);
         enc.set_vertex_value(view, 0);
         enc.set_fragment_value(view, 0);
+        let cube_ready = self.scene.env_map.prefilter_mip_count > 0;
         if let Some((atmo, params)) = self
             .atmosphere
             .as_ref()
+            .filter(|_| !(from_cube && cube_ready))
             .and_then(|a| Some((a, a.params.as_ref()?)))
         {
             enc.set_pipeline(&atmo.sky_pipeline);

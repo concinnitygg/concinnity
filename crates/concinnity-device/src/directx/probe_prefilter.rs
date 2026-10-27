@@ -82,7 +82,7 @@ impl PrefilterSlots {
     }
 
     // The block the reflection-probe bakes share.
-    fn probes(ctx: &DxContext) -> Self {
+    pub(in crate::directx) fn probes(ctx: &DxContext) -> Self {
         let l = &ctx.descriptors.layout;
         Self {
             capture_srv: l.probe_capture_srv_slot,
@@ -197,27 +197,59 @@ pub(in crate::directx) struct PrefilterGpu {
     // The cube of the probe cube array the convolution writes.
     cube: usize,
     mips: u32,
+    // Where the convolution's descriptors sit, and the state the faces leave
+    // the capture in.
+    slots: PrefilterSlots,
+    arrival: D3D12_RESOURCE_STATES,
+}
+
+/// How a capture's faces reach it and where its convolution's descriptors sit.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct CaptureSetup {
+    /// The descriptor block the convolution binds.
+    pub slots: PrefilterSlots,
+    /// The state the capture is created in.
+    pub initial: D3D12_RESOURCE_STATES,
+    /// The state the faces leave it in, which the pyramid build takes it from.
+    pub arrival: D3D12_RESOURCE_STATES,
+    /// Whether the faces render straight into it.
+    pub render_target: bool,
+}
+
+impl CaptureSetup {
+    /// A capture the per-face copies write into, convolved through `slots`.
+    pub(in crate::directx) fn copied(slots: PrefilterSlots) -> Self {
+        Self {
+            slots,
+            initial: D3D12_RESOURCE_STATE_COPY_DEST,
+            arrival: D3D12_RESOURCE_STATE_COPY_DEST,
+            render_target: false,
+        }
+    }
 }
 
 impl PrefilterGpu {
-    /// Allocate the capture and write every descriptor the bake's dispatches
-    /// bind, writing into cube `cube` of `cubes`. The capture starts in `COPY_DEST`
-    /// so the per-face copies can write it.
+    /// Allocate the capture and write every descriptor the convolution's
+    /// dispatches bind, writing into cube `cube` of `cubes` from the plan's
+    /// first mip.
     pub(in crate::directx) fn new(
         ctx: &DxContext,
         plan: &PrefilterPlan,
         cubes: &super::probe_set::ProbeCubeArray,
         cube: usize,
+        setup: CaptureSetup,
     ) -> RenderResult<Self> {
         let mips = plan.mips();
+        let first_mip = plan.first_mip();
         if mips as usize > PROBE_MAX_MIPS {
             return Err(RenderError::Other(format!(
                 "probe: {mips} mips exceeds the {PROBE_MAX_MIPS} descriptors reserved for one bake"
             )));
         }
-        if cube >= cubes.capacity() || cubes.mips() != mips {
+        if cube >= cubes.capacity() || cubes.mips() < first_mip + mips {
             return Err(RenderError::Other(format!(
-                "probe: the cube array has no cube {cube} at {mips} mips"
+                "probe: the cube array has no cube {cube} at mips {first_mip}..{}",
+                first_mip + mips
             )));
         }
         let capture = create_cube_resource(
@@ -226,7 +258,8 @@ impl PrefilterGpu {
                 face_size: plan.face_size(),
                 mips,
                 cubes: 1,
-                state: D3D12_RESOURCE_STATE_COPY_DEST,
+                state: setup.initial,
+                render_target: setup.render_target,
                 label: "probe capture cube",
             },
         )?;
@@ -234,17 +267,19 @@ impl PrefilterGpu {
         let device = &ctx.hw.device;
         write_prefilter_views(
             device,
-            PrefilterSlots::probes(ctx),
+            setup.slots,
             |slot| cpu_slot(ctx, slot),
             &capture,
             mips,
-            |mip, handle| cubes.write_mip_uav(device, cube, mip, handle),
+            |mip, handle| cubes.write_mip_uav(device, cube, first_mip + mip, handle),
         );
 
         Ok(Self {
             capture,
             cube,
             mips,
+            slots: setup.slots,
+            arrival: setup.arrival,
         })
     }
 
@@ -265,8 +300,8 @@ impl PrefilterGpu {
 }
 
 impl DxContext {
-    /// Record the cheap half of the convolution: the capture moves from the
-    /// per-face copies' `COPY_DEST` into `UNORDERED_ACCESS` and the probe's cube of
+    /// Record the cheap half of the convolution: the capture moves from where
+    /// its faces left it into `UNORDERED_ACCESS` and the probe's cube of
     /// the array into `UNORDERED_ACCESS` too, the mirror mip is copied through with
     /// the firefly clamp, the source pyramid is reduced level by level, and the
     /// capture ends in `NON_PIXEL_SHADER_RESOURCE` for the GGX dispatches that
@@ -287,7 +322,7 @@ impl DxContext {
             })?;
         let mut barriers = vec![super::texture::transition_barrier(
             gpu.capture(),
-            D3D12_RESOURCE_STATE_COPY_DEST,
+            gpu.arrival,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         )];
         barriers.extend(self.probe.gpu.bound_cubes().cube_barriers(
@@ -298,13 +333,7 @@ impl DxContext {
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&barriers) };
-        self.record_prefilter_pyramid(
-            cmd,
-            pipelines,
-            PrefilterSlots::probes(self),
-            gpu.capture(),
-            plan,
-        );
+        self.record_prefilter_pyramid(cmd, pipelines, gpu.slots, gpu.capture(), plan);
         // SAFETY: as above.
         unsafe {
             cmd.ResourceBarrier(&[super::texture::transition_barrier(
@@ -322,6 +351,7 @@ impl DxContext {
     pub(in crate::directx) fn encode_probe_ggx_mip(
         &self,
         cmd: &ID3D12GraphicsCommandList,
+        gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
         dst_mip: u32,
     ) -> RenderResult<()> {
@@ -329,7 +359,7 @@ impl DxContext {
             self.probe.prefilter.as_ref().ok_or_else(|| {
                 RenderError::Other("probe: prefilter pipelines missing".to_string())
             })?;
-        self.record_prefilter_ggx(cmd, pipelines, PrefilterSlots::probes(self), plan, dst_mip);
+        self.record_prefilter_ggx(cmd, pipelines, gpu.slots, plan, dst_mip);
         Ok(())
     }
 

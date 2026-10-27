@@ -18,7 +18,9 @@ pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
 
 /// The GPU-cull push constant (cull.hlsl): six already-normalized frustum
 /// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
-/// the build-time object count, then the shader-bucket routing (120 B total).
+/// the build-time object count, then the shader-bucket routing and the records
+/// the view leaves out (128 B total, the push-constant floor every device
+/// guarantees).
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct CullParams {
@@ -33,6 +35,12 @@ pub struct CullParams {
     pub bucket_count: u32,
     /// The first skinned record, whose draws take the skinned tail's stream.
     pub skinned_base: u32,
+    /// First of the records `[exclude_first, exclude_end)` the view leaves
+    /// out: a prop's own capture leaves out the prop. Empty for every other
+    /// view.
+    pub exclude_first: u32,
+    /// End of the records the view leaves out.
+    pub exclude_end: u32,
 }
 
 /// Cull-side Hi-Z uniforms (cull.hlsl, 80 bytes): the previous frame's
@@ -64,12 +72,14 @@ mod tests {
     // source; this is the copy that runs without dxc.
     #[test]
     fn cull_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<CullParams>(), 120);
+        assert_eq!(size_of::<CullParams>(), 128);
         assert_eq!(offset_of!(CullParams, planes), 0);
         assert_eq!(offset_of!(CullParams, cam_pos), 96);
         assert_eq!(offset_of!(CullParams, object_count), 108);
         assert_eq!(offset_of!(CullParams, bucket_count), 112);
         assert_eq!(offset_of!(CullParams, skinned_base), 116);
+        assert_eq!(offset_of!(CullParams, exclude_first), 120);
+        assert_eq!(offset_of!(CullParams, exclude_end), 124);
     }
 
     // CullHizParams in cull.hlsl: mat4 (64) + float2 (8) + two uints. Total 80

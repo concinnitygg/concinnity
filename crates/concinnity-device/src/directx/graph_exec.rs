@@ -1347,6 +1347,7 @@ impl DxContext {
                 // bloom + composite then sample via `scene_srv_for_post`).
                 self.encode_upscale(cmd, params)?;
             }
+            PassId::PropProbe => self.encode_prop_probe(cmd, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).

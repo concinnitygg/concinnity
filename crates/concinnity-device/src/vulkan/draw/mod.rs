@@ -389,7 +389,12 @@ impl VkContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    fn frame_content(&self, lines_published: bool, world_hidden: bool) -> FrameContent {
+    fn frame_content(
+        &self,
+        lines_published: bool,
+        world_hidden: bool,
+        prop_probe: bool,
+    ) -> FrameContent {
         FrameContent {
             world_hidden,
             cull_records: self.state.draw.record_count(),
@@ -422,6 +427,7 @@ impl VkContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+            prop_probe,
         }
     }
 
@@ -435,9 +441,10 @@ impl VkContext {
             render_size,
             lines_published,
             world_hidden,
+            prop_probe,
         } = args;
         let resident = self.resident_features(render_size);
-        let content = self.frame_content(lines_published, world_hidden);
+        let content = self.frame_content(lines_published, world_hidden, prop_probe);
         // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
         // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
         let phase = self.state.planner.jitter_phase();
@@ -485,6 +492,8 @@ struct PlanArgs {
     render_size: [u32; 2],
     lines_published: bool,
     world_hidden: bool,
+    // The world's prop probe rides this frame.
+    prop_probe: bool,
 }
 
 // What `begin` acquired for a frame: its in-flight slot, the swapchain image,
@@ -639,6 +648,7 @@ impl FrameDevice for VkContext {
             render_size: [frame.extent.width, frame.extent.height],
             lines_published: !params.lines.is_empty(),
             world_hidden: params.world_hidden,
+            prop_probe: params.prop_probe.is_some(),
         })
     }
 
@@ -710,6 +720,7 @@ impl FrameDevice for VkContext {
             frame_idx,
         );
 
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
         // Reflection-probe count + records (global set 0 bindings 7 + 17): count
         // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
         // sky path. Uploaded every frame so a later install is picked up

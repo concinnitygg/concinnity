@@ -195,8 +195,10 @@ fn run(
         hiz_enabled: 0,
         object_count: u32::try_from(records.len()).expect("records"),
         skinned_base: SKINNED_BASE,
-        _pad: 0,
+        exclude_first: 0,
         bucket_count: BUCKETS,
+        exclude_end: 0,
+        _pad: [0; 3],
     };
     let queue = device.newCommandQueue().expect("queue");
     let cmd = queue.commandBuffer().expect("command buffer");
@@ -218,6 +220,7 @@ fn run(
             bucket_count: BUCKETS,
             skinned_base: SKINNED_BASE,
             drawn: CullStatus::DRAWN,
+            ..Default::default()
         },
         11,
     );

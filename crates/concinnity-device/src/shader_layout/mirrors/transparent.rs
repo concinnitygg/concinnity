@@ -48,7 +48,7 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
         everywhere(mirror!(ProbeSet => "ProbeSet" {
             count,
             mip_count,
-            [_pad] => ["_pad0", "_pad1"],
+            subject,
         })),
     ]
 }

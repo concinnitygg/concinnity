@@ -18,11 +18,16 @@ pub trait RenderTuning {
     /// Supply the reflection-probe placements: declared `ReflectionProbe`
     /// assets, or a grid the caller auto-seeded over the scene. An empty list
     /// bakes none. The backend bakes a cube per placement and samples the
-    /// nearest for the specular reflection.
+    /// nearest for the specular reflection, and keeps a cube after theirs for
+    /// the world's prop probe when `prop_probe`.
     /// Pushed once after construction. Default no-op: a backend without probe
     /// support keeps the sky reflection.
-    fn set_reflection_probes(&mut self, probes: &[crate::render::probe::capture::ProbePlacement]) {
-        let _ = probes;
+    fn set_reflection_probes(
+        &mut self,
+        probes: &[crate::render::probe::capture::ProbePlacement],
+        prop_probe: bool,
+    ) {
+        let _ = (probes, prop_probe);
     }
 
     /// Apply a settings change: push the live values the plan names, and

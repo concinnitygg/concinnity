@@ -80,7 +80,8 @@ pub use system::{
     PlanetEditsChange, PlanetSystem, StartBuilder, inline_ground,
 };
 pub use tile::{
-    MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, TileSide, tile_bounds, tile_mesh,
+    CAPTURE_TILE_STRIDE, MAX_TILE_LEVEL, TILE_CELLS, TileBounds, TileId, TileMesh, TileSide,
+    tile_bounds, tile_indices, tile_mesh,
 };
 
 /// Smallest radius a planet keeps, in meters.

@@ -176,6 +176,8 @@ pub struct FrameFacts {
     pub grass_casts: bool,
     /// Local lights or probes are clustered.
     pub clustered: bool,
+    /// A prop reflection probe rides this frame and its capture is built.
+    pub prop_probe: bool,
 }
 
 /// This frame's graph inputs, before the view mode and show flags mask them.
@@ -237,6 +239,8 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         composite_reads_reactive: false,
         shadowed_spot_count: facts.shadowed_spot_count,
         spot_shadow_slice_size: facts.spot_shadow_slice_size,
+        // A traced reflection already shows the prop's surroundings.
+        prop_probe_enabled: facts.prop_probe && bindless && !path.rt_trace(),
     }
 }
 

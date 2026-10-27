@@ -157,7 +157,7 @@ pub enum Call {
     SetUiCursorHidden(bool),
     SetMenuMode(bool),
     SetCameraCapture(bool),
-    SetReflectionProbes(Vec<capture::ProbePlacement>),
+    SetReflectionProbes(Vec<capture::ProbePlacement>, bool),
     SetVsync(bool),
     SetWindowMode(WindowMode),
     SetWindowSize(u32, u32),
@@ -692,8 +692,8 @@ impl RenderTuning for RecordingBackend {
         apply_plan(self, graphics, plan)
     }
 
-    fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement]) {
-        self.record(Call::SetReflectionProbes(probes.to_vec()));
+    fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool) {
+        self.record(Call::SetReflectionProbes(probes.to_vec(), prop_probe));
     }
 
     fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {

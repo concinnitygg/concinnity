@@ -173,6 +173,10 @@ pub struct FrameGraphInputs {
     /// or away from a reflector never changes the graph. Only meaningful alongside
     /// `transparent_enabled`, the mirrors' one consumer.
     pub planar_reflection_enabled: bool,
+    /// `true` when the world's prop reflection probe captures this frame: the
+    /// graph adds a `PropProbe` render pass after the shadow maps and the cull
+    /// and ahead of `Main`, whose probe set holds the cube it writes.
+    pub prop_probe_enabled: bool,
     /// `true` when a system submitted world-space lines this frame AND the
     /// backend's line pipeline is live. The graph adds a `Lines` render pass at
     /// the tail of the `hdr_resolve` RMW chain: it blend-writes the scene color
@@ -390,6 +394,7 @@ impl FrameGraphInputs {
             upscale_enabled: false,
             transparent_enabled: false,
             planar_reflection_enabled: false,
+            prop_probe_enabled: false,
             lines_enabled: false,
             raymarch_enabled: false,
             two_pass_occlusion_enabled: false,
@@ -445,6 +450,10 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     ("planar_reflection", |i| {
         i.transparent_enabled = true;
         i.planar_reflection_enabled = true;
+    }),
+    ("prop_probe", |i| {
+        i.bindless_cull_enabled = true;
+        i.prop_probe_enabled = true;
     }),
     ("lines", |i| i.lines_enabled = true),
     ("raymarch", |i| i.raymarch_enabled = true),
@@ -798,6 +807,7 @@ impl PrepassOutputs {
 struct SceneInputs {
     shadow: Option<TextureHandle>,
     spot_shadow: Option<TextureHandle>,
+    prop_probe: Option<TextureHandle>,
     atmosphere_luts: Option<TextureHandle>,
     cluster_lists: Option<BufferHandle>,
     particle_pool: Option<BufferHandle>,
@@ -1112,9 +1122,33 @@ fn add_scene_inputs(
         None
     };
 
+    // The prop reflection probe: one cube face of the scene seen from the
+    // prop, lit like Main (so after the shadow maps) from the frame's records
+    // (so after Cull), and on the cycle's last face the convolution into the
+    // probe's cube. The cube is encoder-owned, so the import only orders the
+    // pass ahead of Main, the first pass reading the probe set.
+    let prop_probe = inputs.prop_probe_enabled.then(|| {
+        let cube = b.import_texture("prop_probe", prop_probe_desc());
+        let mut capture = b.add_pass(PassId::PropProbe, PassKind::Render);
+        if let Some(h) = shadow_v1 {
+            capture.read_texture(h);
+        }
+        if let Some(h) = spot_shadow_v1 {
+            capture.read_texture(h);
+        }
+        if let Some(h) = cull.draw_args {
+            capture.read_buffer(h);
+        }
+        if let Some(h) = atmosphere_luts {
+            capture.read_texture(h);
+        }
+        capture.write_texture(cube)
+    });
+
     SceneInputs {
         shadow: shadow_v1,
         spot_shadow: spot_shadow_v1,
+        prop_probe,
         atmosphere_luts,
         cluster_lists,
         particle_pool: particle_pool_v1,
@@ -1130,6 +1164,9 @@ fn add_scene_inputs(
 fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVersions {
     let mut main = b.add_pass(PassId::Main, PassKind::Render);
     if let Some(h) = front.scene_inputs.shadow {
+        main.read_texture(h);
+    }
+    if let Some(h) = front.scene_inputs.prop_probe {
         main.read_texture(h);
     }
     if let Some(h) = front.scene_inputs.spot_shadow {
@@ -1846,6 +1883,18 @@ pub(crate) fn bloom_top_desc() -> TextureDesc {
 fn hdr_resolve_desc(inputs: &FrameGraphInputs) -> TextureDesc {
     render_res_2d(
         inputs,
+        PixelFormat::Rgba16Float,
+        TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
+    )
+}
+
+fn prop_probe_desc() -> TextureDesc {
+    // Stands for the probe's cube face the pass renders, at the largest face
+    // it may capture; the backend owns the capture and the cube.
+    use crate::render::probe::prop_reflection_probe::MAX_PROP_PROBE_RESOLUTION;
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(MAX_PROP_PROBE_RESOLUTION),
+        TextureSize::Absolute(MAX_PROP_PROBE_RESOLUTION),
         PixelFormat::Rgba16Float,
         TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
     )

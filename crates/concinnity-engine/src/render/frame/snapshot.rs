@@ -59,6 +59,8 @@ pub struct FrameScalars {
     pub daylight: crate::render::uniforms::DaylightBlock,
     /// The authored intensity of the world's sun.
     pub sunlight: f32,
+    /// Where the world's prop reflection probe is this frame, if it has one.
+    pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,
     /// When the input this frame's tick consumed was sampled, in microseconds
     /// on the host's process-wide monotonic clock, or `None` when unknown.
     pub input_sampled_us: Option<u64>,
@@ -85,6 +87,7 @@ impl Default for FrameScalars {
             atmosphere: None,
             daylight: crate::render::uniforms::DaylightBlock::OFF,
             sunlight: crate::gfx::render_types::LightUniforms::DEFAULT.directional[0].intensity,
+            prop_probe: None,
             input_sampled_us: None,
         }
     }

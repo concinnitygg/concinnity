@@ -176,6 +176,9 @@ impl VkContext {
         if let Some(rendering) = self.probe.bake.capture() {
             rendering.rewrite_global_binding(device, &bindings, binding);
         }
+        self.probe
+            .prop
+            .rewrite_global_binding(device, &bindings, binding);
     }
 
     pub(in crate::vulkan) fn global_bindings(&self) -> GlobalBindings<'_> {

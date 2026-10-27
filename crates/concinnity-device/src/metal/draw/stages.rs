@@ -36,6 +36,8 @@ pub(super) struct PlanArgs<'a> {
     pub(super) render_size: [u32; 2],
     pub(super) lines: &'a [LineVertex],
     pub(super) world_hidden: bool,
+    // The world's prop probe rides this frame.
+    pub(super) prop_probe: bool,
 }
 
 // The recorded frame's presenting command buffer and its completion join.
@@ -279,7 +281,12 @@ impl MtlContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    pub(super) fn frame_content(&self, world_hidden: bool, lines: &[LineVertex]) -> FrameContent {
+    pub(super) fn frame_content(
+        &self,
+        world_hidden: bool,
+        lines: &[LineVertex],
+        prop_probe: bool,
+    ) -> FrameContent {
         FrameContent {
             world_hidden,
             cull_records: self.cull_count(),
@@ -306,6 +313,7 @@ impl MtlContext {
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
+            prop_probe: prop_probe && self.prop_probe_supported(),
         }
     }
 
@@ -319,9 +327,10 @@ impl MtlContext {
             render_size,
             lines,
             world_hidden,
+            prop_probe,
         } = args;
         let resident = self.resident_features();
-        let content = self.frame_content(world_hidden, lines);
+        let content = self.frame_content(world_hidden, lines, prop_probe);
         // MetalFX takes the 16-frame Halton cycle, which covers its output
         // pixels better than the TAA cycle.
         let upscaler_jitter = self
@@ -578,10 +587,9 @@ impl MtlContext {
                 // Per-planar-slot mirror cull ICBs: one per distinct reflection
                 // plane, each sized to cull_count. A no-op (clears the slots) when
                 // the world has no planar set (RT on, or no flat reflectors).
-                let mirror_slots = self
-                    .planar_reflection
-                    .as_ref()
-                    .map_or(0, |s| s.layout.planes().len());
+                // The prop probe culls into one more slot after the planes'.
+                let mirror_slots =
+                    self.prop_probe_cull_slot() + usize::from(self.probe.prop.capturing());
                 self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
             }
             let cull_draw_args = draw_args;

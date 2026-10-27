@@ -171,6 +171,8 @@ impl ProbePlacement {
 pub struct PrefilterPlan {
     face_size: u32,
     mips: u32,
+    first_mip: u32,
+    chain_mips: u32,
     samples: u32,
     clamp: f32,
     storage_scale: f32,
@@ -190,6 +192,8 @@ impl PrefilterPlan {
     pub const RUNTIME: Self = Self {
         face_size: 512,
         mips: em::max_mip_count(512),
+        first_mip: 0,
+        chain_mips: em::max_mip_count(512),
         samples: 128,
         clamp: 12.0,
         storage_scale: PROBE_STORAGE_SCALE,
@@ -201,9 +205,27 @@ impl PrefilterPlan {
         Self {
             face_size,
             mips: em::max_mip_count(face_size),
+            first_mip: 0,
+            chain_mips: em::max_mip_count(face_size),
             samples,
             clamp,
             storage_scale: 1.0,
+        }
+    }
+
+    /// This plan's capture at a face `first` mips smaller, written into the
+    /// same cube from mip `first` on: the capture's mip `m` lands in the cube's
+    /// mip `first + m`, at that mip's roughness. `first` past the chain's last
+    /// mip is clamped to it.
+    #[must_use]
+    pub const fn from_mip(self, first: u32) -> Self {
+        let last = self.mips - 1;
+        let first = if first > last { last } else { first };
+        Self {
+            face_size: self.face_size >> first,
+            mips: self.mips - first,
+            first_mip: self.first_mip + first,
+            ..self
         }
     }
 
@@ -222,9 +244,15 @@ impl PrefilterPlan {
         self.face_size
     }
 
-    /// Mip levels in the probe cube, and in the capture pyramid feeding it.
+    /// Mip levels in the capture pyramid, and in the part of the probe cube
+    /// it is written into.
     pub const fn mips(&self) -> u32 {
         self.mips
+    }
+
+    /// The probe-cube mip the capture's mip 0 is written into.
+    pub const fn first_mip(&self) -> u32 {
+        self.first_mip
     }
 
     /// Cube-face edge of mip `mip`, in texels.
@@ -255,7 +283,7 @@ impl PrefilterPlan {
     pub fn ggx_params(&self, dst_mip: u32) -> ProbePrefilterParams {
         ProbePrefilterParams {
             dst_size: self.mip_face_size(dst_mip),
-            roughness: em::prefilter_roughness(dst_mip, self.mips),
+            roughness: em::prefilter_roughness(self.first_mip + dst_mip, self.chain_mips),
             ..self.base_params()
         }
     }
@@ -561,6 +589,29 @@ mod tests {
         // The mirror mip is a clamped copy, not a convolution.
         assert_eq!(plan.mip0_params().dst_size, plan.face_size());
         assert_eq!(plan.mip0_params().roughness, 0.0);
+    }
+
+    // A smaller capture written further down the chain convolves each of its
+    // mips at the roughness of the cube mip it lands in, so its lookups match
+    // a full-size probe's at every roughness it holds.
+    #[test]
+    fn a_plan_from_a_later_mip_writes_the_tail_of_the_chain() {
+        let full = PrefilterPlan::RUNTIME;
+        let tail = full.from_mip(2);
+        assert_eq!(tail.face_size(), 128);
+        assert_eq!(tail.first_mip(), 2);
+        assert_eq!(tail.mips(), full.mips() - 2);
+        assert_eq!(tail.mip_face_size(tail.mips() - 1), 4);
+        for mip in 1..tail.mips() {
+            assert_eq!(
+                tail.ggx_params(mip).roughness,
+                full.ggx_params(mip + 2).roughness
+            );
+            assert_eq!(tail.ggx_params(mip).dst_size, full.mip_face_size(mip + 2));
+            assert_eq!(tail.ggx_params(mip).src_size, 128);
+        }
+        assert_eq!(tail.mip0_params().dst_size, 128);
+        assert_eq!(full.from_mip(99).mips(), 1, "the chain keeps its last mip");
     }
 
     #[test]

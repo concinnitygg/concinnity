@@ -21,7 +21,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::PixelRect;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::probe::radiance::FaceStorage;
-use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera, ViewUniforms};
+use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera, StandIns, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -113,6 +113,10 @@ pub(in crate::metal) struct FacePass<'a> {
     pub storage: FaceStorage,
     // The per-point sky the face shades by.
     pub daylight: &'a DaylightBlock,
+    // What the face's ground stands in for that the face does not draw.
+    pub stand_ins: StandIns,
+    // Whether the sky behind the face is read from the environment's cube.
+    pub sky_from_cube: bool,
 }
 
 impl FacePass<'_> {
@@ -125,6 +129,8 @@ impl FacePass<'_> {
         timer: PassTimer::None,
         storage: FaceStorage::PROBE,
         daylight: &DaylightBlock::OFF,
+        stand_ins: StandIns::None,
+        sky_from_cube: false,
     };
 }
 
@@ -289,7 +295,7 @@ impl MtlContext {
         // `Main2` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
-            self.encode_sky(&encoder, &view_uniforms);
+            self.encode_sky(&encoder, &view_uniforms, false);
         }
         Ok(draw_calls)
     }
@@ -384,14 +390,15 @@ impl MtlContext {
             pre_exposure: pass.storage.scale(),
             daylight: *pass.daylight,
             tile_morph: self.state.tile_morph_view(),
-        });
+        })
+        .with_stand_ins(pass.stand_ins);
 
         self.bind_clusters(&encoder, pass.clusters);
         let draw_calls =
             self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
         // A face is always rendered lit, whatever the viewport shows.
         if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(&encoder, &view_uniforms);
+            self.encode_sky(&encoder, &view_uniforms, pass.sky_from_cube);
         }
         Ok(draw_calls)
     }
@@ -626,7 +633,7 @@ impl MtlContext {
             irradiance: self.irradiance_lane(),
             pre_exposure: self.pre_exposure.value(),
             screen_bounce: if self.screen_bounce() { 1.0 } else { 0.0 },
-            _pad: 0.0,
+            stand_ins: 0.0,
             daylight: self.state.view.daylight,
             tile_morph: self.state.tile_morph_view(),
         }

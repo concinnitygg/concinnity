@@ -714,6 +714,8 @@ pub(super) struct ProbeState {
     // The three convolution kernels and the layouts they bind, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+    // The world's prop probe, captured whole every frame it rides.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 impl ProbeState {
@@ -728,6 +730,7 @@ impl ProbeState {
             gpu,
             bake: super::probe::VkProbeBake::default(),
             prefilter,
+            prop: super::prop_probe::PropProbe::default(),
         }
     }
 }
@@ -1737,6 +1740,8 @@ impl VkContext {
         if let Some(prefiltering) = prefiltering {
             prefiltering.destroy(device, self.commands.command_pool);
         }
+        // The prop probe's capture, targets and sets retire as they drop.
+        self.probe.prop = super::prop_probe::PropProbe::default();
 
         // Parked streamed-texture retires (`wait_idle` above covered them).
         self.drain_stream_retires();

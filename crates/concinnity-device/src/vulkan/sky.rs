@@ -128,9 +128,13 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         global_set: vk::DescriptorSet,
         frame_idx: usize,
+        from_cube: bool,
     ) {
         let device = &self.hw.device;
-        if let Some((pipeline, layout, atmosphere_set)) = self.atmosphere_sky(frame_idx) {
+        let atmosphere = self
+            .atmosphere_sky(frame_idx)
+            .filter(|_| !(from_cube && self.scene.prefilter_mip_count > 0));
+        if let Some((pipeline, layout, atmosphere_set)) = atmosphere {
             // The atmosphere's sky layout takes the global set and the atmosphere's set.
             draw_sky_triangle(device, cmd, pipeline, layout, &[global_set, atmosphere_set]);
             self.inc_draw_calls(1);
@@ -162,7 +166,12 @@ impl VkContext {
                 );
             };
         }
-        self.encode_sky(cmd, self.descriptors.global_sets[frame_idx], frame_idx);
+        self.encode_sky(
+            cmd,
+            self.descriptors.global_sets[frame_idx],
+            frame_idx,
+            false,
+        );
         if let Some((pool, (_, end))) = stamps {
             // SAFETY: as above.
             unsafe {

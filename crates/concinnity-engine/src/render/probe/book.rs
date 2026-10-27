@@ -10,19 +10,24 @@ use core::fmt;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::probe::bake::ProbeBakeQueue;
 use crate::render::probe::capture::{PrefilterPlan, ProbePlacement};
+use crate::render::probe::prop::PropProbeFrame;
 use crate::render::uniforms::{ProbeSet, ProbeUniforms};
 
 /// A world's reflection probes: the placements, one parallax record per
-/// installed probe, and the bake queue over the placements.
+/// installed probe, the bake queue over the placements, and the prop probe's
+/// record after them with the object records of its prop.
 ///
 /// Installs run in placement order, so record `i` (and cube `i` of the array
 /// the backend bakes into) always describes placement `i`. The shaders read
 /// the first [`ProbeBook::count`] records, so a probe that has not been baked
-/// yet reflects the sky.
+/// yet reflects the sky. The prop probe's cube is the one after the
+/// placements', and its record joins once every placement has installed.
 pub struct ProbeBook {
     placements: Vec<ProbePlacement>,
     records: Vec<ProbeUniforms>,
     queue: ProbeBakeQueue,
+    prop_probe: bool,
+    prop_subject: [u32; 2],
     revision: u64,
 }
 
@@ -54,16 +59,53 @@ impl ProbeBook {
             placements: Vec::new(),
             records: Vec::new(),
             queue: ProbeBakeQueue::new(0),
+            prop_probe: false,
+            prop_subject: [0; 2],
             revision: 0,
         }
     }
 
     /// Replace the placements, forgetting every installed probe and queueing
-    /// every placement to bake. An empty list leaves reflections on the sky.
-    pub fn reset(&mut self, placements: Vec<ProbePlacement>) {
+    /// every placement to bake, with a cube for a prop probe after theirs when
+    /// `prop_probe`. An empty list leaves reflections on the sky.
+    pub fn reset(&mut self, placements: Vec<ProbePlacement>, prop_probe: bool) {
         self.records.clear();
         self.queue = ProbeBakeQueue::new(placements.len());
         self.placements = placements;
+        self.prop_probe = prop_probe;
+        self.revision += 1;
+    }
+
+    /// The cube of the array the prop probe is captured into, after every
+    /// placement's; `None` when the placements left it none.
+    pub fn prop_cube(&self) -> Option<usize> {
+        self.prop_probe.then_some(self.placements.len())
+    }
+
+    /// Set the prop probe's record from `frame`, which the shaders read once
+    /// every placement has installed; `None` withdraws it. Changes the
+    /// revision only when the records the shaders read change.
+    pub fn set_prop_probe(&mut self, frame: Option<&PropProbeFrame>) {
+        let Some(cube) = self.prop_cube() else {
+            return;
+        };
+        if self.records.len() < cube {
+            return;
+        }
+        self.prop_subject = frame.map_or([0; 2], |f| f.records);
+        let record = frame.map(PropProbeFrame::record);
+        let current = self.records.get(cube).copied();
+        match (current, record) {
+            (Some(old), Some(new)) if bytemuck::bytes_of(&old) == bytemuck::bytes_of(&new) => {
+                return;
+            }
+            (Some(_), Some(new)) => self.records[cube] = new,
+            (None, Some(new)) => self.records.push(new),
+            (Some(_), None) => {
+                self.records.truncate(cube);
+            }
+            (None, None) => return,
+        }
         self.revision += 1;
     }
 
@@ -134,7 +176,13 @@ impl ProbeBook {
     /// The header the shaders read the live count and the cubes' mip count
     /// from.
     pub fn header(&self) -> ProbeSet {
-        ProbeSet::new(self.count(), PrefilterPlan::RUNTIME.mips())
+        let live = self
+            .prop_cube()
+            .is_some_and(|cube| self.records.len() > cube);
+        ProbeSet {
+            subject: if live { self.prop_subject } else { [0; 2] },
+            ..ProbeSet::new(self.count(), PrefilterPlan::RUNTIME.mips())
+        }
     }
 }
 
@@ -148,7 +196,7 @@ mod tests {
 
     fn placed(n: usize) -> ProbeBook {
         let mut book = ProbeBook::new();
-        book.reset((0..n).map(|i| placement(i as f32)).collect());
+        book.reset((0..n).map(|i| placement(i as f32)).collect(), false);
         book
     }
 
@@ -241,7 +289,7 @@ mod tests {
     fn reset_forgets_installs_and_requeues() {
         let mut book = placed(2);
         bake_all(&mut book);
-        book.reset(alloc::vec![placement(9.0)]);
+        book.reset(alloc::vec![placement(9.0)], false);
         assert_eq!(book.count(), 0);
         assert_eq!(book.placed(), 1);
         assert_eq!(
@@ -256,11 +304,86 @@ mod tests {
     fn a_reset_to_nothing_keeps_the_sky() {
         let mut book = placed(2);
         bake_all(&mut book);
-        book.reset(Vec::new());
+        book.reset(Vec::new(), false);
         assert_eq!(book.count(), 0);
         assert_eq!(book.placed(), 0);
         assert!(!book.pending());
         assert!(book.take_next().is_none());
+    }
+
+    fn prop_frame(x: f32) -> PropProbeFrame {
+        PropProbeFrame {
+            bounds_min: [x - 1.0, -1.0, -1.0],
+            bounds_max: [x + 1.0, 1.0, 1.0],
+            records: [4, 6],
+            resolution: 128,
+            capture_distance: None,
+            sea: false,
+        }
+    }
+
+    // The prop probe's cube follows the placements', so its record waits for
+    // every placement to install and then rides after theirs.
+    #[test]
+    fn the_prop_record_joins_after_every_placement() {
+        let mut book = ProbeBook::new();
+        book.reset(alloc::vec![placement(0.0), placement(1.0)], true);
+        assert_eq!(book.prop_cube(), Some(2));
+        book.set_prop_probe(Some(&prop_frame(5.0)));
+        assert_eq!(book.count(), 0, "the placements bake first");
+        bake_all(&mut book);
+        book.set_prop_probe(Some(&prop_frame(5.0)));
+        assert_eq!(book.count(), 3);
+        assert_eq!(book.records()[2].probe_pos[0], 5.0);
+        book.set_prop_probe(Some(&prop_frame(6.0)));
+        assert_eq!(book.count(), 3);
+        assert_eq!(book.records()[2].probe_pos[0], 6.0);
+        book.set_prop_probe(None);
+        assert_eq!(book.count(), 2);
+        assert_eq!(book.records()[1].probe_pos[0], 1.0);
+    }
+
+    // The header names the prop's records only while its record is live, so
+    // a world without one reads an empty range.
+    #[test]
+    fn the_header_names_the_prop_only_while_its_record_is_live() {
+        let mut book = ProbeBook::new();
+        book.reset(alloc::vec![placement(0.0)], true);
+        book.set_prop_probe(Some(&prop_frame(5.0)));
+        assert_eq!(book.header().subject, [0, 0], "the placement bakes first");
+        bake_all(&mut book);
+        book.set_prop_probe(Some(&prop_frame(5.0)));
+        assert_eq!(book.header().subject, [4, 6]);
+        book.set_prop_probe(None);
+        assert_eq!(book.header().subject, [0, 0]);
+        assert_eq!(placed(1).header().subject, [0, 0]);
+    }
+
+    #[test]
+    fn a_world_without_a_prop_probe_takes_no_prop_record() {
+        let mut book = placed(1);
+        bake_all(&mut book);
+        assert_eq!(book.prop_cube(), None);
+        book.set_prop_probe(Some(&prop_frame(5.0)));
+        assert_eq!(book.count(), 1);
+    }
+
+    // The records are rewritten only when they change: a prop at rest costs
+    // no buffer write.
+    #[test]
+    fn an_unchanged_prop_record_keeps_the_revision() {
+        let mut book = ProbeBook::new();
+        book.reset(Vec::new(), true);
+        book.set_prop_probe(Some(&prop_frame(1.0)));
+        let joined = book.revision();
+        book.set_prop_probe(Some(&prop_frame(1.0)));
+        assert_eq!(book.revision(), joined);
+        book.set_prop_probe(Some(&prop_frame(2.0)));
+        assert_ne!(book.revision(), joined);
+        let moved = book.revision();
+        book.set_prop_probe(None);
+        book.set_prop_probe(None);
+        assert_eq!(book.revision(), moved + 1);
     }
 
     // A backend skips its copy of the records while the revision holds, so it
@@ -269,7 +392,7 @@ mod tests {
     fn the_revision_moves_exactly_when_the_records_do() {
         let mut book = ProbeBook::new();
         let start = book.revision();
-        book.reset(alloc::vec![placement(0.0), placement(1.0)]);
+        book.reset(alloc::vec![placement(0.0), placement(1.0)], false);
         let placed = book.revision();
         assert_ne!(placed, start);
         let (index, _) = book.take_next().unwrap();

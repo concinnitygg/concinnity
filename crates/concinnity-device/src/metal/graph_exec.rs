@@ -850,6 +850,10 @@ impl MtlContext {
                 self.encode_upscale(cmd_buf, scene_pre_taa, params.reactive.readable)?
             }
             PassId::Transparent => self.encode_transparent_stage(cmd_buf, params)?,
+            PassId::PropProbe => {
+                self.encode_prop_probe(cmd_buf, params)?;
+                0
+            }
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
@@ -897,6 +901,8 @@ impl MtlContext {
                 cam_pos: params.cam_pos,
                 daylight: &self.state.view.daylight,
                 variants: &self.cull.variants,
+                exclude: [0, 0],
+                capture_tiles: None,
             },
             self.draw_record_counts(),
         )?;

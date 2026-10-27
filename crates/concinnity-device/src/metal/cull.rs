@@ -8,6 +8,7 @@ use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::{lod, render_types};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::shader::programs::metal::bindless_textures;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 use concinnity_engine::transform::IDENTITY;
@@ -399,6 +400,11 @@ pub(in crate::metal) struct CullView<'a> {
     pub(in crate::metal) daylight: &'a DaylightBlock,
     // The routes and regions of the record set being culled.
     pub(in crate::metal) variants: &'a render_types::GpuCullVariants,
+    // The records `[first, end)` the view leaves out.
+    pub(in crate::metal) exclude: [u32; 2],
+    // The coarse grid a capture draws planet tiles through; `None` draws
+    // their own.
+    pub(in crate::metal) capture_tiles: Option<CaptureTiles>,
 }
 
 // The output the cull kernel encodes survivors into: the target ICB, its
@@ -426,6 +432,7 @@ struct Packing {
     skinned_base: usize,
     bucket_count: usize,
     drawn: u32,
+    capture_tiles: Option<CaptureTiles>,
 }
 
 // One planar mirror's cull: the frame's object records, the mirror frustum and
@@ -439,6 +446,10 @@ pub(in crate::metal) struct MirrorCull<'a> {
     pub(in crate::metal) eye: [f32; 3],
     pub(in crate::metal) slot: usize,
     pub(in crate::metal) timer: super::pass_timing::PassTimer,
+    // The records `[first, end)` the view leaves out.
+    pub(in crate::metal) exclude: [u32; 2],
+    // The coarse grid the capture draws planet tiles through.
+    pub(in crate::metal) capture_tiles: Option<CaptureTiles>,
 }
 
 // Per-dispatch cull knobs: whether to consult the Hi-Z pyramid (off for the
@@ -716,6 +727,8 @@ impl MtlContext {
             eye,
             slot,
             timer,
+            exclude,
+            capture_tiles,
         } = cull;
         let (Some(mirror), Some(status)) =
             (self.cull.mirror_slots.get(slot), &self.cull.mirror_status)
@@ -734,6 +747,8 @@ impl MtlContext {
                 cam_pos: eye,
                 daylight: &self.state.view.daylight,
                 variants: &self.cull.variants,
+                exclude,
+                capture_tiles,
             },
             CullOutputTarget {
                 icbs: std::slice::from_ref(&mirror.icb),
@@ -818,6 +833,8 @@ impl MtlContext {
             cam_pos,
             daylight,
             variants,
+            exclude: [exclude_first, exclude_end],
+            capture_tiles,
         } = view;
         let CullOutputTarget {
             icbs,
@@ -867,8 +884,10 @@ impl MtlContext {
             hiz_enabled,
             object_count: u32::saturating_from(object_count),
             skinned_base: u32::saturating_from(counts.skinned_base),
-            _pad: 0,
+            exclude_first,
             bucket_count: u32::saturating_from(icbs.len()),
+            exclude_end,
+            _pad: [0; 3],
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -929,6 +948,7 @@ impl MtlContext {
                 skinned_base: counts.skinned_base,
                 bucket_count: icbs.len(),
                 drawn: CullStatus::DRAWN,
+                capture_tiles,
             },
         );
         Ok(())
@@ -952,6 +972,7 @@ impl MtlContext {
             skinned_base,
             bucket_count,
             drawn,
+            capture_tiles,
         } = packing;
         let bucket_count = u32::saturating_from(bucket_count.max(1));
         enc.set_pipeline(scan);
@@ -961,6 +982,7 @@ impl MtlContext {
                 bucket_count,
                 skinned_base: u32::saturating_from(skinned_base),
                 drawn,
+                ..Default::default()
             },
             CULL_COMPACT_PARAMS_INDEX,
         );
@@ -972,7 +994,12 @@ impl MtlContext {
                 skinned_base: u32::saturating_from(skinned_base),
                 bucket_count,
                 draw_status: drawn,
-            },
+                coarse_offset: 0,
+                coarse_count: 0,
+                full_count: 0,
+                _pad: 0,
+            }
+            .with_capture_tiles(capture_tiles),
             CULL_SCATTER_PARAMS_INDEX,
         );
         dispatch_groups(
@@ -1039,8 +1066,10 @@ impl MtlContext {
             hiz_enabled: 1,
             object_count: u32::saturating_from(object_count),
             skinned_base,
-            _pad: 0,
+            exclude_first: 0,
             bucket_count: u32::saturating_from(self.cull.icbs_2.len()),
+            exclude_end: 0,
+            _pad: [0; 3],
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -1088,6 +1117,7 @@ impl MtlContext {
                 skinned_base: self.skinned_record_base(),
                 bucket_count: self.cull.icbs_2.len(),
                 drawn: CullStatus::REDRAW,
+                capture_tiles: None,
             },
         );
         Ok(0)
@@ -1228,10 +1258,12 @@ impl MtlContext {
                 hiz_enabled: 0,
                 object_count: u32::saturating_from(object_count),
                 skinned_base: u32::saturating_from(skinned_base),
-                _pad: 0,
+                exclude_first: 0,
                 // The shadow cull writes one depth-only stream and the skinned
                 // tail.
                 bucket_count: 1,
+                exclude_end: 0,
+                _pad: [0; 3],
             };
             enc.set_value(&cull_uniforms, 2);
             dispatch_groups(
@@ -1245,6 +1277,7 @@ impl MtlContext {
                     skinned_base,
                     bucket_count: 1,
                     drawn: CullStatus::DRAWN,
+                    capture_tiles: None,
                 },
             );
         }

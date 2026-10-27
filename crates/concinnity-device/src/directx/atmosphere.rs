@@ -146,6 +146,7 @@ impl DxSkyCube {
                     mips: SKY_CUBE_PLAN.mips(),
                     cubes: 1,
                     state: RESTING,
+                    render_target: false,
                     label,
                 },
             )

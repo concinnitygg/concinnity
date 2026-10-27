@@ -9,7 +9,8 @@ starts. It sets out over the ground, crosses the shore and the sea, climbs
 toward the sun until it leaves the air, shows the whole planet from orbit,
 drops into the night and skims it, and comes down on the far side as the
 sun rises. The camera films the benchmark's `subject` from behind, framed
-by where it is on the tour and where the sun is.
+by where it is on the tour: looking ever further down on it as it climbs,
+so the planet lies below it from orbit.
 
 A subject with a [`RollingDrive`](RollingDrive.md) rolls itself over the
 ground first: through the grass, down the beach and into the sea, where it

@@ -111,6 +111,7 @@ macro_rules! for_each_component {
                 StatHud           => $crate::components::StatHud { gen, external, renders },
                 ScrollPanel       => $crate::components::ScrollPanel { gen, external, consumed },
                 ReflectionProbe   => $crate::components::ReflectionProbe { gen, external, useful_blank, validate: reflection_probe },
+                PropReflectionProbe => $crate::components::PropReflectionProbe { gen, external, validate: prop_reflection_probe },
                 Transform         => $crate::components::Transform { runtime },
                 PropInstance      => $crate::components::PropInstance { runtime },
                 MeshRenderer      => $crate::components::MeshRenderer { runtime },

@@ -383,7 +383,8 @@ fn declared_reflection_probes_reach_the_backend() {
     assert!(!gs.failed);
     assert!(
         lock(&state).saw(&Call::SetReflectionProbes(
-            probes.iter().map(ProbePlacement::from).collect()
+            probes.iter().map(ProbePlacement::from).collect(),
+            false
         )),
         "both declared placements reach the backend, capture distance and all"
     );

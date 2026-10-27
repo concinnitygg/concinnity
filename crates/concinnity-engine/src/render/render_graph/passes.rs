@@ -284,6 +284,12 @@ pass_ids! {
     /// `FrameGraphInputs::disocclusion_enabled` and an upscaler that reads the
     /// mask.
     Disocclusion => "disocclusion",
+    /// One cube face of the scene seen from the prop a prop reflection probe
+    /// rides on, its own draws left out, into the probe's capture; on the
+    /// cycle's sixth face the capture is convolved into the probe's cube of
+    /// the probe array. After the shadow maps and the cull, ahead of `Main`.
+    /// Gated on `FrameGraphInputs::prop_probe_enabled`.
+    PropProbe => "prop_probe",
 }
 
 impl PassId {

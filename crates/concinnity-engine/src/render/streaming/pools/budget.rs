@@ -54,9 +54,11 @@ pub fn chunk_record_reserve(voxel_far_radius: Option<u32>, planet: bool) -> usiz
 }
 
 /// The vertex and index bytes a planet's terrain takes: every resident tile's
-/// vertices at its largest mesh, and the one grid of indices they all draw.
+/// vertices at its largest mesh, and the one grid of indices they all draw
+/// with the coarse grid a capture draws them through after it.
 pub fn planet_tile_headroom() -> (usize, usize) {
-    let (vertices, indices) = tile_mesh_size();
+    let (vertices, full) = tile_mesh_size();
+    let indices = full + crate::planet::tile_indices(crate::planet::CAPTURE_TILE_STRIDE).len();
     let bytes = |tiles: u64, count: usize, size: usize| {
         usize::try_from(tiles * count as u64 * size as u64).unwrap_or(usize::MAX)
     };
@@ -158,9 +160,10 @@ mod tests {
     #[test]
     fn the_planet_headroom_holds_every_tiles_vertices_and_one_shared_grid() {
         let (vertices, indices) = tile_mesh_size();
+        let coarse = crate::planet::tile_indices(crate::planet::CAPTURE_TILE_STRIDE).len();
         let (vtx, idx) = planet_tile_headroom();
         assert_eq!(vtx, MAX_RESIDENT_TILES * vertices * size_of::<Vertex>());
-        assert_eq!(idx, indices * size_of::<u32>());
+        assert_eq!(idx, (indices + coarse) * size_of::<u32>());
     }
 
     // Impostors cost less headroom than full chunks over the same window, and

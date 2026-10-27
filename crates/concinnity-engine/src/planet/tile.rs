@@ -326,19 +326,7 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
             [lo.min(h), hi.max(h)]
         });
 
-    let mut indices = Vec::with_capacity(n * n * 6);
-    let corner = |i: usize, j: usize| u16::saturating_from(j * side + i);
-    for j in 0..n {
-        for i in 0..n {
-            let (a, b, c, d) = (
-                corner(i, j),
-                corner(i + 1, j),
-                corner(i, j + 1),
-                corner(i + 1, j + 1),
-            );
-            indices.extend_from_slice(&[a, b, c, b, d, c]);
-        }
-    }
+    let indices = tile_indices(1);
 
     let morph_extent = morph_extent(&points, n);
 
@@ -360,6 +348,35 @@ pub fn tile_mesh(shape: &PlanetShape, tile: TileId) -> TileMesh {
         origin_altitude: narrow_f32(dvec3::length(dvec3::sub(origin, shape.center)) - shape.radius),
         bounds,
     }
+}
+
+/// Corners a capture's coarse tile steps across per cell: a divisor of
+/// [`TILE_CELLS`] and a power of two, so every corner it keeps is one no level's
+/// geomorph moves.
+pub const CAPTURE_TILE_STRIDE: usize = 4;
+
+/// A tile's triangles over its `(TILE_CELLS + 1)^2` corners, row-major along
+/// `t`, with cells `stride` corners across: two triangles per cell, wound to
+/// face outward and split along the diagonal every level uses. `stride` 1 is
+/// the tile's own mesh; a larger one reaches only the corners on its grid.
+pub fn tile_indices(stride: usize) -> Vec<u16> {
+    let n = TILE_CELLS as usize;
+    let side = n + 1;
+    let cells = n / stride.max(1);
+    let mut indices = Vec::with_capacity(cells * cells * 6);
+    let corner = |i: usize, j: usize| u16::saturating_from(j * stride * side + i * stride);
+    for j in 0..cells {
+        for i in 0..cells {
+            let (a, b, c, d) = (
+                corner(i, j),
+                corner(i + 1, j),
+                corner(i, j + 1),
+                corner(i + 1, j + 1),
+            );
+            indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+    }
+    indices
 }
 
 /// The color of a tile corner in unit direction `dir` with tangent
@@ -710,6 +727,39 @@ mod tests {
     }
 
     // A tile is its grid alone: one vertex a corner, two triangles a cell.
+    // The capture's coarse tile keeps only corners geomorph never moves
+    // (both coordinates even), covers the whole tile, and turns the same way
+    // as the full mesh.
+    #[test]
+    fn the_capture_tile_is_a_coarser_grid_of_fixed_corners() {
+        let side = TILE_CELLS as usize + 1;
+        let coarse = tile_indices(CAPTURE_TILE_STRIDE);
+        let cells = TILE_CELLS as usize / CAPTURE_TILE_STRIDE;
+        assert_eq!(coarse.len(), cells * cells * 6);
+        for &k in &coarse {
+            let (i, j) = (usize::from(k) % side, usize::from(k) / side);
+            assert_eq!((i % CAPTURE_TILE_STRIDE, j % CAPTURE_TILE_STRIDE), (0, 0));
+            assert!(
+                crate::planet::morph::parent_span(i, j).is_none(),
+                "corner ({i}, {j}) morphs"
+            );
+        }
+        let used: alloc::collections::BTreeSet<u16> = coarse.iter().copied().collect();
+        let last = u16::try_from(side * side - 1).unwrap();
+        assert!(
+            used.contains(&0) && used.contains(&last),
+            "corner to corner"
+        );
+        // The first cell's first triangle runs the way the full mesh's does.
+        let fine = tile_indices(1);
+        let (stride, row) = (
+            u16::try_from(CAPTURE_TILE_STRIDE).unwrap(),
+            u16::try_from(side).unwrap(),
+        );
+        assert_eq!(&fine[..3], &[0, 1, row]);
+        assert_eq!(&coarse[..3], &[0, stride, stride * row]);
+    }
+
     #[test]
     fn the_mesh_is_the_grid() {
         let mesh = tile_mesh(&shape(), deep_tile());

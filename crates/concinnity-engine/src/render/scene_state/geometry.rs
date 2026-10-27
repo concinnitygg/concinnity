@@ -16,6 +16,7 @@ use core::mem::size_of;
 use super::SceneState;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, DrawObject, PlanetTileDraw};
+use crate::planet::{CAPTURE_TILE_STRIDE, tile_indices};
 use crate::render::backend::ChunkMesh;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::buffers::range_alloc::RangeAllocator;
@@ -79,6 +80,23 @@ pub struct GeometryPlacement {
     /// all tiles share one grid topology, so it is written once and never
     /// freed with a tile.
     pub planet_tile_indices: Option<SharedIndices>,
+    /// The coarse grid a capture draws planet tiles with, written beside
+    /// [`Self::planet_tile_indices`] when those are a tile's full grid.
+    pub capture_tiles: Option<CaptureTiles>,
+}
+
+/// The index range a capture draws each planet tile through in place of its
+/// full grid, at the tile's own `base_vertex`: the same corners stepped
+/// [`crate::planet::CAPTURE_TILE_STRIDE`] at a time, far fewer triangles for a
+/// view that cannot resolve them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureTiles {
+    /// First index, in `u32` elements.
+    pub offset: u32,
+    /// Indices in the coarse grid.
+    pub count: u32,
+    /// Indices in the full grid a draw must hold to be drawn coarse.
+    pub full_count: u32,
 }
 
 /// An index range in the chunk pool that many chunks draw.
@@ -101,6 +119,7 @@ impl GeometryPlacement {
         self.chunk_vtx = RangeAllocator::new();
         self.chunk_idx = RangeAllocator::new();
         self.planet_tile_indices = None;
+        self.capture_tiles = None;
     }
 
     // The shared planet tile range, when `idxs` is the topology it holds.
@@ -191,6 +210,36 @@ fn place_chunk_vertices(
         return Err(e);
     }
     Ok(v_off)
+}
+
+// Place and write the coarse grid a capture draws planet tiles through, when
+// `full` is the tiles' full grid. `None` without room for it, which leaves a
+// capture drawing every tile whole.
+fn place_capture_tiles(
+    placement: &mut GeometryPlacement,
+    full: &[u16],
+    frame: u64,
+    writer: &mut dyn GeometryWriter,
+) -> Option<CaptureTiles> {
+    if full != tile_indices(1).as_slice() {
+        return None;
+    }
+    let coarse = widen(&tile_indices(CAPTURE_TILE_STRIDE), 0);
+    let len = size_of_val(coarse.as_slice()) as u64;
+    let offset = placement.chunk_idx.alloc_aligned(len, INDEX_STRIDE)?;
+    let offset = usize::saturating_from(offset);
+    if writer
+        .write(GeometryBuffer::Index, offset, bytemuck::cast_slice(&coarse))
+        .is_err()
+    {
+        placement.chunk_idx.free(offset as u64, len, frame);
+        return None;
+    }
+    Some(CaptureTiles {
+        offset: u32::saturating_from(offset / size_of::<u32>()),
+        count: u32::saturating_from(coarse.len()),
+        full_count: u32::saturating_from(full.len()),
+    })
 }
 
 // `indices` widened to the shared buffer's `u32` stride, offset by `base`.
@@ -438,6 +487,7 @@ impl SceneState {
                     offset: index_offset,
                     indices: idxs.to_vec(),
                 });
+                placement.capture_tiles = place_capture_tiles(placement, idxs, frame, writer);
             }
             (v_off, index_offset)
         };
@@ -1135,6 +1185,82 @@ mod tests {
             scene.draw.objects[0].index_offset,
             scene.draw.objects[1].index_offset
         );
+    }
+
+    // The first tile of the full grid writes the capture's coarse grid once,
+    // which every later tile draws through its own base vertex; a repack
+    // forgets it with the shared range.
+    #[test]
+    fn the_first_full_grid_tile_writes_the_capture_grid_once() {
+        let fine = tile_indices(1);
+        let coarse = tile_indices(CAPTURE_TILE_STRIDE);
+        let side = crate::planet::TILE_CELLS as usize + 1;
+        let mut scene = chunked(2 * side * side, fine.len() + coarse.len());
+        let verts = vertices(side * side);
+        let mut w = Recorder::default();
+        for slot in 0..2 {
+            scene
+                .add_chunk_mesh(
+                    &tile_chunk(&verts, &fine, 5),
+                    SlotAlloc::Append(DrawIndex(slot)),
+                    &mut w,
+                )
+                .expect("room for the tile");
+        }
+        let tiles = scene.placement.capture_tiles.expect("a capture grid");
+        assert_eq!(tiles.full_count as usize, fine.len());
+        assert_eq!(tiles.count as usize, coarse.len());
+        let index_writes: Vec<_> = w
+            .writes
+            .iter()
+            .filter(|(buffer, ..)| *buffer == GeometryBuffer::Index)
+            .collect();
+        assert_eq!(
+            index_writes.len(),
+            2,
+            "the second tile draws the shared grids"
+        );
+        let (_, at, bytes) = index_writes[1];
+        assert_eq!(*at, tiles.offset as usize * 4);
+        let want: Vec<u32> = coarse.iter().map(|&i| u32::from(i)).collect();
+        assert_eq!(indices(bytes), want);
+        scene.placement.forget_layout();
+        assert_eq!(scene.placement.capture_tiles, None);
+    }
+
+    // A pool with room for the full grid alone still takes the tile; the
+    // capture then has no coarse grid.
+    #[test]
+    fn a_tile_without_room_for_the_capture_grid_still_places() {
+        let fine = tile_indices(1);
+        let side = crate::planet::TILE_CELLS as usize + 1;
+        let mut scene = chunked(side * side, fine.len());
+        let verts = vertices(side * side);
+        scene
+            .add_chunk_mesh(
+                &tile_chunk(&verts, &fine, 5),
+                SlotAlloc::Append(DrawIndex(0)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile's own grid");
+        assert!(scene.placement.planet_tile_indices.is_some());
+        assert_eq!(scene.placement.capture_tiles, None);
+    }
+
+    // A tile of any other topology leaves the capture without a coarse grid.
+    #[test]
+    fn a_tile_of_another_topology_writes_no_capture_grid() {
+        let mut scene = chunked(6, 6);
+        let verts = vertices(3);
+        scene
+            .add_chunk_mesh(
+                &tile_chunk(&verts, &[0, 1, 2], 5),
+                SlotAlloc::Append(DrawIndex(0)),
+                &mut WriteOnly,
+            )
+            .expect("room for the tile");
+        assert!(scene.placement.planet_tile_indices.is_some());
+        assert_eq!(scene.placement.capture_tiles, None);
     }
 
     // After a repack every tile owns a copy of the grid, so forgetting the

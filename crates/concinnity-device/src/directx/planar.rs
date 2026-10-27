@@ -600,6 +600,7 @@ impl DxContext {
                     region: slot,
                     frustum: mirror.frustum,
                     eye: m.eye,
+                    ..RegionCull::EMPTY
                 };
                 kept += 1;
             }
@@ -641,6 +642,8 @@ impl DxContext {
                     canopy_tables_gva: self.canopy.tables_gpu_va(params.frame_idx),
                     clusters: clustered[slot].then(|| set.cluster_grid(slot, params.frame_idx)),
                     storage,
+                    probes: None,
+                    sky_from_cube: false,
                 },
                 crate::directx::probe::IndirectDraw {
                     lists: set.lists(slot, params.frame_idx),

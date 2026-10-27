@@ -7,8 +7,9 @@
 pub use concinnity_engine::components::validate::volumetric_fog;
 pub(crate) use concinnity_engine::components::validate::{
     atmosphere, decal, directional_light, glass_panel, grass, instanced_prop, material, night_sky,
-    particle_emitter, planet, point_light, prop, rect_area_light, reflection_probe, rigid_body,
-    sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk, water_surface, wind,
+    particle_emitter, planet, point_light, prop, prop_reflection_probe, rect_area_light,
+    reflection_probe, rigid_body, sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk,
+    water_surface, wind,
 };
 
 #[cfg(test)]

@@ -32,6 +32,8 @@ pub(in crate::directx) struct PlanArgs<'a> {
     pub(in crate::directx) render_size: [u32; 2],
     pub(in crate::directx) lines: &'a [LineVertex],
     pub(in crate::directx) world_hidden: bool,
+    // The world's prop probe rides this frame.
+    pub(in crate::directx) prop_probe: bool,
 }
 
 impl DxContext {
@@ -510,7 +512,12 @@ impl DxContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    fn frame_content(&self, lines: &[LineVertex], world_hidden: bool) -> FrameContent {
+    fn frame_content(
+        &self,
+        lines: &[LineVertex],
+        world_hidden: bool,
+        prop_probe: bool,
+    ) -> FrameContent {
         FrameContent {
             world_hidden,
             cull_records: self.state.draw.record_count(),
@@ -539,6 +546,7 @@ impl DxContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+            prop_probe,
         }
     }
 
@@ -552,9 +560,10 @@ impl DxContext {
             render_size,
             lines,
             world_hidden,
+            prop_probe,
         } = args;
         let resident = self.resident_features(render_size);
-        let content = self.frame_content(lines, world_hidden);
+        let content = self.frame_content(lines, world_hidden, prop_probe);
         // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
         // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
         // FFX returns it in input-pixel coordinates, the Halton path's units.

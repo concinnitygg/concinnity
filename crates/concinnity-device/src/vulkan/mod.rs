@@ -49,6 +49,7 @@ mod post;
 mod probe;
 mod probe_prefilter;
 mod probe_set;
+mod prop_probe;
 mod quality;
 mod raymarch;
 mod raytrace;

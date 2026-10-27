@@ -29,7 +29,9 @@ struct DaylightBlock
     float4 body_dir[DAYLIGHT_BODIES];
     // rgb: that body's light above the air.
     float4 body_light[DAYLIGHT_BODIES];
-    float4 _pad;
+    // xyz: the planet sea's deep-water albedo; w: its height above the
+    // ground's datum. Read only by a view whose ground stands in for the sea.
+    float4 sea;
     // Three per knot: the transmittance and the zenith's red, the irradiance
     // and the zenith's green, the horizon and the zenith's blue.
     float4 knots[DAYLIGHT_KNOTS * 3u];

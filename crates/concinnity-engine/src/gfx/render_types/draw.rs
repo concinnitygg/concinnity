@@ -524,6 +524,10 @@ impl DrawArgsFlags {
     // variant once the band starts within its bounds. Mirrored by
     // DRAW_FAR_BAND in object_common.hlsl.
     pub(crate) const FAR_BAND: u32 = 8;
+    // The record is a planet tile drawing the shared tile grid, which a
+    // capture may draw through its coarse grid instead. Mirrored by
+    // DRAW_PLANET_TILE in object_common.hlsl and metal/shaders/cull_encode.metal.
+    pub(crate) const PLANET_TILE: u32 = 16;
     // The record's base shader bucket rides bits 8..16: the cull kernel routes
     // the record's indirect command into that bucket's region, unless the
     // record has a variant route. Mirrored by DRAW_BUCKET_SHIFT in
@@ -565,6 +569,16 @@ pub fn draw_args_flags(visible: bool, resident: bool, cullable: bool) -> u32 {
 /// since the pre-pass is handed `prev_vp == cur_vp` then).
 pub fn draw_args_no_history() -> u32 {
     DrawArgsFlags::NO_HISTORY
+}
+
+/// The `GpuDrawArgs::flags` bit marking a planet tile, whose grid a capture
+/// may draw coarser.
+pub fn draw_args_planet_tile(planet_tile: bool) -> u32 {
+    if planet_tile {
+        DrawArgsFlags::PLANET_TILE
+    } else {
+        0
+    }
 }
 
 /// Pack a `DrawObject`'s shader bucket into the `GpuDrawArgs::flags` upper bits,

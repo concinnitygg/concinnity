@@ -145,6 +145,8 @@ impl VkContext {
             object_count: u32::saturating_from(self.state.draw.record_count()),
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         params.planes = frustum.packed_planes();
         // SAFETY: `cmd` is in the recording state, and the cull pipeline is owned by
@@ -236,6 +238,7 @@ impl VkContext {
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
             drawn,
+            ..Default::default()
         }
     }
 
@@ -349,6 +352,8 @@ impl VkContext {
                 object_count: packed.records,
                 bucket_count: 1,
                 skinned_base: packed.skinned_base,
+                exclude_first: 0,
+                exclude_end: 0,
             };
             params.planes = frustum.packed_planes();
             // SAFETY: the view's cull set was built against the shadow cull layout.
@@ -384,6 +389,7 @@ impl VkContext {
                     bucket_count: 1,
                     skinned_base: packed.skinned_base,
                     drawn: CullStatus::DRAWN,
+                    ..Default::default()
                 },
             };
             packed_views += 1;
@@ -445,6 +451,8 @@ impl VkContext {
             object_count: u32::saturating_from(self.state.draw.record_count()),
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         params.planes = frustum.packed_planes();
 

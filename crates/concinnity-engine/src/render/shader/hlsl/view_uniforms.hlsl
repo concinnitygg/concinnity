@@ -37,7 +37,10 @@ struct ViewUniforms
     // 1.0 when the screen-space indirect target carries the bounce of nearby
     // surfaces beside the occlusion; 0.0 when it holds occlusion alone.
     float screen_bounce;
-    float _pad_view2;
+    // What the view's ground is shaded as in place of what the view does not
+    // draw: 0 nothing; 1 the grass blades, by the canopy; 2 those and the
+    // planet's sea, by its surface over the ground under it.
+    float stand_ins;
     // The planet's per-point sky, off for a world without one.
     DaylightBlock daylight;
     // The camera a planet's tiles morph by, the main camera's in every view.

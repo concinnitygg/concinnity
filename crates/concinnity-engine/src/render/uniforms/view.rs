@@ -98,8 +98,11 @@ pub struct ViewUniforms {
     /// face. Occupies what was pad space, so the offsets in the user-shader
     /// binding contract are unchanged.
     pub screen_bounce: f32,
-    /// Pads the block to a whole `float4`.
-    pub _pad: f32,
+    /// What the view's ground is shaded as in place of what the view does
+    /// not draw ([`StandIns`]), as a lane: 0 for every view that draws the
+    /// whole scene. Occupies what was pad space, so the offsets in the
+    /// user-shader binding contract are unchanged.
+    pub stand_ins: f32,
     /// The planet's per-point sky, [`DaylightBlock::OFF`] for a world
     /// without one.
     pub daylight: DaylightBlock,
@@ -156,9 +159,45 @@ impl ViewUniforms {
             irradiance: face.irradiance,
             pre_exposure: face.pre_exposure,
             screen_bounce: 0.0,
-            _pad: 0.0,
+            stand_ins: 0.0,
             daylight: face.daylight,
             tile_morph: face.tile_morph,
+        }
+    }
+}
+
+/// What a view that leaves out part of the scene shades its ground as instead,
+/// so a capture without the grass blades or the sea's surface still shows a
+/// meadow and the sea.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum StandIns {
+    /// The view draws the whole scene.
+    None,
+    /// Grassy ground is shaded as the far canopy all the way in.
+    Canopy,
+    /// As `Canopy`, and the ground under a planet's sea is shaded as the
+    /// sea's calm surface over it.
+    CanopyAndSea,
+}
+
+impl StandIns {
+    /// The lane the shaders read.
+    pub fn lane(self) -> f32 {
+        match self {
+            Self::None => 0.0,
+            Self::Canopy => 1.0,
+            Self::CanopyAndSea => 2.0,
+        }
+    }
+}
+
+impl ViewUniforms {
+    /// This block with its ground standing in for `stand_ins`.
+    #[must_use]
+    pub fn with_stand_ins(self, stand_ins: StandIns) -> Self {
+        Self {
+            stand_ins: stand_ins.lane(),
+            ..self
         }
     }
 }
@@ -300,7 +339,7 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, irradiance), 208);
         assert_eq!(offset_of!(ViewUniforms, pre_exposure), 212);
         assert_eq!(offset_of!(ViewUniforms, screen_bounce), 216);
-        assert_eq!(offset_of!(ViewUniforms, _pad), 220);
+        assert_eq!(offset_of!(ViewUniforms, stand_ins), 220);
         assert_eq!(offset_of!(ViewUniforms, daylight), 224);
         assert_eq!(offset_of!(ViewUniforms, tile_morph), 224 + 1664);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);

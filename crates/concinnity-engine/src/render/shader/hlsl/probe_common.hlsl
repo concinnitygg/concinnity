@@ -116,8 +116,9 @@ ProbeMask probe_mask_at(float2 uv, float3 world_pos)
 // hit relative to the capture point, so a static captured cube tracks a moving
 // camera. A point outside the box casts from the nearest point of the box, so
 // the sample stays continuous across the box surface, where a neighboring
-// probe blends in. Falls back to the raw ray when the probe has no baked box
-// (box_min.w <= 0.5).
+// probe blends in. Samples along the raw ray for a probe without parallax
+// (box_min.w <= 0.5), whose scene lies far past its box. Never reads finer
+// than the probe's finest mip (probe_pos.w), the one its capture starts at.
 float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, float3 R, float lod)
 {
     float3 sample_dir = R;
@@ -131,7 +132,7 @@ float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, floa
         float dist = max(min(min(t_far.x, t_far.y), t_far.z), 0.0);
         sample_dir = p + R * dist - probe.probe_pos.xyz;
     }
-    return probe_cube_sample(i, sample_dir, lod);
+    return probe_cube_sample(i, sample_dir, max(lod, probe.probe_pos.w));
 }
 
 // Blend weight of probe `i` at `world_pos`: 1 deep inside its influence box, 0.5
@@ -176,15 +177,37 @@ bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float level,
     return wsum > 0.0;
 }
 
+// The share of the blend `probe_mask_blend` takes at `world_pos` from probes
+// captured around a prop they leave out (blend_margin.w); 0 where no probe's
+// influence reaches.
+float probe_mask_subject_share(ProbeMask probes, float3 world_pos)
+{
+    float own = 0.0;
+    float wsum = 0.0;
+    for (uint w = 0u; w * 32u < PROBE_SET.count; w++)
+    {
+        uint bits = probe_live_bits(probe_mask_word(probes, 0u, w), w);
+        while (bits != 0u)
+        {
+            uint i = w * 32u + firstbitlow(bits);
+            bits &= bits - 1u;
+            float wt = probe_weight(i, world_pos);
+            own += wt * PROBE_RECORDS[i].blend_margin.w;
+            wsum += wt;
+        }
+    }
+    return wsum > 0.0 ? own / wsum : 0.0;
+}
+
 // How much of the reflection at `world_pos` belongs to the environment rather
 // than to `probe`, the nearest capture of a point no probe's influence reaches:
 // 0 out to the box grown by its blend margin, where that influence ends, rising
 // to 1 one largest half-extent of the box further out. A capture stands in for
-// the scenery about as far past its box as the box is wide. A probe without a
-// baked box or without the sky fallback keeps the reflection whole.
+// the scenery about as far past its box as the box is wide. A probe without
+// the sky fallback keeps the reflection whole.
 float probe_sky_share(ProbeUniforms probe, float3 world_pos)
 {
-    if (probe.box_min.w <= 0.5 || probe.box_max.w <= 0.5)
+    if (probe.box_max.w <= 0.5)
     {
         return 0.0;
     }

@@ -295,14 +295,7 @@ impl GraphicsSystem {
     ) -> Option<SceneDraws> {
         // A geometry-less world (e.g. text-only) is valid: the backend is
         // initialized with empty geometry buffers and only the text path runs.
-        let draw_list::DrawListData {
-            vertices: mut all_vertices,
-            indices: mut all_indices,
-            mut draw_objects,
-            mut instanced_clusters,
-            mesh_handle_to_draws,
-            ..
-        } = assemble_prop_draws(
+        let data = assemble_prop_draws(
             ctx,
             PropDrawInputs {
                 model_map: &world.model_map,
@@ -314,6 +307,17 @@ impl GraphicsSystem {
             },
             self.extractor.pick_candidates_mut(),
         )?;
+        self.extractor.set_prop_probe(
+            concinnity_engine::render::probe::prop::PropProbeTarget::resolve(ctx, &data),
+        );
+        let draw_list::DrawListData {
+            vertices: mut all_vertices,
+            indices: mut all_indices,
+            mut draw_objects,
+            mut instanced_clusters,
+            mesh_handle_to_draws,
+            ..
+        } = data;
 
         // Taken before streaming plans its geometry, so a Shader's far band is
         // seen whichever scene its draws stream with.
@@ -570,7 +574,7 @@ impl GraphicsSystem {
 
         // The backend bakes a cube per placement.
         if let Some(backend) = self.backend.as_deref_mut() {
-            backend.set_reflection_probes(&probe_placements);
+            backend.set_reflection_probes(&probe_placements, self.extractor.prop_probe().is_some());
         }
 
         let (hot_reload_sources, texture_name_slots) = if capture_sources {
