@@ -45,15 +45,15 @@
 
 {TEXTURE_SIZE}
 
-// Layout matches `SsgiParams` in render_types.rs (48 B, the tail padded on the
-// Rust side).
+// Layout matches `SsgiParams` in render_types.rs (48 B).
 struct SsgiParams
 {
     float intensity;
     float max_distance;
     float tan_half_fov_y;
     float aspect;
-    float thickness;
+    // How far behind a surface, per meter of its view depth, a ray still hits it.
+    float thickness_per_depth;
     // 1 once the previous frame's accumulation holds something to reproject.
     float history_valid;
     uint rays;
@@ -67,6 +67,8 @@ struct SsgiParams
     // pre-exposure; the trace and its accumulation stay in the pre-exposed
     // scale of the scene they gather.
     float history_scale;
+    // The least distance behind a surface a ray still hits it.
+    float min_thickness;
 };
 
 [[vk::push_constant]] ConstantBuffer<SsgiParams> params : register(b0);
@@ -352,6 +354,12 @@ static const float SSGI_NEAR = 0.05;
 // ray does not immediately self-intersect the surface it starts on.
 static const float SSGI_NORMAL_BIAS = 0.25;
 
+// How far behind a surface at view depth `depth` a ray still hits it.
+float ssgi_thickness(float depth)
+{
+    return max(depth * params.thickness_per_depth, params.min_thickness);
+}
+
 // Rebuild a view-space position from a UV and its linear (view-space) depth.
 // Matches ssr_view_pos / ssao_view_pos.
 float3 ssgi_view_pos(float2 uv, float depth)
@@ -397,8 +405,9 @@ float ssgi_cell_exit(float2 start, float2 dir, float2 cell, float size)
 // its inverse depth interpolated linearly, which is what perspective does to
 // view depth along a screen-space line. A cell the ray's whole span inside it
 // passes in front of every surface in, or behind every surface in by more than
-// `thickness`, is skipped, and the walk climbs a level; one it may touch is
-// descended into, down to the finest level the ray's distance allows.
+// their thickness (`ssgi_thickness` of their depth), is skipped, and the walk
+// climbs a level; one it may touch is descended into, down to the finest level
+// the ray's distance allows.
 //
 // Near its origin a ray descends to level 0, where the pyramid's depth range
 // only says the texel may be touched: the hit is judged against the G-buffer
@@ -407,10 +416,10 @@ float ssgi_cell_exit(float2 start, float2 dir, float2 cell, float size)
 // origin. A surface within `thickness` in front of the ray is a hit; one
 // farther in front is passed behind. Farther out the finest level coarsens with
 // distance, like a cone widening, and a cell is the hit where the ray reaches
-// within `thickness` behind its closest surface or back to its farthest one:
-// diffuse bounce needs no finer answer, and a ray skimming a surface would
-// otherwise spend a step per texel. Between the two the ray passes behind the
-// cell's near surfaces and in front of its far ones.
+// within `thickness` behind its closest surface: diffuse bounce needs no finer
+// answer, and a ray skimming a surface would otherwise spend a step per texel.
+// A ray farther behind passes the cell, so it does not take the light of an
+// object it passes behind.
 bool ssgi_trace(float3 origin, float3 dir, float2 low, float2 full, out float2 hit_uv)
 {
     hit_uv = (float2)(0.0);
@@ -457,7 +466,7 @@ bool ssgi_trace(float3 origin, float3 dir, float2 low, float2 full, out float2 h
         float depth_in = 1.0 / lerp(w0, w1, t);
         float depth_out = 1.0 / lerp(w0, w1, t_exit);
         if (max(depth_in, depth_out) < range.x
-            || min(depth_in, depth_out) > range.y + params.thickness)
+            || min(depth_in, depth_out) > range.y + ssgi_thickness(range.y))
         {
             t = t_exit + eps;
             level = min(level + 1u, top);
@@ -468,8 +477,7 @@ bool ssgi_trace(float3 origin, float3 dir, float2 low, float2 full, out float2 h
         }
         else if (level > 0u)
         {
-            if (min(depth_in, depth_out) <= range.x + params.thickness
-                || max(depth_in, depth_out) >= range.y)
+            if (min(depth_in, depth_out) <= range.x + ssgi_thickness(range.x))
             {
                 hit_uv = pos / low;
                 return true;
@@ -482,7 +490,7 @@ bool ssgi_trace(float3 origin, float3 dir, float2 low, float2 full, out float2 h
             int2 under = min(int2(pos * to_full), full_i - 1);
             float actual = gbuffer.Load(int3(under, 0)).a;
             if (actual > 0.0 && max(depth_in, depth_out) >= actual
-                && min(depth_in, depth_out) <= actual + params.thickness)
+                && min(depth_in, depth_out) <= actual + ssgi_thickness(actual))
             {
                 hit_uv = pos / low;
                 return true;
@@ -516,7 +524,7 @@ float4 ssgi_trace_fragment(
     float3 up = abs(n.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
     float3 t = normalize(cross(up, n));
     float3 b = cross(n, t);
-    float3 origin = pos + n * (params.thickness * SSGI_NORMAL_BIAS);
+    float3 origin = pos + n * (ssgi_thickness(c.a) * SSGI_NORMAL_BIAS);
 
     // The sequence advances through time and a per-pixel rotation decorrelates
     // neighbors. The rotation moves every frame too: held still, what the

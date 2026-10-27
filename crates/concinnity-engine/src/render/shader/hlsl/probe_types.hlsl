@@ -34,4 +34,6 @@ struct ProbeSet
     uint mip_count;
     // The object records [x, y) of the prop a live prop probe rides on.
     uint2 subject;
+    // The plane that prop rests on: up (xyz) and offset (w), dot(up, p) == w.
+    float4 ground;
 };

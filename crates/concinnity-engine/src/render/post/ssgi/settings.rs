@@ -35,11 +35,12 @@ const MIN_RAYS: u32 = 1;
 /// Most hemisphere rays a pixel may trace per frame.
 pub const MAX_RAYS: u32 = 4;
 
-// View-space intersection tolerance as a fraction of the ray's reach. A ray is
-// a hit where it passes behind the scene surface by less than this: wide enough
-// that a ray skimming a surface lands on it, tight enough not to catch thin
-// geometry the ray passes behind.
-const THICKNESS_FRACTION: f32 = 1.0 / 6.0;
+// How far behind a surface a ray still hits it, per meter of the surface's
+// view depth, and never less than the floor: wide enough that a ray skimming a
+// surface lands on it, tight enough that a ray passing behind an object does
+// not take that object's light.
+const THICKNESS_PER_DEPTH: f32 = 0.02;
+const MIN_THICKNESS: f32 = 0.05;
 
 /// Clamped SSGI tunables resolved from the authored asset fields. Held by the
 /// backend and turned into a per-frame [`SsgiParams`] once the camera is known.
@@ -134,14 +135,14 @@ impl SsgiSettings {
             max_distance: self.max_distance,
             tan_half_fov_y,
             aspect,
-            thickness: self.max_distance * THICKNESS_FRACTION,
+            thickness_per_depth: THICKNESS_PER_DEPTH,
             history_valid: if frame.history_valid { 1.0 } else { 0.0 },
             rays: self.rays,
             frame: frame.frame,
             levels: frame.levels,
             gi_scale: self.gi_scale,
             history_scale,
-            _pad: 0,
+            min_thickness: MIN_THICKNESS,
         }
     }
 }
@@ -276,7 +277,6 @@ mod tests {
         // A 90-degree vertical FOV has tan(45 deg) == 1.
         assert!((p.tan_half_fov_y - 1.0).abs() < 1.0e-5);
         assert_eq!(p.aspect, 1.6);
-        assert!((p.thickness - 2.0).abs() < 1.0e-5);
         assert_eq!(p.rays, 2);
         assert_eq!(p.gi_scale, 2);
         assert_eq!((p.frame, p.levels, p.history_valid), (7, 5, 1.0));
@@ -289,11 +289,16 @@ mod tests {
         assert_eq!(s.params(1.0, 1.0, fresh, 1.0).history_valid, 0.0);
     }
 
+    // The thickness follows the depth of the surface a ray meets, not how far
+    // the ray reaches: a long reach must not let a ray take the light of an
+    // object it passes behind.
     #[test]
-    fn the_thickness_scales_with_the_reach() {
+    fn the_thickness_does_not_follow_the_reach() {
         let near = SsgiSettings::resolve(0.6, 6.0, 1, 2).params(1.0, 1.0, FRAME, 1.0);
-        let far = SsgiSettings::resolve(0.6, 12.0, 1, 2).params(1.0, 1.0, FRAME, 1.0);
-        assert!((far.thickness - 2.0 * near.thickness).abs() < 1.0e-5);
+        let far = SsgiSettings::resolve(0.6, 60.0, 1, 2).params(1.0, 1.0, FRAME, 1.0);
+        assert_eq!(near.thickness_per_depth, far.thickness_per_depth);
+        assert_eq!(near.min_thickness, far.min_thickness);
+        assert!(near.thickness_per_depth > 0.0 && near.min_thickness > 0.0);
     }
 
     #[test]

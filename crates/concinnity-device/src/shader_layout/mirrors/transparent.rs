@@ -49,6 +49,7 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             count,
             mip_count,
             subject,
+            ground,
         })),
     ]
 }

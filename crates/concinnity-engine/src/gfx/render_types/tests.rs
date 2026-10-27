@@ -363,14 +363,14 @@ fn ssgi_params_layout_matches_shaders() {
     assert_eq!(offset_of!(SsgiParams, max_distance), 4);
     assert_eq!(offset_of!(SsgiParams, tan_half_fov_y), 8);
     assert_eq!(offset_of!(SsgiParams, aspect), 12);
-    assert_eq!(offset_of!(SsgiParams, thickness), 16);
+    assert_eq!(offset_of!(SsgiParams, thickness_per_depth), 16);
     assert_eq!(offset_of!(SsgiParams, history_valid), 20);
     assert_eq!(offset_of!(SsgiParams, rays), 24);
     assert_eq!(offset_of!(SsgiParams, frame), 28);
     assert_eq!(offset_of!(SsgiParams, levels), 32);
     assert_eq!(offset_of!(SsgiParams, gi_scale), 36);
     assert_eq!(offset_of!(SsgiParams, history_scale), 40);
-    assert_eq!(offset_of!(SsgiParams, _pad), 44);
+    assert_eq!(offset_of!(SsgiParams, min_thickness), 44);
 }
 
 // The RT kernel's parameter block, with every vec3 padded to a float4.

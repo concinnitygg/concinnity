@@ -111,18 +111,42 @@ ProbeMask probe_mask_at(float2 uv, float3 world_pos)
 
 #endif
 
+// The direction from a prop probe's capture point `eye` toward where ray `R`
+// from `world_pos` meets the plane the prop rests on (PROBE_SET.ground), so the
+// ground and shadows under the prop land where a traced ray finds them. A ray
+// that does not fall toward the plane keeps `R`, and a falling one turns to `R`
+// as its hit recedes toward the horizon, where the capture holds no ground.
+float3 prop_ground_dir(float3 eye, float3 world_pos, float3 R)
+{
+    float3 up = PROBE_SET.ground.xyz;
+    float fall = -dot(R, up);
+    if (fall <= 0.0)
+    {
+        return R;
+    }
+    float height = max(dot(world_pos, up) - PROBE_SET.ground.w, 1e-4);
+    // The hit, world_pos + R * height / fall, less eye, scaled by fall.
+    return R * height + (world_pos - eye) * fall;
+}
+
 // Box-parallax sample of probe cube `i`: intersect the world-space reflection
 // ray with the probe's influence box and re-anchor the sample direction at that
 // hit relative to the capture point, so a static captured cube tracks a moving
 // camera. A point outside the box casts from the nearest point of the box, so
 // the sample stays continuous across the box surface, where a neighboring
-// probe blends in. Samples along the raw ray for a probe without parallax
-// (box_min.w <= 0.5), whose scene lies far past its box. Never reads finer
-// than the probe's finest mip (probe_pos.w), the one its capture starts at.
+// probe blends in. A probe without parallax (box_min.w <= 0.5) samples along
+// the raw ray, its scene lying far past its box, except that a prop probe
+// (blend_margin.w) re-aims a ray at the ground its prop rests on. Never reads
+// finer than the probe's finest mip (probe_pos.w), the one its capture starts
+// at.
 float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, float3 R, float lod)
 {
     float3 sample_dir = R;
-    if (probe.box_min.w > 0.5)
+    if (probe.blend_margin.w > 0.5)
+    {
+        sample_dir = prop_ground_dir(probe.probe_pos.xyz, world_pos, R);
+    }
+    else if (probe.box_min.w > 0.5)
     {
         float3 p = clamp(world_pos, probe.box_min.xyz, probe.box_max.xyz);
         float3 inv_r = 1.0 / R;

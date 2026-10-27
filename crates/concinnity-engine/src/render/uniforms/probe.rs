@@ -12,7 +12,8 @@ use concinnity_core::math::SaturatingFrom;
 /// capture point), so a static captured cube tracks a moving first-person
 /// camera. Four float4s keep every field 16-byte aligned. `box_min.w` is the
 /// parallax flag: 0 samples the raw reflection vector, for a probe whose scene
-/// lies far past its box (one riding on a prop). `box_max.w` is the sky
+/// lies far past its box (one riding on a prop, which aims at its prop's
+/// [`ProbeSet::ground`] instead). `box_max.w` is the sky
 /// fallback flag: 0 keeps the capture at any distance past the box.
 /// `probe_pos.w` is the finest mip the probe's cube holds, which a lookup never
 /// reads finer than. `blend_margin.w` marks a probe captured around a prop it
@@ -29,7 +30,8 @@ pub struct ProbeUniforms {
     pub probe_pos: [f32; 4],
     /// xyz = distance along each axis the blend weight ramps over across the
     /// box surface, so the probe's influence reaches that far outside the box;
-    /// w = 1.0 for a probe captured around the prop of [`ProbeSet::subject`].
+    /// w = 1.0 for a probe captured around the prop of [`ProbeSet::subject`],
+    /// resting on [`ProbeSet::ground`].
     pub blend_margin: [f32; 4],
 }
 
@@ -89,6 +91,10 @@ pub struct ProbeSet {
     /// The object records `[first, end)` of the prop a live prop probe rides
     /// on; empty without one.
     pub subject: [u32; 2],
+    /// The plane that prop rests on: its up (xyz, unit) and offset (w), so
+    /// `dot(up, p) == w` on it. A lookup of the prop probe re-aims a ray
+    /// falling toward the plane at where it meets it. Zero without one.
+    pub ground: [f32; 4],
 }
 
 impl ProbeSet {
@@ -97,6 +103,7 @@ impl ProbeSet {
         count: 0,
         mip_count: 0,
         subject: [0; 2],
+        ground: [0.0; 4],
     };
 
     /// The header for `count` live records of `mip_count`-level cubes.
@@ -260,13 +267,15 @@ mod tests {
     }
 
     // `ProbeSet` in `shaders/probe_types.hlsl`: the count, the cube mip count
-    // and the prop's record range, one 16-byte constant register.
+    // and the prop's record range in one 16-byte constant register, its ground
+    // plane in the next.
     #[test]
     fn probe_set_layout_matches_the_shader() {
-        assert_eq!(size_of::<ProbeSet>(), 16);
+        assert_eq!(size_of::<ProbeSet>(), 32);
         assert_eq!(offset_of!(ProbeSet, count), 0);
         assert_eq!(offset_of!(ProbeSet, mip_count), 4);
         assert_eq!(offset_of!(ProbeSet, subject), 8);
+        assert_eq!(offset_of!(ProbeSet, ground), 16);
         let set = ProbeSet::new(12, 10);
         assert_eq!((set.count, set.mip_count), (12, 10));
     }

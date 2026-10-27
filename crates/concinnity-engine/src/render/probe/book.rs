@@ -28,6 +28,7 @@ pub struct ProbeBook {
     queue: ProbeBakeQueue,
     prop_probe: bool,
     prop_subject: [u32; 2],
+    prop_ground: [f32; 4],
     revision: u64,
 }
 
@@ -61,6 +62,7 @@ impl ProbeBook {
             queue: ProbeBakeQueue::new(0),
             prop_probe: false,
             prop_subject: [0; 2],
+            prop_ground: [0.0; 4],
             revision: 0,
         }
     }
@@ -93,6 +95,7 @@ impl ProbeBook {
             return;
         }
         self.prop_subject = frame.map_or([0; 2], |f| f.records);
+        self.prop_ground = frame.map_or([0.0; 4], |f| f.ground);
         let record = frame.map(PropProbeFrame::record);
         let current = self.records.get(cube).copied();
         match (current, record) {
@@ -174,14 +177,19 @@ impl ProbeBook {
     }
 
     /// The header the shaders read the live count and the cubes' mip count
-    /// from.
+    /// from, with the prop probe's prop and ground while its record is live.
     pub fn header(&self) -> ProbeSet {
+        let set = ProbeSet::new(self.count(), PrefilterPlan::RUNTIME.mips());
         let live = self
             .prop_cube()
             .is_some_and(|cube| self.records.len() > cube);
+        if !live {
+            return set;
+        }
         ProbeSet {
-            subject: if live { self.prop_subject } else { [0; 2] },
-            ..ProbeSet::new(self.count(), PrefilterPlan::RUNTIME.mips())
+            subject: self.prop_subject,
+            ground: self.prop_ground,
+            ..set
         }
     }
 }
@@ -315,6 +323,7 @@ mod tests {
         PropProbeFrame {
             bounds_min: [x - 1.0, -1.0, -1.0],
             bounds_max: [x + 1.0, 1.0, 1.0],
+            ground: [0.0, 1.0, 0.0, -1.0],
             records: [4, 6],
             resolution: 128,
             capture_distance: None,
@@ -343,19 +352,22 @@ mod tests {
         assert_eq!(book.records()[1].probe_pos[0], 1.0);
     }
 
-    // The header names the prop's records only while its record is live, so
-    // a world without one reads an empty range.
+    // The header names the prop's records and ground only while its record
+    // is live, so a world without one reads an empty range and no plane.
     #[test]
     fn the_header_names_the_prop_only_while_its_record_is_live() {
         let mut book = ProbeBook::new();
         book.reset(alloc::vec![placement(0.0)], true);
         book.set_prop_probe(Some(&prop_frame(5.0)));
         assert_eq!(book.header().subject, [0, 0], "the placement bakes first");
+        assert_eq!(book.header().ground, [0.0; 4]);
         bake_all(&mut book);
         book.set_prop_probe(Some(&prop_frame(5.0)));
         assert_eq!(book.header().subject, [4, 6]);
+        assert_eq!(book.header().ground, [0.0, 1.0, 0.0, -1.0]);
         book.set_prop_probe(None);
         assert_eq!(book.header().subject, [0, 0]);
+        assert_eq!(book.header().ground, [0.0; 4]);
         assert_eq!(placed(1).header().subject, [0, 0]);
     }
 

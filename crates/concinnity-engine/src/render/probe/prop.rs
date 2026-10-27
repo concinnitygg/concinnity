@@ -6,10 +6,12 @@
 use crate::components::{GlobalTransform, PropReflectionProbe, RenderHandle};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::frustum::transform_aabb;
+use crate::planet::PlanetFrame;
 use crate::render::draw_list::DrawListData;
 use crate::render::probe::capture::PrefilterPlan;
 use crate::render::probe::prop_reflection_probe::MAX_PROP_PROBE_RESOLUTION;
 use crate::render::uniforms::{ProbeUniforms, StandIns};
+use concinnity_core::math::vec3;
 
 /// Fraction of the prop's smallest half-extent its probe's influence fades
 /// over past its bounds, as a declared probe's does by default.
@@ -18,6 +20,9 @@ const PROP_BLEND_FRACTION: f32 = 0.2;
 /// Floor of the prop probe's blend margin and half-extents, so a flat prop
 /// still has a box to fade across.
 const MIN_PROP_EXTENT: f32 = 1e-2;
+
+/// Up where a world has no planet.
+const WORLD_UP: [f32; 3] = [0.0, 1.0, 0.0];
 
 /// The world's prop probe as the frame extraction tracks it: the prop's
 /// entity, its bounds in its own space, the cull records its draws occupy,
@@ -70,19 +75,51 @@ impl PropProbeTarget {
     }
 
     /// Where the probe is this frame: the prop's bounds carried by its
-    /// current world transform. `None` once the prop has no transform.
+    /// current world transform, and the plane it rests on along the planet's
+    /// up there (world up without a planet). `None` once the prop has no
+    /// transform.
     pub fn frame(&self, ctx: &PipelineContext<'_>) -> Option<PropProbeFrame> {
         let model = ctx.get::<GlobalTransform>(self.entity)?.0;
         let (bounds_min, bounds_max) = transform_aabb(self.local_min, self.local_max, model);
+        let center = local_center(self.local_min, self.local_max, model);
+        let up = ctx
+            .resource::<PlanetFrame>()
+            .map_or(WORLD_UP, |planet| planet.up_at(center));
         Some(PropProbeFrame {
             bounds_min,
             bounds_max,
+            ground: ground_plane(self.local_min, self.local_max, model, up),
             records: self.records,
             resolution: self.resolution,
             capture_distance: self.capture_distance,
             sea: false,
         })
     }
+}
+
+// The center of the local bounds `[local_min, local_max]` under `model`.
+fn local_center(local_min: [f32; 3], local_max: [f32; 3], model: [[f32; 4]; 4]) -> [f32; 3] {
+    let c: [f32; 3] = core::array::from_fn(|i| 0.5 * (local_min[i] + local_max[i]));
+    core::array::from_fn(|r| {
+        model[0][r] * c[0] + model[1][r] * c[1] + model[2][r] * c[2] + model[3][r]
+    })
+}
+
+// The plane a prop with local bounds `[local_min, local_max]` under `model`
+// rests on along `up` (unit): `up` and its offset, `dot(up, p) == w` on the
+// plane. It passes through the bottom of the ellipsoid the bounds enclose,
+// which stays put as a round prop turns where its box's corners would swing.
+fn ground_plane(
+    local_min: [f32; 3],
+    local_max: [f32; 3],
+    model: [[f32; 4]; 4],
+    up: [f32; 3],
+) -> [f32; 4] {
+    let reach = vec3::length(core::array::from_fn(|i| {
+        0.5 * (local_max[i] - local_min[i]) * vec3::dot([model[i][0], model[i][1], model[i][2]], up)
+    }));
+    let offset = vec3::dot(up, local_center(local_min, local_max, model)) - reach;
+    [up[0], up[1], up[2], offset]
 }
 
 // The record range `[first, end)` that holds exactly `draws`, or an empty
@@ -114,6 +151,9 @@ pub struct PropProbeFrame {
     pub bounds_min: [f32; 3],
     /// Upper corner of the prop's world bounds this frame.
     pub bounds_max: [f32; 3],
+    /// The plane the prop rests on: its up (xyz, unit) and offset (w), so
+    /// `dot(up, p) == w` on it.
+    pub ground: [f32; 4],
     /// The cull records `[first, end)` the prop draws through, which its own
     /// capture leaves out.
     pub records: [u32; 2],
@@ -157,9 +197,10 @@ impl PropProbeFrame {
     }
 
     /// The record the shaders read this probe by: an influence box on the
-    /// prop's bounds, no parallax (the scene it captures lies far beyond any
-    /// box around a prop), a fade to the sky past it, its finest mip, and the
-    /// mark of a capture that leaves its prop out.
+    /// prop's bounds, no box parallax (the scene it captures lies far beyond
+    /// any box around a prop), a fade to the sky past it, its finest mip, and
+    /// the mark of a capture that leaves its prop out, whose lookups aim at
+    /// the header's [`ground`](crate::render::uniforms::ProbeSet::ground).
     pub fn record(&self) -> ProbeUniforms {
         let eye = self.eye();
         let half: [f32; 3] = core::array::from_fn(|i| {
@@ -197,6 +238,7 @@ mod tests {
         PropProbeFrame {
             bounds_min: [1.0, 2.0, 3.0],
             bounds_max: [3.0, 4.0, 7.0],
+            ground: [0.0, 1.0, 0.0, 2.0],
             records: [4, 6],
             resolution,
             capture_distance: None,
@@ -245,6 +287,73 @@ mod tests {
         let r = flat.record();
         assert!(r.box_max[1] > r.box_min[1]);
         assert!(r.blend_margin[0] > 0.0);
+    }
+
+    // A column-major model turning `angle` radians about z, scaled by
+    // `scale`, then moved to `at`.
+    fn model(angle: f32, scale: f32, at: [f32; 3]) -> [[f32; 4]; 4] {
+        let (s, c) = angle.sin_cos();
+        [
+            [c * scale, s * scale, 0.0, 0.0],
+            [-s * scale, c * scale, 0.0, 0.0],
+            [0.0, 0.0, scale, 0.0],
+            [at[0], at[1], at[2], 1.0],
+        ]
+    }
+
+    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    #[test]
+    fn a_ball_rests_one_radius_below_its_center_however_it_turns() {
+        let (lo, hi) = ([-0.6; 3], [0.6; 3]);
+        let up = [0.0, 1.0, 0.0];
+        for angle in [0.0, 0.3, core::f32::consts::FRAC_PI_4, 2.0] {
+            let plane = ground_plane(lo, hi, model(angle, 1.0, [6.0, 7.3, 0.6]), up);
+            assert!(close(plane, [0.0, 1.0, 0.0, 6.7]), "{angle}: {plane:?}");
+        }
+        let scaled = ground_plane(lo, hi, model(0.0, 2.0, [0.0; 3]), up);
+        assert!(close(scaled, [0.0, 1.0, 0.0, -1.2]), "{scaled:?}");
+    }
+
+    #[test]
+    fn the_plane_follows_a_tilted_up() {
+        let up = vec3::normalize([1.0, 1.0, 0.0]);
+        let at = [10.0, 10.0, 0.0];
+        let ball = ground_plane([-0.5; 3], [0.5; 3], model(0.0, 1.0, at), up);
+        assert!(
+            close(ball, [up[0], up[1], up[2], vec3::dot(up, at) - 0.5]),
+            "{ball:?}"
+        );
+
+        // A slab half as tall as it is wide rests on its broad face when that
+        // faces the tilted up.
+        let slab = ground_plane(
+            [-1.0, -0.25, -1.0],
+            [1.0, 0.25, 1.0],
+            model(-core::f32::consts::FRAC_PI_4, 1.0, at),
+            up,
+        );
+        assert!(
+            close(slab, [up[0], up[1], up[2], vec3::dot(up, at) - 0.25]),
+            "{slab:?}"
+        );
+    }
+
+    #[test]
+    fn a_prop_off_its_bounds_center_rests_under_that_center() {
+        let plane = ground_plane(
+            [0.0; 3],
+            [2.0, 1.0, 2.0],
+            model(0.0, 1.0, [0.0, 5.0, 0.0]),
+            [0.0, 1.0, 0.0],
+        );
+        assert!(close(plane, [0.0, 1.0, 0.0, 5.0]), "{plane:?}");
+        assert_eq!(
+            local_center([0.0; 3], [2.0, 1.0, 2.0], model(0.0, 1.0, [0.0, 5.0, 0.0])),
+            [1.0, 5.5, 1.0]
+        );
     }
 
     #[test]

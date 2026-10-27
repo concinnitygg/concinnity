@@ -259,8 +259,9 @@ pub struct SsgiParams {
     pub tan_half_fov_y: f32,
     /// Viewport aspect ratio (width / height).
     pub aspect: f32,
-    /// View-space depth tolerance for accepting a ray/scene-depth intersection.
-    pub thickness: f32,
+    /// How far behind a surface, per meter of its view depth, a ray still
+    /// hits it.
+    pub thickness_per_depth: f32,
     /// 1.0 when the previous frame's accumulation can be reprojected, else 0.0.
     pub history_valid: f32,
     /// Hemisphere rays traced per trace pixel this frame.
@@ -274,8 +275,8 @@ pub struct SsgiParams {
     /// What last frame's accumulation is multiplied by to read at this
     /// frame's pre-exposure ([`crate::gfx::auto_exposure::PreExposure::history_scale`]).
     pub history_scale: f32,
-    /// Tail padding to a 16-byte multiple.
-    pub _pad: u32,
+    /// The least distance behind a surface a ray still hits it, in meters.
+    pub min_thickness: f32,
 }
 
 /// Per-frame uniform for the hardware ray-traced reflection pass. Like
