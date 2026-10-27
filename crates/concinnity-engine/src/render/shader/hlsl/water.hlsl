@@ -1981,9 +1981,12 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     float2 vp_dim = max(view.viewport, (float2)(1.0));
     s.frag_uv = i.position.xy / vp_dim;
 
-    // Refraction: perturb the screen lookup by the wave normal's XZ so the
-    // seabed bends under the waves.
-    float2 refract_uv = clamp(s.frag_uv + s.normal.xz * params.refraction_strength,
+    // Refraction: perturb the screen lookup by the waves' slope, the normal's
+    // tilt off the surface's up, so the seabed bends under the waves. A planet
+    // sea's own curvature tilts its up, which must not shift the lookup.
+    float3 up = WATER_UP(i);
+    float3 tilt = s.normal - up * dot(s.normal, up);
+    float2 refract_uv = clamp(s.frag_uv + tilt.xz * params.refraction_strength,
                               (float2)(0.001), (float2)(0.999));
     float3 refracted = scene_sample(refract_uv).rgb;
 
