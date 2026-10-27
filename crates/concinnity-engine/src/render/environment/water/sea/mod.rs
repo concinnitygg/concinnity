@@ -14,6 +14,8 @@ use crate::planet::LocalFrame;
 use crate::water::WaterBody;
 use crate::water::sea::SeaFace;
 use crate::water::sea::shore::{LatticePlace, SHORE_OCTAVES, SHORE_TRAINS, SURF_LACE_PERIOD};
+use core::f64::consts::FRAC_PI_2;
+
 use concinnity_core::math::{dvec3, narrow_f32};
 
 /// The faces a sea's shader reads: the three around the corner of the cube
@@ -61,10 +63,12 @@ pub struct SeaMotion {
     /// run, in the simulated frame: those its face's `u` and `v` grow along.
     pub tangents: [[f32; 3]; 2],
     /// Meters along the sea per meter of the grid: one over the face's
-    /// stretch at the anchor, so the grid's vertices sit on the face's lattice.
+    /// stretch at the anchor, so the grid's vertices sit on the face's lattice,
+    /// spread wider when the camera is too high for the grid to reach its
+    /// horizon.
     pub grid_scale: f32,
-    /// How far from the anchor along the tangent plane the grid is drawn, in
-    /// meters: past the horizon by the sea's crests, no farther.
+    /// How far from the anchor along the sea the grid is drawn, in meters:
+    /// past the horizon by the sea's crests, no farther.
     pub reach: f32,
     /// The faces around the corner nearest the anchor, one per axis.
     pub faces: [SeaFaceMotion; SEA_FACES],
@@ -123,28 +127,31 @@ impl WaterBody {
             lattice: shore.lattice_at(a),
         });
 
+        // The arc from the anchor to the farthest sea in view: the camera's
+        // horizon and the crests standing up beyond it.
         let crest = f64::from(self.reach()[0]);
         let horizon = |h: f64| {
             if h > 0.0 {
-                libm::sqrt(h * (2.0 * r + h))
+                libm::acos(r / (r + h))
             } else {
                 0.0
             }
         };
-        let seen = horizon(height) + horizon(crest);
         let margin = 4.0 * f64::from(sea.grid.inner_cell);
         let drawn = f64::from(sea.grid.reach()) * f64::from(grid_scale);
         let reach = if height > 0.0 {
-            (1.02 * seen + margin).min(drawn)
+            (1.02 * r * (horizon(height) + horizon(crest)) + margin).min(FRAC_PI_2 * r)
         } else {
             drawn
         };
+        // A camera too high for the grid to reach its horizon spreads it wider.
+        let spread = (reach / drawn).max(1.0);
         Some(SeaMotion {
             anchor,
             up: frame.dir_to_local(a),
             tangents: [frame.dir_to_local(tu), frame.dir_to_local(tv)],
-            grid_scale,
-            reach: narrow_f32(reach.min(0.95 * r)),
+            grid_scale: narrow_f32(f64::from(grid_scale) * spread),
+            reach: narrow_f32(reach),
             faces,
             shore,
         })
@@ -220,6 +227,29 @@ mod tests {
             .sea_motion_at(0.0, &frame, [0.1 + 1.0 * cell, 30.0, 0.1])
             .unwrap();
         assert_ne!(a.anchor, c.anchor);
+    }
+
+    // From orbit the grid spreads past its own reach to the horizon, which
+    // lies most of a quarter turn round the sea.
+    #[test]
+    fn a_camera_in_orbit_spreads_the_grid_to_its_horizon() {
+        let body = sea_body();
+        let sea = body.sea.as_ref().unwrap();
+        let r = sea.sphere.radius;
+        let frame = LocalFrame::AUTHORED;
+        let low = body.sea_motion_at(0.0, &frame, [0.0, 40.0, 0.0]).unwrap();
+        let high = body
+            .sea_motion_at(0.0, &frame, [0.0, narrow_f32(3.0 * r), 0.0])
+            .unwrap();
+        let horizon = libm::acos(r / (4.0 * r - 12.0)) * r;
+        assert!(f64::from(high.reach) > horizon, "{} m", high.reach);
+        assert!(f64::from(high.reach) <= FRAC_PI_2 * r);
+        assert!(high.reach <= sea.grid.reach() * high.grid_scale * 1.0001);
+        assert!(
+            high.grid_scale > 1.5 * low.grid_scale,
+            "{}",
+            high.grid_scale
+        );
     }
 
     // A flat body has no sea motion.

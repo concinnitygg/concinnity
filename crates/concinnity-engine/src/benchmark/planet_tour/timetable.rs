@@ -34,7 +34,7 @@ const ROLL_SPEED: f64 = 15.0;
 const PADDLE_SPEED: f64 = 2.0;
 /// The pace the subject is towed up to through the water before it lifts off,
 /// in meters per second.
-pub(super) const WAKE_SPEED: f64 = 8.0;
+pub(super) const WAKE_SPEED: f64 = 12.0;
 
 const fn phase(
     name: &'static str,
@@ -67,7 +67,7 @@ const ROLL: [Phase; 4] = [
     phase("settle", 3.0, ROLL_HEIGHT, 0.0, 0.0),
     phase("roll", 27.0, ROLL_HEIGHT, ROLL_SPEED, 3.0),
     phase("float", 4.0, FLOAT_HEIGHT, PADDLE_SPEED, 1.0),
-    phase("wake", 8.0, FLOAT_HEIGHT, WAKE_SPEED, 2.0),
+    phase("wake", 10.0, FLOAT_HEIGHT, WAKE_SPEED, 2.0),
 ];
 
 // Out over the sea, a climb toward the sun that speeds up out of the air, a

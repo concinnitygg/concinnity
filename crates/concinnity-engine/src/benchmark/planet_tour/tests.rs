@@ -1,10 +1,10 @@
 use super::*;
 use crate::test_support::from_json;
 use alloc::string::String;
-use concinnity_core::math::vec3;
+use concinnity_core::math::{dvec3, vec3};
 
-// A 50 km planet with hills and a shore a couple of hundred meters east of
-// the start, a sea, and a sun the sky turns.
+// A 50 km planet with hills, a shore a couple of hundred meters east of the
+// start, and a sea.
 fn world(sea: bool) -> World {
     let mut world = World::new();
     let mut planet = from_json::<Planet>(
@@ -12,13 +12,6 @@ fn world(sea: bool) -> World {
     );
     planet.sea = sea.then(crate::components::PlanetSea::default);
     world.push(planet);
-    world.push(from_json::<SkyRotation>(
-        r#"{"axis":[0.0,0.0,-1.0],"degrees_per_second":1.5}"#,
-    ));
-    world.push(DirectionalLight {
-        direction: [1.0, 0.0, 0.35],
-        ..Default::default()
-    });
     world
 }
 
@@ -28,7 +21,7 @@ fn height(p: [f32; 3]) -> f32 {
 
 #[test]
 fn a_world_without_a_planet_has_no_tour() {
-    assert!(plan(&World::new(), PlanetTour::default(), 2.0, false).is_none());
+    assert!(plan(&World::new(), PlanetTour::default(), false).is_none());
 }
 
 // The tour starts `start_back` behind where the world starts along its
@@ -37,7 +30,7 @@ fn a_world_without_a_planet_has_no_tour() {
 #[test]
 fn the_tour_sets_out_behind_the_start_along_its_heading() {
     let tour = PlanetTour::default();
-    let plan = plan(&world(true), tour, 2.0, false).expect("a planet");
+    let plan = plan(&world(true), tour, false).expect("a planet");
     let start = plan.start.position;
     let back = vec3::length([start[0], 0.0, start[2]]);
     assert!((back - tour.start_back).abs() < 1.0, "{start:?}");
@@ -64,7 +57,7 @@ fn the_heading_turns_the_tour() {
         heading_deg: 0.0,
         ..PlanetTour::default()
     };
-    let start = plan(&world(true), north, 2.0, false).unwrap().start;
+    let start = plan(&world(true), north, false).unwrap().start;
     // Setting out north (-Z), it starts to the south (+Z).
     assert!(
         start.position[2] > 140.0 && start.position[0].abs() < 1.0,
@@ -78,7 +71,7 @@ fn the_heading_turns_the_tour() {
 #[test]
 fn the_sea_floors_the_path() {
     let lowest = |sea: bool| {
-        let plan = plan(&world(sea), PlanetTour::default(), 2.0, false).unwrap();
+        let plan = plan(&world(sea), PlanetTour::default(), false).unwrap();
         let mut at = plan.start.position;
         let mut lowest = f32::MAX;
         for leg in plan.travel.iter().take(200) {
@@ -106,7 +99,7 @@ fn the_sea_floors_the_path() {
 #[test]
 fn a_rolling_subject_rolls_before_it_flies() {
     let tour = PlanetTour::default();
-    let rolled = plan(&world(true), tour, 2.0, true).unwrap();
+    let rolled = plan(&world(true), tour, true).unwrap();
     let names: Vec<&str> = rolled.phases.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(&names[..5], ["settle", "roll", "float", "wake", "sea"]);
     let sea: f32 = rolled.phases[..4].iter().map(|p| p.seconds).sum();
@@ -125,7 +118,7 @@ fn a_rolling_subject_rolls_before_it_flies() {
     assert_eq!(wake.seconds, wake_start);
     assert_eq!(f64::from(wake.pace), timetable::WAKE_SPEED);
     assert_eq!(wake.heading_deg, tour.heading_deg);
-    let skimmed = plan(&world(true), tour, 2.0, false).unwrap();
+    let skimmed = plan(&world(true), tour, false).unwrap();
     assert!(skimmed.drive.is_empty() && skimmed.carry_from_seconds == 0.0);
     assert_eq!(skimmed.phases[1].name, "meadow");
     // The flight after the ground stretch is the same either way.
@@ -142,7 +135,7 @@ fn a_rolling_subject_rolls_before_it_flies() {
 // and the path never sinks into the ground under it.
 #[test]
 fn a_rolling_subject_on_a_dry_planet_skips_the_float() {
-    let dry = plan(&world(false), PlanetTour::default(), 2.0, true).unwrap();
+    let dry = plan(&world(false), PlanetTour::default(), true).unwrap();
     let names: Vec<&str> = dry.phases.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(&names[..3], ["settle", "roll", "sea"]);
     let roll: f32 = dry.phases[..2].iter().map(|p| p.seconds).sum();
@@ -160,5 +153,39 @@ fn a_rolling_subject_on_a_dry_planet_skips_the_float() {
         );
         let over = f64::from(height(at)) - shape.height(up);
         assert!(over > 0.9, "{over} m over the ground");
+    }
+}
+
+// The camera looks ever further down as the subject climbs, and through the
+// orbit looks down on the planet below it.
+#[test]
+fn the_camera_looks_down_on_the_planet_from_orbit() {
+    let plan = plan(&world(true), PlanetTour::default(), true).unwrap();
+    let start = |name: &str| -> f32 {
+        plan.phases
+            .iter()
+            .take_while(|p| p.name != name)
+            .map(|p| p.seconds)
+            .sum()
+    };
+    let pitch_at = |seconds: f32| -> f32 {
+        let mut at = 0.0;
+        let mut pitch = plan.start.pitch_deg;
+        for turn in &plan.turn {
+            if at >= seconds {
+                break;
+            }
+            at += turn.seconds;
+            pitch = turn.pitch_deg.unwrap_or(pitch);
+        }
+        pitch
+    };
+    let (climb, orbit) = (start("climb"), start("orbit"));
+    assert!(pitch_at(climb + 8.0) < pitch_at(climb + 1.0) - 15.0);
+    let mut seconds = orbit + 2.0;
+    while seconds <= orbit + 14.0 {
+        let pitch = pitch_at(seconds);
+        assert!((-89.0..-80.0).contains(&pitch), "{pitch} at {seconds} s");
+        seconds += 1.0;
     }
 }

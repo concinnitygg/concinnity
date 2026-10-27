@@ -22,8 +22,8 @@ use crate::planet::{DVec3, PlanetShape};
 use crate::render::uniforms::DaylightBlock;
 
 /// How far a sea's grid reaches from its anchor, in planet radii along the
-/// sphere's tangent plane, before the stretch of its face: enough for the
-/// horizon from about a quarter of a radius up.
+/// sea, before the stretch of its face: enough for the horizon from about a
+/// fifth of a radius up. A higher camera spreads the grid wider.
 const SEA_GRID_REACH_RADII: f32 = 0.6;
 
 // The widest a face's stereographic map stretches, at the cube's corners:

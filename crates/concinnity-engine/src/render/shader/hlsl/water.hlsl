@@ -1702,8 +1702,8 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
 WaterVertexOut water_vertex(WaterVertexIn v)
 {
     // The grid is laid out in face meters around the anchor; scaled to
-    // meters along the sea, held within the horizon, and dropped from the
-    // anchor's tangent plane straight down its up onto the sphere.
+    // meters along the sea, held within the horizon, and wrapped onto the
+    // sphere along the great circles out from the anchor.
     float2 g = v.pos.xz * params.sea.tangent_u.w;
     float d = length(g);
     float reach = params.sea.tangent_v.w;
@@ -1713,7 +1713,10 @@ WaterVertexOut water_vertex(WaterVertexIn v)
         d = reach;
     }
     float radius = params.sea.up.w;
-    float drop = d * d / (radius + sqrt(max(radius * radius - d * d, 0.0)));
+    float turn = d / radius;
+    float half_turn = sin(0.5 * turn);
+    float drop = 2.0 * radius * half_turn * half_turn;
+    g *= d > 0.0 ? radius * sin(turn) / d : 1.0;
     float3 rest = g.x * params.sea.tangent_u.xyz + g.y * params.sea.tangent_v.xyz - drop * params.sea.up.xyz;
     float rest_w = mul(view.vp, float4(rest + params.anchor.xyz, 1.0)).w;
     float footprint = water_pixel_meters(rest_w);

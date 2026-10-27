@@ -7,26 +7,17 @@ use alloc::vec::Vec;
 
 use super::timetable::{Phase, phase_start, smoothstep};
 
-/// What a [`Shot`]'s yaw and pitch are measured from.
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Aim {
-    /// The course ahead and the horizon below the subject, so a shot aimed at
-    /// the horizon stays on it from the ground to orbit.
-    Course,
-    /// The sun, so the shot keeps it in view as it moves.
-    Sun,
-}
-
 /// One framing the camera reaches at a moment of a phase.
 pub(super) struct Shot {
     /// The phase the shot is timed in.
     pub(super) phase: &'static str,
     /// Seconds from the phase's start, or before its end when negative.
     pub(super) at: f64,
-    pub(super) aim: Aim,
-    /// Where the camera looks, in degrees left of what it aims by.
+    /// Where the camera looks, in degrees left of the course ahead.
     pub(super) yaw: f64,
-    /// Where the camera looks, in degrees above what it aims by.
+    /// Where the camera looks, in degrees above the horizon below the
+    /// subject, so a shot aimed at the horizon stays on it from the ground to
+    /// orbit.
     pub(super) pitch: f64,
     /// How far behind the subject the camera sits, in meters.
     pub(super) distance: f64,
@@ -46,25 +37,10 @@ const fn shot(
     Shot {
         phase,
         at,
-        aim: Aim::Course,
         yaw,
         pitch,
         distance,
         offset,
-    }
-}
-
-const fn sun_shot(
-    phase: &'static str,
-    at: f64,
-    yaw: f64,
-    pitch: f64,
-    distance: f64,
-    offset: [f64; 2],
-) -> Shot {
-    Shot {
-        aim: Aim::Sun,
-        ..shot(phase, at, yaw, pitch, distance, offset)
     }
 }
 
@@ -101,19 +77,18 @@ const ROLL: [Shot; 13] = [
     shot("wake", -1.5, -55.0, -14.0, 6.5, [6.0, -2.0]),
 ];
 
-// Out to sea behind the subject, up past it at the sun, round to face the
-// whole planet from orbit, ahead to the terminator, down at the dark disc, low
-// through the night, back at the moon over the water, and ahead into the
-// sunrise. The camera moves from one shot to the next eased in and out, and
-// holds between.
-const FLIGHT: [Shot; 14] = [
+// Out to sea behind the subject, then looking ever further down on it as it
+// climbs, the ground and then the whole planet below it, held over the planet
+// through the orbit, ahead to the terminator on the way down, low through the
+// night, back at the moon over the water, and ahead into the sunrise. The
+// camera moves from one shot to the next eased in and out, and holds between.
+const FLIGHT: [Shot; 13] = [
     shot("sea", 1.5, 0.0, -4.0, 3.2, [0.0, -5.0]),
     shot("climb", 1.0, 0.0, -2.0, 3.6, [0.0, -6.0]),
-    sun_shot("climb", 7.0, 14.0, -16.0, 4.0, [-6.0, -8.0]),
-    sun_shot("climb", 13.0, 14.0, -16.0, 4.5, [-6.0, -8.0]),
-    shot("orbit", 2.0, -180.0, 3.0, 5.0, [-10.0, 12.0]),
-    shot("orbit", 9.0, -180.0, 3.0, 5.0, [-10.0, 12.0]),
-    shot("orbit", 14.0, 0.0, 2.0, 5.0, [8.0, 12.0]),
+    shot("climb", 7.0, 0.0, -20.0, 4.0, [0.0, -8.0]),
+    shot("climb", 13.0, 0.0, -14.0, 4.5, [6.0, -14.0]),
+    shot("orbit", 2.0, 0.0, -9.5, 4.5, [8.0, -16.0]),
+    shot("orbit", 14.0, 0.0, -9.5, 4.5, [-6.0, -16.0]),
     shot("descent", 8.0, 0.0, 2.0, 4.5, [8.0, 10.0]),
     shot("night", 2.0, 0.0, -10.0, 3.6, [0.0, -6.0]),
     shot("night", 3.0, -1.0, -9.5, 3.6, [0.0, -6.0]),

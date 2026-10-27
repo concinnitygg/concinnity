@@ -17,11 +17,9 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use crate::components::{
-    BenchmarkPhase, CameraBoom, CameraPose, CameraTravel, CameraTurn, DirectionalLight, DriveKey,
-    Planet, SkyRotation,
+    BenchmarkPhase, CameraBoom, CameraPose, CameraTravel, CameraTurn, DriveKey, Planet,
 };
 use crate::ecs::World;
-use concinnity_core::math::dvec3::{self, DVec3};
 use concinnity_core::math::narrow_f32;
 
 use course::{Path, Route};
@@ -34,7 +32,8 @@ use framing::Framing;
 /// toward the sun until it leaves the air, shows the whole planet from orbit,
 /// drops into the night and skims it, and comes down on the far side as the
 /// sun rises. The camera films the benchmark's `subject` from behind, framed
-/// by where it is on the tour and where the sun is.
+/// by where it is on the tour: looking ever further down on it as it climbs,
+/// so the planet lies below it from orbit.
 ///
 /// A subject with a [`RollingDrive`](#rollingdrive) rolls itself over the
 /// ground first: through the grass, down the beach and into the sea, where it
@@ -81,31 +80,12 @@ pub(crate) struct TourPlan {
     pub(crate) carry_from_seconds: f32,
 }
 
-/// The tour over `world`'s planet, its sea and its sun, starting after
-/// `warmup_seconds`, rolled over the ground first when `rolls`, or `None`
-/// for a world with no planet.
-pub(crate) fn plan(
-    world: &World,
-    tour: PlanetTour,
-    warmup_seconds: f32,
-    rolls: bool,
-) -> Option<TourPlan> {
+/// The tour over `world`'s planet and its sea, rolled over the ground first
+/// when `rolls`, or `None` for a world with no planet.
+pub(crate) fn plan(world: &World, tour: PlanetTour, rolls: bool) -> Option<TourPlan> {
     let planet = world.query::<Planet>().next()?;
     let shape = planet.shape();
     let sea_level = planet.sea.map(|s| f64::from(s.level));
-    let sky = world.query::<SkyRotation>().next().cloned();
-    let light = world
-        .query::<DirectionalLight>()
-        .next()
-        .map_or([0.0, 1.0, 0.0], |l| l.direction);
-    // The path starts when the warm-up ends, by which time the sky has turned.
-    let warmup = f64::from(warmup_seconds);
-    let sun = |seconds: f64| -> DVec3 {
-        let toward = sky
-            .as_ref()
-            .map_or(light, |sky| sky.turned(light, warmup + seconds));
-        dvec3::normalize_or(dvec3::from_f32(toward), [0.0, 1.0, 0.0])
-    };
     let phases = timetable::phases(rolls, sea_level.is_some());
     let framing = Framing::new(&phases, rolls);
     let route = Route {
@@ -115,7 +95,7 @@ pub(crate) fn plan(
         phases: &phases,
         framing: &framing,
     };
-    let path = Path::new(&shape, sea_level, &route, sun);
+    let path = Path::new(&shape, sea_level, &route);
     let (drive, carry_from_seconds) = if rolls {
         roll_script(&phases, tour.heading_deg)
     } else {

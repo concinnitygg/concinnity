@@ -84,7 +84,7 @@ fn resolve_route(world: &World, config: &mut BenchmarkConfig) {
         return;
     }
     let rolls = rolls(world, config);
-    let Some(plan) = planet_tour::plan(world, config.tour, config.warmup_seconds, rolls) else {
+    let Some(plan) = planet_tour::plan(world, config.tour, rolls) else {
         return;
     };
     tracing::info!(

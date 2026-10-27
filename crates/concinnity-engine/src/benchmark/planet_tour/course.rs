@@ -7,10 +7,10 @@ use crate::components::{CameraBoom, CameraTravel, CameraTurn, Ease};
 use crate::planet::PlanetShape;
 use concinnity_core::math::narrow_f32;
 
-use super::framing::{Aim, Framing, Shot};
+use super::framing::Framing;
 use super::timetable::Phase;
 use super::timetable::{self, Fix};
-use concinnity_core::math::dvec3::{DVec3, add, cross, dot, length, scale, sub};
+use concinnity_core::math::dvec3::{DVec3, add, length, scale, sub};
 
 /// How often the path is pinned to the flight: often enough that a leg over
 /// the meadow strays from the ground under it by centimeters.
@@ -44,14 +44,6 @@ impl Course {
             scale(self.forward, libm::sin(arc)),
         )
     }
-
-    /// The unit direction of travel `arc` radians along the course.
-    fn ahead(&self, arc: f64) -> DVec3 {
-        add(
-            scale(START_UP, -libm::sin(arc)),
-            scale(self.forward, libm::cos(arc)),
-        )
-    }
 }
 
 /// Where the tour goes and how it films: the course's heading clockwise from
@@ -80,14 +72,8 @@ pub(super) struct Path {
 impl Path {
     /// The path over `shape`, flooded to `sea_level` meters above its radius
     /// when it has a sea, setting out `heading_deg` clockwise from north
-    /// `start_back` meters behind where the world starts, with the sun toward
-    /// `sun` seconds into the run.
-    pub(super) fn new(
-        shape: &PlanetShape,
-        sea_level: Option<f64>,
-        route: &Route<'_>,
-        sun: impl Fn(f64) -> DVec3,
-    ) -> Self {
+    /// `start_back` meters behind where the world starts.
+    pub(super) fn new(shape: &PlanetShape, sea_level: Option<f64>, route: &Route<'_>) -> Self {
         let heading_deg = route.heading_deg;
         let course = Course::new(heading_deg);
         let arc = -route.start_back / shape.radius;
@@ -110,14 +96,9 @@ impl Path {
         let views: Vec<View> = fixes
             .iter()
             .map(|fix| {
-                let up = course.up(fix.arc);
-                let sky = Sky {
-                    up,
-                    ahead: course.ahead(fix.arc),
-                    sun: sun(fix.seconds),
-                    dip: libm::acos(surface(up) / (surface(up) + fix.height)).to_degrees(),
-                };
-                view(fix, &sky, route.framing, heading_deg)
+                let ground = surface(course.up(fix.arc));
+                let dip = libm::acos(ground / (ground + fix.height)).to_degrees();
+                view(fix, dip, route.framing, heading_deg)
             })
             .collect();
 
@@ -178,46 +159,15 @@ impl View {
     }
 }
 
-// What a fix's shots are aimed by: the marble's up and the course ahead of
-// it, the direction toward the sun, and how far below level the horizon
-// lies, in degrees.
-struct Sky {
-    up: DVec3,
-    ahead: DVec3,
-    sun: DVec3,
-    dip: f64,
-}
-
-impl Sky {
-    // `shot`'s yaw, counterclockwise from the course, and pitch, both in
-    // degrees from level.
-    fn angles(&self, shot: &Shot) -> [f64; 2] {
-        match shot.aim {
-            Aim::Course => [shot.yaw, shot.pitch - self.dip],
-            Aim::Sun => {
-                let left = cross(self.up, self.ahead);
-                let bearing = libm::atan2(dot(self.sun, left), dot(self.sun, self.ahead));
-                let elevation = libm::asin(dot(self.sun, self.up).clamp(-1.0, 1.0));
-                [
-                    bearing.to_degrees() + shot.yaw,
-                    elevation.to_degrees() + shot.pitch,
-                ]
-            }
-        }
-    }
-}
-
-// The framing at `fix` under `sky`, eased from one shot to the next. Yaw is
-// counterclockwise from the course's start heading, which along the great
-// circle stays the same angle from the course.
-fn view(fix: &Fix, sky: &Sky, framing: &Framing, heading_deg: f64) -> View {
+// The framing at `fix`, with the horizon `dip` degrees below level, eased
+// from one shot to the next. Yaw is counterclockwise from the course's start
+// heading, which along the great circle stays the same angle from the course.
+fn view(fix: &Fix, dip: f64, framing: &Framing, heading_deg: f64) -> View {
     let (from, to, k) = framing.at(fix.seconds);
     let mix = |a: f64, b: f64| a + (b - a) * k;
-    let [from_yaw, from_pitch] = sky.angles(from);
-    let [to_yaw, to_pitch] = sky.angles(to);
     View {
-        yaw: -heading_deg + mix(from_yaw, to_yaw),
-        pitch: mix(from_pitch, to_pitch),
+        yaw: -heading_deg + mix(from.yaw, to.yaw),
+        pitch: mix(from.pitch, to.pitch) - dip,
         distance: mix(from.distance, to.distance),
         offset: [
             mix(from.offset[0], to.offset[0]),
