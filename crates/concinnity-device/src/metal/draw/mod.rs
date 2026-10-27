@@ -207,7 +207,6 @@ impl FrameDevice for MtlContext {
             grass_benders,
             water_stirs,
             particle_bursts,
-            atmosphere,
             input_sampled_us,
             ..
         } = *frame_params;
@@ -250,7 +249,7 @@ impl FrameDevice for MtlContext {
             scene_color,
         } = self.scene_textures()?;
 
-        self.prepare_atmosphere(atmosphere, plan.atmosphere);
+        self.prepare_atmosphere(frame_params.atmosphere.as_ref(), plan.atmosphere);
         self.prepare_water_wake(cam_pos, water_time, water_stirs);
 
         // This frame's ribbon geometry, written into this slot's persistent

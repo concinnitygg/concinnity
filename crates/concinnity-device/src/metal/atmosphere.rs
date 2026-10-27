@@ -403,16 +403,16 @@ impl MtlContext {
     // the scene is drawn from. A frame without inputs leaves the passes out.
     pub(super) fn prepare_atmosphere(
         &mut self,
-        frame: Option<AtmosphereFrame>,
+        frame: Option<&AtmosphereFrame>,
         view: AtmosphereView,
     ) {
         if let Some(atmo) = self.atmosphere.as_mut() {
-            atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, &f, &view));
+            atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, f, &view));
             atmo.sky_cube.work = match frame {
                 Some(f) => {
                     atmo.sky_cube
                         .schedule
-                        .plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
+                        .plan(SkyCubeKey::new(&atmo.settings, f, &view.sky_rot))
                 }
                 None => SkyCubeWork::default(),
             };

@@ -12,7 +12,7 @@ use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::planet::PlanetShape;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
-use crate::render::environment::atmosphere::AtmosphereSettings;
+use crate::render::environment::atmosphere::{AtmosphereSettings, SeaLook, SurfacePalette};
 use crate::render::environment::grass::{CanopyField, GrassField, GrassTerrain, PlanetGrass};
 use crate::render::environment::ground::GroundCovers;
 use crate::render::environment::night_sky::NightSkySettings;
@@ -23,10 +23,12 @@ use crate::water::sea::shore::ShoreWaves;
 use crate::water::{WaterBody, split_water};
 use crate::wind::WindField;
 
-/// What a planet's ground is laid with: the grass its layers grow and the
-/// covers over it.
+/// What a planet's ground is laid with: the tint of its material, the grass
+/// its layers grow and the covers over it.
 #[derive(Debug, Clone, Default)]
 pub struct PlanetSurface {
+    /// The tint of the planet's material.
+    pub tint: [f32; 3],
     /// The grass, `None` when no layer grows any.
     pub grass: Option<PlanetGrass>,
     /// The covers.
@@ -71,6 +73,11 @@ pub fn drain_world_fx(
     if planet.is_some_and(|p| p.sea.is_some()) && sea.is_none() {
         tracing::warn!("the Planet's sea names no WaterSurface; it is not drawn");
     }
+    // What the sky's cubes show below the horizon around the planet.
+    let palette = surface.as_ref().map(|s| {
+        let sea = sea.as_ref().map(|w| SeaLook::of(w.level, w.surface));
+        SurfacePalette::new(s.tint, s.covers, s.grass.as_ref(), sea)
+    });
     let (water_surfaces, ocean) =
         WaterBody::resolve_all(rectangles, &wind_field, ocean_quality, sea);
     let grass: hashbrown::HashMap<AssetId, Grass> = ctx
@@ -115,7 +122,7 @@ pub fn drain_world_fx(
         Some(a) => Some(AtmosphereSettings::resolve(&a, planet)),
         None => night.map(|_| AtmosphereSettings::vacuum(planet)),
     }
-    .map(|s| s.with_night(night));
+    .map(|s| s.with_night(night).with_surface(palette));
     WorldFx {
         decals,
         particles,
@@ -322,11 +329,11 @@ mod tests {
 
     fn sandy() -> PlanetSurface {
         PlanetSurface {
-            grass: None,
             covers: GroundCovers {
                 count: 1,
                 ..GroundCovers::default()
             },
+            ..PlanetSurface::default()
         }
     }
 

@@ -2,6 +2,7 @@
 
 use super::air::AirProfile;
 use super::apparent::ApparentGround;
+use super::surface::SurfacePalette;
 use crate::components::Atmosphere;
 use crate::render::environment::night_sky::NightSkySettings;
 use concinnity_core::math::{cos, narrow_f32};
@@ -39,6 +40,9 @@ pub struct AtmosphereSettings {
     pub apparent: Option<ApparentGround>,
     /// The night sky drawn behind the air, if the world has one.
     pub night: Option<NightSkySettings>,
+    /// What the planet's ground looks like, for the ground the sky's cubes
+    /// show below the horizon; `None` keeps `ground_albedo` there.
+    pub surface: Option<SurfacePalette>,
 }
 
 impl AtmosphereSettings {
@@ -81,6 +85,7 @@ impl AtmosphereSettings {
             planet_center: planet.map(|(center, _)| center),
             apparent,
             night: None,
+            surface: None,
         }
     }
 
@@ -106,6 +111,13 @@ impl AtmosphereSettings {
     #[must_use]
     pub fn with_night(self, night: Option<NightSkySettings>) -> Self {
         Self { night, ..self }
+    }
+
+    /// These settings with the ground below the horizon looking like
+    /// `surface`.
+    #[must_use]
+    pub fn with_surface(self, surface: Option<SurfacePalette>) -> Self {
+        Self { surface, ..self }
     }
 
     /// The ground radius the sky's tables are built over for a camera

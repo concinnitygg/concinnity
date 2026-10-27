@@ -411,6 +411,15 @@ impl GraphicsSystem {
 
         let planet_surface = planet.as_ref().map(|p| {
             let surface = concinnity_engine::render::world_load::world_fx::PlanetSurface {
+                tint: p
+                    .material
+                    .and_then(|h| world.materials.map.get(&h))
+                    .map_or(
+                        concinnity_engine::render::material_entry::MaterialEntry::UNTEXTURED,
+                        |e| *e,
+                    )
+                    .uniforms
+                    .tint,
                 grass: concinnity_engine::render::world_load::world_scan::planet_grass(
                     p,
                     &concinnity_engine::render::environment::terrain::grass_by_id(ctx),

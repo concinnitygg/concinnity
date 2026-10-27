@@ -16,6 +16,9 @@
 //   ATMOSPHERE_SKY_CUBE       the sky drawn into the faces of a cube, without
 //                             the sun's disc, for the reflection prefilter
 //
+// Over a planet, the last two see the ground around the camera below the
+// horizon (`surface_seen`) instead of the sky-view table's gray albedo.
+//
 // The first two depend on the air and the tables' ground alone and run when
 // either changes, the next three every frame, and the sky cube when its
 // reflections are refreshed. AERIAL_PERSPECTIVE is the fullscreen haze pass:
@@ -46,7 +49,8 @@
 #else
 
 [[vk::binding(0, 0)]] ConstantBuffer<AtmosphereParams> atmo_cb : register(b0);
-#if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL)
+#if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) \
+    || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 [[vk::binding(1, 0)]] Texture2D<float4> transmittance_lut : register(t0);
 #endif
 #if defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL)
@@ -82,7 +86,8 @@
 {ATMOSPHERE_COMMON}
 {NIGHT_SKY}
 
-#if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL)
+#if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) \
+    || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 // Light surviving the path from radius `r` with up-cosine `mu` to the top of
 // the air; none when the path runs into the ground.
 float3 atmo_transmittance(float r, float mu)
@@ -364,6 +369,149 @@ float3 cube_texel_world_dir(uint face, uint2 xy, uint size)
 }
 #endif
 
+#if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
+// The sky's light on the ground around the camera, the same for every
+// direction a dispatch draws: one lane of each group reads it for the rest.
+groupshared float3 surface_sky_shared;
+
+// Whether the block carries the ground around the camera.
+bool surface_on()
+{
+    return ATMO.surface_land.w > 0.5;
+}
+
+// The table's band coordinate, in [0, SURFACE_BANDS - 1], of a ray
+// `depression` radians below the level: `band_depression_deg` in
+// render::atmosphere inverted.
+float surface_band_of(float depression)
+{
+    float deg = max(degrees(depression), 1e-4);
+    float t = log(deg / SURFACE_STEEPEST_DEG) / log(SURFACE_SHALLOWEST_DEG / SURFACE_STEEPEST_DEG);
+    return saturate(t) * float(SURFACE_BANDS - 1u);
+}
+
+float surface_share_at(uint band, uint azimuth)
+{
+    uint i = band * SURFACE_AZIMUTHS + azimuth % SURFACE_AZIMUTHS;
+    return ATMO.surface_share[i >> 2u][i & 3u];
+}
+
+// How much of the ground seen along `dir`, `depression` radians below the
+// level about `up`, is water: the table read between its directions and
+// bands.
+float surface_water_share(float3 dir, float3 up, float depression)
+{
+    float3 east = ATMO.surface_east.xyz;
+    float3 north = cross(up, east);
+    float turn = atan2(dot(dir, north), dot(dir, east)) / (2.0 * ATMO_PI);
+    float a = frac(turn) * float(SURFACE_AZIMUTHS);
+    uint a0 = uint(a);
+    float fa = a - float(a0);
+    float b = surface_band_of(depression);
+    uint b0 = min(uint(b), SURFACE_BANDS - 2u);
+    float fb = b - float(b0);
+    float near = lerp(surface_share_at(b0, a0), surface_share_at(b0, a0 + 1u), fa);
+    float far = lerp(surface_share_at(b0 + 1u, a0), surface_share_at(b0 + 1u, a0 + 1u), fa);
+    return lerp(near, far, fb);
+}
+
+// The sky's light on level ground under `up`, absolute: the sky-view table
+// straight up and halfway down toward the four sides, cosine weighted.
+float3 surface_sky_irradiance(float3 up)
+{
+    float3 east = ATMO.surface_east.xyz;
+    float3 north = cross(up, east);
+    float3 sum = atmo_sky_view(sky_view_lut, lut_sampler, up).rgb;
+    const float side = 0.70710678;
+    sum += side * atmo_sky_view(sky_view_lut, lut_sampler, normalize(up + east)).rgb;
+    sum += side * atmo_sky_view(sky_view_lut, lut_sampler, normalize(up - east)).rgb;
+    sum += side * atmo_sky_view(sky_view_lut, lut_sampler, normalize(up + north)).rgb;
+    sum += side * atmo_sky_view(sky_view_lut, lut_sampler, normalize(up - north)).rgb;
+    return ATMO_PI * sum / ((1.0 + 4.0 * side) * ATMO.cam_pos.w);
+}
+
+// `surface_sky_irradiance` around the camera, read by lane 0 of the group
+// and shared; zero without the ground. Every lane of the group calls it.
+float3 surface_sky_light(uint lane)
+{
+    if (lane == 0u)
+    {
+        surface_sky_shared = surface_on() ? surface_sky_irradiance(atmo_camera_up()) : (float3)0.0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    return surface_sky_shared;
+}
+
+// The light reaching the camera along `dir` from the ground around it,
+// absolute. The sky-view table already holds that ray's air and, past it,
+// the atmosphere's own ground; that ground, seen through the air, is taken
+// back out and the ground around the camera put in its place, sea or land by
+// the table. The ray is taken in the tables' space, its angle below the
+// horizon stretched onto theirs as the table's is. The sea mirrors the sky
+// about level ground by its Fresnel term over its lit body; the land is lit
+// by the sun through the air and by `sky_light` (`surface_sky_light`).
+float3 surface_seen(float3 dir, float3 sky_light)
+{
+    float3 up = atmo_camera_up();
+    float mu = dot(dir, up);
+    float table_mu = cos(atmo_table_view_angle(acos(clamp(mu, -1.0, 1.0))));
+    float3 flat = dir - up * mu;
+    float flat_len = length(flat);
+    flat = flat_len > 1e-6 ? flat / flat_len : ATMO.surface_east.xyz;
+    float3 table_dir = up * table_mu + flat * sqrt(saturate(1.0 - table_mu * table_mu));
+
+    // Where the ray meets the tables' ground; a ray the true ground meets can
+    // pass over theirs near their horizon, and then ends where it is nearest
+    // their ground, with no ground of theirs in the table to take out.
+    float r = atmo_camera_radius();
+    float ground = ray_ground(r, table_mu);
+    bool table_ground = ground >= 0.0;
+    if (!table_ground)
+    {
+        ground = max(-r * table_mu, 0.0);
+    }
+    float3 hit = up * r + table_dir * ground;
+    float hit_r = max(length(hit), atmo_bottom());
+    float3 n = hit / hit_r;
+    // The air between the camera and the ground: the light surviving from the
+    // ground to the top of the air, over that from the camera, the path read
+    // backward so both run upward. From above the air only the first holds.
+    float3 to_top = atmo_transmittance(hit_r, dot(n, -table_dir));
+    float3 from_camera = r < atmo_top() ? atmo_transmittance(r, -table_mu) : (float3)1.0;
+    float3 air = saturate(to_top / max(from_camera, (float3)1e-4));
+
+    float3 sun = atmo_table_sun();
+    float mu_g = dot(n, sun);
+    float3 sun_light = ATMO.sun_illuminance.xyz;
+    float3 sunlit = atmo_transmittance(atmo_bottom(), mu_g) * saturate(mu_g) * sun_light;
+    float3 table_view = atmo_sky_view(sky_view_lut, lut_sampler, dir).rgb / ATMO.cam_pos.w;
+    float3 authored_ground = table_ground ? sunlit * ATMO.ground_albedo.xyz / ATMO_PI : (float3)0.0;
+    float3 in_air = max(table_view - air * authored_ground, (float3)0.0);
+
+    float3 lit = sunlit + sky_light;
+    float3 land = ATMO.surface_land.rgb * lit / ATMO_PI;
+    float fresnel = 0.02 + 0.98 * pow(saturate(1.0 + mu), max(ATMO.surface_water.w, 1e-3));
+    float3 mirrored = dir - 2.0 * mu * up;
+    float4 sky = atmo_sky_view(sky_view_lut, lut_sampler, mirrored);
+    float3 reflected = sky.rgb / ATMO.cam_pos.w;
+    if (night_sky_on())
+    {
+        reflected += night_sky_ambient(mirrored, sky.a);
+    }
+    float3 sea = fresnel * reflected + (1.0 - fresnel) * ATMO.surface_water.rgb * lit / ATMO_PI;
+
+    float water = surface_water_share(dir, up, asin(saturate(-mu)));
+    return in_air + air * lerp(land, sea, water);
+}
+
+// Whether `dir` sees the ground around the camera rather than the sky-view
+// table's.
+bool surface_seen_along(float3 dir)
+{
+    return surface_on() && atmo_view_hits_ground(dot(dir, atmo_camera_up()));
+}
+#endif
+
 #ifdef ATMOSPHERE_SKY_CUBE
 // The scale the cube is stored at, so a night sky's faint glow keeps its
 // half-float steps. Mirrors `render::radiance_storage::SKY_CUBE_STORAGE_SCALE`.
@@ -375,20 +523,29 @@ static const float SKY_CUBE_STORAGE_SCALE = 1024.0;
 // sun light's own specular term draws it.
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID)
+void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
 {
+    float3 sky_light = surface_sky_light(lane);
     if (id.x >= SKY_CUBE_FACE || id.y >= SKY_CUBE_FACE)
     {
         return;
     }
     float3 n = cube_texel_world_dir(id.z, id.xy, SKY_CUBE_FACE);
-    float4 view = atmo_sky_view(sky_view_lut, lut_sampler, n);
-    // The cube holds radiance at its storage scale; the table holds it
-    // pre-exposed.
-    float3 l = view.rgb / ATMO.cam_pos.w;
-    if (night_sky_on())
+    float3 l;
+    if (surface_seen_along(n))
     {
-        l += night_sky_reflected(n, 0.5 * ATMO_PI / float(SKY_CUBE_FACE), view.a);
+        l = surface_seen(n, sky_light);
+    }
+    else
+    {
+        float4 view = atmo_sky_view(sky_view_lut, lut_sampler, n);
+        // The cube holds radiance at its storage scale; the table holds it
+        // pre-exposed.
+        l = view.rgb / ATMO.cam_pos.w;
+        if (night_sky_on())
+        {
+            l += night_sky_reflected(n, 0.5 * ATMO_PI / float(SKY_CUBE_FACE), view.a);
+        }
     }
     atmo_out[id] = float4(hdr_store_cap(l * SKY_CUBE_STORAGE_SCALE), 1.0);
 }
@@ -415,14 +572,23 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
     }
     uint per_lane = IRRADIANCE_SAMPLES / IRRADIANCE_LANES;
     float weight = 4.0 * ATMO_PI / float(IRRADIANCE_SAMPLES);
+    float3 sky_light = surface_sky_light(lane);
     for (uint k = 0u; k < per_lane; ++k)
     {
         float3 d = fibonacci_direction(lane * per_lane + k, IRRADIANCE_SAMPLES);
-        float4 view = atmo_sky_view(sky_view_lut, lut_sampler, d);
-        float3 l = view.rgb / ATMO.cam_pos.w;
-        if (night_sky_on())
+        float3 l;
+        if (surface_seen_along(d))
         {
-            l += night_sky_ambient(d, view.a);
+            l = surface_seen(d, sky_light);
+        }
+        else
+        {
+            float4 view = atmo_sky_view(sky_view_lut, lut_sampler, d);
+            l = view.rgb / ATMO.cam_pos.w;
+            if (night_sky_on())
+            {
+                l += night_sky_ambient(d, view.a);
+            }
         }
         sh9_basis(d, basis);
         for (uint j = 0u; j < 9u; ++j)

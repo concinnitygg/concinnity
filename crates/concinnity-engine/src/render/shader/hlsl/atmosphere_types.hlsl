@@ -4,7 +4,7 @@
 // kilometers. `render::atmosphere` mirrors the sizes, and its tests lock the
 // constants below to the Rust ones.
 //
-// AtmosphereParams (992 B) mirrors `render::atmosphere::AtmosphereParams`;
+// AtmosphereParams (1168 B) mirrors `render::atmosphere::AtmosphereParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 {HDR_STORE}
@@ -61,6 +61,17 @@ struct AtmosphereParams
     // Inverse of the view-projection the scene's depth was drawn with,
     // temporal jitter included: turns a depth sample back into its world point.
     float4x4 depth_inv_vp;
+    // The ground below the horizon seen from the camera
+    // (render::atmosphere::SurfaceBelow): xyz = the land's color, w = 1 when
+    // the table is in use, 0 to keep the sky-view table's ground.
+    float4 surface_land;
+    // xyz = deep water's body reflectance, w = its Fresnel exponent.
+    float4 surface_water;
+    // xyz = the table's east, w = unused.
+    float4 surface_east;
+    // The share of water, band by band from the steepest, each band
+    // SURFACE_AZIMUTHS directions from east toward north; four to a lane.
+    float4 surface_share[8];
 };
 
 static const uint NIGHT_MAX_GALAXIES = 16u;
@@ -76,6 +87,10 @@ static const float AERIAL_MAX_DISTANCE_KM = 32.0;
 static const uint IRRADIANCE_FACE = 16u;
 static const uint IRRADIANCE_SAMPLES = 512u;
 static const uint SKY_CUBE_FACE = 512u;
+static const uint SURFACE_AZIMUTHS = 8u;
+static const uint SURFACE_BANDS = 4u;
+static const float SURFACE_STEEPEST_DEG = 50.0;
+static const float SURFACE_SHALLOWEST_DEG = 2.5;
 
 // Steps along each sky-view and multiple-scattering ray.
 static const uint SKY_VIEW_STEPS = 30u;

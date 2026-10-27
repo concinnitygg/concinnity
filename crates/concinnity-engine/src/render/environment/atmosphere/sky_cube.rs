@@ -11,6 +11,7 @@
 use super::frame::AtmosphereFrame;
 use super::lut::SKY_CUBE_FACE;
 use super::settings::AtmosphereSettings;
+use super::surface::SurfaceBelow;
 use crate::render::probe::capture::PrefilterPlan;
 use crate::render::probe::radiance::SKY_CUBE_STORAGE_SCALE;
 use concinnity_core::math::vec3::{dot, length, scale};
@@ -37,12 +38,14 @@ pub const SKY_CUBE_HEIGHT_KM: f32 = 0.02;
 pub const SKY_CUBE_HEIGHT_FRACTION: f32 = 0.05;
 
 /// What the sky in the cube depends on: the sun and the ground's up, both in
-/// the cube's own frame (the sky rotation's), and the camera's height.
+/// the cube's own frame (the sky rotation's), the camera's height, and the
+/// ground around the camera below the horizon.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkyCubeKey {
     sun: [f32; 3],
     up: [f32; 3],
     height: f32,
+    surface: Option<SurfaceBelow>,
 }
 
 impl SkyCubeKey {
@@ -61,6 +64,7 @@ impl SkyCubeKey {
             sun: into_cube(frame.sun_direction),
             up: into_cube(up),
             height: frame.camera_height(settings),
+            surface: frame.surface,
         }
     }
 
@@ -68,9 +72,14 @@ impl SkyCubeKey {
     fn moved_from(&self, last: &Self) -> bool {
         let turn = concinnity_core::math::cos(SKY_CUBE_TURN_DEG.to_radians());
         let tolerance = SKY_CUBE_HEIGHT_KM + SKY_CUBE_HEIGHT_FRACTION * last.height.abs();
+        let surface = match (&self.surface, &last.surface) {
+            (Some(s), Some(l)) => s.moved_from(l),
+            (s, l) => s.is_some() != l.is_some(),
+        };
         dot(self.sun, last.sun) < turn
             || dot(self.up, last.up) < turn
             || (self.height - last.height).abs() > tolerance
+            || surface
     }
 }
 
@@ -252,6 +261,41 @@ mod tests {
         let high = key(sun_at(30.0), up(10_000.0), rows(0.0));
         assert!(!key(sun_at(30.0), up(10_400.0), rows(0.0)).moved_from(&high));
         assert!(key(sun_at(30.0), up(10_600.0), rows(0.0)).moved_from(&high));
+    }
+
+    // The ground below the horizon turning from land to sea redraws; the same
+    // ground does not.
+    #[test]
+    fn a_changed_surface_redraws() {
+        use super::super::surface::{SeaLook, SurfacePalette, SurfaceView};
+        use crate::render::environment::ground::GroundCovers;
+        let shape = crate::components::Planet::default().shape();
+        let view = SurfaceView {
+            camera: [0.0, shape.radius + shape.highest_height() + 10.0, 0.0],
+            east: [1.0, 0.0, 0.0],
+            east_rendered: [1.0, 0.0, 0.0],
+        };
+        let below = |level: Option<f32>| {
+            let sea = level.map(|level| SeaLook {
+                level,
+                deep_color: [0.02, 0.05, 0.15],
+                fresnel_power: 5.0,
+            });
+            let palette = SurfacePalette::new([0.1; 3], GroundCovers::default(), None, sea);
+            Some(SurfaceBelow::sample(&palette, &shape, &view))
+        };
+        let base = key(sun_at(30.0), GROUND, SkyOrientation::IDENTITY_ROWS);
+        let land = SkyCubeKey {
+            surface: below(None),
+            ..base
+        };
+        let flooded = SkyCubeKey {
+            surface: below(Some(1000.0)),
+            ..base
+        };
+        assert!(land.moved_from(&base));
+        assert!(flooded.moved_from(&land));
+        assert!(!land.moved_from(&land));
     }
 
     // A reset fills the cube whole again.

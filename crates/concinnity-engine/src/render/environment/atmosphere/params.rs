@@ -3,6 +3,7 @@
 use super::frame::AtmosphereFrame;
 use super::lut::AERIAL_MAX_DISTANCE_KM;
 use super::settings::{AtmosphereSettings, METERS_PER_KM};
+use super::surface::SURFACE_TABLE_LEN;
 use crate::render::environment::night_sky::{MAX_GALAXIES, NightLanes};
 use concinnity_core::math::vec3::length;
 
@@ -72,6 +73,16 @@ pub struct AtmosphereParams {
     /// temporal jitter included: turns a screen position and depth back into
     /// a world point.
     pub depth_inv_vp: [[f32; 4]; 4],
+    /// The ground below the horizon (`SurfaceBelow::lanes`): xyz = the
+    /// land's color, w = 1 when the table is in use, 0 to keep the sky-view
+    /// table's ground.
+    pub surface_land: [f32; 4],
+    /// xyz = deep water's body reflectance, w = its Fresnel exponent.
+    pub surface_water: [f32; 4],
+    /// xyz = the table's east, w = unused.
+    pub surface_east: [f32; 4],
+    /// The share of water by direction, four to a lane.
+    pub surface_share: [[f32; 4]; SURFACE_TABLE_LEN / 4],
 }
 
 /// The view the atmosphere is drawn for.
@@ -109,6 +120,15 @@ impl AtmosphereParams {
             }
             _ => NightLanes::OFF,
         };
+        let (surface_land, surface_water, surface_east, surface_share) = frame.surface.map_or(
+            (
+                [0.0; 4],
+                [0.0; 4],
+                [0.0; 4],
+                [[0.0; 4]; SURFACE_TABLE_LEN / 4],
+            ),
+            |s| s.lanes(),
+        );
         Self {
             inv_vp: view.inv_vp,
             rayleigh: v3(air.rayleigh_scattering, -1.0 / air.rayleigh_scale_height),
@@ -143,6 +163,10 @@ impl AtmosphereParams {
             moon_up: night.moon_up,
             galaxies: night.galaxies,
             depth_inv_vp: view.depth_inv_vp,
+            surface_land,
+            surface_water,
+            surface_east,
+            surface_share,
         }
     }
 }
@@ -157,7 +181,7 @@ mod tests {
     // member a float4 lane, so MSL, SPIR-V and DXIL agree.
     #[test]
     fn atmosphere_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<AtmosphereParams>(), 992);
+        assert_eq!(size_of::<AtmosphereParams>(), 1168);
         assert_eq!(offset_of!(AtmosphereParams, inv_vp), 0);
         assert_eq!(offset_of!(AtmosphereParams, rayleigh), 64);
         assert_eq!(offset_of!(AtmosphereParams, mie_scattering), 80);
@@ -181,6 +205,10 @@ mod tests {
         assert_eq!(offset_of!(AtmosphereParams, moon_up), 400);
         assert_eq!(offset_of!(AtmosphereParams, galaxies), 416);
         assert_eq!(offset_of!(AtmosphereParams, depth_inv_vp), 928);
+        assert_eq!(offset_of!(AtmosphereParams, surface_land), 992);
+        assert_eq!(offset_of!(AtmosphereParams, surface_water), 1008);
+        assert_eq!(offset_of!(AtmosphereParams, surface_east), 1024);
+        assert_eq!(offset_of!(AtmosphereParams, surface_share), 1040);
     }
 
     #[test]
@@ -212,6 +240,8 @@ mod tests {
 
         assert_eq!(p.viewport[2], 1.0 / 1600.0);
         assert_eq!(p.cam_pos, [1.0, 2.0, 3.0, 4.0]);
+        // No surface table: the sky-view table's ground stays.
+        assert_eq!(p.surface_land[3], 0.0);
         // No night sky: its lanes are off and no direction reaches the moon.
         assert_eq!(p.moon_up[3], 0.0);
         assert_eq!(p.moon_direction[3], 2.0);

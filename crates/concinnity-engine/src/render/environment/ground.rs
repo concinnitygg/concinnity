@@ -53,7 +53,6 @@ impl GroundRuleGpu {
 
     // Every bound's ramp at `altitude` meters above sea level, on ground of
     // `steepness` (see [`steepness`]), before the edge noise.
-    #[cfg(test)]
     fn ramps(&self, altitude: f32, steep: f32) -> [f32; 4] {
         let [a, b, c, d] = self.altitude;
         let [e, f, g, h] = self.slope;
@@ -74,11 +73,11 @@ impl GroundRuleGpu {
             .any(|&r| r > -GROUND_RULE_WANDER && r < 1.0 + GROUND_RULE_WANDER)
     }
 
-    // How fully the rule holds at `altitude` and `steep`, the edge noise
-    // there being `noise`, in [0, 1]. The noise moves each ramp along its
-    // measure's rising direction; an open ramp (k 0) stays put.
-    #[cfg(test)]
-    fn weight(&self, altitude: f32, steep: f32, noise: f32) -> f32 {
+    /// How fully the rule holds at `altitude` meters above sea level on
+    /// ground of steepness `steep` (see [`steepness`](crate::terrain::steepness)),
+    /// the edge noise there being `noise`, in [0, 1]. The noise moves each
+    /// ramp along its measure's rising direction; an open ramp stays put.
+    pub fn weight(&self, altitude: f32, steep: f32, noise: f32) -> f32 {
         let k = [
             self.altitude[0],
             self.altitude[2],

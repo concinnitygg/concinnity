@@ -9,7 +9,8 @@ use crate::ecs::PipelineContext;
 use crate::gfx::render_types::LightUniforms;
 use crate::planet::PlanetFrame;
 use crate::render::environment::atmosphere::{
-    AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, sun_light,
+    AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, SurfaceBelow, SurfaceView,
+    sun_light,
 };
 use crate::render::environment::night_sky::{NightFrame, shadowed_first, shadowed_pair};
 use crate::render::light::lights::DirectionalLightSet;
@@ -49,6 +50,9 @@ pub(super) struct AtmosphereDrive {
     pushed: Option<PushedLights>,
     // The packed daylight curves, around a planet.
     daylight: Option<[[f32; 4]; DAYLIGHT_KNOTS * 3]>,
+    // The ground around the camera last sampled, around a planet with a
+    // surface palette.
+    surface: Option<SurfaceBelow>,
 }
 
 impl AtmosphereDrive {
@@ -64,6 +68,7 @@ impl AtmosphereDrive {
             settings,
             pushed: None,
             daylight,
+            surface: None,
         }
     }
 
@@ -96,7 +101,8 @@ impl AtmosphereDrive {
             &self.settings,
             self.settings.camera_km(camera, center),
             &sun,
-        );
+        )
+        .with_surface(self.surface_below(ctx, cam_pos));
         if let Some(night) = &self.settings.night {
             // The celestial pole is the sky's axis, or straight up for a sky
             // that does not turn.
@@ -158,6 +164,25 @@ impl AtmosphereDrive {
             )
         });
         (frame, set, daylight)
+    }
+}
+
+impl AtmosphereDrive {
+    // The ground around a camera at `cam_pos`, sampled again once the camera
+    // has moved far enough from where it last was; `None` without a planet
+    // or a palette for its ground.
+    fn surface_below(
+        &mut self,
+        ctx: &PipelineContext<'_>,
+        cam_pos: [f32; 3],
+    ) -> Option<SurfaceBelow> {
+        let palette = self.settings.surface.as_ref()?;
+        let planet = ctx.resource::<PlanetFrame>()?;
+        let view = SurfaceView::of(planet, cam_pos);
+        if self.surface.is_none_or(|s| s.stale(&view)) {
+            self.surface = Some(SurfaceBelow::sample(palette, &planet.shape, &view));
+        }
+        self.surface
     }
 }
 
@@ -268,6 +293,7 @@ mod tests {
             settings,
             pushed: None,
             daylight: Some(*knots),
+            surface: None,
         }
     }
 
@@ -368,6 +394,32 @@ mod tests {
         assert_eq!(set.as_slice().len(), 1);
         let d = LightUniforms::DEFAULT.directional[0].direction;
         assert_eq!(set.as_slice()[0].direction, d);
+    }
+
+    // Around a planet whose ground has a palette, the frame carries the
+    // ground around the camera, sampled again only once the camera moves.
+    #[test]
+    fn a_planet_frame_carries_the_ground_around_the_camera() {
+        use crate::render::environment::atmosphere::SurfacePalette;
+        use crate::render::environment::ground::GroundCovers;
+        let mut world = world_with_sun([0.0, 1.0, 0.0]);
+        let mut drive = planet_drive();
+        let (frame, _, _) = drive.frame(&world.context(), [0.0, 2.0, 0.0], None);
+        assert!(frame.surface.is_none(), "no palette, no table");
+
+        let planet = crate::components::Planet::default();
+        world.insert_resource(PlanetFrame {
+            shape: planet.shape(),
+            frame: crate::planet::LocalFrame::AUTHORED,
+        });
+        let palette = SurfacePalette::new([0.3, 0.2, 0.1], GroundCovers::default(), None, None);
+        drive.settings = drive.settings.with_surface(Some(palette));
+        let cam = [0.0, -9_960.0, 0.0];
+        let (frame, _, _) = drive.frame(&world.context(), cam, None);
+        let first = frame.surface.expect("a table");
+        assert_eq!(first.land, [0.3, 0.2, 0.1]);
+        let (frame, _, _) = drive.frame(&world.context(), cam, None);
+        assert_eq!(frame.surface, Some(first));
     }
 
     // A world without a planet keeps the per-point sky off.

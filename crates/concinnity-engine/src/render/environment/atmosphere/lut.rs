@@ -242,6 +242,15 @@ mod tests {
             assert_eq!(uint(src, name), value as usize, "{name}");
         }
         assert_eq!(float(src, "AERIAL_MAX_DISTANCE_KM"), AERIAL_MAX_DISTANCE_KM);
+        use super::super::surface::{
+            SURFACE_AZIMUTHS, SURFACE_BANDS, SURFACE_SHALLOWEST_DEG, SURFACE_STEEPEST_DEG,
+            SURFACE_TABLE_LEN,
+        };
+        assert_eq!(uint(src, "SURFACE_AZIMUTHS"), SURFACE_AZIMUTHS);
+        assert_eq!(uint(src, "SURFACE_BANDS"), SURFACE_BANDS);
+        assert_eq!(SURFACE_TABLE_LEN / 4, 8, "surface_share[8] in the shader");
+        assert_eq!(float(src, "SURFACE_STEEPEST_DEG"), SURFACE_STEEPEST_DEG);
+        assert_eq!(float(src, "SURFACE_SHALLOWEST_DEG"), SURFACE_SHALLOWEST_DEG);
     }
 
     // Every texel center maps to a height and angle that map back to it.

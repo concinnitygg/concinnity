@@ -6,6 +6,7 @@ use super::optics::{
     sun_transmittance_seen,
 };
 use super::settings::AtmosphereSettings;
+use super::surface::SurfaceBelow;
 use crate::components::DirectionalLight;
 use crate::render::environment::night_sky::{NightFrame, moon_share};
 use concinnity_core::math::vec3::{dot, length, normalize_or, scale};
@@ -32,6 +33,9 @@ pub struct AtmosphereFrame {
     pub sun_set_depth: f32,
     /// The night sky behind the air, if the world has one.
     pub night: Option<NightFrame>,
+    /// The ground around the camera the sky's cubes show below the horizon;
+    /// `None` leaves it the atmosphere's `ground_albedo`.
+    pub surface: Option<SurfaceBelow>,
 }
 
 impl AtmosphereFrame {
@@ -56,6 +60,7 @@ impl AtmosphereFrame {
             sun_transmittance,
             sun_set_depth: disc_set_depth(settings, r, mu, settings.sun_cos_radius),
             night: None,
+            surface: None,
         }
     }
 
@@ -83,6 +88,12 @@ impl AtmosphereFrame {
             night: Some(night),
             ..self
         }
+    }
+
+    /// This frame with the ground below the horizon seen as `surface`.
+    #[must_use]
+    pub fn with_surface(self, surface: Option<SurfaceBelow>) -> Self {
+        Self { surface, ..self }
     }
 
     /// The camera in the sky tables' space: as high above their ground as it

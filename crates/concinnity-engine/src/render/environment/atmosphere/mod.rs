@@ -42,6 +42,7 @@ mod readiness;
 mod settings;
 mod sh;
 mod sky_cube;
+mod surface;
 
 pub use air::AirProfile;
 pub use air_tables::AirTables;
@@ -65,6 +66,11 @@ pub use sh::{Sh9, fibonacci_direction, sh9_basis};
 pub use sky_cube::{
     SKY_CUBE_HEIGHT_FRACTION, SKY_CUBE_HEIGHT_KM, SKY_CUBE_PLAN, SKY_CUBE_TURN_DEG, SkyCubeKey,
     SkyCubeSchedule, SkyCubeWork,
+};
+pub use surface::{
+    SURFACE_AZIMUTHS, SURFACE_BANDS, SURFACE_GRASS_LAYERS, SURFACE_SHALLOWEST_DEG,
+    SURFACE_STEEPEST_DEG, SURFACE_TABLE_LEN, SeaLook, SurfaceBelow, SurfacePalette, SurfaceView,
+    band_depression_deg,
 };
 
 /// The air above the ground: a physically based sky that scatters sunlight
@@ -168,7 +174,9 @@ pub struct Atmosphere {
     #[asset(default = 30.0)]
     pub ozone_width_km: f32,
     /// Linear-space color of the ground as seen from far above: the light it
-    /// bounces back into the air.
+    /// bounces back into the air. Around a [Planet](#planet), what the sky
+    /// reflects and lights surfaces with below the horizon is the planet's
+    /// own ground and sea near the camera instead.
     #[asset(default = [0.3, 0.3, 0.3])]
     pub ground_albedo: [f32; 3],
     /// Angular diameter of the sun's disc, in degrees. Clamped to
