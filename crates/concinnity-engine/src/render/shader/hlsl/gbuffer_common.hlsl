@@ -8,13 +8,16 @@
 //
 // Alpha 0 in target(0) marks "no geometry", the sky included.
 
-// Layout matches `GBufferView` (4 x float4x4 + two float4 rows, 288 B).
+// Layout matches `GBufferView` (5 x float4x4 + two float4 rows, 352 B).
 struct GbView
 {
     float4x4 jittered_vp;
     float4x4 cur_vp;
     float4x4 prev_vp;
     float4x4 view_mat;
+    // Carries a model transform the previous frame recorded into this frame,
+    // which a rebase of the world moved.
+    float4x4 prev_model_carry;
     // `VIEW.elapsed` and the camera position as the previous frame saw them,
     // so a vertex hook animated by the clock or facing the camera reprojects
     // to where it was drawn.

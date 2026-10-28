@@ -17,9 +17,9 @@
 // average, same firefly clamp, and the roughness per mip comes from the same
 // `prefilter_roughness`. The deliberate difference is where a sample's radiance
 // comes from. The CPU kernel taps the full-resolution capture every time; this
-// one taps the pyramid at the level whose texel solid angle matches the
-// sample's, so a small bright source cannot alias between samples at high
-// roughness (Karis, Real Shading in Unreal Engine 4).
+// one taps the pyramid a level coarser than the one whose texel solid angle
+// matches the sample's, so a small bright source cannot alias between samples
+// at high roughness (Karis, Real Shading in Unreal Engine 4).
 //
 // That is also why the clamp applies while the pyramid is built: a blown texel's
 // energy would otherwise survive the box average and reappear through a coarse
@@ -205,13 +205,17 @@ float3 probe_importance_sample_ggx(float2 xi, float3 n, float3 t, float3 b, floa
     return normalize(t * h_local.x + b * h_local.y + n * h_local.z);
 }
 
+// Levels past the solid-angle match each GGX sample taps.
+static const float PROBE_GGX_LOD_BIAS = 1.0;
+
 // GGX convolution of the capture pyramid into one mip of the probe cube.
 //
 // Split-sum approximation: V = R = N, so a sampled half-vector H gives the light
 // direction L = 2 (N.H) H - N and the samples average weighted by N.L. Each
-// sample reads the pyramid level whose texel solid angle matches the sample's
-// own (`sa_sample / sa_texel`), which is what keeps a sparse sample set from
-// aliasing a small bright source across a wide lobe.
+// sample reads the pyramid one level coarser than the one whose texel solid
+// angle matches the sample's own (`sa_sample / sa_texel`), so neighboring taps
+// overlap and a small bright source spreads over the lobe rather than showing
+// as one copy per sample.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void probe_ggx(uint3 tid : SV_DispatchThreadID)
@@ -254,7 +258,7 @@ void probe_ggx(uint3 tid : SV_DispatchThreadID)
         float d = ndh * ndh * (a2 - 1.0) + 1.0;
         float pdf = a2 / (PI * d * d * 4.0);
         float sa_sample = 1.0 / (float(params.sample_count) * pdf + 1e-4);
-        float lod = clamp(0.5 * log2(sa_sample / sa_texel), 0.0, max_lod);
+        float lod = clamp(0.5 * log2(sa_sample / sa_texel) + PROBE_GGX_LOD_BIAS, 0.0, max_lod);
         float3 env = probe_clamp_radiance(src_cube.SampleLevel(src_sampler, l, lod).rgb,
                                           params.clamp_lum);
         accum += env * ndl;

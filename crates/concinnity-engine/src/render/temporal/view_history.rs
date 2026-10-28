@@ -5,7 +5,7 @@
 //! The per-object half is the model-history ring (see
 //! [`crate::render::temporal::model_history`]).
 
-use crate::transform::Mat4;
+use crate::transform::{IDENTITY, Mat4, mat4_mul};
 
 /// One frame's camera and clock, as motion reprojects through them.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -19,10 +19,12 @@ pub struct ViewFrame {
 }
 
 /// The previous frame's camera and clock, absent until a frame has recorded
-/// one.
+/// one, and the moves of the world since.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct ViewHistory {
     prev: Option<ViewFrame>,
+    // The rebases since the previous frame, composed; `None` for none.
+    carry: Option<Mat4>,
 }
 
 impl ViewHistory {
@@ -33,14 +35,22 @@ impl ViewHistory {
         self.prev.unwrap_or(cur)
     }
 
+    /// The move that carries a transform the previous frame recorded into
+    /// this frame: identity unless the world was rebased since.
+    pub(crate) fn carry(&self) -> Mat4 {
+        self.carry.unwrap_or(IDENTITY)
+    }
+
     /// Record this frame as the next frame's history.
     pub(crate) fn advance(&mut self, cur: ViewFrame) {
         self.prev = Some(cur);
+        self.carry = None;
     }
 
     /// Forget the history, so the next motion frame starts over.
     pub(crate) fn reset(&mut self) {
         self.prev = None;
+        self.carry = None;
     }
 
     /// Carry the history into the frame the world moved to, so a point that
@@ -50,13 +60,13 @@ impl ViewHistory {
             prev.vp = rebase.reproject(prev.vp);
             prev.cam_pos = rebase.apply_point(prev.cam_pos);
         }
+        self.carry = Some(mat4_mul(rebase.matrix(), self.carry()));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transform::IDENTITY;
 
     const CUR: ViewFrame = ViewFrame {
         vp: [
@@ -123,5 +133,41 @@ mod tests {
         history.advance(EARLIER);
         history.reset();
         assert_eq!(history.prev_or(CUR), CUR);
+    }
+
+    // A transform recorded before two rebases, carried by the history's move,
+    // places a point where both rebases put it; the next frame recorded
+    // after them carries nothing.
+    #[test]
+    fn the_carry_composes_the_rebases_since_the_previous_frame() {
+        use crate::planet::Rebase;
+        let first = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([0.0, 0.0, 1.0], 0.03),
+            translation: [-1_000.0, 2.0, 0.0],
+        };
+        let second = Rebase {
+            rotation: concinnity_core::math::quat_from_axis_angle([1.0, 0.0, 0.0], -0.02),
+            translation: [0.0, -5.0, 1_000.0],
+        };
+        let mut history = ViewHistory::default();
+        assert_eq!(history.carry(), IDENTITY);
+        history.advance(CUR);
+        history.rebase(&first);
+        history.rebase(&second);
+        let p = [1_003.0, 7.0, -998.0];
+        let carry = history.carry();
+        let carried: [f32; 3] = core::array::from_fn(|i| {
+            carry[0][i] * p[0] + carry[1][i] * p[1] + carry[2][i] * p[2] + carry[3][i]
+        });
+        let want = second.apply_point(first.apply_point(p));
+        assert!(
+            (0..3).all(|i| (carried[i] - want[i]).abs() < 1e-2),
+            "{carried:?} {want:?}"
+        );
+        history.advance(EARLIER);
+        assert_eq!(history.carry(), IDENTITY);
+        history.rebase(&first);
+        history.reset();
+        assert_eq!(history.carry(), IDENTITY);
     }
 }

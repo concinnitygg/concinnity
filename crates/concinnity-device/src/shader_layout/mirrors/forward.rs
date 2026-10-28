@@ -31,6 +31,8 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             stand_ins,
             daylight,
             tile_morph,
+            reflection,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
         everywhere(mirror!(TileMorphView => "TileMorphView" {
             [eye, level0_range] => ["eye_range0"],
@@ -55,7 +57,7 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
         })),
         everywhere(mirror!(DirectionalLightData => "DirLight" {
             [direction, intensity] => ["dir_i"],
-            [color, _pad] => ["col"],
+            [color, sin_radius] => ["col"],
         })),
         everywhere(mirror!(PointLightData => "PointLight" {
             [position, range] => ["pos_r"],

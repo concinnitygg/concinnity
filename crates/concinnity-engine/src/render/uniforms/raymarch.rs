@@ -171,7 +171,7 @@ mod tests {
             elapsed: 0.0,
             cam_pos: [0.0; 3],
         };
-        let gbuffer = GBufferView::new(m(10.0), m(11.0), frame(12.0), frame(13.0), true);
+        let gbuffer = GBufferView::new(m(10.0), m(11.0), frame(12.0), frame(13.0), m(14.0), true);
         let camera = super::super::view::test_camera();
         let view = RaymarchView::for_gbuffer(&camera, &gbuffer);
         assert_eq!(view.vp, m(10.0));

@@ -140,6 +140,7 @@ mod tests {
                 rt_reflections: Some(false),
                 screenshots_dir: Some("shots".into()),
                 frames: Some(5),
+                start_at_millis: None,
                 screenshots: true,
                 screenshot_at: vec![concinnity_engine::launch::ScreenshotAt::new(
                     4.0,

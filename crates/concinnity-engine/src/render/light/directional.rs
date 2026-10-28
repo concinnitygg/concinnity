@@ -38,6 +38,11 @@ pub struct DirectionalLight {
     /// Intensity multiplier applied to the color.
     #[asset(default = 1.0)]
     pub intensity: f32,
+    /// Angular radius of the light's disc in the sky, in degrees: a smooth
+    /// surface reflects the disc's image rather than a point. 0 is a point.
+    /// Under an [Atmosphere](#atmosphere) the sun takes the atmosphere's disc.
+    #[asset(default = 0.0)]
+    pub angular_radius_deg: f32,
 }
 
 impl DirectionalLight {
@@ -46,5 +51,6 @@ impl DirectionalLight {
         direction: [0.0; 3],
         color: [0.0; 3],
         intensity: 0.0,
+        angular_radius_deg: 0.0,
     };
 }

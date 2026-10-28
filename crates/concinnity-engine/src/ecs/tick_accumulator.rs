@@ -40,18 +40,32 @@ impl TickAccumulator {
     /// [`FrameTime`] into `world`. At a fixed launch rate a frame lasts exactly
     /// `1 / rate` seconds whatever the wall clock measured, so every launch at
     /// that rate sees the same clock on the same frame; otherwise it lasts
-    /// `wall_elapsed`. An open menu ([`MenuActive`]) pauses the ticks.
+    /// `wall_elapsed`. Until the simulated time reaches `start_at` seconds, a
+    /// frame lasts as many ticks as one may run, so a run that starts late
+    /// gets there in fewer frames. An open menu ([`MenuActive`]) pauses the
+    /// ticks.
     pub fn publish_frame(
         &mut self,
         world: &mut World,
         fixed_rate: Option<NonZeroU32>,
         wall_elapsed: f32,
+        start_at: Option<f32>,
     ) {
         let elapsed = fixed_rate.map_or(wall_elapsed, |rate| 1.0 / rate.get() as f32);
+        let elapsed = start_at.map_or(elapsed, |start| self.ahead(elapsed, start));
         let paused = world.resource::<MenuActive>().is_some_and(|m| m.0);
         let (timing, frame) = self.advance(elapsed, paused);
         world.insert_resource(timing);
         world.insert_resource(frame);
+    }
+
+    // A frame of `elapsed` seconds lengthened toward simulated time `start`,
+    // by at most what one frame may run.
+    fn ahead(&self, elapsed: f32, start: f32) -> f32 {
+        let cap = SimTiming::MAX_TICKS_PER_FRAME as f32 * SimTiming::TICK_DT;
+        let run = self.ticks_run as f64 * f64::from(SimTiming::TICK_DT);
+        let behind = narrow_f32(f64::from(start) - run - f64::from(self.accumulator));
+        elapsed.max(behind.min(cap))
     }
 
     fn ticks(&mut self, dt: f32, paused: bool) -> SimTiming {
@@ -88,14 +102,37 @@ mod tests {
     fn a_published_frame_follows_the_fixed_rate_and_the_menu() {
         let mut world = World::new();
         let mut ticks = TickAccumulator::default();
-        ticks.publish_frame(&mut world, NonZeroU32::new(60), 5.0);
+        ticks.publish_frame(&mut world, NonZeroU32::new(60), 5.0, None);
         assert_eq!(world.resource::<FrameTime>().unwrap().dt, 1.0 / 60.0);
         assert_eq!(world.resource::<SimTiming>().unwrap().ticks, 1);
 
         world.insert_resource(MenuActive(true));
-        ticks.publish_frame(&mut world, None, 0.5);
+        ticks.publish_frame(&mut world, None, 0.5, None);
         assert_eq!(world.resource::<FrameTime>().unwrap().dt, 0.5);
         assert_eq!(world.resource::<SimTiming>().unwrap().ticks, 0);
+    }
+
+    // A late start runs the most ticks a frame may until it reaches its
+    // moment, lands on it without overshooting, and then keeps the pace.
+    #[test]
+    fn a_late_start_runs_ahead_to_its_moment_then_keeps_the_pace() {
+        let mut world = World::new();
+        let mut ticks = TickAccumulator::default();
+        let rate = NonZeroU32::new(60);
+        let start = 12.5 * SimTiming::TICK_DT;
+        let mut per_frame = Vec::new();
+        for _ in 0..5 {
+            ticks.publish_frame(&mut world, rate, 0.0, Some(start));
+            per_frame.push(world.resource::<SimTiming>().unwrap().ticks);
+        }
+        let max = SimTiming::MAX_TICKS_PER_FRAME;
+        assert_eq!(per_frame[..2], [max, max]);
+        let time = world.resource::<SimTiming>().unwrap().time;
+        assert!(
+            time >= f64::from(start) - f64::from(SimTiming::TICK_DT),
+            "{per_frame:?}"
+        );
+        assert_eq!(per_frame[4], 1, "past the start a frame is one tick again");
     }
 
     const DT: f32 = SimTiming::TICK_DT;

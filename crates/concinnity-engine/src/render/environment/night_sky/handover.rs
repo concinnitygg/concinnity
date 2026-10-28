@@ -80,6 +80,7 @@ mod tests {
             direction,
             color,
             intensity,
+            angular_radius_deg: 0.0,
         }
     }
 

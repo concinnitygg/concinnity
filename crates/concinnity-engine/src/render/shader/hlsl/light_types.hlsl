@@ -14,6 +14,7 @@ static const uint MAX_DIRECTIONAL_LIGHTS = 4u;
 static const uint MAX_POINT_LIGHTS = 8u;
 static const uint NUM_SHADOW_CASCADES = 4u;
 
+// col.w: the sine of the angular radius of the light's disc, 0 for a point.
 struct DirLight   { float4 dir_i; float4 col; };
 struct PointLight { float4 pos_r; float4 col_i; };
 

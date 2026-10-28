@@ -97,14 +97,29 @@ VertexOut project_vertex(float4x4 model, float3 pos, float3 normal, float3 tange
 
 // ---- Fragment helpers ----
 
+// The smoothest perceptual roughness the GGX lobe is evaluated at: its peak,
+// 1 / (pi a^4), stays finite in fp32 and its denominator never reaches zero.
+static const float GGX_MIN_ROUGHNESS = 0.045;
+
 float distribution_ggx(float3 N, float3 H, float roughness)
 {
-    float a  = roughness * roughness;
+    float a  = max(roughness, GGX_MIN_ROUGHNESS);
+    a *= a;
     float a2 = a * a;
     float NdH  = max(dot(N, H), 0.0);
     float NdH2 = NdH * NdH;
     float denom = NdH2 * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom + 0.0001);
+    return a2 / (PI * denom * denom);
+}
+
+// The perceptual roughness a light whose disc's angular radius has sine
+// `sin_radius` reflects at: the GGX alpha widened by the half vector's spread
+// over the disc, half its angular radius. The lobe stays normalized, so the
+// light's energy is spread over the disc's image rather than gained or lost.
+float disc_roughness(float roughness, float sin_radius)
+{
+    float a = max(roughness, GGX_MIN_ROUGHNESS);
+    return sqrt(a * a + 0.5 * sin_radius);
 }
 
 float geometry_schlick_ggx(float NdV, float roughness)
@@ -472,7 +487,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         float3 H = normalize(V + L);
         float NdL = max(dot(N, L), 0.0);
 
-        float D = distribution_ggx(N, H, roughness);
+        float D = distribution_ggx(N, H, disc_roughness(roughness, LIGHTS.dir[i].col.w));
         float G = geometry_smith(N, V, L, roughness);
         float3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
 

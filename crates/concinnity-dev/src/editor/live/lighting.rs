@@ -198,6 +198,7 @@ mod tests {
             direction: [0.0, -1.0, 0.0],
             color: [0.2, 0.4, 0.6],
             intensity: 5.0,
+            angular_radius_deg: 0.27,
         };
         commit_sun(&mut world, entity, edited);
         let held = world

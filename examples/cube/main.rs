@@ -181,6 +181,7 @@ fn cube_world() -> Result<World, Box<dyn std::error::Error>> {
         direction: SUN_DIRECTION,
         color: [0.52, 0.95, 0.70],
         intensity: 10.0,
+        ..Default::default()
     });
 
     // A light, gusty breeze: the only thing moving the water. Its gusts roll

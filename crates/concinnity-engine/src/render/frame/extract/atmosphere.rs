@@ -18,7 +18,7 @@ use crate::render::uniforms::{DaylightBlock, DaylightBody, DaylightView};
 use crate::sky::SkyOrientation;
 use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3::{length, normalize_or};
-use concinnity_core::math::{cos, smoothstep};
+use concinnity_core::math::{acos, cos, smoothstep};
 
 // How far the sun's transmittance, or the moon's light as a share of its
 // full brightness, may drift from what the lights were last pushed with
@@ -137,12 +137,11 @@ impl AtmosphereDrive {
             } else {
                 shadowed_first
             };
-            place(
-                sun_light(&frame, &turned[0]),
-                moon.map(|m| m.0),
-                share,
-                &turned[1..],
-            )
+            let sun = DirectionalLight {
+                angular_radius_deg: acos(self.settings.sun_cos_radius).to_degrees(),
+                ..sun_light(&frame, &turned[0])
+            };
+            place(sun, moon.map(|m| m.0), share, &turned[1..])
         });
         let daylight = self.daylight.map_or(DaylightBlock::OFF, |knots| {
             let sun_body = DaylightBody {
@@ -210,6 +209,7 @@ fn moon_light(
         direction: moon.direction,
         color: core::array::from_fn(|i| sun.color[i] * moon.transmittance[i]),
         intensity: sun.intensity * brightness * moon.phase,
+        angular_radius_deg: acos(settings.night?.moon?.cos_radius).to_degrees(),
     };
     let seen = moon.transmittance.map(|t| t * moon.phase * moon.share);
     Some((light, seen))
@@ -265,6 +265,7 @@ fn authored_lights(ctx: &PipelineContext<'_>) -> DirectionalLightSet {
         direction: d.direction,
         color: d.color,
         intensity: d.intensity,
+        angular_radius_deg: 0.0,
     }))
 }
 
@@ -326,6 +327,7 @@ mod tests {
             direction,
             color: [1.0; 3],
             intensity: 2.0,
+            angular_radius_deg: 0.0,
         });
         world
     }
@@ -361,6 +363,7 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
             color: [0.2, 0.3, 0.4],
             intensity: 1.0,
+            angular_radius_deg: 0.0,
         });
         world.insert_resource(SkyOrientation::new([1.0, 0.0, 0.0], -60.0));
         let (_, set, _) = drive().frame(&world.context(), [0.0, 2.0, 0.0], None);
@@ -385,12 +388,20 @@ mod tests {
         let full = 2.0 * NightSky::default().moon_brightness * moon.phase;
         assert!((first.intensity / full - 1.0).abs() < 1e-4);
         assert!(first.color.iter().all(|&c| c > 0.7), "{:?}", first.color);
+        let moon_radius = 0.5 * NightSky::default().moon_angular_diameter_deg;
+        assert!(
+            (first.angular_radius_deg - moon_radius).abs() < 1e-3,
+            "{first:?}"
+        );
         let mut day = world_with_sun([0.1, 1.0, 0.0]);
         let (_, set, _) =
             AtmosphereDrive::new(settings, &Inline).frame(&day.context(), [0.0, 2.0, 0.0], None);
         let set = set.expect("installed");
         assert_eq!(set.as_slice().len(), 1);
         assert_eq!(set.as_slice()[0].intensity, 2.0);
+        let sun_radius = acos(settings.sun_cos_radius).to_degrees();
+        assert!((set.as_slice()[0].angular_radius_deg - sun_radius).abs() < 1e-4);
+        assert!(sun_radius > 0.2, "the sun has a disc: {sun_radius}");
     }
 
     // A world with no directional light is lit by the neutral sun, through the
@@ -501,6 +512,7 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
             color: [1.0; 3],
             intensity: 2.0,
+            angular_radius_deg: 0.0,
         };
         let view = |height_m: f64| {
             let camera = [0.0, height_m, 0.0];
@@ -527,6 +539,7 @@ mod tests {
             direction: [0.0, -1.0, 0.0],
             color: [1.0, 0.9, 0.8],
             intensity: 2.0,
+            angular_radius_deg: 0.0,
         };
         let mut world = world_with_sun(sun.direction);
         let mut drive = planet_drive();

@@ -218,6 +218,7 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
             color: [1.0; 3],
             intensity: 2.0,
+            angular_radius_deg: 0.0,
         };
         let frame = AtmosphereFrame::new(&s, [0.0, 6360.5, 0.0], &sun);
         let p = AtmosphereParams::new(

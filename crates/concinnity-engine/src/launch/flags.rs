@@ -124,6 +124,13 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         description: "Stop after N frames",
         repeatable: false,
     },
+    LaunchFlag {
+        name: "start-at",
+        value: Some("SECONDS"),
+        values: &[],
+        description: "Run the simulation ahead at the most ticks a frame allows until SECONDS into the run",
+        repeatable: false,
+    },
 ];
 
 /// The flag named `name`, given without its leading `--`.

@@ -116,7 +116,7 @@ const ZERO_DIR: DirectionalLightData = DirectionalLightData {
     direction: [0.0; 3],
     intensity: 0.0,
     color: [0.0; 3],
-    _pad: 0.0,
+    sin_radius: 0.0,
 };
 const ZERO_PT: PointLightData = PointLightData {
     position: [0.0; 3],
@@ -176,7 +176,7 @@ pub fn directional_light_data(
             direction: l.direction,
             intensity: l.intensity,
             color: l.color,
-            _pad: 0.0,
+            sin_radius: concinnity_core::math::sin(l.angular_radius_deg.to_radians()),
         };
     }
     (
@@ -323,6 +323,7 @@ mod tests {
             direction,
             color,
             intensity,
+            angular_radius_deg: 0.0,
         }
     }
 
@@ -375,6 +376,19 @@ mod tests {
         let (empty, none) = directional_light_data(&[]);
         assert_eq!(none, 0);
         assert!(empty.iter().all(|d| *d == ZERO_DIR));
+    }
+
+    // A light's disc reaches the shader as the sine of its angular radius,
+    // and a point light as zero.
+    #[test]
+    fn directional_packing_carries_the_disc() {
+        let sun = DirectionalLight {
+            angular_radius_deg: 30.0,
+            ..dir([0.0, 1.0, 0.0], [1.0; 3], 2.0)
+        };
+        let (packed, _) = directional_light_data(&[sun, dir([1.0, 0.0, 0.0], [1.0; 3], 1.0)]);
+        assert!((packed[0].sin_radius - 0.5).abs() < 1e-6);
+        assert_eq!(packed[1].sin_radius, 0.0);
     }
 
     // Extras past the fixed array are dropped rather than overflowing it.

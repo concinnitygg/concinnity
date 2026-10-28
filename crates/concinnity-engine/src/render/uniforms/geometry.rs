@@ -259,7 +259,7 @@ mod view_layout_tests {
             direction: [0.0, 2.0, 0.0],
             intensity: core::f32::consts::PI,
             color: [1.0, 0.5, 0.25],
-            _pad: 0.0,
+            sin_radius: 0.0,
         };
         let lit = ParticleView::new([[0.0; 4]; 4], &view, 1.0, &lights, &DaylightBlock::OFF);
         assert_eq!(lit.sun_dir, [0.0, 1.0, 0.0, 0.0]);

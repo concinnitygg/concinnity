@@ -636,6 +636,8 @@ impl MtlContext {
             stand_ins: 0.0,
             daylight: self.state.view.daylight,
             tile_morph: self.state.tile_morph_view(),
+            reflection: 0.0,
+            _pad: [0.0; 3],
         }
     }
 

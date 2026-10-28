@@ -480,6 +480,7 @@ impl Runtime {
             &mut self.world,
             Instant::now(),
             self.launch.fixed_frame_rate,
+            self.launch.args.start_at(),
         );
         self.world.step()
     }

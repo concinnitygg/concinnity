@@ -5,6 +5,7 @@
 use crate::planet::Rebase;
 use crate::render::temporal::occlusion_history::OcclusionHistory;
 use crate::render::temporal::view_history::{ViewFrame, ViewHistory};
+use crate::transform::Mat4;
 
 /// The temporal state every backend's frame reads and advances.
 #[derive(Debug, Default)]
@@ -23,6 +24,12 @@ impl TemporalState {
     /// The camera the motion vectors reproject to, or `cur` with no history.
     pub fn prev_view_or(&self, cur: ViewFrame) -> ViewFrame {
         self.view.prev_or(cur)
+    }
+
+    /// The move that carries the previous frame's model transforms into this
+    /// frame, identity unless the world was rebased since.
+    pub fn prev_model_carry(&self) -> Mat4 {
+        self.view.carry()
     }
 
     /// The occlusion test's history.

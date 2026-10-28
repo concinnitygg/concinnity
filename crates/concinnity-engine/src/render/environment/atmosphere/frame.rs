@@ -137,6 +137,7 @@ mod tests {
             direction,
             color: [1.0, 1.0, 1.0],
             intensity: 3.0,
+            angular_radius_deg: 0.0,
         }
     }
 
@@ -176,6 +177,7 @@ mod tests {
                 direction: [0.0, 4.0, 0.0],
                 color: [1.0, 0.5, 0.25],
                 intensity: 2.0,
+                angular_radius_deg: 0.0,
             },
         );
         assert_eq!(frame.sun_direction, [0.0, 1.0, 0.0]);

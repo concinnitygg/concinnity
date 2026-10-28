@@ -71,8 +71,8 @@ pub struct DirectionalLightData {
     pub intensity: f32,
     /// Linear RGB light color.
     pub color: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad: f32,
+    /// Sine of the angular radius of the light's disc, 0 for a point.
+    pub sin_radius: f32,
 }
 
 /// One point light entry in `LightUniforms`.
@@ -144,7 +144,7 @@ const ZERO_DIR_LIGHT: DirectionalLightData = DirectionalLightData {
     direction: [0.0; 3],
     intensity: 0.0,
     color: [0.0; 3],
-    _pad: 0.0,
+    sin_radius: 0.0,
 };
 
 const ZERO_POINT_LIGHT: PointLightData = PointLightData {
@@ -188,7 +188,7 @@ impl LightUniforms {
                 direction: [-0.3, 0.85, 0.4],
                 intensity: 1.0,
                 color: [1.0, 1.0, 1.0],
-                _pad: 0.0,
+                sin_radius: 0.0,
             },
             ZERO_DIR_LIGHT,
             ZERO_DIR_LIGHT,

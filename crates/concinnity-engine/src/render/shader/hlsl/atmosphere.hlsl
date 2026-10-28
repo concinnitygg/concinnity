@@ -519,8 +519,8 @@ static const float SKY_CUBE_STORAGE_SCALE = 1024.0;
 
 // One thread per texel of the cube's top mip, six faces deep: the sky-view
 // table along the texel's direction, the ground below the horizon included,
-// and any night sky behind it but its stars. The sun's disc is left out: the
-// sun light's own specular term draws it.
+// and any night sky behind it but its stars. The sun's and the moon's discs
+// are left out: their lights' own specular terms draw them.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_GroupIndex)
@@ -544,7 +544,7 @@ void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_G
         l = view.rgb / ATMO.cam_pos.w;
         if (night_sky_on())
         {
-            l += night_sky_reflected(n, 0.5 * ATMO_PI / float(SKY_CUBE_FACE), view.a);
+            l += night_sky_reflected(n, view.a);
         }
     }
     atmo_out[id] = float4(hdr_store_cap(l * SKY_CUBE_STORAGE_SCALE), 1.0);

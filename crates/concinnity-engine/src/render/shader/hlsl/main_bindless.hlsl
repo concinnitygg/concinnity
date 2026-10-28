@@ -117,16 +117,17 @@ struct PrepassVertexOut
     [[vk::location(7)]] nointerpolation uint object_id : TEXCOORD7;
 };
 
-// The transform to reproject last frame's position through: the history entry,
-// or this frame's own model where no history exists, which collapses the motion
-// vector to the camera's own (and to exactly zero when `prev_vp == cur_vp`).
+// The transform to reproject last frame's position through: the history entry
+// carried into this frame, or this frame's own model where no history exists,
+// which collapses the motion vector to the camera's own (and to exactly zero
+// when `prev_vp == cur_vp`).
 float4x4 prepass_prev_model(uint oid, float4x4 cur_model)
 {
     if ((draw_args[oid].flags & DRAW_NO_HISTORY) != 0u)
     {
         return cur_model;
     }
-    return prev_models[oid];
+    return mul(gb_view.prev_model_carry, prev_models[oid]);
 }
 
 // The hook places the surface exactly as the main pass draws it, rasterized

@@ -135,6 +135,7 @@ fn a_sun_edit_reaches_the_backend() {
         direction: [0.0, 1.0, 0.0],
         color: [1.0, 0.5, 0.25],
         intensity: 3.0,
+        angular_radius_deg: 0.0,
     };
     assert!(apply_directional_lights(
         &mut f.world,

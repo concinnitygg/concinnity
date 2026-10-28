@@ -344,6 +344,7 @@ mod tests {
                     color: [1.0, 0.96, 0.86],
                     direction: [-0.35, 0.85, 0.35],
                     intensity: 2.2,
+                    ..Default::default()
                 },
             )
             // `Room` here is the authored form, not the component of the same

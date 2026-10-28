@@ -52,9 +52,9 @@ pub(crate) const GBUFFER_VELOCITY_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16_FLOAT
 // two together.
 pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 
-// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat,
-// the previous clock and camera position, and the motion flag. Matches the
-// `GbView` cbuffer in `gbuffer_common.hlsl`.
+// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat +
+// prev_model_carry, the previous clock and camera position, and the motion
+// flag. Matches the `GbView` cbuffer in `gbuffer_common.hlsl`.
 const GBUFFER_VIEW_UBO_SIZE: u64 = size_of::<GBufferView>() as u64;
 
 // `GBufferView` (the `GbView` cbuffer) is a GPU-free layout struct that lives in

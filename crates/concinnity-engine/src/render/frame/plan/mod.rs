@@ -298,6 +298,8 @@ impl FramePlanner {
                 screen_bounce: f32::from(u8::from(inputs.surface.screen_bounce)),
                 stand_ins: 0.0,
                 daylight: view.daylight,
+                reflection: 0.0,
+                _pad: [0.0; 3],
                 tile_morph: view.tile_morph_view(),
             },
             cluster: ClusterParams::for_camera(
@@ -338,6 +340,7 @@ impl FramePlanner {
                 cam.view,
                 cur,
                 self.temporal.prev_view_or(cur),
+                self.temporal.prev_model_carry(),
                 motion_read,
             ),
             atmosphere: AtmosphereView {

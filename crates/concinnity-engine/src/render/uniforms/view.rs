@@ -109,6 +109,12 @@ pub struct ViewUniforms {
     /// The camera a planet's tiles morph by: the main camera's in every view,
     /// so a reflection shows the tiles as the screen does.
     pub tile_morph: TileMorphView,
+    /// 1.0 for a probe or mirror face: the view is a reflection, so its sky
+    /// leaves out the sun's and the moon's discs, which those lights'
+    /// specular terms draw. 0.0 for the main view.
+    pub reflection: f32,
+    /// Pads the block to a whole float4 row.
+    pub _pad: [f32; 3],
 }
 
 const _: () = assert!(size_of::<ViewUniforms>() <= VIEW_BLOCK_LIMIT);
@@ -162,6 +168,8 @@ impl ViewUniforms {
             stand_ins: 0.0,
             daylight: face.daylight,
             tile_morph: face.tile_morph,
+            reflection: 1.0,
+            _pad: [0.0; 3],
         }
     }
 }
@@ -206,10 +214,11 @@ impl ViewUniforms {
 /// VP drives the sky's rasterized position (the surfaces take theirs from the
 /// main pass's view block); `view` takes the normal into view space (where
 /// SSR / SSAO / SSGI / RT work); the un-jittered cur/prev VPs derive a
-/// jitter-free motion vector, and `prev_elapsed` / `prev_cam_pos` rewind a
-/// vertex hook driven by the clock or the camera to where the previous frame
-/// drew it. Matches `GbView` in `shaders/gbuffer_common.hlsl`. 288 bytes: four
-/// float4x4 and two float4 rows.
+/// jitter-free motion vector, `prev_model_carry` moves the previous frame's
+/// model transforms into this frame, and `prev_elapsed` / `prev_cam_pos`
+/// rewind a vertex hook driven by the clock or the camera to where the
+/// previous frame drew it. Matches `GbView` in `shaders/gbuffer_common.hlsl`.
+/// 352 bytes: five float4x4 and two float4 rows.
 #[derive(Copy, Clone, bytemuck::NoUninit)]
 #[repr(C)]
 pub struct GBufferView {
@@ -221,6 +230,10 @@ pub struct GBufferView {
     pub prev_vp: [[f32; 4]; 4],
     /// View matrix, column-major.
     pub view: [[f32; 4]; 4],
+    /// The move that carries the model transforms the previous frame
+    /// recorded into this frame: identity unless the world was rebased
+    /// between them.
+    pub prev_model_carry: [[f32; 4]; 4],
     /// The main pass's `elapsed` as the previous frame saw it.
     pub prev_elapsed: f32,
     /// The camera position as the previous frame saw it.
@@ -234,22 +247,30 @@ pub struct GBufferView {
 
 impl GBufferView {
     /// The block for a frame rasterized through `jittered_vp` and viewed
-    /// through `view`, whose motion reprojects from `cur` to `prev`. Without
-    /// `motion` the previous frame is `cur` itself, so every motion vector is
-    /// zero and the surfaces skip reprojecting.
+    /// through `view`, whose motion reprojects from `cur` to `prev`, the
+    /// previous frame's model transforms moved into this frame by
+    /// `prev_model_carry`. Without `motion` the previous frame is `cur`
+    /// itself, so every motion vector is zero and the surfaces skip
+    /// reprojecting.
     pub fn new(
         jittered_vp: [[f32; 4]; 4],
         view: [[f32; 4]; 4],
         cur: crate::render::temporal::view_history::ViewFrame,
         prev: crate::render::temporal::view_history::ViewFrame,
+        prev_model_carry: [[f32; 4]; 4],
         motion: bool,
     ) -> Self {
-        let prev = if motion { prev } else { cur };
+        let (prev, prev_model_carry) = if motion {
+            (prev, prev_model_carry)
+        } else {
+            (cur, crate::transform::IDENTITY)
+        };
         Self {
             jittered_vp,
             cur_vp: cur.vp,
             prev_vp: prev.vp,
             view,
+            prev_model_carry,
             prev_elapsed: prev.elapsed,
             prev_cam_pos: prev.cam_pos,
             motion: u32::from(motion),
@@ -309,6 +330,7 @@ mod tests {
             (4.0, 5.0, [[6.0; 4]; 3])
         );
         assert_eq!((u.irradiance, u.pre_exposure), (1.0, 0.5));
+        assert_eq!(u.reflection, 1.0, "a face is a reflection");
         assert_eq!(
             (
                 u.reflections_enabled,
@@ -325,7 +347,7 @@ mod tests {
     // moved.
     #[test]
     fn view_uniforms_layout_matches_msl() {
-        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664 + 32);
+        assert_eq!(size_of::<ViewUniforms>(), 224 + 1664 + 32 + 16);
         assert_eq!(offset_of!(ViewUniforms, vp), 0);
         assert_eq!(offset_of!(ViewUniforms, view), 64);
         assert_eq!(offset_of!(ViewUniforms, elapsed), 128);
@@ -342,22 +364,25 @@ mod tests {
         assert_eq!(offset_of!(ViewUniforms, stand_ins), 220);
         assert_eq!(offset_of!(ViewUniforms, daylight), 224);
         assert_eq!(offset_of!(ViewUniforms, tile_morph), 224 + 1664);
+        assert_eq!(offset_of!(ViewUniforms, reflection), 224 + 1664 + 32);
+        assert_eq!(offset_of!(ViewUniforms, _pad), 224 + 1664 + 36);
         assert_eq!(size_of::<ViewUniforms>() % 16, 0);
     }
 
-    // Four float4x4s, then the previous clock and camera position, then the
+    // Five float4x4s, then the previous clock and camera position, then the
     // motion flag padded to a whole float4 row.
     #[test]
     fn gbuffer_view_layout_matches_the_shader() {
-        assert_eq!(size_of::<GBufferView>(), 288);
+        assert_eq!(size_of::<GBufferView>(), 352);
         assert_eq!(offset_of!(GBufferView, jittered_vp), 0);
         assert_eq!(offset_of!(GBufferView, cur_vp), 64);
         assert_eq!(offset_of!(GBufferView, prev_vp), 128);
         assert_eq!(offset_of!(GBufferView, view), 192);
-        assert_eq!(offset_of!(GBufferView, prev_elapsed), 256);
-        assert_eq!(offset_of!(GBufferView, prev_cam_pos), 260);
-        assert_eq!(offset_of!(GBufferView, motion), 272);
-        assert_eq!(offset_of!(GBufferView, _pad), 276);
+        assert_eq!(offset_of!(GBufferView, prev_model_carry), 256);
+        assert_eq!(offset_of!(GBufferView, prev_elapsed), 320);
+        assert_eq!(offset_of!(GBufferView, prev_cam_pos), 324);
+        assert_eq!(offset_of!(GBufferView, motion), 336);
+        assert_eq!(offset_of!(GBufferView, _pad), 340);
     }
 
     #[test]
@@ -378,11 +403,12 @@ mod tests {
             elapsed: 1.25,
             cam_pos: [0.5, 2.0, 3.0],
         };
-        let block = GBufferView::new(m(1.0), m(4.0), cur, prev, true);
+        let block = GBufferView::new(m(1.0), m(4.0), cur, prev, m(5.0), true);
         assert_eq!(block.jittered_vp, m(1.0));
         assert_eq!(block.cur_vp, m(2.0));
         assert_eq!(block.prev_vp, m(3.0));
         assert_eq!(block.view, m(4.0));
+        assert_eq!(block.prev_model_carry, m(5.0));
         assert_eq!(block.prev_elapsed, 1.25);
         assert_eq!(block.prev_cam_pos, [0.5, 2.0, 3.0]);
         assert_eq!(block.motion, 1);
@@ -404,8 +430,9 @@ mod tests {
             elapsed: 1.25,
             cam_pos: [0.5, 2.0, 3.0],
         };
-        let block = GBufferView::new(m(1.0), m(4.0), cur, prev, false);
+        let block = GBufferView::new(m(1.0), m(4.0), cur, prev, m(5.0), false);
         assert_eq!(block.prev_vp, block.cur_vp);
+        assert_eq!(block.prev_model_carry, crate::transform::IDENTITY);
         assert_eq!(block.prev_elapsed, 1.5);
         assert_eq!(block.prev_cam_pos, [1.0, 2.0, 3.0]);
         assert_eq!(block.motion, 0);

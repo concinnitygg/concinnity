@@ -115,9 +115,7 @@ pub fn drive_frame<D: FrameDevice>(
         device.frame_scene().planner.reset_history();
         device.reset_history();
     } else if let Some(rebase) = &params.rebase {
-        let scene = device.frame_scene();
-        scene.planner.rebase(rebase);
-        scene.model_history.get_mut().forget();
+        device.frame_scene().planner.rebase(rebase);
     }
 
     let Some(frame) = device.begin(&params)? else {

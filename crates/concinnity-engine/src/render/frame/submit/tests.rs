@@ -198,6 +198,7 @@ fn a_frame_carrying_lights_installs_them_before_the_draw() {
         direction: [0.0, 1.0, 0.0],
         color: [1.0, 0.5, 0.25],
         intensity: 2.0,
+        angular_radius_deg: 0.0,
     };
     let pushed = pushed_lights(Some(DirectionalLightSet::collect(core::iter::once(sun))));
     assert_eq!(

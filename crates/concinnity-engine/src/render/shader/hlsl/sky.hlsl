@@ -62,7 +62,8 @@ SkyVertexOut sky_vertex(uint vid : SV_VertexID)
 #ifdef SKY_ATMOSPHERE
 // The sky-view table along the pixel's ray over any night sky behind it, and
 // the sun's disc where the ray meets it above the horizon, darkened toward
-// its limb.
+// its limb. A reflection leaves out the sun's and the moon's discs, which
+// their lights' specular terms draw.
 [shader("pixel")]
 float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
 {
@@ -73,13 +74,15 @@ float4 sky_atmosphere_fragment(SkyVertexOut p) : SV_Target
     float3 dir_dx = ddx(dir);
     float3 dir_dy = ddy(dir);
     float3 beyond = (float3)0.0;
+    bool reflection = VIEW.reflection > 0.5;
     if (night_sky_on())
     {
-        beyond += night_sky_radiance(dir, dir_dx, dir_dy, view.a);
+        beyond += reflection ? night_sky_reflected(dir, view.a)
+                             : night_sky_radiance(dir, dir_dx, dir_dy, view.a);
     }
     float cos_sun = dot(dir, ATMO.sun_direction.xyz);
     float cos_radius = ATMO.sun_direction.w;
-    if (cos_sun > cos_radius && !atmo_view_hits_ground(dot(dir, atmo_camera_up())))
+    if (!reflection && cos_sun > cos_radius && !atmo_view_hits_ground(dot(dir, atmo_camera_up())))
 
     {
         float x = saturate((1.0 - cos_sun) / max(1.0 - cos_radius, 1e-7));

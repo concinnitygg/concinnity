@@ -404,15 +404,13 @@ float3 night_sky_radiance(float3 d, float3 dx, float3 dy, float transmittance)
     return transmittance * behind * (1.0 - cover) + moon * cover;
 }
 
-// The night sky as a reflection cube texel `texel` radians wide sees it:
-// everything but the stars, which would alias at a cube's resolution.
-float3 night_sky_reflected(float3 d, float texel, float transmittance)
+// The night sky as a reflection sees it: everything but the stars, which
+// would alias at a cube's resolution, and the moon, whose light's specular
+// term draws it.
+float3 night_sky_reflected(float3 d, float transmittance)
 {
-    float3 moon;
-    float cover = night_moon(d, texel, moon);
     float3 c = night_celestial(d);
-    float3 behind = milky_way(c, true) + night_galaxies(c);
-    return transmittance * behind * (1.0 - cover) + moon * cover;
+    return transmittance * (milky_way(c, true) + night_galaxies(c));
 }
 
 // The night sky's share of the ambient light: the Milky Way's smooth band.

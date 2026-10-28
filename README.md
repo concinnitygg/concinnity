@@ -46,7 +46,7 @@ depending on which platform requirements are installed. See the
 #### From crates.io
 
 ```bash
-cargo install concinnity --features editor
+cargo install --locked concinnity
 ```
 
 #### From Source

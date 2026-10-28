@@ -59,8 +59,9 @@ pub(in crate::vulkan) const GBUFFER_ROUGHNESS_FORMAT: vk::Format = vk::Format::R
 // Screen-space motion (prev_uv - cur_uv). Cleared to 0 (no motion).
 pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 
-// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat and
-// the previous clock. Matches the `GbView` UBO in `gbuffer_common.hlsl`.
+// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat +
+// prev_model_carry and the previous clock. Matches the `GbView` UBO in
+// `gbuffer_common.hlsl`.
 pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
     size_of::<GBufferView>() as vk::DeviceSize;
 

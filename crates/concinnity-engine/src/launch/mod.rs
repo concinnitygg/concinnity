@@ -58,6 +58,9 @@ pub struct LaunchArgs {
     pub screenshots_dir: Option<String>,
     /// Stop after this many frames.
     pub frames: Option<u64>,
+    /// Milliseconds into the run the simulation runs ahead to before it keeps
+    /// the normal pace ([`Self::start_at`] in seconds).
+    pub start_at_millis: Option<u32>,
     /// Take the world's authored screenshots, as a benchmarked run always
     /// does. A run that asks for neither takes none of them.
     pub screenshots: bool,
@@ -76,11 +79,25 @@ pub struct ScreenshotAt {
     pub file: String,
 }
 
+// Milliseconds of `seconds` into the run, none before it starts.
+fn run_millis(seconds: f32) -> u32 {
+    u32::saturating_from(round(seconds.max(0.0) * 1000.0))
+}
+
+// A moment of the run given as seconds: `None` for one that is not a finite,
+// non-negative number.
+fn parse_seconds(value: &str) -> Option<f32> {
+    value
+        .parse()
+        .ok()
+        .filter(|s: &f32| s.is_finite() && *s >= 0.0)
+}
+
 impl ScreenshotAt {
     /// A screenshot `seconds` into the run, saved as `file`.
     pub fn new(seconds: f32, file: &str) -> Self {
         Self {
-            millis: u32::saturating_from(round(seconds.max(0.0) * 1000.0)),
+            millis: run_millis(seconds),
             file: file.to_string(),
         }
     }
@@ -98,11 +115,7 @@ impl ScreenshotAt {
             Some((seconds, file)) => (seconds, Some(file)),
             None => (value, None),
         };
-        let seconds: f32 = seconds
-            .parse()
-            .ok()
-            .filter(|s: &f32| s.is_finite() && *s >= 0.0)?;
-        let mut shot = Self::new(seconds, "");
+        let mut shot = Self::new(parse_seconds(seconds)?, "");
         shot.file = match file {
             Some(file) if !crate::screenshot::is_contained_file(file) => return None,
             Some(file)
@@ -133,9 +146,17 @@ impl LaunchArgs {
         rt_reflections: None,
         screenshots_dir: None,
         frames: None,
+        start_at_millis: None,
         screenshots: false,
         screenshot_at: Vec::new(),
     };
+
+    /// Seconds into the run, on the simulation clock, the simulation runs
+    /// ahead to before it keeps the normal pace; `None` to start at the
+    /// normal pace.
+    pub fn start_at(&self) -> Option<f32> {
+        self.start_at_millis.map(|millis| millis as f32 / 1000.0)
+    }
 
     /// The launch `args` ask for, each a flag from [`LAUNCH_FLAGS`] as
     /// `--name`, `--name value` or `--name=value`. `--help` is answered with
@@ -206,6 +227,10 @@ impl LaunchArgs {
                 .push(ScreenshotAt::parse(value).ok_or_else(|| bad(value))?),
             ("fps-cap", Some(value)) => self.fps_cap = Some(value.parse().map_err(|_| bad(value))?),
             ("frames", Some(value)) => self.frames = Some(value.parse().map_err(|_| bad(value))?),
+            ("start-at", Some(value)) => {
+                self.start_at_millis =
+                    Some(run_millis(parse_seconds(value).ok_or_else(|| bad(value))?));
+            }
             ("quality-preset", Some(value)) => {
                 self.quality_preset = Some(
                     QualityPreset::ALL
@@ -294,6 +319,7 @@ mod tests {
             "--screenshots-dir=shots/vk",
             "--frames",
             "600",
+            "--start-at=96.5",
             "--screenshots",
             "--screenshot-at",
             "12.5:beach",
@@ -313,6 +339,7 @@ mod tests {
                 rt_reflections: Some(true),
                 screenshots_dir: Some("shots/vk".into()),
                 frames: Some(600),
+                start_at_millis: Some(96_500),
                 screenshots: true,
                 screenshot_at: alloc::vec![
                     ScreenshotAt::new(12.5, "beach.png"),
@@ -386,6 +413,18 @@ mod tests {
                 "{value}"
             );
         }
+        for value in ["soon", "-1", "inf"] {
+            assert_eq!(
+                parse(&["--start-at", value]),
+                Err(LaunchArgsError::BadValue {
+                    flag: "start-at",
+                    value: value.into()
+                }),
+                "{value}"
+            );
+        }
+        assert_eq!(parse(&["--start-at=0.25"]).unwrap().start_at(), Some(0.25));
+        assert_eq!(LaunchArgs::NONE.start_at(), None);
         assert_eq!(
             parse(&["--graphics-api", "opengl"]),
             Err(LaunchArgsError::BadValue {
