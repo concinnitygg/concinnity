@@ -409,6 +409,8 @@ struct WaterVertexOut
     [[vk::location(3)]] float4 shore_noise : TEXCOORD3;
     // How tall the swell runs there (`water_shore_swell`).
     [[vk::location(4)]] float shore_swell : TEXCOORD4;
+    // How far the grid's flat triangles there sag below the sphere, in meters.
+    [[vk::location(5)]] float sag : TEXCOORD5;
     float4 position : SV_Position;
 };
 
@@ -1748,6 +1750,7 @@ WaterVertexOut water_vertex(WaterVertexIn v)
     o.shore_field = shore_field;
     o.shore_noise = shore_noise;
     o.shore_swell = shore_swell;
+    o.sag = cell * cell / (8.0 * radius);
     o.position = mul(view.vp, float4(pos, 1.0));
     return o;
 }
@@ -1817,6 +1820,18 @@ float3 water_sea_hit(float2 pixel)
     float disc = b * b - c;
     float t = (c > 0.0 && b < 0.0 && disc >= 0.0) ? c / (-b + sqrt(disc)) : 1e7;
     return t * dir;
+}
+
+// The grid sag past which the sphere stands in for the mesh, in meters. A cell
+// this wide is far too coarse to carry a wave, so the sphere loses nothing.
+static const float WATER_SEA_SAG_STAND_IN = 0.5;
+
+// Whether the sphere stands in for the mesh at `i`: from high up a grid cell
+// spans kilometers and its flat triangles sag tens of meters under the sphere,
+// below the seabed the sea should cover.
+bool water_sea_stands_in(WaterVertexOut i)
+{
+    return i.sag > WATER_SEA_SAG_STAND_IN;
 }
 
 // How far the point on the sea moves across one pixel right (`dx`) and one
@@ -1997,6 +2012,12 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     float2 ndc_xy = float2(s.frag_uv.x * 2.0 - 1.0, -(s.frag_uv.y * 2.0 - 1.0));
     float scene_dist = water_scene_distance(ndc_xy, scene_depth01);
     float water_dist = distance(i.world_pos, view.camera_pos.xyz);
+#ifdef WATER_SEA
+    if (water_sea_stands_in(i))
+    {
+        water_dist = min(water_dist, length(water_sea_hit(i.position.xy)));
+    }
+#endif
     s.camera_distance = water_dist;
     s.world_pos = i.world_pos;
     s.day = water_daylight(i.world_pos);
@@ -2208,7 +2229,15 @@ TransparentOut water_resolve(WaterSurfacePoint s, float3 view_dir, float3 reflec
 // fragment position lines up with the stored texel.
 bool water_occluded(WaterVertexOut i)
 {
-    return depth_in_front(water_scene_depth(water_clamp_pixel(i.position.xy)), i.position.z);
+    float scene = water_scene_depth(water_clamp_pixel(i.position.xy));
+#ifdef WATER_SEA
+    if (water_sea_stands_in(i))
+    {
+        float4 clip = mul(view.vp, float4(view.camera_pos.xyz + water_sea_hit(i.position.xy), 1.0));
+        return depth_in_front(scene, clip.z / clip.w);
+    }
+#endif
+    return depth_in_front(scene, i.position.z);
 }
 
 #ifdef WATER_RT
