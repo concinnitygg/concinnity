@@ -353,6 +353,18 @@ static const float SSGI_NEAR = 0.05;
 // Origin offset along the surface normal, as a fraction of the thickness, so a
 // ray does not immediately self-intersect the surface it starts on.
 static const float SSGI_NORMAL_BIAS = 0.25;
+// Brightest luminance, in the scene's pre-exposed scale, one ray's hit may
+// carry. A small highlight (a chrome glint) holds far more radiance than its
+// few pixels can spread over a one-ray-per-pixel estimate: unclamped, the
+// pixels whose rays happen to strike it light up as sparks around it.
+static const float SSGI_HIT_LUMINANCE = 4.0;
+
+// `radiance` scaled down, hue kept, to at most `SSGI_HIT_LUMINANCE`.
+float3 ssgi_clamp_hit(float3 radiance)
+{
+    float lum = dot(radiance, float3(0.2126, 0.7152, 0.0722));
+    return lum > SSGI_HIT_LUMINANCE ? radiance * (SSGI_HIT_LUMINANCE / lum) : radiance;
+}
 
 // How far behind a surface at view depth `depth` a ray still hits it.
 float ssgi_thickness(float depth)
@@ -542,7 +554,7 @@ float4 ssgi_trace_fragment(
         float2 hit_uv;
         if (ssgi_trace(origin, d, low, full, hit_uv))
         {
-            gathered += float4(scene.SampleLevel(scene_samp, hit_uv, 0.0).rgb, 1.0);
+            gathered += float4(ssgi_clamp_hit(scene.SampleLevel(scene_samp, hit_uv, 0.0).rgb), 1.0);
         }
     }
     gathered /= float(rays);

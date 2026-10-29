@@ -168,9 +168,9 @@ fn sky_bindings() -> [Binding; 3] {
     ]
 }
 
-// The haze pass's set: the constants, the scene depth, the aerial volume and
-// its sampler.
-fn aerial_bindings() -> [Binding; 4] {
+// The haze pass's set: the constants, the scene depth, the aerial volume, its
+// sampler, and the transmittance and multiple-scattering tables.
+fn aerial_bindings() -> [Binding; 6] {
     use vk::DescriptorType as T;
     let f = vk::ShaderStageFlags::FRAGMENT;
     [
@@ -178,6 +178,8 @@ fn aerial_bindings() -> [Binding; 4] {
         (1, T::SAMPLED_IMAGE, f),
         (2, T::SAMPLED_IMAGE, f),
         (3, T::SAMPLER, f),
+        (4, T::SAMPLED_IMAGE, f),
+        (5, T::SAMPLED_IMAGE, f),
     ]
 }
 
@@ -689,8 +691,10 @@ impl VkAtmosphere {
             SetWrites::new(*set)
                 .uniform_buffer(0, ubo.buffer(), params_size)
                 .sampled_image(1, targets.depth_views[i.min(last_depth)])
-                .sampled_image_in(2, tables[3].view, vk::ImageLayout::GENERAL)
+                .sampled_image_in(2, tables[AERIAL].view, vk::ImageLayout::GENERAL)
                 .sampler(3, sampler.handle())
+                .sampled_image_in(4, tables[TRANSMITTANCE].view, vk::ImageLayout::GENERAL)
+                .sampled_image_in(5, tables[MULTISCATTER].view, vk::ImageLayout::GENERAL)
                 .apply(device);
         }
         let framebuffers = create_framebuffers(

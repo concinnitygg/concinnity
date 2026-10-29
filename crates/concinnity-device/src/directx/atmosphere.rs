@@ -367,12 +367,14 @@ fn sky_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [0] root CBV b0   AtmosphereParams
 //   [1] table  t0     scene depth
 //   [2] table  t1     aerial volume
+//   [3] table  t2-t3  transmittance and multiple scattering
 // Static linear-clamp sampler s0.
 fn aerial_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::Pixel)
         .srv_table(0, 1, Visibility::Pixel)
         .srv_table(1, 1, Visibility::Pixel)
+        .srv_table(2, 2, Visibility::Pixel)
         .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
         .build(device, "aerial perspective root sig")
 }
@@ -822,6 +824,9 @@ impl DxContext {
         unsafe { cmd.set_graphics_srv_table(1, atmo.depth_srv_gpu) };
         // SAFETY: the aerial volume's SRV slot lives in the heap set above.
         unsafe { cmd.set_graphics_srv_table(2, atmo.srv_gpu[3]) };
+        // SAFETY: the transmittance and multiple-scattering SRVs sit next to each other in the
+        // heap set above, so the table starting at the first covers both.
+        unsafe { cmd.set_graphics_srv_table(3, atmo.srv_gpu[0]) };
         // SAFETY: the target, pipeline, root signature and every table the draw reads are bound
         // above.
         unsafe { cmd.DrawInstanced(3, 1, 0, 0) };

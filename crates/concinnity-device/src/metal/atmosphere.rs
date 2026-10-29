@@ -388,6 +388,8 @@ impl MtlContext {
         enc.set_fragment_value(params, 0);
         enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
         enc.set_fragment_texture(&atmo.aerial, 1);
+        enc.set_fragment_texture(&atmo.transmittance, 2);
+        enc.set_fragment_texture(&atmo.multiscatter, 3);
         set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 1);
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.

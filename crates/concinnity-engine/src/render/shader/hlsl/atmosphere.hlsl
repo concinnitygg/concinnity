@@ -24,7 +24,9 @@
 // reflections are refreshed. AERIAL_PERSPECTIVE is the fullscreen haze pass:
 // it reads the scene depth and the aerial volume and blends
 // `(in-scatter, 1 - T)` over the scene with the premultiplied `over` blend
-// fog uses.
+// fog uses. From high above the air it marches each pixel's own ray through
+// the transmittance and multiple-scattering tables instead, since one froxel
+// column then spans both sides of the planet's limb.
 
 //
 // Every resource takes its Metal index from its register number. The written
@@ -45,6 +47,8 @@
 #endif
 [[vk::binding(2, 0)]] Texture3D<float4> aerial_volume : register(t1);
 [[vk::binding(3, 0)]] SamplerState lut_sampler : register(s0);
+[[vk::binding(4, 0)]] Texture2D<float4> transmittance_lut : register(t2);
+[[vk::binding(5, 0)]] Texture2D<float4> multiscatter_lut : register(t3);
 
 #else
 
@@ -87,7 +91,7 @@
 {NIGHT_SKY}
 
 #if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) \
-    || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
+    || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE) || defined(AERIAL_PERSPECTIVE)
 // Light surviving the path from radius `r` with up-cosine `mu` to the top of
 // the air; none when the path runs into the ground.
 float3 atmo_transmittance(float r, float mu)
@@ -100,7 +104,7 @@ float3 atmo_transmittance(float r, float mu)
 }
 #endif
 
-#if defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL)
+#if defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) || defined(AERIAL_PERSPECTIVE)
 // Light scattered more than once, per unit sunlight and scattering, at radius
 // `r` with the sun at up-cosine `mu_s`.
 float3 atmo_multiscatter(float r, float mu_s)
@@ -633,6 +637,37 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
 #endif
 
 #ifdef AERIAL_PERSPECTIVE
+// Camera heights, in the air's thicknesses above the ground, over which the
+// haze hands over from the volume to each pixel's own ray.
+static const float2 AERIAL_OWN_RAY_HEIGHTS = float2(0.5, 2.0);
+static const uint AERIAL_MARCH_STEPS = 32u;
+
+// The share of the haze each pixel's own ray carries at this camera height.
+float aerial_own_ray_share()
+{
+    float thickness = atmo_top() - atmo_bottom();
+    float height = ATMO.camera.w - atmo_bottom();
+    return smoothstep(AERIAL_OWN_RAY_HEIGHTS.x * thickness, AERIAL_OWN_RAY_HEIGHTS.y * thickness,
+                      height);
+}
+
+// `(in-scatter, 1 - T)` along `dir` from where it enters the air to
+// `distance` km past that, marched as the volume's columns are.
+float4 aerial_march(float3 dir, float enter, float distance)
+{
+    float3 origin = atmo_camera_up() * atmo_camera_radius() + dir * enter;
+    float3 sun = atmo_table_sun();
+    float3 radiance = (float3)0.0;
+    float3 throughput = (float3)1.0;
+    float dt = distance / float(AERIAL_MARCH_STEPS);
+    for (uint i = 0u; i < AERIAL_MARCH_STEPS; ++i)
+    {
+        atmo_step(origin + dir * ((float(i) + 0.5) * dt), dir, sun, dt, radiance, throughput);
+    }
+    float t = dot(throughput, (float3)(1.0 / 3.0));
+    return float4(radiance * ATMO.sun_illuminance.xyz * ATMO.cam_pos.w, 1.0 - t);
+}
+
 // The fragment takes the shared fullscreen varying but derives its own `uv`
 // from SV_Position, for the reason fog_fragment gives: the volume was filled
 // in screen tile order.
@@ -661,20 +696,32 @@ float4 aerial_perspective_fragment(
         discard;
     }
     float3 to_world = world - ATMO.cam_pos.xyz;
-    float2 span = atmo_aerial_span(normalize(to_world));
+    float3 dir = normalize(to_world);
+    float2 span = atmo_aerial_span(dir);
     if (span.x < 0.0)
     {
         discard;
     }
     float distance = max(length(to_world) * ATMO.radii.w - span.x, 0.0);
-    // Slices are centered, so a surface nearer than the first slice's center
-    // fades in from no haze at the camera.
-    float slice = aerial_slice_of(distance, span.y) * float(AERIAL_SIZE);
-    float fade = saturate(slice * 2.0);
-    float w = max(slice, 0.5) / float(AERIAL_SIZE);
-    // The volume already holds its in-scattered light pre-exposed. Across
-    // the screen it is read through the B-spline: a froxel column is wide,
-    // and a linear read draws its grid into the haze.
-    return atmo_bspline_slice(aerial_volume, lut_sampler, uv, w, float(AERIAL_SIZE)) * fade;
+    float own = aerial_own_ray_share();
+    float4 haze = (float4)0.0;
+    if (own < 1.0)
+    {
+        // Slices are centered, so a surface nearer than the first slice's
+        // center fades in from no haze at the camera.
+        float slice = aerial_slice_of(distance, span.y) * float(AERIAL_SIZE);
+        float fade = saturate(slice * 2.0);
+        float w = max(slice, 0.5) / float(AERIAL_SIZE);
+        // The volume already holds its in-scattered light pre-exposed. Across
+        // the screen it is read through the B-spline: a froxel column is wide,
+        // and a linear read draws its grid into the haze.
+        haze = atmo_bspline_slice(aerial_volume, lut_sampler, uv, w, float(AERIAL_SIZE)) * fade
+             * (1.0 - own);
+    }
+    if (own > 0.0)
+    {
+        haze += aerial_march(dir, span.x, distance) * own;
+    }
+    return haze;
 }
 #endif

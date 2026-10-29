@@ -43,10 +43,13 @@ struct TaaParams
 // roughly a 10-frame exponential moving average once converged.
 static const float TAA_BLEND = 0.9;
 
-// Standard deviations of the neighborhood the history is allowed to span.
-// 1.0 is the Playdead/Karis default; lower tightens (less ghosting, more
-// flicker), higher loosens.
-static const float TAA_VARIANCE_GAMMA = 1.0;
+// Standard deviations of the neighborhood the history is allowed to span: x
+// for a still pixel, y for one moving `TAA_VARIANCE_MOTION_PX` or more per
+// frame, linear between. A wide box lets a slow high-contrast edge (a coastline
+// or a planet's limb) settle its jitter; a fast one narrows to the
+// Playdead/Karis default, which keeps a disocclusion from ghosting.
+static const float2 TAA_VARIANCE_GAMMA = float2(2.5, 1.0);
+static const float TAA_VARIANCE_MOTION_PX = 8.0;
 
 // Luma ratio under which two neighborhood samples count as the same surface
 // for the thin-feature test.
@@ -189,13 +192,16 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     }
     float3 mean  = m1 / 9.0;
     float3 sigma = sqrt(max(m2 / 9.0 - mean * mean, (float3)(0.0)));
-    float3 bmin  = mean - TAA_VARIANCE_GAMMA * sigma;
-    float3 bmax  = mean + TAA_VARIANCE_GAMMA * sigma;
 
     // The velocity pre-pass stored each surface's screen-space motion as the
     // offset that maps a current-frame UV onto its previous-frame UV. This
     // captures camera motion, moving props, and skinned deformation alike.
     float2 motion  = velocity_tex.Sample(velocity_samp, uv).rg;
+    float2 motion_px = motion * texture_size(scene_tex);
+    float gamma = lerp(TAA_VARIANCE_GAMMA.x, TAA_VARIANCE_GAMMA.y,
+                       saturate(length(motion_px) / TAA_VARIANCE_MOTION_PX));
+    float3 bmin = mean - gamma * sigma;
+    float3 bmax = mean + gamma * sigma;
     float2 prev_uv = uv + motion;
     bool on_screen = all(prev_uv >= (float2)(0.0)) && all(prev_uv <= (float2)(1.0));
 
@@ -222,7 +228,6 @@ float4 taa_fragment_main([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Target
     // prop never locks), and holds the clip off only over a flat neighborhood.
     float lock = has_history ? saturate(select(isnan(hist_raw.a), 0.0, hist_raw.a)) : 0.0;
     lock = max(lock - params.lock_decay, 0.0);
-    float2 motion_px = motion * texture_size(scene_tex);
     bool thin = taa_thin_feature(luma);
     if (thin && dot(motion_px, motion_px) < TAA_LOCK_MOTION_PX * TAA_LOCK_MOTION_PX)
     {
