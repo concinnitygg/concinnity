@@ -267,7 +267,7 @@ fn probe_dxc() -> Result<Dxc, String> {
     }
     Err(format!(
         "dxc not found: the engine's single-source shaders need the DirectX \
-         Shader Compiler. In an engine checkout, `scripts/vendor.py fetch dxc` \
+         Shader Compiler. In an engine checkout, `cargo xtask vendor fetch dxc` \
          vendors the pinned release (`build dxc` on macOS, which Microsoft \
          publishes no binary for). Otherwise install a release \
          (https://github.com/microsoft/DirectXShaderCompiler/releases) and put \

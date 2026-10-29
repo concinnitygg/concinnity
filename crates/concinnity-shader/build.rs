@@ -62,7 +62,7 @@ fn main() {
 // The workspace root, two levels above this manifest, under which `vendor/`
 // holds the pinned dxc release. A registry copy has neither that layout nor a
 // manifest there, so it emits `None` and resolution falls through to PATH.
-// `vendor.py` touches this file after installing dxc, which reruns it.
+// `cargo xtask vendor` touches this file after installing dxc, which reruns it.
 fn emit_workspace_root(manifest: &Path, out_dir: &Path) {
     let root = manifest
         .parent()

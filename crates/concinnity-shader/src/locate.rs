@@ -4,7 +4,7 @@
 //! releases, then PATH, then `$VULKAN_SDK/bin`. The first two are the same idea
 //! from either side of a release: a release stages the dxc it was built with
 //! beside its binaries, and a checkout carries a pinned release under `vendor/`
-//! (`scripts/vendor.py`), so a given revision compiles its shaders with a given
+//! (`cargo xtask vendor`), so a given revision compiles its shaders with a given
 //! compiler rather than with whatever a machine installed. Both beat PATH,
 //! because both are the answer nearest to the thing being run. Neither exists
 //! for a consumer building from a registry copy, which starts at PATH.
@@ -21,7 +21,7 @@ include!(concat!(env!("OUT_DIR"), "/workspace_root.rs"));
 /// The directory a release stages its dxc in, beside the binaries.
 const BUNDLED_DIR: &str = "dxc";
 
-/// The name `vendor.py` gives a dxc release directory, before `-<version>-<slug>`.
+/// The name `cargo xtask vendor` gives a dxc release directory, before `-<version>-<slug>`.
 const VENDORED_NAME: &str = "dxc";
 
 /// Every dxc to try, in resolution order.
@@ -75,7 +75,7 @@ fn exe_dir() -> Option<PathBuf> {
 }
 
 // The `<os>-<arch>` half of a release directory name. `None` on a platform
-// `vendor.py` vendors no dxc for.
+// `cargo xtask vendor` vendors no dxc for.
 fn host_slug() -> Option<&'static str> {
     Some(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => "macos-aarch64",

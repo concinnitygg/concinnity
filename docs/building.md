@@ -55,25 +55,17 @@ rustc --version
 
 ### Third-party dependencies
 
-The build uses third-party binaries that are not Rust crates. Fetch them once
+The build uses third-party binaries that are not Rust crates. Vendor them once
 per checkout:
 
 ```sh
-scripts/vendor.py fetch
-```
-
-On macOS, which Microsoft publishes no `dxc` for, build the pinned
-[shader compiler](#shader-compiler) from source as well. It needs `git`, `cmake`
-and `ninja`, and takes a few minutes (3.5 on a 12-core Apple silicon Mac):
-
-```sh
-scripts/vendor.py build dxc
+cargo xtask vendor
 ```
 
 To see what is vendored and what the build would otherwise pick:
 
 ```sh
-scripts/vendor.py status
+cargo xtask vendor status
 ```
 
 [Third-party environment variables](#third-party-environment-variables)
@@ -90,7 +82,7 @@ binary, and stops if no `dxc` resolves. It is looked for in this order:
 
 1. `dxc/bin/` beside the running executable, which is where a release carries
    the one it was built with
-2. `vendor/dxc-<version>-<os>-<arch>/`, the release `scripts/vendor.py` pins
+2. `vendor/dxc-<version>-<os>-<arch>/`, the release `cargo xtask vendor` pins
 3. `PATH`
 4. `$VULKAN_SDK/bin`
 
@@ -110,7 +102,7 @@ compiles alongside the engine's.
 Every third-party toolchain the build reaches for is located the same way: the
 environment variable if it is set, then `vendor/`, then nothing (the feature is
 skipped and the build says which of the two was missing). Setting one is only
-needed for an SDK installed somewhere `vendor.py` did not put it.
+needed for an SDK installed somewhere `cargo xtask vendor` did not put it.
 
 ### Locating an SDK
 
@@ -178,7 +170,7 @@ below.
    ```
 
 3. Build `dxc`, the [shader compiler](#shader-compiler), with
-   `scripts/vendor.py build dxc`: DXC publishes no macOS release of its own.
+   `cargo xtask vendor`: DXC publishes no macOS release of its own.
 
 ### Build
 
@@ -260,7 +252,7 @@ DirectX 12 is the default backend on Windows.
    [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/),
    selecting the **Desktop development with C++** workload. This provides the MSVC
    linker plus the Windows SDK. Shaders compile with the pinned `dxc` that
-   `scripts/vendor.py fetch` vendors; see [Shader compiler](#shader-compiler).
+   `cargo xtask vendor` vendors; see [Shader compiler](#shader-compiler).
 
 ### Build
 
@@ -365,8 +357,7 @@ engine.
 Build the patched runtime out of the SDK already under `vendor/`:
 
 ```powershell
-python scripts/vendor.py fetch fidelityfx    # if not already vendored
-python scripts/vendor.py build fidelityfx-vk
+cargo xtask vendor fidelityfx fidelityfx-vk
 ```
 
 That applies the shader fix, builds `ffx-api` for `VK_X64` (which recompiles the
@@ -376,7 +367,7 @@ the stock SDK copy. It is idempotent, needs **CMake**, the **Visual Studio Build
 Tools** C++ x64 toolset, and the **Vulkan SDK** with `VULKAN_SDK` set (for
 `glslc`), and takes `--generator` for a toolchain other than the default
 `Visual Studio 18 2026`. The change it makes is recorded in
-`scripts/patches/fsr3upscaler_luma_history_rgba16f.patch`.
+`crates/xtask/patches/fsr3upscaler_luma_history_rgba16f.patch`.
 
 Without it the build falls back to the stock SDK DLL, which works but warns
 every dispatch; with neither, Vulkan FSR falls back to native resolution. To
@@ -419,7 +410,7 @@ Ubuntu; translate them to your distribution's equivalents as needed.
    ```
 
 3. Vendor `dxc`, the [shader compiler](#shader-compiler), with
-   `scripts/vendor.py fetch dxc`.
+   `cargo xtask vendor`.
 
 4. To **run** the engine you also need a Vulkan-capable GPU driver (e.g.
    `mesa-vulkan-drivers` for Intel/AMD, or the proprietary NVIDIA driver). The
@@ -448,6 +439,17 @@ Doctests are a separate pass, because `--all-targets` skips them:
 
 ```sh
 cargo test --doc --workspace
+```
+
+### Test tools
+
+The capture, diff and snapshot tools live in the `tools/` submodule, which
+nothing in the build needs. A plain clone leaves it empty; clone with
+`--recurse-submodules`, or fetch it into an existing checkout:
+
+```sh
+git submodule update --init tools
+python3 tools/cn.py --help
 ```
 
 ### Discipline scans
