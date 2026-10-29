@@ -163,7 +163,7 @@ impl LiveEdit for MtlContext {
     }
 
     // The swapchain config this live context can hot-swap a new world onto: the
-    // ring depth plus the HDR-output request it was built with. A live `cn editor`
+    // ring depth plus the HDR-output request it was built with. A live `cn edit`
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
     fn hot_swap_config(&self) -> Option<init::SwapchainConfig> {

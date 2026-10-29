@@ -1,5 +1,5 @@
 //! The shared render/event loop that drives a live `Runtime`. Both the compiled
-//! `cn run` runtime (`run::start_runtime`) and the interpreted `cn debug` path
+//! `cn run` runtime (`run::start_runtime`) and the interpreted `cn run -f` path
 //! (in the editor crate) pump the same loop; the only difference is the per-tick
 //! hook the debug path threads through to run its frame hook. Keeping the platform
 //! event-pump and window-activation glue in one place means it is not duplicated

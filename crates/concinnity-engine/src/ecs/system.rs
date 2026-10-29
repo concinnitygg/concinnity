@@ -32,7 +32,7 @@ pub enum StepResult {
 /// A world holds its systems as `dyn System`, so the trait is object-safe.
 /// `Send` is what lets a built world move to the simulation thread, and `Any`
 /// is what lets a caller holding the world reach one system as its own type
-/// (the `cn debug` / `cn editor` hot-reload drive).
+/// (the `cn run -f` / `cn edit` hot-reload drive).
 pub trait System: core::any::Any + core::fmt::Debug + Send {
     /// Run once at `World::start`, before the first step.
     fn init(&mut self, _ctx: &mut PipelineContext<'_>) {}

@@ -1,7 +1,7 @@
 //! Compiles a Texture component's args into the binary payload that
 //! `GraphicsSystem` reads at runtime, and decodes file-backed texture sources
 //! (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
-//! build pipeline and the `cn debug` asset hot-reload path.
+//! build pipeline and the `cn run -f` asset hot-reload path.
 //!
 //! Payload format: `concinnity_engine::bake::texture::serialize`. RGBA8 images
 //! are stored with their full box-filtered mip chain, so the runtime uploads
@@ -239,7 +239,7 @@ pub fn decode_source(
 
 // Decode a KTX2 to RGBA8 for the runtime asset hot-reload live preview. The
 // build path keeps KTX2 block-compressed; this decodes/transcodes the base
-// level so `cn debug` can show an edited texture without a compressed upload.
+// level so `cn run -f` can show an edited texture without a compressed upload.
 fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
     let bytes = read_source(source, "KTX2 texture")?;
     crate::codec::ktx2::decode_ktx2_rgba8(&bytes).map_err(|e| format!("'{source}': {e}"))

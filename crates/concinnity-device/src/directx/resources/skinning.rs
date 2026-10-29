@@ -284,7 +284,7 @@ impl DxContext {
 
     // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the shared
     // skinned vertex / index buffers in place. Driven by asset hot-reload
-    // (`cn debug` only). The slot's vertex region starts at
+    // (`cn run -f` only). The slot's vertex region starts at
     // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
     // vertices wide; the index region lives at the slot's init-time
     // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`

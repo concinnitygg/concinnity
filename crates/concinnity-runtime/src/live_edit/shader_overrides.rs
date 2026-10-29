@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// shader bucket. Clones share one set: hot reload writes it and the streaming
 /// pump installs from it when a Shader's scene loads after the edit. Created
 /// fresh by each init under hot-reload capture, so an override never outlives
-/// the world its bucket numbering belongs to; `cn build` is what persists an
+/// the world its bucket numbering belongs to; `cn cook` is what persists an
 /// edit.
 #[derive(Debug, Clone, Default)]
 pub struct ShaderOverrides(Arc<Mutex<HashMap<u32, Arc<ShaderPrograms>>>>);

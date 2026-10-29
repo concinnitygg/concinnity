@@ -77,7 +77,7 @@ impl Default for SleepMargin {
 pub fn frame_cap(world: &World) -> u32 {
     let launch = world
         .resource::<LaunchRequest>()
-        .and_then(|launch| launch.args.fps_cap);
+        .and_then(|launch| launch.args.limit_fps);
     let benchmark = world
         .resource::<BenchmarkRun>()
         .map(|run| run.config.fps_cap);
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(frame_cap(&world), 0);
         world.insert_resource(LaunchRequest {
             args: LaunchArgs {
-                fps_cap: Some(1000),
+                limit_fps: Some(1000),
                 ..LaunchArgs::NONE
             },
             ..Default::default()

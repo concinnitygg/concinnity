@@ -127,7 +127,7 @@ pub struct FrameRateCap(pub u32);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WindowMinimized(pub bool);
 
-/// An external per-frame driver (the `cn editor` HUD) can force the world's
+/// An external per-frame driver (the `cn edit` HUD) can force the world's
 /// "menu active" state through this resource: `Some(true)` frees the cursor and
 /// freezes gameplay/physics/animation (edit mode), `Some(false)` captures the
 /// cursor and lets the world run (play mode), both regardless of whether the
@@ -142,7 +142,7 @@ pub struct MenuOverride(pub Option<bool>);
 /// true, the systems that persist play state (behavior variables / once flags,
 /// story position) neither read nor write their disk saves -- every session
 /// starts fresh and leaves no trace. In-memory state is unaffected, so a `save`
-/// node still works within the session. Published by the `cn editor` HUD
+/// node still works within the session. Published by the `cn edit` HUD
 /// injection (sampled at each system's init); a shipped runtime never
 /// publishes it.
 #[derive(Debug, Clone, Copy, Default)]
@@ -194,7 +194,7 @@ pub struct TraceEvent {
 }
 
 /// An external observer's request for execution tracing, published per frame by
-/// the `cn editor` HUD while its Behavior panel is open and removed when it
+/// the `cn edit` HUD while its Behavior panel is open and removed when it
 /// closes. While present, the behavior system records which nodes ran each
 /// simulated tick and publishes [`ExecutionTrace`]; absent (the shipped runtime,
 /// or the panel closed), the system does no recording work beyond noticing the
@@ -236,7 +236,7 @@ pub struct ExecutionTrace {
 pub struct TracePaths(pub Vec<(AssetId, Vec<TracePath>)>);
 
 /// The silhouette the in-engine cursor sprite should draw this frame. Published
-/// by the `cn editor` HUD when the pointer is over a resizable panel's edge or
+/// by the `cn edit` HUD when the pointer is over a resizable panel's edge or
 /// corner (or while a resize drag is in flight) and read by the overlay build,
 /// which draws the matching shape at the pointer in place of the arrow. `Default`
 /// is the plain arrow; the four resize shapes are double-headed arrows along a
@@ -262,7 +262,7 @@ pub enum CursorShape {
 pub struct DesiredCursor(pub CursorShape);
 
 /// Per-frame draw-layer overrides for HUD Sprites / `TextLabels` / `TextInputs`, keyed
-/// by asset id and published by the `cn editor` HUD so its floating panels occlude
+/// by asset id and published by the `cn edit` HUD so its floating panels occlude
 /// cleanly. Overlay draw calls render in two passes (all sprites, then all text),
 /// so two overlapping panels' contents merge -- one panel's text draws over the
 /// other's background. The renderer stable-sorts the overlay calls by this layer
@@ -325,7 +325,7 @@ pub struct FlyCam(pub bool);
 /// each listed asset's draw slots to a degenerate transform (so it neither
 /// rasterizes nor casts shadows) and drops it from the [`PickIndex`]. Authored
 /// data is untouched, and the collapse is re-derived every frame, so clearing
-/// an id restores the object immediately. Published by the `cn editor` HUD
+/// an id restores the object immediately. Published by the `cn edit` HUD
 /// drive; absent / empty otherwise.
 #[derive(Debug, Clone, Default)]
 pub struct HiddenAssets(pub alloc::collections::BTreeSet<AssetId>);
@@ -358,7 +358,7 @@ pub struct PickEntry {
 /// The per-frame viewport-picking index: every renderable prop entity's asset id
 /// and world-space AABB, refreshed by the renderer from the live transforms.
 /// Opt-in: the renderer only builds it when the resource is already present at
-/// init (the `cn editor` HUD injection inserts an empty one), so a shipped
+/// init (the `cn edit` HUD injection inserts an empty one), so a shipped
 /// runtime never pays for it. Rooms, instanced clusters, and voxel chunks are
 /// not indexed; picking targets authored prop placements.
 #[derive(Debug, Clone, Default)]

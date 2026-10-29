@@ -114,7 +114,7 @@ fn the_launch_request_survives_a_world_load_and_restart() {
 fn only_a_benchmark_launch_arms_the_world() {
     use concinnity_engine::benchmark::BenchmarkRun;
     use concinnity_engine::components::BenchmarkConfig;
-    use concinnity_engine::launch::LaunchArgs;
+    use concinnity_engine::launch::{LaunchArgs, LaunchCommand};
 
     let declared = || {
         let mut world = World::new();
@@ -130,7 +130,7 @@ fn only_a_benchmark_launch_arms_the_world() {
 
     let mut benchmarked = Runtime::from_world(declared()).with_launch(LaunchRequest {
         args: LaunchArgs {
-            benchmark: true,
+            command: LaunchCommand::Bench,
             ..LaunchArgs::NONE
         },
         ..Default::default()
@@ -145,18 +145,18 @@ fn only_a_benchmark_launch_arms_the_world() {
 #[test]
 fn an_apps_args_replace_the_launchs() {
     use concinnity_engine::benchmark::BenchmarkRun;
-    use concinnity_engine::launch::LaunchArgs;
+    use concinnity_engine::launch::{LaunchArgs, LaunchCommand};
 
     let mut world = World::new();
     let args = LaunchArgs {
-        benchmark: true,
-        frames: Some(9),
+        command: LaunchCommand::Bench,
+        limit_frames: Some(9),
         ..LaunchArgs::NONE
     };
     world.insert_resource(args.clone());
     let mut runtime = Runtime::from_world(world).with_launch(LaunchRequest {
         args: LaunchArgs {
-            frames: Some(1),
+            limit_frames: Some(1),
             ..LaunchArgs::NONE
         },
         ..Default::default()

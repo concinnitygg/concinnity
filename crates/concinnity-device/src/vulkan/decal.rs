@@ -709,7 +709,7 @@ impl VkContext {
     }
 
     // Tombstone a runtime decal slot. The id becomes invalid; the next
-    // `add_decal` may reuse it. Reached only through the bin's `cn debug`
+    // `add_decal` may reuse it. Reached only through the bin's `cn run -f`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
     pub(crate) fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
         self.decal

@@ -93,7 +93,7 @@ pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
     let runtime_platforms = read_runtime_platforms(&runtime)?;
     let targets = verify_runtime_backend(runtime_platforms, crate::cook_targets())?;
 
-    // Build the world like `cn build` (validates, compiles, writes the blobs +
+    // Build the world like `cn cook` (validates, compiles, writes the blobs +
     // world-lock.json, reuses the build cache), for the player's backends.
     let world_path = resolve_world_path(world.as_deref())?;
     crate::authoring::build_world_file_for(&world_path, targets)?;

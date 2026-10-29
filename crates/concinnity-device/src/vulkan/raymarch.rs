@@ -1288,7 +1288,7 @@ impl RaymarchResources {
     // of every view set after an EnvironmentMap hot-reload swapped the IBL
     // cubes for fresh image views. The light / shadow / snapshot bindings and
     // the cube-less shadow-caster view sets are left untouched. Reached only
-    // through the bin's `cn debug` env-map hot-reload path (dead in the FFI
+    // through the bin's `cn run -f` env-map hot-reload path (dead in the FFI
     // lib, live in the bin).
     pub(in crate::vulkan) fn rewire_ibl_cubes(
         &self,

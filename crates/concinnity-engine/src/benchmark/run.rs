@@ -19,6 +19,8 @@ pub struct BenchmarkRun {
     names: Vec<String>,
     // Where each phase ends on the run's clock, in phase order.
     ends: Vec<f32>,
+    // Where the launch stops the run, when before its last phase ends.
+    stop_at: Option<f32>,
 }
 
 impl BenchmarkRun {
@@ -38,7 +40,16 @@ impl BenchmarkRun {
             config,
             names,
             ends,
+            stop_at: None,
         }
+    }
+
+    /// The same run, stopped `seconds` into it when that is before its last
+    /// phase ends.
+    #[must_use]
+    pub fn with_stop_at(mut self, seconds: Option<f32>) -> Self {
+        self.stop_at = seconds;
+        self
     }
 
     /// The phase names, in order. A phase's index into this list is how a
@@ -68,6 +79,12 @@ impl BenchmarkRun {
             .last()
             .copied()
             .unwrap_or(self.config.warmup_seconds)
+    }
+
+    /// When the run stops: its end, or the launch's stop when that is sooner.
+    pub fn stop_seconds(&self) -> f32 {
+        let end = self.end_seconds();
+        self.stop_at.map_or(end, |stop| stop.min(end))
     }
 }
 
@@ -119,5 +136,15 @@ mod tests {
         let run = run(1.0, &[("a", -4.0), ("b", 2.0)]);
         assert_eq!(run.phase_at(1.0), Some(1));
         assert_eq!(run.end_seconds(), 3.0);
+    }
+
+    #[test]
+    fn a_launch_stop_cuts_the_run_short_but_never_extends_it() {
+        let full = run(1.0, &[("a", 4.0), ("b", 5.0)]);
+        assert_eq!(full.stop_seconds(), 10.0);
+        let cut = full.clone().with_stop_at(Some(3.5));
+        assert_eq!(cut.stop_seconds(), 3.5);
+        assert_eq!(cut.end_seconds(), 10.0);
+        assert_eq!(full.with_stop_at(Some(60.0)).stop_seconds(), 10.0);
     }
 }

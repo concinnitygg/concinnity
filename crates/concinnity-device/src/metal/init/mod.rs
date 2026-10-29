@@ -144,7 +144,7 @@ impl MtlContext {
     // The shared constructor. `reuse == None` creates a fresh device + command
     // queue + window (the normal `new` path); `reuse == Some` rebuilds the
     // world's content on the hardware an outgoing context handed over for a
-    // live `cn editor` reload, keeping its window so a save does not recreate
+    // live `cn edit` reload, keeping its window so a save does not recreate
     // it. Everything after the hardware is identical: the same pipelines,
     // buffers, textures, and targets are built from `init` either way.
     fn build(init: BackendInit<'_>, reuse: Option<MtlHardware>) -> RenderResult<Self> {
@@ -422,7 +422,7 @@ impl MtlContext {
 
     // Re-upload a new world's GPU content onto this live context, reusing the
     // retained device + command queue + window instead of recreating them.
-    // Drives the `cn editor` live SAVE: after a structural edit recompiles the
+    // Drives the `cn edit` live SAVE: after a structural edit recompiles the
     // blobs, GraphicsSystem transplants the running backend into the rebuilt
     // world and calls this so the edit applies with no window recreation.
     //

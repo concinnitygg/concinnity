@@ -610,7 +610,7 @@ pub(super) struct DxHardware {
     // window is in (borderless) fullscreen and restored on exit / drop.
     // Reconciled once per frame in `window_closed`.
     pub fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
-    // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
+    // Win32 window. `Option` so a live `cn edit` world reload can MOVE the
     // window (and its live cursor / menu / keymap state) into the rebuilt
     // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
     pub win_state: Option<Box<WindowState>>,

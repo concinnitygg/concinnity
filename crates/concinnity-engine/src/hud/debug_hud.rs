@@ -307,7 +307,7 @@ fn rss_due(age: &mut Option<f32>, dt: f32) -> bool {
 /// Every rendering world receives a `DebugHud` at start when it declares none,
 /// and any label field left unset receives a chip, so the example below is
 /// only needed to restyle them. The HUD only activates in developer contexts:
-/// a debug build of the host binary, or a world launched through `cn debug`;
+/// a debug build of the host binary, or a world launched through `cn run -f`;
 /// release builds leave it inert even when declared. Declare an
 /// [`EngineDefaults`](#enginedefaults) with `"debug_hud": false` to leave the
 /// world without one.

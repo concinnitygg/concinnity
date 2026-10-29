@@ -78,7 +78,7 @@ const CURSOR_LAYER: i32 = i32::MAX;
 
 // Build the cursor draw calls (one mesh per visible `follow_cursor` sprite) at
 // the pointer, drawing `shape`'s silhouette (the arrow, or a resize double-arrow
-// over a `cn editor` panel edge). Each sprite's tint is the fill color and its
+// over a `cn edit` panel edge). Each sprite's tint is the fill color and its
 // `height` the cursor height; `width` is ignored so the silhouette keeps its
 // aspect ratio. The height is authored in the reference canvas, so it is scaled
 // by the overlay factor for `viewport` to stay proportional with the menu it

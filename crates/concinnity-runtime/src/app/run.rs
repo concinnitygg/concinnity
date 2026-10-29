@@ -7,12 +7,11 @@
 //! process its callbacks on the main thread each tick. On all other platforms
 //! a tight Rust loop is used, which is what `VulkanRenderer` expects.
 //!
-//! This is the `cn run` path only: no debug server, no remote command
+//! This is the blob-playback path: no debug server, no remote command
 //! channel, no in-memory rebuild. A shipped run is neither remotely inspectable
-//! nor remotely driven. The interpreted (`cn debug`) path with hot-reload and
-//! the command channel lives in the editor crate.
+//! nor remotely driven. The paths with hot-reload and the command channel live
+//! in the dev crate.
 
-use concinnity_engine::ecs::ScheduleMode;
 use concinnity_engine::error::WorldError;
 use concinnity_engine::render::backend::error::RenderError;
 use concinnity_host::store::paths::StateTree;
@@ -22,7 +21,7 @@ use crate::app::blob::BlobSource;
 use crate::app::runloop;
 use crate::app::runtime::Runtime;
 use crate::app::startup_error::StartupError;
-use concinnity_engine::launch::{LaunchRequest, PipelineMode};
+use concinnity_engine::launch::{LaunchArgs, LaunchRequest, PipelineMode};
 
 // Default tracing filter applied when RUST_LOG is unset: info for debug
 // builds, warn for release builds. A RUST_LOG value always takes precedence.
@@ -44,59 +43,47 @@ fn log_filter() -> EnvFilter {
 /// configured: the CLI entry points call it directly, and the FFI entry point
 /// (`cn_init`) calls it for the macOS app. Safe to call once per process. The
 /// crash ring layer rides along so crash reports carry the recent log lines.
+pub fn init_logging() {
+    install_logging(false);
+}
+
+/// Install the global tracing subscriber, printing nothing when `quiet`. A
+/// quiet process still keeps the crash ring, so a crash report carries the
+/// recent log lines. The first call in a process wins.
 #[expect(
     clippy::let_underscore_must_use,
     reason = "a subscriber the host already installed takes precedence"
 )]
-pub fn init_logging() {
+pub fn install_logging(quiet: bool) {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let fmt = tracing_subscriber::fmt::layer().with_filter(log_filter());
+    let fmt = (!quiet).then(|| tracing_subscriber::fmt::layer().with_filter(log_filter()));
     let _ = tracing_subscriber::registry()
         .with(fmt)
         .with(crate::crash::RingLayer)
         .try_init();
 }
 
-/// Runtime launch options beyond the world itself.
-#[derive(Debug, Default)]
-pub struct RunOptions {
-    /// Whether the runtime pipelines simulation and rendering.
-    pub mode: PipelineMode,
-    /// Whether systems may fan their internal work across the job pool
-    /// (default) or keep everything on the stepping thread
-    /// (`cn run --serial-schedule`, the determinism oracle).
-    pub schedule: ScheduleMode,
-    /// Capture the last presented frame to this path when the run stops, for
-    /// headless verification of the runtime path (`cn run --screenshot`).
-    pub screenshot: Option<String>,
-    /// What the launch asks the runtime to arm (`cn run` only; [`run_from`] and
-    /// [`Runtime::run`] keep the runtime's own).
-    pub launch: LaunchRequest,
-}
-
-/// Production entry point (`cn run`). Reads the compiled binary blobs from
-/// `tree`'s `data/`, written by a prior `cn build`. No debug server, no
-/// command channel: a shipped run is neither remotely inspectable nor
-/// remotely driven.
+/// Blob-playback entry point (`cn run` on a cooked world). Reads the compiled
+/// binary blobs from `tree`'s `data/`, written by a prior `cn cook`, and runs
+/// them as `launch` asks. No debug server, no command channel: a shipped run is
+/// neither remotely inspectable nor remotely driven.
 ///
 /// # Errors
 ///
 /// Returns an error if the world in `data/` cannot be loaded or the runtime
 /// fails to start.
-pub fn run(tree: &StateTree, options: RunOptions) -> std::io::Result<()> {
-    init_logging();
+pub fn run(tree: &StateTree, launch: LaunchRequest) -> std::io::Result<()> {
+    install_logging(launch.args.quiet);
 
-    let mut runtime = Runtime::new()
-        .in_tree(tree.clone())
-        .with_launch(options.launch.clone());
+    let mut runtime = Runtime::new().in_tree(tree.clone()).with_launch(launch);
     let data_dir = tree.data_dir();
     if let Err(error) = load_world(&mut runtime, &BlobSource::Directory(data_dir)) {
         return Err(report_startup_error(&error));
     }
-    start_runtime(runtime, options).map_err(|e| start_failure(&e))
+    start_runtime(runtime).map_err(|e| start_failure(&e))
 }
 
 // A refused start, in the form a process exit status is built from.
@@ -145,25 +132,20 @@ pub fn run_from(tree: &StateTree, blob: &BlobSource) -> std::io::Result<()> {
     if let Err(error) = load_world(&mut runtime, blob) {
         return Err(report_startup_error(&error));
     }
-    start_runtime(runtime, RunOptions::default()).map_err(|e| start_failure(&e))
+    start_runtime(runtime).map_err(|e| start_failure(&e))
 }
 
 // Startup and loop entry once the Runtime's world is populated. Registers the
 // CTRL+C handler, activates AppKit on macOS, starts the runtime, then drives
-// frames -- pipelined (sim thread + render half) or serial (the
-// single-threaded world loop) -- until the window closes, a system stops the
-// world, or CTRL+C is received. External callers reach this through
-// `Runtime::run` / `Runtime::run_with`.
-pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result<(), WorldError> {
-    let RunOptions {
-        mode,
-        schedule,
-        screenshot,
-        ..
-    } = options;
+// frames -- pipelined (sim thread + render half), or serial for a world with
+// nothing to render -- until the window closes, a system stops the world, or
+// CTRL+C is received. External callers reach this through `Runtime::run`.
+pub(crate) fn start_runtime(mut runtime: Runtime) -> Result<(), WorldError> {
     // A host that installed its own subscriber keeps it (`try_init` no-ops),
     // so an embedded app gets logs without wiring any up itself.
-    init_logging();
+    let args = runtime.launch_args();
+    install_logging(args.quiet);
+    warn_unserved_debug_port(args);
     tracing::info!("Running app...");
     runloop::install_ctrlc_handler(&runtime);
 
@@ -171,11 +153,6 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
     // reads are drained. The runtime caches it, so `start()` publishes this
     // same answer rather than probing the GPU twice.
     let renders = runtime.render_mode().renders();
-
-    if screenshot.is_some() {
-        runtime.launch_mut().capture = true;
-    }
-    runtime.world_mut().insert_resource(schedule);
 
     #[cfg(target_os = "macos")]
     if renders {
@@ -194,20 +171,24 @@ pub(crate) fn start_runtime(mut runtime: Runtime, options: RunOptions) -> Result
         return Err(e);
     }
 
-    match mode.effective(renders) {
-        PipelineMode::Pipelined => {
-            crate::app::pipeline::run_pipelined(runtime, screenshot.as_deref());
-        }
+    match PipelineMode::Pipelined.effective(renders) {
+        PipelineMode::Pipelined => crate::app::pipeline::run_pipelined(runtime),
         PipelineMode::Serial => {
             // The serial loop: no per-tick hook; a rendering macOS world pumps
             // the Cocoa run loop, every other case uses the tight loop.
             runloop::run_loop(&mut runtime, cfg!(target_os = "macos") && renders, |_| {});
             finish_frame_captures(&mut runtime);
-            capture_exit_screenshot(&mut runtime, screenshot.as_deref());
         }
     }
 
     Ok(())
+}
+
+// This path carries no debug server, so a launch that asks for one is told.
+fn warn_unserved_debug_port(args: &LaunchArgs) {
+    if let Some(port) = args.debug_port {
+        tracing::warn!("--debug-port {port}: this build has no debug server, so none is started");
+    }
 }
 
 // Report a renderer that refused, or a world that needs one this machine
@@ -235,20 +216,6 @@ fn finish_frame_captures(runtime: &mut Runtime) {
         .and_then(|slot| slot.0.as_mut())
     {
         backend.finish_captures();
-    }
-}
-
-// Capture the last presented frame on the way out of a serial run, when
-// requested. The backend is still parked in the world after the loop ends.
-fn capture_exit_screenshot(runtime: &mut Runtime, path: Option<&str>) {
-    let Some(path) = path else { return };
-    let Some(mut backend) = runtime.take_render_backend() else {
-        tracing::warn!("screenshot skipped: no live backend at exit");
-        return;
-    };
-    match backend.screenshot(path) {
-        Ok(saved) => tracing::info!("screenshot saved: {}", saved),
-        Err(e) => tracing::warn!("screenshot failed: {}", e),
     }
 }
 
@@ -309,10 +276,7 @@ mod tests {
         runtime.start().expect("the first start succeeds");
 
         assert!(
-            matches!(
-                runtime.run_with(RunOptions::default()),
-                Err(WorldError::AlreadyStarted)
-            ),
+            matches!(runtime.run(), Err(WorldError::AlreadyStarted)),
             "a second start is refused"
         );
     }

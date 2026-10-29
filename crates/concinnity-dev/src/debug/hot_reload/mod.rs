@@ -1,5 +1,5 @@
 //! Asset / shader / world.jsonl hot-reload machinery for dev sessions
-//! (`cn debug` and `cn editor`). Moved out of the library into the binary
+//! (`cn run -f` and `cn edit`). Moved out of the library into the binary
 //! tree: the watcher, off-thread decode, and the reload passes are driven once
 //! per frame from a `FrameHook::tick` (see `driver::HotReloadDriver`). The
 //! passive source catalogs these consume are captured by graphics init and

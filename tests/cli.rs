@@ -1,7 +1,7 @@
 //! End-to-end tests that drive the built `concinnity` binary through the paths
 //! that never touch the renderer: `--help`, an unknown subcommand, `cn mcp`
 //! pointed at a dead debug port, and every authoring subcommand
-//! (`build` / `add` / `rm` / `list` / `explain` / `test` / `docs` / `export` /
+//! (`cook` / `add` / `rm` / `list` / `explain` / `check` / `docs` / `export` /
 //! `init` / `new`). They exercise `fn main()` and the command dispatch (which the
 //! in-crate unit tests cannot, since those never run the binary), plus the
 //! world-discovery fallbacks each command reaches for when no `-f` is given,
@@ -10,9 +10,8 @@
 //! `cargo llvm-cov` the profile data the spawned binary writes on exit is
 //! merged, so this coverage counts.
 //!
-//! Only the non-engine paths are driven here; `cn run`, a bare `cn debug`, and
-//! an argv-less run (which is `cn editor`) stand up a renderer + window and are
-//! verified by screenshot probes instead.
+//! Only the non-engine paths are driven here; `cn run`, `cn bench` and `cn edit`
+//! stand up a renderer + window and are verified by screenshot probes instead.
 
 use concinnity_core::math::SaturatingFrom;
 use core::time::Duration;
@@ -166,7 +165,7 @@ fn help_exits_zero() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("Usage"));
 }
 
-// The subcommand, the long flag, and both shorts render the same line: they
+// The subcommand, the long flag, and the short render the same line: they
 // share one source, and nothing else proves the flags reach it.
 #[test]
 fn every_version_spelling_prints_the_same_line() {
@@ -175,7 +174,7 @@ fn every_version_spelling_prints_the_same_line() {
         expected.starts_with(&format!("concinnity {}", env!("CARGO_PKG_VERSION"))),
         "cn version printed {expected:?}"
     );
-    for args in [&["--version"] as &[&str], &["-V"], &["-v"]] {
+    for args in [&["--version"] as &[&str], &["-V"]] {
         let out = run(args);
         expect_ok(&out, &format!("cn {}", args.join(" ")));
         assert_eq!(
@@ -200,9 +199,8 @@ fn the_version_carries_a_build_stamp() {
     assert_eq!(date.split('-').count(), 3, "{date} is not a date");
 }
 
-// A bare invocation launches the editor, so what argv still owes is a usage
-// error for a command it does not know, rather than a fallback into the
-// default. Nothing here spawns a window: the binary exits at parse.
+// A command argv does not know is a usage error. Nothing here spawns a window:
+// the binary exits at parse.
 #[test]
 fn an_unknown_subcommand_is_a_usage_error() {
     let out = run(&["edtior"]);
@@ -213,17 +211,27 @@ fn an_unknown_subcommand_is_a_usage_error() {
     assert!(stderr(&out).contains("edtior"), "{}", stderr(&out));
 }
 
-// The command is optional, and the help says which one a bare run performs.
+// A bare invocation runs nothing: it prints the help, as `--help` does.
 #[test]
-fn the_help_reports_an_optional_command_defaulting_to_the_editor() {
-    let out = run(&["--help"]);
-    expect_ok(&out, "cn --help");
-    let help = stdout(&out);
+fn a_bare_invocation_prints_the_help() {
+    let out = run(&[]);
+    let help = stderr(&out);
     // The usage line carries the binary name, which Windows spells with its
-    // `.exe` suffix; the brackets around COMMAND are what says it is optional.
+    // `.exe` suffix.
     assert!(help.contains("Usage: concinnity"), "{help}");
-    assert!(help.contains("[COMMAND]"), "{help}");
-    assert!(help.contains("[default command]"), "{help}");
+    for command in ["cook", "check", "run", "bench", "edit"] {
+        assert!(help.contains(command), "{help}");
+    }
+    assert!(!help.contains("[default command]"), "{help}");
+}
+
+// `-q` silences logging only: a command's own output still prints.
+#[test]
+fn quiet_keeps_a_commands_own_output() {
+    let project = Project::with_world(HELLO_WORLD);
+    let out = project.cn(&["-q", "check"]);
+    expect_ok(&out, "cn -q check");
+    assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
 // Drive `cn mcp` over stdin, one JSON-RPC message per line, and collect the
@@ -270,7 +278,7 @@ fn mcp_serves_the_catalog_with_no_app_running() {
     assert!(lines[0].contains(r#""serverInfo""#), "{}", lines[0]);
     assert!(lines[1].contains(r#""name":"ping""#), "{}", lines[1]);
     assert!(lines[2].contains(r#""isError":true"#), "{}", lines[2]);
-    assert!(lines[2].contains("cn debug"), "{}", lines[2]);
+    assert!(lines[2].contains("cn run --debug-port"), "{}", lines[2]);
 }
 
 // `cn list` with no --file discovers the world under `worlds/`,
@@ -374,31 +382,31 @@ fn explain_of_an_unknown_name_fails() {
     assert!(stderr(&out).contains("no_such_asset"), "{}", stderr(&out));
 }
 
-// `cn test` validates without building; the world comes from discovery.
+// `cn check` validates without cooking; the world comes from discovery.
 #[test]
-fn test_validates_the_discovered_world() {
+fn check_validates_the_discovered_world() {
     let project = Project::with_world(HELLO_WORLD);
-    let out = project.cn(&["test"]);
-    expect_ok(&out, "cn test");
+    let out = project.cn(&["check"]);
+    expect_ok(&out, "cn check");
     assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
 #[test]
-fn test_reports_an_invalid_world() {
+fn check_reports_an_invalid_world() {
     let project = Project::with_world("[\"NotARealAssetType\",{\"$id\":\"x\"}]\n");
-    let out = project.cn(&["test"]);
+    let out = project.cn(&["check"]);
     assert!(!out.status.success(), "an unknown asset type should fail");
 }
 
-// A real compile, covering both ways `cn build` resolves its world: discovery
-// when no --file is given, and an explicit path when one is. The second build
+// A real compile, covering both ways `cn cook` resolves its world: discovery
+// when no --file is given, and an explicit path when one is. The second cook
 // reuses the first one's cache, so only one cook is paid for.
 #[test]
-fn build_compiles_the_discovered_world_and_an_explicit_one() {
+fn cook_compiles_the_discovered_world_and_an_explicit_one() {
     let project = Project::with_world(HELLO_WORLD);
 
-    let out = project.cn(&["build"]);
-    expect_ok(&out, "cn build");
+    let out = project.cn(&["cook"]);
+    expect_ok(&out, "cn cook");
     // The blobs and the lock file land under the project's hidden state
     // directory, not beside the authored world and not in the developer's tree.
     assert!(
@@ -423,8 +431,8 @@ fn build_compiles_the_discovered_world_and_an_explicit_one() {
         "the lock must not land at the project root"
     );
 
-    let out = project.cn(&["build", "-f", &project.world_path()]);
-    expect_ok(&out, "cn build -f");
+    let out = project.cn(&["cook", "-f", &project.world_path()]);
+    expect_ok(&out, "cn cook -f");
 }
 
 // Removing a name the world does not declare reports the ones it does, so a typo
@@ -696,7 +704,7 @@ fn compile_step(out: &Output) -> String {
 // only way to see this -- the cook crate's in-crate tests disable the payload
 // cache outright, so nothing there ever observes a hit.
 fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
-    let cold = project.cn(&["build"]);
+    let cold = project.cn(&["cook"]);
     expect_ok(&cold, "cold build");
     assert!(
         !compile_step(&cold).contains("cached"),
@@ -705,7 +713,7 @@ fn assert_warm_build_reproduces_the_cold_one(project: &Project) {
     );
     let cold_blob = project.blob();
 
-    let warm = project.cn(&["build"]);
+    let warm = project.cn(&["cook"]);
     expect_ok(&warm, "warm build");
     assert!(
         compile_step(&warm).contains("all cached"),

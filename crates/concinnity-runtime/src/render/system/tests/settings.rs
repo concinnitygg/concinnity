@@ -5,7 +5,7 @@ use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
 use concinnity_engine::window::display_mode::DisplayMode;
 
-// The `--quality-preset` launch flag has to reach the CEILING, not merely the
+// The `--graphics-quality` launch flag has to reach the CEILING, not merely the
 // menu label. On an entry-tier GPU `Auto` resolves to the `Medium` ceiling,
 // which clamps ray-traced reflections off and logs nothing about it, so a probe
 // that forces `ultra` and never checks would measure a non-RT frame and read it
@@ -33,7 +33,7 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     world.insert_resource(settings);
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
-            quality_preset: Some(QualityPreset::Ultra),
+            graphics_quality: Some(QualityPreset::Ultra),
             ..LaunchArgs::NONE
         },
         ..Default::default()
@@ -106,8 +106,11 @@ fn the_ray_tracing_flags_reach_the_backend() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     world.insert_resource(LaunchRequest {
-        rt_dynamic: Some(RtDynamicMode::Rebuild),
-        rt_skinned_geometry: Some(false),
+        args: LaunchArgs {
+            rt_dynamic: Some(RtDynamicMode::Rebuild),
+            rt_skinned_geometry: Some(false),
+            ..LaunchArgs::NONE
+        },
         ..Default::default()
     });
     init_graphics(&mut world, hooks);
@@ -127,20 +130,6 @@ fn capture_stays_off_without_a_launch_request() {
     let mut world = scene_builder().build();
     init_graphics(&mut world, hooks);
     assert!(!lock(&state).init.as_ref().unwrap().capture);
-}
-
-// The launch's screenshot request reaches the backend through the world's
-// `LaunchRequest`.
-#[test]
-fn a_capture_launch_request_reaches_the_backend() {
-    let (state, hooks) = recording_hooks();
-    let mut world = scene_builder().build();
-    world.insert_resource(LaunchRequest {
-        capture: true,
-        ..Default::default()
-    });
-    init_graphics(&mut world, hooks);
-    assert!(lock(&state).init.as_ref().unwrap().capture);
 }
 
 // A run that takes screenshots keeps the presented frame readable, with no
@@ -164,7 +153,7 @@ fn a_run_taking_screenshots_arms_frame_capture() {
         lock(&state).init.as_ref().unwrap().capture
     };
     assert!(armed(LaunchArgs {
-        screenshots: true,
+        command: concinnity_engine::launch::LaunchCommand::Bench,
         ..LaunchArgs::NONE
     }));
     assert!(!armed(LaunchArgs::NONE));

@@ -18,8 +18,9 @@ use concinnity_core::math::vec3;
 /// subject it films, with the camera kept at its authored offset) where the
 /// [`BenchmarkConfig`] starts it, replace any track it declares with the
 /// benchmark's own, and publish the [`BenchmarkRun`]. A world that declares no
-/// config is armed with the default one. Arming twice changes nothing.
-pub fn arm(world: &mut World) {
+/// config is armed with the default one, stopped `stop_at` seconds into the run
+/// when that comes first. Arming twice changes nothing.
+pub fn arm(world: &mut World, stop_at: Option<f32>) {
     if world.resource::<BenchmarkRun>().is_some() {
         return;
     }
@@ -56,7 +57,7 @@ pub fn arm(world: &mut World) {
         Some(declared) => *declared = track,
         None => world.add_component(track),
     }
-    world.insert_resource(BenchmarkRun::new(config));
+    world.insert_resource(BenchmarkRun::new(config).with_stop_at(stop_at));
 }
 
 // Lay `config`'s route out over `world`: a planet tour fills the start, the
@@ -216,7 +217,7 @@ mod tests {
                 world.push(planet.clone());
             }
             world.add_component(config);
-            arm(&mut world);
+            arm(&mut world, None);
             world.resource::<BenchmarkRun>().unwrap().config.clone()
         };
         let toured = armed(BenchmarkConfig::default(), true);
@@ -265,7 +266,7 @@ mod tests {
     #[test]
     fn a_world_without_a_config_is_armed_with_the_default_one() {
         let mut world = world_with_camera();
-        arm(&mut world);
+        arm(&mut world, None);
         let run = world.resource::<BenchmarkRun>().expect("armed");
         assert_eq!(run.config, BenchmarkConfig::default());
         let track = world.query::<CameraTrack>().next().expect("a track");
@@ -285,7 +286,7 @@ mod tests {
             travel: alloc::vec![leg(4.0)],
             ..Default::default()
         });
-        arm(&mut world);
+        arm(&mut world, None);
         let track = world.query::<CameraTrack>().next().expect("a track");
         assert_eq!(track.travel[0].end_seconds, 3.0);
         assert_eq!(track.travel[1].end_seconds, 7.0);
@@ -312,7 +313,7 @@ mod tests {
             travel: alloc::vec![leg(50.0)],
             ..Default::default()
         }));
-        arm(&mut world);
+        arm(&mut world, None);
         let tracks: Vec<_> = world.query::<CameraTrack>().collect();
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].travel.len(), 1, "only the warm-up hold");
@@ -333,7 +334,7 @@ mod tests {
             }),
             ..Default::default()
         });
-        arm(&mut world);
+        arm(&mut world, None);
         let camera = world.query::<Camera3D>().next().expect("camera");
         assert_eq!(camera.position, [9.0, 8.0, 7.0]);
         assert!((camera.yaw - 90.0_f32.to_radians()).abs() < 1e-6);
@@ -341,14 +342,22 @@ mod tests {
     }
 
     #[test]
+    fn the_launch_stop_reaches_the_armed_run() {
+        let mut world = world_with_camera();
+        arm(&mut world, Some(1.5));
+        let run = world.resource::<BenchmarkRun>().expect("armed");
+        assert_eq!(run.stop_seconds(), 1.5);
+    }
+
+    #[test]
     fn arming_twice_keeps_the_first_run() {
         let mut world = world_with_camera();
-        arm(&mut world);
+        arm(&mut world, None);
         world.add_component(BenchmarkConfig {
             warmup_seconds: 9.0,
             ..Default::default()
         });
-        arm(&mut world);
+        arm(&mut world, None);
         let run = world.resource::<BenchmarkRun>().expect("armed");
         assert_eq!(run.config.warmup_seconds, 2.0);
     }
@@ -381,7 +390,7 @@ mod tests {
             }],
             ..Default::default()
         });
-        arm(&mut world);
+        arm(&mut world, None);
         let subject = world.get_by_id::<Transform>(id).unwrap().position;
         assert_eq!(subject, [10.0, 0.0, 0.0]);
         let camera = world.query::<Camera3D>().next().unwrap().position;
@@ -416,7 +425,7 @@ mod tests {
             subject: Some(Ref::<Prop>::new(id)),
             ..Default::default()
         });
-        arm(&mut world);
+        arm(&mut world, None);
         assert_eq!(
             world.get_by_id::<Prop>(id).unwrap().position,
             [10.0, 0.0, 0.0]

@@ -3,17 +3,25 @@
 // belongs on the other side of it, where `tests/cli.rs` and this crate's own
 // tests can reach it.
 
-use super::commands::RunArgs;
 use super::{Cli, Commands};
 use crate::command;
 use crate::export::ExportOptions;
+use concinnity_engine::launch::LaunchArgs;
 use concinnity_host::store::paths::StateTree;
 
 pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
-    match cli.resolved_command() {
+    // A command that launches a world installs its own logging as it starts.
+    if cli.quiet && cli.command.launch_args(cli.quiet).is_none() {
+        concinnity_runtime::install_logging(true);
+    }
+    let launch = |args: &LaunchArgs| LaunchArgs {
+        quiet: cli.quiet,
+        ..args.clone()
+    };
+    match &cli.command {
         Commands::Init => command::init(),
         Commands::New(args) => command::new(&args.path),
-        Commands::Build(args) => command::build(
+        Commands::Cook(args) => command::cook(
             args.world.file(),
             if args.verbose {
                 command::Verbosity::Verbose
@@ -21,20 +29,15 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
                 command::Verbosity::Normal
             },
         ),
-        Commands::Run(args) => {
-            args.render.select_graphics_api(tree);
-            run_world(args, tree)
+        Commands::Check(args) => command::check(args.world.file()),
+        Commands::Run(args) => crate::run_world(args.world.file(), launch(&args.launch.args), tree),
+        Commands::Bench(args) => {
+            crate::run_world(args.world.file(), launch(&args.launch.args), tree)
         }
-        Commands::Debug(args) => {
-            args.render.select_graphics_api(tree);
-            let launch = args.render.launch(args.validation, true);
-            crate::run_debug(launch, args.world.file(), args.debug_port)
-        }
-        Commands::Editor(args) => {
-            args.render.select_graphics_api(tree);
-            // Every editor session hot-reloads, with or without a debug port.
-            let launch = args.render.launch(args.validation, true);
-            crate::run_editor(launch, args.file.as_deref(), args.debug_port)
+        Commands::Edit(args) => {
+            let launch = launch(&args.launch.args);
+            crate::run::select_graphics_api(&launch, tree);
+            crate::run_editor(launch, args.world.file())
         }
         Commands::Add(args) => {
             command::add(args.id.as_deref(), &args.target, args.template.as_deref())
@@ -43,7 +46,6 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         Commands::List(args) => command::list(args.world.file(), args.expanded, args.systems),
         Commands::Explain(args) => command::explain(&args.id, args.world.file()),
         Commands::Docs(args) => crate::docs::docs(args.root.as_deref()),
-        Commands::Test(args) => command::check(args.world.file()),
         Commands::Export(args) => crate::export::export(&ExportOptions {
             world: args.world.file().map(str::to_string),
             name: args.name.clone(),
@@ -59,25 +61,4 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
             Ok(())
         }
     }
-}
-
-// `cn run`: the built world in `tree`'s `data/`, with this command's options.
-fn run_world(args: &RunArgs, tree: &StateTree) -> std::io::Result<()> {
-    concinnity_runtime::run(
-        tree,
-        concinnity_runtime::RunOptions {
-            mode: if args.serial {
-                concinnity_engine::launch::PipelineMode::Serial
-            } else {
-                concinnity_engine::launch::PipelineMode::Pipelined
-            },
-            schedule: if args.serial_schedule {
-                concinnity_engine::ecs::ScheduleMode::Serial
-            } else {
-                concinnity_engine::ecs::ScheduleMode::Parallel
-            },
-            screenshot: args.screenshot.clone(),
-            launch: args.render.launch(args.validation, false),
-        },
-    )
 }

@@ -3,7 +3,7 @@
 //! line), the log window's pinned-tail scroll, the /del ghost autocomplete, and
 //! the command dispatch: /add and /del mutate the working entries exactly like
 //! their panel counterparts, the build command compiles the in-memory entries
-//! on a worker thread (in-process -- a separate `cn build` process would leave
+//! on a worker thread (in-process -- a separate `cn cook` process would leave
 //! this editor's name table empty), and everything reports through the shared
 //! log sink.
 

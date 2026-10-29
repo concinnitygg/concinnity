@@ -9,11 +9,12 @@
 //! the beach into the surf, and floats and paddles out at sea.
 //!
 //! The whole world is `planet.jsonl`, beside this file. This program only
-//! compiles it into a blob next to the executable and plays that blob.
+//! compiles it into a blob next to the executable and plays that blob; its
+//! `cook` command writes the blob and stops there.
 //!
 //! Run it with `cargo run --release --example planet`.
 //!
-//! The world also declares a benchmark, which `--benchmark` runs: the
+//! The world also declares a benchmark, which the `bench` command runs: the
 //! engine's tour of the planet. The marble rolls through the meadow, down the
 //! beach and into the surf, then lifts off, and the camera follows it out over
 //! the sea, up toward the sun and out of the air to see the planet from orbit,
@@ -21,18 +22,18 @@
 //! times every frame, saves the world's screenshots as it reaches them, and
 //! closes when the tour ends, printing what the frames cost, phase by phase.
 //!
-//! It takes the engine's launch flags (`--help` lists them), `--vsync` among
-//! them.
+//! It takes the engine's launch commands and flags (`--help` lists them),
+//! `--vsync` among them.
 
 use std::path::PathBuf;
 
-use concinnity::launch::{LaunchArgs, LaunchArgsError};
+use concinnity::launch::{LaunchArgs, LaunchArgsError, LaunchCommand};
 use concinnity::{App, cook};
 
 const WORLD: &str = include_str!("planet.jsonl");
 
 fn main() {
-    let args = match LaunchArgs::parse(std::env::args().skip(1)) {
+    let args = match concinnity::launch::from_env() {
         Ok(args) => args,
         Err(LaunchArgsError::Help) => {
             print!("{}", LaunchArgsError::Help);
@@ -54,6 +55,9 @@ fn run(args: LaunchArgs) -> Result<(), Box<dyn std::error::Error>> {
     world.add_jsonl(WORLD);
     let blob = blob_path();
     world.write_blob(&blob)?;
+    if args.command == LaunchCommand::Cook {
+        return Ok(());
+    }
     App::from_blob(&blob)?.with_args(args).run()?;
     Ok(())
 }

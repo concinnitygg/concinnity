@@ -347,7 +347,7 @@ pub(super) fn reload_procedural_meshes(
 // Re-expand the world's stories from disk and return every compiled `Story`
 // whose graph changed since the last pass. The expansion is the same one the
 // build runs (`expand_world_from_str` includes the StoryImport pass), so the
-// returned graphs match what a fresh `cn debug` would compile; `cn debug`
+// returned graphs match what a fresh `cn run -f` would compile; `cn run -f`
 // only, where the interner is warm and re-interning the generated names
 // yields the ids the running world already carries. `snapshots` is the
 // caller-owned name -> compiled-args map used to skip unchanged stories (a

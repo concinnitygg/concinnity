@@ -8,8 +8,8 @@
 //! usable from the editor and the debug server.
 
 mod add;
-mod build;
 mod check;
+mod cook;
 mod explain;
 mod list;
 mod new;
@@ -18,8 +18,8 @@ mod version;
 mod world_path;
 
 pub(crate) use add::add;
-pub(crate) use build::{Verbosity, build};
 pub(crate) use check::check;
+pub(crate) use cook::{Verbosity, cook};
 pub(crate) use explain::explain;
 pub(crate) use list::{list, provenance};
 pub(crate) use new::{init, new};

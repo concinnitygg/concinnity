@@ -55,7 +55,7 @@ pub(crate) struct DebugState {
     pub(super) shutdown_token: Option<ShutdownToken>,
     // Shared shader-reload flag captured from the active graphics backend.
     // `Some` once `tick` has seen a `GraphicsSystem` whose backend opted into
-    // hot-reload (Metal under `cn debug`); `None` otherwise. The
+    // hot-reload (Metal under `cn run -f`); `None` otherwise. The
     // `reload-shaders` command flips this to `true` and the backend polls it
     // at the top of `draw_frame`.
     pub(super) shader_reload: Option<Arc<AtomicBool>>,

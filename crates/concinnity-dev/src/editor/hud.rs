@@ -3,7 +3,7 @@
 //! and View buttons as compact rounded chips at its right end. This lives in the
 //! editor crate (not in a client ECS system) so no editor code is compiled into
 //! the shipped runtime: the HUD is driven from the editor's `FrameHook` tick,
-//! which runs only under `cn editor`.
+//! which runs only under `cn edit`.
 //!
 //! These are plain `Sprite` + `TextLabel` components (injected by `inject.rs` at
 //! reserved ids). Each frame the hook re-anchors the bar to the window width

@@ -23,7 +23,7 @@ vulkan = ["concinnity-runtime/vulkan"]
 [dependencies]
 anstyle-query = { workspace = true }
 ciborium = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
+clap = { workspace = true, features = ["derive", "string"] }
 concinnity-runtime = { workspace = true }
 concinnity-cook = { workspace = true, features = ["schema"] }
 concinnity-engine = { workspace = true, features = ["schema"] }

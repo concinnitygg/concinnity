@@ -3,7 +3,7 @@
 // else a compile. Every backend fetches its built-ins through this one path.
 //
 // The match is on the source digest rather than on hot-reload being off, and
-// that distinction is the whole point. `cn debug` and `cn editor` both run with
+// that distinction is the whole point. `cn run -f` and `cn edit` both run with
 // hot-reload on, so a mode check would leave the two binaries a developer
 // actually runs compiling every shader at startup, and needing dxc to do it.
 // Comparing digests means an unedited shader takes the embedded artifact in

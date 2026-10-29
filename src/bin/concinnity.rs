@@ -56,7 +56,7 @@ fn project_tree() -> concinnity_host::store::paths::StateTree {
 
 #[cfg(test)]
 mod tests {
-    // `cn debug` and `cn editor` report heap figures through the editor's health
+    // `cn run -f` and `cn edit` report heap figures through the editor's health
     // output, which the probe harness reads. Nothing forces the declaration at
     // the top of this file to exist, so this is what catches its removal:
     // without it the CLI would run correctly while reporting no memory at all.

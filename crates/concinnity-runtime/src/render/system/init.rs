@@ -107,7 +107,7 @@ impl GraphicsSystem {
             "gpu",
             &format!("{:?} {:?}", gpu_profile.vendor, gpu_profile.tier),
         );
-        // `--quality-preset` wins and is never persisted; a preset never
+        // `--graphics-quality` wins and is never persisted; a preset never
         // chosen seeds and persists `Auto` once.
         let preset = launch.resolve_quality_preset(persisted, ctx.resources);
         let ceiling = resolve_ceiling(preset, &gpu_profile);
@@ -135,7 +135,7 @@ impl GraphicsSystem {
         quality: &DetectedQuality,
     ) -> (ResolvedRenderConfig, SettingsState) {
         let window = ctx.drain::<Window>().into_iter().next();
-        self.frames = FrameCounter::new(launch.args.frames);
+        self.frames = FrameCounter::new(launch.args.limit_frames);
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
         let authored = WorldSettings::new(WorldAssets {
@@ -153,7 +153,7 @@ impl GraphicsSystem {
             window,
             display: self.detect_display(ctx),
             authored,
-            // `--vsync`, `--fps-cap`, `--window-mode` and `--dlss-preset` win for
+            // `--vsync`, `--limit-fps`, `--window-mode` and `--dlss-preset` win for
             // this launch, shown on the row and never persisted unless the row
             // itself changes.
             session: launch.session_overrides(),

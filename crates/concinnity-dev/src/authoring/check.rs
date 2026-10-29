@@ -2,7 +2,7 @@
 //!
 //! Runs the validation front half of the build pipeline (load, expand, and
 //! the semantic checks in `crate::check`) and reports the outcome. Used by
-//! `cn test`.
+//! `cn check`.
 
 /// Read `world_path`, run validation, and report results. Returns Ok if every
 /// asset passes; otherwise an error whose Display contains a human-readable

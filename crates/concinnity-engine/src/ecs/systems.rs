@@ -354,7 +354,7 @@ impl<H: SystemHost> CoreSystems<H> {
     /// The run's screenshots, once the cameras have posed this tick's frame.
     pub const SCREENSHOT: SystemEntry = SystemEntry {
         name: "ScreenshotSystem",
-        present_when: "the run is benchmarked or launched with --screenshots, and has screenshots to take",
+        present_when: "the run is benchmarked or launched with --screenshot-at, and has screenshots to take",
         phase: Phase::Late,
         gate: |world| boxed(ScreenshotSystem::for_world(world)),
         after: &["Camera3DSystem", "ThirdPersonSystem", "CameraTrackSystem"],

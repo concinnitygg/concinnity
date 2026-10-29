@@ -1,10 +1,8 @@
 use alloc::string::{String, ToString};
-use core::num::NonZeroU32;
 
 use super::LaunchArgs;
 use crate::ecs::{Resources, ViewOverrides, World};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
-use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::{QualityPreset, StoredSettings, UserGraphicsSettings};
 
@@ -37,33 +35,12 @@ fn is_absolute(path: &str) -> bool {
 /// defers to that setting's default.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LaunchRequest {
-    /// Keep the presented frame blit-readable for an exit screenshot.
-    pub capture: bool,
     /// Run as a development session: capture hot-reload sources, load shaders
     /// disk-first, keep frame capture available, and show the debug HUD.
     pub dev_loop: bool,
-    /// What the launch's flags ask of the run: a benchmark, vsync, a frame-rate
-    /// cap, a quality preset or a frame count. An app's own
+    /// What the launch's command and flags ask of the run. An app's own
     /// [`LaunchArgs`] resource, published before start, replaces these.
     pub args: LaunchArgs,
-    /// Force the DirectX / Vulkan debug layers on or off. `None` follows the
-    /// build profile. Metal's layer is set by the process environment instead.
-    pub validation: Option<bool>,
-    /// Force how the ray-tracing acceleration structure tracks moving props.
-    /// `None` is [`RtDynamicMode::Auto`].
-    pub rt_dynamic: Option<RtDynamicMode>,
-    /// Whether skinned meshes join the ray-tracing acceleration structure.
-    /// `None` leaves them in.
-    pub rt_skinned_geometry: Option<bool>,
-    /// Force the DLSS render preset over the persisted choice, unpersisted.
-    pub dlss_preset: Option<DlssPreset>,
-    /// Step the frame clock by exactly `1 / rate` seconds per frame instead of
-    /// the wall time between frames, so a given frame sees the same clock on
-    /// every launch. `None` follows the wall clock.
-    pub fixed_frame_rate: Option<NonZeroU32>,
-    /// The feature passes the run starts with, as the editor's View menu shows
-    /// them. Every flag set is the shipping frame.
-    pub show: ShowFlags,
 }
 
 impl LaunchRequest {
@@ -75,8 +52,8 @@ impl LaunchRequest {
             self.args = args;
         }
         world.insert_resource(self.clone());
-        if self.args.benchmark {
-            crate::benchmark::arm(world);
+        if self.args.benchmarks() {
+            crate::benchmark::arm(world, self.args.stop_at());
         }
         if let Some(view) = self.view_overrides() {
             world.insert_resource(view);
@@ -85,9 +62,9 @@ impl LaunchRequest {
 
     /// The view state the run starts with, or `None` for the shipping frame.
     fn view_overrides(&self) -> Option<ViewOverrides> {
-        (self.show != ShowFlags::all()).then_some(ViewOverrides {
+        (self.args.show != ShowFlags::all()).then_some(ViewOverrides {
             mode: ViewMode::Lit,
-            show: self.show,
+            show: self.args.show,
         })
     }
 
@@ -101,7 +78,9 @@ impl LaunchRequest {
 
     /// Whether the graphics debug layers run: the request, else the build profile.
     pub fn resolve_validation(&self) -> bool {
-        self.validation.unwrap_or(cfg!(debug_assertions))
+        self.args
+            .graphics_validation
+            .unwrap_or(cfg!(debug_assertions))
     }
 
     /// The master quality preset: the request (never persisted), else the
@@ -112,7 +91,11 @@ impl LaunchRequest {
         stored: &StoredSettings,
         resources: &mut Resources,
     ) -> QualityPreset {
-        if let Some(preset) = self.args.quality_preset.or(stored.graphics.quality_preset) {
+        if let Some(preset) = self
+            .args
+            .graphics_quality
+            .or(stored.graphics.quality_preset)
+        {
             return preset;
         }
         let mut seeded = stored.clone();
@@ -123,7 +106,7 @@ impl LaunchRequest {
 
     /// How the acceleration structure tracks moving props: the request, else `Auto`.
     pub fn resolve_rt_dynamic(&self) -> RtDynamicMode {
-        self.rt_dynamic.unwrap_or_default()
+        self.args.rt_dynamic.unwrap_or_default()
     }
 
     /// The settings this launch overrides for its own run, layered over the
@@ -132,46 +115,69 @@ impl LaunchRequest {
     /// preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
         UserGraphicsSettings {
-            vsync: self.args.vsync.then_some(true),
-            fps_cap: self.args.fps_cap,
+            vsync: self.args.vsync,
+            fps_cap: self.args.limit_fps,
             window_mode: self.args.window_mode,
             temporal_upscaling: self.args.upscaling,
             ray_traced_reflections: self.args.rt_reflections,
-            dlss_preset: self.dlss_preset,
+            dlss_preset: self.args.dlss_preset,
             ..UserGraphicsSettings::default()
         }
     }
 
     /// Whether skinned meshes join the acceleration structure: the request, else in.
     pub fn resolve_rt_skinned_geometry(&self) -> bool {
-        self.rt_skinned_geometry.unwrap_or(true)
+        self.args.rt_skinned_geometry.unwrap_or(true)
     }
 
-    /// Whether the presented frame stays readable: always in a dev session, and
-    /// for a launch that asked for an exit screenshot.
+    /// Whether the presented frame stays readable: in a dev session.
     pub fn frame_capture(&self) -> bool {
-        self.dev_loop || self.capture
+        self.dev_loop
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::output::dlss::DlssPreset;
 
     // The world's own arguments win, and the published request carries them.
     #[test]
     fn publishing_adopts_the_worlds_launch_args() {
         let mut world = World::new();
         world.insert_resource(LaunchArgs {
-            frames: Some(3),
+            limit_frames: Some(3),
             ..Default::default()
         });
         let mut request = LaunchRequest::default();
         request.publish(&mut world);
-        assert_eq!(request.args.frames, Some(3));
+        assert_eq!(request.args.limit_frames, Some(3));
         assert_eq!(world.resource::<LaunchRequest>(), Some(&request));
         assert!(world.resource::<LaunchArgs>().is_none());
         assert!(world.resource::<ViewOverrides>().is_none());
+    }
+
+    // Only `bench` arms a benchmark, stopped where the launch stops it.
+    #[test]
+    fn publishing_a_bench_arms_the_benchmark() {
+        let mut world = World::new();
+        LaunchRequest::default().publish(&mut world);
+        assert!(world.resource::<crate::benchmark::BenchmarkRun>().is_none());
+
+        let mut world = World::new();
+        let mut request = LaunchRequest {
+            args: LaunchArgs {
+                command: crate::launch::LaunchCommand::Bench,
+                stop_at_millis: Some(2_500),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        };
+        request.publish(&mut world);
+        let run = world
+            .resource::<crate::benchmark::BenchmarkRun>()
+            .expect("armed");
+        assert!(run.stop_seconds() <= 2.5);
     }
 
     #[test]
@@ -204,8 +210,11 @@ mod tests {
 
     #[test]
     fn the_validation_request_outranks_the_build_profile() {
-        let request = |validation| LaunchRequest {
-            validation,
+        let request = |graphics_validation| LaunchRequest {
+            args: LaunchArgs {
+                graphics_validation,
+                ..LaunchArgs::NONE
+            },
             ..Default::default()
         };
         assert_eq!(request(None).resolve_validation(), cfg!(debug_assertions));
@@ -240,7 +249,7 @@ mod tests {
 
         let forced = LaunchRequest {
             args: LaunchArgs {
-                quality_preset: Some(QualityPreset::Ultra),
+                graphics_quality: Some(QualityPreset::Ultra),
                 ..LaunchArgs::NONE
             },
             ..Default::default()
@@ -262,14 +271,12 @@ mod tests {
             LaunchRequest::default().resolve_rt_dynamic(),
             RtDynamicMode::Auto
         );
-        for mode in [
-            RtDynamicMode::Off,
-            RtDynamicMode::Auto,
-            RtDynamicMode::Rebuild,
-            RtDynamicMode::Tlas,
-        ] {
+        for mode in RtDynamicMode::ALL {
             let request = LaunchRequest {
-                rt_dynamic: Some(mode),
+                args: LaunchArgs {
+                    rt_dynamic: Some(mode),
+                    ..LaunchArgs::NONE
+                },
                 ..Default::default()
             };
             assert_eq!(request.resolve_rt_dynamic(), mode);
@@ -280,8 +287,8 @@ mod tests {
     fn vsync_and_a_frame_rate_cap_are_session_overrides() {
         let forced = LaunchRequest {
             args: LaunchArgs {
-                vsync: true,
-                fps_cap: Some(30),
+                vsync: Some(true),
+                limit_fps: Some(30),
                 ..LaunchArgs::NONE
             },
             ..Default::default()
@@ -325,7 +332,10 @@ mod tests {
             UserGraphicsSettings::default()
         );
         let forced = LaunchRequest {
-            dlss_preset: Some(DlssPreset::M),
+            args: LaunchArgs {
+                dlss_preset: Some(DlssPreset::M),
+                ..LaunchArgs::NONE
+            },
             ..Default::default()
         };
         let user = UserGraphicsSettings {
@@ -341,7 +351,10 @@ mod tests {
     #[test]
     fn skinned_rt_geometry_is_in_unless_the_request_clears_it() {
         let request = |rt_skinned_geometry| LaunchRequest {
-            rt_skinned_geometry,
+            args: LaunchArgs {
+                rt_skinned_geometry,
+                ..LaunchArgs::NONE
+            },
             ..Default::default()
         };
         assert!(request(None).resolve_rt_skinned_geometry());
@@ -355,7 +368,10 @@ mod tests {
     fn a_hidden_pass_starts_the_run_without_it() {
         assert_eq!(LaunchRequest::default().view_overrides(), None);
         let hidden = LaunchRequest {
-            show: ShowFlags::all().toggled(ShowFlags::REACTIVE),
+            args: LaunchArgs {
+                show: ShowFlags::all().toggled(ShowFlags::REACTIVE),
+                ..LaunchArgs::NONE
+            },
             ..Default::default()
         };
         let view = hidden.view_overrides().expect("view state");
@@ -365,17 +381,12 @@ mod tests {
     }
 
     #[test]
-    fn frame_capture_is_armed_by_a_dev_loop_or_a_capture_request() {
+    fn frame_capture_is_armed_by_a_dev_loop() {
         assert!(!LaunchRequest::default().frame_capture());
         let dev_loop = LaunchRequest {
             dev_loop: true,
             ..Default::default()
         };
         assert!(dev_loop.frame_capture());
-        let capture = LaunchRequest {
-            capture: true,
-            ..Default::default()
-        };
-        assert!(capture.frame_capture());
     }
 }

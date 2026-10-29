@@ -34,7 +34,7 @@ impl DxContext {
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> RenderResult<()> {
         // Stop the GPU + CPU pipelines so the readback + swap can run safely.
-        // Costs a frame-time stall but only fires under `cn debug` when the
+        // Costs a frame-time stall but only fires under `cn run -f` when the
         // source `.glb` size actually changed.
         self.wait_idle();
 
@@ -218,7 +218,7 @@ impl DxContext {
 
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // fresh geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a `SkinnedMesh` re-import has a
+    // hot-reload (`cn run -f` only) when a `SkinnedMesh` re-import has a
     // different vertex / index count than its init-time slot. Walks every
     // `SkinnedDrawObject` in order: for each slot in `changes`, the new
     // vertices / indices are appended to a fresh CPU buffer; for unchanged

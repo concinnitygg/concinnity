@@ -28,7 +28,7 @@ pub const SDF_PARAMS_LEN: usize = 32;
 /// for it.
 ///
 /// The distance field is one `.hlsl` file for every backend. The build
-/// compiles it, so a field that does not compile fails `cn build` rather than
+/// compiles it, so a field that does not compile fails `cn cook` rather than
 /// the renderer, and a shipped player needs no shader compiler of its own.
 ///
 /// ```rust

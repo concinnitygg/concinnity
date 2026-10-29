@@ -123,7 +123,7 @@ fn init_parks_overlay_assets_with_the_hud_chips() {
     );
 }
 
-// The built backend can be taken exactly once (the `cn editor` transplant).
+// The built backend can be taken exactly once (the `cn edit` transplant).
 #[test]
 fn take_backend_yields_the_backend_once() {
     let (_state, hooks) = recording_hooks();
@@ -142,7 +142,7 @@ fn take_backend_yields_the_backend_once() {
 // A world carrying a transplanted backend whose swapchain config matches reuses
 // it (calls reload_world) instead of building a fresh one, and the reused
 // backend ends up carrying the new world's content -- proving the same instance
-// was swapped over (the `cn editor` live SAVE hot path).
+// was swapped over (the `cn edit` live SAVE hot path).
 #[test]
 fn pending_backend_reuses_instance_and_ends_with_new_world() {
     // World A builds its own backend (the factory records into state_a).
@@ -353,7 +353,7 @@ fn launch_vsync_overrides_persisted_and_authored_config() {
     world.insert_resource(settings);
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
-            vsync: true,
+            vsync: Some(true),
             ..LaunchArgs::NONE
         },
         ..Default::default()

@@ -10,7 +10,7 @@
 //! rebuilt data is uploaded via the existing `write_geometry_region` helper.
 //! The scene's streamed-mesh placement allocators are **not** preserved: the
 //! rebuilt buffer is sized exactly for the current draws, so any subsequent
-//! `upload_mesh` will fail allocation. `cn debug`-only by design; matches
+//! `upload_mesh` will fail allocation. `cn run -f`-only by design; matches
 //! DirectX + Metal.
 
 use ash::vk;
@@ -109,7 +109,7 @@ impl VkContext {
 
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // fresh geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a `SkinnedMesh` re-import has a
+    // hot-reload (`cn run -f` only) when a `SkinnedMesh` re-import has a
     // different vertex / index count than its init-time slot. Walks every
     // `SkinnedDrawObject` in order: for each slot in `changes`, the new
     // vertices / indices are appended to a fresh CPU buffer; for unchanged
@@ -126,7 +126,7 @@ impl VkContext {
     // `normal_map_slot` / `material` / `joint_count`) are untouched.
     // Skeleton-shape changes route through `update_skinned_skeleton`, not
     // this call. Mirrors `DxContext::rebuild_skinned_geometry`. Reached only
-    // through the bin's `cn debug` runtime-mutation path (dead in the FFI lib,
+    // through the bin's `cn run -f` runtime-mutation path (dead in the FFI lib,
     // live in the bin).
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,

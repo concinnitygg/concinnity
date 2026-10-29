@@ -368,7 +368,7 @@ fn decal_record(decal: &DecalAdd, texture_slot: usize) -> Result<DecalRecord, St
 // A texture asset name's slot in the live pool. No name samples the renderer's
 // white fallback at slot 0, so the tint or color gradient still shows; a name
 // that does not resolve is an error rather than a silent fallback. Names
-// resolve through the table graphics init parks under `cn debug`.
+// resolve through the table graphics init parks under `cn run -f`.
 fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Result<usize, String> {
     let Some(name) = texture else {
         return Ok(0);
@@ -376,7 +376,7 @@ fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Resu
     let id =
         asset_id::lookup(name).ok_or_else(|| format!("texture '{name}' not found in interner"))?;
     let slots = slots.ok_or_else(|| {
-        "texture-name resolution requires cn debug (texture-name slots not captured)".to_string()
+        "texture-name resolution requires cn run -f (texture-name slots not captured)".to_string()
     })?;
     slots
         .0

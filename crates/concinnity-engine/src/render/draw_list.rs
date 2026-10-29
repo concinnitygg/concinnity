@@ -606,7 +606,7 @@ pub fn build_draw_list(inputs: DrawListInputs<'_>) -> Option<DrawListData> {
             instanced_clusters: Vec::new(),
             prop_draw_indices: Vec::new(),
             // Map every mesh-source handle to the draw slots that received a copy of
-            // its geometry. Hot-reload (`cn debug` only) walks this to know which slots
+            // its geometry. Hot-reload (`cn run -f` only) walks this to know which slots
             // to overwrite when the source `.glb` changes. The slot list accumulates
             // every push since a mesh shared by N `Prop`s yields N independent draw
             // objects.

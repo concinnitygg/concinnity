@@ -55,9 +55,8 @@ pub(crate) struct PipelineChannels {
 // moves the Runtime to the sim thread, and runs the render half here. A world
 // that never built a backend (headless) falls back to the serial loop. A
 // panic on the sim thread is re-raised here after the render half drains, so
-// the process fails the same way a serial panic does. `screenshot` captures
-// the last presented frame on the way out (skipped after a device loss).
-pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
+// the process fails the same way a serial panic does.
+pub(crate) fn run_pipelined(mut runtime: Runtime) {
     let Some(mut backend) = runtime.take_render_backend() else {
         crate::app::runloop::run_loop(&mut runtime, false, |_| {});
         return;
@@ -101,7 +100,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
         feedback_tx,
     };
     let rendered = render_half(backend.as_mut(), &ends, &shutdown);
-    // What the run actually drew, which `--frames N` only requested: a pixel A/B
+    // What the run actually drew, which `--limit-frames N` only requested: a pixel A/B
     // of a temporal world is a comparison of the frame it stopped on, so the
     // capture harness reads this back and refuses a run that stopped elsewhere.
     tracing::info!("pipeline: {} frame(s) submitted", rendered.submitted);
@@ -116,12 +115,6 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     if !rendered.device_lost {
         backend.wait_idle();
         backend.finish_captures();
-        if let Some(path) = screenshot {
-            match backend.screenshot(path) {
-                Ok(saved) => tracing::info!("screenshot saved: {}", saved),
-                Err(e) => tracing::warn!("screenshot failed: {}", e),
-            }
-        }
     }
 }
 

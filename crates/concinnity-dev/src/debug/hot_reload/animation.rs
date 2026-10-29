@@ -3,7 +3,7 @@
 //! GLB decode lives here (editor side) because the runtime crate links no image
 //! decoders; the runtime crate exposes only the catalog (`reload_entries`) and
 //! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
-//! build time, so a hot-reloaded clip is byte-identical to a fresh `cn build`.
+//! build time, so a hot-reloaded clip is byte-identical to a fresh `cn cook`.
 
 use concinnity_engine::animation::AnimationSystem;
 use concinnity_engine::animation::skeleton::{AnimationClip, JointTrack, Keyframe};

@@ -50,7 +50,7 @@ pub(in crate::debug::hot_reload) fn read_field(path: &str) -> Result<ShaderSourc
         .map_err(|e| e.to_string())
 }
 
-// Compile `field` exactly as `cn build` would for this host's backend.
+// Compile `field` exactly as `cn cook` would for this host's backend.
 pub(in crate::debug::hot_reload) fn compile(
     name: &str,
     key: &FieldKey,

@@ -616,7 +616,7 @@ fn apply_reloaded_clip_refreshes_graph_clip_duration() {
     assert_eq!(report.state, "idle");
 }
 
-// With hot-reload off (no `cn debug`) and inline clips, the reload catalog
+// With hot-reload off (no `cn run -f`) and inline clips, the reload catalog
 // is empty: the getter returns an empty slice.
 #[test]
 fn reload_entries_is_empty_without_captured_sources() {

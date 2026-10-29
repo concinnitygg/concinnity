@@ -302,7 +302,7 @@ pub fn build_compiled_with_progress(
     } = partition_components(&assets, &resource_handles)?;
 
     // Dev-only: the file source behind each texture and mesh handle, for
-    // `cn debug`'s hot-reload watcher.
+    // `cn run -f`'s hot-reload watcher.
     let (texture_sources, mesh_sources) = hot_reload_sources(&assets, &resource_jobs);
 
     // Scene payload ownership, derived from the resolved scene memberships and
@@ -753,7 +753,7 @@ mod tests {
         v
     }
 
-    // `cn debug`'s hot-reload watcher maps a saved file back to the handle it
+    // `cn run -f`'s hot-reload watcher maps a saved file back to the handle it
     // feeds, so every file-backed texture and mesh records its source in handle
     // order. A generated asset has nothing to watch and records an empty source.
     #[test]

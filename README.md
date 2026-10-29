@@ -102,29 +102,30 @@ Check out the [Rust Documentation][docs-link] to explore the crate.
 ## CLI Reference
 
 ```
-Usage: concinnity [COMMAND]
+Usage: concinnity [OPTIONS] <COMMAND>
 
 Commands:
   init     Create a new app in the current directory
   new      Create a new app in a new directory
-  build    Build a world from worlds/ into binary blobs
-  run      Run a compiled world
-  debug    Run interpreted directly from a world jsonl file
-  editor   Edit a world in-engine with a save-back HUD [default command]
-  add      Add an asset to the active world
-  rm       Remove an asset from the active world by its unique name
+  cook     Cook an app into binary blobs
+  check    Validate an app without cooking it
+  run      Run an app
+  bench    Benchmark an app and print what its frames cost
+  edit     Edit an app in-engine with a save-back HUD
+  add      Add an asset to the active app
+  rm       Remove an asset from the active app by its id
   list     List all declared assets
-  explain  Print an asset's effective entry from the expanded world
-  docs     Regenerate the asset reference pages under docs/assets
-  test     Validate a world without building
-  export   Package a built world into a distributable app
+  explain  Print an asset's effective entry from the expanded app
+  docs     Regenerate the asset reference pages
+  export   Package a cooked app for distribution
   mcp      Serve the debug protocol to an MCP client over stdio
   version  Print the version
   help     Print this message or the help of the given subcommand(s)
 
 Options:
-  -V, --version  Print the version
+  -q, --quiet    Do not print log messages
   -h, --help     Print help
+  -V, --version  Print version
 ```
 
 ## Engine Capabilities

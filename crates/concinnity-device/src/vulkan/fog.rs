@@ -658,7 +658,7 @@ fn create_fog_pipeline(
 
 impl VkContext {
     // Hot-reload entry point for the volumetric-fog tunables (driven by
-    // `world.jsonl` hot-reload under `cn debug`). Writes the new
+    // `world.jsonl` hot-reload under `cn run -f`). Writes the new
     // `Option<FogSettings>` into `self.fog.settings`; the next frame's graph
     // seed re-reads it (so `None` drops the FogFroxel + Fog passes) and
     // `encode_fog_froxel` rebuilds `FogParams` / `FogFroxelParams` from it.
@@ -672,7 +672,7 @@ impl VkContext {
     // Named distinctly from the `RenderBackend::update_fog_settings` trait
     // method so the backend forwarder's `self.apply_fog_settings(...)` is
     // unambiguous. Reached through the `RenderBackend` vtable (the bin's
-    // `cn debug` world.jsonl hot-reload).
+    // `cn run -f` world.jsonl hot-reload).
     pub(in crate::vulkan) fn apply_fog_settings(
         &mut self,
         settings: Option<volumetric_fog::FogSettings>,

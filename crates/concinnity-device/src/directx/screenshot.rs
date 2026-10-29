@@ -38,7 +38,7 @@ impl DxContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn debug`).
+    // `RenderBackend` vtable (bin-only `cn run -f`).
     pub(crate) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
         let Some(back_idx) = self.swapchain.last_present_index else {
             return Err(RenderError::Other(

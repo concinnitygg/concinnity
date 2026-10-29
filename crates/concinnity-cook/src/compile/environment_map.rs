@@ -184,7 +184,7 @@ pub(crate) fn compile_environment_map_payload(
 /// Decode the `EnvironmentMap` source at `path` the same way
 /// `compile_environment_map_payload` does at build time, returning the
 /// serialized payload (header + irradiance + prefilter mips). Exposed for the
-/// asset hot-reload path (`cn debug` only), which the editor drives; production
+/// asset hot-reload path (`cn run -f` only), which the editor drives; production
 /// reads the compiled payload from a blob locator instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
 /// `prefilter_face`, `irradiance_face`, and `prefilter_samples` should be the

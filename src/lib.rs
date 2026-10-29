@@ -156,8 +156,11 @@ pub mod components {
 /// What a launch asks of the run, and the flags it is read from.
 pub mod launch {
     pub use concinnity_engine::launch::{
-        LAUNCH_FLAGS, LaunchArgs, LaunchArgsError, LaunchFlag, QUALITY_PRESET_VALUES, usage,
+        LAUNCH_FLAGS, LaunchArgs, LaunchArgsError, LaunchCommand, LaunchFlag,
+        QUALITY_PRESET_VALUES, usage,
     };
+    #[cfg(feature = "std")]
+    pub use concinnity_runtime::launch_args_from_env as from_env;
 }
 
 /// Math an application lays its own geometry out with.

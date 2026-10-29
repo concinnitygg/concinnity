@@ -23,7 +23,7 @@ use crate::file_stamp::FileStamp;
 // single build can reference one large source file from hundreds of assets
 // (e.g. every Mesh imported from one `.fbx`), and hashing it once per asset
 // dominates the build; the memo reads + hashes each unique file once. Keyed by
-// `FileStamp` so a file edited between in-process rebuilds (the `cn debug`
+// `FileStamp` so a file edited between in-process rebuilds (the `cn run -f`
 // hot-reload path) is re-hashed rather than served stale.
 fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     type HashMemo = Mutex<HashMap<String, (FileStamp, [u8; 32])>>;

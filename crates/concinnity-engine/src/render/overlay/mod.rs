@@ -160,7 +160,7 @@ impl System for OverlaySystem {
         let mut frame = self.build_frame(ctx, &assets, self.elapsed);
         ctx.insert_resource(assets);
 
-        // An external per-frame driver (the `cn editor` HUD) can force the
+        // An external per-frame driver (the `cn edit` HUD) can force the
         // menu-active state through the `MenuOverride` resource, so it frees
         // the cursor + freezes the world regardless of the world's own menu
         // UI. `None` leaves the world's own logic in charge. This shadows
@@ -223,7 +223,7 @@ impl OverlaySystem {
         //   - the screen stack: every element of an active Screen takes its
         //     screen's computed layer (stack position within the authored layer
         //     band), so screens draw in stack order and above the layer-0 HUD;
-        //   - the `cn editor` HUD's per-frame overrides, lifted into a reserved
+        //   - the `cn edit` HUD's per-frame overrides, lifted into a reserved
         //     top range so the editor panels always occlude world screens while
         //     keeping their own focus order.
         // An id absent from the map is layer 0. When the map ends up empty (no
@@ -351,7 +351,7 @@ impl OverlaySystem {
             .any(|s| s.follow_cursor && s.visible && s.tint[3] > 0.0);
         let want_ui_cursor = menu_cursor && !cursor.outside_window;
         if want_ui_cursor {
-            // The `cn editor` HUD switches the silhouette to a resize cursor over a
+            // The `cn edit` HUD switches the silhouette to a resize cursor over a
             // panel edge; every other cursor stays the arrow (the default absence).
             let cursor_shape = ctx
                 .resource::<DesiredCursor>()

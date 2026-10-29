@@ -389,7 +389,7 @@ pub(super) struct MtlHardware {
     // request rather than the negotiated mode keeps a display without EDR
     // headroom from forcing a rebuild every save.
     pub swapchain_config: init::SwapchainConfig,
-    // `Option` so a live `cn editor` world reload can MOVE the window (and its
+    // `Option` so a live `cn edit` world reload can MOVE the window (and its
     // live cursor / keymap / fullscreen state) into the rebuilt context; a
     // normal context always holds `Some`. Access via `window`/`window_mut`.
     pub window: Option<WindowState>,
@@ -559,7 +559,7 @@ pub(super) struct CompositeState {
 // Only ever accessed from the main thread.
 pub(crate) struct MtlContext {
     // Color texture of the most recently presented drawable, retained so the
-    // `cn debug` `screenshot` command can blit it back to a host buffer and
+    // `cn run -f` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
     // `hot_reload` (the path that runs the debug endpoint able to request a
     // capture); `None` in production and before the first present, so a
@@ -696,7 +696,8 @@ pub(crate) struct MtlContext {
     pub(super) world_shader: Option<concinnity_engine::components::ShaderPrograms>,
     // Keep each presented drawable's texture retained so `screenshot` can
     // blit it back (the view is blit-readable under the same flag). On under
-    // the dev loop and `cn run --screenshot`; false in plain production.
+    // the dev loop and for a run that takes screenshots; false in plain
+    // production.
     pub(super) capture: bool,
     // Skinned-mesh rendering feature state: the shared skinned vertex / index
     // buffers, the pre-skin pipeline and its deformed buffers, and the morph

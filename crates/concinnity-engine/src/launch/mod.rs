@@ -1,72 +1,107 @@
 //! What a launch asks of the run, from the command line or from code: the
-//! [`LaunchArgs`] parsed from the flags in [`LAUNCH_FLAGS`].
+//! [`LaunchArgs`] parsed from a [`LaunchCommand`] and the flags in
+//! [`LAUNCH_FLAGS`].
 //!
-//! The flags are described once, in the table, so every front that offers them
-//! (an app's own command line, `cn run`, a debug client) shows the same names
-//! and descriptions.
+//! The commands and flags are described once, in the table, so every front
+//! that offers them (an app's own command line, `cn run`, a debug client)
+//! shows the same names and descriptions.
 
 mod error;
 mod flags;
+mod parse;
 mod pipeline;
 mod request;
 
 pub use error::LaunchArgsError;
 pub use flags::{
-    GRAPHICS_API_VALUES, LAUNCH_FLAGS, LaunchFlag, QUALITY_PRESET_VALUES, SWITCH_VALUES,
-    WINDOW_MODE_VALUES, flag, usage,
+    DEFAULT_DEBUG_PORT, DLSS_PRESET_VALUES, GRAPHICS_API_VALUES, HIDE_PASS_VALUES, LAUNCH_FLAGS,
+    LaunchCommand, LaunchFlag, QUALITY_PRESET_VALUES, RT_DYNAMIC_VALUES, WINDOW_MODE_VALUES, flag,
+    short_flag, usage,
 };
 pub use pipeline::PipelineMode;
 pub use request::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest, screenshot_path};
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::num::NonZeroU32;
 
+use crate::gfx::view_modes::ShowFlags;
 use crate::platform::Platform;
+use crate::render::output::dlss::DlssPreset;
+use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::QualityPreset;
 use crate::window::WindowMode;
 use concinnity_core::math::{SaturatingFrom, round};
 
 /// What a launch asks of the run. Each field left at its default leaves the
 /// run as the world and the saved settings make it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchArgs {
-    /// Benchmark the world: arm its `BenchmarkConfig`, or the default one, and
-    /// report what the frames cost when its last phase ends.
-    pub benchmark: bool,
-    /// Turn vertical sync on, over the world's settings and the saved ones.
-    pub vsync: bool,
-    /// Cap the frame rate at this many frames a second, `0` for uncapped,
-    /// over the world's settings, the saved ones and a benchmark's own cap.
-    pub fps_cap: Option<u32>,
+    /// What the launch does with its world.
+    pub command: LaunchCommand,
+    /// Install no log output.
+    pub quiet: bool,
     /// Force the graphics-quality preset for this run, unsaved.
-    pub quality_preset: Option<QualityPreset>,
+    pub graphics_quality: Option<QualityPreset>,
     /// Render with this graphics API, over the one chosen in the saved
     /// settings, without saving it.
     pub graphics_api: Option<Platform>,
     /// Open the window in this mode, over the world's and the saved settings'
     /// choice, without saving it.
     pub window_mode: Option<WindowMode>,
+    /// Force the graphics API's validation layer on or off. `None` follows the
+    /// build profile.
+    pub graphics_validation: Option<bool>,
     /// Turn temporal upscaling on or off, over the world's and the saved
     /// settings' choice, without saving it.
     pub upscaling: Option<bool>,
+    /// Force how the ray-tracing acceleration structure tracks moving props.
+    /// `None` is [`RtDynamicMode::Auto`].
+    pub rt_dynamic: Option<RtDynamicMode>,
     /// Turn ray-traced reflections on or off, over the world's, the saved
     /// settings' and the quality preset's choice, without saving it. A device
     /// without ray tracing still runs without them.
     pub rt_reflections: Option<bool>,
+    /// Whether skinned meshes join the ray-tracing acceleration structure.
+    /// `None` leaves them in.
+    pub rt_skinned_geometry: Option<bool>,
+    /// Turn vertical sync on or off, over the world's settings and the saved ones.
+    pub vsync: Option<bool>,
+    /// Force the DLSS render preset over the saved choice, unsaved.
+    pub dlss_preset: Option<DlssPreset>,
+    /// Step the frame clock by exactly `1 / rate` seconds per frame instead of
+    /// the wall time between frames, so a given frame sees the same clock on
+    /// every launch. `None` follows the wall clock.
+    pub fixed_frame_rate: Option<NonZeroU32>,
     /// The directory screenshots are written under, instead of
     /// [`DEFAULT_SCREENSHOTS_DIR`].
     pub screenshots_dir: Option<String>,
+    /// The feature passes the run starts with. Every flag set is the shipping
+    /// frame.
+    pub show: ShowFlags,
     /// Stop after this many frames.
-    pub frames: Option<u64>,
+    pub limit_frames: Option<u64>,
+    /// Cap the frame rate at this many frames a second, `0` for uncapped,
+    /// over the world's settings, the saved ones and a benchmark's own cap.
+    pub limit_fps: Option<u32>,
+    /// Serve the debug protocol on this localhost port, where the host carries
+    /// a debug server.
+    pub debug_port: Option<u16>,
     /// Milliseconds into the run the simulation runs ahead to before it keeps
     /// the normal pace ([`Self::start_at`] in seconds).
     pub start_at_millis: Option<u32>,
-    /// Take the world's authored screenshots, as a benchmarked run always
-    /// does. A run that asks for neither takes none of them.
-    pub screenshots: bool,
-    /// Screenshots to take at moments of the run, with or without the
-    /// world's own. A file another shot writes is taken only once.
+    /// Milliseconds into the run a benchmark stops at, before its last phase
+    /// ends ([`Self::stop_at`] in seconds).
+    pub stop_at_millis: Option<u32>,
+    /// Screenshots to take at moments of the run, alongside the world's own. A
+    /// file another shot writes is taken only once.
     pub screenshot_at: Vec<ScreenshotAt>,
+}
+
+impl Default for LaunchArgs {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 /// A screenshot a launch asks for at a moment of the run, as
@@ -134,22 +169,35 @@ impl ScreenshotAt {
 }
 
 impl LaunchArgs {
-    /// A launch that asks for nothing.
+    /// A launch that runs the world and asks for nothing else.
     pub const NONE: Self = Self {
-        benchmark: false,
-        vsync: false,
-        fps_cap: None,
-        quality_preset: None,
+        command: LaunchCommand::Run,
+        quiet: false,
+        graphics_quality: None,
         graphics_api: None,
         window_mode: None,
+        graphics_validation: None,
         upscaling: None,
+        rt_dynamic: None,
         rt_reflections: None,
+        rt_skinned_geometry: None,
+        vsync: None,
+        dlss_preset: None,
+        fixed_frame_rate: None,
         screenshots_dir: None,
-        frames: None,
+        show: ShowFlags::all(),
+        limit_frames: None,
+        limit_fps: None,
+        debug_port: None,
         start_at_millis: None,
-        screenshots: false,
+        stop_at_millis: None,
         screenshot_at: Vec::new(),
     };
+
+    /// Whether the launch benchmarks its world.
+    pub fn benchmarks(&self) -> bool {
+        self.command == LaunchCommand::Bench
+    }
 
     /// Seconds into the run, on the simulation clock, the simulation runs
     /// ahead to before it keeps the normal pace; `None` to start at the
@@ -158,324 +206,9 @@ impl LaunchArgs {
         self.start_at_millis.map(|millis| millis as f32 / 1000.0)
     }
 
-    /// The launch `args` ask for, each a flag from [`LAUNCH_FLAGS`] as
-    /// `--name`, `--name value` or `--name=value`. `--help` is answered with
-    /// [`LaunchArgsError::Help`]. Takes `std::env::args().skip(1)` as it is.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LaunchArgsError::Help`] for `--help`, or an error naming an
-    /// unknown flag or a missing, unexpected, or malformed value.
-    pub fn parse<I>(args: I) -> Result<Self, LaunchArgsError>
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        let mut parsed = Self::NONE;
-        let mut args = args.into_iter();
-        while let Some(item) = args.next() {
-            let arg = item.as_ref();
-            if arg == "--help" || arg == "-h" {
-                return Err(LaunchArgsError::Help);
-            }
-            let Some(named) = arg.strip_prefix("--") else {
-                return Err(LaunchArgsError::Unknown(arg.to_string()));
-            };
-            let (name, inline) = match named.split_once('=') {
-                Some((name, value)) => (name, Some(value)),
-                None => (named, None),
-            };
-            let Some(flag) = flag(name) else {
-                return Err(LaunchArgsError::Unknown(arg.to_string()));
-            };
-            let following;
-            let value = match (flag.value, inline) {
-                (None, None) => None,
-                (None, Some(_)) => return Err(LaunchArgsError::UnexpectedValue(flag.name)),
-                (Some(_), Some(value)) => Some(value),
-                (Some(_), None) => {
-                    following = args
-                        .next()
-                        .ok_or(LaunchArgsError::MissingValue(flag.name))?;
-                    Some(following.as_ref())
-                }
-            };
-            parsed.set(flag.name, value)?;
-        }
-        Ok(parsed)
-    }
-
-    /// Apply the flag `name` (without its `--`), with its value when it takes
-    /// one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `name` is unknown, or `value` is missing,
-    /// unexpected, or malformed.
-    pub fn set(&mut self, name: &str, value: Option<&str>) -> Result<(), LaunchArgsError> {
-        let flag = flag(name).ok_or_else(|| LaunchArgsError::Unknown(name.to_string()))?;
-        let bad = |value: &str| LaunchArgsError::BadValue {
-            flag: flag.name,
-            value: value.to_string(),
-        };
-        match (flag.name, value) {
-            ("benchmark", None) => self.benchmark = true,
-            ("vsync", None) => self.vsync = true,
-            ("screenshots", None) => self.screenshots = true,
-            ("screenshot-at", Some(value)) => self
-                .screenshot_at
-                .push(ScreenshotAt::parse(value).ok_or_else(|| bad(value))?),
-            ("fps-cap", Some(value)) => self.fps_cap = Some(value.parse().map_err(|_| bad(value))?),
-            ("frames", Some(value)) => self.frames = Some(value.parse().map_err(|_| bad(value))?),
-            ("start-at", Some(value)) => {
-                self.start_at_millis =
-                    Some(run_millis(parse_seconds(value).ok_or_else(|| bad(value))?));
-            }
-            ("quality-preset", Some(value)) => {
-                self.quality_preset = Some(
-                    QualityPreset::ALL
-                        .into_iter()
-                        .find(|preset| preset.name().eq_ignore_ascii_case(value))
-                        .ok_or_else(|| bad(value))?,
-                );
-            }
-            ("window-mode", Some(value)) => {
-                self.window_mode = Some(
-                    WindowMode::ALL
-                        .iter()
-                        .copied()
-                        .find(|mode| mode.as_str() == value)
-                        .ok_or_else(|| bad(value))?,
-                );
-            }
-            ("upscaling", Some(value)) => {
-                self.upscaling = Some(switch(value).ok_or_else(|| bad(value))?);
-            }
-            ("rt-reflections", Some(value)) => {
-                self.rt_reflections = Some(switch(value).ok_or_else(|| bad(value))?);
-            }
-            ("screenshots-dir", Some(value)) => {
-                if value.is_empty() {
-                    return Err(bad(value));
-                }
-                self.screenshots_dir = Some(value.to_string());
-            }
-            ("graphics-api", Some(value)) => {
-                self.graphics_api = Some(Platform::from_key(value).ok_or_else(|| bad(value))?);
-            }
-            (_, None) => return Err(LaunchArgsError::MissingValue(flag.name)),
-            (_, Some(_)) => return Err(LaunchArgsError::UnexpectedValue(flag.name)),
-        }
-        Ok(())
-    }
-}
-
-// An on/off flag's state, as [`SWITCH_VALUES`] names it.
-fn switch(value: &str) -> Option<bool> {
-    match value {
-        "on" => Some(true),
-        "off" => Some(false),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloc::string::String;
-
-    fn parse(args: &[&str]) -> Result<LaunchArgs, LaunchArgsError> {
-        LaunchArgs::parse(args.iter().copied())
-    }
-
-    #[test]
-    fn no_args_ask_for_nothing() {
-        assert_eq!(parse(&[]), Ok(LaunchArgs::NONE));
-        assert_eq!(LaunchArgs::NONE, LaunchArgs::default());
-    }
-
-    // Moments a millisecond apart get files of their own.
-    #[test]
-    fn a_screenshot_at_a_moment_is_named_for_it_to_the_millisecond() {
-        let args = parse(&["--screenshot-at=1.001", "--screenshot-at=1.004"]).unwrap();
-        let files: Vec<&str> = args.screenshot_at.iter().map(|s| s.file.as_str()).collect();
-        assert_eq!(files, ["at-1.001s.png", "at-1.004s.png"]);
-    }
-
-    #[test]
-    fn every_flag_parses() {
-        let args = parse(&[
-            "--benchmark",
-            "--vsync",
-            "--fps-cap",
-            "144",
-            "--quality-preset=ultra",
-            "--graphics-api",
-            "vulkan",
-            "--window-mode=fullscreen",
-            "--upscaling=off",
-            "--rt-reflections",
-            "on",
-            "--screenshots-dir=shots/vk",
-            "--frames",
-            "600",
-            "--start-at=96.5",
-            "--screenshots",
-            "--screenshot-at",
-            "12.5:beach",
-            "--screenshot-at=30",
-        ])
-        .unwrap();
-        assert_eq!(
-            args,
-            LaunchArgs {
-                benchmark: true,
-                vsync: true,
-                fps_cap: Some(144),
-                quality_preset: Some(QualityPreset::Ultra),
-                graphics_api: Some(Platform::Vulkan),
-                window_mode: Some(WindowMode::Fullscreen),
-                upscaling: Some(false),
-                rt_reflections: Some(true),
-                screenshots_dir: Some("shots/vk".into()),
-                frames: Some(600),
-                start_at_millis: Some(96_500),
-                screenshots: true,
-                screenshot_at: alloc::vec![
-                    ScreenshotAt::new(12.5, "beach.png"),
-                    ScreenshotAt::new(30.0, "at-30.000s.png"),
-                ],
-            }
-        );
-    }
-
-    #[test]
-    fn every_flag_in_the_table_is_handled() {
-        for flag in LAUNCH_FLAGS {
-            let value = flag
-                .values
-                .first()
-                .copied()
-                .or_else(|| flag.value.map(|_| "1"));
-            let mut args = LaunchArgs::NONE;
-            assert_eq!(args.set(flag.name, value), Ok(()), "{}", flag.name);
-            assert_ne!(args, LaunchArgs::NONE, "{}", flag.name);
-        }
-    }
-
-    #[test]
-    fn mistakes_name_what_went_wrong() {
-        assert_eq!(
-            parse(&["--fast"]),
-            Err(LaunchArgsError::Unknown("--fast".into()))
-        );
-        assert_eq!(
-            parse(&["benchmark"]),
-            Err(LaunchArgsError::Unknown("benchmark".into()))
-        );
-        assert_eq!(
-            parse(&["--frames"]),
-            Err(LaunchArgsError::MissingValue("frames"))
-        );
-        assert_eq!(
-            parse(&["--vsync=on"]),
-            Err(LaunchArgsError::UnexpectedValue("vsync"))
-        );
-        assert_eq!(
-            parse(&["--fps-cap", "fast"]),
-            Err(LaunchArgsError::BadValue {
-                flag: "fps-cap",
-                value: "fast".into()
-            })
-        );
-        assert_eq!(
-            parse(&["--screenshots-dir="]),
-            Err(LaunchArgsError::BadValue {
-                flag: "screenshots-dir",
-                value: String::new()
-            })
-        );
-        for value in [
-            "soon",
-            "-1",
-            "3:../out",
-            "3:/tmp/out.png",
-            "3:",
-            "3:shots/",
-            "3:a.png:stream",
-        ] {
-            assert_eq!(
-                parse(&["--screenshot-at", value]),
-                Err(LaunchArgsError::BadValue {
-                    flag: "screenshot-at",
-                    value: value.into()
-                }),
-                "{value}"
-            );
-        }
-        for value in ["soon", "-1", "inf"] {
-            assert_eq!(
-                parse(&["--start-at", value]),
-                Err(LaunchArgsError::BadValue {
-                    flag: "start-at",
-                    value: value.into()
-                }),
-                "{value}"
-            );
-        }
-        assert_eq!(parse(&["--start-at=0.25"]).unwrap().start_at(), Some(0.25));
-        assert_eq!(LaunchArgs::NONE.start_at(), None);
-        assert_eq!(
-            parse(&["--graphics-api", "opengl"]),
-            Err(LaunchArgsError::BadValue {
-                flag: "graphics-api",
-                value: "opengl".into()
-            })
-        );
-        assert_eq!(
-            parse(&["--window-mode", "maximized"]),
-            Err(LaunchArgsError::BadValue {
-                flag: "window-mode",
-                value: "maximized".into()
-            })
-        );
-        for flag in ["upscaling", "rt-reflections"] {
-            assert_eq!(
-                parse(&[&alloc::format!("--{flag}"), "true"]),
-                Err(LaunchArgsError::BadValue {
-                    flag,
-                    value: "true".into()
-                })
-            );
-        }
-        assert_eq!(
-            parse(&["--quality-preset", "max"]),
-            Err(LaunchArgsError::BadValue {
-                flag: "quality-preset",
-                value: "max".into()
-            })
-        );
-    }
-
-    // The flag names every platform by its key, and only those.
-    #[test]
-    fn every_graphics_api_is_named_by_its_key() {
-        let keys: Vec<&str> = Platform::ALL.iter().map(|p| p.key()).collect();
-        assert_eq!(keys, GRAPHICS_API_VALUES);
-        for platform in Platform::ALL {
-            let args = parse(&["--graphics-api", platform.key()]).unwrap();
-            assert_eq!(args.graphics_api, Some(platform));
-        }
-    }
-
-    #[test]
-    fn owned_arguments_parse_as_they_come() {
-        let argv = alloc::vec![String::from("--fps-cap"), String::from("60")];
-        assert_eq!(LaunchArgs::parse(argv).map(|a| a.fps_cap), Ok(Some(60)));
-    }
-
-    #[test]
-    fn help_is_its_own_answer() {
-        assert_eq!(parse(&["--vsync", "--help"]), Err(LaunchArgsError::Help));
+    /// Seconds into the run, on the simulation clock, a benchmark stops at;
+    /// `None` to run its every phase.
+    pub fn stop_at(&self) -> Option<f32> {
+        self.stop_at_millis.map(|millis| millis as f32 / 1000.0)
     }
 }

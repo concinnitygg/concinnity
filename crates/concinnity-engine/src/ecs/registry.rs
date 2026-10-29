@@ -39,7 +39,7 @@
 //! therefore not hand-written and not a stable on-disk contract: a build
 //! regenerates the blob, so the blob and the engine that loads it always agree.
 //! Reordering the list changes every tag, which is only safe alongside a rebuild
-//! (`cn build`), which the workflow always does. The tag must stay in 0..128 (the
+//! (`cn cook`), which the workflow always does. The tag must stay in 0..128 (the
 //! `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
 
 use crate::define_components;

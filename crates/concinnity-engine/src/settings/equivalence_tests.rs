@@ -559,7 +559,10 @@ fn case_text(
     };
     let ceiling = resolve_ceiling(preset, &profile);
     let launch = LaunchRequest {
-        dlss_preset: Some(DlssPreset::M),
+        args: crate::launch::LaunchArgs {
+            dlss_preset: Some(DlssPreset::M),
+            ..crate::launch::LaunchArgs::NONE
+        },
         ..LaunchRequest::default()
     };
     // The settings state as init leaves it, then a preset change.

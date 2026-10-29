@@ -2718,7 +2718,7 @@ impl super::context::VkContext {
     // and the deformed buffers were sized for the old layout. The joint and
     // morph bindings (1/3/4) are untouched; their buffers did not move. A
     // no-op when the fold is inactive. Reached only through the bin's
-    // `cn debug` geometry-rebuild path (dead in the FFI lib, live in the bin).
+    // `cn run -f` geometry-rebuild path (dead in the FFI lib, live in the bin).
     pub(in crate::vulkan) fn refresh_main_skin_geometry(
         &mut self,
         vertex_total: usize,

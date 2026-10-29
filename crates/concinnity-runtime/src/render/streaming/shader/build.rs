@@ -15,7 +15,7 @@ use crate::live_edit::shader_overrides::ShaderOverrides;
 
 // Where a deferred bucket's compiled stage container is read from.
 pub(crate) enum ShaderPayloadSource {
-    // RAM-backed world (`cn debug`, `cn editor`): the payload bytes.
+    // RAM-backed world (`cn run -f`, `cn edit`): the payload bytes.
     Bytes(Vec<u8>),
     // Disk-backed world (`cn run`): the payload's absolute range in its blob.
     Disk { path: String, offset: u64, len: u64 },

@@ -2,7 +2,7 @@
 //! core's mesh pool.
 //!
 //! `MeshPayloadSource` is the seam. `MemMeshSource` serves geometry kept
-//! resident in RAM (used by `cn debug`, which builds geometry in memory with no
+//! resident in RAM (used by `cn run -f`, which builds geometry in memory with no
 //! disk artifacts); `DiskMeshSource` re-reads it from a scratch file written by
 //! `write_mesh_scratch` (used by `cn run`, so the geometry never stays a second
 //! RAM copy past GPU upload).
@@ -23,7 +23,7 @@ pub(crate) trait MeshPayloadSource: Send + Sync {
     fn fetch(&self, id: usize) -> Result<DecodedMesh, String>;
 }
 
-// Geometry kept resident in RAM. `cn debug` has no disk artifacts to re-read,
+// Geometry kept resident in RAM. `cn run -f` has no disk artifacts to re-read,
 // so this streams the GPU upload only.
 pub(crate) struct MemMeshSource {
     meshes: Vec<DecodedMesh>,

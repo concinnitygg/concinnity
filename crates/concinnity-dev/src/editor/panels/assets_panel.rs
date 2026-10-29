@@ -51,7 +51,7 @@ use crate::editor::{hud, theme};
 // EXCLUDED list with a reason, so a newly registered type is a deliberate
 // choice, never a silent omission). Types that cook blank but stay unflagged:
 // world-config singletons want the edit-or-add flow below, engine-injected
-// HUDs (DebugHud / StatHud) are added by `cn build`, and types defined by a
+// HUDs (DebugHud / StatHud) are added by `cn cook`, and types defined by a
 // nested array or a source file (Model, Scene, Story, ...) are inert until the
 // nested / source form controls exist -- Behavior is flagged because it has
 // one: its body is authored in the Behavior panel. Types that cannot even cook
@@ -1960,7 +1960,7 @@ mod tests {
         // Types that cook blank but are deliberately NOT offered, each for a reason
         // above. Keeping this explicit means the assertion below flags anything new.
         const EXCLUDED: &[&str] = &[
-            // Engine-injected HUDs (added by `cn build`, not by hand).
+            // Engine-injected HUDs (added by `cn cook`, not by hand).
             "DebugHud",
             "StatHud",
             // Defined by nested content / a source the scalar form can't supply, so

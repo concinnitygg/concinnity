@@ -1,5 +1,5 @@
 // Execution tracing: while an observer publishes a `TraceRequest` (the
-// `cn editor` Behavior panel), each simulated tick publishes which nodes ran,
+// `cn edit` Behavior panel), each simulated tick publishes which nodes ran,
 // the world variables, and the requested entity's locals as an
 // `ExecutionTrace` resource. Without a request the system does no recording
 // work, so a shipped runtime pays nothing.

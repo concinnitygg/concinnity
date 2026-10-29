@@ -131,7 +131,7 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
 }
 
 // The expanded world: every asset the build produces, with its provenance.
-// Runs the same front half as `cn build` (expansion passes, injection,
+// Runs the same front half as `cn cook` (expansion passes, injection,
 // semantic validation), so the listing is exactly what lands in the blob.
 fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())

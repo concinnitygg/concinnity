@@ -101,9 +101,12 @@ impl Runtime {
         self
     }
 
-    // The launch request, for the runtime entry that adds to it before start.
-    pub(crate) fn launch_mut(&mut self) -> &mut LaunchRequest {
-        &mut self.launch
+    // The launch arguments the run takes: the world's own when it holds any,
+    // replacing the request's whole, as `LaunchRequest::publish` takes them.
+    pub(crate) fn launch_args(&self) -> &LaunchArgs {
+        self.world
+            .resource::<LaunchArgs>()
+            .unwrap_or(&self.launch.args)
     }
 
     /// The state tree this runtime runs against, if it has one.
@@ -296,13 +299,9 @@ impl Runtime {
             .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))
     }
 
-    // The graphics API the launch asks for: the world's own launch arguments
-    // when it holds any, replacing the request's whole, as
-    // `LaunchRequest::publish` takes them.
+    // The graphics API the launch asks for.
     fn launch_graphics_api(&self) -> Option<Platform> {
-        self.world
-            .resource::<LaunchArgs>()
-            .map_or(self.launch.args.graphics_api, |args| args.graphics_api)
+        self.launch_args().graphics_api
     }
 
     // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the
@@ -479,7 +478,7 @@ impl Runtime {
         self.clock.publish(
             &mut self.world,
             Instant::now(),
-            self.launch.fixed_frame_rate,
+            self.launch.args.fixed_frame_rate,
             self.launch.args.start_at(),
         );
         self.world.step()
@@ -497,13 +496,7 @@ impl Runtime {
     /// Returns an error if the runtime fails to start (see
     /// [`start`](Self::start)).
     pub fn run(self) -> Result<(), WorldError> {
-        self.run_with(crate::app::run::RunOptions::default())
-    }
-
-    // Run this on the run loop, consuming it. Drives frames until the
-    // window closes, a system stops the world, or CTRL+C is received.
-    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), WorldError> {
-        crate::app::run::start_runtime(self, options)
+        crate::app::run::start_runtime(self)
     }
 }
 

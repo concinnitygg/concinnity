@@ -20,7 +20,7 @@ const DEFAULT_PHASE_NAME: &str = "run";
 
 /// Customizes how a world is benchmarked.
 ///
-/// A world is benchmarked when it is launched with `--benchmark`, whether it
+/// A world is benchmarked when it is launched with `bench`, whether it
 /// declares one of these or not. Without one the camera holds the pose the
 /// world starts it at for ten seconds after the warm-up, or, on a world with
 /// a [`Planet`](#planet), tours the planet as [`PlanetTour`](#planettour)

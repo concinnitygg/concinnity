@@ -21,8 +21,8 @@ use crate::build_status::{BuildStatus, Verbosity};
 // validation front half and is ready for concinnity_cook::build_compiled.
 //
 // This is the shared front half of every in-memory build: `build_world_from_path`
-// (the interpreted `cn debug` run) funnels through here so
-// validation and asset fetching behave identically. The `cn build` blob path
+// (the interpreted `cn run -f` run) funnels through here so
+// validation and asset fetching behave identically. The `cn cook` blob path
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(source: WorldSource<'_>) -> std::io::Result<LoadedWorld> {
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
@@ -120,7 +120,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
         world.add(component, def.name);
     }
     // Load the compiled resource stream into its per-kind tables, exactly as the
-    // shipped runtime's `load_blob` does, so the in-memory `cn debug` world reads
+    // shipped runtime's `load_blob` does, so the in-memory `cn run -f` world reads
     // audio clips and textures by handle too.
     concinnity_engine::resource::install_tables(&mut world, &mut result.resources);
     world.insert_resource(BlobSceneGroups(result.scene_groups));
@@ -477,7 +477,7 @@ mod tests {
     }
 
     // build_world_str_to_disk compiles world content and writes the blobs + lock to
-    // the open project's build root, exactly as `cn build` does. Uses a
+    // the open project's build root, exactly as `cn cook` does. Uses a
     // payload-free world (PhysicsConfig) so it needs no source files or shader
     // compilation.
     #[test]

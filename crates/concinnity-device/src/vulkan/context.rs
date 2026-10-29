@@ -1665,7 +1665,7 @@ impl VkContext {
 
     // Public accessor for the shared shader-reload flag. Cloning the `Arc`
     // lets the debug server flip it from a non-render thread.
-    // `None` outside `cn debug`. Mirrors `DxContext::shader_reload_pending`.
+    // `None` outside `cn run -f`. Mirrors `DxContext::shader_reload_pending`.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         // Both platform windows snapshot straight into the shared InputSnapshot.
         self.window_mut().take_input()

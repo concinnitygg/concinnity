@@ -423,7 +423,7 @@ impl DxContext {
     // `None` and the froxel + fog PSOs were never built), a `Some` update logs
     // once and is dropped: re-enabling fog mid-run requires a relaunch.
     //
-    // The only caller is the bin-only `cn debug` world hot-reload
+    // The only caller is the bin-only `cn run -f` world hot-reload
     // (`debug::hot_reload::passes`), reached through the `RenderBackend`
     // vtable. Mirrors the other bin-only runtime-mutation seams on this
     // backend.

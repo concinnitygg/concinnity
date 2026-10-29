@@ -14,7 +14,7 @@ pub(crate) trait FrameHook: Send {
 
     // Called once per frame right after `tick`, handing the hook the whole runtime.
     // Lets a hook perform a Runtime-level world swap -- replace the world and
-    // re-`start` it -- which `tick`'s `&mut World` cannot reach. The `cn editor`
+    // re-`start` it -- which `tick`'s `&mut World` cannot reach. The `cn edit`
     // live SAVE uses it to install the recompiled world (carrying the render
     // backend transplanted out of the pre-edit world) without recreating the
     // OS window. Default: no swap.

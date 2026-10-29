@@ -252,7 +252,7 @@ pub(crate) fn setup_window_and_view(
 }
 
 // Re-resolve the swapchain color-output mode on the view a live world reload
-// (`cn editor` SAVE) inherits, returning it with the initial target size. The
+// (`cn edit` SAVE) inherits, returning it with the initial target size. The
 // reload is only chosen when the swapchain REQUEST is unchanged, but the
 // display's actual EDR headroom can still have changed since the original build
 // (a monitor plugged/unplugged, HDR toggled), which flips the resolved mode and
@@ -343,7 +343,7 @@ fn configure_mtk_view(mtk_view: &MTKView, hdr_mode: HdrOutputMode, capture_enabl
     mtk_view.setSampleCount(1);
     // The drawable defaults to `framebufferOnly` (write-as-attachment only),
     // which forbids using it as a blit source. Under the capture-enabled
-    // (`cn debug`) path the `screenshot` command blits the last presented
+    // (`cn run -f`) path the `screenshot` command blits the last presented
     // drawable back to the host, so switch it off there. Left at the default
     // in production so a normal `cn run` pays nothing for a debug-only feature.
     if capture_enabled {

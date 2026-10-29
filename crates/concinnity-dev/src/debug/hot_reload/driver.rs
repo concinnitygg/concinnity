@@ -1,6 +1,6 @@
 //! Per-frame drive of the asset / shader / world.jsonl hot-reload passes,
-//! shared by every dev session. A plain `cn editor` runs the driver as its own
-//! per-frame hook; `cn debug` (and `cn editor --debug-port`) drive it from
+//! shared by every dev session. A plain `cn edit` runs the driver as its own
+//! per-frame hook; `cn run --debug-port` (and `cn edit --debug-port`) drive it from
 //! inside `DebugServer::tick`, which layers the debug-server-only concerns
 //! (runtime spawn commands, camera motion) around it. Each session constructs
 //! exactly one driver, so a reload is never applied twice.
@@ -30,7 +30,7 @@ pub(crate) struct HotReloadDriver {
     signals: Arc<ReloadSignals>,
     // The editor's toast queue, when driving inside an editor session: the
     // reload passes report apply results through it. `None` under a bare
-    // `cn debug`, which has no toast surface.
+    // `cn run -f`, which has no toast surface.
     notifier: Option<crate::editor::notify::Notifier>,
     // The session's world.jsonl path, read at every arm so a world switch is
     // watched from the next rebuild on. `None` watches no world file.

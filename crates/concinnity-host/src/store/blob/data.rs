@@ -38,7 +38,7 @@ pub struct BlobData {
     // slots[i] is the payload state of blob i
     slots: Vec<BlobSlot>,
     // True when the payloads came from blob files on disk (the `cn run` path).
-    // False for in-memory builds (`cn debug`) and empty stores. The
+    // False for in-memory builds (`cn run -f`) and empty stores. The
     // asset-streaming subsystem reads this to decide whether a streamed
     // payload can be re-read from its blob file on demand instead of held
     // RAM-resident.
@@ -47,7 +47,7 @@ pub struct BlobData {
 
 impl BlobData {
     /// Build an in-memory store where every section is already resident. Used
-    /// by the `cn debug` path, which compiles payloads in memory with no blob
+    /// by the `cn run -f` path, which compiles payloads in memory with no blob
     /// files, so there is nothing to lazily load. A `None` section is treated
     /// as already released.
     pub fn new(payload_sections: Vec<Option<Vec<u8>>>) -> Self {

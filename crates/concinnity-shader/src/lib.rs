@@ -536,7 +536,7 @@ fn words(spirv: &[u8]) -> Result<Vec<u32>, String> {
 
 // A scratch directory name no concurrent compile can share: the process id
 // pairs with a monotonic counter, so neither two threads nor two engine
-// processes (a `cn build` alongside a running editor) collide.
+// processes (a `cn cook` alongside a running editor) collide.
 fn scratch_name() -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

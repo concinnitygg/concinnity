@@ -77,7 +77,7 @@ fn color_lut_strength(args: &serde_json::Value) -> f32 {
 /// Decode the `ColorLut` source at `path` the same way `compile_color_lut_payload`
 /// does at build time. Dispatches between `.cube` text parse and PNG-strip parse
 /// based on the file extension. Exposed for the runtime asset hot-reload path
-/// (`cn debug` only); production reads the compiled payload via
+/// (`cn run -f` only); production reads the compiled payload via
 /// `concinnity_engine::bake::color_lut::deserialize` instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
 ///

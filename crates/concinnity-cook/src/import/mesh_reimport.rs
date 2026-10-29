@@ -1,7 +1,7 @@
-//! Asset hot-reload (`cn debug`) decode helpers: re-import a file-backed Mesh /
+//! Asset hot-reload (`cn run -f`) decode helpers: re-import a file-backed Mesh /
 //! `SkinnedMesh` from a pre-parsed glTF document into the runtime Vertex /
 //! `SkinnedVertex` form, mirroring the build pipeline so a hot-reloaded mesh is
-//! byte-identical to a fresh `cn build`. The runtime crate links no image / glTF
+//! byte-identical to a fresh `cn cook`. The runtime crate links no image / glTF
 //! decoders, so these live here in the build crate; the editor's debug server
 //! drives them.
 
@@ -26,7 +26,7 @@ type SkinnedImport = (
 /// Decode a file-backed `Mesh` primitive from a pre-parsed glTF document the
 /// same way the build pipeline does at compile time, returning the runtime
 /// `Vertex` / index form with normals + tangents + optional LOD alternates baked
-/// in. Used by the asset hot-reload path (`cn debug` only); production reads the
+/// in. Used by the asset hot-reload path (`cn run -f` only); production reads the
 /// compiled payload from a blob locator and goes through
 /// `deserialize_with_lods` instead.
 ///
@@ -115,7 +115,7 @@ pub fn decode_skinned_inline_from_parsed_glb(
 /// Decode a file-backed `SkinnedMesh` from a pre-parsed glTF document the same
 /// way the build pipeline does at compile time, returning the runtime
 /// `SkinnedVertex` / index form (normals + tangents baked in) plus the imported
-/// bind-pose skeleton. Used by the asset hot-reload path (`cn debug` only);
+/// bind-pose skeleton. Used by the asset hot-reload path (`cn run -f` only);
 /// production reads the compiled payload from a blob locator and goes through
 /// `deserialize_skinned` instead.
 ///

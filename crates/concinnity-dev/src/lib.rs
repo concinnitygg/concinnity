@@ -4,7 +4,7 @@
 //! the command line it parses, the world authoring / in-memory build code, the
 //! implementations behind each subcommand, the asset-reference generator,
 //! bundle packaging, the in-engine editor HUD, the localhost debug server, and
-//! the interpreted (`cn debug`) run loop.
+//! the `cn run` / `cn bench` run loop.
 //!
 //! The binary declares the global allocator, resolves the project's state tree,
 //! installs the crash hooks, and hands the rest to [`cli::Invocation`].
@@ -50,10 +50,10 @@ pub mod project;
 #[cfg(test)]
 mod test_support;
 
-// Dev-session entry points, dispatched by `cli`: the debug
-// server + interpreted run (`cn debug`), the in-engine editor (`cn editor`),
+// Dev-session entry points, dispatched by `cli`: the world run with its
+// optional debug server (`cn run`, `cn bench`), the in-engine editor (`cn edit`),
 // and the MCP stdio bridge that forwards an agent's tool calls to a running
 // app (`cn mcp`).
 pub(crate) use editor::run_editor;
 pub(crate) use mcp::run as run_mcp;
-pub(crate) use run::run_debug;
+pub(crate) use run::run_world;

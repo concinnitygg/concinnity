@@ -212,7 +212,7 @@ fn max_frames_stops_the_run() {
     let mut world = b.build();
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
-            frames: Some(2),
+            limit_frames: Some(2),
             ..LaunchArgs::NONE
         },
         ..Default::default()
@@ -243,7 +243,7 @@ fn pipelined_max_frames_counts_frames_sent() {
     let mut world = b.build();
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
-            frames: Some(3),
+            limit_frames: Some(3),
             ..LaunchArgs::NONE
         },
         ..Default::default()

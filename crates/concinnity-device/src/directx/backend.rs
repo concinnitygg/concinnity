@@ -121,7 +121,7 @@ impl LiveEdit for DxContext {
         fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape);
     }
 
-    // The swapchain config this live context was built with. A live `cn editor`
+    // The swapchain config this live context was built with. A live `cn edit`
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
     fn hot_swap_config(&self) -> Option<init::SwapchainConfig> {

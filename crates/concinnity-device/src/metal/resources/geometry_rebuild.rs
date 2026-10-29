@@ -20,7 +20,7 @@ impl MtlContext {
     ) -> RenderResult<()> {
         // Stop the GPU + CPU pipelines so we can safely read the old
         // buffers and atomically swap. Costs a frame-time stall but only
-        // fires under `cn debug` and only when the source `.glb` size
+        // fires under `cn run -f` and only when the source `.glb` size
         // actually changed.
         self.wait_idle();
 

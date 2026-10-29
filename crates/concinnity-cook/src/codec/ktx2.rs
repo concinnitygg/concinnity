@@ -225,7 +225,7 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
     })
 }
 
-// Decode a KTX2 to RGBA8 for the `cn debug` hot-reload live preview, which
+// Decode a KTX2 to RGBA8 for the `cn run -f` hot-reload live preview, which
 // uploads RGBA8 rather than a compressed texture. Reuses `compile_ktx2`, then
 // decodes the base level: Basis and BC1/3/5 have decoders here; BC7 does not.
 pub(crate) fn decode_ktx2_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {

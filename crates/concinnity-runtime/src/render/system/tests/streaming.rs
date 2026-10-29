@@ -164,7 +164,7 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
 // The hot-reload seams concinnity-dev drives through. The library never reads
 // them, so they are exercised here: init parks the pushed fog beside the backend,
 // while the source catalogs and the texture-name map are captured only under
-// `cn debug` (this world is a plain build, so neither is parked).
+// `cn run -f` (this world is a plain build, so neither is parked).
 #[test]
 fn hot_reload_seams_park_the_fog_beside_the_backend() {
     use concinnity_engine::components::VolumetricFog;
@@ -197,7 +197,7 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     );
     assert!(
         slots.is_none(),
-        "the texture-name map is captured only under cn debug"
+        "the texture-name map is captured only under cn run -f"
     );
     backend
         .and_then(|slot| slot.0.as_deref_mut())

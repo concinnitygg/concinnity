@@ -48,7 +48,7 @@ pub(crate) fn takes_screenshots(ctx: &PipelineContext<'_>) -> bool {
 
 // Whether a launch takes the world's own screenshots.
 fn takes_authored(launch: &LaunchRequest) -> bool {
-    launch.args.benchmark || launch.args.screenshots
+    launch.args.benchmarks()
 }
 
 // The world's screenshots when the launch takes them, then the launch's, each
@@ -96,7 +96,7 @@ impl System for ScreenshotSystem {
     fn init(&mut self, ctx: &mut PipelineContext<'_>) {
         let Some(end) = ctx
             .resource::<BenchmarkRun>()
-            .map(BenchmarkRun::end_seconds)
+            .map(BenchmarkRun::stop_seconds)
         else {
             return;
         };
@@ -159,7 +159,7 @@ fn untaken<'a>(ended: f32, waiting: impl Iterator<Item = &'a Shot>) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launch::{LaunchArgs, ScreenshotAt};
+    use crate::launch::{LaunchArgs, LaunchCommand, ScreenshotAt};
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -211,27 +211,22 @@ mod tests {
         );
     }
 
-    // Plain play takes none of the world's shots; a benchmark or
-    // `--screenshots` takes them, and `--screenshot-at` takes its own alone.
+    // Plain play takes none of the world's shots; a benchmark takes them, and
+    // `--screenshot-at` takes its own alone.
     #[test]
     fn only_a_run_that_asks_takes_screenshots() {
         let shots = [(1.0, "a.png", true)];
         assert!(ScreenshotSystem::for_world(&world(LaunchArgs::NONE, &shots)).is_none());
         assert!(ScreenshotSystem::for_world(&World::new()).is_none());
-        let screenshots = LaunchArgs {
-            screenshots: true,
+        let benchmark = LaunchArgs {
+            command: LaunchCommand::Bench,
             ..LaunchArgs::NONE
         };
-        assert!(ScreenshotSystem::for_world(&world(screenshots.clone(), &shots)).is_some());
+        assert!(ScreenshotSystem::for_world(&world(benchmark.clone(), &shots)).is_some());
         assert!(
-            ScreenshotSystem::for_world(&world(screenshots, &[])).is_none(),
+            ScreenshotSystem::for_world(&world(benchmark, &[])).is_none(),
             "nothing to take"
         );
-        let benchmark = LaunchArgs {
-            benchmark: true,
-            ..LaunchArgs::NONE
-        };
-        assert!(ScreenshotSystem::for_world(&world(benchmark, &shots)).is_some());
         let asked = LaunchArgs {
             screenshot_at: vec![ScreenshotAt::new(2.0, "b.png")],
             ..LaunchArgs::NONE
@@ -248,7 +243,7 @@ mod tests {
     #[test]
     fn shots_fire_on_the_simulation_clock() {
         let args = LaunchArgs {
-            screenshots: true,
+            command: LaunchCommand::Bench,
             screenshots_dir: Some("shots".to_string()),
             screenshot_at: vec![ScreenshotAt::new(2.5, "asked.png")],
             ..LaunchArgs::NONE
@@ -285,7 +280,7 @@ mod tests {
     #[test]
     fn a_shot_fires_on_the_drawn_moment() {
         let args = LaunchArgs {
-            screenshots: true,
+            command: LaunchCommand::Bench,
             ..LaunchArgs::NONE
         };
         let mut world = world(args, &[(1.0, "a.png", true)]);
@@ -307,7 +302,7 @@ mod tests {
     #[test]
     fn a_hidden_window_skips_its_shot() {
         let args = LaunchArgs {
-            screenshots: true,
+            command: LaunchCommand::Bench,
             ..LaunchArgs::NONE
         };
         let mut world = world(args, &[(1.0, "a.png", true)]);

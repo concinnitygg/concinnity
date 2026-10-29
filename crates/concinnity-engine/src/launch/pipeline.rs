@@ -1,6 +1,6 @@
 /// Whether a run overlaps simulation and rendering on separate threads (the
-/// default) or steps both serially on one thread (the editor's mode, and
-/// `cn run --serial` for A/B comparison and as an escape hatch).
+/// default) or steps both serially on one thread (the editor's mode, and a
+/// world with nothing to render).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PipelineMode {
     /// Simulation and rendering overlap on separate threads.

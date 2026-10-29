@@ -121,7 +121,7 @@ impl VkContext {
     }
 
     // Replace a `SkinnedMesh` draw slot's vertex + index data in place.
-    // Driven by asset hot-reload (`cn debug` only). The shared skinned VB
+    // Driven by asset hot-reload (`cn run -f` only). The shared skinned VB
     // / IB were sized once at `upload_skinned` to hold every skinned
     // mesh's geometry, so the new payload must fit within this slot's
     // existing region (size-changing reloads route through
@@ -129,7 +129,7 @@ impl VkContext {
     // offset *in vertices*; `indices` are mesh-relative and get rebased
     // by `vertex_base` before being written into the shared IB.
     // Mirrors `DxContext::update_skinned_mesh_geometry`. Reached only through
-    // the bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in
+    // the bin's `cn run -f` runtime-mutation path (dead in the FFI lib, live in
     // the bin).
     #[expect(
         clippy::needless_pass_by_ref_mut,

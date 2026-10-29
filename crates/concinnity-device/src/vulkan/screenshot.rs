@@ -37,7 +37,7 @@ impl VkContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn debug`).
+    // `RenderBackend` vtable (bin-only `cn run -f`).
     pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
         let Some(image_index) = self.swapchain.last_present_index else {
             return Err(RenderError::Other(

@@ -50,7 +50,7 @@ impl ShaderTexts {
     }
 }
 
-// Compile `texts` exactly as `cn build` would for this host's backend.
+// Compile `texts` exactly as `cn cook` would for this host's backend.
 pub(in crate::debug::hot_reload) fn compile(name: &str, texts: &ShaderTexts) -> CompileResult {
     // Inside the bounded job pool, so the compile's rayon fan-out over the
     // programs does not claim every core the frame loop also needs.

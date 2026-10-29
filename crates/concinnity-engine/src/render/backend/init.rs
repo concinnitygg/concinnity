@@ -260,10 +260,10 @@ pub struct BackendInit<'a> {
     pub hdr_samples: u32,
     /// The launch's ray-tracing requests.
     pub launch: RenderLaunch,
-    /// True only under `cn debug`: disk-first shader resolution + watcher.
+    /// True only under `cn run -f`: disk-first shader resolution + watcher.
     pub hot_reload: bool,
     /// Keep the presented frame blit-readable so `screenshot` can capture it.
-    /// On under the dev loop, and armed by `cn run --screenshot`; production
+    /// On under the dev loop, and for a run that takes screenshots; production
     /// otherwise pays nothing for it (Metal leaves the drawable
     /// framebuffer-only and retains nothing).
     pub capture: bool,

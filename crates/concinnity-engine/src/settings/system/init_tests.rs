@@ -371,7 +371,7 @@ fn launch_vsync_overrides_persisted_and_authored_config() {
     let mut launch = Launch::new(GraphicsConfig::default()).stored(stored);
     launch.request = LaunchRequest {
         args: LaunchArgs {
-            vsync: true,
+            vsync: Some(true),
             ..LaunchArgs::NONE
         },
         ..Default::default()
@@ -498,7 +498,7 @@ fn a_stored_fullscreen_resolution_decides_the_output() {
     assert!(!upscales(&launch));
 }
 
-// `--quality-preset` names a preset for this launch, which never upscales on
+// `--graphics-quality` names a preset for this launch, which never upscales on
 // its own, over a stored Auto.
 #[test]
 fn a_launch_preset_over_a_stored_auto_keeps_native() {
@@ -507,7 +507,7 @@ fn a_launch_preset_over_a_stored_auto_keeps_native() {
     assert!(upscales(&launch));
     launch.request = LaunchRequest {
         args: LaunchArgs {
-            quality_preset: Some(QualityPreset::High),
+            graphics_quality: Some(QualityPreset::High),
             ..LaunchArgs::NONE
         },
         ..Default::default()

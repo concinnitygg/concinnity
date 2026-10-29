@@ -8,7 +8,7 @@
 //! field spliced at its marker and compiled for the host's target (see
 //! `program`).
 //!
-//! Shared by the payload build and by `cn debug`'s hot reload, so an edit
+//! Shared by the payload build and by `cn run -f`'s hot reload, so an edit
 //! recompiles through exactly the path the cook took.
 
 use concinnity_engine::components::ShaderSource;

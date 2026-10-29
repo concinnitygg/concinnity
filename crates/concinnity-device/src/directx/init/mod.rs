@@ -139,7 +139,7 @@ impl DxContext {
 
     // The shared constructor. `reuse == None` acquires fresh hardware (the
     // normal `new` path); `reuse == Some` rebuilds only the world's content on
-    // the retained device + window + swapchain for a live `cn editor` world
+    // the retained device + window + swapchain for a live `cn edit` world
     // reload (see `reload_world`). Everything after the device/window
     // acquisition is identical: the same pipelines, buffers, textures, and
     // targets are built from `init` either way.
@@ -533,7 +533,7 @@ fn report_init(hw: &DxHardware) {
 }
 
 impl DxContext {
-    // Rebuild the world's GPU content in place for a live `cn editor` reload:
+    // Rebuild the world's GPU content in place for a live `cn edit` reload:
     // idle the GPU, hand the hardware and swapchain to a successor built from
     // `init`, then replace `self` with it. The D3D12 / DXGI objects are COM
     // ref-counted, so the successor's clones keep them alive through the

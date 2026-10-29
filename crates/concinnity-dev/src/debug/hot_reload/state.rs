@@ -97,7 +97,7 @@ pub(crate) struct DecodedAssetBatch {
     pub decode_failures: usize,
 }
 
-// Shared `cn debug`-only state: the source map, the optional LUT entry, the
+// Shared `cn run -f`-only state: the source map, the optional LUT entry, the
 // reload signals `run_frame` takes at frame start, and the live watcher handle.
 pub(crate) struct AssetHotReloadState {
     pub map: TextureSourceMap,

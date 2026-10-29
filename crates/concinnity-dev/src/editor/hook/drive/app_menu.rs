@@ -12,7 +12,7 @@ use concinnity_engine::ecs::World;
 use crate::editor::hook::EditorHook;
 
 impl EditorHook {
-    /// Install the session's menu bar. Called only from the `cn editor` run
+    /// Install the session's menu bar. Called only from the `cn edit` run
     /// path, so a hook built for a test never reaches `AppKit`.
     #[cfg(target_os = "macos")]
     pub(crate) fn with_app_menu(self) -> Self {

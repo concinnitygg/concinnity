@@ -319,17 +319,17 @@ fn reload_shaders(call: &Call<'_>, _: Args) -> Reply {
     let flag = s
         .shader_reload
         .as_ref()
-        .ok_or("shader hot-reload not available (cn debug only)")?;
+        .ok_or("shader hot-reload not available (cn run -f only)")?;
     flag.store(true, Ordering::SeqCst);
     Ok(json!({ "reload_queued": true }))
 }
 
 // `tick` captures the signals once the reload driver is armed, which needs
-// `cn debug` and a graphics init that parked its reload sources.
+// `cn run -f` and a graphics init that parked its reload sources.
 fn reload_assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let signals = s.reload.as_ref().ok_or(
-        "asset hot-reload not available (cn debug only; no file-backed textures captured yet)",
+        "asset hot-reload not available (cn run -f only; no file-backed textures captured yet)",
     )?;
     signals.request_all();
     Ok(json!({ "reload_queued": true }))

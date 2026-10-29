@@ -135,7 +135,7 @@ pub(super) fn message(h: &EditorHook) -> String {
 }
 
 // Run `test` with the working directory at a fresh project whose assets live
-// under it, as `cn editor` runs.
+// under it, as `cn edit` runs.
 pub(super) fn in_project(test: impl FnOnce(&Path)) {
     // Hands the binary's other tests back their project however `test` ends.
     // Bound after the cwd guard, so it drops first, while the lock is held.

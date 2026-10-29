@@ -436,7 +436,10 @@ fn a_forced_dlss_preset_reaches_the_menu_unpersisted() {
             .stored(saved.clone())
             .on(nvidia);
         launch.request = LaunchRequest {
-            dlss_preset: forced,
+            args: crate::launch::LaunchArgs {
+                dlss_preset: forced,
+                ..crate::launch::LaunchArgs::NONE
+            },
             ..Default::default()
         };
         let mut world = World::new();

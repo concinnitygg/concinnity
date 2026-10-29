@@ -69,7 +69,7 @@ pub struct SkinnedDrawGeometryUpdate {
 /// regions. Returned for every slot (both the ones whose geometry was
 /// replaced and the ones whose geometry was carried over) because the
 /// rebuild may have shifted every slot's `vertex_base`.
-/// Constructed only by the `cn debug` binary's skinned-rebuild reload pass;
+/// Constructed only by the `cn run -f` binary's skinned-rebuild reload pass;
 /// reads as dead under `cargo check --lib`.
 pub struct SkinnedSlotLayout {
     /// The skinned slot this layout describes.
@@ -94,7 +94,7 @@ pub struct SkinnedSlotLayout {
 /// as applied when nothing changed.
 pub trait LiveEdit: SceneHost {
     /// Shared atomic flag the backend polls at frame start to trigger a
-    /// shader rebuild. `Some` only under `cn debug` on backends that ship
+    /// shader rebuild. `Some` only under `cn run -f` on backends that ship
     /// hot-reload; `None` on production runs and on backends that do not. The
     /// debug server reads this to forward `reload-shaders` commands; the
     /// filesystem watcher writes it directly. Default: `None`.
@@ -103,7 +103,7 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    /// Driven by asset hot-reload (`cn debug` only).
+    /// Driven by asset hot-reload (`cn run -f` only).
     ///
     /// # Errors
     ///
@@ -143,7 +143,7 @@ pub trait LiveEdit: SceneHost {
     /// keep their current geometry, copied byte-for-byte from the live
     /// buffers. The slot's `vertex_count`, `index_count`, and
     /// `lod_alternates` index offsets are rewritten as the new buffers are
-    /// laid out. Driven by asset hot-reload (`cn debug` only) when a
+    /// laid out. Driven by asset hot-reload (`cn run -f` only) when a
     /// size-changing `.glb` re-export means the existing
     /// [`Self::update_mesh_geometry`] in-place write no longer fits.
     /// `wait_idle` first; the rebuild swaps the GPU buffers wholesale.
@@ -161,7 +161,7 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Replace a `SkinnedMesh` draw slot's vertex + index data in place.
-    /// Driven by asset hot-reload (`cn debug` only). Reuses the slot's
+    /// Driven by asset hot-reload (`cn run -f` only). Reuses the slot's
     /// existing vertex region + index region in the shared skinned vertex /
     /// index buffers (created once by [`SkinnedDraws::upload_skinned`](super::SkinnedDraws::upload_skinned)), so the new
     /// geometry must match the slot's init-time vertex count + index count
@@ -196,7 +196,7 @@ pub trait LiveEdit: SceneHost {
     /// post-rebuild layout (one [`SkinnedSlotLayout`] per slot, in
     /// `skinned_index` order) so the caller can refresh its source-map
     /// `vertex_base` / `vertex_count` / `index_count` to point at the new
-    /// regions. Driven by asset hot-reload (`cn debug` only) when a
+    /// regions. Driven by asset hot-reload (`cn run -f` only) when a
     /// size-changing `.glb` re-export means the existing
     /// [`Self::update_skinned_mesh_geometry`] in-place write no longer fits.
     /// The backend `wait_idle`s first; the rebuild swaps the GPU buffers
@@ -222,7 +222,7 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Update a skinned slot's joint count and resize the backend's per-slot
-    /// joint-matrix buffers to match. Driven by asset hot-reload (`cn debug`
+    /// joint-matrix buffers to match. Driven by asset hot-reload (`cn run -f`
     /// only) when a re-imported `.glb`'s skeleton has a different joint
     /// count than the slot was initialized with. Shrinking truncates the
     /// per-slot Vec; growing seeds the new entries to identity so the slot
@@ -251,7 +251,7 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Replace a `Mesh` draw slot's vertex + index data in place. Driven by
-    /// asset hot-reload (`cn debug` only). Reuses the slot's existing offset
+    /// asset hot-reload (`cn run -f` only). Reuses the slot's existing offset
     /// in the shared vertex / index buffers, so the new geometry must match
     /// the slot's init-time vertex count + index count; a size-changing
     /// reload returns an error so the caller can queue
@@ -288,7 +288,7 @@ pub trait LiveEdit: SceneHost {
     /// `payload` is the serialized byte format emitted by
     /// `crate::bake::environment_map::compile_environment_map_payload`
     /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
-    /// share a single byte format. Driven by asset hot-reload (`cn debug`
+    /// share a single byte format. Driven by asset hot-reload (`cn run -f`
     /// only).
     ///
     /// # Errors
@@ -349,7 +349,7 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Rebuild one world Shader's pipeline from freshly compiled programs.
-    /// Driven by asset hot-reload (`cn debug` and `cn editor`) when one of the
+    /// Driven by asset hot-reload (`cn run -f` and `cn edit`) when one of the
     /// Shader's files is saved or a `reload-assets` debug tool call fires.
     /// Bucket 0 is the world default program; any other bucket is a
     /// Material-named Shader. The backend builds the replacement first and only
@@ -379,7 +379,7 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Rebuild one raymarched `SdfVolume`'s pipelines from a freshly compiled
-    /// field. Driven by asset hot-reload (`cn debug` and `cn editor`) when the
+    /// field. Driven by asset hot-reload (`cn run -f` and `cn edit`) when the
     /// volume's field file is saved. `volume` is the volume's position in
     /// [`WorldFx::sdf_volumes`](crate::render::backend::init::WorldFx::sdf_volumes),
     /// the order the backend built them in. Every pipeline the volume draws
@@ -413,7 +413,7 @@ pub trait LiveEdit: SceneHost {
     /// The swapchain-level configuration this live backend can hot-swap a world
     /// onto, or `None` when the backend cannot reload a world in place (it must
     /// be fully rebuilt instead). Read by the renderer when a transplanted
-    /// backend is handed a new world (the `cn editor` live SAVE): the swap reuses
+    /// backend is handed a new world (the `cn edit` live SAVE): the swap reuses
     /// the backend via [`Self::reload_world`] only when this equals the new
     /// world's `BackendInit::swapchain_config`; a `None` or a mismatch routes to a
     /// full rebuild (recreating the window). Default `None`: DirectX / Vulkan
@@ -424,7 +424,7 @@ pub trait LiveEdit: SceneHost {
 
     /// Re-upload a new world's GPU content onto this already-constructed backend,
     /// reusing the live device + window + swapchain instead of building a new one.
-    /// Driven by the `cn editor` live SAVE: after a structural edit recompiles the
+    /// Driven by the `cn edit` live SAVE: after a structural edit recompiles the
     /// blobs, the renderer transplants the running backend into the rebuilt
     /// world and calls this so the edit applies without recreating the OS window
     /// or re-initializing the GPU device. The backend waits for the GPU to idle,

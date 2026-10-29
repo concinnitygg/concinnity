@@ -1180,7 +1180,7 @@ impl VkContext {
     // `add_emitter` may reuse it. The pool + counter buffers are dropped
     // after a `device_wait_idle`: Vulkan has no driver-side keep-alive
     // for in-flight buffer references, so we must drain the queue before
-    // freeing the backing memory. Reached only through the bin's `cn debug`
+    // freeing the backing memory. Reached only through the bin's `cn run -f`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
     pub(in crate::vulkan) fn remove_particle_emitter(
         &mut self,

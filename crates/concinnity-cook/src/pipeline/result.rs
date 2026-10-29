@@ -1,16 +1,16 @@
 //! What a pipeline run hands back: the compiled defs and packed blobs, plus the
-//! dev-only source catalogs a `cn debug` build reads back by handle.
+//! dev-only source catalogs a `cn run -f` build reads back by handle.
 
 use concinnity_engine::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
 use concinnity_engine::ecs::{BlobAssetDef, ResourceRecord};
 
 /// A texture's identity + on-disk source, in `TextureHandle` order. Now that
 /// Texture is a resource (no `source` on a component the renderer drains),
-/// this is how a dev build hands the `cn debug` tools what they need: the
+/// this is how a dev build hands the `cn run -f` tools what they need: the
 /// hot-reload watcher maps `source` -> handle, and the runtime spawn-by-name path
 /// maps `name_id` -> handle. `source` is empty for a procedural texture (nothing
 /// to watch). `name_id` is the interned asset name (same interner the runtime
-/// shares in-process under `cn debug`), so nothing is interned at runtime.
+/// shares in-process under `cn run -f`), so nothing is interned at runtime.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextureSourceInfo {
     /// The interned asset name.
@@ -24,7 +24,7 @@ pub struct TextureSourceInfo {
 /// A file-backed Mesh's re-import inputs, in `MeshHandle` order (the Mesh block
 /// leads the shared mesh-source handle space, so Mesh handles are dense from 0).
 /// Now that Mesh is a resource (no `source` on a component the renderer drains),
-/// this is how a dev build hands the `cn debug` hot-reload watcher what it needs
+/// this is how a dev build hands the `cn run -f` hot-reload watcher what it needs
 /// to re-import a saved `.glb`/`.fbx`. `source` is empty for an inline-authored
 /// mesh (nothing to watch).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -70,11 +70,11 @@ pub struct PipelineResult {
     pub(crate) cache_hits: usize,
     // Compiled-asset payloads compiled fresh this run.
     pub(crate) cache_misses: usize,
-    /// File-backed texture sources in `TextureHandle` order, for the `cn debug`
+    /// File-backed texture sources in `TextureHandle` order, for the `cn run -f`
     /// hot-reload watcher. Dev-only info; not written to the shipped blob.
     pub texture_sources: Vec<TextureSourceInfo>,
     /// File-backed mesh sources in `MeshHandle` order (dense over the Mesh block
-    /// of the shared mesh-source space), for the `cn debug` hot-reload watcher.
+    /// of the shared mesh-source space), for the `cn run -f` hot-reload watcher.
     /// Dev-only info; not written to the shipped blob.
     pub mesh_sources: Vec<MeshSourceInfo>,
     // Lock-file provenance for the resource stream, index-aligned with

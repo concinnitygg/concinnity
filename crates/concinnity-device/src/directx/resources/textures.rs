@@ -151,7 +151,7 @@ impl DxContext {
     }
 
     // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    // Driven by asset hot-reload (`cn debug` only) when the file-backed
+    // Driven by asset hot-reload (`cn run -f` only) when the file-backed
     // `ColorLut` source is saved. Reuses the SRV heap slot the composite pass
     // already binds, so the new texture is picked up on the next `draw_frame`
     // with no pipeline or descriptor-table change. `wait_idle` first
@@ -168,7 +168,7 @@ impl DxContext {
     }
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn debug` only). Re-uploads into the same
+    // Driven by asset hot-reload (`cn run -f` only). Re-uploads into the same
     // SRV heap slots [1] (irradiance) + [2] (prefilter) the init path wrote,
     // so every pipeline that references those slots keeps working without a
     // descriptor-table rebind. The new payload may declare different mip /

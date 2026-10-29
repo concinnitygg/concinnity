@@ -126,7 +126,7 @@ loads at startup.
 
 # Compilation
 
-`cn build` compiles both files for the backend it cooks for and stores the
+`cn cook` compiles both files for the backend it cooks for and stores the
 result in the world; a player needs no shader compiler. A file that fails
 to compile, or omits its hook, fails the build naming the Shader and the
 hook, with each compiler error reported at its file and line; a compiler

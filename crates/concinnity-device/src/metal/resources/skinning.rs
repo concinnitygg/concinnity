@@ -104,7 +104,7 @@ pub(crate) struct MorphBinding {
 impl MtlContext {
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // new geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a SkinnedMesh's re-imported `.glb`
+    // hot-reload (`cn run -f` only) when a SkinnedMesh's re-imported `.glb`
     // no longer fits in its init-time slot. Walks every
     // `SkinnedDrawObject` in order: for each slot in `changes`, the new
     // vertices / indices are appended to a fresh CPU buffer; for unchanged
@@ -140,7 +140,7 @@ impl MtlContext {
 
         // Stop the GPU + CPU pipelines so we can safely read the old buffers
         // and atomically swap. Costs a frame-time stall but only fires under
-        // `cn debug` and only when the source `.glb` size actually changed.
+        // `cn run -f` and only when the source `.glb` size actually changed.
         self.wait_idle();
 
         let old_v_len = v_buf.length() / size_of::<SkinnedVertex>();
@@ -208,12 +208,12 @@ impl MtlContext {
 
     // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the
     // shared skinned vertex / index buffers in place. Driven by asset
-    // hot-reload (`cn debug` only).
+    // hot-reload (`cn run -f` only).
     //
     // Like [`MtlContext::update_mesh_geometry`], this rewrites a live buffer
     // region with no in-flight fence. There is no steady-state skinned
     // streamer (skinned meshes upload once at init and are never evicted), so
-    // the only caller is the human-paced `cn debug` hot-reload, which stalls
+    // the only caller is the human-paced `cn run -f` hot-reload, which stalls
     // for the reload: no frame racing this write is plausibly in flight.
     // Production (non-debug) callers must not take this path.
     //

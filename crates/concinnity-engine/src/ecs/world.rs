@@ -474,7 +474,7 @@ impl World {
 
     /// Disjoint mutable borrows of the system list and the resource map, for a
     /// caller that drives a system against something parked in a resource (the
-    /// `cn debug` hot-reload drive reaches the render backend that way).
+    /// `cn run -f` hot-reload drive reaches the render backend that way).
     pub fn systems_and_resources(&mut self) -> (&mut [BuiltSystem], &mut Resources) {
         (&mut self.systems, &mut self.resources)
     }

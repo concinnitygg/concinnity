@@ -74,7 +74,7 @@ impl Camera3DSystem {
     }
 
     /// Zero the smoothed movement velocity. Called when an external source (the
-    /// cn debug `camera-set` command) teleports the camera, so free-fly velocity
+    /// cn run -f `camera-set` command) teleports the camera, so free-fly velocity
     /// integration does not drift the new pose on the next step. Only reached
     /// from the dev tooling crate's debug drive, hence dead in a `--lib` build.
     pub fn reset_velocity(&mut self) {

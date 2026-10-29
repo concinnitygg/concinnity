@@ -242,7 +242,7 @@ impl GraphicsSystem {
     //
     // The payload source depends on where the world came from: a disk-backed
     // `cn run` world writes the streamed geometry to a scratch file and
-    // re-reads it from there (no persistent RAM copy), an in-memory `cn debug`
+    // re-reads it from there (no persistent RAM copy), an in-memory `cn run -f`
     // world keeps the geometry RAM-resident.
     pub(super) fn setup_mesh_streaming(
         &mut self,

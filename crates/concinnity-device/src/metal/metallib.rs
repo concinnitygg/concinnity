@@ -45,7 +45,7 @@ mod tests {
     // Every registered name's embedded digest must equal the digest of the
     // source the renderer assembles for it, or `fetch` would miss and
     // compile a shader the binary already carries -- which is what made an
-    // installed `cn editor` demand a shader compiler at startup.
+    // installed `cn edit` demand a shader compiler at startup.
     #[test]
     fn every_embedded_digest_matches_the_assembled_source() {
         use concinnity_engine::render::shader::source::source_digest;

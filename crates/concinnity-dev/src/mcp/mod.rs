@@ -1,8 +1,8 @@
 //! The Model Context Protocol: the one transport the runtime debug surface
 //! speaks.
 //!
-//! A running app serves MCP itself on its debug port (`cn debug`, or
-//! `cn editor --debug-port N`) over the Streamable HTTP transport in its
+//! A running app serves MCP itself on its debug port (`cn run --debug-port N`,
+//! or `cn edit --debug-port N`) over the Streamable HTTP transport in its
 //! stateless form, so any MCP client can post straight to
 //! `http://127.0.0.1:8777/mcp`. `cn mcp` is the stdio entry a client that
 //! spawns servers as child processes uses instead: it answers `initialize`,

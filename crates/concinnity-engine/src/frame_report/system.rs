@@ -244,8 +244,8 @@ impl System for FrameReportSystem {
             ));
         }
 
-        if run_seconds >= self.benchmark.end_seconds() {
-            self.run.completed = true;
+        if run_seconds >= self.benchmark.stop_seconds() {
+            self.run.completed = run_seconds >= self.benchmark.end_seconds();
             self.emit();
             return StepResult::Stop;
         }
@@ -554,6 +554,22 @@ mod tests {
         assert_eq!(system.step(&mut world.context()), StepResult::Stop);
         assert!(system.run().completed);
         // The report went out with the stop, so teardown adds nothing.
+        assert!(system.reported);
+    }
+
+    // A launch's stop ends the run early, and its report says it is incomplete.
+    #[test]
+    fn a_launch_stop_ends_the_run_early_and_incomplete() {
+        let run = benchmark(&[("long", 60.0)]).with_stop_at(Some(1.0 / 60.0));
+        let (mut world, mut camera, mut system) = world_with(track(vec![]), &run);
+        camera.init(&mut world.context());
+        system.init(&mut world.context());
+        camera.step(&mut world.context());
+        system.step(&mut world.context());
+
+        camera.step(&mut world.context());
+        assert_eq!(system.step(&mut world.context()), StepResult::Stop);
+        assert!(!system.run().completed);
         assert!(system.reported);
     }
 

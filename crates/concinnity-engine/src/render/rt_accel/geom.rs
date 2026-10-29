@@ -51,6 +51,19 @@ pub enum RtDynamicMode {
 }
 
 impl RtDynamicMode {
+    /// Every mode, in `--rt-dynamic` order.
+    pub const ALL: [Self; 4] = [Self::Off, Self::Auto, Self::Rebuild, Self::Tlas];
+
+    /// The name `--rt-dynamic` gives the mode.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::Rebuild => "rebuild",
+            Self::Tlas => "tlas",
+        }
+    }
+
     /// Whether this mode updates the BVH after the initial build at all.
     pub fn is_dynamic(self) -> bool {
         self != Self::Off

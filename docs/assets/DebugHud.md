@@ -24,7 +24,7 @@ The always-on frame-rate and GPU-memory readouts live on the separate
 Every rendering world receives a `DebugHud` at start when it declares none,
 and any label field left unset receives a chip, so the example below is
 only needed to restyle them. The HUD only activates in developer contexts:
-a debug build of the host binary, or a world launched through `cn debug`;
+a debug build of the host binary, or a world launched through `cn run -f`;
 release builds leave it inert even when declared. Declare an
 [`EngineDefaults`](EngineDefaults.md) with `"debug_hud": false` to leave the
 world without one.
