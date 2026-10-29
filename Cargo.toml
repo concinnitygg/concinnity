@@ -51,7 +51,8 @@ libloading = "0.8"
 libm = "0.2"
 minidump-writer = "0.13"
 mint = "0.5"
-notify = { version = "8", default-features = false }
+# 8.2.1 shares windows-sys 0.61 with ctrlc, rfd and tempfile.
+notify = { version = "8.2.1", default-features = false }
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 objc2-core-foundation = "0.3.2"
@@ -76,7 +77,7 @@ serde_path_to_error = "0.1"
 sha2 = "0.11.0"
 spin = { version = "0.12.3", default-features = false }
 spirv-cross2 = { version = "0.7.1", default-features = false }
-syn = "2"
+syn = "3"
 tar = "0.4"
 tempfile = "3.25.0"
 terminal_size = "0.4"

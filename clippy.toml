@@ -6,7 +6,7 @@ allowed-wildcard-imports = ["windows"]
 too-many-lines-threshold = 300
 doc-valid-idents = ["..", "DirectX", "MoltenVK", "SPIR-V", "HLSL", "GLSL", "MSL", "glTF", "FBX", "DLSS", "XeSS", "FidelityFX"]
 disallowed-methods = [
-    { path = "std::env::var", reason = "engine settings come from assets and CLI flags; reading the environment needs approval" },
-    { path = "std::env::var_os", reason = "engine settings come from assets and CLI flags; reading the environment needs approval" },
-    { path = "std::env::vars", reason = "engine settings come from assets and CLI flags; reading the environment needs approval" },
+    { path = "std::env::var", reason = "engine settings come from assets and CLI flags" },
+    { path = "std::env::var_os", reason = "engine settings come from assets and CLI flags" },
+    { path = "std::env::vars", reason = "engine settings come from assets and CLI flags" },
 ]
