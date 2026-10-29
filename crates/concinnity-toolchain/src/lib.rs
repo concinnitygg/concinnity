@@ -68,8 +68,8 @@ pub enum Backend {
 
 impl Backend {
     /// The shader platform this backend consumes.
-    pub fn platform(self) -> concinnity_core::platform::Platform {
-        use concinnity_core::platform::Platform;
+    pub fn platform(self) -> concinnity_engine::platform::Platform {
+        use concinnity_engine::platform::Platform;
         match self {
             Self::Metal => Platform::Metal,
             Self::Dx => Platform::DirectX,
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn each_backend_consumes_its_own_platform() {
-        use concinnity_core::platform::Platform;
+        use concinnity_engine::platform::Platform;
         assert_eq!(Backend::Metal.platform(), Platform::Metal);
         assert_eq!(Backend::Dx.platform(), Platform::DirectX);
         assert_eq!(Backend::Vk.platform(), Platform::Vulkan);

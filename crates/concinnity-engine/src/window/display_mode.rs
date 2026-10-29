@@ -1,0 +1,423 @@
+//! The backend-agnostic display-mode list behind the "Resolution" settings row.
+//! A backend enumerates the modes (width x height at refresh rate) the display
+//! it renders to supports; this module holds the shared shaping: the row/list
+//! label format, the dedup + sort that turns a raw enumeration into the menu
+//! list, the persisted-choice -> list-index recovery, and the static fallback a
+//! backend without enumeration (or an embedded view with no window) uses so the
+//! row still drives the windowed resize path.
+//!
+//! How a chosen mode is applied stays per window mode: windowed resizes the
+//! window's content area to the resolution; fullscreen switches the display to
+//! the mode itself (resolution + refresh rate); borderless always covers the
+//! display's current mode, so the row is inert there.
+
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use concinnity_core::math::{SaturatingFrom, round};
+
+/// One display mode the hardware supports: pixel dimensions plus refresh rate.
+/// `refresh_hz` of 0 means unknown (some built-in panels report none); the label
+/// then omits the rate and a fullscreen apply keeps the display's current rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DisplayMode {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Refresh rate in Hz; 0 when the display reports none.
+    pub refresh_hz: u32,
+}
+
+impl DisplayMode {
+    /// The option text shown in the Resolution row and its dropdown list, e.g.
+    /// "2560 x 1440 (165Hz)"; a mode with an unknown rate reads "2560 x 1440".
+    pub fn label(&self) -> String {
+        if self.refresh_hz == 0 {
+            format!("{} x {}", self.width, self.height)
+        } else {
+            format!("{} x {} ({}Hz)", self.width, self.height, self.refresh_hz)
+        }
+    }
+}
+
+/// The menu list for a raw enumeration: duplicates collapsed, ordered by width,
+/// then height, then refresh rate ascending (each resolution's rate variants
+/// group together).
+pub fn normalize(mut modes: Vec<DisplayMode>) -> Vec<DisplayMode> {
+    modes.sort();
+    modes.dedup();
+    modes
+}
+
+/// The list index for a (possibly persisted) choice. An exact match wins; a
+/// choice whose resolution is listed but whose rate is not (the display
+/// changed) snaps to that resolution's nearest rate; otherwise the nearest
+/// resolution by pixel count, so a stale persisted mode still lands somewhere
+/// sensible. Returns 0 for an empty list (callers guard, but stay total).
+pub fn index_of(modes: &[DisplayMode], choice: DisplayMode) -> usize {
+    if let Some(i) = modes.iter().position(|m| *m == choice) {
+        return i;
+    }
+    let same_res = modes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.width == choice.width && m.height == choice.height)
+        .min_by_key(|(_, m)| m.refresh_hz.abs_diff(choice.refresh_hz))
+        .map(|(i, _)| i);
+    if let Some(i) = same_res {
+        return i;
+    }
+    let choice_px = u64::from(choice.width) * u64::from(choice.height);
+    modes
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, m)| {
+            let px = u64::from(m.width) * u64::from(m.height);
+            (
+                px.abs_diff(choice_px),
+                m.refresh_hz.abs_diff(choice.refresh_hz),
+            )
+        })
+        .map_or(0, |(i, _)| i)
+}
+
+/// The index in `modes` of the native mode to apply for `want`: an exact
+/// (resolution, rate) match wins; a `want` with an unknown rate (0) or a rate
+/// the display no longer offers takes the matching resolution's highest rate;
+/// `None` when no mode has that resolution (e.g. a stale persisted choice from
+/// another monitor), so the caller leaves the display alone. Used by the
+/// DirectX + Vulkan apply paths; Metal does the same matching natively over
+/// `CGDisplayModes` (`find_native_mode`), so this is dead on a Metal-only build.
+pub fn best_native_index(modes: &[DisplayMode], want: DisplayMode) -> Option<usize> {
+    let mut best: Option<(u32, usize)> = None;
+    for (i, m) in modes.iter().enumerate() {
+        if m.width != want.width || m.height != want.height {
+            continue;
+        }
+        if want.refresh_hz != 0 && m.refresh_hz == want.refresh_hz {
+            return Some(i);
+        }
+        if best.as_ref().is_none_or(|(hz, _)| m.refresh_hz > *hz) {
+            best = Some((m.refresh_hz, i));
+        }
+    }
+    best.map(|(_, i)| i)
+}
+
+/// How fast the display a window sits on can refresh, as the OS reports it.
+///
+/// This is what the display offers, not what it is running at: a panel the
+/// system holds below its top rate still reports that rate here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayRefresh {
+    /// The highest refresh rate in Hz.
+    pub max_hz: f32,
+    /// The lowest rate a variable-refresh display drops to, equal to `max_hz`
+    /// on a fixed-rate one. `None` when the backend reads only the one rate.
+    pub min_hz: Option<f32>,
+}
+
+impl DisplayRefresh {
+    /// A display whose backend reports only its current mode's rate.
+    pub fn from_mode(mode: DisplayMode) -> Option<Self> {
+        (mode.refresh_hz > 0).then_some(Self {
+            max_hz: mode.refresh_hz as f32,
+            min_hz: None,
+        })
+    }
+
+    /// Whether the display varies its rate below `max_hz`, as adaptive-sync
+    /// panels do.
+    pub fn is_variable(&self) -> bool {
+        self.min_hz.is_some_and(|min| min < self.max_hz - 0.5)
+    }
+
+    /// The text logged at startup and printed with a benchmark's report, e.g.
+    /// "120 Hz, variable down to 24 Hz", "60 Hz fixed", or "144 Hz".
+    pub fn label(&self) -> String {
+        let max = round(self.max_hz);
+        match self.min_hz {
+            Some(min) if self.is_variable() => {
+                format!("{max} Hz, variable down to {} Hz", round(min))
+            }
+            Some(_) => format!("{max} Hz fixed"),
+            None => format!("{max} Hz"),
+        }
+    }
+}
+
+/// The display a window would open on, read before the window exists.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayProbe {
+    /// The output pixels a window filling the display gets at its current
+    /// mode. A process the OS scales for DPI gets fewer than the mode's own.
+    pub mode: DisplayMode,
+    /// Output pixels per unit of a window's authored size: 2 on a Retina
+    /// display, 1 where a window is sized in pixels.
+    pub scale: f32,
+    /// Output pixels per pixel of a fullscreen mode the window switches the
+    /// display to: 1 unless the OS scales the process for DPI.
+    pub fullscreen_scale: f32,
+}
+
+/// The pixel size a window opens at: its authored size at the display's scale
+/// when windowed, the display filled when borderless, and `fullscreen` (else
+/// the display filled) in fullscreen. Without a probe, the authored size, and
+/// `fullscreen` as given.
+pub fn predicted_output(
+    window: &super::Window,
+    fullscreen: Option<DisplayMode>,
+    display: Option<DisplayProbe>,
+) -> [u32; 2] {
+    let scaled = |[w, h]: [u32; 2], scale: f32| {
+        [w, h].map(|v| u32::saturating_from(round(v as f32 * scale)))
+    };
+    let filled = display.map(|d| [d.mode.width, d.mode.height]);
+    let chosen = fullscreen.map(|m| {
+        scaled(
+            [m.width, m.height],
+            display.map_or(1.0, |d| d.fullscreen_scale),
+        )
+    });
+    let output = match window.mode {
+        super::WindowMode::Windowed => None,
+        super::WindowMode::Borderless => filled,
+        super::WindowMode::Fullscreen => chosen.or(filled),
+    };
+    output.unwrap_or_else(|| {
+        scaled(
+            [window.width, window.height],
+            display.map_or(1.0, |d| d.scale),
+        )
+    })
+}
+
+/// The static list used when the backend cannot enumerate the display (DirectX /
+/// Vulkan today, or an embedded view with no window). Common resolutions with no
+/// rate, so the row keeps driving the windowed resize path.
+pub fn fallback_modes() -> Vec<DisplayMode> {
+    [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)]
+        .into_iter()
+        .map(|(width, height)| DisplayMode {
+            width,
+            height,
+            refresh_hz: 0,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::window::{Window, WindowMode};
+
+    use alloc::vec;
+    fn mode(width: u32, height: u32, refresh_hz: u32) -> DisplayMode {
+        DisplayMode {
+            width,
+            height,
+            refresh_hz,
+        }
+    }
+
+    #[test]
+    fn label_includes_rate_only_when_known() {
+        assert_eq!(mode(2560, 1440, 165).label(), "2560 x 1440 (165Hz)");
+        assert_eq!(mode(1920, 1080, 60).label(), "1920 x 1080 (60Hz)");
+        assert_eq!(mode(1280, 720, 0).label(), "1280 x 720");
+    }
+
+    #[test]
+    fn normalize_dedups_and_groups_rates_per_resolution() {
+        let raw = vec![
+            mode(2560, 1440, 60),
+            mode(1024, 768, 120),
+            mode(1024, 768, 60),
+            mode(2560, 1440, 165),
+            mode(1024, 768, 60), // duplicate
+            mode(1280, 720, 75),
+        ];
+        let list = normalize(raw);
+        assert_eq!(
+            list,
+            vec![
+                mode(1024, 768, 60),
+                mode(1024, 768, 120),
+                mode(1280, 720, 75),
+                mode(2560, 1440, 60),
+                mode(2560, 1440, 165),
+            ]
+        );
+    }
+
+    #[test]
+    fn index_of_prefers_exact_then_rate_then_resolution() {
+        let list = vec![
+            mode(1280, 720, 60),
+            mode(1280, 720, 120),
+            mode(1920, 1080, 60),
+            mode(2560, 1440, 165),
+        ];
+        // Exact match.
+        assert_eq!(index_of(&list, mode(1920, 1080, 60)), 2);
+        // Listed resolution, unlisted rate: nearest rate for that resolution.
+        assert_eq!(index_of(&list, mode(1280, 720, 144)), 1);
+        // A fallback-preset choice (rate 0) lands on the resolution's lowest rate.
+        assert_eq!(index_of(&list, mode(1280, 720, 0)), 0);
+        // Unlisted resolution: nearest by pixel count (1600x900 sits closer to
+        // 1280x720 than to 1920x1080; 2048x1152 closer to 1920x1080).
+        assert_eq!(index_of(&list, mode(1600, 900, 60)), 0);
+        assert_eq!(index_of(&list, mode(2048, 1152, 60)), 2);
+        // Empty list stays total.
+        assert_eq!(index_of(&[], mode(1920, 1080, 60)), 0);
+    }
+
+    #[test]
+    fn best_native_index_snaps_rate_and_rejects_unknown_resolution() {
+        let list = vec![
+            mode(1280, 720, 60),
+            mode(1280, 720, 120),
+            mode(1920, 1080, 60),
+        ];
+        // Exact (resolution, rate) match wins.
+        assert_eq!(best_native_index(&list, mode(1280, 720, 120)), Some(1));
+        // Unknown wanted rate (0, a fallback preset) takes the resolution's
+        // highest rate.
+        assert_eq!(best_native_index(&list, mode(1280, 720, 0)), Some(1));
+        // A rate the display no longer offers also snaps to the highest.
+        assert_eq!(best_native_index(&list, mode(1920, 1080, 144)), Some(2));
+        // An unlisted resolution applies nothing (the display is left alone).
+        assert_eq!(best_native_index(&list, mode(2560, 1440, 60)), None);
+    }
+
+    #[test]
+    fn fallback_modes_are_sorted_rate_free_presets() {
+        let list = fallback_modes();
+        assert_eq!(normalize(list.clone()), list);
+        assert!(list.len() > 2, "must expand as a dropdown row");
+        assert!(list.iter().all(|m| m.refresh_hz == 0));
+        assert!(list.iter().any(|m| (m.width, m.height) == (1920, 1080)));
+    }
+
+    fn window(mode: WindowMode) -> Window {
+        Window {
+            width: 1600,
+            height: 900,
+            mode,
+            ..Window::default()
+        }
+    }
+
+    const RETINA: DisplayProbe = DisplayProbe {
+        mode: DisplayMode {
+            width: 3456,
+            height: 2234,
+            refresh_hz: 120,
+        },
+        scale: 2.0,
+        fullscreen_scale: 1.0,
+    };
+
+    // A 3840x2160 monitor at 150% to a process the OS scales for DPI: a filling
+    // window gets 2560x1440, and a chosen mode two thirds of its pixels.
+    const SCALED_4K: DisplayProbe = DisplayProbe {
+        mode: DisplayMode {
+            width: 2560,
+            height: 1440,
+            refresh_hz: 60,
+        },
+        scale: 1.0,
+        fullscreen_scale: 2560.0 / 3840.0,
+    };
+
+    #[test]
+    fn a_window_opens_at_its_authored_size_on_the_displays_scale() {
+        let windowed = window(WindowMode::Windowed);
+        assert_eq!(
+            predicted_output(&windowed, None, Some(RETINA)),
+            [3200, 1800]
+        );
+        assert_eq!(predicted_output(&windowed, None, None), [1600, 900]);
+        // A fullscreen choice only sizes a fullscreen window.
+        let chosen = mode(1920, 1080, 60);
+        assert_eq!(
+            predicted_output(&windowed, Some(chosen), Some(RETINA)),
+            [3200, 1800]
+        );
+    }
+
+    #[test]
+    fn a_window_filling_the_display_opens_at_its_mode() {
+        let chosen = mode(1920, 1080, 60);
+        let borderless = window(WindowMode::Borderless);
+        assert_eq!(
+            predicted_output(&borderless, None, Some(RETINA)),
+            [3456, 2234]
+        );
+        assert_eq!(
+            predicted_output(&borderless, Some(chosen), Some(RETINA)),
+            [3456, 2234]
+        );
+        let fullscreen = window(WindowMode::Fullscreen);
+        assert_eq!(
+            predicted_output(&fullscreen, None, Some(RETINA)),
+            [3456, 2234]
+        );
+        assert_eq!(
+            predicted_output(&fullscreen, Some(chosen), Some(RETINA)),
+            [1920, 1080]
+        );
+        assert_eq!(
+            predicted_output(&fullscreen, Some(chosen), None),
+            [1920, 1080]
+        );
+        assert_eq!(predicted_output(&borderless, None, None), [1600, 900]);
+    }
+
+    #[test]
+    fn a_dpi_scaled_window_opens_at_the_pixels_the_os_gives_it() {
+        let borderless = window(WindowMode::Borderless);
+        assert_eq!(
+            predicted_output(&borderless, None, Some(SCALED_4K)),
+            [2560, 1440]
+        );
+        let fullscreen = window(WindowMode::Fullscreen);
+        assert_eq!(
+            predicted_output(&fullscreen, Some(mode(3840, 2160, 60)), Some(SCALED_4K)),
+            [2560, 1440]
+        );
+        assert_eq!(
+            predicted_output(&window(WindowMode::Windowed), None, Some(SCALED_4K)),
+            [1600, 900]
+        );
+    }
+
+    #[test]
+    fn a_variable_display_names_its_range() {
+        let refresh = DisplayRefresh {
+            max_hz: 120.0,
+            min_hz: Some(24.0),
+        };
+        assert!(refresh.is_variable());
+        assert_eq!(refresh.label(), "120 Hz, variable down to 24 Hz");
+    }
+
+    #[test]
+    fn a_fixed_display_says_so() {
+        let refresh = DisplayRefresh {
+            max_hz: 60.0,
+            min_hz: Some(60.0),
+        };
+        assert!(!refresh.is_variable());
+        assert_eq!(refresh.label(), "60 Hz fixed");
+    }
+
+    #[test]
+    fn a_mode_rate_alone_leaves_the_range_unknown() {
+        let refresh = DisplayRefresh::from_mode(mode(2560, 1440, 144)).unwrap();
+        assert!(!refresh.is_variable());
+        assert_eq!(refresh.label(), "144 Hz");
+        assert_eq!(DisplayRefresh::from_mode(mode(2560, 1440, 0)), None);
+    }
+}

@@ -62,6 +62,11 @@ const BUFFERS: &[ResourceType] = &[
 /// name, whether or not its entry point uses the buffer. Nested structs are reported under their own names as well, so a block
 /// that embeds a record covers both, and so does a structured buffer, whose
 /// record sits inside the wrapper dxc generates for it.
+///
+/// # Errors
+///
+/// Returns an error if `spirv` is not valid SPIR-V or its resources cannot be
+/// reflected.
 pub fn struct_layouts(spirv: &[u8]) -> Result<BTreeMap<String, StructLayout>, String> {
     let words = crate::words(spirv)?;
     let compiler =

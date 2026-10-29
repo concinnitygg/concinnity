@@ -18,7 +18,7 @@ mod view;
 
 use std::cell::{Cell, RefCell};
 
-use concinnity_core::components::ColorRun;
+use concinnity_engine::components::ColorRun;
 
 pub(crate) use buffer::Pos;
 use buffer::{Buffer, ordered};

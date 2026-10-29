@@ -4,7 +4,7 @@
 
 A point source of sound in the world.
 
-Plays its `clip` (an [AudioClip](AudioClip.md) reference) from `position`,
+Plays its `clip` (an [`AudioClip`](AudioClip.md) reference) from `position`,
 attenuated and panned relative to the camera. When `prop` names a
 [Prop](Prop.md), the emitter tracks that prop's position every frame, so the
 sound follows a moving object.
@@ -15,7 +15,7 @@ beyond `max_distance`.
 
 ## Parameters
 
-- `clip`: A string. The [AudioClip](AudioClip.md) this emitter plays. Optional.
+- `clip`: A string. The [`AudioClip`](AudioClip.md) this emitter plays. Optional.
 - `position`: An array of 3 floats. World-space position of the sound source. Defaults to `[0.0, 0.0, 0.0]`.
 - `volume`: A float. Linear gain multiplier applied to the clip. Defaults to `1.0`.
 - `looping`: A boolean. Whether the clip restarts when it ends. Defaults to `true`.

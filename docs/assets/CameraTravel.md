@@ -2,7 +2,7 @@
 
 # CameraTravel
 
-One straight run on a [CameraTrack](CameraTrack.md)'s travel track.
+One straight run on a [`CameraTrack`](CameraTrack.md)'s travel track.
 
 The direction is world space rather than camera relative, so a turn running
 over the same span does not bend the path: the two tracks stay independent,

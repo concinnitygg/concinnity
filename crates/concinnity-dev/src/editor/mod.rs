@@ -1,12 +1,12 @@
-//! The `cn editor` run path. Like `cn debug`, the editor compiles world.jsonl in
+//! The `cn edit` run path. Like `cn run -f`, the editor compiles world.jsonl in
 //! memory: the session boots from the authored entries, not from the blobs a
 //! build left under the state tree, so what opens is always what the world file
 //! says. It overlays an injected editor HUD and persists edits by writing
-//! world.jsonl. The blobs are refreshed only by an explicit build (`cn build`,
+//! world.jsonl. The blobs are refreshed only by an explicit build (`cn cook`,
 //! or the console's cook command). An optional debug port reuses the existing
 //! debug server so an MCP client can inspect and drive a session.
 //!
-//! `cn editor -f <world>` opens that world. With no world named the session
+//! `cn edit -f <world>` opens that world. With no world named the session
 //! opens an empty scene under the Worlds panel (`editor/worlds/`), which lists
 //! the project's worlds and opens, creates, or deletes one.
 //!
@@ -57,6 +57,8 @@ mod hook;
 mod hud;
 // The reserved asset-id families every injected HUD element is declared in.
 mod hud_ids;
+// Vector icons drawn from rounded rectangles, sharp at any scale.
+mod icons;
 // Runtime injection of the HUD's reserved assets into a compiled world,
 // between the in-memory compile and `Runtime::start`.
 mod inject;
@@ -79,6 +81,8 @@ mod owned_files;
 mod overrides;
 // The command palette's model: every actionable thing the editor can reach.
 mod palette;
+// The Planet panel's tools and brush, the strokes they lay and the brush ring.
+mod planet_tools;
 // Every floating panel: its layout half, its data half, and the registry
 // each panel is one entry in.
 mod panels;
@@ -119,9 +123,9 @@ mod widget_slider;
 mod worlds;
 
 use concinnity_cook::authoring::world::WORLD_JSONL;
-use concinnity_core::ecs::World;
-use concinnity_core::launch::LaunchRequest;
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::ecs::World;
+use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
 use hook::EditorHook;
 
@@ -136,19 +140,21 @@ use crate::frame_hook::FrameHook;
 // SAVE.
 const SEED_WINDOW: &str = "[\"Window\",{\"$id\":\"editor_default_window\"}]";
 
-/// Editor entry point (`cn editor`). Compiles the authored world in memory,
+/// Editor entry point (`cn edit`). Compiles the authored world in memory,
 /// injects the editor HUD, and runs the world loop driven by the editor hook
-/// (plus the debug server when a port is given).
-pub fn run_editor(
-    launch: LaunchRequest,
-    json_path: Option<&str>,
-    debug_port: Option<u16>,
-) -> std::io::Result<()> {
+/// (plus the debug server when the launch names a port).
+pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::Result<()> {
+    let debug_port = args.debug_port;
+    // Every editor session hot-reloads, with or without a debug port.
+    let launch = LaunchRequest {
+        dev_loop: true,
+        args,
+    };
     // Instead of the engine's plain `init_logging`: the same stderr formatter
     // plus a layer mirroring this crate's events into the Console panel's log.
     // The sink exists first so even boot-time errors reach the panel.
     let console_sink = panels::console::ConsoleSink::default();
-    panels::console::install_tracing(console_sink.clone());
+    panels::console::install_tracing(console_sink.clone(), launch.args.quiet);
 
     // Resolve the edit target -- the world.jsonl where readable names live and
     // where SAVE writes -- and whether the session opens on the Worlds panel
@@ -314,7 +320,7 @@ impl FrameHook for MultiHook {
 mod tests {
     use super::*;
     use concinnity_cook::authoring::world::{parse_world_jsonl, write_world_jsonl};
-    use concinnity_core::components::TextLabel;
+    use concinnity_engine::components::TextLabel;
 
     // An empty (or whitespace-only) world seeds to just the render marker, so an
     // empty session still opens a window.
@@ -413,7 +419,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let build_root = open_project(dir.path());
 
-        // An explicit build, as `cn build` runs it, over the stale world.
+        // An explicit build, as `cn cook` runs it, over the stale world.
         let world_path = dir.path().join("worlds").join(WORLD_JSONL);
         std::fs::create_dir_all(world_path.parent().unwrap()).unwrap();
         std::fs::write(

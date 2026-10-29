@@ -2,12 +2,12 @@
 //! for core's texture pool.
 //!
 //! `PayloadSource` is the seam. `MemPayloadSource` serves compiled texture
-//! payloads already resident in RAM (used by `cn debug`, which builds payloads
+//! payloads already resident in RAM (used by `cn run -f`, which builds payloads
 //! in memory); `DiskPayloadSource` re-reads them from their blob files on disk
 //! (used by `cn run`, so the bytes never stay RAM-resident).
 
-use concinnity_core::bake::texture::{self, TextureImage};
-use concinnity_core::render::stream_pools::ItemLoad;
+use concinnity_engine::bake::texture::{self, TextureImage};
+use concinnity_engine::render::streaming::pools::ItemLoad;
 use std::sync::Arc;
 
 use concinnity_host::thread::worker::Worker;
@@ -19,7 +19,7 @@ pub(crate) trait PayloadSource: Send + Sync {
     fn fetch(&self, id: usize) -> Result<TextureImage, String>;
 }
 
-// Compiled texture payloads kept resident in RAM. `cn debug` builds payloads in
+// Compiled texture payloads kept resident in RAM. `cn run -f` builds payloads in
 // memory with no blob files on disk, so this streams the GPU upload only.
 pub(crate) struct MemPayloadSource {
     payloads: Vec<Vec<u8>>,

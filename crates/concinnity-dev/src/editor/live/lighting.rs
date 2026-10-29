@@ -11,9 +11,9 @@
 //! so the caller rebuilds rather than showing a change that does not stick.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::DirectionalLight;
-use concinnity_core::ecs::{ComponentAsset, Entity, World};
-use concinnity_core::render::live_preview::lighting as lighting_preview;
+use concinnity_engine::components::DirectionalLight;
+use concinnity_engine::ecs::{ComponentAsset, Entity, World};
+use concinnity_engine::render::live_preview::lighting as lighting_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 
@@ -191,13 +191,14 @@ mod tests {
     // commit lands even where there is no renderer to push to.
     #[test]
     fn committing_a_sun_writes_the_component() {
-        use concinnity_core::components::DirectionalLight;
+        use concinnity_engine::components::DirectionalLight;
         let mut world = World::new();
         let entity = world.push(DirectionalLight::default());
         let edited = DirectionalLight {
             direction: [0.0, -1.0, 0.0],
             color: [0.2, 0.4, 0.6],
             intensity: 5.0,
+            angular_radius_deg: 0.27,
         };
         commit_sun(&mut world, entity, edited);
         let held = world

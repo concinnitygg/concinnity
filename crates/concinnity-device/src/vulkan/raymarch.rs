@@ -23,18 +23,18 @@
 //! init.
 
 use ash::vk;
-use concinnity_core::components::SdfVolume;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_core::math::{SaturatingFrom, saturating_u32};
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend_init::SdfVolumeSource;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::components::SdfVolume;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::SdfVolumeSource;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
+use concinnity_engine::transform::mat4_inverse;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::{HDR_FORMAT, VkContext};
@@ -63,7 +63,7 @@ const CUBE_INDEX_COUNT: u32 = 36;
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported so `crate::vulkan::raymarch::{RaymarchView, RaymarchVolumeUniforms}`
 // stay the paths the encode and `volume_uniforms_from` sites use.
-pub(in crate::vulkan) use concinnity_core::render::uniforms::{
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::{
     RaymarchView, RaymarchVolumeUniforms,
 };
 
@@ -71,7 +71,7 @@ pub(in crate::vulkan) use concinnity_core::render::uniforms::{
 // 16-byte block is declared, not just the live `u32`: the shared source spells
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
-use concinnity_core::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
 
 mod swap;
 
@@ -508,9 +508,9 @@ fn write_shadow_view_set(
 // the shared lights, and the shared shadow VPs.
 #[derive(Clone, Copy)]
 struct RaymarchViewSetBuffers {
-    view_ubo: vk::Buffer,
-    light_ubo: vk::Buffer,
-    shadow_ubo: vk::Buffer,
+    view: vk::Buffer,
+    light: vk::Buffer,
+    shadow: vk::Buffer,
 }
 
 // The image/sampler pairs bound into one per-frame view set: the CSM shadow
@@ -537,9 +537,9 @@ fn write_view_set(
     textures: RaymarchViewSetTextures,
 ) {
     let RaymarchViewSetBuffers {
-        view_ubo,
-        light_ubo,
-        shadow_ubo,
+        view: view_ubo,
+        light: light_ubo,
+        shadow: shadow_ubo,
     } = buffers;
     let RaymarchViewSetTextures {
         shadow_map_view,
@@ -1070,9 +1070,9 @@ impl RaymarchResources {
                 device,
                 set,
                 RaymarchViewSetBuffers {
-                    view_ubo: view_ubos[i].buffer(),
-                    light_ubo: light_ubos[i].buffer(),
-                    shadow_ubo: shadow_ubos[i].buffer(),
+                    view: view_ubos[i].buffer(),
+                    light: light_ubos[i].buffer(),
+                    shadow: shadow_ubos[i].buffer(),
                 },
                 RaymarchViewSetTextures {
                     shadow_map_view,
@@ -1288,7 +1288,7 @@ impl RaymarchResources {
     // of every view set after an EnvironmentMap hot-reload swapped the IBL
     // cubes for fresh image views. The light / shadow / snapshot bindings and
     // the cube-less shadow-caster view sets are left untouched. Reached only
-    // through the bin's `cn debug` env-map hot-reload path (dead in the FFI
+    // through the bin's `cn run -f` env-map hot-reload path (dead in the FFI
     // lib, live in the bin).
     pub(in crate::vulkan) fn rewire_ibl_cubes(
         &self,
@@ -1375,7 +1375,7 @@ impl VkContext {
             viewport: [0.0, 0.0],
             time: elapsed,
             prefilter_mip_count: 0.0,
-            sky_rot: concinnity_core::sky::SkyOrientation::IDENTITY_ROWS,
+            sky_rot: concinnity_engine::sky::SkyOrientation::IDENTITY_ROWS,
             cur_vp: [[0.0; 4]; 4],
             prev_vp: [[0.0; 4]; 4],
             view_mat: [[0.0; 4]; 4],

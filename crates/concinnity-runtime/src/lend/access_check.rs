@@ -5,8 +5,8 @@
 //! through the other.
 #![cfg(debug_assertions)]
 
-use concinnity_core::ecs::Access;
-use concinnity_core::ecs::access_check::{self, Touch};
+use concinnity_engine::ecs::Access;
+use concinnity_engine::ecs::access_check::{self, Touch};
 
 std::thread_local! {
     static ACTIVE: std::cell::Cell<Option<(Access, &'static str)>> =
@@ -37,10 +37,10 @@ fn check(touch: &Touch) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::access_check::set_active;
-    use concinnity_core::ecs::{Access, MenuActive, World};
-    use concinnity_core::{component_mask, resource_mask};
+    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::ecs::access_check::set_active;
+    use concinnity_engine::ecs::{Access, MenuActive, World};
+    use concinnity_engine::{component_mask, resource_mask};
 
     #[test]
     #[should_panic(expected = "Sprite without declaring it")]

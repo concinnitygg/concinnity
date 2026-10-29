@@ -8,7 +8,7 @@
 //! store's entry for it. Both switches run behind the confirmation dialog
 //! whenever the open world has unsaved edits.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use crate::editor::entry_list::EntryList;
@@ -356,6 +356,8 @@ impl EditorHook {
         self.story.reset_for_world();
         self.shaders.reset_for_world();
         self.lighting.touched = false;
+        self.planet.reset_for_world();
+        self.planet_tool.put_down();
 
         // The panel has done its job; it stays a registered panel, so the View
         // row reopens it as a switcher. The session owns a world now, so the

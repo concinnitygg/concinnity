@@ -1,7 +1,7 @@
 //! The verbs answered from the per-frame snapshot, or from a handle it holds,
 //! without waiting on the engine.
 
-use concinnity_core::profile::FanOutTiming;
+use concinnity_core::fanout::FanOutTiming;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
@@ -109,10 +109,18 @@ fn framed(frame: u64, snapshot: &impl Serialize) -> Reply {
     serde_json::to_value(Framed { frame, snapshot }).map_err(|e| e.to_string())
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn ping(_: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "pong": true }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn state(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({
@@ -123,15 +131,27 @@ fn state(call: &Call<'_>, _: Args) -> Reply {
     }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(json!({ "frame": s.frame, "assets": s.assets }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn names(call: &Call<'_>, _: Args) -> Reply {
     Ok(json!({ "names": &*call.snapshot().names }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn streaming(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let pools = &s.streaming;
@@ -182,6 +202,10 @@ fn chunk_pool(counts: Option<(usize, usize)>, bytes: Option<(u64, u64)>) -> Valu
 
 // The allocation layer's counters are global rather than snapshot state, so
 // they are read at reply time.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn memory(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     Ok(memory::report(
@@ -202,6 +226,10 @@ fn budget(call: &Call<'_>, _: Args) -> Reply {
     framed(s.frame, budget)
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "every verb's `run` returns `Reply`"
+)]
 fn profile(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let r = &s.profile_render;
@@ -291,17 +319,17 @@ fn reload_shaders(call: &Call<'_>, _: Args) -> Reply {
     let flag = s
         .shader_reload
         .as_ref()
-        .ok_or("shader hot-reload not available (cn debug only)")?;
+        .ok_or("shader hot-reload not available (cn run -f only)")?;
     flag.store(true, Ordering::SeqCst);
     Ok(json!({ "reload_queued": true }))
 }
 
 // `tick` captures the signals once the reload driver is armed, which needs
-// `cn debug` and a graphics init that parked its reload sources.
+// `cn run -f` and a graphics init that parked its reload sources.
 fn reload_assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let signals = s.reload.as_ref().ok_or(
-        "asset hot-reload not available (cn debug only; no file-backed textures captured yet)",
+        "asset hot-reload not available (cn run -f only; no file-backed textures captured yet)",
     )?;
     signals.request_all();
     Ok(json!({ "reload_queued": true }))
@@ -316,9 +344,9 @@ mod tests {
         PressureSnapshot,
     };
     use crate::debug::verbs::testing::ask;
-    use concinnity_core::profile::RenderStats;
-    use concinnity_core::render::stream_pools::StreamingStats;
-    use concinnity_core::shutdown::ShutdownToken;
+    use concinnity_engine::profile::RenderStats;
+    use concinnity_engine::render::streaming::pools::StreamingStats;
+    use concinnity_engine::shutdown::ShutdownToken;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 

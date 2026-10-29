@@ -6,10 +6,11 @@
 //! construction reports `Unsupported`, and a machine with no GPU is what the
 //! probe reports.
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::backend::{DeviceProbe, RenderBackend};
-use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::backend::{DeviceProbe, RenderBackend};
+use concinnity_engine::window::display_mode::DisplayProbe;
 use std::sync::OnceLock;
 
 /// Whether a rendering backend compiles into this build. False leaves the
@@ -50,6 +51,18 @@ pub(crate) fn probe_device_on(platform: Platform) -> Option<DeviceProbe> {
     })
 }
 
+/// The display a window would open on, read before any window exists.
+pub(crate) fn probe_display() -> Option<DisplayProbe> {
+    #[cfg(any(backend_metal, backend_dx, backend_vk))]
+    {
+        concinnity_device::probe_display()
+    }
+    #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
+    {
+        None
+    }
+}
+
 /// Build the backend the runtime draws through, or report why there is none.
 pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn RenderBackend>> {
     crate::crash::note("backend", init.platform.key());
@@ -60,7 +73,11 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
     #[cfg(not(any(backend_metal, backend_dx, backend_vk)))]
     {
         let _ = init;
-        Err(concinnity_core::render::error::RenderError::Unsupported { op: "init_backend" })
+        Err(
+            concinnity_engine::render::backend::error::RenderError::Unsupported {
+                op: "init_backend",
+            },
+        )
     }
 }
 
@@ -69,8 +86,8 @@ pub(crate) fn init_backend(init: BackendInit<'_>) -> RenderResult<Box<dyn Render
 #[cfg(all(test, not(any(backend_metal, backend_dx, backend_vk))))]
 mod tests {
     use super::*;
-    use concinnity_core::components::Window;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_engine::components::Window;
+    use concinnity_engine::render::backend::error::RenderError;
 
     #[test]
     fn a_build_with_no_backend_reports_unsupported() {

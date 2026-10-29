@@ -2,13 +2,13 @@
 //! they seed, the world's textures with their reserved fallbacks and the flat
 //! bindless pool views, the color-grading LUT, and the static geometry.
 
-use concinnity_core::bake;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::{AreaLightData, FALLBACK_TEXTURE_COUNT};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::{MediaPayloads, SceneData};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::ltc;
+use concinnity_engine::bake;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::{AreaLightData, FALLBACK_TEXTURE_COUNT};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{MediaPayloads, SceneData};
+use concinnity_engine::render::light::ltc;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;

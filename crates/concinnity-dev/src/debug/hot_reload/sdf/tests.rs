@@ -2,12 +2,13 @@ use super::*;
 use crate::debug::hot_reload::report::SubjectKind;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::sdf_field::CompiledField;
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::{GeometryEdit, SceneHost};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -89,8 +90,8 @@ impl PipelineBuilder for FakeBuilder {
     }
 }
 
-fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
-    Some(Arc::new(FakeBuilder { reject }))
+fn builder(reject: bool) -> Arc<dyn PipelineBuilder> {
+    Arc::new(FakeBuilder { reject })
 }
 
 // Stands in for dxc and records each compile as (name, flags). A field
@@ -294,7 +295,7 @@ fn a_request_for_all_reaches_every_volume() {
     f.reload.request(
         &PendingSdfVolumes {
             all: true,
-            ids: Default::default(),
+            ids: BTreeSet::default(),
         },
         None,
     );
@@ -349,7 +350,7 @@ fn every_volume_of_a_group_is_handed_its_own_worker_built_pipelines() {
     f.write("cloud.hlsl", "cloud v2");
     f.reload.request(
         &pending(&["cloud_a", "cloud_b", "cloud_caster"]),
-        builder(false).as_ref(),
+        Some(&builder(false)),
     );
     let reports = poll_for(&f.reload, &mut backend, 3);
     assert_eq!(outcomes(&reports).len(), 3);
@@ -383,7 +384,7 @@ fn pipelines_the_builder_refuses_are_never_swapped() {
     let mut f = Fixture::new();
     let mut backend = backend(&[0, 1]);
     f.reload
-        .request(&pending(&["cloud_a", "cloud_b"]), builder(true).as_ref());
+        .request(&pending(&["cloud_a", "cloud_b"]), Some(&builder(true)));
     let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
@@ -449,7 +450,7 @@ fn an_empty_catalog_reloads_nothing() {
             .request(
                 &PendingSdfVolumes {
                     all: true,
-                    ids: Default::default()
+                    ids: BTreeSet::default()
                 },
                 None
             )

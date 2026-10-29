@@ -16,8 +16,8 @@ use crate::editor::hook::{EditorHook, declared_id, entry_type, pick};
 use crate::editor::panels::form;
 use crate::editor::viewport::gizmo::{self, GizmoMode};
 use crate::editor::viewport::{group_transform, snap};
-use concinnity_core::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
-use concinnity_core::ecs::{Entity, World};
+use concinnity_engine::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
+use concinnity_engine::ecs::{Entity, World};
 
 // Committed values are rounded so world.jsonl stays readable: positions and
 // scales to 3 decimals, angles to 1.
@@ -444,7 +444,7 @@ impl EditorHook {
         if let Some(obj) = entries.by_key_mut(entry).and_then(|e| e.as_object_mut()) {
             let args = obj
                 .entry("args".to_string())
-                .or_insert_with(|| serde_json::Value::Object(Default::default()));
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
             if let Some(a) = args.as_object_mut() {
                 a.insert(arg.to_string(), serde_json::json!(value));
             }

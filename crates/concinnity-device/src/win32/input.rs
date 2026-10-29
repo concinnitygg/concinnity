@@ -3,9 +3,9 @@
 // wnd_proc (window.rs); this struct is the snapshot consumed by
 // GraphicsSystem each tick.
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
+use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
 // One frame's accumulated mouse input, owned by `WindowState` and handed to
@@ -25,6 +25,10 @@ pub(crate) struct MouseSnapshot {
 
 // Per-key pressed state tracked across Win32 WM_KEYDOWN / WM_KEYUP messages.
 #[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "an input snapshot: one flag per action or key"
+)]
 pub(crate) struct KeyState {
     pub forward: bool,
     pub backward: bool,

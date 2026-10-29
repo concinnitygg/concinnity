@@ -11,10 +11,10 @@
 //! wrappers (`import_skinned_glb`, `import_glb_animation`, ...) live in
 //! `crate::import::gltf` and call into here.
 
-use concinnity_core::animation::skeleton::JointPose;
-use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::transform::euler_yxz_from_quat;
+use concinnity_engine::animation::skeleton::JointPose;
+use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::transform::euler_yxz_from_quat;
 use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;
 use std::path::Path;
@@ -97,6 +97,11 @@ fn morph_target_names(mesh: &gltf::Mesh<'_>, target_count: usize) -> Vec<String>
 /// a path with a directory component is read as written. Shared by the skinned
 /// and static importers; the desugar pass uses this directly so it can memoize
 /// one document across many primitive/material/image lookups.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, is not a valid glTF, or a
+/// buffer cannot be resolved.
 pub fn parse_glb(source: &str, assets_dir: Option<&Path>) -> Result<GltfDoc, String> {
     GltfDoc::parse_file(&resolve_source(source, assets_dir))
 }
@@ -412,7 +417,7 @@ fn import_geometry(
     doc: &GltfDoc,
     remap: &[usize],
 ) -> Result<SkinnedGeometry, String> {
-    use concinnity_core::components::MorphDelta;
+    use concinnity_engine::components::MorphDelta;
 
     let mut vertices: Vec<SkinnedVertexData> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
@@ -612,6 +617,11 @@ pub(crate) fn import_glb_animations_from_doc(
 /// `animation_index`. Used by the asset hot-reload pass to mirror the
 /// desugar pass's selection logic exactly so a reload picks the same clip
 /// the build chose at compile time.
+///
+/// # Errors
+///
+/// Returns an error if the document's animations cannot be imported, or no clip
+/// matches the name or index.
 pub fn import_glb_animation_from_doc(
     doc: &GltfDoc,
     source: &str,

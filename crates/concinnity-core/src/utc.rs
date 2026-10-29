@@ -3,6 +3,7 @@
 use crate::math::SaturatingFrom;
 use alloc::format;
 use alloc::string::String;
+use core::fmt;
 
 /// A civil UTC timestamp, from Unix seconds without a date dependency. Only
 /// meaningful for post-epoch times.
@@ -47,14 +48,6 @@ impl UtcTime {
         }
     }
 
-    /// `YYYY-MM-DD hh:mm:ss`.
-    pub fn display(&self) -> String {
-        format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        )
-    }
-
     /// Compact, lexicographically sortable form for file names:
     /// `YYYYMMDD-hhmmss`.
     pub fn stem(&self) -> String {
@@ -65,24 +58,36 @@ impl UtcTime {
     }
 }
 
+/// `YYYY-MM-DD hh:mm:ss`.
+impl fmt::Display for UtcTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            self.year, self.month, self.day, self.hour, self.minute, self.second
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn epoch_converts_to_civil_origin() {
         let t = UtcTime::from_unix(0);
-        assert_eq!(t.display(), "1970-01-01 00:00:00");
+        assert_eq!(t.to_string(), "1970-01-01 00:00:00");
     }
 
     #[test]
     fn known_timestamps_convert() {
         // 2026-08-08 12:34:56 UTC.
         let t = UtcTime::from_unix(1_786_192_496);
-        assert_eq!(t.display(), "2026-08-08 12:34:56");
+        assert_eq!(t.to_string(), "2026-08-08 12:34:56");
         assert_eq!(t.stem(), "20260808-123456");
         // A leap day: 2024-02-29 23:59:59 UTC.
         let t = UtcTime::from_unix(1_709_251_199);
-        assert_eq!(t.display(), "2024-02-29 23:59:59");
+        assert_eq!(t.to_string(), "2024-02-29 23:59:59");
     }
 }

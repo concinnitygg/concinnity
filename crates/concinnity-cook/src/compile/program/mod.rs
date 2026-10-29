@@ -21,9 +21,9 @@
 
 use std::path::Path;
 
-use concinnity_core::components::compiled_programs::CompiledProgram;
-use concinnity_core::platform::{Platform, PlatformSet};
-use concinnity_core::render::shader_source;
+use concinnity_engine::platform::{Platform, PlatformSet};
+use concinnity_engine::render::shader::compiled::CompiledProgram;
+use concinnity_engine::render::shader::source;
 use concinnity_shader::diagnostics;
 
 mod failure;
@@ -158,7 +158,7 @@ fn gather(
                 }
                 programs.push(CompiledProgram {
                     entry: job.entry.to_string(),
-                    source_digest: shader_source::source_digest(job.source),
+                    source_digest: source::source_digest(job.source),
                     artifact: compiled.artifact,
                 });
             }
@@ -297,10 +297,7 @@ mod tests {
         let digests: Vec<u64> = compiled.programs.iter().map(|p| p.source_digest).collect();
         assert_eq!(
             digests,
-            [
-                shader_source::source_digest(PIXEL),
-                shader_source::source_digest(&other)
-            ]
+            [source::source_digest(PIXEL), source::source_digest(&other)]
         );
         assert!(compiled.warnings.is_empty());
 

@@ -1,14 +1,17 @@
 //! `EditorHook`: unique-name generation and edit persistence (SAVE, the atomic
-//! world.jsonl write, and the in-memory live-preview world rebuild).
+//! write of every changed world file, and the in-memory live-preview world
+//! rebuild).
+
+use std::path::{Path, PathBuf};
 
 use concinnity_cook::authoring::refs::{count_references, rename_references};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::{EditorHook, EntryId, EntryList, FormTarget, declared_id, entry_type};
-use crate::editor::entry_list::build_text;
+use crate::editor::entry_list::{Refusal, build_text, paths};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::panels::{assets_panel, form_panel};
 use crate::editor::{behavior, build_renderable, live, modal, notify, widget};
@@ -161,12 +164,10 @@ impl EditorHook {
     // `baseline` (only committed edits move it), so it becomes the undo
     // snapshot; a call that changed nothing records no step.
     //
-    // An edit that reached an included entry or an `Include` line is undone
-    // whole: those lines belong to another file, or decide what that file
-    // brings in, so the editor never writes them.
+    // An edit the entry list refuses (see `EntryList`) is undone whole.
     pub(super) fn mark_changed(&mut self) {
-        if let Some(i) = self.entries.changed_read_only(&self.baseline) {
-            self.refuse_read_only_edit(i);
+        if let Some(refusal) = self.refusal() {
+            self.refuse_edit(refusal);
             return;
         }
         if self.baseline != self.entries {
@@ -183,27 +184,43 @@ impl EditorHook {
         self.template_index = None;
     }
 
-    // `mark_changed`, answering whether the edit stood: one that reached a
-    // read-only entry is undone, and says why.
+    // `mark_changed`, answering whether the edit stood: one the entry list
+    // refuses is undone, and says why.
     pub(super) fn commit(&mut self) -> bool {
-        let refused = self.entries.changed_read_only(&self.baseline).is_some();
+        let refused = self.refusal().is_some();
         self.mark_changed();
         !refused
     }
 
-    // Put the entries back as they were before an edit that changed the
-    // read-only baseline entry at `index`, and say where that entry lives. The
+    // Why the edit since `baseline` cannot stand, if it cannot.
+    pub(super) fn refusal(&self) -> Option<Refusal> {
+        self.entries
+            .refusal(&self.baseline, Path::new(&self.world_path))
+    }
+
+    // Put the entries back as they were before a refused edit, and say why. The
     // preview is rebuilt, since a drag may already have moved what it shows.
-    fn refuse_read_only_edit(&mut self, index: usize) {
-        let name = entry_handle(&self.baseline, index).unwrap_or_default();
-        let message = match self.baseline.included_from(index) {
-            Some(file) => format!(
-                "'{name}' is included from {}; edit it there",
-                file.display()
+    fn refuse_edit(&mut self, refusal: Refusal) {
+        let handle = |list: &EntryList, i| entry_handle(list, i).unwrap_or_default();
+        let file = |list: &EntryList, i| {
+            list.included_from(i)
+                .map_or_else(|| self.world_path.clone(), paths::shown)
+        };
+        let message = match refusal {
+            Refusal::IncludeLine(i) => format!(
+                "'{}' is an Include line; edit it in {}",
+                handle(&self.baseline, i),
+                file(&self.baseline, i)
             ),
-            None => format!(
-                "'{name}' is an Include line; edit it in {}",
-                self.world_path
+            Refusal::Repeated(i) => format!(
+                "'{}' comes from {}, which the world includes more than once",
+                handle(&self.baseline, i),
+                file(&self.baseline, i)
+            ),
+            Refusal::Moved(i) => format!(
+                "'{}' belongs with the other entries of {}",
+                handle(&self.entries, i),
+                file(&self.entries, i)
             ),
         };
         self.entries = self.baseline.clone();
@@ -272,14 +289,17 @@ impl EditorHook {
         if self.open[PanelKey::Lighting] {
             self.seed_lighting(world);
         }
+        if self.open[PanelKey::Planet] {
+            self.seed_planet(world);
+        }
     }
 
-    // SAVE: persist the working entries to disk. world.jsonl is the source of
-    // truth and the only thing a save writes -- the compiled blobs under the
-    // build root belong to an explicit build, so a save never cooks and never
-    // stalls behind one. The live preview is already up to date (every edit
-    // refreshed it), so nothing is rebuilt or swapped here. On a write failure
-    // the world stays dirty and the next SAVE retries.
+    // SAVE: persist the working entries to disk. The world files are the
+    // source of truth and the only thing a save writes -- the compiled blobs
+    // under the build root belong to an explicit build, so a save never cooks
+    // and never stalls behind one. The live preview is already up to date
+    // (every edit refreshed it), so nothing is rebuilt or swapped here. On a
+    // write failure the world stays dirty and the next SAVE retries.
     pub(super) fn save(&mut self) {
         // A world nobody has named has nowhere to go yet: ask first, and let
         // the dialog's Save come back through here once it has a path.
@@ -287,21 +307,24 @@ impl EditorHook {
             self.prompt_world_name(None);
             return;
         }
-        let content = match self.entries.file_text() {
-            Ok(c) => c,
+        let written = match self.write_files() {
+            Ok(written) => written,
             Err(e) => {
                 self.save_failed(e);
                 return;
             }
         };
-        if let Err(e) = self.write_jsonl_content(&content) {
-            self.save_failed(e);
-            return;
-        }
         self.dirty = false;
         self.saved = self.entries.clone();
-        tracing::info!("editor: saved {}", self.world_path);
-        self.notifier.success(&format!("Saved {}", self.world_path));
+        for path in &written {
+            tracing::info!("editor: saved {}", path.display());
+        }
+        let message = match written.len() {
+            0 | 1 => format!("Saved {}", self.world_path),
+            2 => format!("Saved {} and 1 included file", self.world_path),
+            n => format!("Saved {} and {} included files", self.world_path, n - 1),
+        };
+        self.notifier.success(&message);
     }
 
     // Report a failed SAVE, leaving the world dirty for the next attempt.
@@ -349,22 +372,28 @@ impl EditorHook {
         }
     }
 
-    // Write the working entries to world.jsonl atomically (temp file + rename),
-    // so a crash mid-write cannot truncate the user's world. SAVE inlines the
-    // serialization; this remains the test seam for the write itself.
-    #[cfg(test)]
-    pub(super) fn write_jsonl(&self) -> std::io::Result<()> {
-        let out = self.entries.file_text()?;
-        self.write_jsonl_content(&out)
-    }
-
-    // The file-write tail of `write_jsonl`, for a caller that already
-    // serialized the entries. The directory is created as needed: a fresh
-    // project saves its first world into a `worlds/` that does not exist yet.
-    fn write_jsonl_content(&self, content: &str) -> std::io::Result<()> {
-        concinnity_host::store::atomic::replace(std::path::Path::new(&self.world_path), |out| {
-            std::io::Write::write_all(out, content.as_bytes())
-        })
+    // Write the world file and every included file whose entries changed since
+    // the last save, each atomically (temp file + rename) so a crash mid-write
+    // cannot truncate it, returning the paths written. Included files go first,
+    // so a world naming a new file is never on disk without it. Directories are
+    // created as needed: a fresh project saves its first world into a
+    // `worlds/` that does not exist yet.
+    pub(super) fn write_files(&self) -> std::io::Result<Vec<PathBuf>> {
+        let mut files = self.entries.unsaved_files(&self.saved);
+        if !files.contains(&None) {
+            files.push(None);
+        }
+        let mut written = Vec::with_capacity(files.len());
+        for file in files {
+            let text = self.entries.file_text(file.as_deref())?;
+            let path = file.map_or_else(|| PathBuf::from(&self.world_path), |f| f.to_path_buf());
+            concinnity_host::store::atomic::replace(&path, |out| {
+                std::io::Write::write_all(out, text.as_bytes())
+            })
+            .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", paths::shown(&path))))?;
+            written.push(path);
+        }
+        Ok(written)
     }
 }
 

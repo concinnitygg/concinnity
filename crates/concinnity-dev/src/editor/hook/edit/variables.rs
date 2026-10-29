@@ -13,8 +13,8 @@
 //! list and the arrows are already what the text fields use.
 
 use concinnity_cook::authoring::world::replace_args;
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 use serde_json::Value;
 
 use crate::editor::behavior::{edit, palette, relations};

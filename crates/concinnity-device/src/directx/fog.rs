@@ -17,12 +17,12 @@
 //!
 //! Mirrors src/metal/fog.rs.
 
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::FogBlocks;
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog;
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::volumetric_fog;
+use concinnity_engine::render::frame::plan::FogBlocks;
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -423,7 +423,7 @@ impl DxContext {
     // `None` and the froxel + fog PSOs were never built), a `Some` update logs
     // once and is dropped: re-enabling fog mid-run requires a relaunch.
     //
-    // The only caller is the bin-only `cn debug` world hot-reload
+    // The only caller is the bin-only `cn run -f` world hot-reload
     // (`debug::hot_reload::passes`), reached through the `RenderBackend`
     // vtable. Mirrors the other bin-only runtime-mutation seams on this
     // backend.

@@ -1,7 +1,7 @@
 //! Vulkan's share of SSAO (GTAO), which is the settings and where the kernel's
 //! inputs and the blur's output come from this frame. The depth copy, kernel
 //! and blur -- their pipelines, the depth copy and raw occlusion they own and
-//! every draw -- are written once in `concinnity_core::render::post::ssao` and
+//! every draw -- are written once in `concinnity_engine::render::post::ssao` and
 //! reach Vulkan through `VkPostDevice`. The depth + normal they read come from the unified G-buffer
 //! pre-pass.
 //!
@@ -11,10 +11,10 @@
 //! pass-through 1.0.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::SsaoParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass};
+use concinnity_engine::gfx::render_types::SsaoParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::render::post::ssao::{OCCLUSION_FORMAT, SsaoInputs, SsaoPass};
 
 use super::super::context::VkContext;
 use crate::vulkan::post::pass_cache::AttachmentRest;
@@ -54,7 +54,7 @@ impl SsaoResources {
     // Swap in freshly built pipelines after a hot reload.
     pub(in crate::vulkan) fn swap_pipelines(
         &mut self,
-        pipelines: concinnity_core::render::post::ssao::SsaoPipelines<PostPipeline>,
+        pipelines: concinnity_engine::render::post::ssao::SsaoPipelines<PostPipeline>,
     ) {
         self.pass.swap_pipelines(pipelines);
     }

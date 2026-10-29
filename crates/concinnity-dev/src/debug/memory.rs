@@ -6,8 +6,8 @@
 //! passed in rather than read from the globals here, so the reply shape is
 //! testable without a live process.
 
-use concinnity_core::ecs::ScratchStats;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, Realm, SizeClass};
+use concinnity_engine::ecs::ScratchStats;
 
 pub(super) fn report(
     frame: u64,
@@ -64,11 +64,12 @@ pub(super) fn report(
 mod tests {
     use super::*;
     use concinnity_core::memory::{Ledger, MemTag};
+    use std::num::NonZeroU64;
 
     fn ledger() -> Ledger {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 4_096);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(2_048));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(2_048));
         ledger.set(MemTag::Scratch, Realm::Host, 512);
         ledger
     }

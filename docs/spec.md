@@ -83,7 +83,7 @@ flowchart LR
    implies, and steps them in a fixed-timestep loop while a GPU backend renders
    each frame (sections 9 to 21).
 
-A development session can skip the on-disk blobs: `cn debug` and `cn editor`
+A development session can skip the on-disk blobs: `cn run -f` and `cn edit`
 cook the world in memory and run it directly.
 
 ---
@@ -167,15 +167,15 @@ The public framework is one library facade over these parts. It is tiered:
 
 | Product                       | Purpose                                                                                                                                       |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `concinnity` (alias `cn`)     | Developer CLI: `init`, `new`, `build`, `run`, `debug`, `editor`, `add`, `rm`, `list`, `explain`, `test`, `export`, `docs`, `mcp`, `version`. |
+| `concinnity` (alias `cn`)     | Developer CLI: `init`, `new`, `cook`, `check`, `run`, `bench`, `edit`, `add`, `rm`, `list`, `explain`, `export`, `docs`, `mcp`, `version`.   |
 | `concinnity-run`              | The shipped player. Loads compiled blobs relative to its own executable and plays them. No debug server, no compiler, no editor.              |
 | Library                       | The framework facade, for applications that construct and run worlds in code.                                                                 |
 | C library                     | Static and dynamic builds of the embedding layer, with a generated header.                                                                    |
 
 `cn run` and the player drive the same loop; they differ in where the state root
-is anchored and how a missing world is reported. `cn debug` cooks a world in
-memory and serves a localhost inspection endpoint; `cn editor` does the same and
-overlays the in-engine editor. Neither path exists in a shipped player.
+is anchored and how a missing world is reported. `cn run -f` cooks a world in
+memory and hot-reloads it, `cn run --debug-port` serves a localhost inspection
+endpoint, and `cn edit` cooks in memory and overlays the in-engine editor. Neither path exists in a shipped player.
 
 ### 3.3 Platforms and backends
 
@@ -407,7 +407,7 @@ no compiled payload (computable geometry and textures, UI, behaviors).
 
 The **cook** turns an authored world and its source files into blobs. It has a
 front half (load, expand, validate) and a back half (compile, pack, write).
-`cn build` runs it; `cn debug`, `cn editor`, and `cn export` run it too.
+`cn cook` runs it; `cn run -f`, `cn edit`, and `cn export` run it too.
 
 ```mermaid
 flowchart TD
@@ -466,7 +466,7 @@ Two properties govern expansion:
 
 **Semantic validation.** Runs on the expanded world: cross-references resolve,
 singleton constraints hold, per-type validators pass, and arguments are in
-range. Every error is collected and reported together. `cn test` runs the front
+range. Every error is collected and reported together. `cn check` runs the front
 half alone.
 
 ### 6.2 Back half
@@ -1048,8 +1048,8 @@ The feedback channel returns render stats, op-replay results, and the consumed
 snapshot for buffer reuse. A crash on the sim thread is re-raised on
 the main thread after the render half drains.
 
-**Serial.** Both halves step on the main thread. This is the editor's mode, the
-headless mode, and an escape hatch (`cn run --serial`).
+**Serial.** Both halves step on the main thread. This is the editor's mode and
+the headless mode.
 
 On macOS the loop pumps the Cocoa run loop on the main thread each tick so AppKit
 callbacks and drawable presentation fire. In the pipelined driver the render
@@ -1169,23 +1169,25 @@ registry.
 | 4   | Planet              | Early      | The world declares a `Planet`.                                                                                        |
 | 5   | Behavior            | Logic      | The world declares any `Behavior`.                                                                                    |
 | 6   | Physics             | Late       | The world declares a `PhysicsConfig`, `RigidBody`, `PropBody`, or `TriggerVolume`, or a skinned mesh bakes a capsule. |
-| 7   | First-person camera | Late       | The first controlled `Camera3D` has no follow block.                                                                  |
-| 8   | Third-person camera | Late       | The first controlled `Camera3D` has a follow block.                                                                   |
-| 9   | Camera track        | Late       | The world declares a `CameraTrack` and the `Camera3D` it drives.                                                      |
-| 10  | Animation           | Late       | The world declares any `Animation` or `AnimationGraph`.                                                               |
-| 11  | Story               | Late       | The world declares a `Story`.                                                                                         |
-| 12  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
-| 13  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
-| 14  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
-| 15  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
-| 16  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
-| 17  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
-| 18  | Settings            | PreRender  | The world runs with a window.                                                                                         |
-| 19  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
-| 20  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
-| 21  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
-| 22  | Graphics            | PostRender | The world runs with a window.                                                                                         |
-| 23  | Frame report        | PostRender | The run is benchmarked (`--benchmark`).                                                                               |
+| 7   | Water spray         | Late       | A `WaterSurface` names a `spray` emitter.                                                                             |
+| 8   | First-person camera | Late       | The first controlled `Camera3D` has no follow block.                                                                  |
+| 9   | Third-person camera | Late       | The first controlled `Camera3D` has a follow block.                                                                   |
+| 10  | Camera track        | Late       | The world declares a `CameraTrack` and the `Camera3D` it drives.                                                      |
+| 11  | Animation           | Late       | The world declares any `Animation` or `AnimationGraph`.                                                               |
+| 12  | Story               | Late       | The world declares a `Story`.                                                                                         |
+| 13  | Audio               | Late       | The world declares any `AudioEmitter`, `AudioCue`, story audio, or a `Behavior` with a sound node.                    |
+| 14  | Screenshot          | Late       | The launch has a `--screenshot-at`, or takes the world's shots and the world declares a `Screenshot`.                 |
+| 15  | Text input          | Late       | The world declares any `TextInput`.                                                                                   |
+| 16  | Stat HUD            | Late       | The world declares a `StatHud`.                                                                                       |
+| 17  | Debug HUD           | Late       | The world declares a `DebugHud` and the binary is a debug build or a dev session.                                     |
+| 18  | FPS counter         | Late       | The world declares an `FpsCounter`.                                                                                   |
+| 19  | Spawn               | PreRender  | The world runs with a window.                                                                                         |
+| 20  | Settings            | PreRender  | The world runs with a window.                                                                                         |
+| 21  | Streaming           | PreRender  | The world runs with a window.                                                                                         |
+| 22  | Loading overlay     | PreRender  | The world declares a `LoadingOverlay`.                                                                                |
+| 23  | UI input            | PreRender  | The world declares any `HitRegion`, `Screen`, or `KeyBinding`.                                                        |
+| 24  | Graphics            | PostRender | The world runs with a window.                                                                                         |
+| 25  | Frame report        | PostRender | The run is benchmarked (`bench`).                                                                                     |
 
 Key ordering constraints:
 
@@ -1213,6 +1215,8 @@ Key ordering constraints:
   previous-frame movement intent, a deliberate one-frame-lagged resolution.
 - **Cameras and story before audio.** The listener reads the camera, and page
   audio is heard the same tick.
+- **Cameras before screenshots.** A shot requested this tick shows the pose the
+  cameras and the camera track just set.
 
 Blobs are profile-agnostic (the cook injects a debug HUD into every rendering
 world), so the running binary is the one place its own profile is knowable: a
@@ -2638,14 +2642,27 @@ fluctuation is not reported as a leak.
 
 ### 25.3 Benchmarks
 
-Any world can be benchmarked by launching it with `--benchmark` (`cn run
---benchmark`, or an app passing `LaunchArgs` with `benchmark` set to
-`App::with_args`). A `BenchmarkConfig` asset customizes
-the run: the camera's start pose, the travel and turn legs it follows after the
-warm-up, the named phases the run is measured in, the frame budget, the frame-rate
-cap, and frames to save as images. A world without one holds its starting camera
-for ten seconds after a two-second warm-up; declaring one changes nothing on an
+Any world can be benchmarked by launching it with `bench` (`cn bench`, an
+app's own `bench` command, or an app passing `LaunchArgs` with its `command`
+set to `LaunchCommand::Bench` to `App::with_args`). `--stop-at SECONDS` ends
+the run that far in, and its report is marked incomplete. A `BenchmarkConfig` asset customizes
+the run: the camera's start pose, the travel, turn and boom legs it follows after
+the warm-up, a subject it films, the drive keys that steer a rolling subject and
+the moment the run picks it up, the named phases the run is measured in, the frame
+budget, and the frame-rate cap. A world without one holds its starting camera for
+ten seconds after a two-second warm-up; declaring one changes nothing on an
 ordinary launch.
+
+A world with a `Planet` whose config authors none of its route tours the planet
+instead: one great circle through where the world starts, over the ground, the
+shore and the sea, up into orbit, through the night and down into the sunrise,
+built when the run arms from the world's planet, sea and sun. A subject with a
+`RollingDrive` rolls itself into the sea first and is picked up there with no jump
+in position or speed. `route` asks for the legs or the tour outright, and the run
+logs which route it took.
+
+A benchmarked run also takes the world's `Screenshot`s, each the frame drawn at a
+moment of the fixed simulation clock, so the images match across hosts.
 
 The run records one fixed-size row per frame (wall, CPU, GPU, per-pass, and
 per-system times), reduces each column to count, mean, percentiles (50, 95, 99),
@@ -2663,25 +2680,44 @@ simulation clock, so the run is reproducible across hosts.
 | --------- | ------------------------------------------------------------------ |
 | `init`    | Create a new app in the current directory.                         |
 | `new`     | Create a new app in a new directory.                               |
-| `build`   | Cook a world into blobs.                                           |
-| `run`     | Run a compiled world.                                              |
-| `debug`   | Cook in memory and run with the debug endpoint.                    |
-| `editor`  | Cook in memory and run with the editor overlay (default command).  |
+| `cook`    | Cook a world into blobs.                                           |
+| `check`   | Validate a world without cooking it.                               |
+| `run`     | Run the cooked world (cooking it first if needed), or `-f` in memory. |
+| `bench`   | Benchmark a world, found the way `run` finds it (section 25.3).    |
+| `edit`    | Cook in memory and run with the editor overlay.                    |
 | `add`     | Append an asset to the active world.                               |
 | `rm`      | Remove an asset by handle.                                         |
 | `list`    | List declared assets, or the systems a world builds.               |
 | `explain` | Print an asset's effective entry from the expanded world.          |
-| `test`    | Validate a world without building.                                 |
 | `export`  | Package a cooked world for distribution (section 28).              |
 | `docs`    | Regenerate the asset reference.                                    |
 | `mcp`     | Serve the debug protocol to an MCP client over stdio.              |
 | `version` | Print the version.                                                 |
 
-**Launch options** shared by `run`, `debug`, and `editor` form one launch request:
-quality preset, ray-tracing dynamic-geometry policy, skinned ray-tracing geometry,
-DLSS preset, fixed frame rate, hidden show flags, GPU validation, serial driver,
-serial schedule, and screenshot capture after a frame count. The engine reads no
+A bare `cn` prints its help. `-q` / `--quiet` on any command installs no log
+output and leaves the command's own output.
+
+`run` without `-f` plays the cooked blobs, cooking the discovered world first when
+there are none; `run -f FILE` cooks `FILE` in memory and hot-reloads it.
+`--debug-port [PORT]` (8777 when bare) serves the debug protocol on either path.
+
+**Launch options** shared by `run`, `bench`, and `edit` form one launch request,
+described once in the engine's `LAUNCH_FLAGS` table so an app's own command line
+offers the same ones: graphics quality, graphics API, window mode, graphics
+validation, upscaling, ray-tracing dynamic-geometry policy, ray-traced
+reflections, skinned ray-tracing geometry, vsync, DLSS preset, fixed frame rate,
+screenshot directory, hidden passes, frame and frame-rate limits, and the debug
+port. An on/off option is a pair of flags (`--vsync` / `--no-vsync`); leaving
+both out keeps what the world and the saved settings choose. The engine reads no
 environment variables for these; every development knob is a flag.
+
+Screenshots: `bench` takes the world's `Screenshot`s; plain play takes none.
+`bench --screenshot-at SECONDS[:FILE]` (repeatable) saves the frame drawn that many seconds into the run on the simulation
+clock, named for the moment to the millisecond when `FILE` is left out and given a
+`.png` extension when it has none. `--screenshots-dir DIR` puts them all under
+`DIR` (default `screenshots`). A shot whose file would leave that directory, or
+that writes a file another shot writes, is refused at startup; one past the end of
+a benchmark, never reached, or due while the window is hidden is reported.
 
 ### 26.2 Debug protocol
 
@@ -2705,7 +2741,7 @@ A shipped player has no endpoint and cannot be inspected or driven remotely.
 
 ### 26.3 Editor
 
-`cn editor` cooks a world in memory, runs it serially, and injects an editor
+`cn edit` cooks a world in memory, runs it serially, and injects an editor
 overlay at reserved ids that is never saved. Saving writes the authored entry list
 back to `world.jsonl`.
 
@@ -2814,11 +2850,12 @@ static and a dynamic library with a generated header:
 | --------------- | ------------------------------------------------------------------------------------- |
 | `cn_init`       | Initialize the process-wide engine state.                                             |
 | `cn_world_open` | Open a world from a state root into a host-owned native view (an `NSView` or `UIView`), optionally pumping events. |
-| `cn_world_step` | Advance one frame; returns continue, done, stopped, or no world.                      |
+| `cn_world_step` | Advance one frame; returns success while running, done or stopped when it ends.      |
 | `cn_world_close`| Tear the world down.                                                                  |
 
-Errors are a flat code (`Ok` is zero): invalid argument, not initialized, no world
-data, unreadable world data, start failed. The surface is single-threaded, called
+Every call reports a flat `CnResult`: `CN_SUCCESS` is zero, positive codes are
+statuses (done, stopped), and errors are negative (invalid argument, not
+initialized, no world data, unreadable world data, start failed, no world). The surface is single-threaded, called
 from the view's thread, and guarded against re-entry. Authoring is deliberately not
 part of it. This is the route by which the engine runs on iOS.
 
@@ -2838,31 +2875,31 @@ _Timing-only_ identities time work recorded inside another graph node.
 | 4   | `ssao_blur`            | render      | Depth-aware blur; the graph node for the whole SSAO bundle.                                                 |
 | 5   | `main`                 | render      | Lit forward pass; writes HDR color and depth, then draws the sky.                                           |
 | 6   | `auto_exposure`        | compute     | Luminance histogram and reduction over the undecorated scene.                                               |
-| 7   | `decals`               | render      | Deferred box decals.                                                                                        |
-| 8   | `fog`                  | render      | Fullscreen application of the froxel volume.                                                                |
-| 9   | `particles_sim`        | compute     | Particle aging, integration, and ring spawns. Async-eligible.                                                |
-| 10  | `particles_draw`       | render      | Billboard particles blended into the HDR target.                                                            |
-| 11  | `ssr_resolve`          | render      | Screen-space reflection march and composite.                                                                |
-| 12  | `taa_resolve`          | render      | Temporal accumulation.                                                                                      |
-| 13  | `bloom`                | render      | Prefilter, downsample, and upsample chain.                                                                  |
-| 14  | `composite`            | render      | Tonemap or HDR encode, grade, overlay UI, present.                                                          |
-| 15  | `fog_froxel`           | compute     | Froxel scattering and transmittance volume.                                                                 |
-| 16  | `upscale`              | compute     | Temporal upscaling from render to output resolution. Replaces TAA.                                         |
-| 17  | `transparent`          | render      | Back-to-front glass and water, after reflections and before temporal resolve.                              |
-| 18  | `raymarch`             | render      | Sphere-traced SDF volumes; writes color and depth.                                                          |
-| 19  | `hiz_build`            | compute     | Mid-frame Hi-Z rebuild from phase-1 depth.                                                                  |
-| 20  | `cull2`                | compute     | Phase-2 re-test of phase-1-occluded objects.                                                                |
-| 21  | `main2`                | render      | Phase-2 draw of the disoccluded survivors.                                                                  |
-| 22  | `ssgi`                 | render      | Screen-space GI: Hi-Z trace with in-trace temporal accumulation, then upsample and composite.               |
-| 23  | `rt_reflections`       | render      | Ray-traced reflections. Takes precedence over SSR.                                                          |
-| 24  | `gbuffer_prepass`      | render      | Normal, linear depth, roughness, and motion MRT plus depth; copies model history.                           |
-| 25  | `reflection_composite` | timing only | Roughness-aware blur and composite at the tail of the reflection pass.                                      |
-| 26  | `light_cull`           | compute     | Clustered light and probe binning.                                                                          |
-| 27  | `spot_shadow`          | render      | GPU-culled depth render of each shadowed spot cone into its array slice.                                    |
-| 28  | `lines`                | render      | Depth-tested world-space line ribbons.                                                                      |
-| 29  | `hiz_final`            | compute     | Terminal Hi-Z build from the frame's final depth, for the next frame's cull.                                |
-| 30  | `planar_reflection`    | render      | Mirrored, cropped re-render of the scene per reflector plane.                                               |
-| 31  | `sky`                  | timing only | The sky draw at the tail of the main pass (separately timed on DirectX 12 and Vulkan).                      |
+| 8   | `decals`               | render      | Deferred box decals.                                                                                        |
+| 9   | `fog`                  | render      | Fullscreen application of the froxel volume.                                                                |
+| 10  | `particles_sim`        | compute     | Particle aging, integration, and ring spawns. Async-eligible.                                                |
+| 11  | `particles_draw`       | render      | Billboard particles blended into the HDR target.                                                            |
+| 12  | `ssr_resolve`          | render      | Screen-space reflection march and composite.                                                                |
+| 13  | `taa_resolve`          | render      | Temporal accumulation.                                                                                      |
+| 14  | `bloom`                | render      | Prefilter, downsample, and upsample chain.                                                                  |
+| 15  | `composite`            | render      | Tonemap or HDR encode, grade, overlay UI, present.                                                          |
+| 16  | `fog_froxel`           | compute     | Froxel scattering and transmittance volume.                                                                 |
+| 17  | `upscale`              | compute     | Temporal upscaling from render to output resolution. Replaces TAA.                                         |
+| 18  | `transparent`          | render      | Back-to-front glass and water, after reflections and before temporal resolve.                              |
+| 19  | `raymarch`             | render      | Sphere-traced SDF volumes; writes color and depth.                                                          |
+| 20  | `hiz_build`            | compute     | Mid-frame Hi-Z rebuild from phase-1 depth.                                                                  |
+| 21  | `cull2`                | compute     | Phase-2 re-test of phase-1-occluded objects.                                                                |
+| 22  | `main2`                | render      | Phase-2 draw of the disoccluded survivors.                                                                  |
+| 23  | `ssgi`                 | render      | Screen-space GI: Hi-Z trace with in-trace temporal accumulation, then upsample and composite.               |
+| 24  | `rt_reflections`       | render      | Ray-traced reflections. Takes precedence over SSR.                                                          |
+| 25  | `gbuffer_prepass`      | render      | Normal, linear depth, roughness, and motion MRT plus depth; copies model history.                           |
+| 26  | `reflection_composite` | timing only | Roughness-aware blur and composite at the tail of the reflection pass.                                      |
+| 27  | `light_cull`           | compute     | Clustered light and probe binning.                                                                          |
+| 28  | `spot_shadow`          | render      | GPU-culled depth render of each shadowed spot cone into its array slice.                                    |
+| 29  | `lines`                | render      | Depth-tested world-space line ribbons.                                                                      |
+| 30  | `hiz_final`            | compute     | Terminal Hi-Z build from the frame's final depth, for the next frame's cull.                                |
+| 31  | `planar_reflection`    | render      | Mirrored, cropped re-render of the scene per reflector plane.                                               |
+| 32  | `sky`                  | timing only | The sky draw at the tail of the main pass (separately timed on DirectX 12 and Vulkan).                      |
 
 ---
 

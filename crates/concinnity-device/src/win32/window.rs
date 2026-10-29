@@ -2,9 +2,9 @@
 //! message pump, shared by the DirectX backend and the Vulkan backend's
 //! Windows window (vulkan/window/win32.rs).
 
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::chrome::windowed_style;
 use super::input::{KeyState, MouseSnapshot, hi_word, lo_word, vk_from_wparam};
 
-// The `cn editor` live world-swap drops the old render backend and builds a new
+// The `cn edit` live world-swap drops the old render backend and builds a new
 // one on the same thread (see graphics init's `PendingBackend` fallback).
 // A full rebuild would otherwise call `create_window` again and pop a brand-new
 // OS window every edit, leaking the old one (nothing ever `DestroyWindow`s it).
@@ -41,6 +41,10 @@ fn take_parked_window() -> Option<HWND> {
 // state as a raw pointer in the window's GWLP_USERDATA slot so the proc can
 // reach it without unsafe global statics.
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent input, cursor and chrome states of the OS window"
+)]
 pub(crate) struct WindowState {
     // The window this state belongs to. Stored so the DxContext cursor methods
     // (which only hold the WindowState) can reach the client rect for a
@@ -731,7 +735,7 @@ pub(crate) fn create_window(
     height: u32,
     title_bar: bool,
 ) -> Result<(HWND, Box<WindowState>), String> {
-    concinnity_core::window::policy::assert_windows_allowed("the Win32 window");
+    concinnity_engine::window::policy::assert_windows_allowed("the Win32 window");
 
     // Reuse a window parked by a prior backend's drop (editor live-swap) rather
     // than popping a new one, so a world reload keeps the same OS window.

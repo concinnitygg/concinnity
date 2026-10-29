@@ -5,9 +5,9 @@
 //! frame in flight reads. A released region is zeroed, so a stray draw of it
 //! renders nothing rather than stale triangles.
 
-use concinnity_core::render::backend::{GeometryEdit, SceneHost};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
+use concinnity_engine::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 
 use crate::metal::allocator::PooledBuffer;
 use crate::metal::context::{

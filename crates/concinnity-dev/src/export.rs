@@ -36,7 +36,7 @@ struct AppMeta {
 
 /// How an exported bundle is written to the output directory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum BundleFormat {
+pub(crate) enum BundleFormat {
     /// The bundle archived to a `.zip`.
     #[default]
     Zip,
@@ -46,7 +46,7 @@ pub enum BundleFormat {
 
 /// What [`export`] packages and where it writes the result.
 #[derive(Clone, Debug, Default)]
-pub struct ExportOptions {
+pub(crate) struct ExportOptions {
     /// The world JSONL to build; discovered from `worlds/` when `None`.
     pub world: Option<String>,
     /// Overrides the application name the world's `AppConfig` declares.
@@ -65,7 +65,7 @@ pub struct ExportOptions {
 
 /// Package a built world into a distributable bundle: the player binary and the
 /// blob, written to `options.out` as a zip or a directory.
-pub fn export(options: &ExportOptions) -> io::Result<()> {
+pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
     let ExportOptions {
         world,
         name,
@@ -93,7 +93,7 @@ pub fn export(options: &ExportOptions) -> io::Result<()> {
     let runtime_platforms = read_runtime_platforms(&runtime)?;
     let targets = verify_runtime_backend(runtime_platforms, crate::cook_targets())?;
 
-    // Build the world like `cn build` (validates, compiles, writes the blobs +
+    // Build the world like `cn cook` (validates, compiles, writes the blobs +
     // world-lock.json, reuses the build cache), for the player's backends.
     let world_path = resolve_world_path(world.as_deref())?;
     crate::authoring::build_world_file_for(&world_path, targets)?;
@@ -490,6 +490,10 @@ fn make_executable(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "matches the Unix version, which can fail"
+)]
 fn make_executable(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -899,8 +903,12 @@ fn zip_tree(src_dir: &Path, top: &str, exe_rel: &str, zip_path: &Path) -> io::Re
             .to_string_lossy()
             .replace('\\', "/");
         let mode = if rel == exe_rel { 0o755 } else { 0o644 };
+        // Marked as made on Unix: zip defaults to DOS on a Windows host, and
+        // unzip ignores the mode bits of a DOS entry, which would drop the
+        // executable bit.
         let options = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
+            .system(zip::System::Unix)
             .unix_permissions(mode);
         zw.start_file(format!("{top}/{rel}"), options)
             .map_err(io::Error::other)?;
@@ -1490,7 +1498,7 @@ mod tests {
         let file = fs::File::open(&zip_path).unwrap();
         let mut archive = zip::ZipArchive::new(file).unwrap();
         let names: Vec<String> = (0..archive.len())
-            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert_eq!(archive.len(), 2);
         assert!(

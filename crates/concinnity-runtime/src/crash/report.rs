@@ -102,7 +102,7 @@ impl CrashReport {
     fn write_header(&self, out: &mut impl fmt::Write) -> fmt::Result {
         out.write_str("concinnity crash report\n")?;
         writeln!(out, "kind: {}", self.kind.label())?;
-        writeln!(out, "time: {} UTC", self.time.display())?;
+        writeln!(out, "time: {} UTC", self.time)?;
         writeln!(out, "engine: {}", env!("CARGO_PKG_VERSION"))?;
         writeln!(out, "schema: {SCHEMA_VERSION:#010x}")?;
         writeln!(

@@ -1,4 +1,4 @@
-// The environment drawn as the background (see `concinnity_core::render::sky`):
+// The environment drawn as the background (see `concinnity_engine::render::environment::sky`):
 // a fullscreen draw at the tail of each opaque scene pass (the main camera, a
 // reflection-probe face, a planar mirror), on the targets that pass already has
 // bound, and one at the tail of the G-buffer pre-pass for the sky's motion
@@ -9,10 +9,10 @@
 //   [1] table  t0     the environment's prefilter cube
 // Static linear-clamp sampler s0, the cube sampler the main pass reads through.
 
-use concinnity_core::gfx::view_modes::ViewMode;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph::PassId;
-use concinnity_core::render::{pass_timing, sky};
+use concinnity_engine::gfx::view_modes::ViewMode;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::{backend::pass_timing, environment::sky};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_QUERY_TYPE_TIMESTAMP, ID3D12Device, ID3D12GraphicsCommandList, ID3D12PipelineState,
@@ -74,7 +74,7 @@ impl DxSky {
 // that passes only where the depth still holds the clear.
 pub(in crate::directx) fn build_sky_pso(
     device: &ID3D12Device,
-    fragment: &concinnity_core::render::shader_programs::ShaderProgram,
+    fragment: &concinnity_engine::render::shader::programs::ShaderProgram,
     root_sig: &ID3D12RootSignature,
     msaa_samples: u32,
     hot_reload: bool,
@@ -118,8 +118,10 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         view_gva: u64,
         frame_idx: usize,
+        from_cube: bool,
     ) {
-        if self.encode_atmosphere_sky(cmd, view_gva, frame_idx) {
+        let cube_ready = self.scene.env_map.prefilter_mip_count > 0;
+        if !(from_cube && cube_ready) && self.encode_atmosphere_sky(cmd, view_gva, frame_idx) {
             return;
         }
         // SAFETY: the list is recording, and the sky PSO is owned by `self.sky`.
@@ -152,7 +154,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state and the query heap is live.
             unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, start) };
         }
-        self.encode_sky(cmd, view_gva, frame_idx);
+        self.encode_sky(cmd, view_gva, frame_idx, false);
         if let Some(heap) = heap {
             // SAFETY: as above.
             unsafe { cmd.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, end) };

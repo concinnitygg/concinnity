@@ -3,8 +3,8 @@
 //! (view mode, show flags, the billboard toggle) are published to the renderer
 //! each tick as the `ViewOverrides` resource.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::{hud, view_menu};

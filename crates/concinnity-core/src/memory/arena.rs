@@ -30,7 +30,8 @@ const ARENA_ALIGN: usize = 64;
 /// A bump allocator over one fixed reservation, reset as a whole.
 pub struct Arena {
     ptr: NonNull<u8>,
-    cap: usize,
+    // The reservation's size and alignment; zero-sized when nothing was taken.
+    layout: Layout,
     used: Cell<usize>,
     peak: Cell<usize>,
     // Requests this arena could not satisfy. A caller falling back to the heap
@@ -51,7 +52,9 @@ pub struct Arena {
 )]
 impl Arena {
     /// Reserve `bytes` up front. The buffer is taken from the global allocator
-    /// once and held until the arena drops; nothing here allocates again.
+    /// once and held until the arena drops; nothing here allocates again. A
+    /// size no allocation can have gives an empty arena that declines every
+    /// request.
     pub fn with_capacity(bytes: usize) -> Self {
         Self::new(bytes, None)
     }
@@ -60,30 +63,26 @@ impl Arena {
     /// for as long as the arena lives. An arena's whole cost is its reservation,
     /// so it can account for itself rather than making its owner do it.
     pub fn tagged(bytes: usize, tag: MemTag) -> Self {
-        crate::memory::ledger().add(tag, Realm::Host, bytes as u64);
-        Self::new(bytes, Some(tag))
+        let arena = Self::new(bytes, Some(tag));
+        crate::memory::ledger().add(tag, Realm::Host, arena.capacity() as u64);
+        arena
     }
 
     fn new(bytes: usize, tag: Option<MemTag>) -> Self {
-        if bytes == 0 {
-            return Self {
-                ptr: NonNull::dangling(),
-                cap: 0,
-                used: Cell::new(0),
-                peak: Cell::new(0),
-                overflows: Cell::new(0),
-                tag,
-            };
-        }
-        let layout = Layout::from_size_align(bytes, ARENA_ALIGN).expect("arena layout");
-        // SAFETY: `layout` has a non-zero size.
-        let ptr = unsafe { alloc::alloc::alloc(layout) };
-        let Some(ptr) = NonNull::new(ptr) else {
-            alloc::alloc::handle_alloc_error(layout)
+        let (ptr, layout) = match Layout::from_size_align(bytes, ARENA_ALIGN) {
+            Ok(layout) if layout.size() > 0 => {
+                // SAFETY: `layout` has a non-zero size.
+                let ptr = unsafe { alloc::alloc::alloc(layout) };
+                let Some(ptr) = NonNull::new(ptr) else {
+                    alloc::alloc::handle_alloc_error(layout)
+                };
+                (ptr, layout)
+            }
+            _ => (NonNull::dangling(), Layout::new::<()>()),
         };
         Self {
             ptr,
-            cap: bytes,
+            layout,
             used: Cell::new(0),
             peak: Cell::new(0),
             overflows: Cell::new(0),
@@ -93,7 +92,7 @@ impl Arena {
 
     /// The reservation size in bytes.
     pub fn capacity(&self) -> usize {
-        self.cap
+        self.layout.size()
     }
 
     /// Bytes handed out since the last reset.
@@ -103,7 +102,7 @@ impl Arena {
 
     /// Bytes still available before the next request is declined.
     pub fn remaining(&self) -> usize {
-        self.cap - self.used.get()
+        self.capacity() - self.used.get()
     }
 
     /// The most this arena has held between resets: what to size it from.
@@ -201,19 +200,19 @@ impl Arena {
     }
 
     fn try_bump(&self, size: usize, align: usize) -> Option<NonNull<u8>> {
-        if align > ARENA_ALIGN || self.cap == 0 {
+        if align > ARENA_ALIGN || self.capacity() == 0 {
             return None;
         }
         let start = self.used.get().checked_next_multiple_of(align)?;
         let end = start.checked_add(size)?;
-        if end > self.cap {
+        if end > self.capacity() {
             return None;
         }
         self.used.set(end);
         if end > self.peak.get() {
             self.peak.set(end);
         }
-        // SAFETY: `start <= end <= cap`, so the offset stays inside the one
+        // SAFETY: `start <= end <= capacity`, so the offset stays inside the one
         // allocation `ptr` owns.
         Some(unsafe { self.ptr.add(start) })
     }
@@ -222,16 +221,14 @@ impl Arena {
 impl Drop for Arena {
     fn drop(&mut self) {
         if let Some(tag) = self.tag {
-            crate::memory::ledger().release(tag, Realm::Host, self.cap as u64);
+            crate::memory::ledger().release(tag, Realm::Host, self.capacity() as u64);
         }
-        if self.cap == 0 {
+        if self.capacity() == 0 {
             return;
         }
-        let layout = Layout::from_size_align(self.cap, ARENA_ALIGN).expect("arena layout");
-        // SAFETY: `ptr` came from `alloc` with this exact layout in
-        // `with_capacity`, and nothing can still borrow it: `Drop` takes
-        // `&mut self`.
-        unsafe { alloc::alloc::dealloc(self.ptr.as_ptr(), layout) };
+        // SAFETY: `ptr` came from `alloc` with exactly `self.layout` in `new`,
+        // and nothing can still borrow it: `Drop` takes `&mut self`.
+        unsafe { alloc::alloc::dealloc(self.ptr.as_ptr(), self.layout) };
     }
 }
 
@@ -403,6 +400,15 @@ mod tests {
         let arena = Arena::with_capacity(0);
         assert_eq!(arena.capacity(), 0);
         assert!(arena.alloc(1u8).is_none());
+    }
+
+    #[test]
+    fn an_unrepresentable_size_gives_an_empty_arena() {
+        let arena = Arena::with_capacity(usize::MAX);
+        assert_eq!(arena.capacity(), 0);
+        assert!(arena.alloc(1u8).is_none());
+        assert_eq!(arena.overflows(), 1);
+        assert_eq!(Arena::tagged(usize::MAX, MemTag::Scratch).capacity(), 0);
     }
 
     #[test]

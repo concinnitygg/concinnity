@@ -2,9 +2,9 @@
 // each `SettingKey` with its label; core's `SettingKey` owns the key vocabulary
 // and core's settings system knows each key's options and how to apply it.
 
-use concinnity_core::components::GamepadAction;
-use concinnity_core::input::keymap::Bindable;
-use concinnity_core::settings::SettingKey;
+use concinnity_engine::components::GamepadAction;
+use concinnity_engine::input::keymap::Bindable;
+use concinnity_engine::settings::SettingKey;
 
 use crate::authoring::registry::build_only::{MainMenu, SettingsProfile};
 
@@ -154,7 +154,7 @@ const AUDIO_ROWS: [(SettingKey, &str); 4] = [
 const CONTROLS_SLIDERS: [(SettingKey, &str); 1] = [(SettingKey::MouseSensitivity, "Sensitivity")];
 // Rebindable gameplay actions shown under the Controls tab: (display label,
 // setting). Each emits a clickable row that captures a new key; the client
-// (`concinnity_core::input::keymap` + the graphics system) owns the live key map and applies a
+// (`concinnity_engine::input::keymap` + the graphics system) owns the live key map and applies a
 // rebind without a restart.
 const CONTROLS_REBINDS: [(&str, SettingKey); 7] = [
     ("Move Forward", SettingKey::KeyRebind(Bindable::Forward)),

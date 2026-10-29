@@ -2,7 +2,7 @@
 //! the frame pacer and before the world steps: each frame's wall delta feeds
 //! core's [`TickAccumulator`], which publishes the frame's clock.
 
-use concinnity_core::ecs::{TickAccumulator, World};
+use concinnity_engine::ecs::{TickAccumulator, World};
 use std::num::NonZeroU32;
 use std::time::Instant;
 
@@ -15,9 +15,15 @@ pub(crate) struct SimClock {
 
 impl SimClock {
     // Publish the clock of a frame starting at `now` into `world`.
-    pub(crate) fn publish(&mut self, world: &mut World, now: Instant, fixed: Option<NonZeroU32>) {
+    pub(crate) fn publish(
+        &mut self,
+        world: &mut World,
+        now: Instant,
+        fixed: Option<NonZeroU32>,
+        start_at: Option<f32>,
+    ) {
         let elapsed = self.wall_elapsed(now);
-        self.ticks.publish_frame(world, fixed, elapsed);
+        self.ticks.publish_frame(world, fixed, elapsed, start_at);
     }
 
     // Seconds since the previous frame started; the first frame has none.
@@ -33,13 +39,13 @@ impl SimClock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::{FrameTime, SimTiming};
+    use concinnity_engine::ecs::{FrameTime, SimTiming};
 
     #[test]
     fn first_frame_has_no_elapsed_time() {
         let mut clock = SimClock::default();
         let mut world = World::new();
-        clock.publish(&mut world, Instant::now(), None);
+        clock.publish(&mut world, Instant::now(), None, None);
         assert_eq!(world.resource::<SimTiming>().unwrap().ticks, 0);
         assert_eq!(world.resource::<FrameTime>().unwrap().elapsed, 0.0);
     }

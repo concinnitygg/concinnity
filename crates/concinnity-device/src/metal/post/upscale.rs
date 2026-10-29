@@ -12,9 +12,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::depth::CAMERA_DEPTH;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
+use concinnity_engine::gfx::auto_exposure::UpscalerExposure;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::CAMERA_DEPTH;
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
@@ -23,6 +24,7 @@ use objc2_metal_fx::{MTLFXTemporalScaler, MTLFXTemporalScalerBase, MTLFXTemporal
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
 use crate::metal::error::allocation_failed;
+use crate::metal::pass_timing::{PassId, PassTimer};
 use crate::metal::texture::{REACTIVE_MASK_FORMAT, REACTIVE_MASK_USAGE};
 
 // All MetalFX-temporal-upscaling state grouped into one feature unit: the
@@ -47,6 +49,9 @@ pub(crate) struct UpscaleState {
     // pending after a scaler rebuild (resize / startup) and on a frame that
     // resets the temporal history; consumed by `encode_upscale`.
     pub reset: UpscalerResetLatch,
+    // The pre-exposure the scaler divides its input by, stepped on the main
+    // thread before fan-out and read by `encode_upscale`.
+    pub exposure: UpscalerExposure,
 }
 
 // MetalFX temporal upscaler. Owns the descriptor-bound scaler instance plus
@@ -171,8 +176,8 @@ impl MetalFXUpscaler {
         unsafe { descriptor.setOutputWidth(output_width as usize) };
         // SAFETY: the output height is likewise the drawable extent.
         unsafe { descriptor.setOutputHeight(output_height as usize) };
-        // The input is linear HDR at the frame's pre-exposure, which each
-        // encode hands over through `preExposure`, so leave auto-exposure
+        // The input is linear HDR at the frame's pre-exposure, whose changes
+        // each encode hands over through `preExposure`, so leave auto-exposure
         // off and let MetalFX use its built-in heuristic.
         // SAFETY: a plain boolean property setter on the fresh descriptor.
         unsafe { descriptor.setAutoExposureEnabled(false) };
@@ -305,8 +310,8 @@ impl MtlContext {
         // SAFETY: as X, the input height the scaler was built for.
         unsafe { scaler.setMotionVectorScaleY(upscaler.input_height as f32) };
 
-        // The jitter the projection matrix applied this frame in input
-        // pixel space (each Halton sample is in [-0.5, 0.5] pixels).
+        // The jitter the projection matrix applied this frame, as the offset
+        // from the sample to the pixel center in input pixels.
         // `draw_frame` stashes it on the context before fan-out.
         let [jx, jy] = self
             .upscale
@@ -322,9 +327,9 @@ impl MtlContext {
         unsafe { scaler.setDepthReversed(CAMERA_DEPTH.reversed) };
 
         // MetalFX divides the input by this, so its history holds steady
-        // across exposure changes.
+        // across exposure changes while staying near the pre-exposed scale.
         // SAFETY: a plain float property on the live scaler, read at encode time.
-        unsafe { scaler.setPreExposure(self.pre_exposure.value()) };
+        unsafe { scaler.setPreExposure(self.upscale.exposure.value()) };
 
         // The first frame after a rebuild or a history reset discards
         // history. The latch is raised on the main thread between frames.
@@ -332,15 +337,19 @@ impl MtlContext {
         // SAFETY: the reset flag is a plain boolean the scaler reads at the encode below.
         unsafe { scaler.setReset(reset) };
 
-        // MetalFX's encode is a single dispatch that doesn't go through a render
-        // or compute encoder we own, so the standard `attach_render` /
-        // `attach_compute` plumbing doesn't apply. The pass-timing slot for
-        // Upscale stays at zero until Apple exposes a sampling hook; the chip
-        // simply omits the row.
-
+        // MetalFX encodes into encoders of its own, which no sample buffer can
+        // attach to, so markers reading its color input and its output bracket
+        // it. The reading is the scaler's span, including work that overlaps it.
+        let timing = self.diagnostics.pass_timing.as_ref();
+        if let Some(t) = timing {
+            t.mark(cmd_buf, PassTimer::First(PassId::Upscale), scene_pre_taa);
+        }
         // SAFETY: the scaler's input, output, and parameter slots were all set above, and `cmd_buf`
         // is the live command buffer for this frame.
         unsafe { scaler.encodeToCommandBuffer(cmd_buf) };
+        if let Some(t) = timing {
+            t.mark(cmd_buf, PassTimer::Last(PassId::Upscale), &upscaler.output);
+        }
         Ok(0)
     }
 }

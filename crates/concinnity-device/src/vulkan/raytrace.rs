@@ -56,19 +56,21 @@
 //! per-material hit shaders, which screen-space reflections do not.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::rt_accel::{
+use concinnity_engine::gfx::render_types::{DrawObject, InstancedCluster, SkinnedDrawObject};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::align_up;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::rt_accel::geom::{RtDynamicMode, pack_row_major_3x4};
+use concinnity_engine::render::rt_accel::pool::BlasPool;
+use concinnity_engine::render::rt_accel::refit::{AccelUpdate, SkinnedRefit, TlasRefit, TlasTree};
+use concinnity_engine::render::rt_accel::topology::blas_vertex_count;
+use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FrameRing, HeadRefresh, InstanceBlas, RefreshMode, RefreshStep,
     RtAccelSteps, RtDriveInputs, RtUpdate, ScratchRing, SeedSet, StaticRing, drive_update,
 };
-use concinnity_core::render::rt_geom::{RtDynamicMode, pack_row_major_3x4};
-use concinnity_core::render::rt_refit::{BlasUpdate, SkinnedRefit};
-use concinnity_core::render::rt_topology::blas_vertex_count;
-use concinnity_core::render::uniforms::SkinParams;
+use concinnity_engine::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkGeometry;
@@ -277,8 +279,6 @@ pub(super) struct SkinPipeline {
 }
 
 impl SkinPipeline {
-    pub(super) fn destroy(&self, _device: &VkDevice) {}
-
     // Forget what every set was last pointed at, so the next RT rebuild re-points
     // each one. Called when the BVH whose deformed buffers they name is replaced.
     pub(in crate::vulkan) fn forget_wired(&mut self) {
@@ -449,9 +449,34 @@ struct StaticFrameRing {
     tlas: Option<AccelBuffer>,
     instance: Option<HostBuffer>,
     geom: Option<HostBuffer>,
+    // The tree `tlas` was last built as and the refit run since.
+    tlas_refit: TlasRefit,
 }
 
 impl StaticFrameRing {
+    // The slot's TLAS, grown to `size` bytes; a new structure holds no tree to
+    // refit.
+    fn ensure_tlas(
+        &mut self,
+        alloc: &DeviceAllocator,
+        as_loader: &ash::khr::acceleration_structure::Device,
+        size: u64,
+        retire: RetireSink<'_>,
+    ) -> RenderResult<()> {
+        let grown = ensure_accel(
+            &mut self.tlas,
+            alloc,
+            as_loader,
+            size,
+            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            retire,
+        )?;
+        if grown {
+            self.tlas_refit.reset();
+        }
+        Ok(())
+    }
+
     // The host buffers retire through the allocator when the slot drops.
     fn destroy(&self, as_loader: &ash::khr::acceleration_structure::Device) {
         if let Some(t) = &self.tlas {
@@ -501,9 +526,9 @@ pub(super) struct RtAccelData {
     // Size the TLAS prebuild reported; the static rebuild recycles the ring slot's
     // TLAS at this size (the static instance count is fixed).
     tlas_size: u64,
-    // Scratch that TLAS build needs, kept with it so the static rebuild sizes
-    // the ring slot it records over: a topology refresh grows only its own
-    // frame's slot.
+    // Scratch that TLAS build, or a refit of it, needs, kept with it so the
+    // static rebuild sizes the ring slot it records over: a topology refresh
+    // grows only its own frame's slot.
     tlas_scratch: u64,
     instance_count: u32,
     // Frames-in-flight depth; a retired structure is freed this many updates
@@ -548,6 +573,9 @@ pub(super) struct RtAccelData {
 
     // Persistent CPU scratch for the skinned rebuild.
     skinned_scratch: SkinnedScratch,
+
+    // Draw BLAS a refresh orphaned, rebuilt in place by a later refresh.
+    blas_pool: BlasPool<AccelBuffer>,
 }
 
 // SAFETY: Raw pointers in `HostBuffer` are host-mapped and only touched on the render
@@ -709,11 +737,11 @@ fn skinned_blas_geometry(
 // allocation flags.
 fn skinned_blas_build_info<'a>(
     geo: &'a vk::AccelerationStructureGeometryKHR<'a>,
-    update: BlasUpdate,
+    update: AccelUpdate,
 ) -> vk::AccelerationStructureBuildGeometryInfoKHR<'a> {
     let mode = match update {
-        BlasUpdate::Build => vk::BuildAccelerationStructureModeKHR::BUILD,
-        BlasUpdate::Refit => vk::BuildAccelerationStructureModeKHR::UPDATE,
+        AccelUpdate::Build => vk::BuildAccelerationStructureModeKHR::BUILD,
+        AccelUpdate::Refit => vk::BuildAccelerationStructureModeKHR::UPDATE,
     };
     vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
@@ -738,16 +766,38 @@ fn tlas_geometry(instance_address: u64) -> vk::AccelerationStructureGeometryKHR<
 }
 
 // A from-scratch build of a `ty` structure over the one geometry `geo`, preferring
-// trace speed. The destination and scratch are set by the caller.
+// trace speed. Every TLAS allows updates so a later static update can refit it
+// (see `tlas_update_info`). The destination and scratch are set by the caller.
 fn build_info<'a>(
     ty: vk::AccelerationStructureTypeKHR,
     geo: &'a vk::AccelerationStructureGeometryKHR<'a>,
 ) -> vk::AccelerationStructureBuildGeometryInfoKHR<'a> {
+    let mut flags = vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE;
+    if ty == vk::AccelerationStructureTypeKHR::TOP_LEVEL {
+        flags |= vk::BuildAccelerationStructureFlagsKHR::ALLOW_UPDATE;
+    }
     vk::AccelerationStructureBuildGeometryInfoKHR::default()
         .ty(ty)
-        .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+        .flags(flags)
         .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
         .geometries(std::slice::from_ref(geo))
+}
+
+// A TLAS build over `geo` by `update`: from scratch, or a refit of `source`,
+// which must hold a tree built over the same instances. The destination
+// and scratch are set by the caller.
+fn tlas_update_info<'a>(
+    geo: &'a vk::AccelerationStructureGeometryKHR<'a>,
+    update: AccelUpdate,
+    source: vk::AccelerationStructureKHR,
+) -> vk::AccelerationStructureBuildGeometryInfoKHR<'a> {
+    let info = build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, geo);
+    match update {
+        AccelUpdate::Build => info,
+        AccelUpdate::Refit => info
+            .mode(vk::BuildAccelerationStructureModeKHR::UPDATE)
+            .src_acceleration_structure(source),
+    }
 }
 
 // The structure and scratch sizes `info` needs over `primitive_count` primitives.
@@ -777,6 +827,11 @@ fn blas_build_sizes(
 ) -> vk::AccelerationStructureBuildSizesInfoKHR<'static> {
     let info = build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, geo);
     build_sizes(as_loader, &info, primitive_count)
+}
+
+// The scratch a TLAS with `sizes` needs to be built or refit.
+fn tlas_scratch_size(sizes: &vk::AccelerationStructureBuildSizesInfoKHR<'_>) -> u64 {
+    sizes.build_scratch_size.max(sizes.update_scratch_size)
 }
 
 // The sizes a TLAS build over `instance_count` instances needs.
@@ -1286,7 +1341,11 @@ pub(super) fn build_rt_accel(
         u32::saturating_from(albedo_count),
     )?;
     book.fill_instances(draw_objects, None, |model, id, blas| {
-        tlas_instance(model, id, instance_blas_address(blas, &[], &[]))
+        Some(tlas_instance(
+            model,
+            id,
+            instance_blas_address(blas, &[], &[]),
+        ))
     });
     let instance_count = u32::saturating_from(book.instances().len());
 
@@ -1376,6 +1435,7 @@ pub(super) fn build_rt_accel(
             tlas: Some(tlas),
             instance: Some(instance_buffer),
             geom: Some(geom_table),
+            tlas_refit: TlasRefit::default(),
         },
     );
 
@@ -1387,7 +1447,7 @@ pub(super) fn build_rt_accel(
         live_geom_size,
         scratch,
         tlas_size: tlas_sizes.acceleration_structure_size,
-        tlas_scratch: tlas_sizes.build_scratch_size,
+        tlas_scratch: tlas_scratch_size(&tlas_sizes),
         instance_count,
         frames_in_flight: (frames_in_flight.max(1)) as u64,
         retire: RetirePool::new(),
@@ -1398,6 +1458,7 @@ pub(super) fn build_rt_accel(
         skinned_indices: vk::Buffer::null(),
         frames_in_flight_usize: frames_in_flight.max(1),
         skinned_scratch: SkinnedScratch::default(),
+        blas_pool: BlasPool::default(),
     }))
 }
 
@@ -1426,6 +1487,8 @@ pub(in crate::vulkan) struct RtDynamicInputs<'a> {
     // Per-frame joint palettes + the shared skinned buffers; `None` skips the
     // skinned path (the static path runs).
     pub skinned: Option<SkinnedRtInputs<'a>>,
+    // Where the update's step times are recorded.
+    pub spans: &'a std::cell::Cell<FrameSpans>,
 }
 
 // What one topology refresh needs beyond the device context, the command buffer
@@ -1496,11 +1559,15 @@ impl RtAccelData {
             frame_idx,
             shared,
             skinned,
+            spans,
         } = inputs;
         // Free any retired resources whose frames-in-flight window has elapsed.
         let now = self.book.tick();
         while let Some(r) = self.retire.pop_due(now, self.frames_in_flight) {
             r.destroy(&self.as_loader);
+        }
+        while let Some(spare) = self.blas_pool.pop_expired(now) {
+            spare.destroy(&self.as_loader);
         }
 
         let skinned_objects = skinned.as_ref().map(|s| s.objects);
@@ -1521,6 +1588,8 @@ impl RtAccelData {
                 topology_dirty,
                 draw_objects,
                 skinned: skinned_objects,
+                now_us: concinnity_host::clock::monotonic_micros,
+                spans,
             },
         )
     }
@@ -1588,6 +1657,13 @@ impl RtAccelData {
         match recorded {
             Ok((tlas_sizes, built)) => {
                 self.commit_refresh(pending, draw_objects, built, tlas_sizes);
+                slot.tlas_refit.published(
+                    AccelUpdate::Build,
+                    TlasTree {
+                        head: self.book.head_generation(),
+                        instances: self.book.instances().len(),
+                    },
+                );
                 self.static_ring.publish(next, slot);
                 Ok(())
             }
@@ -1623,21 +1699,30 @@ impl RtAccelData {
         let shared = req.shared.addresses(device);
         let now = self.book.clock();
 
-        // A fresh BLAS per new / changed slot; reused slots keep their structure.
-        let mut fresh_params: Vec<(BlasParams, usize)> = Vec::new();
-        let mut max_scratch: u64 = 0;
+        // A BLAS per new / changed slot, rebuilt into a spare when one fits, each
+        // with its own range of this frame's scratch so the builds need no barrier
+        // between them; reused slots keep their structure.
+        let align = scratch_alignment(ctx.instance, ctx.pd);
+        let mut fresh_params: Vec<(BlasParams, usize, u64)> = Vec::new();
+        let mut blas_scratch: u64 = 0;
         for (j, idx) in refresh.fresh_slots() {
             let p = shared.draw_params(&draw_objects[idx]);
             let geo = blas_geometry(&p, shared.index);
             let sizes = blas_build_sizes(&self.as_loader, &geo, p.primitive_count);
-            fresh[j] = Some(create_accel(
-                alloc,
-                &self.as_loader,
-                sizes.acceleration_structure_size,
-                vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
-            )?);
-            max_scratch = max_scratch.max(sizes.build_scratch_size);
-            fresh_params.push((p, j));
+            let bytes = sizes.acceleration_structure_size.max(256);
+            fresh[j] = Some(
+                match self.blas_pool.take(bytes, now, self.frames_in_flight) {
+                    Some((blas, _)) => blas,
+                    None => create_accel(
+                        alloc,
+                        &self.as_loader,
+                        bytes,
+                        vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+                    )?,
+                },
+            );
+            fresh_params.push((p, j, blas_scratch));
+            blas_scratch += align_up(sizes.build_scratch_size, align);
         }
         let fresh_addresses: Vec<u64> = fresh
             .iter()
@@ -1650,11 +1735,11 @@ impl RtAccelData {
         // full ring cycle ago, so its trace has retired.
         self.book
             .fill_refresh_instances(refresh, draw_objects, |model, id, blas| {
-                tlas_instance(
+                Some(tlas_instance(
                     model,
                     id,
                     instance_blas_address(blas, &fresh_addresses, &[]),
-                )
+                ))
             });
         let instance_count = u32::saturating_from(self.book.instances().len());
         write_or_recreate_host(
@@ -1680,14 +1765,18 @@ impl RtAccelData {
         // this frame's scratch slot covers every fresh BLAS build + this TLAS.
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
         let tlas_sizes = tlas_build_sizes(&self.as_loader, &tlas_geo, instance_count);
-        max_scratch = max_scratch.max(tlas_sizes.build_scratch_size);
-        let scratch_addr = ensure_scratch(&mut self.scratch, ctx, req.frame_idx, max_scratch)?;
-        ensure_accel(
-            &mut slot.tlas,
+        // The TLAS build follows a barrier after every BLAS build, so it reuses
+        // the scratch from the start.
+        let scratch_addr = ensure_scratch(
+            &mut self.scratch,
+            ctx,
+            req.frame_idx,
+            blas_scratch.max(tlas_sizes.build_scratch_size),
+        )?;
+        slot.ensure_tlas(
             alloc,
             &self.as_loader,
             tlas_sizes.acceleration_structure_size,
-            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             RetireSink::new(&mut self.retire, now),
         )?;
         let built = StaticBuilt::of(slot, instance_count)?;
@@ -1696,12 +1785,12 @@ impl RtAccelData {
         // while a failure still leaves nothing recorded.
         self.book.check_refresh(refresh, fresh)?;
 
-        // Record the fresh draw-BLAS builds (build-barrier-serialized over the one
-        // scratch slot they share), then the TLAS build, on `cmd`. Infallible from here on.
+        // Record the fresh draw-BLAS builds over disjoint scratch ranges, one build
+        // barrier, then the TLAS build, on `cmd`. Infallible from here on.
         let scratch = vk::DeviceOrHostAddressKHR {
             device_address: scratch_addr,
         };
-        for (p, j) in &fresh_params {
+        for (p, j, offset) in &fresh_params {
             let Some(dst) = fresh[*j].as_ref() else {
                 continue;
             };
@@ -1711,9 +1800,13 @@ impl RtAccelData {
                 cmd,
                 build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, &geo)
                     .dst_acceleration_structure(dst.accel)
-                    .scratch_data(scratch),
+                    .scratch_data(vk::DeviceOrHostAddressKHR {
+                        device_address: scratch_addr + offset,
+                    }),
                 build_range(p.primitive_count, p.index_byte_offset),
             );
+        }
+        if !fresh_params.is_empty() {
             build_barrier(device, cmd, BUILD_TO_BUILD);
         }
         record_build(
@@ -1744,7 +1837,7 @@ impl RtAccelData {
         let orphans = self.book.commit_refresh(refresh, fresh, draw_objects);
         self.retire_orphans(orphans);
         self.tlas_size = tlas_sizes.acceleration_structure_size;
-        self.tlas_scratch = tlas_sizes.build_scratch_size;
+        self.tlas_scratch = tlas_scratch_size(&tlas_sizes);
         // The TLAS just built references no skinned BLAS, so no ring slot's refit
         // bookkeeping describes a published tree any more. On the skinned path
         // `rebuild_skinned` re-adds the skinned instances this same frame and
@@ -1758,12 +1851,16 @@ impl RtAccelData {
         }
     }
 
-    // Retire BLAS the live TLAS no longer references, together with any a
-    // refresh parked until a TLAS built after it published.
+    // Hand BLAS the live TLAS no longer references, together with any a refresh
+    // parked until a TLAS built after it published, to the BLAS pool, retiring
+    // those it has no room for.
     fn retire_orphans(&mut self, orphans: Vec<AccelBuffer>) {
         let now = self.book.clock();
         for orphan in orphans.into_iter().chain(self.book.take_parked()) {
-            self.retire.push(now, Retired::Accel(orphan));
+            let bytes = orphan.size;
+            if let Some(orphan) = self.blas_pool.give(orphan, bytes, now) {
+                self.retire.push(now, Retired::Accel(orphan));
+            }
         }
     }
 
@@ -1814,7 +1911,11 @@ impl RtAccelData {
         // The geometry table mirrors this order.
         self.book
             .fill_instances(draw_objects, None, |model, id, blas| {
-                tlas_instance(model, id, instance_blas_address(blas, &[], &[]))
+                Some(tlas_instance(
+                    model,
+                    id,
+                    instance_blas_address(blas, &[], &[]),
+                ))
             });
         let instance_count = u32::saturating_from(self.book.instances().len());
 
@@ -1839,25 +1940,30 @@ impl RtAccelData {
             "RT geometry table",
             RetireSink::new(&mut self.retire, now),
         )?;
-        ensure_accel(
-            &mut slot.tlas,
+        slot.ensure_tlas(
             alloc,
             &self.as_loader,
             self.tlas_size,
-            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
             RetireSink::new(&mut self.retire, now),
         )?;
+        let tree = TlasTree {
+            head: self.book.head_generation(),
+            instances: self.book.instances().len(),
+        };
+        let update = slot.tlas_refit.plan(tree);
         let instance_buffer = host_buffer(slot.instance.as_ref())?;
         let built = StaticBuilt::of(slot, instance_count)?;
         // This frame's scratch slot was sized at init; a topology refresh that
         // raised the instance count grew only the slot it recorded over.
         let scratch_addr = ensure_scratch(&mut self.scratch, ctx, frame_idx, self.tlas_scratch)?;
 
+        // A refit updates the slot's own tree in place, which no frame in flight
+        // traces.
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
         record_build(
             &self.as_loader,
             cmd,
-            build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
+            tlas_update_info(&tlas_geo, update, built.tlas)
                 .dst_acceleration_structure(built.tlas)
                 .scratch_data(vk::DeviceOrHostAddressKHR {
                     device_address: scratch_addr,
@@ -1873,6 +1979,7 @@ impl RtAccelData {
         // full build produced, so re-entering the skinned path after an arbitrary
         // gap must rebuild rather than update from a pose the tree was never fitted
         // for.
+        slot.tlas_refit.published(update, tree);
         if self.book.commit_static().is_some() {
             self.skinned_ring.unpublish(self.book.clock());
             for ring in self.skinned_ring.slots_mut() {
@@ -2085,7 +2192,7 @@ impl RtAccelData {
         let mut max_scratch: u64 = 0;
         for (si, p) in skinned_params.iter().enumerate() {
             let geo = skinned_blas_geometry(p, skinned_idx_addr);
-            let info = skinned_blas_build_info(&geo, BlasUpdate::Build);
+            let info = skinned_blas_build_info(&geo, AccelUpdate::Build);
             let sizes = build_sizes(&self.as_loader, &info, p.primitive_count);
             let needed = sizes.acceleration_structure_size;
             match slot.blas.get(si) {
@@ -2131,11 +2238,11 @@ impl RtAccelData {
         // skinned object.
         self.book
             .fill_instances(draw_objects, Some(skinned.objects), |model, id, blas| {
-                tlas_instance(
+                Some(tlas_instance(
                     model,
                     id,
                     instance_blas_address(blas, &[], skinned_blas_addresses),
-                )
+                ))
             });
         let instance_count = u32::saturating_from(self.book.instances().len());
 
@@ -2200,7 +2307,7 @@ impl RtAccelData {
             let mut bi = skinned_blas_build_info(&geo, update)
                 .dst_acceleration_structure(dst.accel)
                 .scratch_data(scratch);
-            if update == BlasUpdate::Refit {
+            if update == AccelUpdate::Refit {
                 bi.src_acceleration_structure = dst.accel;
             }
             record_build(
@@ -2257,6 +2364,9 @@ impl RtAccelData {
             slot.destroy(&self.as_loader);
         }
         for b in self.book.drain_blas() {
+            b.destroy(&self.as_loader);
+        }
+        for b in self.blas_pool.drain() {
             b.destroy(&self.as_loader);
         }
     }
@@ -2608,7 +2718,7 @@ impl super::context::VkContext {
     // and the deformed buffers were sized for the old layout. The joint and
     // morph bindings (1/3/4) are untouched; their buffers did not move. A
     // no-op when the fold is inactive. Reached only through the bin's
-    // `cn debug` geometry-rebuild path (dead in the FFI lib, live in the bin).
+    // `cn run -f` geometry-rebuild path (dead in the FFI lib, live in the bin).
     pub(in crate::vulkan) fn refresh_main_skin_geometry(
         &mut self,
         vertex_total: usize,
@@ -2729,7 +2839,7 @@ impl super::context::VkContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::mesh_payload;
+    use concinnity_engine::gfx::mesh_payload;
 
     // Distinct fake buffer handles for the descriptor-cache rule.
     fn buf(raw: u64) -> vk::Buffer {
@@ -2788,7 +2898,7 @@ mod tests {
     #[test]
     fn an_empty_host_buffer_still_holds_one_element() {
         assert_eq!(
-            host_buffer_size::<concinnity_core::gfx::render_types::RtGeomEntry>(&[]),
+            host_buffer_size::<concinnity_engine::gfx::render_types::RtGeomEntry>(&[]),
             128
         );
         assert_eq!(host_buffer_size::<u8>(&[]), 16);

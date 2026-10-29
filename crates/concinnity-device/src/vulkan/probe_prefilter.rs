@@ -25,9 +25,9 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-use concinnity_core::render::uniforms::ProbePrefilterParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::uniforms::ProbePrefilterParams;
 
 use super::allocator::{DeviceAllocator, PooledImage};
 use super::descriptor_layout::{Binding, PoolSizes};
@@ -43,6 +43,13 @@ use super::set_writes::SetWrites;
 // Color format of the capture and the probe cube array.
 pub(super) const PROBE_CUBE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
+// The stages that sample the probe cube array: the forward and transparent
+// fragments, and the reflection resolves' compute.
+const PROBE_CUBE_READERS: vk::PipelineStageFlags = vk::PipelineStageFlags::from_raw(
+    vk::PipelineStageFlags::FRAGMENT_SHADER.as_raw()
+        | vk::PipelineStageFlags::COMPUTE_SHADER.as_raw(),
+);
+
 // Threadgroup tile, matching the kernels' `[numthreads(8, 8, 1)]`. The third
 // dispatch dimension is the six cube faces, one invocation deep.
 const PREFILTER_TILE: u32 = 8;
@@ -52,35 +59,83 @@ fn cube_range(cube: u32, mips: u32) -> vk::ImageSubresourceRange {
     probe_set::range(0, mips, 6 * cube, 6)
 }
 
-/// The cube one convolution writes: cube `cube` of `image`, and one
-/// single-mip storage view of its six layers per mip.
+/// The cube one convolution writes: cube `cube` of `image` from mip
+/// `first_mip`, and one single-mip storage view of its six layers per mip
+/// written.
 #[derive(Clone, Copy)]
 pub(super) struct PrefilterTarget<'a> {
     pub(super) image: vk::Image,
     pub(super) cube: u32,
+    pub(super) first_mip: u32,
     pub(super) mip_views: &'a [vk::ImageView],
 }
 
 impl<'a> PrefilterTarget<'a> {
-    /// Cube `index` of the probe cube array, which must carry `mips` levels.
+    /// Cube `index` of the probe cube array at the mips `plan` writes, from
+    /// its first.
     pub(super) fn probe(
         cubes: &'a probe_set::ProbeCubeArray,
         index: usize,
-        mips: u32,
+        plan: &PrefilterPlan,
     ) -> RenderResult<Self> {
+        let first = plan.first_mip() as usize;
         let mip_views = cubes
             .mip_views(index)
-            .filter(|views| views.len() == mips as usize)
+            .and_then(|views| views.get(first..first + plan.mips() as usize))
             .ok_or_else(|| {
                 RenderError::Other(format!(
-                    "probe: the cube array has no cube {index} at {mips} mips"
+                    "probe: the cube array has no cube {index} at mips {first}..{}",
+                    first + plan.mips() as usize
                 ))
             })?;
         Ok(Self {
             image: cubes.image(),
             cube: u32::saturating_from(index),
+            first_mip: plan.first_mip(),
             mip_views,
         })
+    }
+
+    // Every mip and layer of the cube this target writes.
+    fn range(&self) -> vk::ImageSubresourceRange {
+        let mips = u32::saturating_from(self.mip_views.len());
+        probe_set::range(self.first_mip, mips, 6 * self.cube, 6)
+    }
+}
+
+/// How the six faces reach a capture, which sets what the capture is made for
+/// and where the pyramid build takes it from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CaptureFaces {
+    /// Copied or written in by a kernel, arriving in `TRANSFER_DST`.
+    Copied,
+    /// Rendered straight into its layers, arriving in
+    /// `SHADER_READ_ONLY_OPTIMAL` as the main render pass leaves its color.
+    Rendered,
+}
+
+impl CaptureFaces {
+    fn usage(self) -> vk::ImageUsageFlags {
+        let arrival = match self {
+            Self::Copied => vk::ImageUsageFlags::TRANSFER_DST,
+            Self::Rendered => vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        };
+        arrival | vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED
+    }
+
+    fn arrival(self) -> LayoutSide {
+        match self {
+            Self::Copied => LayoutSide {
+                layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                access: vk::AccessFlags::TRANSFER_WRITE,
+                stage: vk::PipelineStageFlags::TRANSFER,
+            },
+            Self::Rendered => LayoutSide {
+                layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                access: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                stage: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            },
+        }
     }
 }
 
@@ -156,11 +211,13 @@ pub(super) struct PrefilterGpu {
     capture: PooledImage,
     // The capture's top mip as six array layers.
     capture_top: vk::ImageView,
-    // The image and the cube this convolution writes. Its owner holds the
+    // How the faces reach the capture.
+    faces: CaptureFaces,
+    // The image and the cube mips this convolution writes. Its owner holds the
     // storage views the sets below name and outlives the convolution: a probe
     // re-placement idles and drops every bake before replacing the array.
     probe_image: vk::Image,
-    probe_cube: u32,
+    probe_range: vk::ImageSubresourceRange,
     // Sets, all written once at construction: the mirror-mip copy, one
     // downsample per destination mip, one GGX per destination mip.
     mip0_set: vk::DescriptorSet,
@@ -174,14 +231,15 @@ pub(super) struct PrefilterGpu {
 impl PrefilterGpu {
     /// Allocate the capture, its views and every descriptor set the
     /// convolution's dispatches bind, writing into `target`, whose views must
-    /// cover the plan's mips. The capture starts undefined; a bake's per-face
-    /// copies move it to `TRANSFER_DST` before writing it.
+    /// cover the plan's mips. The capture starts undefined; `faces` says how
+    /// its faces are put in.
     pub(super) fn new(
         device: &VkDevice,
         alloc: &DeviceAllocator,
         pipelines: &ProbePrefilterPipelines,
         plan: &PrefilterPlan,
         target: PrefilterTarget<'_>,
+        faces: CaptureFaces,
     ) -> RenderResult<Self> {
         let mips = plan.mips();
         let capture = probe_set::create_image(
@@ -190,9 +248,7 @@ impl PrefilterGpu {
                 face_size: plan.face_size(),
                 mips,
                 layers: 6,
-                usage: vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::STORAGE
-                    | vk::ImageUsageFlags::SAMPLED,
+                usage: faces.usage(),
             },
         )
         .map_err(|e| e.context("probe capture cube"))?;
@@ -248,8 +304,9 @@ impl PrefilterGpu {
         Ok(Self {
             capture_top: capture_mip_views[0],
             capture,
+            faces,
             probe_image: target.image,
-            probe_cube: target.cube,
+            probe_range: target.range(),
             mip0_set,
             downsample_sets,
             ggx_sets,
@@ -273,11 +330,28 @@ impl PrefilterGpu {
     pub(super) fn capture_range(&self) -> vk::ImageSubresourceRange {
         cube_range(0, self.mips)
     }
+
+    /// A view of face `face` of the capture's top mip, for a render pass to
+    /// draw that face into. It lives as long as the capture.
+    pub(super) fn capture_face_view(
+        &self,
+        device: &VkDevice,
+        face: u32,
+    ) -> RenderResult<vk::ImageView> {
+        let view = probe_set::create_view(
+            device,
+            self.capture.image(),
+            vk::ImageViewType::TYPE_2D,
+            probe_set::range(0, 1, face, 1),
+        )?;
+        self.capture.attach_view(view);
+        Ok(view)
+    }
 }
 
 impl super::context::VkContext {
-    /// Record the cheap half of the convolution: the capture moves from the
-    /// per-face copies' `TRANSFER_DST` into GENERAL, the mirror mip is copied
+    /// Record the cheap half of the convolution: the capture moves from where
+    /// its faces left it into GENERAL, the mirror mip is copied
     /// through with the firefly clamp, the source pyramid is reduced level by
     /// level, and the capture ends in `SHADER_READ_ONLY_OPTIMAL` for the GGX
     /// dispatches that follow. The probe's cube is ordered after whatever read it
@@ -303,11 +377,7 @@ impl super::context::VkContext {
             cmd,
             gpu.capture.image(),
             cube_range(0, gpu.mips),
-            LayoutSide {
-                layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                access: vk::AccessFlags::TRANSFER_WRITE,
-                stage: vk::PipelineStageFlags::TRANSFER,
-            },
+            gpu.faces.arrival(),
             LayoutSide {
                 layout: vk::ImageLayout::GENERAL,
                 // The downsample dispatches WRITE mips 1..n as well as reading:
@@ -317,17 +387,17 @@ impl super::context::VkContext {
                 stage: vk::PipelineStageFlags::COMPUTE_SHADER,
             },
         );
-        // The cube may hold a replaced placement's probe that earlier frames
-        // sampled; this orders the writes after those reads.
+        // The cube may hold a probe that earlier passes sampled; this orders
+        // the writes after those reads.
         transition(
             device,
             cmd,
             gpu.probe_image,
-            cube_range(gpu.probe_cube, gpu.mips),
+            gpu.probe_range,
             LayoutSide {
                 layout: probe_set::PROBE_CUBES_LAYOUT,
                 access: vk::AccessFlags::empty(),
-                stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+                stage: PROBE_CUBE_READERS,
             },
             LayoutSide {
                 layout: probe_set::PROBE_CUBES_LAYOUT,
@@ -441,7 +511,7 @@ impl super::context::VkContext {
             &self.hw.device,
             cmd,
             gpu.probe_image,
-            cube_range(gpu.probe_cube, gpu.mips),
+            gpu.probe_range,
             LayoutSide {
                 layout: probe_set::PROBE_CUBES_LAYOUT,
                 access: vk::AccessFlags::SHADER_WRITE,
@@ -450,7 +520,7 @@ impl super::context::VkContext {
             LayoutSide {
                 layout: probe_set::PROBE_CUBES_LAYOUT,
                 access: vk::AccessFlags::SHADER_READ,
-                stage: vk::PipelineStageFlags::FRAGMENT_SHADER,
+                stage: PROBE_CUBE_READERS,
             },
         );
     }

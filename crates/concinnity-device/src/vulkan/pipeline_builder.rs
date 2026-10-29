@@ -9,12 +9,12 @@
 
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 
 use super::owned::VkDevice;
 use super::pipeline::{BucketPipelineTargets, BucketPipelines, build_world_shader_pipeline};
@@ -55,8 +55,8 @@ pub(super) struct VkPipelineBuilder {
     pub world: Option<BucketPipelineTargets>,
     // `None` when the world has no raymarch pass.
     pub volumes: Option<VolumePipelineTargets>,
-    // Per bucket: what of the grass its main fragment shades.
-    pub grass: Vec<GrassShading>,
+    // Per bucket: which of its Shader's main fragments it draws with.
+    pub variants: Vec<SurfaceVariant>,
 }
 
 // A world Shader's main-pass and pre-pass pipelines and what they were built
@@ -85,7 +85,11 @@ impl PipelineBuilder for VkPipelineBuilder {
             .world
             .ok_or_else(|| RenderError::Other("the GPU-driven main pass is not live".into()))?;
         let _open = self.gate.enter()?;
-        let grass = self.grass.get(bucket as usize).copied().unwrap_or_default();
+        let grass = self
+            .variants
+            .get(bucket as usize)
+            .copied()
+            .unwrap_or_default();
         let pipelines =
             build_world_shader_pipeline(&self.device, targets, bucket as usize, programs, grass)?;
         Ok(PreparedPipelines::new(PreparedWorldShader {

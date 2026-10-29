@@ -1,13 +1,14 @@
-// Fan-outs the tests share: one that really runs units on threads, and one that
-// visits them in an order no pool would, to show an order never leaks out.
+//! Fan-outs the tests share: one that really runs units on threads, and one that
+//! visits them in an order no pool would, to show an order never leaks out.
 
-use super::Fanout;
+use super::FanOut;
 
-// Every unit of work on its own scoped thread, reporting `.0` workers. Below
-// two units there is nothing to split, so they run on the calling thread.
-pub(crate) struct Threads(pub(crate) usize);
+/// Every unit of work on its own scoped thread, reporting `.0` workers. Below
+/// two units there is nothing to split, so they run on the calling thread.
+#[derive(Debug)]
+pub struct Threads(pub usize);
 
-impl Fanout for Threads {
+impl FanOut for Threads {
     fn workers(&self) -> usize {
         self.0
     }
@@ -30,11 +31,12 @@ impl Fanout for Threads {
     }
 }
 
-// Reports `.0` workers and visits the units back to front, on the calling
-// thread.
-pub(crate) struct Reversed(pub(crate) usize);
+/// Reports `.0` workers and visits the units back to front, on the calling
+/// thread.
+#[derive(Debug)]
+pub struct Reversed(pub usize);
 
-impl Fanout for Reversed {
+impl FanOut for Reversed {
     fn workers(&self) -> usize {
         self.0
     }

@@ -5,10 +5,10 @@
 //! the axis-drag math. The hook (`hook/drag/gizmo.rs`) owns the drag state and
 //! the write-back.
 
-use concinnity_core::components::Sprite;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::math::pick::PickRay;
+use concinnity_engine::components::Sprite;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::pick::PickRay;
 
 use crate::editor::hud_ids::{Family, family_base, hud_ids};
 
@@ -266,7 +266,7 @@ fn place_square(world: &mut World, id: AssetId, center: [f32; 2], size: f32, rad
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::camera::view_matrix;
+    use concinnity_engine::gfx::camera::view_matrix;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const FOV: f32 = core::f32::consts::FRAC_PI_2;

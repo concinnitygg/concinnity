@@ -3,12 +3,12 @@
 // a device-local image via a one-shot command buffer.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::mipmap;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::mipmap;
+use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::depth::SHADOW_SAMPLE_COMPARE;
@@ -454,7 +454,7 @@ impl StreamedUploadRetire {
 // ONLY, fragment-stage scope) orders every later submission on the same queue
 // after the copy, so the image is safe to sample from any subsequently
 // submitted frame; only freeing the returned in-flight resources needs GPU
-// retirement. The chain is box-filtered on the CPU (`concinnity_core::render::mipmap`), for
+// retirement. The chain is box-filtered on the CPU (`concinnity_engine::render::mipmap`), for
 // the backend's own init-time textures (fallbacks, text atlases); scene textures
 // arrive with their chain cooked and go through `upload_texture_image_deferred`.
 pub(super) fn upload_texture_deferred(
@@ -497,8 +497,8 @@ pub(super) struct TextureLevel<'a> {
 
 // Vulkan equivalent of a compiled texture payload format. The BC formats need
 // the `textureCompressionBC` device feature, enabled in `vulkan::device`.
-fn vk_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> vk::Format {
-    use concinnity_core::bake::texture::TextureFormat;
+fn vk_texture_format(format: concinnity_engine::bake::texture::TextureFormat) -> vk::Format {
+    use concinnity_engine::bake::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => vk::Format::R8G8B8A8_UNORM,
         TextureFormat::Bc1 => vk::Format::BC1_RGBA_UNORM_BLOCK,
@@ -513,7 +513,7 @@ fn vk_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> v
 // (BC1/BC3/BC5/BC7) container chain.
 pub(super) fn upload_texture_image_deferred(
     ctx: &GpuUploadContext<'_>,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<(GpuImage, UploadInFlight)> {
     image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
@@ -531,7 +531,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     ctx: &GpuUploadContext<'_>,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<GpuImage> {
     let (img, in_flight) = upload_texture_image_deferred(ctx, image)?;
     finish_upload(ctx, in_flight)?;
@@ -1392,7 +1392,7 @@ fn create_cube_image(
     let mut mip_sizes: Vec<usize> = Vec::with_capacity(mip_count as usize);
     let mut total: usize = 0;
     for (m, bytes) in mip_bytes.iter().enumerate() {
-        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, m)
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, m)
             .map_err(RenderError::Other)?;
         if bytes.len() < needed {
             return Err(RenderError::Other(format!(

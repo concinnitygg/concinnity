@@ -5,18 +5,21 @@
 // by a scene other than the start scene). The streaming pump calls in here as
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 //
-// The bucket regions of the GPU-culled command buffer are issued here too: the
-// cull kernel wrote every record's command into exactly one region, so each
-// region is one `ExecuteIndirect` under that bucket's pipeline. Mirrors
+// The bucket lists of the GPU-culled command buffer are issued here too: the
+// cull packed every kept record into exactly one stream's list, so each list
+// is one `ExecuteIndirect` under that bucket's pipeline. Mirrors
 // `metal/world_shaders.rs` + the bucket loop in `metal/draw/main.rs`.
 //
 // Unlike Metal there is no on-disk GPU-binary cache behind the build: see
 // `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
 
-use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::GrassShading;
-use concinnity_core::render::world_pipelines::{BucketSource, check_rebuild, replace_bucket};
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
+use concinnity_engine::render::shader::world_pipelines::{
+    BucketSource, check_rebuild, replace_bucket,
+};
 use std::sync::Arc;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -35,12 +38,14 @@ impl DxContext {
     pub(in crate::directx) fn install_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
-        let grass = self.cull.world_pipelines.grass(bucket as usize);
-        let psos = self.bucket_psos(bucket, programs, grass, prepared, false)?;
-        self.install_bucket(bucket, psos)
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let psos = self.bucket_psos(bucket, programs, variant, prepared, false)?;
+        let family = self.build_family(bucket, programs, true)?;
+        self.install_bucket(bucket, psos)?;
+        self.install_family(family)
     }
 
     // One shader bucket's PSOs to replace a bucket that has a pre-pass when
@@ -50,8 +55,8 @@ impl DxContext {
     fn bucket_psos(
         &self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
-        grass: GrassShading,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        variant: SurfaceVariant,
         prepared: Option<PreparedPipelines>,
         live_prepass: bool,
     ) -> RenderResult<BucketPsos> {
@@ -62,7 +67,7 @@ impl DxContext {
         replace_bucket(
             bucket as usize,
             live_prepass,
-            world_shader_for(prepared, &targets).filter(|p| p.grass == grass),
+            world_shader_for(prepared, &targets).filter(|p| p.variant == variant),
             |p: &BucketPsos| p.prepass.is_some(),
             || {
                 build_world_shader_pso(
@@ -75,7 +80,7 @@ impl DxContext {
                     },
                     bucket as usize,
                     programs,
-                    grass,
+                    variant,
                 )
             },
         )
@@ -169,7 +174,7 @@ impl DxContext {
                 &BucketSource {
                     programs: live.programs.as_ref(),
                     deferred: false,
-                    grass: live.grass,
+                    variant: live.variant,
                 },
             )?;
             check_rebuild(bucket, live.prepass.is_some(), psos.prepass.is_some())?;
@@ -199,15 +204,16 @@ impl DxContext {
     pub(in crate::directx) fn update_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
             let prepared = self
                 .world_pso_targets()
                 .and_then(|targets| world_shader_for(prepared, &targets));
+            let family = self.build_family(0, programs, false)?;
             self.update_default_world_shader(programs, prepared)?;
-            self.update_grass_twins(programs)?;
+            self.install_family(family)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -216,31 +222,45 @@ impl DxContext {
         }
         let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
             .is_some_and(|live| live.prepass.is_some());
-        let grass = self.cull.world_pipelines.grass(bucket as usize);
-        let psos = self.bucket_psos(bucket, programs, grass, prepared, live_prepass)?;
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let psos = self.bucket_psos(bucket, programs, variant, prepared, live_prepass)?;
+        let family = self.build_family(bucket, programs, false)?;
         self.install_bucket(bucket, psos)?;
+        self.install_family(family)?;
         Ok(PipelineSwap::Swapped)
     }
 
-    // Rebuild the default Shader's grass twins from its fresh programs, when
-    // the world has them. Built here rather than on a worker: only a hot reload
-    // of the default Shader reaches them.
-    fn update_grass_twins(
-        &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
-    ) -> RenderResult<()> {
-        let twins = self.cull.world_pipelines.grass_twins();
-        for (twin, grass) in [
-            (twins.canopy, GrassShading::Canopy),
-            (twins.ground, GrassShading::Ground),
-        ] {
-            let Some(twin) = twin else {
+    // Shader `shader`'s grass variants built from its fresh programs, when it
+    // has them: every one when `install`ing, else those already resident.
+    // Built here rather than on a worker: only a pin or a hot reload of the
+    // Shader reaches them. All are built before any is installed, so a
+    // failure keeps the live family whole.
+    fn build_family(
+        &self,
+        shader: u32,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        install: bool,
+    ) -> RenderResult<Vec<(u32, BucketPsos)>> {
+        let mut built = Vec::new();
+        for bucket in self.cull.world_pipelines.family(shader) {
+            let variant = self.cull.world_pipelines.variant(bucket as usize);
+            let live = self.cull.world_pipelines.get(bucket as usize);
+            if !install && live.is_none() {
                 continue;
-            };
-            let live_prepass = (self.cull.world_pipelines.get(twin as usize))
-                .is_some_and(|live| live.prepass.is_some());
-            let psos = self.bucket_psos(twin, programs, grass, None, live_prepass)?;
-            self.install_bucket(twin, psos)?;
+            }
+            let live_prepass = live.is_some_and(|live| live.prepass.is_some());
+            built.push((
+                bucket,
+                self.bucket_psos(bucket, programs, variant, None, live_prepass)?,
+            ));
+        }
+        Ok(built)
+    }
+
+    // Install a family `build_family` built.
+    fn install_family(&mut self, built: Vec<(u32, BucketPsos)>) -> RenderResult<()> {
+        for (bucket, pipelines) in built {
+            self.install_bucket(bucket, pipelines)?;
         }
         Ok(())
     }
@@ -286,7 +306,7 @@ impl DxContext {
             info_queue: self.hw.info_queue.clone(),
             world: self.world_pso_targets(),
             volumes: self.volume_pso_targets(),
-            grass: self.cull.world_pipelines.grass_shadings(),
+            variants: self.cull.world_pipelines.variants(),
         })
     }
 
@@ -295,25 +315,28 @@ impl DxContext {
     // tick, which holds it until every frame in flight that recorded against it
     // has finished.
     pub(in crate::directx) fn evict_world_shader(&mut self, bucket: u32) {
-        if let Some(psos) = self.cull.world_pipelines.evict(bucket) {
-            self.retire_bucket(psos);
+        let family = self.cull.world_pipelines.family(bucket);
+        for b in family.chain([bucket]) {
+            if let Some(psos) = self.cull.world_pipelines.evict(b) {
+                self.retire_bucket(psos);
+            }
         }
     }
 
     // Issue the bucket 1.. regions of `indirect`, each under its own material
     // shader's pipeline. Bucket 0's region is issued by the caller (it runs under
     // the pipeline the pass already bound), so this covers only the
-    // material-referenced shaders. `max_count` is the record prefix each region
-    // draws, matching bucket 0's. Returns the number of `ExecuteIndirect` calls
-    // issued, and leaves the last bucket's pipeline bound.
+    // material-referenced shaders and grass variants. Returns the number of
+    // `ExecuteIndirect` calls issued, and leaves the last bucket's pipeline
+    // bound.
     pub(in crate::directx) fn execute_bucket_regions(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         cull_sig: &ID3D12CommandSignature,
         indirect: &ID3D12Resource,
-        max_count: u32,
+        frame_idx: usize,
     ) -> u32 {
-        self.for_each_resident_bucket(|bucket| {
+        self.for_each_resident_bucket(frame_idx, |bucket| {
             let Some(psos) = self.cull.world_pipelines.get(bucket) else {
                 return;
             };
@@ -323,7 +346,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(pso) };
-            self.execute_bucket_region(cmd, cull_sig, indirect, max_count, bucket);
+            self.execute_main_stream(cmd, cull_sig, indirect, u32::saturating_from(bucket));
         })
     }
 
@@ -339,10 +362,10 @@ impl DxContext {
         cmd: &ID3D12GraphicsCommandList,
         prepass_sig: &ID3D12CommandSignature,
         indirect: &ID3D12Resource,
-        max_count: u32,
+        frame_idx: usize,
     ) -> u32 {
         let mut issued = 0;
-        for bucket in self.cull.world_pipelines.resident_buckets() {
+        for bucket in self.drawn_buckets(frame_idx) {
             let Some(prepass) = self
                 .cull
                 .world_pipelines
@@ -354,7 +377,7 @@ impl DxContext {
             // SAFETY: the command list is in the recording state, and every resource, descriptor
             // and slice these commands name is live for the call.
             unsafe { cmd.SetPipelineState(prepass) };
-            self.execute_bucket_region(cmd, prepass_sig, indirect, max_count, bucket);
+            self.execute_main_stream(cmd, prepass_sig, indirect, u32::saturating_from(bucket));
             issued += 1;
         }
         issued
@@ -364,34 +387,52 @@ impl DxContext {
     // returning how many ran. A bucket whose scene has not pinned yet has no
     // pipeline: skip it until warmup builds one rather than drawing it with the
     // wrong program.
-    fn for_each_resident_bucket(&self, mut f: impl FnMut(usize)) -> u32 {
+    fn for_each_resident_bucket(&self, frame_idx: usize, mut f: impl FnMut(usize)) -> u32 {
         let mut issued = 0;
-        for bucket in self.cull.world_pipelines.resident_buckets() {
+        for bucket in self.drawn_buckets(frame_idx) {
             f(bucket);
             issued += 1;
         }
         issued
     }
 
-    fn execute_bucket_region(
+    // The buckets past the default whose regions draw in frame `frame_idx`:
+    // resident, holding records, and pickable in that frame's view.
+    fn drawn_buckets(&self, frame_idx: usize) -> impl Iterator<Item = usize> + '_ {
+        let live = self
+            .cull
+            .live_buckets
+            .get(frame_idx)
+            .map_or(u64::MAX, |l| l.load(std::sync::atomic::Ordering::Relaxed));
+        self.cull
+            .world_pipelines
+            .resident_buckets()
+            .filter(move |&b| {
+                (live >> b) & 1 != 0
+                    && self
+                        .cull
+                        .variants
+                        .regions
+                        .get(b)
+                        .is_some_and(|r| !r.is_empty())
+            })
+    }
+
+    // Execute stream `stream`'s list of `indirect`, one of the main view's
+    // indirect buffers, by the count its cull wrote.
+    pub(in crate::directx) fn execute_main_stream(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        cull_sig: &ID3D12CommandSignature,
+        signature: &ID3D12CommandSignature,
         indirect: &ID3D12Resource,
-        max_count: u32,
-        bucket: usize,
-    ) {
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe {
-            cmd.ExecuteIndirect(
-                cull_sig,
-                max_count,
-                indirect,
-                self.bucket_region_offset(bucket),
-                None::<&ID3D12Resource>,
-                0,
-            );
-        }
+        stream: u32,
+    ) -> u32 {
+        super::compact::execute_stream(
+            cmd,
+            signature,
+            self.main_lists(indirect),
+            stream,
+            self.stream_layout().slots(stream),
+        )
     }
 }

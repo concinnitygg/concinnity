@@ -4,8 +4,8 @@
 //! and dropping the vertex file; assigning Materials; and moving the world
 //! default. Each commit is one undo step.
 
-use concinnity_core::components::ShaderStage;
-use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+use concinnity_engine::components::ShaderStage;
+use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 use std::path::Path;
 
 use super::shader_fixtures::{

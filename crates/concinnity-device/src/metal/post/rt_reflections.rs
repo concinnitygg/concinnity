@@ -11,8 +11,8 @@
 //! pre-pass is forced on whenever RT reflections are enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -34,6 +34,12 @@ use crate::metal::scoped_encoder::ScopedEncoder;
 // block's sampler takes 4, so the pool's own sampler follows them; the shader's
 // `register(s5)` is what pins it.
 const RT_POOL_SAMPLER_INDEX: usize = 5;
+
+// Fragment buffer indices of the textured variant's canopy block and view
+// tables, past the probe records at 11; the shader's `register(b12)` /
+// `register(t13)` pin them.
+const RT_CANOPY_BUFFER_INDEX: usize = 12;
+const RT_CANOPY_TABLES_BUFFER_INDEX: usize = 13;
 
 // Build one RT-reflection pipeline from the given single-source variant: a
 // fullscreen-triangle pass that traces a reflection ray and writes reflected
@@ -172,6 +178,12 @@ impl MtlContext {
                 crate::metal::context::BINDLESS_TEXTURE_ARG_BUFFER_INDEX,
             );
             self.use_bindless_textures(&enc);
+            // The canopy block and view tables a hit on ground growing grass
+            // shades from, as the main pass binds them.
+            enc.set_fragment_value(&self.canopy, RT_CANOPY_BUFFER_INDEX);
+            if let Some(tables) = self.canopy_tables.buffer() {
+                enc.set_fragment_buffer(tables, 0, RT_CANOPY_TABLES_BUFFER_INDEX);
+            }
         }
         // The TLAS references each BLAS indirectly, so the BLASes are not
         // auto-tracked: declare them resident or the trace reads garbage.

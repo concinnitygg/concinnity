@@ -27,20 +27,21 @@
 //! instanced + chunk geometry only -- skinned meshes are not drawn into the mirror
 //! (the bindless face render omits the skinned tail), exactly like the probe capture.
 
-use concinnity_core::gfx::render_types::ClusterParams;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::planar_reflection::{
+use concinnity_engine::gfx::render_types::ClusterParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
 };
-use concinnity_core::render::radiance_storage::FaceStorage;
+use concinnity_engine::render::probe::radiance::FaceStorage;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
+use super::compact::DrawLists;
 use super::context::{DxContext, align256};
-use super::cull::{INDIRECT_COMMAND_STRIDE, RegionCull};
+use super::cull::{RegionCull, RegionPacking};
 use super::draw::ViewUniforms;
 use super::error::map_hresult;
 use super::graph_exec::GraphFrameParams;
@@ -62,9 +63,10 @@ pub(in crate::directx) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_P
 
 // Byte offset of a mirror ring entry's `ClusterParams` CBV, past its
 // `ViewUniforms` one; root CBVs are 256-byte aligned.
-const MIRROR_CLUSTER_OFFSET: usize = 256;
+const MIRROR_CLUSTER_OFFSET: usize = size_of::<ViewUniforms>().next_multiple_of(256);
 // Bytes in one mirror ring entry: the view CBV, then the cluster params CBV.
-const MIRROR_CBV_SIZE: u64 = 512;
+const MIRROR_CBV_SIZE: u64 =
+    (MIRROR_CLUSTER_OFFSET + size_of::<ClusterParams>().next_multiple_of(256)) as u64;
 
 // Where a plane's mirror render lands. Multisampled planes share one MSAA color
 // target and resolve out of it a plane at a time, the way the probe shares one
@@ -125,13 +127,15 @@ pub(in crate::directx) struct PlanarReflectionSet {
     frames: usize,
 
     // Per-frame reflected-frustum cull output: one indirect buffer per frame
-    // holding `plane_count` regions of `n_cull` commands each, plus a per-frame
-    // never-read cull-status scratch. Frame-indexed so frame N writes its own and
+    // holding `plane_count` regions of `n_cull` commands and their list counts
+    // each, plus a per-frame never-read cull-status scratch and group-count
+    // scratch, a region per plane. Frame-indexed so frame N writes its own and
     // never races the GPU reading frame N-1's. The per-plane face render issues its
-    // region (`region_offset`) of `planar_indirect[frame]`. Sized by the object
-    // count (`n_cull`), which is fixed at init, so resize never touches them.
+    // region's lists (`lists`). Sized by the object count (`n_cull`), which is
+    // fixed at init, so resize never touches them.
     planar_indirect: Vec<ID3D12Resource>,
     planar_status: Vec<ID3D12Resource>,
+    planar_group_counts: Vec<ID3D12Resource>,
     n_cull: usize,
 
     // Per-plane cluster light lists and probe masks, binned over the plane's
@@ -271,22 +275,17 @@ impl PlanarReflectionSet {
         // Per-frame mirror-cull output: `plane_count` regions of `n_cull` commands,
         // plus a never-read status scratch. Created in COMMON (D3D12 promotes buffers
         // from COMMON on first use), matching the shadow indirect buffers.
-        let indirect_size =
-            align256((planes.len() * n_cull * INDIRECT_COMMAND_STRIDE as usize) as u64);
+        let lists_size = crate::directx::compact::indirect_buffer_bytes(n_cull);
         let status_size = align256((n_cull * size_of::<u32>()) as u64).max(256);
+        let group_count_size = crate::directx::compact::group_count_bytes(n_cull);
+        let regions = planes.len().max(1) as u64;
         let mut planar_indirect = Vec::with_capacity(frames);
         let mut planar_status = Vec::with_capacity(frames);
+        let mut planar_group_counts = Vec::with_capacity(frames);
         for _ in 0..frames {
-            planar_indirect.push(create_uav_buffer(
-                device,
-                indirect_size.max(256),
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
-            planar_status.push(create_uav_buffer(
-                device,
-                status_size,
-                D3D12_RESOURCE_STATE_COMMON,
-            )?);
+            planar_indirect.push(create_uav_buffer(device, regions * lists_size)?);
+            planar_status.push(create_uav_buffer(device, regions * status_size)?);
+            planar_group_counts.push(create_uav_buffer(device, regions * group_count_size)?);
         }
 
         let cluster_lists = planes
@@ -316,6 +315,7 @@ impl PlanarReflectionSet {
             frames,
             planar_indirect,
             planar_status,
+            planar_group_counts,
             n_cull,
             cluster_lists,
         })
@@ -386,15 +386,26 @@ impl PlanarReflectionSet {
         &self.planar_indirect[frame]
     }
 
-    // GPU address of this frame's never-read mirror-cull status scratch.
-    fn status_gva(&self, frame: usize) -> u64 {
-        com::gpu_va(&self.planar_status[frame])
+    // Where this frame's mirror culls pack each plane's draws: its group counts,
+    // its status (written, never read) and its lists, a region apiece.
+    fn packing(&self, frame: usize) -> RegionPacking<'_> {
+        RegionPacking {
+            group_counts: &self.planar_group_counts[frame],
+            group_stride: crate::directx::compact::group_count_bytes(self.n_cull),
+            status: &self.planar_status[frame],
+            status_stride: align256((self.n_cull * size_of::<u32>()) as u64).max(256),
+            lists_stride: crate::directx::compact::indirect_buffer_bytes(self.n_cull),
+        }
     }
 
-    // Byte offset to plane `slot`'s region (of `n_cull` commands) in the indirect
-    // buffer, for the face render's `ExecuteIndirect`.
-    fn region_offset(&self, slot: usize) -> u32 {
-        u32::saturating_from(slot * self.n_cull * INDIRECT_COMMAND_STRIDE as usize)
+    // Plane `slot`'s lists in this frame's indirect buffer, for the face
+    // render's `ExecuteIndirect`.
+    fn lists(&self, slot: usize, frame: usize) -> DrawLists<'_> {
+        DrawLists {
+            buffer: self.indirect(frame),
+            base: slot as u64 * crate::directx::compact::indirect_buffer_bytes(self.n_cull),
+            commands: self.n_cull,
+        }
     }
 
     // RTV plane `slot`'s mirror render draws through: the shared MSAA target, or
@@ -508,9 +519,9 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
-    ) -> RenderResult<()> {
+    ) {
         let Some(set) = self.planar_reflection.as_ref() else {
-            return Ok(());
+            return;
         };
         let crops =
             params
@@ -518,7 +529,7 @@ impl DxContext {
                 .crops(set.plane_count(), set.width, set.height, PLANAR_CROP_MARGIN);
         let crops = crops.as_slice();
         if crops.is_empty() {
-            return Ok(());
+            return;
         }
 
         // Recover the (jittered) projection from this frame's view-projection so
@@ -538,6 +549,8 @@ impl DxContext {
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
             pre_exposure: storage.scale(),
+            daylight: self.state.view.daylight,
+            tile_morph: self.state.tile_morph_view(),
         };
 
         // Per kept plane: compute the reflected matrices, write the reflected
@@ -551,9 +564,9 @@ impl DxContext {
             let m = mirror.matrices;
             let view = ViewUniforms::face(mirror.face_camera(shading));
             let ring = set.ring_index(slot, params.frame_idx);
-            // SAFETY: `ring < planes.len() * frames`; the CBV is 256 bytes and
-            // `ViewUniforms` is 208. The slot is this frame's own, written before
-            // the GPU reads it later on this cmd list.
+            // SAFETY: `ring < planes.len() * frames`; the entry holds a
+            // `ViewUniforms` before `MIRROR_CLUSTER_OFFSET`. The slot is this
+            // frame's own, written before the GPU reads it later on this cmd list.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     (&raw const view).cast::<u8>(),
@@ -587,6 +600,7 @@ impl DxContext {
                     region: slot,
                     frustum: mirror.frustum,
                     eye: m.eye,
+                    ..RegionCull::EMPTY
                 };
                 kept += 1;
             }
@@ -599,9 +613,9 @@ impl DxContext {
             params.frame_idx,
             &culls[..kept],
             set.indirect(params.frame_idx),
-            set.status_gva(params.frame_idx),
-            // Stride regions by the SAME fixed capacity `region_offset` reads with.
+            // The SAME fixed capacity `lists` reads with.
             set.n_cull,
+            set.packing(params.frame_idx),
         );
 
         self.encode_mirror_light_culls(cmd, params.frame_idx, set, crops, clustered);
@@ -611,7 +625,6 @@ impl DxContext {
         // object buffer), within the crop, then leave the plane's resolve
         // shader-readable.
         let frame_object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
-        let indirect = set.indirect(params.frame_idx);
         for &(slot, crop) in crops {
             let ring = set.ring_index(slot, params.frame_idx);
             set.begin_plane(cmd, slot);
@@ -629,10 +642,11 @@ impl DxContext {
                     canopy_tables_gva: self.canopy.tables_gpu_va(params.frame_idx),
                     clusters: clustered[slot].then(|| set.cluster_grid(slot, params.frame_idx)),
                     storage,
+                    probes: None,
+                    sky_from_cube: false,
                 },
                 crate::directx::probe::IndirectDraw {
-                    indirect,
-                    indirect_offset: set.region_offset(slot),
+                    lists: set.lists(slot, params.frame_idx),
                     object_gva: frame_object_gva,
                     material_params_gva: self.material_params_gva(params.frame_idx),
                 },
@@ -644,7 +658,6 @@ impl DxContext {
             );
             set.end_plane(cmd, slot);
         }
-        Ok(())
     }
 }
 

@@ -156,18 +156,56 @@ fn check_renderable_contract(assets: &[WorldJsonlAsset], errors: &mut Vec<String
     }
 }
 
-// The renderer gives every Shader its own pipeline and its own indirect
-// command buffer per draw pass, sized at init from a fixed bucket count. No
-// filler: the count is exactly what the world declares.
+// The renderer gives every shader bucket its own pipeline and its own indirect
+// command region per draw pass. Every Shader is a bucket, and one under which a
+// surface grows grass (a Terrain's layers, a Planet's ground, which streams
+// under the default) takes its grass variants too: the canopy and the ground,
+// each with and without a Planet's sky in a world with a Planet. Mirrors the
+// renderer's `BucketPlan`. No filler: the count is exactly what the world
+// declares.
 fn check_shader_budget(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
-    let shaders = names_of_type(assets, RegisteredType::Shader);
-    let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
-    if shaders.len() > max {
-        let mut names: Vec<&str> = shaders.into_iter().collect();
+    let shaders: Vec<&str> = assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Shader && !a.is_anonymous())
+        .map(|a| a.id.as_str())
+        .collect();
+    let default = shaders.first().copied();
+    let shader_of = |material: Option<&str>| {
+        material
+            .and_then(|m| {
+                assets
+                    .iter()
+                    .find(|a| a.asset_type == RegisteredType::Material && a.id == m)
+            })
+            .and_then(|m| str_arg(m, "shader"))
+            .or(default)
+    };
+    let planet = assets
+        .iter()
+        .any(|a| a.asset_type == RegisteredType::Planet);
+    let mut grassy: HashSet<Option<&str>> = assets
+        .iter()
+        .filter(|a| a.asset_type == RegisteredType::Terrain)
+        .filter(|t| {
+            t.args
+                .get("layers")
+                .and_then(|l| l.as_array())
+                .is_some_and(|l| !l.is_empty())
+        })
+        .map(|t| shader_of(str_arg(t, "material")))
+        .collect();
+    if planet {
+        grassy.insert(default);
+    }
+    let variants = grassy.len() * if planet { 4 } else { 2 };
+    let buckets = shaders.len().max(1) + variants;
+    let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
+    if buckets > max {
+        let mut names = shaders;
         names.sort_unstable();
         errors.push(format!(
-            "world declares {} Shaders but at most {max} are supported ({}); \
-             share one Shader between more materials",
+            "world needs {buckets} shader buckets ({} Shaders and {variants} grass variants) \
+             but at most {max} are supported ({}); share one Shader between more materials",
             names.len(),
             names.join(", ")
         ));
@@ -436,9 +474,59 @@ mod tests {
         )
     }
 
+    fn grassy_terrain(name: &str, material: &str) -> WorldJsonlAsset {
+        asset(
+            name,
+            RegisteredType::Terrain,
+            serde_json::json!({"material": material, "layers": [{}]}),
+        )
+    }
+
+    // A Shader a Terrain grows grass under takes its two grass variants, and a
+    // Planet gives the default its four.
+    #[test]
+    fn grass_variants_count_toward_the_buckets() {
+        let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
+        let mut assets = render_stack();
+        for i in 0..max - 3 {
+            assets.push(shader(&format!("extra_{i}")));
+        }
+        assets.push(asset(
+            "turf",
+            RegisteredType::Material,
+            serde_json::json!({"shader": "extra_0"}),
+        ));
+        assets.push(grassy_terrain("field", "turf"));
+        assert!(errors_for(&assets).is_empty(), "62 Shaders and 2 variants");
+        assets.push(grassy_terrain("field_2", "turf"));
+        assert!(errors_for(&assets).is_empty(), "one family per Shader");
+        assets.push(asset(
+            "plain",
+            RegisteredType::Material,
+            serde_json::json!({}),
+        ));
+        assets.push(grassy_terrain("field_3", "plain"));
+        let errs = errors_for(&assets);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(
+            errs[0].contains("needs 66 shader buckets (62 Shaders and 4 grass variants)"),
+            "{errs:?}"
+        );
+        assets.push(asset(
+            "world",
+            RegisteredType::Planet,
+            serde_json::json!({}),
+        ));
+        let errs = errors_for(&assets);
+        assert!(
+            errs.iter().any(|e| e.contains("and 8 grass variants")),
+            "{errs:?}"
+        );
+    }
+
     #[test]
     fn more_shaders_than_buckets_is_an_error() {
-        let max = concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+        let max = concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
         let mut assets = render_stack();
         for i in 0..max {
             assets.push(shader(&format!("extra_{i}")));

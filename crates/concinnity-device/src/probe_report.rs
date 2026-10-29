@@ -1,7 +1,7 @@
 //! How the reflection-probe bake's progress and failures are reported.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::probe_bake::BakeReport;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::probe::bake::BakeReport;
 
 /// Log a probe that installed and a failure that abandoned the rest of the bake.
 pub(crate) fn report_probe_bake(report: BakeReport) {

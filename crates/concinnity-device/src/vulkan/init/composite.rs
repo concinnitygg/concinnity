@@ -2,9 +2,9 @@
 //! and one input set per frame in flight.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::CompositeParams;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::gfx::render_types::CompositeParams;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::InitGpu;
 use crate::vulkan::context::{

@@ -1,7 +1,7 @@
 //! Settings-slider row schema.
 
-use concinnity_core::components::{Font, Screen};
-use concinnity_core::ecs::NameRef;
+use concinnity_engine::components::{Font, Screen};
+use concinnity_engine::ecs::NameRef;
 
 /// A settings row that sets a continuous value by dragging a handle along a
 /// track.
@@ -32,7 +32,9 @@ use concinnity_core::ecs::NameRef;
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct Slider {
     /// [Screen](#screen) the generated elements belong to. Empty leaves them

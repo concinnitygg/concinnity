@@ -45,8 +45,8 @@
 //! value field is the selection's and follows it from view to view, so it holds
 //! only Left and Right, which are the caret's (`input::text_input`).
 
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use super::EditorHook;
 use crate::editor::behavior;

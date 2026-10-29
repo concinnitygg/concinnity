@@ -1,8 +1,8 @@
 //! Text: the glyph atlases with their views, and the text pipeline that draws
 //! in the composite pass.
 
-use concinnity_core::render::backend_init::MediaPayloads;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::MediaPayloads;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 

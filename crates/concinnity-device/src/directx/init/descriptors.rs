@@ -3,7 +3,7 @@
 //! passes' descriptor block.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{RtvHeapLayout, SrvHeapLayout, SrvHeapParams};
@@ -11,7 +11,7 @@ use super::{InitGpu, heaps};
 use crate::directx::context::{DxDescriptors, SwapchainState};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::map_hresult;
-use crate::directx::post::descriptors::PostDescriptors;
+use crate::directx::post::descriptors::{PostBlockBase, PostDescriptors};
 
 pub(super) fn build_descriptors(
     gpu: &InitGpu<'_>,
@@ -75,13 +75,17 @@ pub(super) fn build_post_descriptors(
     descriptors: &DxDescriptors,
     swapchain: &SwapchainState,
     rtv: &RtvHeapLayout,
+    frames_in_flight: usize,
 ) -> PostDescriptors {
     let post_srv_base_slot = descriptors.layout.post_srv_base_slot;
     PostDescriptors::new(
-        descriptors.slot_cpu(post_srv_base_slot),
-        descriptors.slot_gpu(post_srv_base_slot),
-        descriptors.srv_descriptor_size,
-        swapchain.rtv(rtv.post_base_slot),
-        swapchain.rtv_descriptor_size,
+        PostBlockBase {
+            srv_cpu: descriptors.slot_cpu(post_srv_base_slot),
+            srv_gpu: descriptors.slot_gpu(post_srv_base_slot),
+            srv_size: descriptors.srv_descriptor_size,
+            rtv: swapchain.rtv(rtv.post_base_slot),
+            rtv_size: swapchain.rtv_descriptor_size,
+        },
+        frames_in_flight,
     )
 }

@@ -1,0 +1,741 @@
+//! Converts drained `DirectionalLight`, `PointLight`, `SpotLight`, and `RectAreaLight`
+//! asset components into the GPU data the renderer consumes: the fixed
+//! `LightUniforms` uniform (directional lights, ambient, and the fixed point array
+//! world Shader hooks read as `LIGHTS.pt` / `num_pt`), the `GpuLight` storage
+//! buffer the clustered forward pass iterates, the per-slice spot shadow
+//! projections, and the rect area-light extents.
+
+use crate::components::{DirectionalLight, PointLight, RectAreaLight, SpotLight};
+use crate::gfx::render_types::{
+    AreaLightData, DirectionalLightData, GpuLight, LIGHT_KIND_AREA, LIGHT_KIND_POINT,
+    LIGHT_KIND_SPOT, LightUniforms, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,
+    PointLightData, SpotShadowData,
+};
+use crate::render::{light::area, shadow::spot};
+use alloc::vec::Vec;
+use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::vec3::{length, scale};
+
+/// The per-scene GPU light data: the storage buffer the clustered forward pass
+/// iterates, plus the side tables it indexes into. Kept together because
+/// `GpuLight.shadow_index` indexes `spot_shadows` and `GpuLight.data_index`
+/// indexes `area_lights` -- invariants that would be easy to break if the three
+/// were built independently.
+pub struct LightData {
+    /// Every local light for the clustered forward pass.
+    pub lights: Vec<GpuLight>,
+    /// One entry per shadowed spot light.
+    pub spot_shadows: Vec<SpotShadowData>,
+    /// One entry per rectangular area light.
+    pub area_lights: Vec<AreaLightData>,
+}
+
+/// Packs point, spot, and rect area lights into the `GpuLight` storage buffer and
+/// assigns their side-table slots. All three share the `MAX_LOCAL_LIGHTS` budget
+/// (not the 8-entry `LightUniforms` array); extras past the cap are dropped with a
+/// warning. Unused fields stay at their neutral `GpuLight::ZERO` values, so a point
+/// light carries no cone, shadow, or area data.
+pub fn build_light_data(
+    pt_lights: &[PointLight],
+    spot_lights: &[SpotLight],
+    rect_lights: &[RectAreaLight],
+) -> LightData {
+    let slices = spot::assign_spot_shadow_slices(spot_lights);
+    let spot_shadows = spot::build_spot_shadow_data(spot_lights, &slices);
+    let slots = area::assign_area_light_slots(rect_lights);
+    let area_lights = area::build_area_light_data(rect_lights, &slots);
+
+    let points = pt_lights.iter().map(|l| GpuLight {
+        position: l.position,
+        range: l.range,
+        color: l.color,
+        intensity: l.intensity,
+        kind: LIGHT_KIND_POINT,
+        ..GpuLight::ZERO
+    });
+    let spots = spot_lights
+        .iter()
+        .zip(&slices)
+        .map(|(l, &shadow_index)| GpuLight {
+            position: l.position,
+            range: l.range,
+            color: l.color,
+            intensity: l.intensity,
+            direction: l.unit_direction(),
+            kind: LIGHT_KIND_SPOT,
+            cos_inner: l.cos_inner(),
+            cos_outer: l.cos_outer(),
+            shadow_index,
+            ..GpuLight::ZERO
+        });
+    let areas = rect_lights
+        .iter()
+        .zip(&slots)
+        .map(|(l, &data_index)| GpuLight {
+            position: l.center,
+            range: l.range,
+            color: l.color,
+            intensity: l.intensity,
+            direction: l.normal,
+            kind: LIGHT_KIND_AREA,
+            data_index,
+            ..GpuLight::ZERO
+        });
+    let lights: Vec<GpuLight> = points
+        .chain(spots)
+        .chain(areas)
+        .take(MAX_LOCAL_LIGHTS)
+        .collect();
+
+    // A spot dropped by the MAX_LOCAL_LIGHTS clamp must not leave a slice
+    // reserved for a light the forward pass will never see.
+    let kept = lights.iter().filter(|l| l.shadow_index >= 0).count();
+    let spot_shadows = if kept < spot_shadows.len() {
+        spot_shadows[..kept].to_vec()
+    } else {
+        spot_shadows
+    };
+
+    // An area light dropped by the MAX_LOCAL_LIGHTS clamp must not leave a table
+    // entry the forward pass will never reach.
+    let kept_areas = lights.iter().filter(|l| l.data_index >= 0).count();
+    let area_lights = if kept_areas < area_lights.len() {
+        area_lights[..kept_areas].to_vec()
+    } else {
+        area_lights
+    };
+
+    LightData {
+        lights,
+        spot_shadows,
+        area_lights,
+    }
+}
+
+const ZERO_DIR: DirectionalLightData = DirectionalLightData {
+    direction: [0.0; 3],
+    intensity: 0.0,
+    color: [0.0; 3],
+    sin_radius: 0.0,
+};
+const ZERO_PT: PointLightData = PointLightData {
+    position: [0.0; 3],
+    range: 0.0,
+    color: [0.0; 3],
+    intensity: 0.0,
+};
+
+/// A frame's directional lights, held inline at the shader's capacity so a
+/// frame can carry them without allocating. Extras past
+/// [`MAX_DIRECTIONAL_LIGHTS`] are dropped, exactly as
+/// [`directional_light_data`] drops them.
+///
+/// ```rust
+/// # use concinnity_engine::components::DirectionalLight;
+/// # use concinnity_engine::render::light::lights::DirectionalLightSet;
+/// let sun = DirectionalLight::default();
+/// let set = DirectionalLightSet::collect(core::iter::once(sun));
+/// assert_eq!(set.as_slice().len(), 1);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DirectionalLightSet {
+    lights: [DirectionalLight; MAX_DIRECTIONAL_LIGHTS],
+    count: usize,
+}
+
+impl DirectionalLightSet {
+    /// The first [`MAX_DIRECTIONAL_LIGHTS`] of `lights`.
+    pub fn collect(lights: impl Iterator<Item = DirectionalLight>) -> Self {
+        let mut set = Self {
+            lights: [DirectionalLight::ZERO; MAX_DIRECTIONAL_LIGHTS],
+            count: 0,
+        };
+        for light in lights.take(MAX_DIRECTIONAL_LIGHTS) {
+            set.lights[set.count] = light;
+            set.count += 1;
+        }
+        set
+    }
+
+    /// The live lights, in packing order.
+    pub fn as_slice(&self) -> &[DirectionalLight] {
+        &self.lights[..self.count]
+    }
+}
+
+/// The `LightUniforms` directional slots and their count for `lights`, padded
+/// with zeroed entries. Shared by the init-time build below and the live
+/// [`crate::render::backend::RenderTuning::update_directional_lights`] seam, so a sun
+/// edited at runtime packs exactly as a relaunch would pack it.
+pub fn directional_light_data(
+    lights: &[DirectionalLight],
+) -> ([DirectionalLightData; MAX_DIRECTIONAL_LIGHTS], i32) {
+    let mut directional = [ZERO_DIR; MAX_DIRECTIONAL_LIGHTS];
+    for (slot, l) in directional.iter_mut().zip(lights) {
+        *slot = DirectionalLightData {
+            direction: l.direction,
+            intensity: l.intensity,
+            color: l.color,
+            sin_radius: concinnity_core::math::sin(l.angular_radius_deg.to_radians()),
+        };
+    }
+    (
+        directional,
+        i32::saturating_from(lights.len().min(MAX_DIRECTIONAL_LIGHTS)),
+    )
+}
+
+/// The direction the cascade shadow projection and the fog ray-march follow:
+/// the first declared directional light, or the neutral sun a world with none
+/// falls back to. Backends cache this at init and re-derive it when the light
+/// set changes.
+pub fn sun_direction(uniforms: &LightUniforms) -> [f32; 3] {
+    if uniforms.num_directional > 0 {
+        uniforms.directional[0].direction
+    } else {
+        LightUniforms::DEFAULT.directional[0].direction
+    }
+}
+
+/// The intensity-weighted color of the sun `sun_direction` names, white when
+/// the world declares no directional light.
+pub fn sun_color(uniforms: &LightUniforms) -> [f32; 3] {
+    if uniforms.num_directional > 0 {
+        let l = &uniforms.directional[0];
+        [
+            l.color[0] * l.intensity,
+            l.color[1] * l.intensity,
+            l.color[2] * l.intensity,
+        ]
+    } else {
+        [1.0, 1.0, 1.0]
+    }
+}
+
+/// The `sun_dir` / `sun_color` lanes the transparent pass carries for its
+/// specular glint: the unit direction toward the first directional light and
+/// that light's intensity-weighted color. Both lanes are zero when the world
+/// declares no directional light, or when the one it declares has no direction,
+/// so the glint disappears rather than falling back to the neutral sun
+/// [`sun_color`] hands the fog.
+pub fn glint_sun(uniforms: &LightUniforms) -> ([f32; 4], [f32; 4]) {
+    if uniforms.num_directional <= 0 {
+        return ([0.0; 4], [0.0; 4]);
+    }
+    let light = &uniforms.directional[0];
+    let len = length(light.direction);
+    if len < 1e-6 {
+        return ([0.0; 4], [0.0; 4]);
+    }
+    let dir = scale(light.direction, 1.0 / len);
+    (
+        [dir[0], dir[1], dir[2], 0.0],
+        [
+            light.color[0] * light.intensity,
+            light.color[1] * light.intensity,
+            light.color[2] * light.intensity,
+            0.0,
+        ],
+    )
+}
+
+/// `local_lights` is the buffer `build_light_data` produced; its length is the
+/// authoritative `num_local_lights` the forward pass iterates.
+pub fn build_light_uniforms(
+    dir_lights: &[DirectionalLight],
+    pt_lights: Vec<PointLight>,
+    local_lights: &[GpuLight],
+    ambient_intensity: f32,
+) -> LightUniforms {
+    if dir_lights.is_empty() && pt_lights.is_empty() && local_lights.is_empty() {
+        return LightUniforms {
+            ambient_intensity,
+            ..LightUniforms::DEFAULT
+        };
+    }
+
+    let (directional, num_directional) = directional_light_data(dir_lights);
+    // The `point` array is the subset world Shader hooks read as `LIGHTS.pt`;
+    // the forward pass reads every light from the GpuLight buffer instead
+    // (see build_light_data), so exceeding MAX_POINT_LIGHTS is not an error.
+    let mut point = [ZERO_PT; MAX_POINT_LIGHTS];
+    let num_point = pt_lights.len().min(MAX_POINT_LIGHTS);
+    for (i, l) in pt_lights.into_iter().take(MAX_POINT_LIGHTS).enumerate() {
+        point[i] = PointLightData {
+            position: l.position,
+            range: l.range,
+            color: l.color,
+            intensity: l.intensity,
+        };
+    }
+
+    LightUniforms {
+        directional,
+        point,
+        num_directional,
+        num_point: i32::saturating_from(num_point),
+        ambient_intensity,
+        num_local_lights: i32::saturating_from(local_lights.len()),
+    }
+}
+
+/// Whether the clustered forward path should bin this frame.
+///
+/// The binning kernel bins both the local lights and the reflection probes'
+/// influence boxes, so it runs whenever either is live: `local_light_count` is
+/// the live light count the forward pass would iterate, `probe_count` the live
+/// probe records. It dispatches one thread per cluster over the whole grid
+/// regardless of what it finds, so a world with neither skips it.
+///
+/// This single-sources two things that must agree: `ClusterParams::use_clusters`
+/// and `FrameGraphInputs::clustering_enabled`. When it is false the
+/// forward pass iterates `num_local_lights` directly (zero iterations) and every
+/// probe reader walks the whole (empty) probe set, instead of reading a cluster
+/// list the dropped pass never wrote, so a stale list from an earlier frame is
+/// never sampled.
+pub fn clustering_active(local_light_count: i32, probe_count: usize) -> bool {
+    local_light_count > 0 || probe_count > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clustered_binning_needs_a_light_or_a_probe() {
+        assert!(clustering_active(1, 0));
+        assert!(clustering_active(0, 1));
+        assert!(clustering_active(4, 12));
+        // Every local light despawned and no probe baked: nothing to bin.
+        assert!(!clustering_active(0, 0));
+    }
+
+    #[test]
+    fn clustered_binning_ignores_a_negative_count() {
+        // `num_local_lights` is a signed i32 in the uniform block.
+        assert!(!clustering_active(-1, 0));
+        assert!(clustering_active(-1, 2));
+    }
+
+    use alloc::vec;
+    fn dir(direction: [f32; 3], color: [f32; 3], intensity: f32) -> DirectionalLight {
+        DirectionalLight {
+            direction,
+            color,
+            intensity,
+            angular_radius_deg: 0.0,
+        }
+    }
+
+    fn pt(position: [f32; 3], color: [f32; 3], intensity: f32, range: f32) -> PointLight {
+        PointLight {
+            position,
+            color,
+            intensity,
+            range,
+        }
+    }
+
+    fn spot(position: [f32; 3], direction: [f32; 3], inner: f32, outer: f32) -> SpotLight {
+        SpotLight {
+            position,
+            direction,
+            inner_angle: inner,
+            outer_angle: outer,
+            ..SpotLight::default()
+        }
+    }
+
+    // The uniforms every test that does not exercise the local buffer wants.
+    fn uniforms(dir_lights: &[DirectionalLight], pt_lights: Vec<PointLight>) -> LightUniforms {
+        let local = build_light_data(&pt_lights, &[], &[]).lights;
+        build_light_uniforms(dir_lights, pt_lights, &local, 1.0)
+    }
+
+    // The live seam packs a sun exactly as the init-time build does, so a
+    // runtime light edit and a relaunch produce the same uniform.
+    #[test]
+    fn directional_packing_matches_the_init_build() {
+        let lights = vec![
+            dir([-0.3, 0.85, 0.4], [1.0, 0.95, 0.8], 1.5),
+            dir([0.1, -1.0, 0.0], [0.2, 0.3, 0.4], 0.5),
+        ];
+        let (packed, count) = directional_light_data(&lights);
+        let built = uniforms(&lights, vec![]);
+        assert_eq!(count, built.num_directional);
+        assert_eq!(packed, built.directional);
+    }
+
+    // Slots past the declared lights are zeroed, so a shorter set never leaves
+    // a stale sun behind it.
+    #[test]
+    fn directional_packing_zeroes_the_unused_slots() {
+        let (packed, count) = directional_light_data(&[dir([0.0, 1.0, 0.0], [1.0; 3], 2.0)]);
+        assert_eq!(count, 1);
+        assert!(packed[1..].iter().all(|d| *d == ZERO_DIR));
+        let (empty, none) = directional_light_data(&[]);
+        assert_eq!(none, 0);
+        assert!(empty.iter().all(|d| *d == ZERO_DIR));
+    }
+
+    // A light's disc reaches the shader as the sine of its angular radius,
+    // and a point light as zero.
+    #[test]
+    fn directional_packing_carries_the_disc() {
+        let sun = DirectionalLight {
+            angular_radius_deg: 30.0,
+            ..dir([0.0, 1.0, 0.0], [1.0; 3], 2.0)
+        };
+        let (packed, _) = directional_light_data(&[sun, dir([1.0, 0.0, 0.0], [1.0; 3], 1.0)]);
+        assert!((packed[0].sin_radius - 0.5).abs() < 1e-6);
+        assert_eq!(packed[1].sin_radius, 0.0);
+    }
+
+    // Extras past the fixed array are dropped rather than overflowing it.
+    #[test]
+    fn directional_packing_clamps_to_the_array_capacity() {
+        let many: Vec<DirectionalLight> = (0..MAX_DIRECTIONAL_LIGHTS + 2)
+            .map(|i| dir([0.0, 1.0, 0.0], [1.0; 3], i as f32))
+            .collect();
+        let (packed, count) = directional_light_data(&many);
+        assert_eq!(count, i32::saturating_from(MAX_DIRECTIONAL_LIGHTS));
+        assert_eq!(packed.len(), MAX_DIRECTIONAL_LIGHTS);
+    }
+
+    #[test]
+    fn empty_inputs_return_default() {
+        let u = uniforms(&[], vec![]);
+        assert_eq!(u.num_directional, LightUniforms::DEFAULT.num_directional);
+        assert_eq!(u.num_point, LightUniforms::DEFAULT.num_point);
+    }
+
+    #[test]
+    fn ambient_intensity_carried_in_both_branches() {
+        // Empty (DEFAULT) branch and the populated branch both honor the
+        // authored multiplier.
+        let empty = build_light_uniforms(&[], vec![], &[], 2.5);
+        assert!((empty.ambient_intensity - 2.5).abs() < 1e-6);
+        let populated =
+            build_light_uniforms(&[dir([-0.3, 0.85, 0.4], [1.0; 3], 1.0)], vec![], &[], 3.0);
+        assert!((populated.ambient_intensity - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn single_directional_light_fields_mapped() {
+        let u = uniforms(&[dir([-0.3, 0.85, 0.4], [1.0, 0.95, 0.8], 1.5)], vec![]);
+        assert_eq!(u.num_directional, 1);
+        assert_eq!(u.num_point, 0);
+        assert_eq!(u.directional[0].direction, [-0.3, 0.85, 0.4]);
+        assert_eq!(u.directional[0].color, [1.0, 0.95, 0.8]);
+        assert!((u.directional[0].intensity - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn single_point_light_fields_mapped() {
+        let u = uniforms(&[], vec![pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)]);
+        assert_eq!(u.num_directional, 0);
+        assert_eq!(u.num_point, 1);
+        assert_eq!(u.point[0].position, [2.0, 3.0, 4.0]);
+        assert_eq!(u.point[0].color, [1.0, 0.8, 0.5]);
+        assert!((u.point[0].intensity - 8.0).abs() < 1e-6);
+        assert!((u.point[0].range - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn excess_directional_lights_clamped_to_max() {
+        let lights: Vec<DirectionalLight> = (0..MAX_DIRECTIONAL_LIGHTS + 2)
+            .map(|i| dir([i as f32, 0.0, 0.0], [1.0; 3], 1.0))
+            .collect();
+        let u = uniforms(&lights, vec![]);
+        assert_eq!(
+            u.num_directional,
+            i32::saturating_from(MAX_DIRECTIONAL_LIGHTS)
+        );
+    }
+
+    #[test]
+    fn excess_point_lights_clamped_to_max() {
+        // The `point` array Shader hooks read caps at 8, but num_local_lights
+        // carries the full count for the forward pass.
+        let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 2)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let u = uniforms(&[], lights);
+        assert_eq!(u.num_point, i32::saturating_from(MAX_POINT_LIGHTS));
+        assert_eq!(
+            u.num_local_lights,
+            i32::saturating_from(MAX_POINT_LIGHTS + 2)
+        );
+    }
+
+    // Spot lights live only in the local buffer, so a spot-only scene still has
+    // to report them through num_local_lights.
+    #[test]
+    fn num_local_lights_counts_spot_lights() {
+        let local =
+            build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)], &[]).lights;
+        let u = build_light_uniforms(&[], vec![], &local, 1.0);
+        assert_eq!(u.num_point, 0);
+        assert_eq!(u.num_local_lights, 1);
+    }
+
+    #[test]
+    fn light_buffer_maps_point_light_fields() {
+        let buf =
+            build_light_data(&[pt([2.0, 3.0, 4.0], [1.0, 0.8, 0.5], 8.0, 6.0)], &[], &[]).lights;
+        assert_eq!(buf.len(), 1);
+        assert_eq!(buf[0].position, [2.0, 3.0, 4.0]);
+        assert_eq!(buf[0].color, [1.0, 0.8, 0.5]);
+        assert!((buf[0].intensity - 8.0).abs() < 1e-6);
+        assert!((buf[0].range - 6.0).abs() < 1e-6);
+        assert_eq!(buf[0].kind, LIGHT_KIND_POINT);
+        // Point lights carry no cone or shadow data.
+        assert_eq!(buf[0].shadow_index, -1);
+        assert_eq!(buf[0].direction, [0.0; 3]);
+        assert_eq!(buf[0].cos_inner, 0.0);
+        assert_eq!(buf[0].cos_outer, 0.0);
+    }
+
+    #[test]
+    fn light_buffer_maps_spot_light_fields() {
+        let buf = build_light_data(
+            &[],
+            &[spot([1.0, 5.0, 2.0], [0.0, -2.0, 0.0], 15.0, 30.0)],
+            &[],
+        )
+        .lights;
+        assert_eq!(buf.len(), 1);
+        assert_eq!(buf[0].position, [1.0, 5.0, 2.0]);
+        assert_eq!(buf[0].kind, LIGHT_KIND_SPOT);
+        // The authored direction is normalized into the record.
+        assert_eq!(buf[0].direction, [0.0, -1.0, 0.0]);
+        assert!((buf[0].cos_inner - 15.0f32.to_radians().cos()).abs() < 1e-6);
+        assert!((buf[0].cos_outer - 30.0f32.to_radians().cos()).abs() < 1e-6);
+        // A wider inner cone than outer would invert the falloff; it is clamped.
+        assert!(buf[0].cos_inner >= buf[0].cos_outer);
+    }
+
+    #[test]
+    fn spot_inner_cone_clamped_to_the_outer_cone() {
+        let buf =
+            build_light_data(&[], &[spot([0.0; 3], [0.0, -1.0, 0.0], 60.0, 20.0)], &[]).lights;
+        assert!((buf[0].cos_inner - buf[0].cos_outer).abs() < 1e-6);
+    }
+
+    #[test]
+    fn spot_lights_follow_the_point_lights_in_the_buffer() {
+        let buf = build_light_data(
+            &[
+                pt([0.0; 3], [1.0; 3], 1.0, 5.0),
+                pt([1.0; 3], [1.0; 3], 1.0, 5.0),
+            ],
+            &[spot([2.0; 3], [0.0, -1.0, 0.0], 10.0, 20.0)],
+            &[],
+        )
+        .lights;
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf[0].kind, LIGHT_KIND_POINT);
+        assert_eq!(buf[1].kind, LIGHT_KIND_POINT);
+        assert_eq!(buf[2].kind, LIGHT_KIND_SPOT);
+    }
+
+    // GpuLight.shadow_index indexes spot_shadows, so the two must agree.
+    #[test]
+    fn shadow_indices_point_at_real_spot_shadow_entries() {
+        let mut casting = spot([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+        casting.cast_shadows = true;
+        let mut dark = spot([3.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+        dark.cast_shadows = false;
+        let data = build_light_data(
+            &[pt([0.0; 3], [1.0; 3], 1.0, 5.0)],
+            &[
+                casting,
+                dark,
+                spot([6.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0),
+            ],
+            &[],
+        );
+        // Point lights never cast; the two casting spots take slices 0 and 1.
+        assert_eq!(data.lights[0].shadow_index, -1);
+        assert_eq!(data.lights[1].shadow_index, 0);
+        assert_eq!(data.lights[2].shadow_index, -1);
+        assert_eq!(data.lights[3].shadow_index, 1);
+        assert_eq!(data.spot_shadows.len(), 2);
+        for l in &data.lights {
+            assert!(
+                l.shadow_index < i32::saturating_from(data.spot_shadows.len()),
+                "shadow_index stays in bounds of spot_shadows"
+            );
+        }
+    }
+
+    // A spot dropped by the MAX_LOCAL_LIGHTS clamp must not leave a shadow slice
+    // reserved for a light the forward pass never sees.
+    #[test]
+    fn clamped_spots_do_not_strand_shadow_slices() {
+        let points: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS - 1)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let spots: Vec<SpotLight> = (0..4)
+            .map(|i| {
+                let mut s = spot([i as f32, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+                s.cast_shadows = true;
+                s
+            })
+            .collect();
+        let data = build_light_data(&points, &spots, &[]);
+        assert_eq!(data.lights.len(), MAX_LOCAL_LIGHTS);
+        // Only one spot survived the clamp, so only its slice is kept.
+        assert_eq!(data.spot_shadows.len(), 1);
+        let max_index = data.lights.iter().map(|l| l.shadow_index).max().unwrap();
+        assert_eq!(max_index, 0);
+    }
+
+    fn area(center: [f32; 3], half_size: [f32; 2]) -> RectAreaLight {
+        RectAreaLight {
+            center,
+            half_size,
+            ..RectAreaLight::default()
+        }
+    }
+
+    // GpuLight.data_index indexes area_lights, so the two must agree, and area
+    // lights must not disturb the spot shadow indices.
+    #[test]
+    fn area_lights_follow_the_other_kinds_and_index_their_table() {
+        let mut casting = spot([0.0, 5.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0);
+        casting.cast_shadows = true;
+        let data = build_light_data(
+            &[pt([0.0; 3], [1.0; 3], 1.0, 5.0)],
+            &[casting],
+            &[
+                area([2.0, 3.0, 0.0], [1.0, 2.0]),
+                area([5.0; 3], [1.0, 1.0]),
+            ],
+        );
+        assert_eq!(data.lights.len(), 4);
+        assert_eq!(data.lights[2].kind, LIGHT_KIND_AREA);
+        assert_eq!(data.lights[3].kind, LIGHT_KIND_AREA);
+        assert_eq!(data.lights[2].data_index, 0);
+        assert_eq!(data.lights[3].data_index, 1);
+        assert_eq!(data.area_lights.len(), 2);
+        // Point and spot lights carry no area data; the spot keeps its slice.
+        assert_eq!(data.lights[0].data_index, -1);
+        assert_eq!(data.lights[1].data_index, -1);
+        assert_eq!(data.lights[1].shadow_index, 0);
+        for l in &data.lights {
+            assert!(l.data_index < i32::saturating_from(data.area_lights.len()));
+        }
+    }
+
+    // The area light's center and emitting direction ride the GpuLight record.
+    #[test]
+    fn area_light_center_and_normal_map_onto_the_gpu_light() {
+        let mut l = area([1.0, 2.0, 3.0], [1.0, 1.0]);
+        l.normal = [0.0, 0.0, 1.0];
+        let data = build_light_data(&[], &[], &[l]);
+        assert_eq!(data.lights[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(data.lights[0].direction, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn clamped_area_lights_do_not_strand_table_entries() {
+        let points: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS - 1)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let areas: Vec<RectAreaLight> = (0..4).map(|_| area([0.0; 3], [1.0, 1.0])).collect();
+        let data = build_light_data(&points, &[], &areas);
+        assert_eq!(data.lights.len(), MAX_LOCAL_LIGHTS);
+        assert_eq!(data.area_lights.len(), 1);
+    }
+
+    #[test]
+    fn light_buffer_carries_more_than_the_point_array_cap() {
+        let lights: Vec<PointLight> = (0..MAX_POINT_LIGHTS + 50)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let buf = build_light_data(&lights, &[], &[]).lights;
+        assert_eq!(buf.len(), MAX_POINT_LIGHTS + 50);
+    }
+
+    #[test]
+    fn light_buffer_clamped_to_capacity() {
+        let lights: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS + 10)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let buf = build_light_data(&lights, &[], &[]).lights;
+        assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
+    }
+
+    // Point and spot lights share one budget: the spots are what overflow.
+    #[test]
+    fn point_and_spot_lights_share_the_capacity() {
+        let points: Vec<PointLight> = (0..MAX_LOCAL_LIGHTS - 1)
+            .map(|i| pt([i as f32, 0.0, 0.0], [1.0; 3], 1.0, 5.0))
+            .collect();
+        let spots: Vec<SpotLight> = (0..4)
+            .map(|i| spot([i as f32, 0.0, 0.0], [0.0, -1.0, 0.0], 10.0, 20.0))
+            .collect();
+        let buf = build_light_data(&points, &spots, &[]).lights;
+        assert_eq!(buf.len(), MAX_LOCAL_LIGHTS);
+        assert_eq!(buf[MAX_LOCAL_LIGHTS - 1].kind, LIGHT_KIND_SPOT);
+    }
+
+    // The cascade projection and the fog ray-march follow the first declared
+    // directional light, and its color is weighted by intensity so a dim sun
+    // does not light the march as brightly as a bright one.
+    #[test]
+    fn the_sun_is_the_first_declared_directional_light() {
+        let u = uniforms(
+            &[
+                dir([-0.3, 0.85, 0.4], [1.0, 0.5, 0.25], 2.0),
+                dir([0.1, -1.0, 0.0], [0.0, 1.0, 0.0], 9.0),
+            ],
+            vec![],
+        );
+        assert_eq!(sun_direction(&u), u.directional[0].direction);
+        assert_eq!(sun_color(&u), [2.0, 1.0, 0.5]);
+    }
+
+    // A world lit only by point lights declares no directional one, but the
+    // cascade projection still needs an axis and the fog still needs a color
+    // to integrate against, so both fall back to the neutral sun.
+    #[test]
+    fn a_world_with_no_directional_light_falls_back_to_a_neutral_sun() {
+        let u = uniforms(&[], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
+        assert_eq!(u.num_directional, 0);
+        assert_eq!(
+            sun_direction(&u),
+            LightUniforms::DEFAULT.directional[0].direction
+        );
+        assert_eq!(sun_color(&u), [1.0, 1.0, 1.0]);
+    }
+
+    // The glint lanes normalize the authored direction, so the shader can dot
+    // them against a wave normal without normalizing per fragment, and weight
+    // the color by intensity the way the fog sun does.
+    #[test]
+    fn the_glint_lanes_carry_a_unit_direction_and_a_weighted_color() {
+        let u = uniforms(&[dir([0.0, 3.0, 4.0], [0.5, 1.0, 0.75], 8.0)], vec![]);
+        let (sun_dir, sun_color) = glint_sun(&u);
+        assert_eq!(sun_dir, [0.0, 0.6, 0.8, 0.0]);
+        assert_eq!(sun_color, [4.0, 8.0, 6.0, 0.0]);
+    }
+
+    // Unlike the fog sun, a world with no directional light glints not at all:
+    // a neutral fallback would draw a white sun path on water under a starfield.
+    #[test]
+    fn a_world_with_no_directional_light_glints_not_at_all() {
+        let u = uniforms(&[], vec![pt([0.0, 2.0, 0.0], [1.0; 3], 1.0, 10.0)]);
+        assert_eq!(glint_sun(&u), ([0.0; 4], [0.0; 4]));
+    }
+
+    // A light authored with no direction has no lobe to place, so it carries
+    // nothing rather than dividing by its own zero length.
+    #[test]
+    fn a_directionless_light_glints_not_at_all() {
+        let u = uniforms(&[dir([0.0; 3], [1.0; 3], 5.0)], vec![]);
+        assert_eq!(u.num_directional, 1);
+        assert_eq!(glint_sun(&u), ([0.0; 4], [0.0; 4]));
+    }
+}

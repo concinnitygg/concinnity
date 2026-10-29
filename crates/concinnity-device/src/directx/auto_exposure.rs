@@ -7,10 +7,10 @@
 //! between the scene's actual luminance and the exposure applied to it that is
 //! invisible at human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
 
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -121,18 +121,10 @@ impl AutoExposureResources {
         // Histogram: 256 * 4 bytes UAV, cleared by the average kernel each
         // frame. Created in COMMON; a one-shot transition before the first
         // dispatch flips it into UNORDERED_ACCESS for steady state.
-        let histogram = create_uav_buffer(
-            device,
-            (HISTOGRAM_BINS * size_of::<u32>()) as u64,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?;
+        let histogram = create_uav_buffer(device, (HISTOGRAM_BINS * size_of::<u32>()) as u64)?;
 
         // Output: the measurement the average kernel writes into.
-        let output_buf = create_uav_buffer(
-            device,
-            size_of::<ExposureMeasurement>() as u64,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?;
+        let output_buf = create_uav_buffer(device, size_of::<ExposureMeasurement>() as u64)?;
 
         // Per-frame readback buffers. READBACK heap resources start in
         // COPY_DEST and never need a barrier.
@@ -234,19 +226,6 @@ impl DxContext {
         self.post_process.exposure = adaptation.step(measured, dt);
     }
 
-    // Resource the histogram_build kernel samples through `hdr_srv_gpu`: the
-    // resolved single-sample HDR scene with MSAA on, otherwise the raw
-    // (single-sample) `hdr_color`. The auto-exposure measurement runs between
-    // the main HDR resolve and any post pass that mutates the scene (decals,
-    // fog, SSR, TAA, bloom, composite), so it samples the pre-post scene.
-    fn auto_exposure_source(&self) -> &ID3D12Resource {
-        self.targets
-            .hdr
-            .resolve
-            .as_ref()
-            .unwrap_or(&self.targets.hdr.color)
-    }
-
     // Encode the auto-exposure histogram passes against the resolved HDR
     // scene. The build kernel runs one thread per HDR pixel; the average
     // kernel runs one threadgroup of 256 threads that reduces the histogram,
@@ -263,22 +242,8 @@ impl DxContext {
             self.auto_exposure.adaptation.as_ref().map(|a| &a.settings),
             self.pre_exposure.value(),
         );
-        let source = self.auto_exposure_source();
-
-        // The build kernel needs the HDR scene readable in a compute (i.e.
-        // NON_PIXEL_SHADER_RESOURCE) stage. After encode_main_pass the
-        // resolved scene rests in PIXEL_SHADER_RESOURCE; flip it to the
-        // compute-readable state for the dispatch and back so the downstream
-        // decal / fog / SSR / TAA / bloom / composite passes find it where
-        // they expect.
-        let to_compute = transition_barrier(
-            source,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-        );
-        // SAFETY: the command list is in the recording state, and every resource, descriptor and
-        // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[to_compute]) };
+        // The graph's `hdr_resolve` read barrier has already made the scene
+        // readable in this compute stage.
 
         let histogram_gva = com::gpu_va(&resources.histogram);
         let output_gva = com::gpu_va(&resources.output_buf);
@@ -351,21 +316,14 @@ impl DxContext {
                 );
             }
         }
-        // Give the output buffer back to the next frame's kernels, and restore
-        // the HDR source to PIXEL_SHADER_RESOURCE for the post stack. Different
-        // resources with nothing between them, so they ride one call.
+        // Give the output buffer back to the next frame's kernels.
         let to_uav = transition_barrier(
             &resources.output_buf,
             D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         );
-        let back_to_psr = transition_barrier(
-            source,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
-        unsafe { cmd.ResourceBarrier(&[to_uav, back_to_psr]) };
+        unsafe { cmd.ResourceBarrier(&[to_uav]) };
     }
 }

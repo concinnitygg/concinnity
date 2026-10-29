@@ -3,7 +3,7 @@
 # SkyRotation
 
 Turns the whole celestial sphere: the sky, the image-based lighting it
-casts, every [DirectionalLight](DirectionalLight.md), and any
+casts, every [`DirectionalLight`](DirectionalLight.md), and any
 [Prop](Prop.md) hung on it.
 
 One per world. The rotation at elapsed time `t` is `angle_deg +

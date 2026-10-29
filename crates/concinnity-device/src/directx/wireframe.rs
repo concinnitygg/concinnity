@@ -10,7 +10,7 @@
 //! so the one twin stands in for every bucket's PSO while the mode is on, as
 //! Metal's encoder-state fill mode does.
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::{DxContext, dump_on_err};
@@ -32,7 +32,7 @@ impl DxContext {
     // yet. Called from `draw_frame` before the frame is
     // recorded, so the `&self` pass encoders can just read them.
     pub(super) fn ensure_wireframe_pipelines(&mut self) {
-        if self.state.view.mode != concinnity_core::gfx::view_modes::ViewMode::Wireframe
+        if self.state.view.mode != concinnity_engine::gfx::view_modes::ViewMode::Wireframe
             || self.wireframe.built
         {
             return;
@@ -85,7 +85,7 @@ impl DxContext {
         match twin {
             Some(w)
                 if self.state.view.mode
-                    == concinnity_core::gfx::view_modes::ViewMode::Wireframe =>
+                    == concinnity_engine::gfx::view_modes::ViewMode::Wireframe =>
             {
                 w
             }

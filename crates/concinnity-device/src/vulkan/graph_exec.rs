@@ -1,6 +1,6 @@
 //! Vulkan-side executor for the render graph. `VkContext::execute_graph`
 //! walks the `CompiledGraph` produced by the shared
-//! `concinnity_core::render::render_graph::build_frame_graph`
+//! `concinnity_engine::render::render_graph::build_frame_graph`
 //! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
 //! DirectX executors: every backend now drives the same builder.
 //!
@@ -31,25 +31,27 @@
 //!     the executor rejects them as graph nodes.
 
 use ash::{Device, vk};
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
-use concinnity_core::render::particles::ParticleFrame;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
-use concinnity_core::render::render_graph::{
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_core::render::uniforms::GBufferView;
-use concinnity_core::render::{pass_timing, render_graph};
+use concinnity_engine::render::temporal::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
+use concinnity_engine::render::uniforms::GBufferView;
+use concinnity_engine::render::{backend::pass_timing, render_graph};
 use concinnity_host::thread::jobs;
 
 use super::barrier_translate::{VkResting, vk_restore, vk_transition};
 use super::context::VkContext;
 use super::parallel_encoder::ParallelCtxRef;
+use super::particle::ParticleStage;
 use super::post::gbuffer::GbufferPrepassView;
 use super::record::Recorder;
 
@@ -450,7 +452,9 @@ fn emit_pass_epilogue(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
     use super::barrier_translate::vk_state;
-    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_engine::render::render_graph::{
+        ResourceState, barrier_coverage_gaps_for_driven,
+    };
 
     let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
@@ -524,7 +528,9 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry
 // the frustum + camera position.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
+    // The particle bursts systems asked for this frame.
+    pub particle_bursts: &'a [concinnity_engine::render::particles::ParticleBurst],
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,
@@ -559,9 +565,10 @@ pub(in crate::vulkan) struct GraphFrameParams<'a> {
     // Frame-global elapsed seconds. The particle encoder needs it to
     // derive `dt` from the last-frame snapshot it stashed in a `Cell`;
     // the compute kernel multiplies dt against `spawn_rate` and the
-    // integration step. Narrowed at each use; the water's motion takes it
-    // whole.
+    // integration step. Narrowed at each use.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     // Camera near-plane in view units. The FogFroxel kernel needs it to map
     // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
     // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
@@ -607,10 +614,16 @@ impl VkContext {
         // the `&self` `encode_particles` (which may run on a parallel-recording
         // worker) never mutates the particle `Cell`s. `None` when the pass is
         // inert. Mirrors Metal's `prepare_particle_pass` hoist.
-        let particle_frame = self.prepare_particle_pass(narrow_f32(params.elapsed));
+        let particle_frame = self.prepare_particle_pass(
+            narrow_f32(params.elapsed),
+            params.particle_bursts,
+            params.frame_idx,
+            params.vp_mat,
+        );
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
+        let grass_started = std::time::Instant::now();
         let grass_frame = graph
             .pass(PassId::Grass)
             .is_some()
@@ -625,6 +638,10 @@ impl VkContext {
                 })
             })
             .flatten();
+        self.state.spans.set(FrameSpans {
+            grass_us: concinnity_host::clock::micros_since(grass_started),
+            ..self.state.spans.get()
+        });
         let frame_idx = params.frame_idx;
         // The raw device, not the owning handle: a worker records through it and
         // must never create or retire an owned object, so it is handed the
@@ -1052,6 +1069,7 @@ impl VkContext {
             PassId::SsgiResolve => {
                 self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
+            PassId::Disocclusion => self.encode_disocclusion(cmd, params.frame_idx)?,
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (inline `rayQueryEXT`). Traces a
                 // reflection ray per glossy pixel against the scene TLAS and
@@ -1119,7 +1137,7 @@ impl VkContext {
                 self.encode_fog(rec, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
-            PassId::WaterSim => self.encode_water_sim(rec, params.elapsed),
+            PassId::WaterSim => self.encode_water_sim(rec, params.frame_idx, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);
@@ -1131,7 +1149,7 @@ impl VkContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, *frame);
+                    self.encode_particles_sim(cmd, params.frame_idx, *frame);
                 }
             }
             PassId::ParticlesDraw => {
@@ -1141,15 +1159,31 @@ impl VkContext {
                         cmd,
                         params.frame_idx,
                         *frame,
-                        params.vp_mat,
                         params.frustum,
-                        write,
+                        ParticleStage {
+                            mask: write,
+                            late: false,
+                        },
                     )
                 });
                 // The pass that was to clear the mask drew nothing to clear it
                 // with.
                 if !drew && write == ReactiveWrite::Clear {
                     self.clear_reactive_mask(cmd, params.frame_idx);
+                }
+            }
+            PassId::ParticlesLateDraw => {
+                if let Some(frame) = particle_frame {
+                    self.encode_particles_draw(
+                        cmd,
+                        params.frame_idx,
+                        *frame,
+                        params.frustum,
+                        ParticleStage {
+                            mask: params.reactive.late_particles,
+                            late: true,
+                        },
+                    );
                 }
             }
             PassId::Raymarch => {
@@ -1163,12 +1197,13 @@ impl VkContext {
                 );
                 self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
             }
+            PassId::PropProbe => self.encode_prop_probe(cmd, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
                 // Recorded ahead of `Transparent` in the frame's submission, and
                 // closed with the barrier that makes the targets readable there.
-                self.encode_planar_reflections(cmd, params)?;
+                self.encode_planar_reflections(cmd, params);
             }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
@@ -1185,7 +1220,7 @@ impl VkContext {
                     narrow_f32(params.elapsed),
                 );
                 let write = params.reactive.transparent;
-                self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
+                self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
                 let drew = self.encode_transparent(
                     cmd,
                     params.frame_idx,

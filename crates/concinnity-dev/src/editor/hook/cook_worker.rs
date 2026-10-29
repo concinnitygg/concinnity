@@ -3,7 +3,7 @@
 //! by the pipeline's compile progress, on the engine's bounded job pool, under
 //! the one-cook-at-a-time guard.
 
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 

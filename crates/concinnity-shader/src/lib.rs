@@ -1,7 +1,7 @@
 //! The HLSL shader toolchain, shared by build scripts and the renderer.
 //!
 //! The engine's single-source shaders
-//! (`crates/concinnity-core/src/render/shaders/*.hlsl`) compile through one
+//! (`crates/concinnity-engine/src/render/shader/hlsl/*.hlsl`) compile through one
 //! pipeline: `dxc` emits DXIL for D3D12 and SPIR-V for Vulkan, and the Metal
 //! leg takes that same SPIR-V through spirv-cross to MSL and the Metal
 //! toolchain to a metallib (see [`metallib`], the only caller of that
@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use concinnity_core::platform::Platform;
+use concinnity_engine::platform::Platform;
 
 pub use stage::{Stage, stage_of};
 pub use vendored::vendored_releases;
@@ -294,6 +294,11 @@ pub(crate) fn stdout_line(cmd: &mut Command) -> Option<String> {
 
 /// Compile `job` under `work_dir`, returning the artifact bytes. A warning
 /// fails the compile.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the source fails to compile or warns.
 pub fn compile(job: &HlslJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
     with_scratch(work_dir, |dxc, scratch| {
         produce(job, dxc, scratch, Warnings::Deny)
@@ -304,6 +309,11 @@ pub fn compile(job: &HlslJob<'_>, work_dir: &Path) -> Result<Vec<u8>, String> {
 /// Compile `job` under `work_dir`, returning the artifact with any warnings
 /// dxc printed. The artifact is byte-identical to what
 /// [`compile`] emits for a source that warns of nothing.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the source fails to compile.
 pub fn compile_with_warnings(job: &HlslJob<'_>, work_dir: &Path) -> Result<Compiled, String> {
     with_scratch(work_dir, |dxc, scratch| {
         produce(job, dxc, scratch, Warnings::Report)
@@ -470,6 +480,11 @@ fn translate_to_msl(
 /// which is the only reading of them that matches what a compile sees: a
 /// declaration behind an inactive `#if` is not a declaration, and a register
 /// spelled as a macro is not a register until it is expanded.
+///
+/// # Errors
+///
+/// Returns an error if dxc cannot be found, the scratch directory cannot be
+/// created, or the preprocessor rejects `source`.
 pub fn preprocessed_declarations(
     source: &str,
     file_name: &str,
@@ -521,7 +536,7 @@ fn words(spirv: &[u8]) -> Result<Vec<u32>, String> {
 
 // A scratch directory name no concurrent compile can share: the process id
 // pairs with a monotonic counter, so neither two threads nor two engine
-// processes (a `cn build` alongside a running editor) collide.
+// processes (a `cn cook` alongside a running editor) collide.
 fn scratch_name() -> String {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

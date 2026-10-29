@@ -3,8 +3,8 @@
 
 use crate::asset::{BuildAsset, BuildCtx, CacheInputs};
 use crate::authoring::registry::RegisteredType;
-use concinnity_core::components::{
-    File, ProceduralMesh, Room, SdfVolume, Shader, Terrain, VoxelChunk,
+use concinnity_engine::components::{
+    File, PlanetGround, ProceduralMesh, Room, SdfVolume, Shader, Terrain, VoxelChunk,
 };
 
 type CompileFn = fn(&serde_json::Value, &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
@@ -48,6 +48,7 @@ pub(super) fn build_asset(ct: RegisteredType) -> Option<BuildAssetEntry> {
         RegisteredType::Shader => BuildAssetEntry::of::<Shader>(),
         RegisteredType::SdfVolume => BuildAssetEntry::of::<SdfVolume>(),
         RegisteredType::Terrain => BuildAssetEntry::of::<Terrain>(),
+        RegisteredType::PlanetGround => BuildAssetEntry::of::<PlanetGround>(),
         _ => return None,
     })
 }
@@ -56,7 +57,7 @@ pub(super) fn build_asset(ct: RegisteredType) -> Option<BuildAssetEntry> {
 mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
-    use concinnity_core::components::SkinnedMesh;
+    use concinnity_engine::components::SkinnedMesh;
     use concinnity_host::thread::asset_id;
 
     #[test]
@@ -89,8 +90,8 @@ mod tests {
 
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             name: "test",
             assets_dir: None,
@@ -400,8 +401,8 @@ mod tests {
             ),
         ];
         let vctx = BuildCtx {
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             name: "chunk",
             assets_dir: None,
@@ -422,7 +423,7 @@ mod tests {
     // renderer's init. A missing source is a hard error, not an empty payload.
     #[test]
     fn compile_entry_sdf_volume_compiles_the_declared_field() {
-        use concinnity_core::components::sdf_programs::SdfPrograms;
+        use concinnity_engine::render::sdf::programs::SdfPrograms;
         concinnity_shader::require_dxc!();
         let dir = tempfile::tempdir().expect("tempdir");
         let field = dir.path().join("blob.hlsl");

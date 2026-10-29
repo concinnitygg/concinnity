@@ -7,8 +7,8 @@
 //! identical, so they live here once. (The Assets and Template detail panels
 //! use the richer grouped list in `asset_list.rs` instead.)
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
@@ -228,7 +228,7 @@ pub(crate) fn hit_row(mx: f32, my: f32, o: [f32; 2], w: f32, rows: usize) -> Opt
 mod tests {
     use super::*;
     use crate::editor::hud_ids::hud_ids;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     const ROWS: usize = 2;
 

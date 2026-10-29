@@ -24,7 +24,7 @@ pub(crate) fn section_twin(
     let section = &input.ident;
     let twin = format_ident!("{}Overrides", section);
     let vis = &input.vis;
-    let fields_path = quote!(::concinnity_core::ecs::asset_fields);
+    let fields_path = quote!(::concinnity_engine::ecs::asset_fields);
     let schema = schema_path();
     let twin_doc = format!(
         "Sparse overrides of [`{section}`]: each field set replaces the section's value, \
@@ -244,7 +244,7 @@ mod tests {
             out.contains("fn apply_to (& self , base : & mut Shadows)"),
             "{out}"
         );
-        assert!(out.contains("< Shadows as :: concinnity_core"), "{out}");
+        assert!(out.contains("< Shadows as :: concinnity_engine"), "{out}");
         // Only the ranged field clamps, and only when it is set.
         assert_eq!(out.matches("clamp_param (value").count(), 1, "{out}");
         // The twin documents itself under the section's name and defaults.

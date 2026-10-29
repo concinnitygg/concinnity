@@ -1,5 +1,5 @@
 use super::*;
-use concinnity_core::render::stream_pools::{StreamingRuntime, StreamingStats};
+use concinnity_engine::render::streaming::pools::{StreamingRuntime, StreamingStats};
 
 // The streaming pools graphics init publishes, for the streaming assertions.
 fn streaming_stats(world: &World) -> StreamingStats {
@@ -99,7 +99,7 @@ fn mesh_streaming_reuploads_evicted_geometry() {
 // the rebase is a function of the camera position alone.
 #[test]
 fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
-    use concinnity_core::components::VoxelWorld;
+    use concinnity_engine::components::VoxelWorld;
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
     // Default chunk is 16x16 world units; a small view radius keeps the chunk
@@ -164,10 +164,10 @@ fn voxel_world_rebases_the_draw_view_onto_the_chunk_origin() {
 // The hot-reload seams concinnity-dev drives through. The library never reads
 // them, so they are exercised here: init parks the pushed fog beside the backend,
 // while the source catalogs and the texture-name map are captured only under
-// `cn debug` (this world is a plain build, so neither is parked).
+// `cn run -f` (this world is a plain build, so neither is parked).
 #[test]
 fn hot_reload_seams_park_the_fog_beside_the_backend() {
-    use concinnity_core::components::VolumetricFog;
+    use concinnity_engine::components::VolumetricFog;
 
     let (state, hooks) = recording_hooks();
     let mut b = scene_builder();
@@ -187,9 +187,9 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     );
     let resources = world.context().resources;
     let (backend, fog, slots) = resources.get_disjoint_mut::<
-        concinnity_core::ecs::ActiveRenderBackend,
-        concinnity_core::render::volumetric_fog::PushedFogSettings,
-        concinnity_core::render::world_load::source_maps::TextureNameSlots,
+        concinnity_engine::ecs::ActiveRenderBackend,
+        concinnity_engine::render::environment::volumetric_fog::PushedFogSettings,
+        concinnity_engine::render::world_load::source_maps::TextureNameSlots,
     >();
     assert!(
         fog.is_some_and(|fog| fog.0.is_some()),
@@ -197,7 +197,7 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     );
     assert!(
         slots.is_none(),
-        "the texture-name map is captured only under cn debug"
+        "the texture-name map is captured only under cn run -f"
     );
     backend
         .and_then(|slot| slot.0.as_deref_mut())

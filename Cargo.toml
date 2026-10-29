@@ -16,36 +16,75 @@ concinnity-core = { path = "crates/concinnity-core", version = "0.20" }
 concinnity-derive = { path = "crates/concinnity-derive", version = "0.20" }
 concinnity-dev = { path = "crates/concinnity-dev", version = "0.20" }
 concinnity-device = { path = "crates/concinnity-device", version = "0.20" }
-concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.20" }
+concinnity-engine = { path = "crates/concinnity-engine", version = "0.20" }
 concinnity-host = { path = "crates/concinnity-host", version = "0.20" }
+concinnity-runtime = { path = "crates/concinnity-runtime", version = "0.20" }
 concinnity-shader = { path = "crates/concinnity-shader", version = "0.20" }
 concinnity-testing = { path = "crates/concinnity-testing" }
 concinnity-toolchain = { path = "crates/concinnity-toolchain", version = "0.20" }
 
+anstyle-query = "1"
 ash = "0.38"
+basisu = "0.1"
+block2 = "0.6.2"
 bytemuck = { version = "1", default-features = false }
+cbindgen = "0.29"
 ciborium = "0.2"
+clap = "4"
+crash-handler = "0.8"
+ctrlc = "3.5.2"
+dispatch2 = "0.3.1"
+erased-serde = { version = "0.4", default-features = false }
 fbxcel = { version = "0.9.0", default-features = false }
+fontdue = { version = "0.9", default-features = false }
+gilrs = "0.11.2"
+glfw = { version = "0.63.0", default-features = false }
 gltf = { version = "1", default-features = false }
 hashbrown = "0.17.1"
 hex = "0.4.3"
+jpeg-decoder = "0.3"
 kira = { version = "0.12", default-features = false, features = ["mp3", "ogg", "vorbis", "flac", "wav", "pcm"] }
+ktx2 = "0.5"
+libc = "0.2"
+libloading = "0.8"
+libm = "0.2"
+minidump-writer = "0.13"
+mint = "0.5"
 notify = { version = "8", default-features = false }
 objc2 = "0.6.4"
 objc2-app-kit = "0.3.2"
 objc2-core-foundation = "0.3.2"
+objc2-core-graphics = "0.3.2"
 objc2-foundation = "0.3.2"
+objc2-metal = "0.3.2"
+objc2-metal-fx = "0.3.2"
+objc2-metal-kit = "0.3.2"
+objc2-quartz-core = "0.3.2"
 png = "0.18.1"
 postcard = { version = "1", default-features = false }
+proc-macro2 = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
+quote = "1"
 rayon = "1"
+rfd = { version = "0.17", default-features = false }
+ruzstd = { version = "0.9", default-features = false }
 serde = { version = "1", default-features = false }
+serde_bytes = { version = "0.11", default-features = false }
 serde_json = "1"
+serde_path_to_error = "0.1"
 sha2 = "0.11.0"
+spin = { version = "0.12.3", default-features = false }
+spirv-cross2 = { version = "0.7.1", default-features = false }
+syn = "2"
 tempfile = "3.25.0"
+terminal_size = "0.4"
 thiserror = { version = "2.0.18", default-features = false }
+time = "0.3.47"
 tracing = { version = "0.1.44", default-features = false }
 tracing-subscriber = "0.3.22"
+ureq = { version = "3.2.0", default-features = false }
 windows = "0.62.2"
+zip = { version = "9", default-features = false }
 
 [package]
 name = "concinnity"
@@ -80,11 +119,6 @@ required-features = ["player"]
 name = "cli"
 required-features = ["editor"]
 
-[[bench]]
-name = "suite"
-harness = false
-required-features = ["cook", "player"]
-
 [workspace]
 resolver = "2"
 members = [
@@ -105,11 +139,11 @@ vulkan = ["std", "concinnity-runtime/vulkan", "concinnity-dev?/vulkan"]
 
 [dependencies]
 concinnity-core = { workspace = true }
+concinnity-engine = { workspace = true }
 concinnity-runtime = { workspace = true, optional = true }
 concinnity-host = { workspace = true, optional = true }
 concinnity-cook = { workspace = true, optional = true }
 concinnity-dev = { workspace = true, optional = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
@@ -154,30 +188,17 @@ invalid_rust_codeblocks = "warn"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-# Pedantic lints that fight the domain: GPU math, padded repr(C) fields, settings structs.
+# Pedantic lints that fight the domain: GPU math and its notation, padded repr(C) fields, and
+# pure helpers, where a `#[must_use]` on each adds noise without catching misuse.
 cast_precision_loss = "allow"
 similar_names = "allow"
 many_single_char_names = "allow"
 pub_underscore_fields = "allow"
-struct_excessive_bools = "allow"
-fn_params_excessive_bools = "allow"
 must_use_candidate = "allow"
-missing_errors_doc = "allow"
-# Large values here are usually consumed, where a move beats a borrow and copy.
-large_types_passed_by_value = "allow"
-# Local items read best beside their only use; `Default::default()` fills fields whose type is plain.
+# Local items read best beside their only use.
 items_after_statements = "allow"
-default_trait_access = "allow"
-# Handlers and callbacks keep the signature their caller expects.
-unnecessary_wraps = "allow"
-unused_self = "allow"
-# Unit suffixes like `_us` name what a field holds; unbounded ranges here end in `find`.
-struct_field_names = "allow"
-maybe_infinite_iter = "allow"
 # Exact float compares here are change detection, tie-breaks and sentinels; an epsilon changes behavior.
 float_cmp = "allow"
-# Not yet enforced: each call site needs a decision, not a mechanical fix.
-too_many_lines = "allow"
 # Nursery and restriction lints adopted one by one.
 use_self = "warn"
 redundant_clone = "warn"

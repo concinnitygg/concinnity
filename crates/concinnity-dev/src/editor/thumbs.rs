@@ -15,8 +15,8 @@
 //! its typed icon.
 
 use concinnity_cook::cache::thumbnails::Thumbnails;
-use concinnity_core::ecs::{OverlayImage, OverlayImages, TextureHandle};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::{OverlayImage, OverlayImages, TextureHandle};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 

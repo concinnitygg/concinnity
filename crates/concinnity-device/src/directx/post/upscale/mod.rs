@@ -15,10 +15,11 @@ use concinnity_core::math::narrow_f32;
 use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::upscaler::UpscalerAvailability;
+use concinnity_engine::gfx::auto_exposure::UpscalerExposure;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::output::upscaler::UpscalerAvailability;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -46,7 +47,12 @@ mod xess;
 pub(in crate::directx) struct UpscaleState {
     pub backend: Option<Box<dyn UpscaleBackend>>,
     pub requested: UpscaleRequest,
+    // This frame's jitter as the offset from the sample back to the pixel
+    // center in y-down render pixels, the convention FFX, NGX and XeSS share.
     pub jitter: Cell<[f32; 2]>,
+    // The pre-exposure the upscaler divides its input by, stepped between
+    // frames so its history stays in FP16's normal range.
+    pub exposure: UpscalerExposure,
 }
 
 // One temporal-upscaling backend. `encode_upscale` transitions the scene /
@@ -378,7 +384,7 @@ impl crate::directx::context::DxContext {
                 narrow_f32(params.elapsed),
                 params.near,
                 params.fov_y_radians,
-                self.pre_exposure.value(),
+                self.upscale.exposure.value(),
             ),
         );
         if local_mask {

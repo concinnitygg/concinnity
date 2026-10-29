@@ -3,7 +3,7 @@
 //! samplers, plus the handle arithmetic every stage addresses a slot with.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;

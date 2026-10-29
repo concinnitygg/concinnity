@@ -12,9 +12,9 @@
 //! `Sprite` / `TextLabel` components at reserved ids driven each frame by the hook;
 //! it is read-only (no per-row interaction), so it needs no typed fields.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::asset_list::{self, ListRow, MAX_ROWS, ROW_H};
 use super::registry::PanelKey;
@@ -267,8 +267,8 @@ pub(crate) fn place(world: &mut World, view: &TemplateView<'_>, o: [f32; 2], s: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)

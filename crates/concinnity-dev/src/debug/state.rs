@@ -3,9 +3,9 @@
 //! read it to answer client queries. Kept as plain data (no sockets, no engine
 //! driving) so the verbs stay unit-testable against a hand-built snapshot.
 
-use concinnity_core::profile;
-use concinnity_core::render::stream_pools::StreamingStats;
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::profile;
+use concinnity_engine::render::streaming::pools::StreamingStats;
+use concinnity_engine::shutdown::ShutdownToken;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -34,7 +34,7 @@ pub(crate) struct DebugState {
     pub(super) streaming: StreamingStats,
     // Frame scratch reserve, peak and lifetime overflow count, refreshed every
     // tick so `memory` can answer whether the reserve is sized right.
-    pub(super) scratch: concinnity_core::ecs::ScratchStats,
+    pub(super) scratch: concinnity_engine::ecs::ScratchStats,
     // Per-system CPU step times (micros) from the last completed frame,
     // refreshed every tick for the `profile` command.
     pub(super) profile_systems: Vec<(String, u32)>,
@@ -47,7 +47,7 @@ pub(crate) struct DebugState {
     pub(super) profile_frame_allocs: Option<u32>,
     // Per-system parallel fan-out timing from the last completed frame. Only
     // the systems that fanned work out appear.
-    pub(super) profile_fan_outs: Vec<(String, profile::FanOutTiming)>,
+    pub(super) profile_fan_outs: Vec<(String, concinnity_core::fanout::FanOutTiming)>,
     // Render-backend stats from the most recent frame, for `profile`.
     pub(super) profile_render: profile::RenderStats,
     // Runtime shutdown token, set once via `FrameHook::attach_shutdown`. The
@@ -55,7 +55,7 @@ pub(crate) struct DebugState {
     pub(super) shutdown_token: Option<ShutdownToken>,
     // Shared shader-reload flag captured from the active graphics backend.
     // `Some` once `tick` has seen a `GraphicsSystem` whose backend opted into
-    // hot-reload (Metal under `cn debug`); `None` otherwise. The
+    // hot-reload (Metal under `cn run -f`); `None` otherwise. The
     // `reload-shaders` command flips this to `true` and the backend polls it
     // at the top of `draw_frame`.
     pub(super) shader_reload: Option<Arc<AtomicBool>>,
@@ -78,7 +78,7 @@ pub(crate) struct DebugState {
 }
 
 // A read-only snapshot of the process thread + memory budgets (see
-// `concinnity_core::budget`), served by the `budget` query. `rss_mib` is
+// `concinnity_engine::budget`), served by the `budget` query. `rss_mib` is
 // the live resident set size sampled each tick; the rest are fixed at start.
 #[derive(Clone, Default, serde::Serialize)]
 pub(crate) struct BudgetSnapshot {
@@ -101,7 +101,7 @@ pub(crate) struct BudgetMemory {
 }
 
 // A read-only snapshot of the streaming RAM back-off valve (see
-// `concinnity_core::render::stream_pools::StreamingPressure`), served
+// `concinnity_engine::render::streaming::pools::StreamingPressure`), served
 // alongside the `streaming` query so the valve is headless-verifiable.
 #[derive(Clone, Copy, Default, serde::Serialize)]
 pub(crate) struct PressureSnapshot {

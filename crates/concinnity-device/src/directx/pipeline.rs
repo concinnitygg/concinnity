@@ -10,8 +10,8 @@
 //! own files: bloom/TAA/SSAO in directx/post/, cull at directx/cull.rs,
 //! main + shadow in directx/init/pipelines.rs.
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -128,7 +128,7 @@ fn text_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 // scene target, composites the bloom top octave, applies an exposure multiplier, the
 // Narkowicz ACES tonemap + gamma 2.2 encode, a single FXAA 3.11-style edge
 // pass, a 3D-LUT color grade, and a radial vignette, then writes the
-// swapchain backbuffer. Ships from `src/render/shaders/composite.hlsl`, paired with
+// swapchain backbuffer. Ships from `src/render/shader/hlsl/composite.hlsl`, paired with
 // the shared single-source fullscreen-triangle vertex every post pass uses.
 
 // Compile the composite (post-process) pass shaders. Returns (vs, ps).

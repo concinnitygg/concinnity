@@ -1,6 +1,6 @@
 //! The closed vocabulary a behavior is built from: its event sources, its
 //! nodes, and its expressions, each with the JSON a fresh one starts as. The
-//! schema fixes this set (`concinnity-core/src/components/behavior.rs`), so the panel
+//! schema fixes this set (`concinnity-engine/src/components/behavior.rs`), so the panel
 //! offers a fixed palette rather than free text and the checker never sees an
 //! invented verb.
 
@@ -522,7 +522,7 @@ fn literal_body(from: &Value, verb: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{BehaviorExpr, BehaviorNode, BehaviorSource};
+    use concinnity_engine::components::{BehaviorExpr, BehaviorNode, BehaviorSource};
 
     // Every offered verb produces JSON the schema parses back into the type it
     // names, so nothing the palette inserts can be a shape the runtime rejects.

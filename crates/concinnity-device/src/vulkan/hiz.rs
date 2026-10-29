@@ -8,7 +8,7 @@
 //! its nearest projected NDC depth is strictly behind. Mirrors the DirectX
 //! implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
 //! `metal/hiz.rs`). Every backend's kernels ship from the single-source
-//! `src/render/shaders/hiz_build.hlsl` (one variant compile per kernel):
+//! `src/render/shader/hlsl/hiz_build.hlsl` (one variant compile per kernel):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
@@ -40,7 +40,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::descriptor_layout::{Binding, PoolSizes};
@@ -56,9 +56,9 @@ use crate::vulkan::owned::{
 use crate::vulkan::record::Recorder;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
-use concinnity_core::render::hiz_spd::{self, Plan};
-use concinnity_core::render::uniforms::HizSpdParams;
-use concinnity_core::render::uniforms::vulkan::CullHizParams;
+use concinnity_engine::render::hiz::spd::{self, Plan};
+use concinnity_engine::render::uniforms::HizSpdParams;
+use concinnity_engine::render::uniforms::vulkan::CullHizParams;
 
 // Compute pipelines + image + per-mip views + descriptor sets for the Hi-Z
 // build, plus the cull-read set (set 1 of the cull pipeline) and its per-frame
@@ -252,14 +252,14 @@ impl HiZResources {
             device,
             &[
                 (0, vk::DescriptorType::SAMPLED_IMAGE, 1),
-                (1, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS),
+                (1, vk::DescriptorType::STORAGE_IMAGE, spd::LEVELS),
             ],
         )?;
         // Tail: binding 0 the mips it writes, whose first element is also the
         // level it reduces.
         let spd_tail_set_layout = create_set_layout_counted(
             device,
-            &[(0, vk::DescriptorType::STORAGE_IMAGE, hiz_spd::LEVELS)],
+            &[(0, vk::DescriptorType::STORAGE_IMAGE, spd::LEVELS)],
         )?;
         let read_set_layout = create_descriptor_set_layout(device, &read_set_bindings())?;
 
@@ -349,7 +349,7 @@ impl HiZResources {
             height,
             depth_views,
         } = target;
-        let mip_count = hiz_spd::pyramid_mip_count(width, height);
+        let mip_count = spd::pyramid_mip_count(width, height);
         let pyramid = create_hiz_image(alloc, width, height, mip_count)?;
         // Rest in SHADER_READ_ONLY so the cull-read descriptor's layout is
         // satisfied on the first frame (the cull kernel won't sample it -
@@ -433,7 +433,7 @@ impl HiZResources {
                 .apply(device);
         }
         // Tail set: mips 6..12, the first of which is the level it reduces.
-        let tail_mips = bound(hiz_spd::LEVELS - 1);
+        let tail_mips = bound(spd::LEVELS - 1);
         for &set in &spd_tail_sets {
             SetWrites::new(set)
                 .images(0, vk::DescriptorType::STORAGE_IMAGE, &tail_mips)
@@ -647,7 +647,7 @@ fn create_pool(
     let sizes = PoolSizes::default()
         .sets(&read_set_bindings(), read_rings * f)
         .add(vk::DescriptorType::SAMPLED_IMAGE, f)
-        .add(vk::DescriptorType::STORAGE_IMAGE, (f + 1) * hiz_spd::LEVELS)
+        .add(vk::DescriptorType::STORAGE_IMAGE, (f + 1) * spd::LEVELS)
         .build();
     // phase 1 (frames) + cull-read (frames per read ring) + the one tail set.
     let max_sets = (1 + read_rings) * f + 1;

@@ -1,5 +1,5 @@
 // The engine defaults that need the authoring vocabulary, and so cannot wait
-// for the runtime pass that injects the rest (`concinnity_core::defaults`): a
+// for the runtime pass that injects the rest (`concinnity_engine::defaults`): a
 // StatHud for a world with a MainMenu, whose performance-stats toggles drive
 // its chips, and an Escape-toggled pause MainMenu for a story world that
 // declares none. Both are stated in terms of MainMenu, which the build expands
@@ -12,7 +12,7 @@
 // consumed: it is a stored component now, and the runtime pass drains it.
 
 use crate::authoring::world::args_with_id;
-use concinnity_core::components::{EngineDefaults, NamedAction, StoryCommand};
+use concinnity_engine::components::{EngineDefaults, NamedAction, StoryCommand};
 
 use super::expand::{ExpandReport, asset_name, registered_type};
 use crate::authoring::registry::RegisteredType;

@@ -1,10 +1,10 @@
 //! The gilrs adapter: OS gamepad events converted to core's `PadEvent` and
 //! folded into a `PadState`.
 
-use concinnity_core::components::GamepadButton;
-use concinnity_core::input::pad::{PadAxis, PadEvent, PadState};
-use concinnity_core::input::system::PadSource;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::GamepadButton;
+use concinnity_engine::input::pad::{PadAxis, PadEvent, PadState};
+use concinnity_engine::input::system::PadSource;
 
 // The OS-facing gamepad event source. Construction is deferred to the first
 // poll so a world without a step never starts the platform's HID machinery;

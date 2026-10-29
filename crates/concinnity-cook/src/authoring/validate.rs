@@ -1,19 +1,20 @@
 //! The bake-time validators, re-exported from their home in
-//! `concinnity_core::components::validate` under the `crate::authoring::validate::<fn>`
+//! `concinnity_engine::components::validate` under the `crate::authoring::validate::<fn>`
 //! paths the registry's `validate:` entries name. The build-side
 //! `RegisteredType::reserialize_args` applies them while baking the blob
 //! record; the runtime never runs these on a loaded world.
 
-pub use concinnity_core::components::validate::volumetric_fog;
-pub(crate) use concinnity_core::components::validate::{
+pub use concinnity_engine::components::validate::volumetric_fog;
+pub(crate) use concinnity_engine::components::validate::{
     atmosphere, decal, directional_light, glass_panel, grass, instanced_prop, material, night_sky,
-    particle_emitter, planet, point_light, prop, rect_area_light, reflection_probe, rigid_body,
-    sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk, water_surface, wind,
+    particle_emitter, planet, point_light, prop, prop_reflection_probe, rect_area_light,
+    reflection_probe, rigid_body, sdf_volume, sky_rotation, spot_light, terrain, voxel_chunk,
+    water_surface, wind,
 };
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::components::*;
+    use concinnity_engine::components::*;
     use concinnity_host::thread::asset_id;
 
     mod material {
@@ -344,7 +345,7 @@ mod tests {
 
     mod instanced_prop {
         use super::*;
-        use concinnity_core::components::InstanceTransform;
+        use concinnity_engine::components::InstanceTransform;
 
         fn empty() -> InstancedProp {
             InstancedProp {
@@ -410,7 +411,7 @@ mod tests {
 
     mod sdf_volume {
         use super::*;
-        use concinnity_core::components::sdf_volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
+        use concinnity_engine::render::sdf::volume::{SDF_MAX_STEPS_CEILING, SDF_MAX_STEPS_FLOOR};
 
         #[test]
         fn clamps_steps() {

@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use concinnity_core::render::shader_programs::vocabulary::{self, Entry};
+use concinnity_engine::render::shader::programs::vocabulary::{self, Entry};
 
 use super::path_cache::PathCache;
 use crate::debug::hot_reload::{Latest, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard};
@@ -357,7 +357,7 @@ mod tests {
     use super::*;
     use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome, ReloadReport, ReloadSubject};
     use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity};
-    use concinnity_core::components::ShaderStage;
+    use concinnity_engine::components::ShaderStage;
 
     fn state(path: &str, text: &str) -> SourceState {
         SourceState::new(

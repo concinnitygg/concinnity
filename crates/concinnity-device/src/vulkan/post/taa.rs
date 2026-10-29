@@ -1,7 +1,7 @@
 //! Vulkan's share of temporal anti-aliasing, which is the jitter counter and
 //! where the resolve's two inputs come from this frame. The resolve itself --
 //! its pipeline, its accumulation ring, the history-validity gate and the draw --
-//! is written once in `concinnity_core::render::post::taa` and reaches Vulkan
+//! is written once in `concinnity_engine::render::post::taa` and reaches Vulkan
 //! through `VkPostDevice`.
 //!
 //! The accumulation ring is one image per frame in flight rather than a bare
@@ -11,8 +11,8 @@
 //! previous frame's output either way.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};

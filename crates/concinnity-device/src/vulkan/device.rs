@@ -2,7 +2,7 @@
 
 use ash::{Device, vk};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use std::ffi::{CStr, CString, c_void};
 
 use super::error::map_vk_result;
@@ -115,6 +115,10 @@ pub(super) fn ray_query_supported(instance: &ash::Instance, pd: vk::PhysicalDevi
 }
 
 // A built logical device and the optional capabilities it was created with.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent device feature toggles"
+)]
 pub(super) struct LogicalDevice {
     pub device: Device,
     // `VK_EXT_memory_budget` was enabled, for the VRAM-residency chip.
@@ -127,7 +131,7 @@ pub(super) struct LogicalDevice {
     // `VK_KHR_deferred_host_operations` + the matching features AND XeSS does
     // not own the feature chain). Capability is independent of whether the world
     // requested RT: the RT extensions + feature structs are enabled whenever the
-    // device is capable so a live `apply_quality_settings` toggle can bring RT up
+    // device is capable so a live settings rebuild can bring RT up
     // at runtime (a device extension cannot be enabled after `create_device`).
     // The caller decides whether to BUILD RT at launch (`rt_settings.is_some() &&
     // rt_capable`); a capable-but-unused device just carries the inert extension
@@ -147,6 +151,16 @@ pub(super) struct LogicalDevice {
     // (`descriptor_layout::update_after_bind_is_wanted`), which is MoltenVK and
     // no desktop driver.
     pub update_after_bind: bool,
+    // `VK_KHR_draw_indirect_count` was enabled, so a cull's lists draw by the
+    // counts it wrote (see `draws_by_count`).
+    pub draw_indirect_count: bool,
+}
+
+// Whether a device with `extensions` draws a cull's lists by their GPU-written
+// counts. Without the extension (MoltenVK) every list is zeroed before the
+// scatter and drawn at its full capacity, a zeroed command drawing nothing.
+pub(super) fn draws_by_count<'a>(mut extensions: impl Iterator<Item = &'a [u8]>) -> bool {
+    extensions.any(|name| name == b"VK_KHR_draw_indirect_count")
 }
 
 pub(super) fn create_logical_device(
@@ -220,6 +234,19 @@ pub(super) fn create_logical_device(
     // Vulkan requires an implementation that exposes it to have it enabled, so
     // `create_device` is invalid without this.
     let has_portability_subset = has_ext(b"VK_KHR_portability_subset");
+    let draw_indirect_count = draws_by_count(exts.iter().map(|e| {
+        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
+        // not outlive the properties entry it points into.
+        unsafe { CStr::from_ptr(e.extension_name.as_ptr()) }.to_bytes()
+    }));
+    tracing::info!(
+        "Vulkan cull lists draw {}",
+        if draw_indirect_count {
+            "by their GPU-written counts (VK_KHR_draw_indirect_count)"
+        } else {
+            "at full capacity over zeroed commands (no VK_KHR_draw_indirect_count)"
+        }
+    );
 
     // Probe which of those features the device actually supports.
     let mut f16_probe = vk::PhysicalDeviceShaderFloat16Int8Features::default();
@@ -290,6 +317,9 @@ pub(super) fn create_logical_device(
     }
     if has_portability_subset {
         enabled.push(c"VK_KHR_portability_subset".to_owned());
+    }
+    if draw_indirect_count {
+        enabled.push(c"VK_KHR_draw_indirect_count".to_owned());
     }
 
     // RT capability gate: the device is capable AND XeSS is not the active
@@ -513,6 +543,7 @@ pub(super) fn create_logical_device(
             rt_capable: false,
             caps,
             update_after_bind: false,
+            draw_indirect_count,
         });
     }
 
@@ -555,6 +586,7 @@ pub(super) fn create_logical_device(
         rt_capable,
         caps,
         update_after_bind: want_update_after_bind,
+        draw_indirect_count,
     })
 }
 
@@ -606,7 +638,7 @@ fn enable_bindless_features(head: *mut c_void) {
 
 // The requested HDR sample count clamped to what this device reports for the
 // HDR format. `requested` is 1 whenever a temporal technique is active (see
-// `concinnity_core::components::hdr_sample_count`), which collapses the whole
+// `concinnity_engine::components::hdr_sample_count`), which collapses the whole
 // main pass to the single-sample path: no resolve attachment, and the color
 // image is the scene spine.
 pub(super) fn resolve_sample_count(

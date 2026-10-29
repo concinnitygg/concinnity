@@ -3,6 +3,10 @@
 
 /// Compile a Mesh / `ProceduralMesh` component's JSON args into a packed binary
 /// payload.
+///
+/// # Errors
+///
+/// Returns an error if the args are malformed or do not build valid geometry.
 pub fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
     crate::compile::geometry::compile_mesh_payload(args)
 }

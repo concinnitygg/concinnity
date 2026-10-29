@@ -1,0 +1,592 @@
+//! The system that drives compiled behaviors: gathers what a body may read,
+//! runs it on the VM, and applies the effects it produced.
+//!
+//! ```text
+//! mod.rs       the system, its per-tick drive, and instance bookkeeping
+//! instance.rs  one behavior's firing state and its clocks
+//! resolve.rs   compiling the source columns, at start and after an edit
+//! eval.rs      the read phase: the tick's view, its buffers, its schedule
+//! gate.rs      whether a tick's runs are worth fanning out
+//! neighbors.rs the neighbor indexes, one per distinct declared query
+//! apply.rs     the write phase: effects landing on the world
+//! state.rs     persisted variables and `once` flags, behind a host's store
+//! trace.rs     the execution trace an observer requests
+//! ```
+//!
+//! A behavior with an empty `scope` runs once per firing; a scoped one runs once
+//! per matching entity, each with its own locals. Each tick is read, run, apply:
+//! the body sees a snapshot and produces effects, and only then does anything
+//! change, so no behavior observes another's writes mid-tick.
+//!
+//! Clocks advance with the simulation rather than the wall, and freeze while a
+//! menu is open, like the rest of the world clock.
+
+mod apply;
+mod eval;
+mod gate;
+mod instance;
+mod neighbors;
+mod resolve;
+mod state;
+mod trace;
+
+#[cfg(test)]
+mod bench;
+#[cfg(test)]
+mod started_tests;
+#[cfg(test)]
+mod test_world;
+#[cfg(test)]
+mod tests;
+
+use crate::ecs::{
+    Entity, EntityById, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
+    SimTiming, StepResult, System, TraceRequest, TransientSaves, World,
+};
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use concinnity_core::math::narrow_f32;
+
+use eval::{EvalBucket, EvalCtx, Job, Resume, Snapshot, eval_one};
+use gate::EvalGate;
+use instance::Instance;
+use neighbors::Neighbors;
+use resolve::{Resolved, SourceTicks};
+
+pub use state::{BehaviorState, BehaviorStore, def_hash};
+
+use crate::behavior::{Program, Val, VarTable};
+use crate::components::{
+    Behavior, BehaviorSource, Identity, InteractEvent, Variables, VolumeEvent,
+};
+use concinnity_core::fanout::{FanOut, Lent, Pooled};
+
+/// Runs a world's [`Behavior`] components: their firing rules, their bodies,
+/// and the effects those produce.
+///
+/// [`new`](BehaviorSystem::new) evaluates every run on the calling thread and
+/// persists nothing; a host lends it a thread pool through
+/// [`with_pool`](BehaviorSystem::with_pool) and somewhere to keep state
+/// through [`with_store`](BehaviorSystem::with_store).
+#[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent once-per-world latches"
+)]
+pub struct BehaviorSystem {
+    programs: Vec<Program>,
+    // Parallel to `programs`.
+    instances: Vec<Vec<Instance>>,
+    vars: Vec<Val>,
+    var_table: VarTable,
+    // Runs waiting on a clock: a whole body a `delay` postponed, or the block
+    // an `after` node deferred with the bindings it captured.
+    pending: Vec<Deferred>,
+    crossing_cursor: EventCursor,
+    press_cursor: EventCursor,
+    crossings: Vec<VolumeEvent>,
+    presses: Vec<InteractEvent>,
+    // `None` when the host keeps no behavior state: behaviors run, saving does
+    // not.
+    store: Option<Box<dyn BehaviorStore>>,
+    // `None` when the host has no thread pool to lend: every run evaluates on
+    // the calling thread.
+    scheduler: Option<Box<dyn Pooled<EvalBucket>>>,
+    // Sampled from the `TransientSaves` resource at init: while true, stored
+    // state is neither read nor written, so a preview session starts fresh and
+    // leaves the user's saves untouched.
+    transient_saves: bool,
+    // The source columns as of the resolution the programs came from. A write
+    // to either moves one, and the next step recompiles rather than running a
+    // body the world no longer holds.
+    sources: SourceTicks,
+    // Execution tracing (see `trace.rs`): the published tick counter, and
+    // whether the node-path table has been published this world.
+    trace_frame: u64,
+    trace_paths_published: bool,
+    // Fixed ticks run so far; elapsed simulated time is this times the tick
+    // length, so behavior clocks advance with the simulation, not the wall.
+    sim_ticks: u64,
+    // Instances present before the first tick are the world's initial
+    // population, so `spawned` does not fire for them.
+    populated: bool,
+    // Per-worker evaluation state, grown to the scheduler's width on the first
+    // fanned-out tick and reused thereafter so steady-state allocations stay
+    // flat. A tick kept on the calling thread uses the first.
+    eval_buckets: Vec<EvalBucket>,
+    // Whether the next tick's runs are worth fanning out.
+    gate: EvalGate,
+    // The tick's firing list, kept for its capacity across ticks.
+    jobs: Vec<Job>,
+    // The tick's resolved entity sets and the tag-intersection scratch, kept
+    // for their capacity across ticks like the buffers above.
+    snapshot: Snapshot,
+    tag_scratch: Vec<Entity>,
+    // One index per distinct declared query, rebuilt on demand each tick.
+    neighbors: Neighbors,
+    // A behavior wrote a camera another system drives; reported once a world.
+    reported_driven_camera: bool,
+}
+
+/// A run waiting on a clock: a whole body a `delay` postponed, or the block an
+/// `after` node deferred. Both count down on simulated time, so both freeze
+/// while a menu is open, and neither is persisted.
+#[derive(Debug)]
+struct Deferred {
+    program: usize,
+    entity: Option<Entity>,
+    // `None` runs the whole body (a `delay`); `Some` runs one `after` block on
+    // the frame it captured.
+    resume: Option<Resume>,
+    seconds: f32,
+}
+
+impl BehaviorSystem {
+    /// A system that evaluates serially and persists nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The system for a world that declares any `Behavior`.
+    pub fn for_world(world: &World) -> Option<Self> {
+        world.query::<Behavior>().next().map(|_| Self::new())
+    }
+
+    /// Keep this world's variables and `once` flags in `store`.
+    #[must_use]
+    pub fn with_store(mut self, store: Box<dyn BehaviorStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// Fan a tick's evaluation out on `pool` once its runs cost enough to pay
+    /// for it.
+    #[must_use]
+    pub fn with_pool<P: FanOut>(self, pool: Lent<P>) -> Self {
+        self.with_scheduler(Box::new(pool))
+    }
+
+    fn with_scheduler(mut self, scheduler: Box<dyn Pooled<EvalBucket>>) -> Self {
+        self.scheduler = Some(scheduler);
+        self
+    }
+}
+
+impl System for BehaviorSystem {
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
+        // A world starting is the resolution with nothing to carry over.
+        self.reseed(ctx);
+
+        self.transient_saves = ctx.resource::<TransientSaves>().is_some_and(|t| t.0);
+        self.trace_frame = 0;
+        self.sim_ticks = 0;
+
+        self.restore_state();
+    }
+
+    fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
+        // Before the freeze gate below: an edit made while the world is paused
+        // is picked up when it lands, not when the world is next allowed to
+        // run.
+        self.reseed_if_edited(ctx);
+
+        if self.programs.is_empty() {
+            return StepResult::Continue;
+        }
+
+        if let Some(events) = ctx.events::<VolumeEvent>() {
+            self.crossings
+                .extend(events.read(&mut self.crossing_cursor).copied());
+        }
+        if let Some(events) = ctx.events::<InteractEvent>() {
+            self.presses
+                .extend(events.read(&mut self.press_cursor).copied());
+        }
+
+        let menu_active = ctx.resource::<MenuActive>().is_some_and(|m| m.0);
+        if menu_active {
+            return StepResult::Continue;
+        }
+
+        // The frame's fixed-tick budget. Absent (a directly-stepped world with
+        // no App), every step runs exactly one tick. Edge events (crossings,
+        // presses) are consumed by the frame's first tick; catch-up ticks see
+        // none, so an edge never fires twice.
+        let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+        for _ in 0..timing.ticks {
+            self.sim_ticks += 1;
+            let elapsed = narrow_f32(self.sim_ticks as f64 * f64::from(timing.tick_dt));
+            self.tick(ctx, timing.tick_dt, elapsed);
+        }
+        StepResult::Continue
+    }
+}
+
+impl BehaviorSystem {
+    // Compile what the source columns now say and adopt it, keeping the run's
+    // state where the edit left it meaningful. Persisted state is not re-read:
+    // restoring a save belongs to a world starting, which `init` does around
+    // this.
+    fn reseed(&mut self, ctx: &PipelineContext<'_>) {
+        let resolved = resolve::resolve(
+            ctx.query::<Variables>().as_slice(),
+            ctx.query_with_entity::<Behavior>()
+                .map(|(entity, def)| (ctx.get::<Identity>(entity).map(|i| i.id()), def)),
+        );
+        self.sources = SourceTicks::of(ctx);
+        self.adopt(resolved);
+    }
+
+    // Recompile when a write has moved either source column since the programs
+    // were compiled from it. This is what lets an editing tool rewrite one of
+    // those components in place instead of reloading the world to apply it.
+    fn reseed_if_edited(&mut self, ctx: &PipelineContext<'_>) {
+        if SourceTicks::of(ctx) != self.sources {
+            self.reseed(ctx);
+        }
+    }
+
+    fn adopt(&mut self, resolved: Resolved) {
+        let programs = core::mem::take(&mut self.programs);
+        let instances = core::mem::take(&mut self.instances);
+        let carried = resolve::carry_instances(&programs, instances, &resolved.programs);
+
+        // A delay is a run of the body it was scheduled against, so one whose
+        // program was edited away is dropped rather than aimed at the new one.
+        let moved = carried.moved;
+        self.pending.retain_mut(
+            |waiting| match moved.get(waiting.program).copied().flatten() {
+                Some(next) => {
+                    waiting.program = next;
+                    true
+                }
+                None => false,
+            },
+        );
+
+        self.vars = resolve::carry_vars(&self.var_table, &self.vars, &resolved.var_table);
+        self.instances = carried.instances;
+        self.programs = resolved.programs;
+        self.var_table = resolved.var_table;
+        self.neighbors.assign(&self.programs);
+        // The node-path table an observer resolves trace events through is a
+        // compile product of the programs just replaced.
+        self.trace_paths_published = false;
+    }
+
+    // Restore persisted state, but only in a world that saves: any other world
+    // starts fresh and never reads the store. Returns how many variables the
+    // restore applied.
+    fn restore_state(&mut self) -> usize {
+        if self.transient_saves || !self.programs.iter().any(|p| p.def.saves_state()) {
+            return 0;
+        }
+        let Some(state) = self.store.as_ref().and_then(|store| store.read()) else {
+            return 0;
+        };
+
+        let mut restored = 0usize;
+        for (name, value) in &state.vars {
+            let Some(slot) = self.var_table.slot_of(name) else {
+                continue;
+            };
+            // A save written before the world retyped a variable no longer
+            // applies to it; the declared starting value stands.
+            let value = Val::from_literal(value);
+            if self.vars[slot as usize].same_type(value) {
+                self.vars[slot as usize] = value;
+                restored += 1;
+            }
+        }
+        for (id, hash) in state.fired {
+            if let Some(i) = self
+                .programs
+                .iter()
+                .position(|p| p.id.map(|i| i.0) == Some(id) && def_hash(&p.def) == hash)
+            {
+                // World-scoped `once` state restores onto the single instance;
+                // a scoped behavior's per-entity flags are not persisted,
+                // matching its locals.
+                if !self.programs[i].is_scoped() {
+                    let mut instance = Instance::new(None, Vec::new(), false);
+                    instance.fired_once = true;
+                    self.instances[i].clear();
+                    self.instances[i].push(instance);
+                }
+            }
+        }
+        restored
+    }
+
+    // Create instances for newly matching entities and drop those whose entity
+    // is gone, preserving the state of everything that persists.
+    fn resync_instances(&mut self, snapshot: &Snapshot, frame: FrameContext<'_>) {
+        // A variable source starts baselined at the variable's current value,
+        // so a restored save does not read as a change on the instance's first
+        // tick. Read before the loop, which borrows `self.instances` mutably.
+        let baselines = frame.collect(self.programs.iter().map(|p| {
+            match &p.def.on {
+                BehaviorSource::Variable(name) => self
+                    .var_table
+                    .slot_of(name)
+                    .and_then(|s| self.vars.get(s as usize))
+                    .copied()
+                    .unwrap_or(Val::Int(0)),
+                _ => Val::Int(0),
+            }
+        }));
+        for (i, program) in self.programs.iter().enumerate() {
+            if !program.is_scoped() {
+                if self.instances[i].is_empty() {
+                    let mut instance = Instance::new(None, Vec::new(), false);
+                    instance.last_value = baselines[i];
+                    self.instances[i].push(instance);
+                }
+                continue;
+            }
+            let matched = &snapshot.scoped[i];
+            self.instances[i].retain(|inst| {
+                inst.entity.is_some_and(|e| {
+                    matched
+                        .binary_search_by_key(&e.to_bits(), |o| o.to_bits())
+                        .is_ok()
+                })
+            });
+            // The retained instances are a sorted subset of the sorted
+            // `matched`, so one merge walk finds the entities without an
+            // instance; in the steady state nothing is appended and the order
+            // already stands.
+            let before = self.instances[i].len();
+            let mut j = 0;
+            for entity in matched {
+                if j < before && self.instances[i][j].entity == Some(*entity) {
+                    j += 1;
+                    continue;
+                }
+                let mut instance =
+                    Instance::new(Some(*entity), program.local_inits.clone(), self.populated);
+                instance.last_value = baselines[i];
+                self.instances[i].push(instance);
+            }
+            if self.instances[i].len() != before {
+                self.instances[i].sort_by_key(|inst| inst.entity.map(Entity::to_bits));
+            }
+        }
+    }
+
+    fn tick(&mut self, ctx: &mut PipelineContext<'_>, dt: f32, elapsed: f32) {
+        // Execution tracing is on only while an observer's request stands
+        // (the editor's Behavior panel); its absence costs this one lookup.
+        let request = ctx.resource::<TraceRequest>().cloned();
+        let tracing = request.is_some();
+        let mut fired: Vec<(usize, Vec<u32>)> = Vec::new();
+
+        // Copied out of the context so the frame temporaries below can hold
+        // scratch while `ctx` stays usable. Main-thread only: the parallel
+        // eval workers keep their per-worker persistent buffers (see
+        // `eval_one`), and nothing arena-backed crosses into them.
+        let frame = ctx.frame;
+
+        let mut snapshot = core::mem::take(&mut self.snapshot);
+        self.gather(ctx, &mut snapshot);
+        self.resync_instances(&snapshot, frame);
+        self.populated = true;
+
+        // Fire decisions run against this tick's starting values, so a `set`
+        // here is seen by variable-source behaviors next tick and chains
+        // advance one link per tick. Every instance could fire, so the
+        // reservation is exact.
+        let bound: usize = self.instances.iter().map(Vec::len).sum();
+        let mut runs = frame.vec::<(usize, Option<Entity>)>(bound);
+        for i in 0..self.programs.len() {
+            let var_slot = match &self.programs[i].def.on {
+                BehaviorSource::Variable(name) => self.var_table.slot_of(name),
+                _ => None,
+            };
+            let def = &self.programs[i].def;
+            for instance in &mut self.instances[i] {
+                if instance.due(
+                    def,
+                    &self.vars,
+                    var_slot,
+                    dt,
+                    &self.crossings,
+                    &self.presses,
+                ) {
+                    runs.push((i, instance.entity));
+                }
+            }
+        }
+        self.crossings.clear();
+        self.presses.clear();
+
+        // Delayed runs from earlier ticks count down first: those now due run
+        // before this tick's firings, in discovery order, exactly as before.
+        // A fresh delay pushed below starts counting next tick.
+        let mut jobs = core::mem::take(&mut self.jobs);
+        jobs.clear();
+        let mut idx = 0;
+        while idx < self.pending.len() {
+            self.pending[idx].seconds -= dt;
+            if self.pending[idx].seconds <= 0.0 {
+                let waiting = self.pending.swap_remove(idx);
+                jobs.push(Job {
+                    program: waiting.program,
+                    entity: waiting.entity,
+                    resume: waiting.resume,
+                });
+            } else {
+                idx += 1;
+            }
+        }
+        for &(i, entity) in &runs {
+            let delay = self.programs[i].def.delay;
+            if delay > 0.0 {
+                self.pending.push(Deferred {
+                    program: i,
+                    entity,
+                    resume: None,
+                    seconds: delay,
+                });
+            } else {
+                jobs.push(Job {
+                    program: i,
+                    entity,
+                    resume: None,
+                });
+            }
+        }
+
+        // Read phase: every body runs against an unchanged world, so the
+        // borrow here is shared and the effects it produces are applied only
+        // after it ends. The job list splits into contiguous chunks, one per
+        // bucket: one bucket on the calling thread, or one per worker when the
+        // gate judges the tick worth fanning out. Either way a body observes
+        // only the tick's starting state, so the results are identical; only
+        // the apply order below is observable, and it walks jobs in list order
+        // in both modes.
+        let scheduler = self
+            .scheduler
+            .as_deref()
+            .filter(|_| crate::ecs::schedule_mode(ctx.resources) == ScheduleMode::Parallel);
+        let workers = scheduler.map_or(1, |s| s.workers(ScheduleMode::Parallel).max(1));
+        let used = if self.gate.fans_out(jobs.len(), workers) {
+            workers
+        } else {
+            1
+        };
+        let mut buckets = core::mem::take(&mut self.eval_buckets);
+        if buckets.len() < used {
+            buckets.resize_with(used, EvalBucket::default);
+        }
+        let buckets_used = &mut buckets[..used];
+        let chunk = jobs.len().div_ceil(used).max(1);
+        for (b, bucket) in buckets_used.iter_mut().enumerate() {
+            bucket.jobs = (b * chunk).min(jobs.len())..((b + 1) * chunk).min(jobs.len());
+        }
+        self.neighbors.reset();
+        let timing = {
+            let ec = EvalCtx {
+                components: ctx.components,
+                names: ctx.resource::<EntityById>(),
+                snapshot: &snapshot,
+                neighbors: &self.neighbors,
+                programs: &self.programs,
+                instances: &self.instances,
+                vars: &self.vars,
+                dt,
+                elapsed,
+                tracing,
+            };
+            let jobs = &jobs;
+            let eval = |bucket: &mut EvalBucket| {
+                bucket.effects.clear();
+                bucket.produced.clear();
+                bucket.fired.clear();
+                for job in &jobs[bucket.jobs.clone()] {
+                    if let Some((count, nodes)) =
+                        eval_one(&ec, &mut bucket.bindings, job, &mut bucket.effects)
+                    {
+                        bucket.produced.push((job.program, job.entity, count));
+                        if ec.tracing {
+                            bucket.fired.push((job.program, nodes));
+                        }
+                    }
+                }
+            };
+            match scheduler {
+                Some(scheduler) if !jobs.is_empty() => {
+                    Some(scheduler.for_each_timed(ScheduleMode::Parallel, buckets_used, &eval))
+                }
+                _ => {
+                    eval(&mut buckets_used[0]);
+                    None
+                }
+            }
+        };
+        if let Some(timing) = timing {
+            self.gate.observe(jobs.len(), timing);
+            if used > 1 {
+                ctx.profile.record_fan_out(timing);
+            }
+        }
+
+        // Walking each buffer once hands each run exactly the effects it
+        // appended, in record order, without copying or reshuffling them.
+        // Bucket order is job order, so a fanned-out apply is byte-identical
+        // to one kept on the calling thread.
+        let mut save_requested = false;
+        for bucket in &mut buckets[..used] {
+            let mut recorded = bucket.effects.drain(..);
+            for k in 0..bucket.produced.len() {
+                let (i, entity, count) = bucket.produced[k];
+                save_requested |= self.apply(ctx, i, entity, recorded.by_ref().take(count));
+            }
+            if tracing {
+                fired.append(&mut bucket.fired);
+            }
+        }
+        self.eval_buckets = buckets;
+        self.jobs = jobs;
+        self.snapshot = snapshot;
+
+        // One write per tick, after every effect has landed, so the store holds
+        // this tick's final values.
+        if save_requested {
+            self.write_state();
+        }
+
+        if let Some(request) = request {
+            self.publish_trace(ctx, &request, &fired);
+        }
+    }
+
+    fn write_state(&self) {
+        if self.transient_saves {
+            return;
+        }
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+        store.write(&BehaviorState {
+            vars: self
+                .var_table
+                .names()
+                .iter()
+                .zip(&self.vars)
+                .map(|(name, value)| (name.clone(), value.to_literal()))
+                .collect(),
+            fired: self
+                .programs
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| {
+                    p.def.once
+                        && !p.is_scoped()
+                        && self.instances[*i].iter().any(|inst| inst.fired_once)
+                })
+                .filter_map(|(_, p)| Some((p.id?.0, def_hash(&p.def))))
+                .collect(),
+        });
+    }
+}

@@ -33,12 +33,12 @@
 //! re-serializes the entry list to world.jsonl and stops there: the compiled
 //! blobs are refreshed by an explicit build, not by editing.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::{
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
     World, WorldLines,
 };
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;
 use concinnity_runtime::live_edit::PendingBackend;
 
@@ -68,6 +68,8 @@ use edit::import_state::ImportState;
 use edit::lighting_state::LightingState;
 use edit::map_state::MapState;
 use edit::palette_state::PaletteState;
+use edit::planet_state::PlanetState;
+use edit::planet_tool_state::PlanetToolState;
 use edit::shaders_state::ShadersState;
 use edit::shape_state::ShapeState;
 use edit::story_state::StoryState;
@@ -88,6 +90,10 @@ struct Drag {
     grab: [f32; 2],
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent editor session toggles and held-key state"
+)]
 pub(crate) struct EditorHook {
     // Path to the world.jsonl the edits are written back to.
     world_path: String,
@@ -132,6 +138,8 @@ pub(crate) struct EditorHook {
     world_shadows: Option<live::ShadowBaselines>,
     templates: TemplatesState,
     lighting: LightingState,
+    planet: PlanetState,
+    planet_tool: PlanetToolState,
     shape: ShapeState,
     story: StoryState,
     // The Shaders list and the Shader source panel it opens.
@@ -411,6 +419,7 @@ mod drop_floor;
 mod duplicate;
 mod editing;
 mod edits;
+mod entry_home;
 mod fly;
 mod form_extras;
 mod form_state;
@@ -459,6 +468,8 @@ impl EditorHook {
             world_shadows: None,
             templates: TemplatesState::default(),
             lighting: LightingState::default(),
+            planet: PlanetState::default(),
+            planet_tool: PlanetToolState::default(),
             shape: ShapeState::default(),
             story: StoryState::default(),
             shaders: ShadersState::default(),
@@ -614,6 +625,7 @@ impl EditorHook {
             || self.assets.picker_open
             || self.form.selected_type.is_some()
             || self.lighting.focus.is_some()
+            || self.planet.focus.is_some()
             || self.story_typing()
             || self.shader_typing()
             || self.import.focus
@@ -679,6 +691,9 @@ impl FrameHook for EditorHook {
                     Some(PanelKey::Lighting) if self.lighting.focus.is_some() => {
                         self.lighting.touched = true;
                     }
+                    Some(PanelKey::Planet) if self.planet.focus.is_some() => {
+                        self.planet.touched = true;
+                    }
                     _ => {}
                 }
             }
@@ -693,6 +708,7 @@ impl FrameHook for EditorHook {
                 self.create_menu = None;
                 self.display_menu_open = false;
                 self.close_palette();
+                self.planet_tool.put_down();
             }
             // The fly camera integrates before any routing: while it is on
             // the cursor is captured, so no click or HUD press can arrive.
@@ -783,6 +799,7 @@ impl FrameHook for EditorHook {
         if self.show_flags.contains(view_menu::ShowFlags::LINES) && !self.start_mode {
             self.push_axis_lines(world, &mut lines);
             self.push_extent_lines(world, vp, &mut lines);
+            self.push_brush_lines(&mut lines);
         }
         world.insert_resource(WorldLines(lines));
         // Drive the editor's in-engine cursor. It shows while the editor owns the

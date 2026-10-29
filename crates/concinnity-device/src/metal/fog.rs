@@ -12,10 +12,10 @@
 //! `scene * T + scattered` automatically.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog::FogSettings;
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::volumetric_fog::FogSettings;
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -230,7 +230,7 @@ pub(super) fn build_fog_froxel_pipeline(
 
 // Allocate the 3D `RGBA16Float` volume the froxel kernel writes and the
 // fog fragment shader samples. Dimensions live in
-// [`concinnity_core::render::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
+// [`concinnity_engine::render::render_graph::FOG_FROXEL_X`] / `Y` / `Z`.
 pub(super) fn build_fog_froxel_volume(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
 ) -> RenderResult<Retained<ProtocolObject<dyn MTLTexture>>> {

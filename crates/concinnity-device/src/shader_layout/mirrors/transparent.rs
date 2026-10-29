@@ -4,12 +4,13 @@
 //! declarations that can drift apart. The water body and the fog froxel kernel
 //! bind the shared `ShadowUniforms` from `light_types.hlsl`.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     FogFroxelParams, FogParams, RtGeomEntry, RtParams, ShadowUniforms,
 };
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::uniforms::wake::WaterWakeGpu;
+use concinnity_engine::render::uniforms::{
     GlassMeshParams, GlassParams, ProbeSet, ProbeUniforms, TransparentView, WaterOceanGpu,
-    WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterWaveGpu,
+    WaterParams, WaterRippleGpu, WaterSeaFaceGpu, WaterSeaGpu, WaterShoreGpu, WaterWaveGpu,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
@@ -27,6 +28,7 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
             sun_dir,
             sun_color,
             ambient,
+            daylight,
         })),
         everywhere(mirror!(GlassParams => "GlassParams" {
             center,
@@ -46,7 +48,8 @@ pub(in crate::shader_layout) fn glass() -> Vec<Case> {
         everywhere(mirror!(ProbeSet => "ProbeSet" {
             count,
             mip_count,
-            [_pad] => ["_pad0", "_pad1"],
+            subject,
+            ground,
         })),
     ]
 }
@@ -64,6 +67,7 @@ pub(in crate::shader_layout) fn glass_mesh() -> Vec<Case> {
             sun_dir,
             sun_color,
             ambient,
+            daylight,
         })),
         everywhere(mirror!(GlassMeshParams => "GlassMeshParams" {
             model,
@@ -89,6 +93,7 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             sun_dir,
             sun_color,
             ambient,
+            daylight,
         })),
         everywhere(mirror!(WaterWaveGpu => "WaterWave" { dir_amp_k, motion, })),
         everywhere(mirror!(WaterRippleGpu => "WaterRipple" { shape, offset, })),
@@ -133,6 +138,31 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
             shape,
             wind_map,
             faces,
+            shore,
+            wake,
+        })),
+        everywhere(mirror!(WaterWakeGpu => "WaterWake" { lookup, fade, })),
+        everywhere(mirror!(WaterShoreGpu => "WaterShore" {
+            planet_rows,
+            continent_salts,
+            continent_frequency,
+            continent_scale,
+            continent_offset,
+            continent_octaves,
+            noise_salts,
+            noise,
+            coast,
+            beach,
+            bounds,
+            swell,
+            lace,
+            omegas,
+            amplitudes,
+            phases,
+            cascade_wavelengths,
+            table,
+            lattice_cells,
+            lattice_places,
         })),
         everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
             light_vps,
@@ -171,7 +201,8 @@ pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
             [emissive] => ["emissive_r", "emissive_g", "emissive_b"],
             model,
             emissive_map_index,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            far_canopy,
+            [_pad] => ["_pad1", "_pad2"],
         })),
     ]
 }

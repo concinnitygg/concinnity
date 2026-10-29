@@ -6,7 +6,7 @@ use crate::command::resolve_world_path;
 /// Validate a world and report its errors without building blobs.
 ///
 /// `json_path` names the world explicitly and must exist; `None` discovers it.
-pub fn check(json_path: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn check(json_path: Option<&str>) -> std::io::Result<()> {
     check_at_path(&resolve_world_path(json_path)?)
 }
 

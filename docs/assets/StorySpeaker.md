@@ -2,7 +2,7 @@
 
 # StorySpeaker
 
-A resolved speaker attribution on a [StoryPage](StoryPage.md).
+A resolved speaker attribution on a [`StoryPage`](StoryPage.md).
 
 ## Parameters
 

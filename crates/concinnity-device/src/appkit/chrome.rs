@@ -70,8 +70,8 @@ pub(crate) fn create_window(
     width: u32,
     height: u32,
     title_bar: bool,
-) -> Result<Retained<NSWindow>, String> {
-    concinnity_core::window::policy::assert_windows_allowed("the AppKit window");
+) -> Retained<NSWindow> {
+    concinnity_engine::window::policy::assert_windows_allowed("the AppKit window");
 
     let content_rect = NSRect::new(
         NSPoint::new(0.0, 0.0),
@@ -102,7 +102,7 @@ pub(crate) fn create_window(
     // area (necessary when CGAssociateMouseAndMouseCursorPosition decouples
     // cursor position from hardware movement).
     window.setAcceptsMouseMovedEvents(true);
-    Ok(window)
+    window
 }
 
 // Whether a screen-space cursor sits over the window's client area: the

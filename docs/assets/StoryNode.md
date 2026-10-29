@@ -11,7 +11,7 @@ a choice menu.
 - `pages`: An array of [StoryPage](StoryPage.md) objects. The click-through pages, in order. Defaults to `[]`.
 - `choices`: An array of [StoryChoice](StoryChoice.md) objects. The choice menu shown after the last page. Empty = no menu. Defaults to `[]`.
 - `choice_stage`: A [StoryStage](StoryStage.md) object. Stage dressing current at the choice menu.
-- `choice_music`: A string. Music current at the choice menu ([AudioClip](AudioClip.md) reference). Optional.
+- `choice_music`: A string. Music current at the choice menu ([`AudioClip`](AudioClip.md) reference). Optional.
 - `choice_sounds`: An array of strings. One-shots played when the choice menu shows. Defaults to `[]`.
 - `choice_ops`: An array of [StoryOp](StoryOp.md) objects. Flag operations run when the choice menu shows. Defaults to `[]`.
 - `choice_gates`: An array of [StoryGate](StoryGate.md) objects. Conditional jumps evaluated before the choice menu shows. Defaults to `[]`.

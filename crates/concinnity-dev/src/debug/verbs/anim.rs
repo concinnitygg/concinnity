@@ -6,9 +6,9 @@
 //! must match the target's clip count. `anim-param` writes one graph parameter,
 //! and `anim-state` reports the graph's state as of the last animation step.
 
-use concinnity_core::animation::AnimationSystem;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::animation::AnimationSystem;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value, json};
 
@@ -94,7 +94,7 @@ fn anim_crossfade(call: &Call<'_>, args: Args) -> Reply {
             anim.crossfade(id, weights, duration_secs)
         })
     })?;
-    queued()
+    Ok(queued())
 }
 
 fn anim_param(call: &Call<'_>, args: Args) -> Reply {
@@ -108,7 +108,7 @@ fn anim_param(call: &Call<'_>, args: Args) -> Reply {
             anim.set_param(id, &name, value)
         })
     })?;
-    queued()
+    Ok(queued())
 }
 
 fn anim_state(call: &Call<'_>, args: Args) -> Reply {
@@ -155,7 +155,7 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::components::{Animation, AnimationGraph};
+    use concinnity_engine::components::{Animation, AnimationGraph};
 
     fn anim_clip(name: &str, duration: f32) -> (AssetId, Animation) {
         asset_id::ensure_name_resolver();
@@ -189,7 +189,7 @@ mod tests {
         (asset_id::intern("hero_graph"), g)
     }
 
-    fn add<C: concinnity_core::ecs::ComponentSlot>(world: &mut World, (id, c): (AssetId, C)) {
+    fn add<C: concinnity_engine::ecs::ComponentSlot>(world: &mut World, (id, c): (AssetId, C)) {
         world.push_identified(id, c);
     }
 

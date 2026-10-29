@@ -13,7 +13,7 @@ pub(crate) use image::{CaptureImage, save_png};
 pub(crate) use readback::Mapped;
 pub(crate) use writer::{PendingCapture, RetiredCapture};
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use readback::ReadbackPool;
 use writer::CaptureWriter;
@@ -151,6 +151,19 @@ impl<B: Clone, T> FrameCaptures<B, T> {
         self.writer.flush();
     }
 
+    /// Write every capture recorded so far, then free the read-back buffers,
+    /// for a backend tearing down the allocator they came from.
+    ///
+    /// # Safety
+    ///
+    /// The GPU must be idle, as for [`Self::finish`].
+    #[cfg(any(backend_vk, test))]
+    pub(crate) unsafe fn close(&mut self) {
+        // SAFETY: the caller vouches the GPU is idle.
+        unsafe { self.finish() };
+        self.pool = ReadbackPool::default();
+    }
+
     #[cfg(test)]
     fn in_flight(&self) -> usize {
         self.in_flight.len()
@@ -160,10 +173,14 @@ impl<B: Clone, T> FrameCaptures<B, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::image_decode::PixelLayout;
+    use concinnity_engine::gfx::image_decode::PixelLayout;
 
     static BYTES: [u8; 8] = [0; 8];
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "stands in for the staging allocator, which can fail"
+    )]
     fn host(_: usize) -> RenderResult<Mapped<()>> {
         Ok(Mapped {
             buffer: (),
@@ -229,6 +246,29 @@ mod tests {
         unsafe { captures.finish() };
         assert_eq!(captures.in_flight(), 0);
         assert!(path.exists());
+    }
+
+    #[test]
+    fn closing_writes_parked_captures_and_frees_the_buffers() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("closed.png");
+        let buffer = std::rc::Rc::new(());
+        let mut captures = FrameCaptures::<std::rc::Rc<()>, u64>::new(true);
+        let image = CaptureImage::tight(2, 1, PixelLayout::Rgba8);
+        let (_, capture) = captures
+            .begin(path.to_str().unwrap().to_string(), image, |_| {
+                Ok(Mapped {
+                    buffer: std::rc::Rc::clone(&buffer),
+                    mapped: BYTES.as_ptr(),
+                })
+            })
+            .unwrap();
+        captures.park(1, capture);
+        assert_eq!(std::rc::Rc::strong_count(&buffer), 2);
+        // SAFETY: the host stand-in has no GPU work.
+        unsafe { captures.close() };
+        assert!(path.exists());
+        assert_eq!(std::rc::Rc::strong_count(&buffer), 1);
     }
 
     #[test]

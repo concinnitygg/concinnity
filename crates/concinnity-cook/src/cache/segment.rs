@@ -22,7 +22,7 @@
 // so the machinery is exercised without the process-global state root and no
 // name a state tree chose appears in this module.
 
-use concinnity_core::blob::{
+use concinnity_engine::blob::{
     CacheEntry, CacheEntryKind, CacheMeta, HEADER_SIZE, encode_cnb_prefix, parse_cnb,
     parse_payload_section_start,
 };

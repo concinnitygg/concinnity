@@ -3,8 +3,8 @@
 //! hook's `drive/trace` owns the per-frame exchange; nothing here touches the
 //! world.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{TraceStep, TraceVal};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{TraceStep, TraceVal};
 use concinnity_host::thread::asset_id;
 
 use super::path::{Path, Step};

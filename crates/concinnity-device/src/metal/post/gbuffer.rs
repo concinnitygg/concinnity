@@ -9,13 +9,13 @@
 
 use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::error::allocation_failed;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::metal::prepass_buffers::{
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::metal::prepass_buffers::{
     DRAW_ARGS as PREPASS_DRAW_ARGS_INDEX, PREV_MODELS as PREPASS_PREV_MODELS_INDEX,
     VIEW as PREPASS_VIEW_INDEX,
 };
-use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
+use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -94,10 +94,10 @@ pub(crate) fn create_gbuffer_targets(
 // Pipeline
 
 // The color target formats, in attachment order: view normal + linear depth,
-// perceptual roughness, screen-space motion.
+// perceptual roughness + specular F0, screen-space motion.
 pub(in crate::metal) const GBUFFER_FORMATS: [MTLPixelFormat; 3] = [
     MTLPixelFormat::RGBA16Float,
-    MTLPixelFormat::R8Unorm,
+    MTLPixelFormat::RGBA8Unorm,
     MTLPixelFormat::RG16Float,
 ];
 
@@ -183,7 +183,7 @@ pub(in crate::metal) struct GbufferPrepassViews<'a> {
     pub gbuffer: &'a GBufferView,
     pub main: &'a ViewUniforms,
     pub raymarch: &'a crate::metal::raymarch::RaymarchView,
-    pub frustum: &'a concinnity_core::gfx::frustum::Frustum,
+    pub frustum: &'a concinnity_engine::gfx::frustum::Frustum,
 }
 
 // The GPU-driven per-frame buffers the G-buffer pre-pass consumes: the
@@ -427,27 +427,30 @@ impl MtlContext {
         enc.set_vertex_buffer(
             &self.scene.vertex_buffer,
             0,
-            concinnity_core::render::shader_programs::metal::MAIN_MESH_VERTICES_BUFFER,
+            concinnity_engine::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
         );
 
         let counts = self.draw_record_counts();
+        let regions = self.main_regions();
         let mut draw_calls = 0u32;
 
         // Static + instance + chunk prefix: static u32 IB resident. Each
-        // bucket's ICB executes under that bucket's pre-pass pipeline; together
-        // the buckets cover the whole record range exactly once. A bucket the
+        // bucket's ICB executes its region under that bucket's pre-pass
+        // pipeline; the cull drew each record in exactly one region. A bucket the
         // main pass skips (Shader not resident) is skipped here too, so depth
         // and velocity never carry geometry the color pass leaves out.
-        if let Some(prefix) = counts.prefix(0) {
+        if counts.prefix(0).is_some() {
             enc.useResource_usage_stages(
                 ProtocolObject::from_ref(&*self.scene.index_buffer),
                 MTLResourceUsage::Read,
                 MTLRenderStages::Vertex,
             );
-            let range = crate::metal::context::ns_range(prefix);
             // A bucket without a pre-pass pipeline (one failed to build) is
             // skipped too: it shades, but adds nothing to the G-buffer.
             for (b, icb) in self.cull.icbs.iter().enumerate() {
+                if !regions.draws(b) {
+                    continue;
+                }
                 let pipelines = match b {
                     0 => Some(default),
                     b => self.cull.world_pipelines.get(b),
@@ -456,12 +459,12 @@ impl MtlContext {
                     continue;
                 };
                 enc.set_pipeline(prepass);
-                // SAFETY: the prefix spans the static + instance + chunk command
-                // slots; every reused main ICB is sized for `counts.total`.
-                unsafe {
-                    enc.executeCommandsInBuffer_withRange(icb, range);
-                }
-                draw_calls += 1;
+                draw_calls += crate::metal::draw::main::execute_list(
+                    enc,
+                    icb,
+                    regions,
+                    concinnity_core::math::saturating_u32(b),
+                );
             }
         }
 
@@ -470,7 +473,7 @@ impl MtlContext {
         // after a rebuild), or with velocity inactive / a single frame in
         // flight, bind the CURRENT buffer as the previous one -> zero skinned
         // motion (no garbage motion vector from an unposed prior slot).
-        if let (Some(deformed), Some(tail), Some(prepass)) = (
+        if let (Some(deformed), Some(_), Some(prepass)) = (
             deformed_current,
             counts.skinned_tail(0),
             default.prepass.as_ref(),
@@ -494,14 +497,12 @@ impl MtlContext {
                     MTLRenderStages::Vertex,
                 );
             }
-            // SAFETY: the tail spans the folded skinned command slots.
-            unsafe {
-                enc.executeCommandsInBuffer_withRange(
-                    &self.cull.icbs[0],
-                    crate::metal::context::ns_range(tail),
-                );
-            }
-            draw_calls += 1;
+            draw_calls += crate::metal::draw::main::execute_list(
+                enc,
+                &self.cull.icbs[0],
+                regions,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            );
             // The current deformed slot now holds a valid pose, so next frame's
             // previous-frame read is well-defined. Relaxed: the only other access
             // is the next frame's same-pass load, ordered by the render-graph

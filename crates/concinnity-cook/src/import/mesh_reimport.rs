@@ -1,13 +1,13 @@
-//! Asset hot-reload (`cn debug`) decode helpers: re-import a file-backed Mesh /
+//! Asset hot-reload (`cn run -f`) decode helpers: re-import a file-backed Mesh /
 //! `SkinnedMesh` from a pre-parsed glTF document into the runtime Vertex /
 //! `SkinnedVertex` form, mirroring the build pipeline so a hot-reloaded mesh is
-//! byte-identical to a fresh `cn build`. The runtime crate links no image / glTF
+//! byte-identical to a fresh `cn cook`. The runtime crate links no image / glTF
 //! decoders, so these live here in the build crate; the editor's debug server
 //! drives them.
 
-use concinnity_core::components::{MorphDelta, SkinnedVertexData};
-use concinnity_core::geometry::payload_joints_to_defs;
-use concinnity_core::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
+use concinnity_engine::components::{MorphDelta, SkinnedVertexData};
+use concinnity_engine::geometry::payload_joints_to_defs;
+use concinnity_engine::gfx::mesh_payload::{deserialize_skinned, deserialize_with_lods};
 
 use crate::compile::geometry::{
     SkinnedLods, compile_mesh_payload, compile_skinned_mesh_payload_with_lods,
@@ -18,15 +18,15 @@ type LodAlternates = Vec<(f32, Vec<u16>)>;
 
 // Imported skinned mesh: runtime vertices, indices, and the bind-pose skeleton.
 type SkinnedImport = (
-    Vec<concinnity_core::gfx::mesh_payload::SkinnedVertex>,
+    Vec<concinnity_engine::gfx::mesh_payload::SkinnedVertex>,
     Vec<u16>,
-    Vec<concinnity_core::components::SkeletonJoint>,
+    Vec<concinnity_engine::components::SkeletonJoint>,
 );
 
 /// Decode a file-backed `Mesh` primitive from a pre-parsed glTF document the
 /// same way the build pipeline does at compile time, returning the runtime
 /// `Vertex` / index form with normals + tangents + optional LOD alternates baked
-/// in. Used by the asset hot-reload path (`cn debug` only); production reads the
+/// in. Used by the asset hot-reload path (`cn run -f` only); production reads the
 /// compiled payload from a blob locator and goes through
 /// `deserialize_with_lods` instead.
 ///
@@ -39,6 +39,11 @@ type SkinnedImport = (
 /// import; `lod_levels` and `lod_distances` mirror the asset declaration so the
 /// reload produces a byte-identical payload to the build pass. The third
 /// component of the result is empty for `lod_levels <= 1`.
+///
+/// # Errors
+///
+/// Returns an error if the primitive cannot be imported or its payload does not
+/// compile.
 pub fn decode_mesh_from_parsed_glb(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
@@ -47,7 +52,7 @@ pub fn decode_mesh_from_parsed_glb(
     lod_distances: &[f32],
 ) -> Result<
     (
-        Vec<concinnity_core::gfx::mesh_payload::Vertex>,
+        Vec<concinnity_engine::gfx::mesh_payload::Vertex>,
         Vec<u16>,
         LodAlternates,
     ),
@@ -77,7 +82,7 @@ pub struct InlineSkinnedImport {
     /// Triangle indices into `vertices`.
     pub indices: Vec<u16>,
     /// Bind-pose skeleton, parents before children.
-    pub skeleton: Vec<concinnity_core::components::SkeletonJoint>,
+    pub skeleton: Vec<concinnity_engine::components::SkeletonJoint>,
     /// Morph-target names, in target order.
     pub morph_target_names: Vec<String>,
     /// Dense target-major morph deltas (`t * vertices.len() + v`).
@@ -88,6 +93,10 @@ pub struct InlineSkinnedImport {
 /// inline asset form, morph targets included and nothing compiled. The
 /// editor's glTF-export round-trip check reads an exported `.glb` back through
 /// this so the comparison sees exactly what the build pipeline would import.
+///
+/// # Errors
+///
+/// Returns an error if the skinned mesh cannot be imported from `doc`.
 pub fn decode_skinned_inline_from_parsed_glb(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
@@ -106,7 +115,7 @@ pub fn decode_skinned_inline_from_parsed_glb(
 /// Decode a file-backed `SkinnedMesh` from a pre-parsed glTF document the same
 /// way the build pipeline does at compile time, returning the runtime
 /// `SkinnedVertex` / index form (normals + tangents baked in) plus the imported
-/// bind-pose skeleton. Used by the asset hot-reload path (`cn debug` only);
+/// bind-pose skeleton. Used by the asset hot-reload path (`cn run -f` only);
 /// production reads the compiled payload from a blob locator and goes through
 /// `deserialize_skinned` instead.
 ///
@@ -116,6 +125,11 @@ pub fn decode_skinned_inline_from_parsed_glb(
 /// skeleton is returned in the same `SkeletonJoint` form the `SkinnedMesh`
 /// asset args carry; the reload helper checks it against the init-time joint
 /// count before pushing to the GPU.
+///
+/// # Errors
+///
+/// Returns an error if the skinned mesh cannot be imported or its payload does
+/// not compile.
 pub fn decode_skinned_from_parsed_glb(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,

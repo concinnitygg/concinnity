@@ -120,6 +120,7 @@ pub(crate) fn create_dump_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crash::memory::MemorySnapshot;
     use crate::crash::report::ReportKind;
     use concinnity_core::utc::UtcTime;
 
@@ -133,7 +134,7 @@ mod tests {
             backtrace: None,
             notes: Vec::new(),
             recent_logs: Vec::new(),
-            memory: Default::default(),
+            memory: MemorySnapshot::default(),
         }
     }
 

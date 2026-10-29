@@ -21,11 +21,11 @@
 //! pipelines frames-in-flight deep.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::{GBufferView, ModelHistoryParams};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::uniforms::{GBufferView, ModelHistoryParams};
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::VkContext;
@@ -52,15 +52,16 @@ const MODEL_HISTORY_THREADGROUP: usize = 64;
 pub(in crate::vulkan) const GBUFFER_NORMAL_DEPTH_FORMAT: vk::Format =
     vk::Format::R16G16B16A16_SFLOAT;
 
-// Single-channel perceptual roughness. 1.0 (cleared background) = no reflection;
-// 0.0 = mirror.
-pub(in crate::vulkan) const GBUFFER_ROUGHNESS_FORMAT: vk::Format = vk::Format::R8_UNORM;
+// Perceptual roughness (r) + specular F0 (gba). Roughness 1.0 (cleared
+// background) = no reflection; 0.0 = mirror.
+pub(in crate::vulkan) const GBUFFER_ROUGHNESS_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
 // Screen-space motion (prev_uv - cur_uv). Cleared to 0 (no motion).
 pub(in crate::vulkan) const GBUFFER_VELOCITY_FORMAT: vk::Format = vk::Format::R16G16_SFLOAT;
 
-// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat and
-// the previous clock. Matches the `GbView` UBO in `gbuffer_common.hlsl`.
+// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat +
+// prev_model_carry and the previous clock. Matches the `GbView` UBO in
+// `gbuffer_common.hlsl`.
 pub(in crate::vulkan) const GBUFFER_VIEW_UBO_SIZE: vk::DeviceSize =
     size_of::<GBufferView>() as vk::DeviceSize;
 
@@ -1077,7 +1078,6 @@ impl VkContext {
         let Some(&gset) = self.cull.gbuffer_sets.get(frame_idx) else {
             return;
         };
-        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
         let prefix = u32::saturating_from(self.state.draw.skinned_record_base());
 
         let sets = [
@@ -1117,8 +1117,7 @@ impl VkContext {
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
             }
-            // SAFETY: `indirect` is this frame's indirect buffer, live until its fence signals.
-            unsafe { device.cmd_draw_indexed_indirect(cmd, indirect, 0, prefix, stride) };
+            self.draw_main_stream(cmd, indirect, 0);
             self.inc_draw_calls(1);
         }
         // The material-referenced shader buckets write their own regions of the
@@ -1126,7 +1125,7 @@ impl VkContext {
         // whose Shader is not resident is skipped, matching what the color pass
         // will draw.
         if prefix > 0 {
-            self.inc_draw_calls(self.draw_prepass_bucket_regions(cmd, indirect, prefix));
+            self.inc_draw_calls(self.draw_prepass_bucket_regions(cmd, indirect, frame_idx));
         }
 
         // Skinned tail: the current deformed VB (binding 0) + the previous-frame
@@ -1167,19 +1166,11 @@ impl VkContext {
                     vk::IndexType::UINT32,
                 );
             }
-            let skinned_offset = (self.state.draw.skinned_record_base() * stride as usize) as u64;
-            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
-            // SAFETY: `indirect` is this frame's indirect buffer, and the skinned tail starts at
-            // the skinned record base inside it.
-            unsafe {
-                device.cmd_draw_indexed_indirect(
-                    cmd,
-                    indirect,
-                    skinned_offset,
-                    skinned_count,
-                    stride,
-                );
-            }
+            self.draw_main_stream(
+                cmd,
+                indirect,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            );
             self.inc_draw_calls(1);
             // The current deformed buffer is posed this frame, so next frame's
             // history slot (this slot) is valid -- prime the ring.

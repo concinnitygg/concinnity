@@ -16,12 +16,16 @@ pub(crate) mod device;
 
 use std::sync::OnceLock;
 
-use concinnity_core::platform::select::{native_platform, resolve};
-use concinnity_core::platform::{GraphicsApiStatus, Platform, PlatformSet};
-use concinnity_core::settings::api_trial::Step;
+use concinnity_engine::platform::select::{native_platform, resolve};
+use concinnity_engine::platform::{GraphicsApiStatus, Platform, PlatformSet};
+use concinnity_engine::settings::api_trial::Step;
 use concinnity_host::store::paths::StateTree;
 
 static SELECTED: OnceLock<Platform> = OnceLock::new();
+
+// What the call that chose `SELECTED` asked for, so a later call repeating it
+// passes quietly.
+static REQUESTED: OnceLock<Option<Platform>> = OnceLock::new();
 
 // The step this process's launch took on the persisted graphics API trial. The
 // first launch decision of a process is the one that stands.
@@ -66,8 +70,25 @@ pub fn current() -> Platform {
 ///
 /// The choice is made once per process: call this before anything cooks or
 /// renders. A later call, or one after [`current`] was read, keeps the earlier
-/// answer and warns when it differs.
+/// answer without probing again, and warns when it asks for another API.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "the first call of a process is the one that stands"
+)]
 pub fn select(requested: Option<Platform>) -> Platform {
+    if let Some(&chosen) = SELECTED.get() {
+        if let Some(asked) = requested
+            && asked != chosen
+            && REQUESTED.get() != Some(&requested)
+        {
+            tracing::warn!(
+                "graphics API {} was already fixed for this process; keeping it over {}",
+                chosen.key(),
+                asked.key()
+            );
+        }
+        return chosen;
+    }
     let selection = resolve(requested, native(), compiled(), |platform| {
         device::probe_device_on(platform).is_some()
     });
@@ -75,14 +96,8 @@ pub fn select(requested: Option<Platform>) -> Platform {
         tracing::warn!("{fallback}; rendering with {}", selection.platform.key());
     }
     let chosen = *SELECTED.get_or_init(|| selection.platform);
+    let _ = REQUESTED.set(requested);
     crate::crash::note("backend", chosen.key());
-    if chosen != selection.platform {
-        tracing::warn!(
-            "graphics API {} was already fixed for this process; keeping it over {}",
-            chosen.key(),
-            selection.platform.key()
-        );
-    }
     chosen
 }
 
@@ -113,12 +128,12 @@ pub fn select_persisted(tree: Option<&StateTree>) -> Platform {
 )]
 fn persisted_request(tree: Option<&StateTree>) -> Option<Platform> {
     let mut settings = crate::persist::settings::load(tree);
-    let launch = concinnity_core::settings::api_trial::plan(
+    let launch = concinnity_engine::settings::api_trial::plan(
         settings.graphics.graphics_api,
         settings.graphics.graphics_api_trial,
     );
     if let Some(step) = launch.step {
-        concinnity_core::settings::api_trial::apply(step, &mut settings.graphics);
+        concinnity_engine::settings::api_trial::apply(step, &mut settings.graphics);
         let _ = LAUNCH_STEP.set(step);
         if let Err(e) = crate::persist::settings::save(&settings, tree) {
             tracing::warn!("graphics API choice: could not save settings: {e}");
@@ -143,11 +158,11 @@ mod tests {
     // launch after it gives the choice up.
     #[test]
     fn an_unconfirmed_choice_is_tried_once_then_dropped() {
-        use concinnity_core::settings::GraphicsApiTrial;
+        use concinnity_engine::settings::GraphicsApiTrial;
 
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        let mut settings = concinnity_core::settings::StoredSettings::default();
+        let mut settings = concinnity_engine::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
         settings.graphics.graphics_api_trial = Some(GraphicsApiTrial::Untried);
         crate::persist::settings::save(&settings, Some(&tree)).unwrap();
@@ -166,7 +181,7 @@ mod tests {
     fn a_confirmed_choice_is_requested_without_a_write() {
         let dir = concinnity_testing::TempTree::new();
         let tree = StateTree::at(dir.path());
-        let mut settings = concinnity_core::settings::StoredSettings::default();
+        let mut settings = concinnity_engine::settings::StoredSettings::default();
         settings.graphics.graphics_api = Some(Platform::Vulkan);
         crate::persist::settings::save(&settings, Some(&tree)).unwrap();
         let before = std::fs::read(tree.settings_path()).unwrap();

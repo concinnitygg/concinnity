@@ -3,7 +3,7 @@
 //! an isolate that keeps only the selection visible; Ctrl+H clears both. The
 //! composition rule lives in `editor/visibility.rs`.
 
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::EditorHook;
 use crate::editor::asset_handle::AssetHandle;

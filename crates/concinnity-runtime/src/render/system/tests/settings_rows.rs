@@ -1,6 +1,6 @@
 use super::*;
-use concinnity_core::components::{ScrollPanel, ScrollRow};
-use concinnity_core::settings::system::DISABLED_ROW_COLOR;
+use concinnity_engine::components::{ScrollPanel, ScrollRow};
+use concinnity_engine::settings::system::DISABLED_ROW_COLOR;
 
 // The color of the TextLabel with `id`.
 fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
@@ -17,7 +17,7 @@ fn label_color(world: &mut World, id: AssetId) -> [f32; 3] {
 // captured rows.
 #[test]
 fn settings_rows_show_their_live_values_at_init() {
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.vsync = Some(true);
     let (_state, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
     let mut b = effects_scene(ResolvedGraphics::default());
@@ -65,7 +65,7 @@ fn scroll_panel_rows_clip_their_elements_to_the_panel_band() {
     assert!(!gs.failed);
 
     let clips = &world
-        .resource::<concinnity_core::render::overlay::OverlayAssets>()
+        .resource::<concinnity_engine::render::overlay::OverlayAssets>()
         .expect("OverlayAssets parked at init")
         .clip_rects;
     let band = [10.0, 20.0, 300.0, 400.0];

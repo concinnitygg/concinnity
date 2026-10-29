@@ -1,6 +1,6 @@
 //! The composite pass state: the post-process pipeline and its sampler.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLDevice as _, MTLSamplerAddressMode, MTLSamplerDescriptor, MTLSamplerMinMagFilter,
 };

@@ -3,8 +3,8 @@
 // nearest its reflection, with the delta's X negated. Lets a generator
 // author one side of an asymmetric key.
 
-use concinnity_core::components::MorphDelta;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::MorphDelta;
 use std::collections::HashMap;
 
 use super::SynthInput;

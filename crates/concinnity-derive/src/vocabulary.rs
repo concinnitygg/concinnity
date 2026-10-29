@@ -88,7 +88,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         }
 
-        impl #impl_generics ::concinnity_core::components::Vocabulary
+        impl #impl_generics ::concinnity_engine::components::Vocabulary
             for #ident #ty_generics #where_clause
         {
             const VARIANTS: &'static [&'static str] = Self::NAMES;
@@ -171,7 +171,7 @@ mod tests {
         assert!(out.contains("# [cfg (feature = \"schema\")]"), "{out}");
         assert!(out.contains("FieldType :: Enum"), "{out}");
         assert!(
-            out.contains(":: concinnity_core :: components :: Vocabulary for E"),
+            out.contains(":: concinnity_engine :: components :: Vocabulary for E"),
             "{out}"
         );
     }

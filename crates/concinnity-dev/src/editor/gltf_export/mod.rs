@@ -10,10 +10,10 @@ mod container;
 mod json;
 mod source;
 
-use concinnity_core::components::{SkeletonJoint, build_skeleton_from_joint_defs};
-use concinnity_core::gfx::mesh_payload::MorphDelta;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::transform::{Mat4, mat4_affine_inverse};
+use concinnity_engine::components::{SkeletonJoint, build_skeleton_from_joint_defs};
+use concinnity_engine::gfx::mesh_payload::MorphDelta;
+use concinnity_engine::transform::{Mat4, mat4_affine_inverse};
 pub(crate) use source::export_world_mesh;
 
 // Everything one exported mesh carries. Attribute lists are parallel to

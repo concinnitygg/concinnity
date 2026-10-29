@@ -8,12 +8,15 @@
 //!   composite.rs           ACES tonemap + composite + text overlay
 //!   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
-use concinnity_core::gfx::render_types::{LightUniforms, LineVertex, ShadowUniforms, TextDrawCall};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::FramePlan;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::PassId;
+use concinnity_engine::gfx::render_types::{
+    LightUniforms, LineVertex, ShadowUniforms, TextDrawCall,
+};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::frame::plan::FramePlan;
+use concinnity_engine::render::render_graph::PassId;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::com;
@@ -31,7 +34,7 @@ mod stages;
 // `ViewUniforms` (the main-pass `ViewBlock` cbuffer) is a GPU-free layout struct
 // that lives in `core::render`; re-export it so
 // `crate::directx::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::directx) use concinnity_core::render::uniforms::ViewUniforms;
+pub(in crate::directx) use concinnity_engine::render::uniforms::ViewUniforms;
 
 // The command list + back-buffer target this frame records into.
 #[derive(Clone, Copy)]
@@ -50,8 +53,10 @@ pub(super) struct RecordFrameTargets<'a> {
 #[derive(Clone, Copy)]
 pub(super) struct RecordFrameView<'a> {
     // Seconds since the world started, narrowed to f32 where a pass needs no
-    // more; the water's motion takes it whole.
+    // more.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     pub fov_y_radians: f32,
     pub near: f32,
     pub cam_pos: [f32; 3],
@@ -60,8 +65,8 @@ pub(super) struct RecordFrameView<'a> {
     // lines, which also drops the pass from the graph.
     pub lines: &'a [LineVertex],
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
-    pub particle: Option<concinnity_core::render::particles::ParticleFrame>,
+    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
+    pub particle: Option<concinnity_engine::render::particles::ParticleFrame>,
 }
 
 // Scene render resolution (every scene pass) plus output resolution (composite).
@@ -148,7 +153,12 @@ impl DxContext {
         // static this frame. Skipped while the world is hidden, which traces
         // nothing; a topology change stays owed to the next frame that draws it.
         if !world_hidden {
+            let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(&start_cmd, frame);
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
         }
 
         // SAFETY: the command list is live and in the recording state, which is what `Close`
@@ -181,6 +191,7 @@ impl DxContext {
         } = targets;
         let RecordFrameView {
             elapsed,
+            water_time,
             fov_y_radians,
             near,
             cam_pos,
@@ -222,13 +233,14 @@ impl DxContext {
             );
         }
         self.grass_lod.set(self.grass.as_ref().map(|g| {
-            g.field
-                .lod_view(concinnity_core::render::grass::lod::focal_length(
+            g.field.lod_view(
+                concinnity_engine::render::environment::grass::lod::focal_length(
                     height,
                     fov_y_radians,
-                ))
+                ),
+            )
         }));
-        self.upload_canopy(frame_idx);
+        self.upload_canopy(frame_idx, water_time);
 
         // Push this frame's skinning matrices into the per-frame joint buffers
         // before the skin fold reads them. No-op when no SkinnedMesh is
@@ -243,7 +255,12 @@ impl DxContext {
         // so the graph's `PassId::Cull` node writes the indirect command buffer
         // ahead of Main from fresh data.
         if let Some(history) = plan.records {
+            let packed = std::time::Instant::now();
             let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
             let mut stats = self.diagnostics.frame_stats.get();
             stats.packing_fan_out = packing;
             self.diagnostics.frame_stats.set(stats);
@@ -330,6 +347,7 @@ impl DxContext {
             frustum: &plan.camera.frustum,
             fov_y_radians,
             elapsed,
+            water_time,
             near,
             prime_model_history,
             grass_benders,

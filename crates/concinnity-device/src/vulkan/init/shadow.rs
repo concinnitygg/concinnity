@@ -2,12 +2,12 @@
 //! the spot shadow array that reuses them.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{
     self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::ShadowParams;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::ShadowParams;
 
 use super::InitGpu;
 use crate::vulkan::context::{VkShadow, VkSpotShadow};
@@ -64,7 +64,7 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     // The frame's plan refreshes the cascades each frame; the ring starts from
     // `empty_shadow_uniforms()` so the descriptor write at startup has a valid
     // (fully-lit) buffer.
-    let uniforms = concinnity_core::render::csm::empty_shadow_uniforms();
+    let uniforms = concinnity_engine::render::shadow::csm::empty_shadow_uniforms();
     for ubo in &ubos {
         upload_shadow_uniforms(ubo, &uniforms);
     }

@@ -1,7 +1,7 @@
 //! concinnity-cook: the build side, kept out of the runtime foundation so that
 //! foundation carries none of the build-only dependencies (fbxcel, sha2,
 //! kira). This crate turns world.jsonl + source files into the binary
-//! blobs the runtime reads; it depends on concinnity-core and core has no edge
+//! blobs the runtime reads; it depends on concinnity-engine and core has no edge
 //! back into it.
 //!
 //! The stages read in order: `authoring` is the authored model and the type
@@ -16,7 +16,7 @@
 //! The authoring-only types this crate expands away are named from
 //! `crate::authoring::registry::build_only` where they are used, so a use site
 //! says which half it works on. The payload *decoders* and shared payload types
-//! live in `concinnity_core::bake`; this crate's modules call back into them.
+//! live in `concinnity_engine::bake`; this crate's modules call back into them.
 //! The source importers parse artist-supplied files, so a panic here is a crash
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail
 //! use `expect` with the invariant named; tests unwrap freely.
@@ -27,7 +27,7 @@
 // (anchoring it, locating `data/`, and naming the `assets/` a host passes as a
 // build's search root); `platform` is the shader-platform vocabulary a host
 // names the backend it cooks for with.
-pub use concinnity_core::platform;
+pub use concinnity_engine::platform;
 pub use concinnity_host::store::paths;
 pub(crate) mod asset;
 pub mod asset_api;
@@ -60,7 +60,7 @@ pub mod resource_handles;
 pub mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
-// server call. The runtime-side decode API stays in concinnity-core.
+// server call. The runtime-side decode API stays in concinnity-engine.
 pub use authoring::world::WorldSource;
 pub use build_only::prepare_world;
 pub use pipeline::{

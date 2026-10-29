@@ -7,22 +7,22 @@ use std::sync::Arc;
 
 use hashbrown::HashMap;
 
-use concinnity_core::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
-use concinnity_core::gfx::mesh_seed;
-use concinnity_core::gfx::render_types::DrawIndex;
-use concinnity_core::planet::MAX_RESIDENT_TILES;
-use concinnity_core::render::draw_list::DeferredMeshSeed;
-use concinnity_core::render::grass::CanopyRange;
-use concinnity_core::render::material_entry::MaterialEntry;
-use concinnity_core::render::scene_members::{self, StreamedContent};
-use concinnity_core::render::scene_residency::SceneResidency;
-use concinnity_core::render::stream_pools::{
+use concinnity_engine::components::{BlockType, Planet, StreamingConfig, VoxelWorld};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
+use concinnity_engine::gfx::render_types::DrawIndex;
+use concinnity_engine::planet::MAX_RESIDENT_TILES;
+use concinnity_engine::render::draw_list::DeferredMeshSeed;
+use concinnity_engine::render::environment::grass::CanopyRange;
+use concinnity_engine::render::material_entry::MaterialEntry;
+use concinnity_engine::render::streaming::mesh_seed;
+use concinnity_engine::render::streaming::pools::{
     ChunkSource, DecodedMesh, DeferredMeshPayload, PlanetStream, StreamPool, StreamingRuntime,
     StreamingState, VoxelStream, streamed_texture_slots,
 };
-use concinnity_core::render::world_load::stream_seed::StreamSeed;
+use concinnity_engine::render::streaming::scene_members::{self, StreamedContent};
+use concinnity_engine::render::streaming::scene_residency::SceneResidency;
+use concinnity_engine::render::world_load::stream_seed::StreamSeed;
 
 use super::GraphicsSystem;
 use crate::render::streaming::mesh::{self, MeshPayloadSource};
@@ -111,7 +111,7 @@ impl GraphicsSystem {
         }
         // Per-stream-id payload refs for the deferred meshes, so the worker
         // can decode them from the blob payload when their scene pins.
-        let deferred_payloads = concinnity_core::render::stream_pools::deferred_mesh_payloads(
+        let deferred_payloads = concinnity_engine::render::streaming::pools::deferred_mesh_payloads(
             deferred_mesh_seeds,
             &seed.draw_to_handle,
             &seed.mesh.draw_indices,
@@ -242,7 +242,7 @@ impl GraphicsSystem {
     //
     // The payload source depends on where the world came from: a disk-backed
     // `cn run` world writes the streamed geometry to a scratch file and
-    // re-reads it from there (no persistent RAM copy), an in-memory `cn debug`
+    // re-reads it from there (no persistent RAM copy), an in-memory `cn run -f`
     // world keeps the geometry RAM-resident.
     pub(super) fn setup_mesh_streaming(
         &mut self,
@@ -388,10 +388,7 @@ impl GraphicsSystem {
         let Some(backend) = self.backend.as_deref_mut() else {
             return;
         };
-        let Some(worker) = started(
-            "Planet terrain",
-            tile_workers::spawn_workers(plan.frame.shape),
-        ) else {
+        let Some(worker) = started("Planet terrain", tile_workers::spawn_workers()) else {
             return;
         };
         if let Err(e) = backend.setup_chunk_streaming(vertex_bytes, index_bytes) {

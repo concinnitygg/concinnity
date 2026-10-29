@@ -84,6 +84,11 @@ pub fn toolchain_id() -> Option<&'static str> {
 
 /// Compile MSL text to a metallib under a scratch directory of its own in
 /// `work_dir`, returning the library's bytes.
+///
+/// # Errors
+///
+/// Returns an error if the scratch directory cannot be created, or the Metal
+/// toolchain cannot be run or rejects `msl`.
 pub fn compile(msl: &str, work_dir: &Path) -> Result<Vec<u8>, String> {
     crate::in_scratch(work_dir, |scratch| build(scratch, msl))
 }

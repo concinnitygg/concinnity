@@ -1,23 +1,23 @@
 //! `RenderBackend` impl for `MtlContext`, one impl block per trait family; the
 //! bodies come from `crate::forward`.
 
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::{MATERIAL_PARAM_COUNT, SkinnedDrawObject};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::profile::RenderStats;
-use concinnity_core::render::backend::{
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::mesh_payload::SkinnedVertex;
+use concinnity_engine::gfx::render_types::{MATERIAL_PARAM_COUNT, SkinnedDrawObject};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::profile::RenderStats;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{
     BackendProbe, DrawStreaming, FrameParams, LiveEdit, RenderBackend, RenderTuning, SceneEffects,
     SkinnedDraws, SkinnedIndex, WindowControl,
 };
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{
-    backend, backend_init, decal, particles, reflection_probe, volumetric_fog,
+use concinnity_engine::render::{
+    backend, backend::init, decal, environment::volumetric_fog, particles, probe::capture,
 };
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode;
-use concinnity_core::{bake, components};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode;
+use concinnity_engine::{bake, components};
 
 use super::context::{MtlContext, debug_assert_main_thread};
 use crate::forward::forward;
@@ -118,11 +118,16 @@ impl WindowControl for MtlContext {
         fn set_window_size(&mut self, width: u32, height: u32);
         fn display_modes(&self) -> Vec<display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<display_mode::DisplayMode>;
+        fn display_refresh(&self) -> Option<display_mode::DisplayRefresh>;
         fn set_display_mode(&mut self, mode: display_mode::DisplayMode);
         fn set_keymap(&mut self, keymap: KeyMap);
         fn logical_size(&self) -> (f32, f32);
         fn top_content_inset(&self) -> f32;
-        fn clipboard(&mut self) -> Option<&mut dyn Clipboard>;
+    }
+
+    fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+        debug_assert_main_thread("clipboard");
+        Some(self.window_mut().appkit.clipboard())
     }
 
     forward! { assert = debug_assert_main_thread;
@@ -132,10 +137,10 @@ impl WindowControl for MtlContext {
 
 impl RenderTuning for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn apply_settings(&mut self, graphics: &concinnity_core::settings::ResolvedGraphics, plan: &concinnity_core::settings::apply::ApplyPlan) -> RenderResult<()>;
-        fn set_reflection_probes(&mut self, probes: &[reflection_probe::ProbePlacement]);
+        fn apply_settings(&mut self, graphics: &concinnity_engine::settings::ResolvedGraphics, plan: &concinnity_engine::settings::apply::ApplyPlan) -> RenderResult<()>;
+        fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
-        fn move_local_lights(&mut self, lights: &concinnity_core::render::lights::LightData, uniforms: &concinnity_core::gfx::render_types::LightUniforms) -> RenderResult<()>;
+        fn move_local_lights(&mut self, lights: &concinnity_engine::render::light::lights::LightData, uniforms: &concinnity_engine::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }
 }
@@ -146,8 +151,9 @@ impl LiveEdit for MtlContext {
         fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
         fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
         fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]);
+        fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape);
         fn update_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &components::sdf_programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_engine::render::sdf::programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
         fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
         fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
     }
@@ -157,16 +163,16 @@ impl LiveEdit for MtlContext {
     }
 
     // The swapchain config this live context can hot-swap a new world onto: the
-    // ring depth plus the HDR-output request it was built with. A live `cn editor`
+    // ring depth plus the HDR-output request it was built with. A live `cn edit`
     // reload reuses this backend (via `reload_world`) only when the new world's
     // `swapchain_config` matches; otherwise the swap does a full rebuild.
-    fn hot_swap_config(&self) -> Option<backend_init::SwapchainConfig> {
+    fn hot_swap_config(&self) -> Option<init::SwapchainConfig> {
         Some(self.hw.swapchain_config)
     }
 
     // Inherent method is named `apply_world_reload` so this forwarder does not
     // shadow-and-recurse (mirrors `screenshot` / `capture_screenshot`).
-    fn reload_world(&mut self, init: backend_init::BackendInit<'_>) -> RenderResult<()> {
+    fn reload_world(&mut self, init: init::BackendInit<'_>) -> RenderResult<()> {
         debug_assert_main_thread("reload_world");
         self.apply_world_reload(init)
     }

@@ -6,8 +6,8 @@
 // Face vertices may be v, v/vt, v/vt/vn, or v//vn.
 // Polygons with more than 3 vertices are triangulated with a fan.
 
-use concinnity_core::components::VertexData;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::VertexData;
 use std::collections::HashMap;
 
 use crate::import::NEUTRAL_COLOR;

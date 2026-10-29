@@ -32,6 +32,11 @@ pub fn is_include(entry: &Value) -> bool {
 /// `world_file` is the file `entries` were read from, which a relative path
 /// resolves against. A world held only in memory has none, so only an absolute
 /// path resolves in it.
+///
+/// # Errors
+///
+/// Returns an error if an `Include` has malformed args, its file cannot be read
+/// or parsed, or the includes form a cycle.
 pub fn resolve_includes(
     entries: Vec<Value>,
     world_file: Option<&Path>,
@@ -46,6 +51,10 @@ pub fn resolve_includes(
 ///
 /// An `Include` line only counts toward the labels of its own type, so the
 /// `<Type>#<n>` labels over this list are the ones the build gives.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as [`resolve_includes`].
 pub fn with_includes(
     entries: Vec<Value>,
     world_file: Option<&Path>,
@@ -131,7 +140,7 @@ fn target_path(entry: &Value, file: Option<&Path>) -> Result<PathBuf, String> {
     let at = |msg: String| format!("Include{}: {msg}", in_file(file));
     let mut args = entry.get("args").cloned().unwrap_or(Value::Null);
     if args.is_null() {
-        args = Value::Object(Default::default());
+        args = Value::Object(serde_json::Map::default());
     }
     if args.get(ID_KEY).is_some() {
         return Err(at(format!(

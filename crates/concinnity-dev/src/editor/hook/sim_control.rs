@@ -4,8 +4,8 @@
 //! state on Stop, and onto the transport's keyboard shortcuts. The tick runs
 //! before the world step, so a publish here gates that same frame's systems.
 
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::{MenuOverride, World};
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::{MenuOverride, World};
 
 use super::EditorHook;
 

@@ -6,10 +6,10 @@
 //! `decal-add` and `emitter-add` answer with the stable slot index the matching
 //! remove takes. Their fields mirror the `Decal` and `ParticleEmitter` assets.
 
-use concinnity_core::components::ParticleEmitter;
-use concinnity_core::render::decal::{self, DecalRecord};
-use concinnity_core::render::particles::ParticleEmitterRecord;
-use concinnity_core::render::world_load::source_maps::TextureNameSlots;
+use concinnity_engine::components::ParticleEmitter;
+use concinnity_engine::render::decal::{self, DecalRecord};
+use concinnity_engine::render::particles::ParticleEmitterRecord;
+use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
 use concinnity_host::thread::asset_id;
 use serde_json::{Value, json};
 
@@ -339,7 +339,7 @@ fn cull_status(call: &Call<'_>, _: Args) -> Reply {
 // numbers a Hi-Z A/B compares: everything the cull let through, and everything
 // the Hi-Z test rejected across both phases.
 fn cull_status_reply(raw: &[u32]) -> Value {
-    let c = concinnity_core::gfx::cull_status::tally(raw);
+    let c = concinnity_engine::gfx::cull_status::tally(raw);
     json!({
         "objects": c.total(),
         "drawn": c.drawn,
@@ -368,7 +368,7 @@ fn decal_record(decal: &DecalAdd, texture_slot: usize) -> Result<DecalRecord, St
 // A texture asset name's slot in the live pool. No name samples the renderer's
 // white fallback at slot 0, so the tint or color gradient still shows; a name
 // that does not resolve is an error rather than a silent fallback. Names
-// resolve through the table graphics init parks under `cn debug`.
+// resolve through the table graphics init parks under `cn run -f`.
 fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Result<usize, String> {
     let Some(name) = texture else {
         return Ok(0);
@@ -376,7 +376,7 @@ fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Resu
     let id =
         asset_id::lookup(name).ok_or_else(|| format!("texture '{name}' not found in interner"))?;
     let slots = slots.ok_or_else(|| {
-        "texture-name resolution requires cn debug (texture-name slots not captured)".to_string()
+        "texture-name resolution requires cn run -f (texture-name slots not captured)".to_string()
     })?;
     slots
         .0
@@ -390,8 +390,8 @@ mod tests {
     use super::*;
     use crate::debug::verbs::testing::Engine;
     use crate::test_support;
-    use concinnity_core::ecs::World;
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::World;
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     #[test]
     fn decal_record_inverts_the_projection_box() {
@@ -515,7 +515,7 @@ mod tests {
     // objects" from "the command failed".
     #[test]
     fn cull_status_reply_reports_every_outcome() {
-        use concinnity_core::gfx::cull_status::CullStatus;
+        use concinnity_engine::gfx::cull_status::CullStatus;
         let raw = [
             CullStatus::DRAWN,
             CullStatus::DRAWN,

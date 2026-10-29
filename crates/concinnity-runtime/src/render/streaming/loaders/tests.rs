@@ -1,14 +1,14 @@
 use super::*;
 use crate::render::streaming::texture::{self, PayloadSource};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::render::backend::recording::{Call, recording_backend};
-use concinnity_core::render::ops::RenderOps;
-use concinnity_core::render::queues::RenderQueues;
-use concinnity_core::render::render_slots::RenderSlots;
-use concinnity_core::render::scene_residency::{CHANNEL_SHADER, SceneResidency};
-use concinnity_core::render::stream_pools::{
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::render::backend::recording::{Call, recording_backend};
+use concinnity_engine::render::frame::ops::RenderOps;
+use concinnity_engine::render::frame::queues::RenderQueues;
+use concinnity_engine::render::slots::render_slots::RenderSlots;
+use concinnity_engine::render::streaming::pools::{
     DriveView, StreamPool, StreamingPools, StreamingRuntime,
 };
+use concinnity_engine::render::streaming::scene_residency::{CHANNEL_SHADER, SceneResidency};
 use std::sync::Arc;
 
 // A source yielding a fixed 1x1 texture for any id.
@@ -47,7 +47,7 @@ fn queues() -> RenderQueues {
 fn view(pins: Option<&[AssetId]>) -> DriveView<'_> {
     DriveView {
         cam_pos: [0.0; 3],
-        view: concinnity_core::transform::IDENTITY,
+        view: concinnity_engine::transform::IDENTITY,
         world_hidden: false,
         scene_pins: pins,
         planet: None,
@@ -62,7 +62,7 @@ fn the_texture_pool_loads_through_its_thread() {
     let mut runtime = texture_runtime();
     concinnity_testing::eventually("both textures to load", || {
         let mut q = queues();
-        runtime.drive(&mut q, view(None));
+        runtime.drive(&mut q, &view(None));
         q.ops.replay(&mut backend);
         (runtime.state.streaming_stats().texture == Some((2, 0, 0))).then_some(())
     });
@@ -77,7 +77,7 @@ fn the_texture_pool_loads_through_its_thread() {
 #[test]
 fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
     use crate::render::streaming::shader::{DeferredBucket, ShaderPayloadSource};
-    use concinnity_core::components::ShaderPrograms;
+    use concinnity_engine::components::ShaderPrograms;
 
     let cooked = ShaderPrograms {
         name: "cooked".into(),
@@ -110,7 +110,7 @@ fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
     let pins = [scene];
     let mut drive = |runtime: &mut StreamingRuntime| {
         let mut q = queues();
-        runtime.drive(&mut q, view(Some(&pins)));
+        runtime.drive(&mut q, &view(Some(&pins)));
         q.ops.replay(&mut backend);
     };
     drive(&mut runtime);
@@ -139,7 +139,7 @@ fn a_pinned_scene_loads_once_its_shader_bucket_is_installed() {
 // A pool that records the requests it had reverted or retired.
 #[derive(Default)]
 struct RecordingPool {
-    mail: concinnity_core::render::stream_pools::Mailbox<usize, usize>,
+    mail: concinnity_engine::render::streaming::pools::Mailbox<usize, usize>,
     refused: Vec<usize>,
     failed: Vec<usize>,
 }
@@ -148,7 +148,9 @@ impl LoadPool for RecordingPool {
     type Request = usize;
     type Result = usize;
 
-    fn mailbox(&mut self) -> &mut concinnity_core::render::stream_pools::Mailbox<usize, usize> {
+    fn mailbox(
+        &mut self,
+    ) -> &mut concinnity_engine::render::streaming::pools::Mailbox<usize, usize> {
         &mut self.mail
     }
 

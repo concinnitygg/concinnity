@@ -1,4 +1,4 @@
-use concinnity_core::components::sdf_volume::SDF_PARAMS_LEN;
+use concinnity_engine::render::sdf::volume::SDF_PARAMS_LEN;
 
 /// Check an `SdfVolume`'s authored args.
 pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {

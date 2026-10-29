@@ -7,9 +7,9 @@
 // capsule. Where the two sides disagree the runtime's debug assert trips, so
 // this module tracks the driver, not the authoring schema.
 
-use concinnity_core::blob::PhysicsBudgetRecord;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::physics::{PhysicsBudget, PhysicsCounts};
+use concinnity_engine::blob::PhysicsBudgetRecord;
+use concinnity_engine::physics::{PhysicsBudget, PhysicsCounts};
 use std::collections::HashSet;
 
 use crate::authoring::registry::RegisteredType;
@@ -668,7 +668,7 @@ mod tests {
         // The same world plus the config the world start injects.
         let mut with = expanded.clone();
         with.push(physics_config(
-            serde_json::to_value(concinnity_core::components::PhysicsConfig::default())
+            serde_json::to_value(concinnity_engine::components::PhysicsConfig::default())
                 .expect("the engine defaults serialize"),
         ));
         assert_eq!(count(&expanded), count(&with));

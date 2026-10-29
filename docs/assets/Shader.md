@@ -32,8 +32,8 @@ surface's material record whichever path drew it: `tint_roughness`,
 `emissive_metallic`, `albedo_index`, `normal_index`, `emissive_map_index`,
 `orm_map_index` and `bb_max_alpha_cutoff.w` are the fields a surface
 reads. `transform` receives the model matrix and the model-space
-attributes, after skinning for a [SkinnedMesh](SkinnedMesh.md) and per
-instance for an [InstancedProp](InstancedProp.md), and returns the projected
+attributes, after skinning for a [`SkinnedMesh`](SkinnedMesh.md) and per
+instance for an [`InstancedProp`](InstancedProp.md), and returns the projected
 vertex; the engine's own is `project_vertex`, so a displacement is
 `return project_vertex(model, pos + offset, normal, tangent, color, uv);`.
 The same `transform` places the surface's depth, normal and motion for the
@@ -100,15 +100,19 @@ float4 shade(VertexOut v, GpuObjectData od)
 
 The first declared Shader is the world's default: everything renders with it
 unless a [Material](Material.md) names another one through its `shader` field.
-A world may declare up to 8 Shaders in total.
+A world draws with at most 64 shader buckets: one per Shader, the default
+included, plus the grass variants below.
 
 - **Instanced, skinned, and voxel-chunk draws always use the world default.**
   A Material naming a Shader cannot be used by an
-  [InstancedProp](InstancedProp.md), a [SkinnedMesh](SkinnedMesh.md), or a
-  [VoxelWorld](VoxelWorld.md); give those a Material without one.
-- **At most 8 Shaders**, the world default included, or 7 when grass draws
-  a far field over ground shaded by the world default, which takes a slot of
-  its own.
+  [`InstancedProp`](InstancedProp.md), a [`SkinnedMesh`](SkinnedMesh.md), or a
+  [`VoxelWorld`](VoxelWorld.md); give those a Material without one.
+- **Grass takes variants of its Shader.** A Shader whose ground grows grass
+  (a [Terrain](Terrain.md) with `layers`, or any [Planet](Planet.md), whose ground
+  draws with the world default) takes 2 more buckets: the ground and grass
+  canopy seen far away, and the ground alone. In a world with a Planet it takes
+  4: each of those with and without the planet's own sky. The renderer picks
+  between them per draw, and only where they look the same.
 
 Planar reflections are the one case with no build-time signal: a surface
 reflected in a mirror is drawn with the world default Shader regardless of
@@ -122,7 +126,7 @@ loads at startup.
 
 # Compilation
 
-`cn build` compiles both files for the backend it cooks for and stores the
+`cn cook` compiles both files for the backend it cooks for and stores the
 result in the world; a player needs no shader compiler. A file that fails
 to compile, or omits its hook, fails the build naming the Shader and the
 hook, with each compiler error reported at its file and line; a compiler

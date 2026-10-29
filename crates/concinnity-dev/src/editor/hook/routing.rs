@@ -2,8 +2,8 @@
 //! wheel region, title-bar dragging, and click hit-testing across the top bar and
 //! the registered panels (front-to-back).
 
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use super::{Drag, EditorHook, bookmarks, scroll_step};
 use crate::editor::hud::{self, HudState};
@@ -42,7 +42,7 @@ impl EditorHook {
         if let Some(i) = self.templates.detail {
             let window =
                 template_panel::rows_for_height(self.effective_size(PanelKey::TemplateDetail)[1]);
-            let max = self.template_rows(i).len().saturating_sub(window);
+            let max = Self::template_rows(i).len().saturating_sub(window);
             self.templates.detail_scroll = scroll_step(self.templates.detail_scroll, delta, max);
         }
     }
@@ -93,6 +93,9 @@ impl EditorHook {
         if self.content.drag.is_some() {
             self.drive_content_drag(input, vp, world);
         }
+        // A picked Planet tool finds the ground under the cursor and carries
+        // its stroke on.
+        self.drive_planet_tool(input, vp, world);
         if input.left_click
             && self.drag.is_none()
             && self.resize.is_none()
@@ -101,6 +104,7 @@ impl EditorHook {
             && self.marquee.is_none()
             && self.content.drag.is_none()
             && self.orbit.is_none()
+            && !self.planet_tool.busy()
         {
             // The confirmation dialog swallows every press first.
             // Behind it, an open Display or create menu is modal: it
@@ -128,6 +132,7 @@ impl EditorHook {
             && self.marquee.is_none()
             && self.content.drag.is_none()
             && self.orbit.is_none()
+            && !self.planet_tool.busy()
         {
             self.open_create_menu(input, vp, world);
         }
@@ -322,12 +327,15 @@ impl EditorHook {
                 return;
             }
         }
-        // Nothing claimed the press: the gizmo's tip handles get it first
-        // (grabbing a handle must not re-pick the object behind it), then the
-        // billboard icons (which arbitrate against the mesh AABBs by camera
-        // distance), then the 3D view as a pick. Only edit mode gets here
-        // (`left_click` stays false while the world holds the cursor in play
-        // mode).
+        // Nothing claimed the press: a picked Planet tool takes it, else the
+        // gizmo's tip handles get it first (grabbing a handle must not re-pick
+        // the object behind it), then the billboard icons (which arbitrate
+        // against the mesh AABBs by camera distance), then the 3D view as a
+        // pick. Only edit mode gets here (`left_click` stays false while the
+        // world holds the cursor in play mode).
+        if self.try_planet_tool_press(world) {
+            return;
+        }
         if self.try_gizmo_press(input, vp, world) {
             return;
         }

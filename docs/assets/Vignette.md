@@ -3,7 +3,7 @@
 # Vignette
 
 Darkening toward the corners of the frame. The `vignette` section of
-[GraphicsConfig](GraphicsConfig.md); left unset, there is no vignette.
+[`GraphicsConfig`](GraphicsConfig.md); left unset, there is no vignette.
 
 ## Parameters
 

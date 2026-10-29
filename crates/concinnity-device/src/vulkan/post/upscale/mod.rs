@@ -22,11 +22,11 @@ use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 
 use ash::vk;
-use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::upscaler::UpscalerAvailability;
+use concinnity_engine::components::UpscalerBackend;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::output::upscaler::UpscalerAvailability;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred};
 use crate::vulkan::allocator::DeviceAllocator;
@@ -77,8 +77,10 @@ pub(in crate::vulkan) trait VkUpscaleBackend: Send {
     // Sub-pixel jitter for this frame's index, shared with the camera
     // projection so the jittered VP and the upscale agree (render pixels).
     fn jitter_offset(&self, frame_index: u32) -> [f32; 2];
-    // This frame's jitter, set on the main thread before the parallel fan-out
-    // and read back on the worker in `encode_upscale`.
+    // This frame's jitter as the offset from the sample back to the pixel
+    // center in y-down render pixels, the convention FFX, NGX and XeSS share.
+    // Set on the main thread before the parallel fan-out and read back on the
+    // worker in `encode_upscale`.
     fn jitter(&self) -> &Cell<[f32; 2]>;
     // Record the upscale onto `cmd`, with the inputs in
     // SHADER_READ_ONLY_OPTIMAL and the output in GENERAL.
@@ -779,7 +781,7 @@ impl VkContext {
                 narrow_f32(params.elapsed),
                 params.near,
                 params.fov_y_radians,
-                self.pre_exposure.value(),
+                self.upscale_exposure.value(),
             ),
         )?;
 

@@ -10,7 +10,7 @@
 //! bar, close button, and row draw come from the shared `list_panel`; this
 //! module only declares the ids, width, and its row actions.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::list_panel::{self, ListIds, Row};
 use super::registry::PanelKey;
@@ -47,9 +47,9 @@ const LIST: ListIds = ListIds {
 
 // Named ids the cross-module tests reference (injection ordering / visibility).
 #[cfg(test)]
-pub(crate) const ROW_BG: concinnity_core::ecs::asset_id::AssetId = row_bg(0);
+pub(crate) const ROW_BG: concinnity_engine::ecs::asset_id::AssetId = row_bg(0);
 #[cfg(test)]
-pub(crate) const CHECK_BOX: concinnity_core::ecs::asset_id::AssetId = check_box(0);
+pub(crate) const CHECK_BOX: concinnity_engine::ecs::asset_id::AssetId = check_box(0);
 
 // Where the panel sits until the user drags it: the window's top-left, below
 // the top bar (clear of its buttons and the Assets panel's default anchor).
@@ -122,6 +122,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2]) -> Option<PreviewAction> {
 
 // The panel's row states, in row order.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(clippy::struct_excessive_bools, reason = "independent preview toggles")]
 pub(crate) struct PreviewState {
     pub playing: bool,
     pub fly: bool,
@@ -150,7 +151,7 @@ pub(crate) fn place(world: &mut World, o: [f32; 2], state: PreviewState, mouse: 
 mod tests {
     use super::*;
     use crate::editor::widget;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

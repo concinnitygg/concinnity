@@ -4,9 +4,9 @@
 // the bone length. A vertex's region weight is the skin weight it gives the
 // region's joints, so a region boundary is exactly as smooth as the skinning.
 
-use concinnity_core::components::{SkeletonJoint, SkinnedVertexData};
 use concinnity_core::math::{SaturatingFrom, vec3};
-use concinnity_core::transform::Mat4;
+use concinnity_engine::components::{SkeletonJoint, SkinnedVertexData};
+use concinnity_engine::transform::Mat4;
 
 // One joint's bind-pose frame in model space.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,7 +32,7 @@ impl BoneFrame {
 
 // Model-space joint origins from the bind pose.
 fn joint_origins(skeleton: &[SkeletonJoint]) -> Vec<[f32; 3]> {
-    let sk = concinnity_core::components::build_skeleton_from_joint_defs(skeleton);
+    let sk = concinnity_engine::components::build_skeleton_from_joint_defs(skeleton);
     let mut world: Vec<Mat4> = Vec::new();
     sk.world_matrices_into(sk.bind_locals(), &mut world);
     world.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect()

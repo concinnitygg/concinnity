@@ -1,4 +1,4 @@
-//! The simulated ocean on D3D12 (see `concinnity_core::render::water::ocean`):
+//! The simulated ocean on D3D12 (see `concinnity_engine::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels.
 //!
@@ -13,13 +13,13 @@
 //! access and is bound as a root UAV.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::ocean::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
-use concinnity_core::render::water::ocean::foam::FoamClock;
-use concinnity_core::render::water::ocean::initial::initial_spectrum;
-use concinnity_core::render::water::ocean::{MAX_OCEAN_CASCADES, OceanPlan, OceanQuality};
+use concinnity_engine::water::ocean::foam::FoamClock;
+use concinnity_engine::water::ocean::initial::initial_spectrum;
+use concinnity_engine::water::ocean::{MAX_OCEAN_CASCADES, OceanPlan, OceanQuality};
 use std::cell::Cell;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -39,6 +39,7 @@ use super::root_sig::{Range, RootSig, Visibility};
 use super::texture::{
     create_uav_buffer, subresource_transition_barrier, transition_barrier, upload_buffer,
 };
+use super::water_wake::{WAKE_SLOTS, WakeSim, WakeSlots, write_stand_in_srv};
 
 const CASCADE_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
@@ -46,9 +47,13 @@ const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 // The most mip levels a cascade array has.
 const MAX_MIPS: usize = OceanQuality::MAX_SIZE.trailing_zeros() as usize + 1;
 
-/// The heap slots the ocean owns: both arrays' SRVs, then four views per mip
-/// level (the source SRV and destination UAV of each array). Always reserved.
-pub(in crate::directx) const OCEAN_SLOTS: usize = 2 + 4 * MAX_MIPS;
+// The draw's table: both arrays' SRVs and the wake field's.
+const DRAW_SLOTS: usize = 3;
+
+/// The heap slots the ocean owns: the draw's table, then four views per mip
+/// level (the source SRV and destination UAV of each array), then the wake's
+/// tables. Always reserved.
+pub(in crate::directx) const OCEAN_SLOTS: usize = DRAW_SLOTS + 4 * MAX_MIPS + WAKE_SLOTS;
 
 // Root parameters of the kernels' signature.
 const PARAMS_ROOT: u32 = 0;
@@ -71,9 +76,11 @@ pub(in crate::directx) struct OceanSlots<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HA
 pub(in crate::directx) struct DxOceanSim {
     displacement: ID3D12Resource,
     slopes: ID3D12Resource,
-    // The two array SRVs, one table.
+    // The two array SRVs and the wake field's, one table.
     srv_gpu: SrvSlot,
     kernels: Option<OceanKernels>,
+    // The wake a planet sea runs, `Some` when the plan asks for one.
+    wake: Option<WakeSim>,
 }
 
 struct OceanKernels {
@@ -116,7 +123,7 @@ impl DxOceanSim {
         }
         let mip_tables: Vec<SrvSlot> = (0..mips as usize)
             .map(|level| {
-                let base = 2 + 4 * level;
+                let base = DRAW_SLOTS + 4 * level;
                 let src = u32::saturating_from(level.saturating_sub(1));
                 for (j, array) in [&displacement, &slopes].into_iter().enumerate() {
                     write_mip_srv(device, array, layers, src, (slots.cpu)(base + j));
@@ -133,15 +140,37 @@ impl DxOceanSim {
                 alloc, plan, mip_tables, mips, hot_reload,
             )?)
         };
+        let wake = if plan.wake && kernels.is_some() {
+            Some(WakeSim::new(
+                alloc,
+                &WakeSlots {
+                    cpu: &slots.cpu,
+                    gpu: slots.gpu,
+                    stride: slots.stride,
+                    first: DRAW_SLOTS + 4 * MAX_MIPS,
+                    field_cpu: (slots.cpu)(2),
+                },
+                hot_reload,
+            )?)
+        } else {
+            write_stand_in_srv(device, (slots.cpu)(2));
+            None
+        };
         Ok(Self {
             displacement,
             slopes,
             srv_gpu: slots.gpu,
             kernels,
+            wake,
         })
     }
 
-    // The table of both array SRVs the water draw binds.
+    // Whether a planet sea runs a wake.
+    pub(in crate::directx) fn wakes(&self) -> bool {
+        self.wake.is_some()
+    }
+
+    // The table of both array SRVs and the wake field's the water draw binds.
     pub(in crate::directx) fn srv_table(&self) -> SrvSlot {
         self.srv_gpu
     }
@@ -171,16 +200,8 @@ impl OceanKernels {
             .collect();
         let bytes: &[u8] = bytemuck::cast_slice(&texels);
         let spectrum = upload_buffer(alloc, bytes, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)?;
-        let row_data = create_uav_buffer(
-            device,
-            2 * bytes.len() as u64,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        )?;
-        let foam = create_uav_buffer(
-            device,
-            (texels.len() * size_of::<f32>()) as u64,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        )?;
+        let row_data = create_uav_buffer(device, 2 * bytes.len() as u64)?;
+        let foam = create_uav_buffer(device, (texels.len() * size_of::<f32>()) as u64)?;
         let sig = RootSig::new()
             .constants::<OceanFftParams>(0, Visibility::All)
             .srv(5, Visibility::All)
@@ -189,7 +210,7 @@ impl OceanKernels {
             .uav(7, Visibility::All);
         debug_assert_eq!(sig.len(), FOAM_ROOT + 1);
         let root_sig = sig.build(device, "ocean root sig")?;
-        let kernel = |program: &concinnity_core::render::shader_programs::ShaderProgram,
+        let kernel = |program: &concinnity_engine::render::shader::programs::ShaderProgram,
                       label: &str| {
             compute_pso(device, &root_sig, &program.compile(hot_reload)?, label)
         };
@@ -336,8 +357,15 @@ fn write_mip_uav(
 impl DxContext {
     // Encode the `WaterSim` node: for every simulation, evolve and transform
     // its rows, then its columns into mip 0, then reduce down the mips, each
-    // mip of its layers handed back to the resting state once written.
-    pub(in crate::directx) fn encode_water_sim(&self, cmd: &ID3D12GraphicsCommandList, time: f64) {
+    // mip of its layers handed back to the resting state once written; then
+    // run the wake one frame forward, in frame slot `frame_idx`, when a sea
+    // runs one.
+    pub(in crate::directx) fn encode_water_sim(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+        time: f64,
+    ) {
         let Some(ocean) = self.water_sim.as_ref() else {
             return;
         };
@@ -435,5 +463,10 @@ impl DxContext {
             uav_barrier(cmd, &k.row_data);
         }
         uav_barrier(cmd, &k.foam);
+        if let (Some(wake), Some(frame)) = (&ocean.wake, &self.wake_frame)
+            && wake.encode(cmd, frame_idx, &frame.params)
+        {
+            self.wake.ran();
+        }
     }
 }

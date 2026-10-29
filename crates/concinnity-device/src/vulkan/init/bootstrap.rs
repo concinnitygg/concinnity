@@ -3,11 +3,11 @@
 //! acquires, or adopts from the outgoing context on a live world reload.
 
 use ash::vk;
-use concinnity_core::components;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{backend_init, hdr_output, pass_timing};
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::components;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend::init, backend::pass_timing, output::hdr};
+use concinnity_engine::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};
@@ -30,8 +30,8 @@ impl HardwareRequest<'_> {
     // The swap-decision key for a future live reload of the context (see
     // `hot_swap_config`). Normalized `frames` (>=1) matches how
     // `BackendInit::swapchain_config` clamps it.
-    fn swapchain_config(&self) -> backend_init::SwapchainConfig {
-        backend_init::SwapchainConfig {
+    fn swapchain_config(&self) -> init::SwapchainConfig {
+        init::SwapchainConfig {
             frames_in_flight: self.frames,
             hdr_display: self.graphics.display.hdr,
             hdr_pq: self.graphics.display.pq,
@@ -249,6 +249,7 @@ pub(super) fn acquire_hardware(
         rt_capable,
         caps,
         update_after_bind,
+        draw_indirect_count,
     } = create_logical_device(
         &instance,
         physical_device,
@@ -392,6 +393,8 @@ pub(super) fn acquire_hardware(
 
     let timestamp_calibration = (calibrated_timestamps && timestamp_query_pool.is_some())
         .then(|| ash::ext::calibrated_timestamps::Device::new(&instance, &device));
+    let draw_count =
+        draw_indirect_count.then(|| ash::khr::draw_indirect_count::Device::new(&instance, &device));
 
     Ok((
         VkHardware {
@@ -407,6 +410,7 @@ pub(super) fn acquire_hardware(
             timestamp_query_pool,
             timestamp_period_ns: timestamp_period,
             timestamp_calibration,
+            draw_count,
             device_local_heaps,
             memory_budget_supported,
             rt_capable,
@@ -437,7 +441,7 @@ fn resolve_hdr_mode(
     surface: vk::SurfaceKHR,
     swapchain_colorspace_ext_available: bool,
     graphics: &ResolvedGraphics,
-) -> hdr_output::HdrOutputMode {
+) -> hdr::HdrOutputMode {
     let (hdr_display, hdr_pq) = (graphics.display.hdr, graphics.display.pq);
     // HDR-output resolve. The world's `hdr_display` toggle is the
     // gate; even on a capable display, no HDR unless the asset opts
@@ -492,7 +496,7 @@ fn resolve_hdr_mode(
     } else {
         1.0
     };
-    let hdr_mode = hdr_output::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
+    let hdr_mode = hdr::HdrOutputMode::resolve(hdr_display, pq_capable, max_edr);
     if hdr_display && !hdr_mode.is_hdr() {
         tracing::warn!(
             "HDR display requested but no surface format advertises an HDR color space \

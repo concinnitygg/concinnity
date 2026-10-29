@@ -12,9 +12,9 @@
 //! [`FramePriority`]. It is process-wide and built once, by whichever of
 //! `configure` and `pool()` is reached first.
 
-use concinnity_core::components::FramePriority;
-use concinnity_core::ecs::ScheduleMode;
-use concinnity_core::fanout::Fanout;
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::components::FramePriority;
+use concinnity_engine::ecs::ScheduleMode;
 use rayon::prelude::*;
 use std::sync::OnceLock;
 
@@ -54,7 +54,7 @@ impl JobPool {
 
 /// The pool lent to core: physics steps, behavior evaluation, pose sampling,
 /// bake rows and render-graph recording.
-impl Fanout for JobPool {
+impl FanOut for JobPool {
     fn workers(&self) -> usize {
         self.pool.current_num_threads()
     }

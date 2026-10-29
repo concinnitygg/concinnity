@@ -2,8 +2,8 @@
 // itself lives with the HDR set, and `core::render::reactive_mask` decides how
 // each writer treats it this frame.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
 use objc2_metal::{

@@ -6,22 +6,23 @@
 //! across separate buffers. Each leg mirrors the struct its own host binds;
 //! everything else is one declaration for all three.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
-use concinnity_core::render::uniforms::directx::CullParams as DxCullParams;
-use concinnity_core::render::uniforms::grass::{
+use concinnity_engine::render::uniforms::directx::CullParams as DxCullParams;
+use concinnity_engine::render::uniforms::grass::{
     GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, PlanetGrassTileGpu,
 };
-use concinnity_core::render::uniforms::metal::CullUniforms as MetalCullParams;
-use concinnity_core::render::uniforms::ocean::OceanFftParams;
-use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::uniforms::metal::CullUniforms as MetalCullParams;
+use concinnity_engine::render::uniforms::ocean::OceanFftParams;
+use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
+use concinnity_engine::render::uniforms::wake::{WaterWakeParams, WaterWakeStirGpu};
+use concinnity_engine::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
-use concinnity_core::platform::Platform;
+use concinnity_engine::platform::Platform;
 
 const METAL: &[Platform] = &[Platform::Metal];
 const VULKAN: &[Platform] = &[Platform::Vulkan];
@@ -34,6 +35,7 @@ pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
         cur_vp,
         prev_vp,
         [view] => ["view_mat"],
+        prev_model_carry,
         prev_elapsed,
         [prev_cam_pos] => ["prev_cam_x", "prev_cam_y", "prev_cam_z"],
         motion,
@@ -49,13 +51,11 @@ pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
             active_cascades,
             [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
-        on(
-            METAL,
-            mirror!(ShadowPassPush => "ShadowPassPush" {
-                cascade_idx,
-                [_pad] => ["_pad0", "_pad1", "_pad2"],
-            }),
-        ),
+        everywhere(mirror!(ShadowPassPush => "ShadowPassPush" {
+            cascade_idx,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            tile_morph,
+        })),
     ]
 }
 
@@ -126,7 +126,9 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             wind_map,
             bend_prev_map,
             planet_density,
+            planet_rules,
             layers,
+            tile_morph,
         })),
         everywhere(mirror!(PlanetGrassTileGpu => "PlanetGrassTile" {
             model,
@@ -134,7 +136,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             face_level,
             tile,
             grass_tiles,
-            _pad,
+            origin_altitude,
             radial,
             tile_morph,
         })),
@@ -188,6 +190,21 @@ pub(in crate::shader_layout) fn water_fft() -> Vec<Case> {
     }))]
 }
 
+pub(in crate::shader_layout) fn water_wake() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(WaterWakeParams => "WaterWakeParams" {
+            window,
+            carry,
+            grid,
+            cell,
+            damping,
+            foam,
+            stirs,
+        })),
+        everywhere(mirror!(WaterWakeStirGpu => "WaterWakeStir" { now, prev, })),
+    ]
+}
+
 pub(in crate::shader_layout) fn grass_bend() -> Vec<Case> {
     vec![everywhere(mirror!(GrassBendParams => "GrassBendParams" {
         window,
@@ -209,10 +226,14 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
             vp,
             [cam_right, pre_exposure] => ["cam_right"],
             [cam_up, _pad1] => ["cam_up"],
+            sun_dir,
+            sun_light,
+            sky_light,
         })),
         everywhere(mirror!(GpuParticle => "Particle" {
             [position, age] => ["position_age"],
             [velocity, lifetime] => ["velocity_lifetime"],
+            [floor_up, floor_height] => ["floor_plane"],
         })),
         everywhere(mirror!(ParticleParams => "ParticleParams" {
             [position, spread_cos] => ["position_spread"],
@@ -229,7 +250,9 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
             spawn_first,
             random_seed,
             max_particles,
-            [_pad] => ["_pad0", "_pad1", "_pad2"],
+            burst_first,
+            burst_count,
+            burst_spawns,
         })),
     ]
 }
@@ -270,8 +293,10 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 hiz_enabled,
                 object_count,
                 skinned_base,
-                cascade_base,
+                exclude_first,
                 bucket_count,
+                exclude_end,
+                [_pad] => ["_pad0", "_pad1", "_pad2"],
             }),
         ),
         on(
@@ -281,7 +306,9 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 cam_pos,
                 object_count,
                 bucket_count,
-                bucket_stride,
+                skinned_base,
+                exclude_first,
+                exclude_end,
             }),
         ),
         on(
@@ -304,8 +331,9 @@ pub(in crate::shader_layout) fn cull() -> Vec<Case> {
                 hiz_mip_count,
                 hiz_enabled,
                 bucket_count,
-                bucket_stride,
-                [_pad] => ["_pad0", "_pad1"],
+                skinned_base,
+                exclude_first,
+                exclude_end,
             }),
         ),
     ]

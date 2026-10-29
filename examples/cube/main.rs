@@ -29,9 +29,9 @@ mod logo;
 
 use concinnity::components::{
     Atmosphere, BackgroundOverrides, Behavior, BehaviorExpr, BehaviorNode, BehaviorSource,
-    BloomOverrides, DirectionalLight, ExposureOverrides, FramePacingOverrides, GraphicsConfig,
-    IndirectLightingOverrides, NightSky, ProceduralMesh, Prop, SkyRotation, VignetteOverrides,
-    WaterShape, WaterSurface, Wind, Window,
+    BloomOverrides, Camera3D, DirectionalLight, ExposureOverrides, FramePacingOverrides,
+    GraphicsConfig, IndirectLightingOverrides, NightSky, ProceduralMesh, Prop, SkyRotation,
+    VignetteOverrides, WaterSurface, Wind, Window,
 };
 use concinnity::{App, AssetId, MaterialHandle, MeshHandle, Ref, World, bake};
 
@@ -84,7 +84,7 @@ fn main() {
     App::from_world(world).run().expect("the app runs");
 }
 
-fn cube_world() -> Result<World, concinnity::Error> {
+fn cube_world() -> Result<World, Box<dyn std::error::Error>> {
     let mut world = World::new();
 
     world.add_component(Window {
@@ -96,7 +96,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
     });
     // No controller: the viewpoint is fixed on the cube, rendering from the
     // view this bakes.
-    world.add_component(bake::camera(bake::Camera3D {
+    world.add_component(Camera3D::bake(bake::Camera3D {
         fov_y_degrees: CAMERA_FOV_Y_DEGREES,
         near: 0.05,
         view_distance: None,
@@ -181,6 +181,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
         direction: SUN_DIRECTION,
         color: [0.52, 0.95, 0.70],
         intensity: 10.0,
+        ..Default::default()
     });
 
     // A light, gusty breeze: the only thing moving the water. Its gusts roll
@@ -209,13 +210,13 @@ fn cube_world() -> Result<World, concinnity::Error> {
     // green light. The grid itself is the engine's to build: the backends
     // tessellate it at start from nothing but this component.
     world.add_component(WaterSurface {
-        shape: WaterShape::Rectangle,
-        sea_level: 0.0,
         center: [0.0, 0.0, 0.0],
         extent: [WATER_HALF_EXTENT, WATER_HALF_EXTENT],
         subdivisions: 240,
         fetch_meters: 2.0 * WATER_HALF_EXTENT,
         wind_response: 1.0,
+        density: 1000.0,
+        depth_meters: 10.0,
         waves: Vec::new(),
         deep_color: [0.004, 0.005, 0.016],
         shallow_color: [0.012, 0.017, 0.032],
@@ -223,6 +224,7 @@ fn cube_world() -> Result<World, concinnity::Error> {
         foam_width_meters: 0.0,
         foam_intensity: 0.0,
         whitecaps: 0.0,
+        spray: None,
         fresnel_power: 0.5,
         roughness: 0.05,
         refraction_strength: 0.02,

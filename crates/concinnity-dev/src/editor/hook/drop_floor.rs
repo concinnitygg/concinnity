@@ -6,10 +6,10 @@
 //! the world ground plane y=0 when nothing is below. The whole batch commits as
 //! ONE undo step.
 
-use concinnity_core::components::Transform;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{PickIndex, World};
-use concinnity_core::math::pick::{PickRay, ray_aabb};
+use concinnity_engine::components::Transform;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{PickIndex, World};
+use concinnity_engine::gfx::pick::{PickRay, ray_aabb};
 
 use super::{EditorHook, drag};
 use crate::editor::viewport::gizmo::GizmoMode;

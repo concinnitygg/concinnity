@@ -3,26 +3,27 @@
 // backends identically.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{
     InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
 };
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::frame_plan::drive_frame;
-use concinnity_core::render::lights::LightData;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_reload::ShaderReload;
-use concinnity_core::render::{
-    backend, backend_init, decal, error, hdr_output, slot_rewrites, spot_shadow, volumetric_fog,
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::frame::plan::drive_frame;
+use concinnity_engine::render::light::lights::LightData;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
+    backend, backend::error, backend::init, decal, environment::volumetric_fog, output::hdr,
+    shadow::spot, slots::rewrites,
 };
-use concinnity_core::window::display_mode;
-use concinnity_core::{components, profile};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::{components, profile};
 
 use super::allocator::PooledBuffer;
 use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};
@@ -117,7 +118,7 @@ impl VkSpotShadow {
 
     // Slices that re-render this frame.
     pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
-        spot_shadow::refreshed_slices(self.render_mask, self.count())
+        spot::refreshed_slices(self.render_mask, self.count())
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
@@ -220,16 +221,14 @@ impl VkSkinned {
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
-    pub(super) fn destroy(&mut self, device: &VkDevice) {
+    pub(super) fn destroy(&mut self) {
         self.vertex_buffer = PooledBuffer::null();
         self.index_buffer = PooledBuffer::null();
         self.joint_buffers.clear();
         self.morph_delta_unique.clear();
         self.morph_weight_buffers.clear();
         // GPU-driven main-pass skinning resources.
-        if let Some(skin) = self.skin.take() {
-            skin.destroy(device);
-        }
+        self.skin = None;
         self.deformed.clear();
     }
 }
@@ -271,13 +270,6 @@ pub(super) struct VkDescriptors {
     pub(super) shadow_global_sets: Vec<vk::DescriptorSet>,
 }
 
-impl VkDescriptors {
-    // Destroy the shared descriptor pool (which frees every set allocated from
-    // it: global_sets / shadow_global_sets) and the set layout. Called from
-    // `VkContext::drop` after `wait_idle`.
-    pub(super) fn destroy(&self, _device: &VkDevice) {}
-}
-
 // Instanced-prop clusters. Every instance folds into the GPU-driven cull
 // records, so no pass walks the instances on the CPU. Empty when the world
 // declares no `InstancedProp` clusters. `clusters` holds the declared clusters
@@ -293,7 +285,7 @@ pub(super) struct VkInstanced {
 impl VkInstanced {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
-            any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
+            any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
             clusters,
         }
     }
@@ -341,12 +333,21 @@ pub(super) struct VkCull {
     // GPU-culled command buffer through the shared bindless pipeline layout.
     // `None` marks a bucket whose Shader is not resident yet: its scene has not
     // pinned, so the pass skips those draws (see `world_shaders.rs`).
-    pub(super) world_pipelines:
-        concinnity_core::render::world_pipelines::WorldPipelines<super::pipeline::BucketPipelines>,
-    // Commands reserved per shader-bucket region in the indirect buffers, fixed at
-    // init to the record capacity the buffers were sized for. Bucket `b`'s region
-    // starts at command `b * bucket_stride`.
+    pub(super) world_pipelines: concinnity_engine::render::shader::world_pipelines::WorldPipelines<
+        super::pipeline::BucketPipelines,
+    >,
+    // Commands reserved per single-stream region (a probe face, a spot slice),
+    // fixed at init to the record capacity the buffers were sized for.
     pub(super) bucket_stride: usize,
+    // The routes and the bucket regions of the indirect buffers, fixed at
+    // init: each bucket's region holds the records it can take.
+    pub(super) variants: concinnity_engine::gfx::render_types::GpuCullVariants,
+    // Per-frame copies of `variants` with this frame's view, at set 0
+    // binding 4 of every cull dispatch.
+    pub(super) variant_buffers: Vec<PooledBuffer>,
+    // Per frame, the buckets its view can pick, a bit each (see
+    // `GpuCullVariants::live_buckets`); the others' regions skip drawing.
+    pub(super) live_buckets: Vec<std::sync::atomic::AtomicU64>,
     // The engine's compiled bindless main-pass and pre-pass SPIR-V, retained so
     // a bucket that resolves to the engine default can build its pipelines
     // without recompiling.
@@ -376,6 +377,16 @@ pub(super) struct VkCull {
     // Per-frame indirect draw-command buffers the cull kernel writes and the
     // main pass consumes (`INDIRECT_BUFFER`). Device-local.
     pub(super) indirect_buffers: Vec<PooledBuffer>,
+    // Commands each indirect buffer holds ahead of its count slots: every
+    // bucket region's, back to back.
+    pub(super) indirect_commands: usize,
+    // The scan and scatter that pack each cull's kept draws per stream, each
+    // frame's group-count scratch (phase 2 reusing phase 1's once its packing
+    // has read it), and each frame's phase-1 and phase-2 packing sets.
+    pub(super) compact: Option<super::compact::VkCompactKernels>,
+    pub(super) group_count_buffers: Vec<PooledBuffer>,
+    pub(super) compact_sets: Vec<vk::DescriptorSet>,
+    pub(super) compact_sets2: Vec<vk::DescriptorSet>,
     // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
     // phase-2 reads. Device-local storage.
     pub(super) cull_status_buffers: Vec<PooledBuffer>,
@@ -407,29 +418,26 @@ pub(super) struct VkCull {
     // current resolution exists. Set true at the end of `record_frame` once a
     // build has run.
     // GPU-driven shadow views. `shadow_cull_pipeline` is a frustum-only cull
-    // kernel (`SHADOW_CULL`, no Hi-Z / status) over a lean 3-SSBO set (objects +
-    // draw-args + this view's indirect-command buffer); one dispatch per
-    // re-rendered cascade or spot slice writes that view's indirect buffer.
-    // `shadow_bindless_pipeline` is a depth-only graphics pipeline whose VS reads
-    // `model` from the GpuObjectData SSBO (gl_InstanceIndex) and projects through
-    // `light_vps[cascade_idx]` (a push constant); each cascade is then issued with
-    // one `cmd_draw_indexed_indirect` (static+instance prefix) + one for the
-    // skinned tail. `shadow_indirect_buffers` / `shadow_cull_sets` are indexed
+    // kernel (`SHADOW_CULL`, no Hi-Z) over a lean 4-SSBO set (objects +
+    // draw-args + the view's group counts + status); one dispatch per
+    // re-rendered cascade or spot slice, then that view's packing, writes its
+    // lists. `shadow_bindless_pipeline` is a depth-only graphics pipeline whose
+    // VS reads `model` from the GpuObjectData SSBO (gl_InstanceIndex) and
+    // projects through `light_vps[cascade_idx]` (a push constant); each cascade
+    // is then issued with one indirect draw by count for the static + instance
+    // stream and one for the skinned tail. `shadow_views` is indexed
     // [frame][cascade]. All `Some`/non-empty only when the bindless cull path is
     // active AND shadows are enabled.
     pub(super) shadow_cull_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_cull_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) _shadow_cull_set_layout: Option<OwnedSetLayout>,
-    pub(super) shadow_cull_sets: Vec<Vec<vk::DescriptorSet>>,
+    pub(super) shadow_views: Vec<Vec<super::cull::VkShadowView>>,
     pub(super) shadow_bindless_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) shadow_indirect_buffers: Vec<Vec<PooledBuffer>>,
-    // The spot shadow pass's cull sets and indirect buffers, indexed
-    // [frame][slice], written by the same shadow kernel. Their own, so the spot
-    // pass shares no state with the cascade pass. Empty when the world has no
-    // shadowed spot.
-    pub(super) spot_cull_sets: Vec<Vec<vk::DescriptorSet>>,
-    pub(super) spot_indirect_buffers: Vec<Vec<PooledBuffer>>,
+    // The spot shadow pass's views, indexed [frame][slice], written by the
+    // same shadow kernel. Their own, so the spot pass shares no state with the
+    // cascade pass. Empty when the world has no shadowed spot.
+    pub(super) spot_views: Vec<Vec<super::cull::VkShadowView>>,
     // GPU-driven G-buffer pre-pass. Each bucket's pre-pass pipeline reads the
     // previous-frame model from `prev_model_buffers`; the velocity history for
     // the skinned tail rides the previous-frame deformed buffer. The pass reuses
@@ -458,9 +466,9 @@ impl VkCull {
         if let Some(hiz) = &mut self.hiz {
             hiz.destroy(device);
         }
-        // GPU-driven shadow views. The per-(frame, view) cascade and spot cull
-        // sets are freed with the shared descriptor pool, so only the pipelines,
-        // the set layout, and the per-view indirect buffers are destroyed.
+        // GPU-driven shadow views. The per-(frame, view) cascade and spot sets
+        // are freed with the shared descriptor pool, so only the pipelines, the
+        // set layout, and the per-view buffers are destroyed.
         // GPU-driven G-buffer pre-pass. The per-frame `gbuffer_sets` and the
         // snapshot kernel's sets are freed with the shared descriptor pool, so
         // only the pipelines, layouts, and the per-frame model-history buffers
@@ -470,9 +478,12 @@ impl VkCull {
         self.draw_args_buffers.clear();
         self.indirect_buffers.clear();
         self.cull_status_buffers.clear();
+        self.variant_buffers.clear();
+        self.group_count_buffers.clear();
+        self.compact = None;
         self.indirect_buffers2.clear();
-        self.shadow_indirect_buffers.clear();
-        self.spot_indirect_buffers.clear();
+        self.shadow_views.clear();
+        self.spot_views.clear();
         self.prev_model_buffers.clear();
         self.model_history = None;
     }
@@ -597,12 +608,12 @@ pub(super) struct VkUniforms {
     // The values the ring carries, which slots of it are stale, and the local
     // lights' reach. `record_frame` writes the frame's own slot, so no
     // in-flight read is ever raced.
-    pub(super) lights: concinnity_core::render::light_state::LightState,
+    pub(super) lights: concinnity_engine::render::light::state::LightState,
     // Per-frame-in-flight canopy block (global set 0 binding 21), persistently
     // mapped and rewritten each frame, and the block last written, which a
     // probe capture snapshots.
     pub(super) canopy_buffers: Vec<PooledBuffer>,
-    pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,
     // The canopy's view tables (binding 22).
     pub(super) canopy_tables: super::canopy::VkCanopyTables,
 }
@@ -703,6 +714,8 @@ pub(super) struct ProbeState {
     // The three convolution kernels and the layouts they bind, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+    // The world's prop probe, captured whole every frame it rides.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 impl ProbeState {
@@ -717,6 +730,7 @@ impl ProbeState {
             gpu,
             bake: super::probe::VkProbeBake::default(),
             prefilter,
+            prop: super::prop_probe::PropProbe::default(),
         }
     }
 }
@@ -734,7 +748,7 @@ impl ProbeState {
 // covers it is the one signaled by the NEXT draw, and a frame-slot-keyed drain
 // would free it too soon).
 pub(super) struct StreamState {
-    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: RetirePool<StreamedUploadRetire>,
     pub retire_depth: u64,
@@ -743,7 +757,7 @@ pub(super) struct StreamState {
 impl StreamState {
     pub(super) fn new(frames: usize) -> Self {
         Self {
-            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
+            pool_rewrites: rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
             retires: RetirePool::new(),
             retire_depth: frames as u64 + 1,
@@ -812,7 +826,7 @@ pub(super) struct VkTargets {
     // aliasing planner manages). Owns each managed transient's image + memory;
     // features read them back by label and the executor's barrier registry
     // resolves them the same way. It manages the transients the planner in
-    // crates/concinnity-core/src/render/render_graph/transient.rs declares.
+    // crates/concinnity-engine/src/render/render_graph/transient.rs declares.
     pub(super) transient_pool: super::transient_pool::TransientImagePool,
 }
 
@@ -861,14 +875,14 @@ pub(super) struct VkRayTracing {
     // How the TLAS is kept current when props move (the launch's `--rt-dynamic`
     // request); read by the per-frame `rt_dynamic_update`. Inert when `accel`
     // is `None`.
-    pub(super) dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
+    pub(super) dynamic_mode: concinnity_engine::render::rt_accel::geom::RtDynamicMode,
     // Whether skinned meshes join the TLAS (the launch's `--rt-skinned-geometry`
     // request; in by default). Clear it and the BVH covers static + instanced
     // geometry only, isolating the skinned trace path.
     pub(super) skinned_geometry: bool,
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
-    pub(super) update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    pub(super) update_streak: concinnity_engine::render::rt_accel::FailureStreak,
     // The compute-skinning pipeline (`rt_skin`) skinned geometry joins the BVH
     // through, built with the RT pass. `None` when the kernel failed to compile.
     pub(super) skin: Option<crate::vulkan::raytrace::SkinPipeline>,
@@ -878,6 +892,10 @@ pub(super) struct VkRayTracing {
 // surface, queues, allocator and window, plus the capabilities and display
 // settings negotiated with them. Declared so the device and allocator handles
 // drop before the window closes.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent device features and the present mode"
+)]
 pub(super) struct VkHardware {
     pub(super) instance: ash::Instance,
     // Owns the logical device: the instance and the entry stay alive for as
@@ -906,6 +924,10 @@ pub(super) struct VkHardware {
     // Reads the GPU's timestamp counter now, to place a frame's timestamps on
     // the host clock. `None` without `VK_EXT_calibrated_timestamps`.
     pub(super) timestamp_calibration: Option<ash::ext::calibrated_timestamps::Device>,
+    // Draws a cull's lists by their GPU-written counts; `None` without
+    // `VK_KHR_draw_indirect_count`, where each list draws at full capacity
+    // over commands zeroed before the scatter.
+    pub(super) draw_count: Option<ash::khr::draw_indirect_count::Device>,
     // `VK_EXT_memory_budget` device-local heap indices summed for the
     // VRAM-residency chip. Empty when the extension is unavailable; the chip
     // then reports 0.
@@ -916,7 +938,7 @@ pub(super) struct VkHardware {
     // Whether the device is RT-capable (the ray-query extensions + features were
     // enabled at device creation, and XeSS is not active). Enabled whenever
     // capable -- independent of whether RT is on at launch -- so a live
-    // `apply_quality_settings` toggle can bring RT up at runtime (a device
+    // settings rebuild can bring RT up at runtime (a device
     // extension cannot be enabled after `create_device`). Read by `upload_skinned`
     // to add the AS-build / storage / device-address flags to the skinned VB/IB
     // whenever capable, and by the RT toggle to reject an enable on an incapable
@@ -940,7 +962,7 @@ pub(super) struct VkHardware {
     // in `BGRA8_UNORM` + sRGB-nonlinear and the ACES + gamma + FXAA + LUT path
     // runs unchanged. Mirrors `DxHardware::hdr_mode`. Stored so the swapchain
     // rebuild path preserves the format + color space on resize.
-    pub(super) hdr_mode: hdr_output::HdrOutputMode,
+    pub(super) hdr_mode: hdr::HdrOutputMode,
     // Lock presentation to the display refresh. Captured so `rebuild_swapchain`
     // re-selects the same present mode (FIFO vsync vs MAILBOX uncapped) on resize.
     pub(super) vsync: bool,
@@ -949,7 +971,7 @@ pub(super) struct VkHardware {
     // (`reload_world`) reuses this backend in place only when the new world's
     // `swapchain_config` still matches; a mismatch routes to a full rebuild.
     // Mirrors `DxHardware::swapchain_config`.
-    pub(super) swapchain_config: backend_init::SwapchainConfig,
+    pub(super) swapchain_config: init::SwapchainConfig,
     // Window + input (native Win32 on Windows, AppKit on macOS, GLFW on Linux).
     // `Option` so a `reload_world` can MOVE the live window (with its cursor /
     // menu / keymap state) into the successor context instead of opening a new
@@ -984,6 +1006,7 @@ impl VkHardware {
             timestamp_query_pool: self.timestamp_query_pool.take(),
             timestamp_period_ns: self.timestamp_period_ns,
             timestamp_calibration: self.timestamp_calibration.clone(),
+            draw_count: self.draw_count.clone(),
             device_local_heaps: self.device_local_heaps.clone(),
             memory_budget_supported: self.memory_budget_supported,
             rt_capable: self.rt_capable,
@@ -1004,6 +1027,9 @@ pub(crate) struct VkContext {
 
     // Composite (post-process) pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
+    // What each frame slot's sets and framebuffers naming a rebuildable
+    // feature's output were last wired with. See `feature_wires.rs`.
+    pub(super) feature_wires: super::feature_wires::FeatureWires,
 
     // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
     pub(super) shadow: VkShadow,
@@ -1058,6 +1084,9 @@ pub(crate) struct VkContext {
     // the reduced `render_extent` and this pass reconstructs the swapchain
     // resolution; bloom + composite sample its output.
     pub(super) upscale: Option<Box<dyn VkUpscaleBackend>>,
+    // The pre-exposure the upscaler divides its input by, stepped between
+    // frames so its history stays in FP16's normal range.
+    pub(super) upscale_exposure: auto_exposure::UpscalerExposure,
 
     // The upscaler and model the world requested. Kept so a swapchain resize
     // rebuilds the same backend via `build_upscaler` (the DLSS / XeSS device
@@ -1089,6 +1118,10 @@ pub(crate) struct VkContext {
     // trace and composite run on the hdr_resolve RMW chain after the main pass, reusing
     // `ssr`'s pre-pass G-buffer.
     pub(super) ssgi: Option<SsgiResources>,
+
+    // The reactive mask's disocclusion mark. `Some` while an upscaler that
+    // reads the mask runs over the G-buffer pre-pass.
+    pub(super) disocclusion: Option<super::post::VkDisocclusionPass>,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer of the merged buffer is on (SSR resolve OR SSGI OR RT OR SSAO OR
@@ -1146,6 +1179,10 @@ pub(crate) struct VkContext {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub(super) water_sim: Option<crate::vulkan::water_sim::OceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
+    pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
     // Planar reflections for the transparent pass's flat reflectors: one
     // render-resolution mirror render per distinct reflector plane (a water
@@ -1161,7 +1198,10 @@ pub(crate) struct VkContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Option<concinnity_core::render::grass::GrassLodView>,
+    pub(super) grass_lod: Option<concinnity_engine::render::environment::grass::GrassLodView>,
+    // What the canopy block is filled from: the grass's far fields and the
+    // planet's ground. `None` when the world has neither.
+    pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
 
     // Auto-exposure (EV adaptation). See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,
@@ -1315,8 +1355,12 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl VkContext {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
+    )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        drive_frame(self, params)
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
     }
 
     // The live platform window. Present for every constructed context; `None`
@@ -1411,7 +1455,10 @@ impl VkContext {
     // construction, matching DirectX / Metal). Per-pass GPU timing is
     // still a follow-up.
     pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        self.frame_stats.get()
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.frame_stats.get()
+        }
     }
 
     // Current device-local memory residency in bytes, via
@@ -1522,6 +1569,10 @@ impl VkContext {
         self.window().current_display_mode()
     }
 
+    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
+        self.window().display_refresh()
+    }
+
     pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.window_mut().set_display_mode(mode);
     }
@@ -1576,7 +1627,7 @@ impl VkContext {
         Ok(())
     }
 
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.state.planner.shadow.cadence = cadence;
     }
 
@@ -1587,11 +1638,11 @@ impl VkContext {
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
-    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // resolution sizes its targets and rides its rebuild with its ray
     // count, so only its scalar intensity / distance are updated.
     pub(crate) fn update_quality_params(
         &mut self,
-        g: &concinnity_core::settings::ResolvedGraphics,
+        g: &concinnity_engine::settings::ResolvedGraphics,
     ) {
         if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;
@@ -1614,7 +1665,7 @@ impl VkContext {
 
     // Public accessor for the shared shader-reload flag. Cloning the `Arc`
     // lets the debug server flip it from a non-render thread.
-    // `None` outside `cn debug`. Mirrors `DxContext::shader_reload_pending`.
+    // `None` outside `cn run -f`. Mirrors `DxContext::shader_reload_pending`.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         // Both platform windows snapshot straight into the shared InputSnapshot.
         self.window_mut().take_input()
@@ -1689,6 +1740,8 @@ impl VkContext {
         if let Some(prefiltering) = prefiltering {
             prefiltering.destroy(device, self.commands.command_pool);
         }
+        // The prop probe's capture, targets and sets retire as they drop.
+        self.probe.prop = super::prop_probe::PropProbe::default();
 
         // Parked streamed-texture retires (`wait_idle` above covered them).
         self.drain_stream_retires();
@@ -1752,6 +1805,9 @@ impl VkContext {
 
         // SSGI resources (pyramids, accumulation and pipelines).
         self.ssgi = None;
+
+        // The disocclusion mark's snapshots and pipelines.
+        self.disocclusion = None;
 
         // Unified G-buffer pre-pass resources (per-frame MRT + pipelines + UBOs).
         if let Some(mut gb) = self.gbuffer.take() {
@@ -1817,6 +1873,10 @@ impl VkContext {
             transparent.destroy(device);
         }
 
+        // The ocean cascades and FFT kernels the water draws sampled; their
+        // images and buffers retire through the allocator.
+        self.water_sim = None;
+
         // Auto-exposure resources (pipelines + histogram + per-frame readbacks).
         if let Some(mut ae) = self.auto_exposure.resources.take() {
             ae.destroy(device);
@@ -1844,11 +1904,7 @@ impl VkContext {
         // Render passes.
 
         // Skinned-mesh resources.
-        self.skinned.destroy(device);
-
-        // Main descriptor pool + the set layouts (the pool frees the global /
-        // text_atlas sets).
-        self.descriptors.destroy(device);
+        self.skinned.destroy();
 
         // Geometry.
         self.geometry.destroy();
@@ -1881,6 +1937,8 @@ impl Drop for VkContext {
         // dropped, before the device teardown below. On a reload the successor
         // shares this allocator, so only a context that still owns it drains.
         if !self.reused_by_successor {
+            // SAFETY: `wait_idle` above left the GPU idle.
+            unsafe { self.frame_capture.close() };
             self.hw.alloc.destroy();
         }
 

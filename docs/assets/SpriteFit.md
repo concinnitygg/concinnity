@@ -2,8 +2,8 @@
 
 # SpriteFit
 
-How a screen-owned overlay element (a [Sprite](Sprite.md), [TextLabel](TextLabel.md),
-or [HitRegion](HitRegion.md)) maps from the 1280x720 reference canvas to the
+How a screen-owned overlay element (a [Sprite](Sprite.md), [`TextLabel`](TextLabel.md),
+or [`HitRegion`](HitRegion.md)) maps from the 1280x720 reference canvas to the
 live window when their aspect ratios differ.
 
 Screen-owned UI is authored against a fixed reference canvas and uniformly

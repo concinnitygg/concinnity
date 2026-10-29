@@ -2,10 +2,10 @@
 //! payload cache, desugar source-backed assets, intern names, resolve scene
 //! references, then compile and pack.
 
-use concinnity_core::ecs::BlobAssetDef;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::platform::PlatformSet;
+use concinnity_engine::ecs::BlobAssetDef;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::platform::PlatformSet;
 use concinnity_host::thread::asset_id;
 use std::path::Path;
 
@@ -27,6 +27,11 @@ use crate::authoring::world::WorldJsonlAsset;
 /// in its `data/`. The whole-tree entry point; a host that builds against
 /// unrelated directories calls
 /// [`prepare_world`](crate::build_only::prepare_world) + [`build_compiled`].
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read, the world fails validation, or
+/// compiling or writing it fails.
 pub fn build_from_path(
     tree: &crate::paths::StateTree,
     json_path: &str,
@@ -71,6 +76,11 @@ pub struct ThumbnailReport {
 /// [`prepare_world`](crate::build_only::prepare_world) against the tree's
 /// `assets/`, and write its blobs and lock into `tree`. The tail of
 /// [`build_from_path`], for a host that reports validation errors itself.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to compile or the outputs cannot be
+/// written.
 pub fn build_loaded(
     tree: &crate::paths::StateTree,
     loaded: crate::build_only::LoadedWorld,
@@ -89,7 +99,7 @@ pub fn build_loaded(
 /// Every overflow payload blob is written as its sibling named by index, which
 /// is the layout the runtime reads back. No lock file and no thumbnails: this
 /// is the blob output alone.
-pub fn write_blobs_to(
+pub(crate) fn write_blobs_to(
     result: &PipelineResult,
     primary: &Path,
 ) -> std::io::Result<crate::blob::PackResult> {
@@ -111,6 +121,10 @@ pub fn write_blobs_to(
 /// editor. The lock records each asset under its real name plus every
 /// injected default with its full args. The report's `injected` is left for
 /// the caller, which holds the loaded world.
+///
+/// # Errors
+///
+/// Returns an error if a blob or the lock file cannot be written.
 pub fn write_build_outputs(
     tree: &crate::paths::StateTree,
     result: &PipelineResult,
@@ -170,6 +184,10 @@ pub fn write_build_outputs(
 /// blobs. Loads, expands, and validates the world (`crate::build_only::prepare_world`),
 /// then compiles it. `assets_dir` is the asset search root a bare `source`
 /// filename is searched under.
+///
+/// # Errors
+///
+/// Returns an error if the world fails validation or an asset fails to compile.
 pub fn build_pipeline_from_str(
     content: &str,
     assets_dir: Option<&Path>,
@@ -185,6 +203,10 @@ pub fn build_pipeline_from_str(
 /// the assets have passed `crate::build_only::prepare_world`, which should have been
 /// given the same `assets_dir`: an asset resolves its source the same way in
 /// both halves.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to import or compile.
 pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
@@ -195,6 +217,10 @@ pub fn build_compiled(
 
 /// [`build_compiled`] reporting the import and compile stages through
 /// `progress`.
+///
+/// # Errors
+///
+/// Returns an error if an asset fails to import or compile.
 pub fn build_compiled_with_progress(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
@@ -254,7 +280,7 @@ pub fn build_compiled_with_progress(
             .map(|kind| (AssetId(u32::saturating_from(i)), kind))
     });
     let mut resource_handles =
-        concinnity_core::resource::ResourceHandles::from_assets(resource_assets);
+        concinnity_engine::resource::ResourceHandles::from_assets(resource_assets);
     // The mesh-source handle space spans four kinds (Mesh, ProceduralMesh,
     // VoxelChunk, mesh-kind File) and File is polymorphic, so it is assigned in a
     // second pass in the fixed block order the runtime enumerates mesh sources
@@ -276,7 +302,7 @@ pub fn build_compiled_with_progress(
     } = partition_components(&assets, &resource_handles)?;
 
     // Dev-only: the file source behind each texture and mesh handle, for
-    // `cn debug`'s hot-reload watcher.
+    // `cn run -f`'s hot-reload watcher.
     let (texture_sources, mesh_sources) = hot_reload_sources(&assets, &resource_jobs);
 
     // Scene payload ownership, derived from the resolved scene memberships and
@@ -361,12 +387,12 @@ mod tests {
     use crate::authoring::registry::RegisteredType;
     use crate::pipeline::fixtures::{wja, write_fixture};
     use crate::pipeline::result::{MeshSourceInfo, TextureSourceInfo};
-    use concinnity_core::components::{
+    use concinnity_engine::components::{
         HitRegion, KeyBinding, Material, Prop, ScreenCommand, Sprite, TextLabel, UiAction,
     };
-    use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::ecs::{MeshHandle, Ref};
-    use concinnity_core::platform::Platform;
+    use concinnity_engine::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::{MeshHandle, Ref};
+    use concinnity_engine::platform::Platform;
 
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {
@@ -504,7 +530,7 @@ mod tests {
             .iter()
             .position(|n| n == "defaults")
             .expect("the directive compiled into the blob");
-        let baked: concinnity_core::components::EngineDefaults =
+        let baked: concinnity_engine::components::EngineDefaults =
             postcard::from_bytes(&result.defs[index].args_bytes).unwrap();
         assert!(!baked.loading_overlay);
         assert!(baked.debug_hud, "the flags it does not name stay on");
@@ -727,7 +753,7 @@ mod tests {
         v
     }
 
-    // `cn debug`'s hot-reload watcher maps a saved file back to the handle it
+    // `cn run -f`'s hot-reload watcher maps a saved file back to the handle it
     // feeds, so every file-backed texture and mesh records its source in handle
     // order. A generated asset has nothing to watch and records an empty source.
     #[test]

@@ -2,8 +2,8 @@
 //! target and its MSAA resolve, the views the depth- and scene-sampling passes
 //! bind, and the render graph's transient pool.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_MAIN_DEPTH_SLOT, RtvHeapLayout};
@@ -134,22 +134,15 @@ pub(super) fn build_targets(
         msaa_samples,
     );
 
-    // Transient pool: the graph-owned transient render targets. `bloom_top`
-    // (the bloom chain's top octave) is always managed; `ao_output` is placed
-    // only when SSAO is on (else `resource_for` returns None and the main pass
-    // binding 6 falls back to `ssao_white`). Built before the bloom chain, SSAO
-    // and the G-buffer, which read their placed resources back by label.
+    // Transient pool: the graph-owned transient render targets (`bloom_top`,
+    // `ao_output` and the G-buffer colors), planned for every feature a
+    // settings change can turn on so a toggle never repacks it. Built before
+    // the bloom chain, SSAO and the G-buffer, which read their placed
+    // resources back by label.
     let transient_pool = TransientResourcePool::build(
         hw.alloc.device(),
         hw.alloc.queue(),
-        &plan_pool_slots(
-            PoolGates {
-                ssao: features.ssao_enabled,
-                gbuffer: features.gbuffer_enabled,
-            },
-            (render_w, render_h),
-            (width, height),
-        )?,
+        &plan_pool_slots(PoolGates::REACHABLE, (render_w, render_h), (width, height))?,
     )?;
 
     let reactive_mask = ReactiveMask::new(
@@ -157,7 +150,7 @@ pub(super) fn build_targets(
         (render_w, render_h),
         ReactiveMaskSlots {
             rtv: swapchain.rtv(rtv.reactive_mask_base_slot),
-            null_rtv: swapchain.rtv(rtv.reactive_mask_base_slot + 1),
+            sink_rtv: swapchain.rtv(rtv.reactive_mask_base_slot + 1),
             srv_cpu: descriptors.slot_cpu(layout.reactive_mask_srv_slot),
             srv_gpu: descriptors.slot_gpu(layout.reactive_mask_srv_slot),
         },

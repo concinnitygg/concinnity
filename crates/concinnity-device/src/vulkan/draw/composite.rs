@@ -12,11 +12,12 @@
 //! from sub-ranges of it, so no GPU buffer is created per label per frame.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::fullscreen;
-use concinnity_core::render::fullscreen::TextBindCache;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::fullscreen;
+use concinnity_engine::render::fullscreen::TextBindCache;
 
 use super::super::context::VkContext;
 use super::super::record::cmd_push_constants;
@@ -116,6 +117,10 @@ impl fullscreen::CompositeEncoder for VkContext {
                 .adaptation
                 .as_ref()
                 .map_or(0.0, |a| a.night_vision(self.state.view.sunlight)),
+            night_nits: auto_exposure::nits_per_exposed(
+                self.state.view.sunlight,
+                self.post_process.exposure,
+            ),
         };
         // SAFETY: the composite layout is live and matches the bound pipeline; `composite` is
         // borrowed for the call.

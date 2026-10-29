@@ -4,11 +4,11 @@
 //! row through core's `live_preview::material` module.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::gfx::render_types::MATERIAL_PARAM_COUNT;
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::live_preview::{draw as draw_preview, material as material_preview};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::render_types::MATERIAL_PARAM_COUNT;
+use concinnity_engine::render::live_preview::{draw as draw_preview, material as material_preview};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

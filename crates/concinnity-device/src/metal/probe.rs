@@ -56,12 +56,12 @@
 //!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::probe_bake::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
 };
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -104,6 +104,9 @@ pub(crate) struct RenderingBake {
     // spawns grow the live draw list while the faces render, so every face culls
     // and draws against this snapshot instead.
     counts: crate::metal::context::DrawRecordCounts,
+    // The routes and bucket regions of that record set, which the live ones
+    // re-span as the draw list grows.
+    variants: concinnity_engine::gfx::render_types::GpuCullVariants,
 }
 
 pub(crate) struct PrefilteringBake {
@@ -163,9 +166,13 @@ impl MtlContext {
     // scene); an empty list bakes none. Resets the staggered bake so the next
     // eligible frames re-bake from scratch, and grows the cube array when the
     // list outgrows it; a world whose array cannot grow keeps the sky.
-    pub(in crate::metal) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
+    pub(in crate::metal) fn set_reflection_probes(
+        &mut self,
+        placements: &[ProbePlacement],
+        prop_probe: bool,
+    ) {
         let placements = placements.to_vec();
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
         crate::probe_report::report_probe_placement(placed);
     }
 
@@ -235,7 +242,7 @@ impl MtlContext {
             .build_record_buffers(
                 slot,
                 eye,
-                concinnity_core::render::model_history::HistoryMode::Untracked,
+                concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
             )?
             .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
         let (object_buffer, draw_args) = (records.objects, records.draw_args);
@@ -291,6 +298,7 @@ impl MtlContext {
                 deformed,
             },
             counts,
+            variants: self.cull.variants,
         })
     }
 
@@ -314,9 +322,9 @@ impl MtlContext {
         // the face's cull encodes into it.
         self.ensure_icb_capacity(counts.total)?;
 
-        let vp = reflection_probe::face_view_projection(eye, face);
-        let view = reflection_probe::face_view_matrix(eye, face);
-        let frustum = reflection_probe::face_frustum(eye, face, bake.capture_distance);
+        let vp = capture::face_view_projection(eye, face);
+        let view = capture::face_view_matrix(eye, face);
+        let frustum = capture::face_frustum(eye, face, bake.capture_distance);
 
         let RenderingBake { done, gpu, .. } = bake;
 
@@ -345,8 +353,14 @@ impl MtlContext {
             &cull_cb,
             &gpu.object_buffer,
             &gpu.draw_args,
-            &frustum,
-            eye,
+            super::cull::CullView {
+                frustum: &frustum,
+                cam_pos: eye,
+                daylight: &concinnity_engine::render::uniforms::DaylightBlock::OFF,
+                variants: &bake.variants,
+                exclude: [0, 0],
+                capture_tiles: None,
+            },
             counts,
         )?;
         super::fault_log::attach_fault_logger(&cull_cb, "reflection probe cull");
@@ -376,6 +390,7 @@ impl MtlContext {
                 bindless_tex_args: Some(tex_args),
                 deformed_skinned: gpu.deformed.as_ref(),
                 counts,
+                regions: self.probe_regions(&bake.variants),
             },
             crate::metal::draw::main::FacePass::PROBE,
         )?;
@@ -530,7 +545,7 @@ impl ProbeBakeDevice for MtlContext {
 // Multisample HDR color face: RGBA16Float, render-target only -- matches the
 // main pipeline's attachment format + sample count so `self.pipeline_state`
 // binds. Built only when the world resolved to more than one sample.
-fn make_face_color(
+pub(in crate::metal) fn make_face_color(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,
@@ -552,7 +567,7 @@ fn make_face_color(
 
 // Depth face: Depth32Float, render-target only, at the main pipelines' sample
 // count. Cleared per face and discarded -- the probe consumes only the color.
-fn make_face_depth(
+pub(in crate::metal) fn make_face_depth(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     size: u32,
     sample_count: u32,

@@ -1,12 +1,12 @@
 //! DirectX's share of temporal anti-aliasing, which is the jitter counter and
 //! where the resolve's two inputs come from this frame. The resolve itself --
 //! its pipeline, its ping-pong accumulation targets, the history-validity gate
-//! and the draw -- is written once in `concinnity_core::render::post::taa` and
+//! and the draw -- is written once in `concinnity_engine::render::post::taa` and
 //! reaches D3D12 through `DxPostDevice`.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::taa::{TaaInputs, TaaPass, TaaRing};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::context::DxContext;

@@ -1,14 +1,14 @@
 //! Vulkan's share of screen-space global illumination, which is its settings and
 //! where the pass reads and writes this frame. Every stage -- the pipelines, the
 //! depth pyramids, the accumulation and all the draws -- is written once in
-//! `concinnity_core::render::post::ssgi` and reaches Vulkan through
+//! `concinnity_engine::render::post::ssgi` and reaches Vulkan through
 //! `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::SsgiParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
-use concinnity_core::render::post::ssgi::{
+use concinnity_engine::gfx::render_types::SsgiParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
+use concinnity_engine::render::post::ssgi::{
     SsgiPass, SsgiPipelines, SsgiResolveInputs, SsgiTraceInputs,
 };
 
@@ -97,9 +97,9 @@ impl VkContext {
             return;
         };
         let occlusion = self
-            .targets
-            .transient_pool
-            .view_for("ao_output", frame_idx)
+            .ssao
+            .as_ref()
+            .and_then(|_| self.targets.transient_pool.view_for("ao_output", frame_idx))
             .unwrap_or(self.scene.ssao_white.view);
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),
@@ -158,6 +158,7 @@ impl VkContext {
                 scene: self.hdr_scene_attachment(frame_idx).view,
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
+                reflectance: gbuffer.roughness,
             },
             params,
         ) {

@@ -18,12 +18,12 @@
 //! Mirrors src/directx/fog.rs and src/metal/fog.rs.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::FogBlocks;
-use concinnity_core::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
-use concinnity_core::render::volumetric_fog;
+use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::volumetric_fog;
+use concinnity_engine::render::frame::plan::FogBlocks;
+use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -658,7 +658,7 @@ fn create_fog_pipeline(
 
 impl VkContext {
     // Hot-reload entry point for the volumetric-fog tunables (driven by
-    // `world.jsonl` hot-reload under `cn debug`). Writes the new
+    // `world.jsonl` hot-reload under `cn run -f`). Writes the new
     // `Option<FogSettings>` into `self.fog.settings`; the next frame's graph
     // seed re-reads it (so `None` drops the FogFroxel + Fog passes) and
     // `encode_fog_froxel` rebuilds `FogParams` / `FogFroxelParams` from it.
@@ -672,7 +672,7 @@ impl VkContext {
     // Named distinctly from the `RenderBackend::update_fog_settings` trait
     // method so the backend forwarder's `self.apply_fog_settings(...)` is
     // unambiguous. Reached through the `RenderBackend` vtable (the bin's
-    // `cn debug` world.jsonl hot-reload).
+    // `cn run -f` world.jsonl hot-reload).
     pub(in crate::vulkan) fn apply_fog_settings(
         &mut self,
         settings: Option<volumetric_fog::FogSettings>,
@@ -787,7 +787,7 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::gfx::render_types::{FogFroxelParams, FogParams};
+    use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
     use std::mem::size_of;
 
     #[test]

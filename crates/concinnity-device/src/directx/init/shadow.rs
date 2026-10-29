@@ -1,13 +1,13 @@
 //! Shadows: the cascade shadow map array with its depth-only pipeline, and the
 //! spot shadow array with its per-slice projections.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::render_types::{
     self, NUM_SHADOW_CASCADES, ShadowUniforms, SpotShadowData,
 };
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::ShadowParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{csm, spot_shadow};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::ShadowParams;
+use concinnity_engine::render::{shadow::csm, shadow::spot};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
@@ -191,10 +191,7 @@ pub(super) fn build_spot_shadow(
         ubo: spot_shadow_ubo,
         ubo_stride: spot_shadow_ubo_stride,
         slice_size: spot_shadow_slice_size,
-        frusta: spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect(),
+        frusta: spot_shadows.iter().map(spot::slice_frustum).collect(),
         render_mask: 0,
     })
 }

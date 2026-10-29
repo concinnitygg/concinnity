@@ -5,8 +5,8 @@
 //! each build. Core's `SettingsSystem` writes through [`FileStore`] on a
 //! background thread whenever its revision moves.
 
-use concinnity_core::settings::StoredSettings;
-use concinnity_core::settings::system::SettingsStore;
+use concinnity_engine::settings::StoredSettings;
+use concinnity_engine::settings::system::SettingsStore;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::store::writer::FileWriter;
 use std::path::{Path, PathBuf};
@@ -63,10 +63,10 @@ fn load_from(path: &Path) -> StoredSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::UpscaleQuality;
-    use concinnity_core::ecs::{Phase, PipelineContext, StepResult, System, SystemTable, World};
-    use concinnity_core::settings::UserGraphicsSettings;
-    use concinnity_core::settings::system::SettingsSystem;
+    use concinnity_engine::components::UpscaleQuality;
+    use concinnity_engine::ecs::{Phase, PipelineContext, StepResult, System, SystemTable, World};
+    use concinnity_engine::settings::UserGraphicsSettings;
+    use concinnity_engine::settings::system::SettingsSystem;
 
     // The on-disk path must stay sandboxable so a test can never clobber the
     // developer's real `settings` file. A non-default `render_scale` mirrors a

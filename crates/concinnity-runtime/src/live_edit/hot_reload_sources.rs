@@ -3,11 +3,11 @@
 //! takes once. The catalogs themselves are core's
 //! `render::world_load::source_maps`.
 
-use concinnity_core::components::{Identity, ProceduralMesh};
-use concinnity_core::ecs::PipelineContext;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::render::backend_init::SdfVolumeSource;
-use concinnity_core::render::world_load::source_maps::{
+use concinnity_engine::components::{Identity, ProceduralMesh};
+use concinnity_engine::ecs::PipelineContext;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::render::backend::init::SdfVolumeSource;
+use concinnity_engine::render::world_load::source_maps::{
     ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap, SdfFieldMap,
     ShaderSourceMap, SkinnedMeshSourceMap, TextureSourceMap,
 };
@@ -86,8 +86,8 @@ pub(crate) fn resolve_sdf_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types::{DrawIndex, SkinnedIndex};
-    use concinnity_core::render::world_load::source_maps::{
+    use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
+    use concinnity_engine::render::world_load::source_maps::{
         MeshSourceEntry, ProceduralMeshSourceEntry, ShaderSourceEntry, SkinnedMeshSourceEntry,
     };
 
@@ -181,7 +181,7 @@ mod tests {
     // watched there.
     #[test]
     fn a_field_resolves_where_the_cook_found_it() {
-        use concinnity_core::components::SdfVolume;
+        use concinnity_engine::components::SdfVolume;
         let source = |label: &str, field: &str| SdfVolumeSource {
             volume: SdfVolume {
                 fragment_shader: field.to_string(),

@@ -4,10 +4,10 @@
 //! and the swapchain it presents through.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::SwapchainConfig;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::hdr_output::HdrOutputMode;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::output::hdr::HdrOutputMode;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
@@ -269,7 +269,7 @@ pub(super) fn setup(
         let pq_max_edr = match hdr_mode {
             HdrOutputMode::Hdr {
                 max_edr,
-                encoding: hdr_output::HdrEncoding::Pq,
+                encoding: hdr::HdrEncoding::Pq,
             } => Some(max_edr),
             _ => None,
         };
@@ -305,7 +305,7 @@ pub(super) fn setup(
                     // Keep the caller's `pq_output` in sync with the swapchain encoding.
                     hdr_mode = HdrOutputMode::Hdr {
                         max_edr,
-                        encoding: hdr_output::HdrEncoding::ExtendedLinear,
+                        encoding: hdr::HdrEncoding::ExtendedLinear,
                     };
                 }
                 ColorSpaceAttempt::Unsupported(flags) => tracing::warn!(
@@ -490,7 +490,7 @@ pub(super) fn query_msaa_samples(device: &ID3D12Device) -> u32 {
 
 // The requested HDR sample count clamped to this adapter's ceiling. `requested`
 // is 1 whenever a temporal technique is active (see
-// `concinnity_core::components::hdr_sample_count`), which collapses the main
+// `concinnity_engine::components::hdr_sample_count`), which collapses the main
 // pass to the single-sample path: no resolve step, and `hdr.color` is the
 // scene spine.
 pub(super) fn resolve_sample_count(supported: u32, requested: u32) -> u32 {

@@ -15,10 +15,10 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use concinnity_core::components::UpscaleQuality;
-use concinnity_core::render::depth::{CAMERA_DEPTH, DepthMapping};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::components::UpscaleQuality;
+use concinnity_engine::render::depth::{CAMERA_DEPTH, DepthMapping};
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{SdkLibrary, UpscaleExtent, entry_point};
 

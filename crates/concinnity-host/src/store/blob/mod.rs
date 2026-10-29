@@ -1,24 +1,24 @@
 //! Runtime blob access: the state root's `data/` path layout, the payload
-//! residency store, and all blob file I/O. `concinnity_core::blob` owns the
+//! residency store, and all blob file I/O. `concinnity_engine::blob` owns the
 //! format contract (schema, header, version, bytes <-> metadata) and is
 //! deliberately I/O-free, so every read below is `fs` here plus a pure parse
 //! there. Blob data is read-only at runtime; concinnity-cook writes what
-//! `concinnity_core::blob::encode_cnb` returns.
+//! `concinnity_engine::blob::encode_cnb` returns.
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-pub use concinnity_core::blob::{BLOB_MAGIC, HEADER_SIZE, WorldManifest};
-use concinnity_core::blob::{parse_cnb, parse_payload_section_start, payload_section};
+pub use concinnity_engine::blob::{BLOB_MAGIC, HEADER_SIZE, WorldManifest};
+use concinnity_engine::blob::{parse_cnb, parse_payload_section_start, payload_section};
 
 mod data;
 mod error;
 
 pub use error::BlobLoadError;
 
-pub use concinnity_core::SCHEMA_VERSION;
-pub use concinnity_core::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
+pub use concinnity_engine::SCHEMA_VERSION;
+pub use concinnity_engine::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
 // The primary blob this process reads, named by whatever anchored it. Process
@@ -79,6 +79,11 @@ fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
 
 /// Read and deserialize a blob's metadata section (component defs + resource
 /// records). Returns (meta, `payload_start_offset`).
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or its header and metadata do
+/// not parse.
 pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
     let data = read_file(path)?;
     parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data)
@@ -90,6 +95,11 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
 /// `PayloadLocator` offset into an absolute file offset.
 /// Used only by the Metal-driven disk-backed streaming source for now
 /// (Vulkan/DirectX streaming catch-up is a follow-up).
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened, or its header cannot be read
+/// or does not parse.
 pub fn payload_section_start(path: &str) -> Result<u64, BlobLoadError> {
     let mut file = fs::File::open(path).map_err(|source| BlobLoadError::io(path, source))?;
     let mut header = [0u8; HEADER_SIZE];
@@ -120,6 +130,11 @@ fn read_file(path: &str) -> Result<Vec<u8>, BlobLoadError> {
 /// each from disk the first time a locator needs it. Defs are not resolved into
 /// runtime `Asset`s: that resolution depends on the component registry, so it
 /// lives with the caller that builds the `World` (concinnity-runtime's `blob`).
+///
+/// # Errors
+///
+/// Returns an error if no state root is set, or a blob file cannot be read or
+/// does not parse.
 pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), BlobLoadError> {
     anchor(primary);
     load_raw_from(blob_path)
@@ -153,8 +168,8 @@ fn load_raw_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::blob::{BlobError, encode_cnb};
     use concinnity_core::math::SaturatingFrom;
+    use concinnity_engine::blob::{BlobError, encode_cnb};
 
     #[test]
     fn an_anchored_primary_owns_blob_zero_and_its_siblings() {
@@ -275,7 +290,7 @@ mod tests {
 
     #[test]
     fn load_raw_reads_blob0_eagerly_and_defers_overflow() {
-        use concinnity_core::ecs::PayloadLocator;
+        use concinnity_engine::ecs::PayloadLocator;
 
         let dir = tempfile::tempdir().unwrap();
         let path_for = |idx: u32| {

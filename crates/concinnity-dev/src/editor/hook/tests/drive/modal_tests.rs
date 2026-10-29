@@ -2,8 +2,8 @@
 //! screen-modal press and wheel lockout, and its place in the draw layers.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::{FrameInput, Sprite, TextLabel};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite, TextLabel};
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::VP;
 use crate::editor::hook::{EditorHook, TOP_BAR_LAYER};

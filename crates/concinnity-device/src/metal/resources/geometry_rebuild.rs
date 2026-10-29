@@ -2,9 +2,9 @@
 //! re-imported `.glb` source no longer fits each draw's init-time slot.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{backend, geometry_repack};
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend, slots::geometry_repack};
 use objc2_metal::{MTLBuffer as _, MTLResourceOptions};
 
 use crate::metal::context::{MtlContext, bytes_of_slice};
@@ -20,7 +20,7 @@ impl MtlContext {
     ) -> RenderResult<()> {
         // Stop the GPU + CPU pipelines so we can safely read the old
         // buffers and atomically swap. Costs a frame-time stall but only
-        // fires under `cn debug` and only when the source `.glb` size
+        // fires under `cn run -f` and only when the source `.glb` size
         // actually changed.
         self.wait_idle();
 
@@ -87,6 +87,7 @@ impl MtlContext {
         {
             layout.apply_to(obj);
         }
+        self.state.placement.forget_layout();
 
         self.scene.vertex_buffer = new_vertex_buffer;
         self.scene.index_buffer = new_index_buffer;

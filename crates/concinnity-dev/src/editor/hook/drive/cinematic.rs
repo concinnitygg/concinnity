@@ -11,8 +11,8 @@
 //! the world declared. Nothing here touches the authored entries, so no shot can
 //! reach the world file or the session store.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::{FrameTime, PickIndex, World};
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::{FrameTime, PickIndex, World};
 
 use crate::editor::hook::{EditorHook, camera_pose};
 use crate::editor::viewport::framing::CameraPose;
@@ -123,7 +123,7 @@ impl EditorHook {
         }
         let fov = cam.fov_y_degrees.to_radians();
         let index = world.resource::<PickIndex>()?;
-        let (mn, mx) = concinnity_core::render::reflection_probe::fold_world_bounds(
+        let (mn, mx) = concinnity_engine::render::probe::seed::fold_world_bounds(
             index.entries.iter().map(|e| (e.bb_min, e.bb_max)),
         )?;
         Framing::new(mn, mx, fov, vp[0] / vp[1], home)

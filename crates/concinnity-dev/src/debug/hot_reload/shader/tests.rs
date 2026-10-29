@@ -2,13 +2,14 @@ use super::*;
 use crate::debug::hot_reload::signals::PendingShaders;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::shader::CompiledShader;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::components::{ShaderPrograms, ShaderStage};
-use concinnity_core::render::backend::{GeometryEdit, PreparedPipelines, SceneHost};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_core::render::world_load::source_maps::ShaderFile;
+use concinnity_engine::components::{ShaderPrograms, ShaderStage};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{GeometryEdit, PreparedPipelines, SceneHost};
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::world_load::source_maps::ShaderFile;
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -91,8 +92,8 @@ impl PipelineBuilder for FakeBuilder {
     }
 }
 
-fn builder(reject: bool) -> Option<Arc<dyn PipelineBuilder>> {
-    Some(Arc::new(FakeBuilder { reject }))
+fn builder(reject: bool) -> Arc<dyn PipelineBuilder> {
+    Arc::new(FakeBuilder { reject })
 }
 
 // Stands in for dxc: a fragment containing "error" fails with an error on its
@@ -327,7 +328,7 @@ fn a_request_for_all_reaches_every_shader() {
     f.reload.request(
         &PendingShaders {
             all: true,
-            ids: Default::default(),
+            ids: BTreeSet::default(),
         },
         None,
     );
@@ -401,7 +402,7 @@ fn a_worker_built_pipeline_reaches_the_swap() {
     };
     f.write("lit.hlsl", "lit v2");
     f.write("water.hlsl", "water v2");
-    f.reload.request(&pending(&[1, 2]), builder(false).as_ref());
+    f.reload.request(&pending(&[1, 2]), Some(&builder(false)));
     let reports = poll_for(&f.reload, &mut backend, 2);
     assert_eq!(
         outcomes(&reports),
@@ -427,7 +428,7 @@ fn a_pipeline_the_builder_refuses_is_never_swapped() {
         resident: [1].into(),
         ..Default::default()
     };
-    f.reload.request(&pending(&[2]), builder(true).as_ref());
+    f.reload.request(&pending(&[2]), Some(&builder(true)));
     let reports = poll_for(&f.reload, &mut backend, 1);
     assert!(matches!(
         &reports[0].outcome,
@@ -468,7 +469,7 @@ fn an_empty_catalog_reloads_nothing() {
             .request(
                 &PendingShaders {
                     all: true,
-                    ids: Default::default()
+                    ids: BTreeSet::default()
                 },
                 None
             )

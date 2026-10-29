@@ -1,0 +1,218 @@
+// The character-rig drive: one kinematic capsule per `CharacterRig`
+// component (a `SkinnedMesh` that declared a `capsule`). Each fixed tick the
+// capsule moves by the target's `RootMotionEvent` displacement -- mapped through
+// the rig's authored rotation/scale -- plus gravity, sliding against the
+// scene like the player capsule; each frame the blended capsule position is
+// written back to the rig component for the renderer's render follow.
+
+use alloc::vec::Vec;
+
+use crate::physics::{BodyHandle, CharacterCapsule, CharacterMoveInput, LayerMask, Simulation};
+
+use crate::components::{CharacterRig, RootMotionEvent};
+use crate::ecs::{Entity, EventCursor, PipelineContext, SkinnedMeshHandle};
+use concinnity_core::math::vec3::add;
+
+use super::interp::PointInterp;
+
+// Physics-side state for one rig.
+#[derive(Debug)]
+pub(crate) struct RigPhysics {
+    pub target: SkinnedMeshHandle,
+    // The entity carrying the rig component, re-found by `target` if it moves.
+    entity: Entity,
+    pub handle: BodyHandle,
+    // The capsule the tick's move is resolved against, resized when the rig
+    // component's dimensions change.
+    shape: CharacterCapsule,
+    // Current vertical velocity (world units/second).
+    pub vy: f32,
+    // Authoritative simulated capsule center with its render blend snapshots.
+    center: PointInterp,
+    // The rig position written back last frame. A component position that
+    // differs was moved externally and is adopted with no blend.
+    written_pos: Option<[f32; 3]>,
+}
+
+impl RigPhysics {
+    // Carry the rig's capsule snapshots into another frame, with the rig
+    // component's position, already carried, as the one last written back.
+    pub(crate) fn rebase(&mut self, rebase: &crate::planet::Rebase, written: Option<[f32; 3]>) {
+        self.center.rebase(rebase);
+        self.written_pos = written.or_else(|| self.written_pos.map(|p| rebase.apply_point(p)));
+    }
+
+    // The entity carrying this rig's component, looked up by `target` only when
+    // the recorded one no longer carries it.
+    pub(crate) fn resolve(&mut self, ctx: &PipelineContext<'_>) -> Option<Entity> {
+        if ctx
+            .get::<CharacterRig>(self.entity)
+            .is_some_and(|r| r.target == self.target)
+        {
+            return Some(self.entity);
+        }
+        let (entity, _) = ctx
+            .query_with_entity::<CharacterRig>()
+            .find(|(_, r)| r.target == self.target)?;
+        self.entity = entity;
+        Some(entity)
+    }
+}
+
+// Capsule center for a rig's mesh-origin position: the capsule stands on
+// the origin (the mesh's feet).
+fn center_of(rig: &CharacterRig) -> [f32; 3] {
+    [
+        rig.position[0],
+        rig.position[1] + rig.half_height + rig.radius,
+        rig.position[2],
+    ]
+}
+
+// Create one kinematic capsule per published `CharacterRig`, filling the
+// caller's list so its reserved capacity survives.
+pub(crate) fn init_rigs(
+    world: &mut Simulation,
+    ctx: &PipelineContext<'_>,
+    mask: LayerMask,
+    rigs: &mut Vec<RigPhysics>,
+) {
+    rigs.extend(
+        ctx.query_with_entity::<CharacterRig>()
+            .filter_map(|(entity, rig)| {
+                let center = center_of(rig);
+                Some(RigPhysics {
+                    target: rig.target,
+                    entity,
+                    handle: world.add_character(rig.half_height, rig.radius, center, mask)?,
+                    shape: CharacterCapsule::new(rig.half_height, rig.radius),
+                    vy: 0.0,
+                    center: PointInterp::new(center),
+                    written_pos: Some(rig.position),
+                })
+            }),
+    );
+}
+
+// Read the root-motion displacements published since last frame (by
+// AnimationSystem, which runs after physics; the events queue holds them for
+// one cycle) into `out`, cleared first so the caller's buffer is reused.
+pub(crate) fn drain_motions_into(
+    ctx: &PipelineContext<'_>,
+    cursor: &mut EventCursor,
+    out: &mut Vec<RootMotionEvent>,
+) {
+    out.clear();
+    if let Some(ev) = ctx.events::<RootMotionEvent>() {
+        out.extend(ev.read(cursor).copied());
+    }
+}
+
+// Adopt externally moved rig components before the frame's ticks run: a
+// position that differs from the one written back last frame was not ours,
+// so the capsule snaps to it with no blend across the jump.
+pub(crate) fn sync_rigs(ctx: &PipelineContext<'_>, rigs: &mut [RigPhysics]) {
+    for rig_body in rigs.iter_mut() {
+        let Some(rig) = rig_body
+            .resolve(ctx)
+            .and_then(|e| ctx.get::<CharacterRig>(e))
+        else {
+            continue;
+        };
+        if rig_body.written_pos != Some(rig.position) {
+            rig_body.center.snap(center_of(rig));
+        }
+    }
+}
+
+// Advance every rig capsule one fixed tick: root-motion displacement plus
+// gravity, resolved against the scene. A rig with no motion still settles
+// under gravity.
+pub(crate) fn tick_rigs(
+    world: &mut Simulation,
+    ctx: &mut PipelineContext<'_>,
+    rigs: &mut [RigPhysics],
+    motions: &[RootMotionEvent],
+    dt: f32,
+    gravity: f32,
+    mask: LayerMask,
+) {
+    for rig_body in rigs.iter_mut() {
+        let Some(entity) = rig_body.resolve(ctx) else {
+            continue;
+        };
+        let Some(rig) = ctx.get_mut::<CharacterRig>(entity) else {
+            continue;
+        };
+        let mut local = [0.0f32; 3];
+        for motion in motions.iter().filter(|m| m.target == rig_body.target) {
+            local = add(local, motion.delta);
+        }
+        // Root-motion displacement plus the controller's direct drive.
+        let displacement = add(
+            rig.world_delta(local),
+            [
+                rig.desired_move[0] * dt,
+                rig.desired_move[1] * dt,
+                rig.desired_move[2] * dt,
+            ],
+        );
+        // A one-shot jump only takes off from the ground; discard it either
+        // way so a press cannot latch until the next landing.
+        if rig.jump_velocity > 0.0 {
+            if rig.grounded {
+                rig_body.vy = rig.jump_velocity;
+            }
+            rig.jump_velocity = 0.0;
+        }
+        rig_body.vy -= gravity * dt;
+        let center = rig_body.center.current();
+        let desired = [
+            displacement[0],
+            displacement[1] + rig_body.vy * dt,
+            displacement[2],
+        ];
+        rig_body.shape.resize(rig.half_height, rig.radius);
+        let moved = world.move_character(
+            &rig_body.shape,
+            &CharacterMoveInput {
+                center,
+                desired,
+                dt,
+                exclude: rig_body.handle,
+                mask,
+            },
+        );
+        let new_center = add(center, moved.translation);
+        world.set_kinematic_translation(rig_body.handle, new_center);
+        if moved.grounded && rig_body.vy < 0.0 {
+            rig_body.vy = 0.0;
+        }
+        rig.grounded = moved.grounded;
+        rig_body.center.push(new_center);
+    }
+}
+
+// Write each rig's blended capsule position back to its component for the
+// render follow.
+pub(crate) fn publish_rigs(ctx: &mut PipelineContext<'_>, rigs: &mut [RigPhysics], alpha: f32) {
+    for rig_body in rigs.iter_mut() {
+        let Some(entity) = rig_body.resolve(ctx) else {
+            continue;
+        };
+        let Some(rig) = ctx.get_mut::<CharacterRig>(entity) else {
+            continue;
+        };
+        let center = rig_body.center.sample(alpha);
+        let new_pos = [
+            center[0],
+            center[1] - rig.half_height - rig.radius,
+            center[2],
+        ];
+        rig_body.written_pos = Some(new_pos);
+        if new_pos != rig.position {
+            rig.position = new_pos;
+            rig.moved = true;
+        }
+    }
+}

@@ -2,10 +2,10 @@
 //! that traces it, and the reflection composite the SSR resolve shares.
 
 use ash::vk;
-use concinnity_core::render::backend_init::{RenderLaunch, SceneData};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use super::InitGpu;
 use super::effects::shared_post_device;
@@ -18,7 +18,7 @@ use crate::vulkan::post::reflection_composite::{
     VkReflectionCompositePass, build_reflection_composite,
 };
 use crate::vulkan::post::rt_reflections::RtReflectionsResources;
-use concinnity_core::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
 
 #[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
@@ -196,7 +196,7 @@ pub(super) fn build_rt_reflections(
         rt_opt.is_some(),
         rt_accel_opt.is_some(),
     )
-    .composite
+    .composite()
     {
         Some(build_reflection_composite(
             &shared_post_device(gpu, post_support, scene, descriptors),
@@ -213,7 +213,7 @@ pub(super) fn build_rt_reflections(
             retire_tick: 0,
             dynamic_mode: launch.rt_dynamic,
             skinned_geometry: launch.rt_skinned_geometry,
-            update_streak: Default::default(),
+            update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
             skin: rt_opt
                 .is_some()
                 .then(|| crate::vulkan::raytrace::build_rt_skin(alloc, device, hot_reload))

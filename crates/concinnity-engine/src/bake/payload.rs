@@ -1,0 +1,464 @@
+//! Baking an asset's payload from its typed value.
+//!
+//! Every bake here is pure computation over the value's fields: a generator's
+//! geometry, an IBL convolution, the built-in face's glyph atlas. An asset whose payload needs a file read, an image
+//! decode, or a shader compiler is refused with an error naming the cook
+//! module, which is where the importers live.
+//!
+//! Where a generator argument is optional, the fallback is the one the
+//! authored path applies to the same absent argument, so a world declared
+//! either way bakes the same bytes.
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use crate::bake::environment_map::source::{HdrImage, bake_payload, generate_sky_equirect};
+use crate::bake::environment_map::stars::generate_stars_equirect;
+use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
+use crate::components::{EnvironmentMap, Font, Mesh, ProceduralMesh};
+use crate::geometry::{
+    Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
+    water_grid,
+};
+use crate::resource::EnvironmentMapRecord;
+use concinnity_core::fanout::FanOut;
+
+/// Why a value could not be baked: usually one that needs the cook module's
+/// importers, which the message names.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct BakeError(String);
+
+// Fallbacks for the generator arguments a `ProceduralMesh` leaves unset. Each
+// matches what the authored path uses for the same absent argument.
+const BOX_HALF_EXTENTS: [f32; 3] = [0.5, 0.5, 0.5];
+const CYLINDER_RADIUS: f32 = 0.5;
+const CYLINDER_HEIGHT: f32 = 1.0;
+const CYLINDER_SEGMENTS: u32 = 16;
+const SPHERE_RADIUS: f32 = 1.0;
+const SPHERE_RINGS: u32 = 12;
+const SPHERE_SEGMENTS: u32 = 16;
+const EXTRUDE_HEIGHT: f32 = 1.0;
+const EXTRUDE_CORNER_RADIUS: f32 = 0.0;
+const EXTRUDE_CORNER_SEGMENTS: u32 = 8;
+const WATER_SUBDIVISIONS: u32 = 64;
+
+/// Baked mesh geometry, for [`World::add_mesh`](crate::ecs::World::add_mesh).
+///
+/// A payload from [`procedural_mesh`] carries the generator it was baked from,
+/// which the world keeps as the record of what was generated; one from
+/// [`mesh`] is nothing but its geometry.
+#[derive(Clone, PartialEq)]
+pub struct MeshPayload {
+    bytes: Vec<u8>,
+    procedural: Option<ProceduralMesh>,
+}
+
+impl MeshPayload {
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<u8>, Option<ProceduralMesh>) {
+        (self.bytes, self.procedural)
+    }
+}
+
+impl core::fmt::Debug for MeshPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MeshPayload")
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Baked image-based lighting and the map's runtime fields, for
+/// [`World::add_environment_map`](crate::ecs::World::add_environment_map).
+#[derive(Clone, PartialEq, Eq)]
+pub struct EnvironmentMapPayload {
+    bytes: Vec<u8>,
+    record: EnvironmentMapRecord,
+}
+
+impl EnvironmentMapPayload {
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<u8>, EnvironmentMapRecord) {
+        (self.bytes, self.record)
+    }
+}
+
+impl core::fmt::Debug for EnvironmentMapPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EnvironmentMapPayload")
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A baked glyph atlas, for [`World::add_font`](crate::ecs::World::add_font).
+#[derive(Clone, PartialEq, Eq)]
+pub struct FontPayload(Vec<u8>);
+
+impl FontPayload {
+    /// The baked bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl core::fmt::Debug for FontPayload {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("FontPayload")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
+
+/// Bake a `ProceduralMesh`'s geometry into its payload.
+///
+/// # Errors
+///
+/// Returns an error if the generator is missing or unknown, or its arguments do
+/// not build valid geometry.
+pub fn procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, BakeError> {
+    bake_procedural_mesh(mesh).map_err(BakeError)
+}
+
+fn bake_procedural_mesh(mesh: ProceduralMesh) -> Result<MeshPayload, String> {
+    let (vertices, indices): (Vec<Vert>, Vec<u16>) = match mesh.generator.as_str() {
+        "room" => build_room_geometry(mesh.half_width, mesh.half_depth, 0.0, mesh.ceiling_height),
+        "box" => build_box(mesh.half_extents.unwrap_or(BOX_HALF_EXTENTS)),
+        "cylinder" => build_cylinder(
+            mesh.radius.unwrap_or(CYLINDER_RADIUS),
+            mesh.height.unwrap_or(CYLINDER_HEIGHT),
+            mesh.segments.unwrap_or(CYLINDER_SEGMENTS),
+        )?,
+        "plane" => build_plane(mesh.half_width, mesh.half_depth),
+        "sphere" => build_sphere(
+            mesh.radius.unwrap_or(SPHERE_RADIUS),
+            mesh.rings.unwrap_or(SPHERE_RINGS),
+            mesh.segments.unwrap_or(SPHERE_SEGMENTS),
+        )?,
+        "extrude" => {
+            let profile = mesh
+                .profile
+                .as_deref()
+                .ok_or("the `extrude` generator needs a `profile` of [x, z] points")?;
+            build_extrude(
+                profile,
+                mesh.height.unwrap_or(EXTRUDE_HEIGHT),
+                mesh.corner_radius.unwrap_or(EXTRUDE_CORNER_RADIUS),
+                mesh.corner_segments.unwrap_or(EXTRUDE_CORNER_SEGMENTS),
+            )?
+        }
+        "water_grid" => water_grid::build_water_grid(
+            mesh.half_width,
+            mesh.half_depth,
+            mesh.subdivisions.unwrap_or(WATER_SUBDIVISIONS),
+        )?,
+        "" => return Err("a ProceduralMesh needs a `generator`".to_string()),
+        other => return Err(alloc::format!("unknown mesh generator '{other}'")),
+    };
+    let bytes = finish_mesh_payload(vertices, &indices, mesh.lod_levels, &mesh.lod_distances)?;
+    Ok(MeshPayload {
+        bytes,
+        procedural: Some(mesh),
+    })
+}
+
+/// Bake a raw `Mesh`'s vertices and indices into its payload. Normals and
+/// tangents are derived here; a `source` naming a file needs an importer.
+///
+/// # Errors
+///
+/// Returns an error if the mesh names a `source` file, has no vertices or
+/// indices, or its indices do not form whole triangles.
+pub fn mesh(mesh: &Mesh) -> Result<MeshPayload, BakeError> {
+    bake_mesh(mesh).map_err(BakeError)
+}
+
+fn bake_mesh(mesh: &Mesh) -> Result<MeshPayload, String> {
+    if !mesh.source.is_empty() {
+        return Err(
+            "a Mesh with a `source` reads a model file; compile it with the cook module"
+                .to_string(),
+        );
+    }
+    if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+        return Err("a Mesh needs `vertices` and `indices`".to_string());
+    }
+    if !mesh.indices.len().is_multiple_of(3) {
+        return Err(alloc::format!(
+            "a Mesh's indices come in triangles; {} is not a multiple of 3",
+            mesh.indices.len()
+        ));
+    }
+    let vertices = vertices_from_data(&mesh.vertices, &mesh.indices)?;
+    let bytes = finish_mesh_payload(
+        vertices,
+        &mesh.indices,
+        mesh.lod_levels,
+        &mesh.lod_distances,
+    )?;
+    Ok(MeshPayload {
+        bytes,
+        procedural: None,
+    })
+}
+
+/// Bake an `EnvironmentMap`'s IBL cubemaps into its payload, spreading each
+/// convolution's rows over `rows`.
+///
+/// # Errors
+///
+/// Returns an error if the map names a `source` file, its generator is missing
+/// or unknown, or its sizes are out of range.
+pub fn environment_map<S: FanOut>(
+    map: &EnvironmentMap,
+    rows: &S,
+) -> Result<EnvironmentMapPayload, BakeError> {
+    let bytes = bake_environment_map(map, rows).map_err(BakeError)?;
+    Ok(EnvironmentMapPayload {
+        bytes,
+        record: EnvironmentMapRecord::from(map),
+    })
+}
+
+fn bake_environment_map<S: FanOut>(map: &EnvironmentMap, rows: &S) -> Result<Vec<u8>, String> {
+    if !map.source.is_empty() {
+        return Err(
+            "an EnvironmentMap with a `source` reads a panorama file; compile it with the \
+             cook module"
+                .to_string(),
+        );
+    }
+    let generate: fn() -> HdrImage = match map.generator.as_str() {
+        "sky" => generate_sky_equirect,
+        "stars" => generate_stars_equirect,
+        "" => return Err("an EnvironmentMap needs a `source` or a `generator`".to_string()),
+        other => return Err(alloc::format!("unknown EnvironmentMap generator '{other}'")),
+    };
+    crate::bake::environment_map::check_sizes(map)?;
+    Ok(bake_payload(
+        &generate(),
+        map.prefilter_face_size,
+        map.irradiance_face_size,
+        map.prefilter_samples,
+        map.prefilter_clamp,
+        rows,
+    ))
+}
+
+/// Rasterize a `Font` into its glyph-atlas payload.
+///
+/// # Errors
+///
+/// Returns an error if the font names a `path`, or the built-in face cannot be
+/// rasterized at its size.
+pub fn font(font: &Font) -> Result<FontPayload, BakeError> {
+    if !font.path.is_empty() {
+        return Err(BakeError(
+            "a Font with a `path` reads a TTF file; compile it with the cook module".to_string(),
+        ));
+    }
+    crate::bake::font::compile(
+        crate::bake::font::BUILTIN_FONT_BYTES,
+        font.size_px,
+        "<built-in>",
+    )
+    .map(FontPayload)
+    .map_err(BakeError)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gfx::mesh_payload;
+    use concinnity_core::fanout::Inline;
+
+    fn mesh(generator: &str) -> ProceduralMesh {
+        ProceduralMesh {
+            generator: generator.into(),
+            ..Default::default()
+        }
+    }
+
+    // Every generator the builder reaches produces a payload the runtime's own
+    // reader accepts; the geometry itself is tested where it is generated.
+    #[test]
+    fn every_reachable_generator_bakes_a_readable_payload() {
+        let mut extrude = mesh("extrude");
+        extrude.profile = Some(alloc::vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+        for m in [
+            mesh("room"),
+            mesh("box"),
+            mesh("cylinder"),
+            mesh("plane"),
+            mesh("sphere"),
+            mesh("water_grid"),
+            extrude,
+        ] {
+            let generator = m.generator.clone();
+            let payload = procedural_mesh(m).unwrap_or_else(|e| panic!("{generator}: {e}"));
+            let read = mesh_payload::deserialize(payload.as_bytes())
+                .unwrap_or_else(|e| panic!("{generator}: {e}"));
+            assert!(!read.0.is_empty(), "{generator} has vertices");
+        }
+    }
+
+    // The unset optional arguments fall back to the same values the authored
+    // path uses, so a box with no half-extents is the same unit cube either
+    // way.
+    #[test]
+    fn an_unset_optional_argument_falls_back_to_the_authored_default() {
+        let payload = procedural_mesh(mesh("box")).expect("a box bakes");
+        let (vertices, indices) = build_box(BOX_HALF_EXTENTS);
+        let expected = finish_mesh_payload(vertices, &indices, 1, &[]).expect("the same box packs");
+        assert_eq!(payload.as_bytes(), expected);
+    }
+
+    #[test]
+    fn a_generator_that_cannot_bake_says_why() {
+        for (m, needle) in [
+            (mesh(""), "needs a `generator`"),
+            (mesh("nonesuch"), "unknown mesh generator"),
+            (mesh("extrude"), "needs a `profile`"),
+        ] {
+            let err = procedural_mesh(m).expect_err("not bakeable");
+            assert!(err.to_string().contains(needle), "{err}");
+        }
+    }
+
+    fn triangle() -> Mesh {
+        let vd = |pos: [f32; 3], uv: [f32; 2]| crate::components::VertexData {
+            pos,
+            color: [1.0; 3],
+            uv,
+        };
+        Mesh {
+            vertices: alloc::vec![
+                vd([0.0, 0.0, 0.0], [0.0, 0.0]),
+                vd([1.0, 0.0, 0.0], [1.0, 0.0]),
+                vd([0.0, 1.0, 0.0], [0.0, 1.0]),
+            ],
+            indices: alloc::vec![0, 1, 2],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn raw_geometry_bakes_with_derived_normals() {
+        let payload = super::mesh(&triangle()).expect("a triangle bakes");
+        let (verts, indices) =
+            mesh_payload::deserialize(payload.as_bytes()).expect("the payload reads back");
+        assert_eq!(indices, alloc::vec![0, 1, 2]);
+        assert!(verts.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
+    }
+
+    #[test]
+    fn raw_geometry_reports_what_it_cannot_bake() {
+        let sourced = Mesh {
+            source: "chair.glb".into(),
+            ..Default::default()
+        };
+        let err = super::mesh(&sourced).expect_err("a file source");
+        assert!(err.to_string().contains("cook module"), "{err}");
+
+        let err = super::mesh(&Mesh::default()).expect_err("nothing to bake");
+        assert!(
+            err.to_string().contains("needs `vertices` and `indices`"),
+            "{err}"
+        );
+
+        let mut ragged = triangle();
+        ragged.indices.push(0);
+        let err = super::mesh(&ragged).expect_err("a partial triangle");
+        assert!(err.to_string().contains("multiple of 3"), "{err}");
+
+        let mut past = triangle();
+        past.indices[2] = 7;
+        let err = super::mesh(&past).expect_err("an index past the list");
+        assert!(err.to_string().contains("indexes past"), "{err}");
+    }
+
+    #[test]
+    fn the_sky_generator_bakes_an_environment_payload() {
+        let map = EnvironmentMap {
+            generator: "sky".into(),
+            prefilter_face_size: 16,
+            irradiance_face_size: 8,
+            prefilter_samples: 4,
+            ..Default::default()
+        };
+        let payload = environment_map(&map, &Inline).expect("the sky bakes");
+        let view = crate::bake::environment_map::deserialize(payload.as_bytes())
+            .expect("the payload reads back");
+        assert_eq!(view.irradiance_face, 8);
+        assert_eq!(view.prefilter_face, 16);
+    }
+
+    #[test]
+    fn an_environment_map_reports_what_it_cannot_bake() {
+        let with_source = EnvironmentMap {
+            source: "studio.hdr".into(),
+            ..Default::default()
+        };
+        let err = environment_map(&with_source, &Inline).expect_err("a file source");
+        assert!(err.to_string().contains("cook module"), "{err}");
+
+        let blank = EnvironmentMap::default();
+        let err = environment_map(&blank, &Inline).expect_err("nothing to bake");
+        assert!(
+            err.to_string()
+                .contains("needs a `source` or a `generator`"),
+            "{err}"
+        );
+
+        let unknown = EnvironmentMap {
+            generator: "swamp".into(),
+            ..Default::default()
+        };
+        let err = environment_map(&unknown, &Inline).expect_err("unknown generator");
+        assert!(
+            err.to_string().contains("unknown EnvironmentMap generator"),
+            "{err}"
+        );
+
+        let oversized = EnvironmentMap {
+            generator: "sky".into(),
+            prefilter_face_size: 3,
+            ..Default::default()
+        };
+        let err = environment_map(&oversized, &Inline).expect_err("out of range");
+        assert!(err.to_string().contains("prefilter_face_size"), "{err}");
+    }
+
+    #[test]
+    fn the_builtin_face_rasterizes_and_a_file_one_does_not() {
+        let payload = font(&Font {
+            size_px: 12,
+            ..Default::default()
+        })
+        .expect("the built-in face bakes");
+        let (_, _, _, size_px, _, metrics) =
+            crate::bake::font::deserialize(payload.as_bytes()).expect("the atlas reads back");
+        assert_eq!(size_px, 12);
+        assert!(!metrics.is_empty());
+
+        let err = font(&Font {
+            path: "assets/face.ttf".into(),
+            ..Default::default()
+        })
+        .expect_err("a file face");
+        assert!(err.to_string().contains("cook module"), "{err}");
+    }
+}

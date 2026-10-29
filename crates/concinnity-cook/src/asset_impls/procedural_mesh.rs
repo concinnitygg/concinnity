@@ -1,4 +1,4 @@
-use concinnity_core::components::ProceduralMesh;
+use concinnity_engine::components::ProceduralMesh;
 
 impl crate::asset::BuildAsset for ProceduralMesh {
     fn compile_payload(
@@ -18,8 +18,8 @@ mod tests {
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {
             name: "prop",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &[],

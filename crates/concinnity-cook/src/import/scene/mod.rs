@@ -37,7 +37,7 @@ mod rig;
 
 use crate::authoring::world::args_with_id;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::transform::{
+use concinnity_engine::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_mul, mat4_transform_point,
 };
 use rig::{SkinnedPart, rig_entries};
@@ -1450,7 +1450,7 @@ mod tests {
         fn write(self, path: &Path) {
             let sink = self
                 .writer
-                .finalize_and_flush(&Default::default())
+                .finalize_and_flush(&fbxcel::writer::v7400::binary::FbxFooter::default())
                 .expect("finalize fbx");
             std::fs::write(path, sink.into_inner()).expect("write fbx");
         }

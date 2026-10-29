@@ -5,7 +5,7 @@
 //! the GPU. While they do not, there is no wait to move, and the go-ahead
 //! comes as soon as a snapshot arrives so the next step overlaps its submit.
 
-use concinnity_core::input::snapshot::InputPacket;
+use concinnity_engine::input::snapshot::InputPacket;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 
 // A frame's input and when it was sampled on the host clock.

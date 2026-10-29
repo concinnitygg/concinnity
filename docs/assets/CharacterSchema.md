@@ -8,7 +8,7 @@ A schema names the joints a conforming skeleton must have (with their
 parents), the shape keys a conforming mesh carries, the regions those keys
 and the editor group by, the proportion rows the editor offers, the morph
 targets the build synthesizes from the mesh, the panel's section order,
-and the presets it offers. A [CharacterModel](CharacterModel.md) names one
+and the presets it offers. A [`CharacterModel`](CharacterModel.md) names one
 schema and is validated against it at build time, so any conforming body
 gets the same sliders, panel, and animations.
 

@@ -3,13 +3,13 @@
 //! bake renders through the cull and the instance records it folds in.
 
 use crate::metal::cull::ShadowViewIcb;
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::WorldShader;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::transform::IDENTITY;
+use concinnity_engine::gfx::lod;
+use concinnity_engine::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::transform::IDENTITY;
 use objc2_metal::MTLVertexDescriptor;
 
 use super::{Features, InitGpu};
@@ -17,7 +17,7 @@ use crate::metal::context::{InstancedState, ProbeState};
 use crate::metal::cull::{CullState, metal_instance_records};
 use crate::metal::probe_prefilter::ProbePrefilterPipelines;
 use crate::metal::probe_set::ProbeCubeArray;
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 
 mod bindless;
 mod compute;
@@ -26,6 +26,8 @@ mod shadow;
 #[derive(Clone, Copy)]
 pub(super) struct CullInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    // The build-time draws, each at its own cull record.
+    pub(super) draws: &'a [concinnity_engine::gfx::render_types::DrawObject],
     pub(super) vert_desc: &'a MTLVertexDescriptor,
     pub(super) features: &'a Features,
     // Whether the cascade shadow pipeline exists.
@@ -46,13 +48,26 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     // runtime flag is true only when the feature can actually run.
     let two_pass_occlusion = inputs.occlusion_two_pass && compute.pipeline_phase2.is_some();
 
+    let variants = bindless
+        .world_pipelines
+        .cull_variants(&bindless.world_pipelines.bucket_spans(
+            inputs.draws,
+            inputs.draws.len()..inputs.draws.len(),
+            inputs.reserved_records,
+        ));
+
     Ok(CullState {
         bindless: bindless.active,
         main_pipeline: bindless.main_pipeline,
         world_pipelines: bindless.world_pipelines,
         pipeline: compute.pipeline,
-        encode_pipeline: compute.encode_pipeline,
+        scan_pipeline: compute.scan_pipeline,
+        scatter_pipeline: compute.scatter_pipeline,
+        group_counts: None,
+        ranges: None,
+        ranges_2: None,
         bucket_count: bindless.bucket_count,
+        variants,
         icbs: Vec::new(),
         icb_arg_encoder: compute.icb_arg_encoder,
         icb_arg_buffer: None,
@@ -95,6 +110,7 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
         bake: crate::metal::probe::MtlProbeBake::default(),
         prefilter,
         retire_pool: RetirePool::new(),
+        prop: crate::metal::prop_probe::PropProbe::default(),
     })
 }
 

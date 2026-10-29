@@ -19,9 +19,9 @@
 //! `RGBA16F`); a fixed 4 B/px would overflow the copy on the HDR path.
 
 use ash::vk;
-use concinnity_core::gfx::image_decode::PixelLayout;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
+use concinnity_engine::gfx::image_decode::PixelLayout;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -37,7 +37,7 @@ impl VkContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn debug`).
+    // `RenderBackend` vtable (bin-only `cn run -f`).
     pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
         let Some(image_index) = self.swapchain.last_present_index else {
             return Err(RenderError::Other(

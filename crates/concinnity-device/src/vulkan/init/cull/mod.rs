@@ -3,10 +3,10 @@
 //! two-pass occlusion passes built over them.
 
 use ash::vk;
-use concinnity_core::bake::texture::TextureImage;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{SceneData, WorldShader};
 
 use super::InitGpu;
 use crate::vulkan::context::{
@@ -17,6 +17,9 @@ use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
 
 mod bindless;
 mod compute;
+pub(in crate::vulkan) use compute::{
+    VARIANT_BUFFER_BYTES, cull_set_bindings, main_cull_set, shadow_cull_set,
+};
 mod gbuffer;
 mod shadow;
 mod two_pass;
@@ -155,7 +158,11 @@ pub(super) fn build_cull(
         },
     )?;
     let world_pipelines = bindless::build_world_pipelines(gpu, &bindless, world_shaders)?;
-    let shader_bucket_count = world_pipelines.bucket_count();
+    let variants = world.cull_variants(&world_pipelines);
+    let indirect_commands = concinnity_engine::gfx::render_types::region_commands(
+        &variants.regions,
+        world_pipelines.bucket_count(),
+    );
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
@@ -165,7 +172,7 @@ pub(super) fn build_cull(
             descriptors,
             plan,
             bindless: &bindless,
-            shader_bucket_count,
+            indirect_commands,
             occlusion_two_pass,
         },
     )?;
@@ -196,7 +203,7 @@ pub(super) fn build_cull(
         &bindless,
         &compute,
         plan,
-        shader_bucket_count,
+        indirect_commands,
         targets.msaa_samples,
         occlusion_two_pass,
     )?;
@@ -213,6 +220,11 @@ pub(super) fn build_cull(
         bindless_update_after_bind: plan.bindless_uab,
         world_pipelines,
         bucket_stride: plan.n_cull,
+        variants,
+        variant_buffers: compute.variant_buffers,
+        live_buckets: (0..gpu.frames)
+            .map(|_| std::sync::atomic::AtomicU64::new(u64::MAX))
+            .collect(),
         bindless_main_spv: bindless.main_spv,
         prepass_layout: bindless.prepass_layout,
         prepass_pipeline: bindless.prepass_pipeline,
@@ -223,6 +235,11 @@ pub(super) fn build_cull(
         cull_sets: compute.sets,
         draw_args_buffers: compute.draw_args_buffers,
         indirect_buffers: compute.indirect_buffers,
+        indirect_commands,
+        compact: compute.compact,
+        group_count_buffers: compute.group_count_buffers,
+        compact_sets: compute.compact_sets,
+        compact_sets2: two_pass.compact_sets,
         cull_status_buffers: compute.status_buffers,
         occlusion_two_pass,
         cull_sets2: two_pass.sets,
@@ -234,12 +251,10 @@ pub(super) fn build_cull(
         shadow_cull_pipeline: shadow_cull.cull_pipeline,
         shadow_cull_pipeline_layout: shadow_cull.cull_pipeline_layout,
         _shadow_cull_set_layout: shadow_cull.set_layout,
-        shadow_cull_sets: shadow_cull.sets,
+        shadow_views: shadow_cull.views,
         shadow_bindless_pipeline: shadow_cull.bindless_pipeline,
         shadow_bindless_pipeline_layout: shadow_cull.bindless_pipeline_layout,
-        shadow_indirect_buffers: shadow_cull.indirect_buffers,
-        spot_cull_sets: shadow_cull.spot_cull_sets,
-        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
+        spot_views: shadow_cull.spot_views,
         gbuffer_sets: gbuffer_pass.sets,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history: gbuffer_pass.model_history,

@@ -47,7 +47,7 @@ mod key;
 mod segment;
 pub mod thumbnails;
 
-pub(crate) use concinnity_core::blob::CacheEntryKind;
+pub(crate) use concinnity_engine::blob::CacheEntryKind;
 pub(crate) use key::{bake_key, expand_key, payload_key};
 use segment::Index;
 use std::collections::HashMap;

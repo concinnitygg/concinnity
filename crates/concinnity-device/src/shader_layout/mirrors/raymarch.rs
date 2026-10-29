@@ -7,7 +7,7 @@
 //! 16 bytes, so every field after the first pair sat four bytes late there and
 //! the volume marched a box it was never given. Reflection is what says so.
 
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::uniforms::{
     RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
 };
 

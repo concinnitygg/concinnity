@@ -15,6 +15,10 @@ use crate::editor::behavior::pulse::NodePulse;
 // its own focus, and `remove_armed` is the removal chip waiting on the press
 // that carries it out.
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent panel flags, each set and cleared on its own path"
+)]
 pub(in crate::editor::hook) struct BehaviorState {
     pub(in crate::editor::hook) index: usize,
     pub(in crate::editor::hook) row: Option<usize>,

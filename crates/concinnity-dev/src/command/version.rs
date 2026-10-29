@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 ///
 /// Every crate in the workspace shares it, so it names the toolchain as a
 /// whole rather than any one library.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // The commit the source was built from, empty when the tree was not a
 // checkout, and the date: the commit's when there is one, the build's when
@@ -22,22 +22,21 @@ const STAMP_DATE: &str = env!("CONCINNITY_STAMP_DATE");
 const NAME: &str = "concinnity";
 
 /// Print the version.
-pub fn version() -> std::io::Result<()> {
+pub(crate) fn version() {
     println!("{}", version_line());
-    Ok(())
 }
 
 /// The version and its build stamp, as `--version` reports them after the
 /// command name: `0.20.0 (fc62e9875 2026-10-16)`.
 ///
 /// Borrowed for the process because that is what clap's version field takes.
-pub fn version_details() -> &'static str {
+pub(crate) fn version_details() -> &'static str {
     static DETAILS: OnceLock<String> = OnceLock::new();
     DETAILS.get_or_init(|| details(VERSION, COMMIT, STAMP_DATE))
 }
 
 /// The full one-line version banner, command name included.
-pub fn version_line() -> String {
+pub(crate) fn version_line() -> String {
     format!("{NAME} {}", version_details())
 }
 

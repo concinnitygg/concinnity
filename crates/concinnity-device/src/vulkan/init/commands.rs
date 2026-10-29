@@ -4,8 +4,8 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{pass_timing, render_graph};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend::pass_timing, render_graph};
 
 use super::InitGpu;
 use crate::vulkan::context::{SwapchainState, VkCommands, VkFrameSync, VkHardware};

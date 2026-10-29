@@ -1,6 +1,6 @@
 // UI interaction builder: a clickable HitRegion.
 
-use concinnity_core::components::NamedAction;
+use concinnity_engine::components::NamedAction;
 
 use crate::authoring::spec::AssetSpec;
 
@@ -23,7 +23,7 @@ pub(crate) fn hit_region(
 mod tests {
     use super::*;
     use crate::authoring::spec::ArgValue;
-    use concinnity_core::components::AuthoredAction;
+    use concinnity_engine::components::AuthoredAction;
 
     #[test]
     fn hit_region_sets_rect_and_action() {

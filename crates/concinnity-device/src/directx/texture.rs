@@ -3,10 +3,10 @@
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::mipmap;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::mipmap;
+use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::Interface;
@@ -87,9 +87,26 @@ where
 // Buffer helpers
 
 // Create a default-heap buffer with `ALLOW_UNORDERED_ACCESS`, suitable for a
-// compute shader to write through a UAV. Used by the compute-cull
-// pass for the per-frame indirect-command buffers.
-pub(super) fn create_uav_buffer(
+// compute shader to write through a UAV. It starts in `COMMON`, as every
+// buffer does, and promotes on first use.
+pub(super) fn create_uav_buffer(device: &ID3D12Device, size: u64) -> RenderResult<ID3D12Resource> {
+    committed_uav_buffer(device, size, D3D12_RESOURCE_STATE_COMMON)
+}
+
+// Create an acceleration-structure backing buffer, which alone among buffers
+// must start, and stays, in `RAYTRACING_ACCELERATION_STRUCTURE`.
+pub(super) fn create_acceleration_structure_buffer(
+    device: &ID3D12Device,
+    size: u64,
+) -> RenderResult<ID3D12Resource> {
+    committed_uav_buffer(
+        device,
+        size,
+        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+    )
+}
+
+fn committed_uav_buffer(
     device: &ID3D12Device,
     size: u64,
     initial_state: D3D12_RESOURCE_STATES,
@@ -283,8 +300,8 @@ pub(super) struct TextureLevel<'a> {
 }
 
 // DXGI equivalent of a compiled texture payload format.
-fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) -> DXGI_FORMAT {
-    use concinnity_core::bake::texture::TextureFormat;
+fn dxgi_texture_format(format: concinnity_engine::bake::texture::TextureFormat) -> DXGI_FORMAT {
+    use concinnity_engine::bake::texture::TextureFormat;
     match format {
         TextureFormat::Rgba8 => DXGI_FORMAT_R8G8B8A8_UNORM,
         TextureFormat::Bc1 => DXGI_FORMAT_BC1_UNORM,
@@ -300,7 +317,7 @@ fn dxgi_texture_format(format: concinnity_core::bake::texture::TextureFormat) ->
 // result, which picks the view format back off the resource.
 pub(super) fn upload_texture_image_deferred(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<(PooledTexture, UploadInFlight)> {
     image.validate().map_err(RenderError::Other)?;
     let levels: Vec<TextureLevel<'_>> = image
@@ -318,7 +335,7 @@ pub(super) fn upload_texture_image_deferred(
 // Synchronous `upload_texture_image_deferred`.
 pub(super) fn upload_texture_image(
     alloc: &DeviceAllocator,
-    image: &concinnity_core::bake::texture::TextureImage,
+    image: &concinnity_engine::bake::texture::TextureImage,
 ) -> RenderResult<PooledTexture> {
     let (texture, in_flight) = upload_texture_image_deferred(alloc, image)?;
     wait_for_queue(alloc.device(), alloc.queue())?;
@@ -1088,7 +1105,30 @@ pub(super) fn create_rt_target_with_clear(
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
 ) -> RenderResult<ID3D12Resource> {
-    create_rt_resource(device, (width, height, 1), format, clear_color)
+    create_rt_resource(
+        device,
+        (width, height, 1),
+        format,
+        clear_color,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    )
+}
+
+// As `create_rt_target`, but created in RENDER_TARGET for a target that is
+// drawn into and never read, so it never leaves that state.
+pub(super) fn create_rt_sink(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> RenderResult<ID3D12Resource> {
+    create_rt_resource(
+        device,
+        (width, height, 1),
+        format,
+        [0.0; 4],
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+    )
 }
 
 // As `create_rt_target`, with `levels` mip levels, each of which a draw can
@@ -1100,15 +1140,23 @@ pub(super) fn create_rt_chain(
     format: DXGI_FORMAT,
     levels: u32,
 ) -> RenderResult<ID3D12Resource> {
-    create_rt_resource(device, (width, height, levels), format, [0.0; 4])
+    create_rt_resource(
+        device,
+        (width, height, levels),
+        format,
+        [0.0; 4],
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    )
 }
 
-// A color render target of `width` x `height` with `levels` mips.
+// A color render target of `width` x `height` with `levels` mips, created in
+// `initial_state`.
 fn create_rt_resource(
     device: &ID3D12Device,
     (width, height, levels): (u32, u32, u32),
     format: DXGI_FORMAT,
     clear_color: [f32; 4],
+    initial_state: D3D12_RESOURCE_STATES,
 ) -> RenderResult<ID3D12Resource> {
     let heap_props = D3D12_HEAP_PROPERTIES {
         Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -1140,7 +1188,7 @@ fn create_rt_resource(
             &raw const heap_props,
             D3D12_HEAP_FLAG_NONE,
             &raw const desc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            initial_state,
             Some(&raw const clear_value),
             &raw mut res_opt,
         )
@@ -1472,7 +1520,7 @@ fn upload_cube_resource(
     mip_count: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, 0)
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)
         .map_err(RenderError::Other)?;
     if mip_count == 1 && bytes.len() < needed {
         return Err(RenderError::Other(format!(
@@ -1556,7 +1604,7 @@ fn upload_face_major_into_cube(
         )));
     }
     for (mip, slab) in mip_bytes.iter().enumerate().take(mip_count as usize) {
-        let needed = concinnity_core::bake::environment_map::cube_mip_byte_len(face_size, mip)
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)
             .map_err(RenderError::Other)?;
         if slab.len() < needed {
             return Err(RenderError::Other(format!(

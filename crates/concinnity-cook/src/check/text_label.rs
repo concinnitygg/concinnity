@@ -1,4 +1,4 @@
-use concinnity_core::components::{ColorRun, color_run_error};
+use concinnity_engine::components::{ColorRun, color_run_error};
 
 // The two fields the check reads; the rest of the label parses when it bakes.
 #[derive(serde::Deserialize)]

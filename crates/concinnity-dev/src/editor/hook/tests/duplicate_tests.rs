@@ -2,9 +2,9 @@
 //! and selects, and the Ctrl+D that stands down while the Behavior panel owns
 //! the keyboard.
 
-use concinnity_core::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput};
-use concinnity_core::ecs::World;
-use concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS;
+use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput};
+use concinnity_engine::ecs::World;
+use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 
 use super::fixtures::{entry, hook, world_with_input};
 use crate::editor::behavior;

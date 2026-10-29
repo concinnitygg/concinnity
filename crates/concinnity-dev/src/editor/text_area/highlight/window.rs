@@ -2,8 +2,8 @@
 //! `[left, left + width)` of the line, one label character per cell (a tab
 //! draws as the spaces it expands to).
 
-use concinnity_core::components::ColorRun;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::ColorRun;
 
 use super::Span;
 use crate::editor::text_area::view;

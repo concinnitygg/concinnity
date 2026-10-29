@@ -1,15 +1,15 @@
 //! The blob WRITE side (build output): pack compiled payloads + the def table
 //! into .cnb files and emit world-lock.json. The byte format itself -- the
 //! header, the record schema, and the `encode_cnb` image builder -- is owned by
-//! the I/O-free `concinnity_core::blob` module; this file owns the packing POLICY
+//! the I/O-free `concinnity_engine::blob` module; this file owns the packing POLICY
 //! (payload distribution across overflow blobs, the size ceiling), the lock, and
 //! the writes themselves.
 
-use concinnity_core::blob::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::{
     MeshBoundsRecord, PhysicsBudgetRecord, SceneGroup, WorldManifest, encode_cnb, payload_section,
 };
-use concinnity_core::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
-use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
 #[cfg(test)]
 pub(crate) use concinnity_host::store::blob::read_cnb;
 use serde::{Deserialize, Serialize};
@@ -182,7 +182,7 @@ pub struct PackResult {
 // Encode one blob image and write it out. The format crate performs no I/O, so
 // the write lives here alongside the rest of the build's file output.
 fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
-    let image = encode_cnb(concinnity_core::SCHEMA_VERSION, meta, payload)
+    let image = encode_cnb(concinnity_engine::SCHEMA_VERSION, meta, payload)
         .map_err(|e| std::io::Error::other(format!("encoding {path}: {e:?}")))?;
     fs::write(path, image)
 }
@@ -451,7 +451,7 @@ pub(crate) mod test_output {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::asset_id::AssetId;
     use test_output::Output;
 
     fn locator(blob_index: u32, offset: u64, len: u64) -> PayloadLocator {
@@ -491,7 +491,7 @@ mod tests {
             component_def(4, None),
         ];
         let resources = vec![ResourceRecord {
-            resource_kind: concinnity_core::blob::ResourceKind::Material,
+            resource_kind: concinnity_engine::blob::ResourceKind::Material,
             handle: 0,
             payload: Some(locator(1, 0, 4)),
             data_bytes: vec![9, 9],
@@ -830,7 +830,7 @@ mod tests {
         assert_eq!(b.blob_index, 2, "group content exceeding the cap rolls on");
     }
 
-    // The byte-format round-trip tests live in `concinnity_core::blob` with
+    // The byte-format round-trip tests live in `concinnity_engine::blob` with
     // the encoder; here the tests cover cook's packing policy and the lock.
 
     #[test]

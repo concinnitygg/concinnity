@@ -5,7 +5,7 @@
 //! function to define as its prototype. Its layout is
 //! `shader_reference_panel.rs`.
 
-use concinnity_core::render::shader_programs::vocabulary::{Entry, Kind};
+use concinnity_engine::render::shader::programs::vocabulary::{Entry, Kind};
 
 // The kinds the column groups names under, in the order it lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +177,7 @@ impl Reference {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::shader_programs::vocabulary::{ENTRIES, sdf};
+    use concinnity_engine::render::shader::programs::vocabulary::{ENTRIES, sdf};
 
     fn names(rows: &[RefRow<'_>]) -> Vec<String> {
         rows.iter().map(RefRow::text).collect()

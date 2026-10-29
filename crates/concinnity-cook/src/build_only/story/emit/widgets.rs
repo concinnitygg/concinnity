@@ -1,5 +1,5 @@
-use concinnity_core::components::NamedAction;
-use concinnity_core::gfx::overlay::UI_REFERENCE_SIZE;
+use concinnity_engine::components::NamedAction;
+use concinnity_engine::gfx::overlay::UI_REFERENCE_SIZE;
 
 use super::names::ButtonNames;
 use crate::authoring::spec::{AssetSpec, asset, spec_to_value};

@@ -10,7 +10,7 @@ use crate::command::{provenance, resolve_world_path};
 
 /// Print one asset's effective entry from the expanded world, with where
 /// each value came from.
-pub fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
+pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()> {
     let json_path = resolve_world_path(json_path)?;
     let content = std::fs::read_to_string(&json_path)?;
     let source = concinnity_cook::WorldSource::file(&content, std::path::Path::new(&json_path));

@@ -25,8 +25,8 @@
 // Deleting `cache/` is the way to force a full recompile, and is what a host
 // toolchain upgrade whose output differs for identical source wants.
 
-use concinnity_core::blob::CacheEntryKind;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::CacheEntryKind;
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};

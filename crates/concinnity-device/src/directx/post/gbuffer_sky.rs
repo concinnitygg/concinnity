@@ -6,7 +6,7 @@
 //! Root signature: `[0]` root CBV b1, the pre-pass `GbView` (the DirectX register
 //! `gbuffer_sky.hlsl` gives it).
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::{
     ID3D12Device, ID3D12GraphicsCommandList, ID3D12InfoQueue, ID3D12PipelineState,
     ID3D12RootSignature,

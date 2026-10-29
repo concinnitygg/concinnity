@@ -10,18 +10,17 @@
 //! rebuilt data is uploaded via the existing `write_geometry_region` helper.
 //! The scene's streamed-mesh placement allocators are **not** preserved: the
 //! rebuilt buffer is sized exactly for the current draws, so any subsequent
-//! `upload_mesh` will fail allocation. `cn debug`-only by design; matches
+//! `upload_mesh` will fail allocation. `cn run -f`-only by design; matches
 //! DirectX + Metal.
 
 use ash::vk;
-use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend::{
+use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::range_alloc::RangeAllocator;
-use concinnity_core::render::{geometry_repack, rt_geom};
+use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;
@@ -90,8 +89,7 @@ impl VkContext {
         self.geometry.vertex_buffer_bytes = new_v_bytes;
         self.geometry.index_buffer = new_ibuf;
         self.geometry.index_buffer_bytes = new_i_bytes;
-        self.state.placement.mesh_vtx = RangeAllocator::new();
-        self.state.placement.mesh_idx = RangeAllocator::new();
+        self.state.placement.forget_layout();
         for (layout, obj) in repacked
             .layouts
             .into_iter()
@@ -111,7 +109,7 @@ impl VkContext {
 
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // fresh geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a `SkinnedMesh` re-import has a
+    // hot-reload (`cn run -f` only) when a `SkinnedMesh` re-import has a
     // different vertex / index count than its init-time slot. Walks every
     // `SkinnedDrawObject` in order: for each slot in `changes`, the new
     // vertices / indices are appended to a fresh CPU buffer; for unchanged
@@ -128,7 +126,7 @@ impl VkContext {
     // `normal_map_slot` / `material` / `joint_count`) are untouched.
     // Skeleton-shape changes route through `update_skinned_skeleton`, not
     // this call. Mirrors `DxContext::rebuild_skinned_geometry`. Reached only
-    // through the bin's `cn debug` runtime-mutation path (dead in the FFI lib,
+    // through the bin's `cn run -f` runtime-mutation path (dead in the FFI lib,
     // live in the bin).
     pub(crate) fn rebuild_skinned_geometry(
         &mut self,
@@ -191,7 +189,7 @@ impl VkContext {
         )?;
         // Whole u32 words for the index buffer; see `upload_skinned`.
         let new_ibuf = self.hw.alloc.create_buffer(
-            rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
+            geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;

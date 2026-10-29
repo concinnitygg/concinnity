@@ -4,7 +4,7 @@
 //! call (on the debug server's socket thread); `super::state::run_frame` and
 //! `super::animation` take each request on the frame thread.
 
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::asset_id::AssetId;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};

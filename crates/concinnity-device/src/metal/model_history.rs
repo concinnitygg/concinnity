@@ -9,8 +9,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::uniforms::ModelHistoryParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::uniforms::ModelHistoryParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;

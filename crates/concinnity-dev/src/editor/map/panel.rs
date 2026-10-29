@@ -8,7 +8,7 @@
 //! are open at once often enough that sharing one family would leave each
 //! blanking the other's cards.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::chart::{self, ChartIds};
 use crate::editor::behavior::graph::{Card, Chart};
@@ -169,14 +169,14 @@ fn chart_view<'a>(view: &'a MapView<'a>) -> chart::ChartView<'a> {
 mod tests {
     use concinnity_cook::authoring::registry::RegisteredType;
     use concinnity_cook::authoring::world::WorldJsonlAsset;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
     use serde_json::{Value, json};
 
     use super::*;
     use crate::editor::behavior::chart::CARD_POOL;
     use crate::editor::entry_list::EntryList;
     use crate::editor::map::{self, Entries};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     const O: [f32; 2] = [40.0, 60.0];
 

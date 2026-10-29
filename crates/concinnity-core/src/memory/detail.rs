@@ -33,19 +33,20 @@ pub struct SizeClass {
     pub live_blocks: u64,
 }
 
-// Every size class, read in one pass.
+/// Every size class, read in one pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SizeClasses {
     classes: [SizeClass; CLASS_COUNT],
 }
 
 impl SizeClasses {
+    /// Every class, smallest first.
     pub fn classes(&self) -> &[SizeClass; CLASS_COUNT] {
         &self.classes
     }
 
-    // The class holding the most live blocks: where the heap's population sits,
-    // and where a leak shows first. `None` when nothing is live.
+    /// The class holding the most live blocks: where the heap's population sits,
+    /// and where a leak shows first. `None` when nothing is live.
     pub fn busiest(&self) -> Option<SizeClass> {
         self.classes
             .iter()
@@ -54,6 +55,7 @@ impl SizeClasses {
             .max_by_key(|c| c.live_blocks)
     }
 
+    /// Blocks allocated and not yet freed, across every class.
     pub fn live_blocks(&self) -> u64 {
         self.classes.iter().map(|c| c.live_blocks).sum()
     }
@@ -179,6 +181,10 @@ mod imp {
         CLASSES.record_realloc(old_size, new_size);
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the build without `detail` returns `None`"
+    )]
     pub(crate) fn snapshot() -> Option<SizeClasses> {
         Some(CLASSES.snapshot())
     }

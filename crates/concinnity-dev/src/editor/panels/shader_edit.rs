@@ -9,7 +9,7 @@ use std::fmt;
 use super::shader_list::ShaderDecl;
 use super::shader_source::{SourceKey, same_file, stage_name};
 use crate::editor::widget_check::Check;
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 
 // An edit that takes a file away from the Shader source panel, carried through
 // the unsaved-changes question when that file is open there.

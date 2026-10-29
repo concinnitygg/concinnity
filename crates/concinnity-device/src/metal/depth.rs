@@ -2,10 +2,10 @@
 // bind, the clear depth their attachments load with, and the compare the
 // shadow sampler takes.
 
-use concinnity_core::render::depth::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::depth::{
     DEPTH_CLEAR, DEPTH_INCLUSIVE_COMPARE, DEPTH_WRITE_COMPARE, DepthCompare,
 };
-use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCompareFunction, MTLDepthStencilDescriptor, MTLDepthStencilState, MTLDevice};

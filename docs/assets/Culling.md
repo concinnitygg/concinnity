@@ -3,7 +3,7 @@
 # Culling
 
 How the renderer culls objects the camera cannot see. The `culling` section
-of [GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default
 below.
 
 ## Parameters

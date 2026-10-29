@@ -4,11 +4,11 @@
 //! from the first light and cached -- the cascade shadow direction -- is
 //! re-derived here, since nothing else refreshes it.
 
-use concinnity_core::components::DirectionalLight;
-use concinnity_core::gfx::render_types::LightUniforms;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::lights::LightData;
-use concinnity_core::render::spot_shadow;
+use concinnity_engine::components::DirectionalLight;
+use concinnity_engine::gfx::render_types::LightUniforms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::light::lights::LightData;
+use concinnity_engine::render::shadow::spot;
 
 use super::context::{MtlContext, write_buffer_slice};
 
@@ -39,11 +39,7 @@ impl MtlContext {
         write_buffer_slice(&self.scene.local_light_buffer, &data.lights)?;
         write_buffer_slice(&self.scene.area_light_buffer, &data.area_lights)?;
         write_buffer_slice(&self.spot_shadow.buffer, &data.spot_shadows)?;
-        self.spot_shadow.frusta = data
-            .spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect();
+        self.spot_shadow.frusta = data.spot_shadows.iter().map(spot::slice_frustum).collect();
         self.state.planner.shadow.reset_spots();
         self.lights.move_local(&data.lights, uniforms);
         Ok(())

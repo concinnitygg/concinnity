@@ -5,7 +5,7 @@
 //! edit keeps the form open and writes nothing.
 
 use concinnity_cook::build_only::include::SourcedEntry;
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 use std::path::PathBuf;
 
 use super::fixtures::{entry, hook, set_field, world_with_fields};
@@ -145,24 +145,33 @@ fn a_types_extras_shape_the_form_and_ride_its_commit() {
     assert!(file.exists(), "the file stays");
 }
 
-// An extras edit that reaches an included entry is refused whole: the entries
-// go back, the form stays open, and no file is written.
+// An extras edit that reaches a read-only entry (one of a file the world
+// includes twice) is refused whole: the entries go back, the form stays open,
+// and no file is written.
 #[test]
 fn a_refused_commit_keeps_the_form_and_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("by_stub.txt");
     let mut h = hook(Vec::new());
-    h.entries = EntryList::with_includes(vec![SourcedEntry {
+    let include = || SourcedEntry {
+        entry: serde_json::json!({"type": "Include", "args": {"path": "lib.jsonl"}}),
+        file: None,
+    };
+    let other = || SourcedEntry {
         entry: entry("other", "PointLight"),
         file: Some("lib.jsonl".into()),
-    }]);
+    };
+    h.entries = EntryList::with_includes(
+        vec![include(), other(), include(), other()],
+        std::path::Path::new(&h.world_path),
+    );
     h.baseline = h.entries.clone();
     let mut world = world_with_fields();
     open_with_stub(&mut h, &mut world, file.clone());
     h.apply_form(FormAction::PressExtra(FLAG), &mut world);
     h.apply_form(FormAction::Confirm, &mut world);
-    assert_eq!(h.entries.len(), 1);
-    assert!(h.entries[0]["args"].get("intensity").is_none());
+    assert_eq!(h.entries.len(), 4);
+    assert!(h.entries[1]["args"].get("intensity").is_none());
     assert!(h.form_open() && h.form.extras.is_some());
     assert!(!file.exists());
     assert!(!h.can_undo());

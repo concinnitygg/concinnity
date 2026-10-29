@@ -5,6 +5,7 @@ on:
     branches: ["main", "master"]
   pull_request:
     branches: ["main", "master"]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +40,59 @@ jobs:
           command: check
 
   build:
-    name: Clippy, Build & Test
+    name: Clippy, Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Keep LF Line Endings
+        if: runner.os == 'Windows'
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install Linux Dependencies
+        uses: ./.github/actions/install-linux-deps
+
+      - name: Install Metal Toolchain
+        if: runner.os == 'macOS'
+        run: xcrun metal --version || xcodebuild -downloadComponent MetalToolchain
+
+      - name: Vendor Third-Party Binaries
+        uses: ./.github/actions/vendor
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-features --all-targets --workspace
+
+      - name: Run Cargo Build
+        run: cargo build --locked --all-features --all-targets --workspace
+
+      - name: Run Doctests
+        timeout-minutes: 20
+        run: cargo test --locked --all-features --doc --workspace
+
+      - name: Test Core Default Features
+        run: cargo test --locked -p concinnity-core
+
+      - name: Diagnose Wiring Tests
+        if: runner.os == 'Windows'
+        run: cargo test --locked --all-features -p concinnity-runtime --test wiring -- --test-threads=1
+
+      - name: Run Tests
+        timeout-minutes: 30
+        run: cargo test --locked --all-features --all-targets --workspace
+
+  coverage:
+    name: Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -52,24 +105,8 @@ jobs:
       - name: Install Linux Dependencies
         uses: ./.github/actions/install-linux-deps
 
-      - name: Cache Shader Compiler
-        uses: actions/cache@v4
-        with:
-          path: vendor/dxc-*
-          key: dxc-${{ runner.os }}-${{ hashFiles('scripts/vendor.py') }}
-
-      - name: Vendor Shader Compiler
-        run: python3 scripts/vendor.py fetch dxc
-
-      - name: Run Clippy
-        run: cargo clippy --locked --all-features --all-targets --workspace
-
-      - name: Run Cargo Build
-        run: cargo build --locked --all-features --all-targets --workspace
-
-      - name: Run Doctests
-        timeout-minutes: 20
-        run: cargo test --locked --all-features --doc --workspace
+      - name: Vendor Third-Party Binaries
+        uses: ./.github/actions/vendor
 
       - name: Install Cargo Llvm-Cov
         uses: taiki-e/install-action@cargo-llvm-cov

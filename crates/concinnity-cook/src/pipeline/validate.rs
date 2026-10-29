@@ -18,6 +18,11 @@ use crate::authoring::registry::{AssetOrigin, RegisteredType};
 /// - per-type structural checks via `crate::check`
 ///
 /// Shader assets are not compiled here; use the `validate_shader` tool for that.
+///
+/// # Errors
+///
+/// Returns an error if the type is unknown or not authorable, or the args fail
+/// its checks.
 pub fn validate_asset(
     asset_type: &str,
     name: &str,
@@ -63,8 +68,12 @@ pub fn validate_asset(
 /// resolution, but stops short of compiling payloads: intended for fast
 /// server-side pre-deploy checks where shader compilation is not needed.
 /// `assets_dir` is the asset search root the expansion passes resolve their
-/// sources and presets against. Every problem found is reported in a single
-/// newline-joined error.
+/// sources and presets against.
+///
+/// # Errors
+///
+/// Returns an error if the world fails validation or an asset's args do not
+/// resolve, with every problem found joined one per line.
 pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io::Result<()> {
     let loaded = crate::build_only::prepare_world(content, assets_dir)
         .map_err(|errors| errors_to_io(&errors))?;

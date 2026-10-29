@@ -3,7 +3,7 @@
 //! hint, and its category tag. The data model and ranking live in
 //! `editor/palette/`; the drive in `hook/edit/palette.rs`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::panels::registry::PanelKey;
@@ -216,7 +216,7 @@ fn empty_row(world: &mut World, o: [f32; 2]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

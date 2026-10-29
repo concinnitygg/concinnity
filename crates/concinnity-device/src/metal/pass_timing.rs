@@ -61,9 +61,11 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSArray, NSRange, NSString};
 use objc2_metal::{
-    MTLCommonCounterSetTimestamp, MTLComputePassDescriptor, MTLCounterResultTimestamp,
-    MTLCounterSampleBuffer, MTLCounterSampleBufferDescriptor, MTLCounterSamplingPoint,
-    MTLCounterSet, MTLDevice, MTLRenderPassDescriptor, MTLStorageMode,
+    MTLBlitCommandEncoder as _, MTLBlitPassDescriptor, MTLBuffer, MTLCommandBuffer,
+    MTLCommandEncoder as _, MTLCommonCounterSetTimestamp, MTLComputePassDescriptor,
+    MTLCounterResultTimestamp, MTLCounterSampleBuffer, MTLCounterSampleBufferDescriptor,
+    MTLCounterSamplingPoint, MTLCounterSet, MTLDevice, MTLOrigin, MTLRenderPassDescriptor,
+    MTLResourceOptions, MTLSize, MTLStorageMode, MTLTexture,
 };
 // `PassId` and `PASS_COUNT` live in the shared render-graph module so the
 // per-pass GPU timer and the future graph executor key off the same enum.
@@ -72,7 +74,7 @@ use objc2_metal::{
 // timing to flow. The passes.rs `every_pass_id_round_trips_to_its_name` test
 // forces those edits at compile time, and `slot_pair` debug_asserts the index
 // at runtime, so a missed registration cannot silently report zero GPU time.
-pub(super) use concinnity_core::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
+pub(super) use concinnity_engine::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
 
 // `NSUInteger::MAX` sentinel for an unused sample slot inside a render-pass
 // or compute-pass `sampleBufferAttachments[0]`. Metal treats this as
@@ -119,7 +121,12 @@ pub(super) struct PassTimingResources {
     // zeroes any pass whose bit is clear so the profiler reports 0 for a pass
     // that did not actually run (e.g. every world pass behind an opaque menu).
     attached: std::sync::atomic::AtomicU64,
+    // Where a marker's one-pixel copy lands; never read.
+    marker_sink: Retained<ProtocolObject<dyn MTLBuffer>>,
 }
+
+// Bytes a marker copies: one pixel of up to four 32-bit channels.
+const MARKER_BYTES: usize = 16;
 
 impl PassTimingResources {
     // Build per-frame timestamp sample buffers. Returns `None` if the
@@ -168,10 +175,17 @@ impl PassTimingResources {
         let buffers = (0..frames_in_flight.max(1))
             .map(|_| make_buf())
             .collect::<Option<Vec<_>>>()?;
+        // Untracked, so frames in flight writing it never wait on each other.
+        let marker_sink = device.newBufferWithLength_options(
+            MARKER_BYTES,
+            MTLResourceOptions::StorageModePrivate
+                | MTLResourceOptions::HazardTrackingModeUntracked,
+        )?;
         Some(Self {
             buffers,
             frame_slot: 0,
             attached: std::sync::atomic::AtomicU64::new(0),
+            marker_sink,
         })
     }
 
@@ -318,6 +332,66 @@ impl PassTimingResources {
             PassTimer::First(id) => self.attach_compute_first(desc, id),
             PassTimer::Last(id) => self.attach_compute_last(desc, id),
         }
+    }
+
+    // Record `timer`'s sample on a blit that copies one pixel of `after`, for
+    // work encoded outside any encoder this module can attach to (MetalFX's
+    // scaler). The read makes the hazard tracker hold the marker until every
+    // earlier writer of `after` has finished, which places its sample against
+    // that work; an encoder with nothing to do is dropped and samples nothing.
+    pub(super) fn mark(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        timer: PassTimer,
+        after: &ProtocolObject<dyn MTLTexture>,
+    ) {
+        let desc = MTLBlitPassDescriptor::new();
+        let (start, end) = match timer {
+            PassTimer::None => return,
+            PassTimer::Whole(id) => {
+                self.mark_attached(id);
+                slot_pair(id)
+            }
+            PassTimer::First(id) => {
+                self.mark_attached(id);
+                (slot_pair(id).0, NO_SAMPLE)
+            }
+            PassTimer::Last(id) => (NO_SAMPLE, slot_pair(id).1),
+        };
+        let arr = desc.sampleBufferAttachments();
+        // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
+        let entry = unsafe { arr.objectAtIndexedSubscript(0) };
+        entry.setSampleBuffer(Some(self.active()));
+        // SAFETY: `start` is a `slot_pair` index below `SAMPLE_COUNT`, the active
+        // buffer's sample count, or `NO_SAMPLE`.
+        unsafe { entry.setStartOfEncoderSampleIndex(start) };
+        // SAFETY: `end` is likewise in the active buffer's range or `NO_SAMPLE`.
+        unsafe { entry.setEndOfEncoderSampleIndex(end) };
+        let Some(enc) = cmd_buf.blitCommandEncoderWithDescriptor(&desc) else {
+            return;
+        };
+        let origin = MTLOrigin { x: 0, y: 0, z: 0 };
+        let size = MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        };
+        // SAFETY: a 1x1 region at the origin of slice 0, level 0 is inside any
+        // texture, and one pixel of at most `MARKER_BYTES` fits the sink.
+        unsafe {
+            enc.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                after,
+                0,
+                0,
+                origin,
+                size,
+                &self.marker_sink,
+                0,
+                MARKER_BYTES,
+                MARKER_BYTES,
+            );
+        }
+        enc.endEncoding();
     }
 }
 

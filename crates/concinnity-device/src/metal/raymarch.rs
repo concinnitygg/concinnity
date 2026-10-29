@@ -22,16 +22,16 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::components::sdf_volume::SdfVolume;
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::LightUniforms;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::{Family, ProxyFaces, VolumeFlags};
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::LightUniforms;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::sdf::volume::SdfVolume;
+use concinnity_engine::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSString, ns_string};
@@ -45,7 +45,7 @@ use objc2_metal::{
 // One declaration for all three backends, in `core::render::uniforms`.
 // Re-exported at `pub(in crate::metal)` so the graph executor, the shadow pass
 // and this file keep their existing paths.
-pub(in crate::metal) use concinnity_core::render::uniforms::{
+pub(in crate::metal) use concinnity_engine::render::uniforms::{
     RaymarchShadowCascade, RaymarchView, RaymarchVolumeUniforms,
 };
 
@@ -64,7 +64,7 @@ mod swap;
 // sits past all of them.
 const RAYMARCH_VERTEX_BUFFER: usize = 5;
 
-// `RaymarchLights` mirror of `concinnity_core::gfx::render_types::LightUniforms`.
+// `RaymarchLights` mirror of `concinnity_engine::gfx::render_types::LightUniforms`.
 // The Rust struct already has the right layout; we just hand the
 // buffer over to the shader at buffer(2). Kept as a type alias so the
 // raymarch encoder can reference it without re-defining the layout.
@@ -72,6 +72,10 @@ type RaymarchLightsGpu = LightUniforms;
 
 // Per-`SdfVolume` GPU state: the compiled render pipeline (one PSO per
 // volume) plus the static per-volume uniforms.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the SdfVolume asset flags"
+)]
 pub(in crate::metal) struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     pub(in crate::metal) label: String,
@@ -928,7 +932,7 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         view: &RaymarchView,
     ) -> RenderResult<u32> {
-        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
+        use concinnity_engine::gfx::render_types::NUM_SHADOW_CASCADES;
         if !self.any_raymarch_shadow_casters() {
             return Ok(0);
         }

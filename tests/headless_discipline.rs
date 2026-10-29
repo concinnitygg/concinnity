@@ -138,8 +138,8 @@ fn the_scan_reads_the_whole_workspace() {
         files.len()
     );
     assert!(
-        files.iter().any(|p| p.ends_with("src/driver.rs")),
-        "the facade's own driver is in the scan"
+        files.iter().any(|p| p.ends_with("src/lib.rs")),
+        "the facade is in the scan"
     );
     assert!(
         !files.iter().any(|p| p.ends_with(SELF)),

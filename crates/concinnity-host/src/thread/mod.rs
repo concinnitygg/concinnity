@@ -1,5 +1,5 @@
 //! The thread-scoped services the rest of the engine builds on, kept out of the
-//! vocabulary and compute layer below them (`concinnity-core`) so that layer
+//! vocabulary and compute layer below them (`concinnity-engine`) so that layer
 //! needs no operating system.
 //!
 //! Four of them, sharing nothing but a need for real threads:
@@ -15,8 +15,8 @@
 //!     per-thread so two concurrent builds cannot see each other's ids.
 //!
 //! It knows where nothing lives: it names no path and opens no file. The
-//! identity types the interner hands back are `concinnity-core`'s, and the
-//! resolver seam it installs is `concinnity_core::ecs::resolver`'s.
+//! identity types the interner hands back are `concinnity-engine`'s, and the
+//! resolver seam it installs is `concinnity_engine::ecs::resolver`'s.
 
 pub mod asset_id;
 pub mod jobs;

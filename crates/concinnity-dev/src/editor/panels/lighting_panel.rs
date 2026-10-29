@@ -6,8 +6,8 @@
 //! `Sprite` / `TextLabel` / `TextInput` components driven each frame by the
 //! editor hook; the hook owns seeding, focus, and the commit path.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::form::{FieldKind, FormField};
 use super::lighting::{self, Row};
@@ -340,7 +340,7 @@ pub(crate) const fn max_rows() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

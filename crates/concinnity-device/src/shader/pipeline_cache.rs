@@ -13,7 +13,7 @@
 // checkpoint, so the two serializations a session makes (end of init, then
 // teardown) cost one write between them rather than one each.
 
-use concinnity_core::blob::CacheEntryKind;
+use concinnity_engine::blob::CacheEntryKind;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Neither VkPipelineCache nor a D3D12 pipeline library evicts internally, so a

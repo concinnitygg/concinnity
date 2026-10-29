@@ -11,19 +11,23 @@
 //! component is present. GLFW's `CursorDisabled` mode delivers raw relative
 //! deltas directly via `CursorPos` events, so no manual warping is needed.
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::window::display_mode;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress, WindowMode};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::{InputSnapshot, wheel_notches_to_scroll_delta};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::window::display_mode::DisplayMode;
 
 // Owns the GLFW library handle, the window, and the event receiver.
 //
 // Created once by GraphicsSystem during init(); polled every step().
 // All GLFW calls must happen on the thread that created this struct -- the
 // world loop guarantees single-threaded system execution.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent cursor and menu states of the OS window"
+)]
 pub(crate) struct GlfwWindow {
     pub glfw: glfw::Glfw,
     pub window: glfw::PWindow,
@@ -220,7 +224,7 @@ impl GlfwWindow {
         resizable: bool,
         title_bar: bool,
     ) -> RenderResult<Self> {
-        concinnity_core::window::policy::assert_windows_allowed("the GLFW window");
+        concinnity_engine::window::policy::assert_windows_allowed("the GLFW window");
 
         // No error callback: glfw-rs transmutes the code into an Error enum
         // that stops at GLFW 3.3, so a 3.4 code (PlatformUnavailable on a
@@ -541,6 +545,12 @@ impl GlfwWindow {
         self.desktop_mode
     }
 
+    // The desktop mode's rate; GLFW reports no variable-refresh range.
+    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
+        self.desktop_mode
+            .and_then(display_mode::DisplayRefresh::from_mode)
+    }
+
     // Remember the display mode to hold while fullscreen, snapped to a video
     // mode the monitor actually has (a stale persisted choice from another
     // display is ignored with a warning, mirroring Metal / DirectX). While
@@ -765,6 +775,10 @@ impl GlfwWindow {
 
     // GLFW window coordinates start below whatever decoration the desktop
     // draws, so nothing overlaps the top of the frame.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn top_content_inset(&self) -> f32 {
         0.0
     }

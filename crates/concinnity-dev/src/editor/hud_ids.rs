@@ -7,9 +7,9 @@
 //! The ids are never serialized: they exist only in a live editor session, so
 //! their numeric values carry no meaning beyond being unique.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::saturating_u32;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::panels::registry::PanelKey;
 use super::widget;
@@ -172,8 +172,8 @@ macro_rules! hud_ids {
     };
     (@entry $ids:ident fields [$($off:tt)*] [$($acc:tt)*]
         [$vis:vis $name:ident = $ph:expr $(, $($tail:tt)*)?] $($rest:tt)*) => {
-        $vis const $name: ::concinnity_core::ecs::asset_id::AssetId =
-            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*));
+        $vis const $name: ::concinnity_engine::ecs::asset_id::AssetId =
+            ::concinnity_engine::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*));
         $crate::editor::hud_ids::hud_ids!(@entry $ids fields [$($off)* + 1]
             [$($acc)* $ids.fields.push(($name, $ph));]
             [$($($tail)*)?] $($rest)*);
@@ -214,16 +214,16 @@ macro_rules! hud_ids {
     // `NAME`.
     (@entry $ids:ident $kind:ident [$($off:tt)*] [$($acc:tt)*]
         [$vis:vis $name:ident $(, $($tail:tt)*)?] $($rest:tt)*) => {
-        $vis const $name: ::concinnity_core::ecs::asset_id::AssetId =
-            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*));
+        $vis const $name: ::concinnity_engine::ecs::asset_id::AssetId =
+            ::concinnity_engine::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*));
         $crate::editor::hud_ids::hud_ids!(@entry $ids $kind [$($off)* + 1]
             [$($acc)* $ids.$kind.push($name);]
             [$($($tail)*)?] $($rest)*);
     };
 
     (@pool $vis:vis $name:ident [$($off:tt)*]) => {
-        $vis const fn $name(i: usize) -> ::concinnity_core::ecs::asset_id::AssetId {
-            ::concinnity_core::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*) + ::concinnity_core::math::saturating_u32(i))
+        $vis const fn $name(i: usize) -> ::concinnity_engine::ecs::asset_id::AssetId {
+            ::concinnity_engine::ecs::asset_id::AssetId(IDS_BASE + ::concinnity_core::math::saturating_u32($($off)*) + ::concinnity_core::math::saturating_u32(i))
         }
     };
 }
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn hide_blanks_and_blurs_every_element() {
-        use concinnity_core::components::{Sprite, TextInput, TextLabel};
+        use concinnity_engine::components::{Sprite, TextInput, TextLabel};
         let ids = sample::ids();
         let mut world = World::new();
         for &id in &ids.sprites {

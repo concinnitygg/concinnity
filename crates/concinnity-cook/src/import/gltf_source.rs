@@ -42,6 +42,11 @@ impl GltfDoc {
 
     /// Parse from bytes already in memory. `base_dir` anchors external URIs;
     /// without one, only the GLB binary chunk and data URIs resolve.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` are not a valid glTF/GLB file or a buffer
+    /// URI cannot be resolved.
     pub fn from_slice(
         bytes: &[u8],
         base_dir: Option<PathBuf>,

@@ -1,11 +1,11 @@
 // Which systems a world's content starts under the runtime's table.
 
-use concinnity_core::audio::system::AudioSystem;
-use concinnity_core::components::{
+use concinnity_engine::audio::system::AudioSystem;
+use concinnity_engine::components::{
     AudioCue, AudioEmitter, EngineDefaults, FpsCounter, PhysicsConfig, PropBody, Screen, Story,
 };
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{AudioClipHandle, ComponentAsset, Ref, World};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{AudioClipHandle, ComponentAsset, Ref, World};
 use concinnity_runtime::SYSTEMS;
 
 fn started(world: &mut World) -> Vec<&'static str> {
@@ -13,7 +13,7 @@ fn started(world: &mut World) -> Vec<&'static str> {
     world
         .systems()
         .iter()
-        .map(concinnity_core::ecs::BuiltSystem::name)
+        .map(concinnity_engine::ecs::BuiltSystem::name)
         .collect()
 }
 
@@ -33,7 +33,7 @@ fn start_completes_the_world_with_its_engine_defaults() {
 // path or the typed one) fills it, and `start()` is what gives it systems.
 #[test]
 fn empty_world_fills_from_components_then_systems() {
-    use concinnity_core::components::TextLabel;
+    use concinnity_engine::components::TextLabel;
 
     let mut world = World::new();
     assert!(world.is_empty());

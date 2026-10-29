@@ -39,4 +39,6 @@ fading out adds more, so a moving particle does not smear.
 - `size_end`: A float. Billboard side length at death, in world units. Defaults to `0.05`.
 - `color_start`: An array of 4 floats. Linear-space RGBA multiplier applied to the texture at spawn. Defaults to `[1.0, 1.0, 1.0, 1.0]`.
 - `color_end`: An array of 4 floats. Linear-space RGBA multiplier applied to the texture at death. Defaults to `[1.0, 1.0, 1.0, 0.0]`.
+- `lit`: A boolean. Whether the sun and the sky light the particles, as a cloud of droplets, dust or smoke, brightest seen toward the sun. A lit particle also fades out over its own size as it nears a surface behind it, rather than cutting into it. Unlit particles show their color as authored, as sparks or embers do. Defaults to `false`.
+- `draw_after_transparent`: A boolean. Whether the particles draw after the see-through surfaces, water and glass, so they show over them, rather than before them, where water and glass cover them as they do the scene behind. A particle that sinks under the water still shows, so such an emitter's particles should die before they reach it: by their lifetime, or, as the water's spray does, as they fall back to its surface. Defaults to `false`.
 - `visible`: A boolean. When false the emitter is skipped each frame. Defaults to `true`.

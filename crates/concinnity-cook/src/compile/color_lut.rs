@@ -26,12 +26,12 @@
 //! `.cube` data-line order, so the `.cube` path appends triplets verbatim.
 
 // The no-dependency `.cube` parse, the classifier, the (de)serializers, and the
-// size validator stay in concinnity-core; the `.png` slice-strip decode below
+// size validator stay in concinnity-engine; the `.png` slice-strip decode below
 // lives here in the build crate alongside the `png` crate.
-use concinnity_core::bake::color_lut::{
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::bake::color_lut::{
     LutFormat, classify_source, parse_cube, serialize, validate_size,
 };
-use concinnity_core::math::narrow_f32;
 use std::path::Path;
 
 // The `source` path a `ColorLut`'s args declare.
@@ -77,9 +77,14 @@ fn color_lut_strength(args: &serde_json::Value) -> f32 {
 /// Decode the `ColorLut` source at `path` the same way `compile_color_lut_payload`
 /// does at build time. Dispatches between `.cube` text parse and PNG-strip parse
 /// based on the file extension. Exposed for the runtime asset hot-reload path
-/// (`cn debug` only); production reads the compiled payload via
-/// `concinnity_core::bake::color_lut::deserialize` instead. `path` is read as
+/// (`cn run -f` only); production reads the compiled payload via
+/// `concinnity_engine::bake::color_lut::deserialize` instead. `path` is read as
 /// given -- the caller holds the path the load already resolved.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or does not decode as a `.cube`
+/// or PNG-strip LUT.
 pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), String> {
     decode(path)
 }
@@ -323,7 +328,7 @@ LUT_3D_SIZE 2
         let strength = |s: f64| {
             let args = serde_json::json!({"source": src, "strength": s});
             let payload = compile_color_lut_payload(&args, None).expect("compile");
-            concinnity_core::bake::color_lut::strength(&payload).expect("header")
+            concinnity_engine::bake::color_lut::strength(&payload).expect("header")
         };
         assert_eq!(strength(0.4), 0.4);
         assert_eq!(strength(2.0), 1.0);

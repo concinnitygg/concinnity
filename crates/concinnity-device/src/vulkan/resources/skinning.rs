@@ -4,13 +4,13 @@
 //! fresh from the gameplay-side pose update.
 
 use ash::vk;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{geometry_repack, rt_geom};
-use concinnity_core::transform::IDENTITY;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::mesh_payload::SkinnedVertex;
+use concinnity_engine::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::transform::IDENTITY;
 
 use super::super::context::VkContext;
 use super::super::set_writes::SetWrites;
@@ -59,7 +59,7 @@ impl VkContext {
         // Never zero-length: the ray-traced hit path binds this as a storage
         // buffer of index words and its descriptor takes the whole size.
         let skinned_ibuf = self.hw.alloc.create_buffer(
-            rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            geom::skinned_index_buffer_bytes(indices.len()) as u64,
             vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
@@ -121,7 +121,7 @@ impl VkContext {
     }
 
     // Replace a `SkinnedMesh` draw slot's vertex + index data in place.
-    // Driven by asset hot-reload (`cn debug` only). The shared skinned VB
+    // Driven by asset hot-reload (`cn run -f` only). The shared skinned VB
     // / IB were sized once at `upload_skinned` to hold every skinned
     // mesh's geometry, so the new payload must fit within this slot's
     // existing region (size-changing reloads route through
@@ -129,7 +129,7 @@ impl VkContext {
     // offset *in vertices*; `indices` are mesh-relative and get rebased
     // by `vertex_base` before being written into the shared IB.
     // Mirrors `DxContext::update_skinned_mesh_geometry`. Reached only through
-    // the bin's `cn debug` runtime-mutation path (dead in the FFI lib, live in
+    // the bin's `cn run -f` runtime-mutation path (dead in the FFI lib, live in
     // the bin).
     #[expect(
         clippy::needless_pass_by_ref_mut,

@@ -21,13 +21,14 @@ mod spot_shadow;
 mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
-use concinnity_core::render::grass::lod as grass_lod;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::rt_accel::RtUpdate;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::{error, render_graph};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::environment::grass::lod as grass_lod;
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::rt_accel::RtUpdate;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::{backend::error, render_graph};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _};
@@ -57,8 +58,14 @@ impl MtlContext {
     // until unified memory is exhausted and the GPU faults / the host panics.
     // Draining per frame frees each frame's command buffers once the GPU
     // retires them, bounding VRAM to the work actually in flight.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
+    )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        objc2::rc::autoreleasepool(|_| drive_frame(self, params))
+        objc2::rc::autoreleasepool(|_| {
+            drive_frame(self, params, concinnity_host::clock::monotonic_micros)
+        })
     }
 }
 
@@ -94,6 +101,7 @@ impl FrameDevice for MtlContext {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_water(rebase);
+            self.particle.system.rebase(rebase);
         }
         Ok(())
     }
@@ -105,6 +113,9 @@ impl FrameDevice for MtlContext {
         }
         if let Some(ssgi) = self.ssgi.pass.as_mut() {
             ssgi.reset_history();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.reset_history();
         }
         self.upscale.reset.request();
     }
@@ -177,6 +188,7 @@ impl FrameDevice for MtlContext {
             render_size: frame.render_size,
             lines: params.lines,
             world_hidden: params.world_hidden,
+            prop_probe: params.prop_probe.is_some(),
         })
     }
 
@@ -188,12 +200,14 @@ impl FrameDevice for MtlContext {
     ) -> error::RenderResult<()> {
         let FrameParams {
             elapsed: elapsed_f64,
+            water_time,
             cam_pos,
             text_calls,
             lines,
             world_hidden,
             grass_benders,
-            atmosphere,
+            water_stirs,
+            particle_bursts,
             input_sampled_us,
             ..
         } = *frame_params;
@@ -213,6 +227,7 @@ impl FrameDevice for MtlContext {
             ..
         } = frame;
 
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
         let texture_signature = self.refresh_probe_records_and_residency(ring_slot)?;
 
         let SceneBuffers {
@@ -236,25 +251,32 @@ impl FrameDevice for MtlContext {
             scene_color,
         } = self.scene_textures()?;
 
-        self.prepare_atmosphere(atmosphere, plan.atmosphere);
+        self.prepare_atmosphere(frame_params.atmosphere.as_ref(), plan.atmosphere);
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
 
         // This frame's ribbon geometry, written into this slot's persistent
         // vertex buffer up front for the same reason the text geometry is: the
         // line pass encodes through `&self`, so it cannot upload for itself.
         self.upload_lines(ring_slot, lines)?;
 
-        self.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self
-                .state
-                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
-            _ => Default::default(),
-        };
+        let hand_off = self
+            .grass
+            .as_ref()
+            .zip(self.grass_lod.as_ref())
+            .map(|(grass, lod)| (lod, grass.crossfade_phase()));
+        self.canopy = self
+            .canopy_field
+            .as_ref()
+            .map_or_else(Default::default, |field| {
+                self.state.canopy_params(field, hand_off, water_time)
+            });
         self.canopy_tables.update(
             &self.hw.device,
-            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+            self.canopy_field.as_ref().map_or(&[], |f| f.tables()),
         )?;
         // The grass kernel's inputs, advanced only on a frame whose graph runs it,
         // so the draw-argument slot it fills alternates frame to frame.
+        let grass_started = std::time::Instant::now();
         let grass_frame = (plan.inputs.grass_enabled && !plan.inputs.world_hidden)
             .then(|| {
                 self.prepare_grass_frame(crate::metal::grass::GrassRequest {
@@ -267,6 +289,10 @@ impl FrameDevice for MtlContext {
                 })
             })
             .flatten();
+        self.state.spans.set(FrameSpans {
+            grass_us: concinnity_host::clock::micros_since(grass_started),
+            ..self.state.spans.get()
+        });
         let HistoryBuffers {
             deformed_this_frame,
             deformed_prev_frame,
@@ -284,6 +310,7 @@ impl FrameDevice for MtlContext {
 
         let params = GraphFrameParams {
             cmd_buf: &cmd_buf,
+            particle_bursts,
             cam_pos,
             skinned_joint_bufs: &skinned_joint_bufs,
             skinned_morph_weight_bufs: &skinned_morph_weight_bufs,
@@ -292,6 +319,7 @@ impl FrameDevice for MtlContext {
             ring_slot,
             world_hidden,
             elapsed: elapsed_f64,
+            water_time,
             vp: plan.camera.vp,
             inv_vp: plan.camera.inv_vp,
             frustum: &plan.camera.frustum,
@@ -385,9 +413,10 @@ impl FrameDevice for MtlContext {
                         super::pass_timing::frame_span(&buf.0, mask, async_mask)
                     {
                         let previous = span_end.fetch_max(end, AtomicOrdering::Relaxed);
-                        let span = concinnity_core::render::pass_timing::FrameSpan::after(
-                            start, end, previous,
-                        );
+                        let span =
+                            concinnity_engine::render::backend::pass_timing::FrameSpan::after(
+                                start, end, previous,
+                            );
                         let micros = |ns: u64| u32::saturating_from(ns / 1000);
                         frame_us = micros(span.own);
                         overlap_us = micros(span.overlap);
@@ -399,7 +428,7 @@ impl FrameDevice for MtlContext {
                 // GPU work ended on the host clock.
                 if let (Some(input_sampled_us), Ok(mut slot)) = (input_sampled_us, gpu_done.lock())
                 {
-                    *slot = Some(concinnity_core::profile::GpuDone {
+                    *slot = Some(concinnity_engine::profile::GpuDone {
                         input_sampled_us,
                         done_us: concinnity_host::clock::monotonic_micros(),
                     });
@@ -411,6 +440,7 @@ impl FrameDevice for MtlContext {
         if let Some(timing) = self.diagnostics.pass_timing.as_ref() {
             active_mask.store(timing.attached_mask(), std::sync::atomic::Ordering::Relaxed);
         }
+        let started = std::time::Instant::now();
         self.submit_and_present(PresentFrame {
             cmd_buf,
             drawable,
@@ -419,6 +449,8 @@ impl FrameDevice for MtlContext {
             pending_terminal: submission.pending_terminal,
             submission_token,
         });
+        self.diagnostics.frame_stats.submit_present_us =
+            concinnity_host::clock::micros_since(started);
 
         Ok(())
     }
@@ -432,6 +464,9 @@ impl FrameDevice for MtlContext {
         }
         if let Some(ssgi) = self.ssgi.pass.as_mut() {
             ssgi.advance();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.advance();
         }
     }
 }
@@ -475,7 +510,7 @@ impl MtlContext {
         joint_buffers: &[Retained<ProtocolObject<dyn MTLBuffer>>],
         topology_dirty: bool,
     ) -> error::RenderResult<RtUpdate> {
-        use concinnity_core::render::rt_accel::{RtDriveInputs, drive_update, seed_wanted};
+        use concinnity_engine::render::rt_accel::{RtDriveInputs, drive_update, seed_wanted};
         let mode = self.rt.dynamic_mode;
         let exclude_seethrough = self.seethrough_meshes_enabled();
         let albedo_count = self.scene.textures.len();
@@ -536,6 +571,8 @@ impl MtlContext {
                 topology_dirty,
                 draw_objects: &self.state.draw.objects,
                 skinned: skinned_objects,
+                now_us: concinnity_host::clock::monotonic_micros,
+                spans: &self.state.spans,
             },
         );
         // The last draw + cluster geometry is gone and no skinned geometry can
@@ -665,15 +702,6 @@ impl MtlContext {
         // upscaler runs, otherwise at native (= render) resolution. Sized
         // off `want_w/h` either way.
         let bloom_changed = (want_w, want_h) != self.targets.output;
-        // Whether the unified G-buffer pre-pass runs, derived once so the pool
-        // and the pre-pass's own depth target below cannot disagree about it.
-        // Same expression as `EffectSettings::gbuffer_needed`.
-        let needs_gbuffer = self.ssr.settings.is_some()
-            || self.ssgi.settings.is_some()
-            || self.rt.settings.is_some()
-            || self.ssao.settings.is_some()
-            || self.taa.enabled
-            || self.upscale.scaler.is_some();
         // The transient pool backs `ao_output` and the G-buffer channels (all
         // render-resolution) plus `bloom_top` (half output-resolution), so
         // either extent moving invalidates it. Nothing caches a pooled handle:
@@ -684,10 +712,7 @@ impl MtlContext {
             self.targets.transient_pool.rebuild(
                 &self.hw.device,
                 &render_graph::plan_pool_slots(
-                    render_graph::PoolGates {
-                        ssao: self.ssao.settings.is_some(),
-                        gbuffer: needs_gbuffer,
-                    },
+                    render_graph::PoolGates::REACHABLE,
                     (render_w, render_h),
                     (want_w, want_h),
                 )?,
@@ -754,9 +779,8 @@ impl MtlContext {
         }
         // The pre-pass's depth attachment is render-resolution and stays
         // feature-owned; its three color channels were rebuilt with the pool
-        // above. Same gate, so the two halves of the pre-pass's targets are
-        // always present or absent together.
-        if render_changed && needs_gbuffer {
+        // above.
+        if render_changed && self.gbuffer.targets.is_some() {
             self.gbuffer.targets = Some(super::post::create_gbuffer_targets(
                 &self.hw.device,
                 render_w,
@@ -774,6 +798,17 @@ impl MtlContext {
                 },
             );
             self.ssgi.pass = Some(ssgi);
+            r?;
+        }
+        if render_changed && let Some(mut disocclusion) = self.disocclusion.take() {
+            let r = disocclusion.resize(
+                &self.post_device(),
+                PostExtent {
+                    width: render_w,
+                    height: render_h,
+                },
+            );
+            self.disocclusion = Some(disocclusion);
             r?;
         }
         // The Hi-Z pyramid matches the render (depth) resolution. Rebuild it

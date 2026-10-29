@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use concinnity_core::components::ColorRun;
-use concinnity_core::render::shader_programs::vocabulary::{ENTRIES, Kind, sdf};
+use concinnity_engine::components::ColorRun;
+use concinnity_engine::render::shader::programs::vocabulary::{ENTRIES, Kind, sdf};
 
 use super::states::LineStates;
 use super::window::window_runs;

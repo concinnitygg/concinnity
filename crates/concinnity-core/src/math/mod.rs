@@ -5,14 +5,17 @@
 //! are authored and stepped in.
 mod angle;
 mod cast;
+pub mod dmat3;
 pub mod dvec3;
+mod interp;
 pub mod noise;
-pub mod pick;
 mod rotation;
 mod scalar;
 pub mod vec3;
 
 pub use cast::{SaturatingFrom, narrow_f32, saturating_u32};
+
+pub use interp::{lerp, lerp_array, smoothstep};
 
 pub use angle::{flat_forward, flat_right, forward, heading_of, shortest_turn};
 pub use rotation::{

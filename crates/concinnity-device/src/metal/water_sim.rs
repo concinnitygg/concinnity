@@ -1,4 +1,4 @@
-//! The simulated ocean on Metal (see `concinnity_core::render::water::ocean`):
+//! The simulated ocean on Metal (see `concinnity_engine::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels. Every
 //! resource here is device-created and hazard-tracked, and the kernels run
@@ -8,14 +8,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::render_graph::PassId;
-use concinnity_core::render::uniforms::ocean::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::uniforms::ocean::{
     OCEAN_FFT_THREADS, OCEAN_MIP_GROUP, OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
-use concinnity_core::render::water::ocean::OceanPlan;
-use concinnity_core::render::water::ocean::foam::FoamClock;
-use concinnity_core::render::water::ocean::initial::initial_spectrum;
+use concinnity_engine::water::ocean::OceanPlan;
+use concinnity_engine::water::ocean::foam::FoamClock;
+use concinnity_engine::water::ocean::initial::initial_spectrum;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -35,6 +35,7 @@ use super::descriptors::TextureDesc;
 use super::encode::ComputeEncode;
 use super::error::allocation_failed;
 use super::scoped_encoder::ScopedEncoder;
+use super::water_wake::{WakeSim, stand_in_field};
 
 type Texture = Retained<ProtocolObject<dyn MTLTexture>>;
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -58,10 +59,12 @@ pub(in crate::metal) const OCEAN_DISPLACEMENT_TEXTURE_INDEX: usize = 9;
 pub(in crate::metal) const OCEAN_SLOPES_TEXTURE_INDEX: usize = 10;
 pub(in crate::metal) const OCEAN_SAMPLER_INDEX: usize = 6;
 
-// What the water draw samples: both cascade arrays and their sampler.
+// What the water draw samples: both cascade arrays, the wake's field (a
+// stand-in where none runs) and their sampler.
 pub(in crate::metal) struct OceanArrays {
     pub(in crate::metal) displacement: Texture,
     pub(in crate::metal) slopes: Texture,
+    pub(in crate::metal) wake: Texture,
     pub(in crate::metal) sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
 }
 
@@ -70,6 +73,8 @@ pub(in crate::metal) struct OceanArrays {
 pub(in crate::metal) struct OceanSim {
     pub(in crate::metal) arrays: OceanArrays,
     kernels: Option<OceanKernels>,
+    // The wake a planet sea runs, `Some` when the plan asks for one.
+    wake: Option<WakeSim>,
 }
 
 struct OceanKernels {
@@ -103,11 +108,21 @@ impl OceanSim {
                 arrays: OceanArrays {
                     displacement: cascade_array(device, 1, 1, 1)?,
                     slopes: cascade_array(device, 1, 1, 1)?,
+                    wake: stand_in_field(device)?,
                     sampler,
                 },
                 kernels: None,
+                wake: None,
             });
         }
+        let wake = plan
+            .wake
+            .then(|| WakeSim::build(device, hot_reload))
+            .transpose()?;
+        let wake_field = match &wake {
+            Some(w) => w.field().clone(),
+            None => stand_in_field(device)?,
+        };
         let size = plan.quality.size;
         let layers = plan.layer_count();
         let mips = ocean_mip_levels(size);
@@ -142,8 +157,10 @@ impl OceanSim {
             arrays: OceanArrays {
                 displacement,
                 slopes,
+                wake: wake_field,
                 sampler,
             },
+            wake,
             kernels: Some(OceanKernels {
                 plan: plan.clone(),
                 rows: compute_pipeline(device, &WATER_FFT_ROWS, hot_reload)?,
@@ -163,6 +180,11 @@ impl OceanSim {
     // Whether any body simulates an ocean, which puts `WaterSim` in the graph.
     pub(in crate::metal) fn simulates(&self) -> bool {
         self.kernels.is_some()
+    }
+
+    // Whether a planet sea runs a wake.
+    pub(in crate::metal) fn wakes(&self) -> bool {
+        self.wake.is_some()
     }
 }
 
@@ -261,7 +283,8 @@ fn dispatch(
 
 impl MtlContext {
     // Encode the `WaterSim` node: for every simulation, evolve and transform
-    // its rows, then its columns into mip 0, then reduce down the mips.
+    // its rows, then its columns into mip 0, then reduce down the mips; then
+    // run the wake one frame forward when a sea runs one.
     pub(in crate::metal) fn encode_water_sim(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -316,6 +339,13 @@ impl MtlContext {
                     [OCEAN_MIP_GROUP, OCEAN_MIP_GROUP],
                 );
             }
+        }
+        let ocean = self.water.ocean.as_ref();
+        if let (Some(wake), Some(frame)) =
+            (ocean.and_then(|o| o.wake.as_ref()), &self.water.wake_frame)
+            && wake.encode(&enc, &frame.params)
+        {
+            self.water.wake.ran();
         }
         Ok(())
     }

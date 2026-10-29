@@ -3,7 +3,7 @@
 //! which entry list each relationship is fed, that a hit replaces the selection
 //! wholesale, and that a miss reports without disturbing what was selected.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{select, selected};
@@ -97,8 +97,8 @@ fn select_origin_without_a_selection_errors() {
 // outliner's grouping rather than the raw working list.
 #[test]
 fn select_origin_gathers_the_active_members_group() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}}),
@@ -119,8 +119,8 @@ fn select_origin_gathers_the_active_members_group() {
 // A name that cooks away into no group reports rather than clearing.
 #[test]
 fn select_origin_reports_a_name_no_group_lists() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let mut world = World::new();
     let mut h = hook(vec![
         serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}}),

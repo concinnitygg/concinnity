@@ -12,10 +12,10 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::record_pack::StaticSlots;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-use concinnity_core::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::record_pack::StaticSlots;
+use concinnity_engine::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_capacity};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::context::VkContext;
@@ -279,7 +279,7 @@ pub(super) struct ProbeSetGpu {
 
 impl ProbeSetGpu {
     pub(super) fn new(upload: &GpuUploadContext<'_>, frames: usize) -> RenderResult<Self> {
-        let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
+        let capacity = concinnity_engine::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
         let stand_in_set = upload.alloc.create_buffer(
             size_of::<ProbeSet>() as u64,
             vk::BufferUsageFlags::UNIFORM_BUFFER,
@@ -372,6 +372,11 @@ impl VkContext {
             if let Some(planar) = self.planar_reflection.as_ref() {
                 planar.rewrite_probe_records(&self.hw.device, &self.global_bindings(), frame_idx);
             }
+            self.probe.prop.rewrite_probe_records(
+                &self.hw.device,
+                &self.global_bindings(),
+                frame_idx,
+            );
         }
         // The records change only when a probe installs or the placements are
         // replaced, so a buffer already holding this revision is left alone.

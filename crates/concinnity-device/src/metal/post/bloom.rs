@@ -1,13 +1,13 @@
 //! Metal's share of bloom, which is where the chain's scene and top octave come
 //! from this frame. The chain itself -- its pipelines, the octaves below the
 //! top, and every draw -- is written once in
-//! `concinnity_core::render::post::bloom` and reaches Metal through
+//! `concinnity_engine::render::post::bloom` and reaches Metal through
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::bloom::{BloomInputs, BloomPass};
-use concinnity_core::render::post::device::PostExtent;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::bloom::{BloomInputs, BloomPass};
+use concinnity_engine::render::post::device::PostExtent;
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;

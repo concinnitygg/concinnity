@@ -9,7 +9,7 @@
 //! the jump, and the history is bounded, so the recovery is neither immediate nor
 //! indefinite. Arming the chip keeps a stray press from needing it at all.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::{EditorHook, declared_id};
 use crate::editor::behavior::panel::Status;

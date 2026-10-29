@@ -10,10 +10,10 @@
 // write state.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::record_pack::StaticSlots;
-use concinnity_core::render::reflection_probe::PrefilterPlan;
-use concinnity_core::render::uniforms::{ProbeUniforms, grown_probe_capacity};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::record_pack::StaticSlots;
+use concinnity_engine::render::uniforms::{ProbeUniforms, grown_probe_capacity};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -47,6 +47,8 @@ pub(in crate::directx) struct CubeResource<'a> {
     pub mips: u32,
     pub cubes: usize,
     pub state: D3D12_RESOURCE_STATES,
+    // Whether faces render straight into it, besides the kernels writing it.
+    pub render_target: bool,
     pub label: &'a str,
 }
 
@@ -62,6 +64,7 @@ pub(in crate::directx) fn create_cube_resource(
         mips,
         cubes,
         state,
+        render_target,
         label,
     } = shape;
     let desc = D3D12_RESOURCE_DESC {
@@ -76,7 +79,11 @@ pub(in crate::directx) fn create_cube_resource(
             Count: 1,
             Quality: 0,
         },
-        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        Flags: if render_target {
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+        } else {
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+        },
         ..Default::default()
     };
     let heap_props = D3D12_HEAP_PROPERTIES {
@@ -164,6 +171,7 @@ impl ProbeCubeArray {
                 mips,
                 cubes,
                 state: PROBE_CUBES_STATE,
+                render_target: false,
                 label: "probe cube array",
             },
         )?;
@@ -244,6 +252,11 @@ impl ProbeCubeArray {
     pub(in crate::directx) fn mips(&self) -> u32 {
         self.mips
     }
+
+    // The array resource, which a cube's writers are built against.
+    pub(in crate::directx) fn resource(&self) -> &ID3D12Resource {
+        &self.resource
+    }
 }
 
 // A persistently mapped upload buffer of parallax records with room for
@@ -318,7 +331,7 @@ impl ProbeSetGpu {
         alloc: &super::allocator::DeviceAllocator,
         frames: usize,
     ) -> RenderResult<Self> {
-        let capacity = concinnity_core::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
+        let capacity = concinnity_engine::render::uniforms::DEFAULT_PROBE_RECORD_CAPACITY;
         Ok(Self {
             cubes: None,
             stand_in: ProbeCubeArray::stand_in(device)?,

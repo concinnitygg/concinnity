@@ -3,17 +3,17 @@
 //!
 //! A world Shader defines hooks the engine's own main-pass entries call, so it
 //! compiles as those programs do: each entry in
-//! `concinnity_core::render::shader_programs::surface` is assembled from the
+//! `concinnity_engine::render::shader::programs::surface` is assembled from the
 //! engine's template with the world's files spliced at the hook markers and
 //! compiled for the host's target (see `program`).
 //!
-//! Shared by the payload build and by `cn debug`'s hot reload, so an edit
+//! Shared by the payload build and by `cn run -f`'s hot reload, so an edit
 //! recompiles through exactly the path the cook took.
 
-use concinnity_core::components::{ShaderPrograms, ShaderSource};
-use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::surface::{self, Sources};
-use concinnity_core::render::shader_source::SourceFile;
+use concinnity_engine::components::{ShaderPrograms, ShaderSource};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::shader::programs::surface::{self, Sources};
+use concinnity_engine::render::shader::source::SourceFile;
 use concinnity_shader::diagnostics::Diagnostic;
 
 use crate::compile::program::{self, ProgramError};
@@ -29,17 +29,20 @@ pub struct CompiledShader {
 
 /// Compile every program `platform` consumes from a Shader's files.
 ///
-/// A failure names the Shader and the entries and carries the compiler's own
-/// diagnostics: a file with a syntax error, or one missing its hook, has to
-/// fail the build here, where the message can point at it, rather than at a
-/// renderer's init on someone else's machine.
-///
 /// Each file's text is fenced by `#line` directives naming its
 /// [`SourceFile::path`], so a diagnostic in a Shader's own file carries that
 /// path verbatim, and one in the engine's template carries the template's file
 /// name (`main_bindless.hlsl`). A caller matches a diagnostic to a file by
 /// comparing it with the path it passed here. The path is part of the
 /// assembled text and so of every artifact's source digest.
+///
+/// # Errors
+///
+/// Returns an error if an entry fails to compile. The error names the Shader
+/// and the entries and carries the compiler's own diagnostics: a file with a
+/// syntax error, or one missing its hook, has to fail the build here, where the
+/// message can point at it, rather than at a renderer's init on someone else's
+/// machine.
 pub fn compile_world_shader(
     name: &str,
     sources: &Sources<'_>,
@@ -94,6 +97,10 @@ fn hook_hint(diagnostic: &str) -> &'static str {
 }
 
 /// Read one of a Shader's files, naming the path on failure.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read.
 pub fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
     std::fs::read_to_string(source_path).map_err(|e| {
         std::io::Error::new(
@@ -106,7 +113,7 @@ pub fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::shader_source;
+    use concinnity_engine::render::shader::source;
 
     const SHADE: &str =
         "float4 shade(VertexOut v, GpuObjectData od) { return float4(1.0, 0.0, 1.0, 1.0); }\n";
@@ -176,7 +183,7 @@ mod tests {
             assert!(compiled.warnings.is_empty());
             for program in surface::ALL {
                 let source = surface::source(program, platform, &programs.sources());
-                let digest = shader_source::source_digest(&source);
+                let digest = source::source_digest(&source);
                 let bytes = programs
                     .artifact(program.entry, digest)
                     .unwrap_or_else(|| panic!("{platform:?}: no artifact for {}", program.entry));

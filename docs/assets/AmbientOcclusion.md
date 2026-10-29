@@ -4,7 +4,7 @@
 
 Screen-space ambient occlusion: darkens creases and contact areas where
 ambient light is occluded. The `ambient_occlusion` section of
-[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+[`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default
 below.
 
 On by default, which is the look on capable hardware: the `Auto` graphics

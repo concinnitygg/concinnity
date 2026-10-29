@@ -14,7 +14,7 @@
 
 use serde_json::Value;
 
-use concinnity_core::components::SceneTransition;
+use concinnity_engine::components::SceneTransition;
 
 use crate::authoring::registry::{RegisteredType, ScopeResolution};
 use crate::check::fault::{Fault, Locate, Step, field};
@@ -131,6 +131,11 @@ pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
 /// The [Fault] says where in `args` the problem is,
 /// for callers that can show the author the spot; its `message` is the same text
 /// a build reports.
+///
+/// # Errors
+///
+/// Returns a [`Fault`] if the behavior's args do not check against the declared
+/// variables.
 pub fn check_with_variables(
     name: &str,
     args: &Value,
@@ -143,6 +148,11 @@ pub fn check_with_variables(
 /// Validate the world's `Variables` asset: every declaration needs a name and a
 /// typed starting value, and no name may repeat. For callers holding the asset
 /// alone rather than an expanded world (the editor's Variables panel).
+///
+/// # Errors
+///
+/// Returns an error if a declaration has no name, repeats a name, or lacks a
+/// typed starting value.
 pub fn check_variables(name: &str, args: &Value) -> Result<(), String> {
     let err = |detail: String| format!("Variables '{name}': {detail}");
     let mut seen: Vec<&str> = Vec::new();

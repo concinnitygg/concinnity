@@ -13,7 +13,7 @@
 // of a developer's state directory and keeps a previous run's artifact from
 // masking a compile change.
 
-use concinnity_core::blob::CacheEntryKind;
+use concinnity_engine::blob::CacheEntryKind;
 use concinnity_host::store::cache;
 
 // Off under `cargo test`, where every operation below is a no-op.

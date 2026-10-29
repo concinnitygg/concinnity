@@ -3,7 +3,7 @@
 //! attenuation mapped onto kira's spatial tracks. kira (and its cpal /
 //! symphonia dependencies) is confined to this module.
 //!
-//! [`AudioOut`]: concinnity_core::audio::out::AudioOut
+//! [`AudioOut`]: concinnity_engine::audio::out::AudioOut
 
 // The background decode worker thread.
 mod decode;

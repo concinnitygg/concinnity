@@ -5,9 +5,9 @@
 //! swap must walk every set that samples this slot.
 
 use ash::vk;
-use concinnity_core::bake;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::bake;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use super::super::context::VkContext;
 use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};
@@ -29,7 +29,7 @@ impl VkContext {
     // Re-point every descriptor that samples texture-pool `slot` and may be
     // referenced by in-flight command buffers: the per-frame bindless pool
     // copies plus the decal / clone / particle sets. Only legal under a device
-    // drain (the fallback streaming path and the `cn debug` hot-reload paths).
+    // drain (the fallback streaming path and the `cn run -f` hot-reload paths).
     fn rewrite_bound_texture_sets(&self, slot: usize) {
         let view = self.scene.textures[slot].view;
         // The bindless pool addresses each texture at pool index == its handle,
@@ -167,7 +167,7 @@ impl VkContext {
     }
 
     // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    // Driven by asset hot-reload (`cn debug` only) when the file-backed
+    // Driven by asset hot-reload (`cn run -f` only) when the file-backed
     // `ColorLut` source is saved. `wait_idle` first guarantees no in-flight
     // command buffer still references the old image. Builds the replacement
     // via the same `upload_color_lut` the init path uses, rewrites every
@@ -175,7 +175,7 @@ impl VkContext {
     // drops the previous image; same write-then-destroy order as the
     // texture-pool rewires above to keep validation layers happy. Mirrors
     // `DxContext::update_color_lut` / `MtlContext::update_color_lut`. Reached
-    // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
+    // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
@@ -203,7 +203,7 @@ impl VkContext {
     }
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn debug` only). Decodes the byte stream
+    // Driven by asset hot-reload (`cn run -f` only). Decodes the byte stream
     // emitted by `gfx::build::environment_map::serialize`, then re-uploads
     // the irradiance + prefilter cubes via the same `upload_environment_map`
     // the init path uses. Every consumer that captured the old image views is
@@ -216,7 +216,7 @@ impl VkContext {
     // re-wire, every Vulkan `upload_environment_map` mints fresh `vk::ImageView`
     // handles, so each descriptor set must be re-written. Mirrors
     // `DxContext::update_environment_map`. Reached
-    // only through the bin's `cn debug` runtime-mutation path (dead in the FFI
+    // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
     pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)

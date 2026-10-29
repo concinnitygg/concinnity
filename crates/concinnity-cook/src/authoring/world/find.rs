@@ -8,6 +8,11 @@ pub const WORLD_JSONL: &str = "world.jsonl";
 /// directories: a supported location for an ad hoc world beside `worlds/`,
 /// searched after it, and the whole search when the caller has no `worlds/` to
 /// offer.
+///
+/// # Errors
+///
+/// Returns an error if the world `name` names does not exist, or no world is
+/// found by the search.
 pub fn find_world_jsonl(
     worlds_dir: Option<&std::path::Path>,
     name: Option<&str>,
@@ -119,7 +124,7 @@ mod tests {
     }
 
     // An unnamed lookup takes the most recently modified world in the directory
-    // given, so `cn build` with no argument opens whatever was last edited.
+    // given, so `cn cook` with no argument opens whatever was last edited.
     #[test]
     fn an_unnamed_lookup_takes_the_newest_world_in_the_directory() {
         let tree = concinnity_testing::TempTree::new();

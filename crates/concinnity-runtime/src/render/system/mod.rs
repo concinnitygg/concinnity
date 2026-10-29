@@ -2,18 +2,21 @@
 //! asset); `World::start` constructs one when the run resolved to a windowed
 //! one.
 
-use concinnity_core::components::Background;
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{PipelineContext, StepResult, System, World};
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::error::RenderError;
-use concinnity_core::render::extract::FrameExtractor;
-use concinnity_core::render::frame_outcome::FrameCounter;
-use concinnity_core::render::frame_submit::FramePolicy;
-use concinnity_core::render::render_mode::RenderMode;
-use concinnity_core::render::stream_pools::StreamingPools;
-use concinnity_core::render::world_load::scene_deferral::ShaderDeferral;
-use concinnity_core::render::{backend, overlay_maps, scene_flow, snapshot, text};
+use crate::render::streaming::loaders::StreamWorkers;
+use concinnity_engine::components::Background;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{PipelineContext, StepResult, System, World};
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::RenderError;
+use concinnity_engine::render::backend::render_mode::RenderMode;
+use concinnity_engine::render::frame::extract::FrameExtractor;
+use concinnity_engine::render::frame::outcome::FrameCounter;
+use concinnity_engine::render::frame::submit::FramePolicy;
+use concinnity_engine::render::streaming::pools::StreamingPools;
+use concinnity_engine::render::world_load::scene_deferral::ShaderDeferral;
+use concinnity_engine::render::{
+    backend, frame::snapshot, overlay::maps, overlay::text, scene::flow,
+};
 use concinnity_host::store::paths::StateTree;
 
 /// Why the renderer could not be built, left by `GraphicsSystem`'s init for
@@ -47,14 +50,14 @@ pub(crate) struct GraphicsSystem {
     // active scene-flow bookkeeping while init builds it; handed to the shared
     // `ActiveSceneFlow` resource at the end of init (SettingsSystem jumps it,
     // this system ticks it). None when no Scene assets were declared.
-    scene_flow: Option<scene_flow::SceneFlow>,
+    scene_flow: Option<flow::SceneFlow>,
     // Overlay build inputs assembled during init() and handed to OverlaySystem
     // (as the `OverlayAssets` resource) at its end; empty afterwards. Fonts is
     // the atlas data keyed by handle; sprite_texture_slots maps a Sprite's
     // texture into the text-atlas pool (appended after the font atlases); the
     // chip id lists and scroll clip bands drive the per-frame HUD layout.
     loaded_fonts: text::FontSet,
-    sprite_texture_slots: overlay_maps::TextureSlots,
+    sprite_texture_slots: maps::TextureSlots,
     debug_hud_chips: Vec<AssetId>,
     stat_hud_chips: Vec<AssetId>,
     // Streaming pools built during init (shared albedo+normal texture pool,
@@ -63,7 +66,7 @@ pub(crate) struct GraphicsSystem {
     // when the world declares it and the backend supports it. Init scratch:
     // moved into the published `StreamingRuntime` resource at the end of init.
     stream_pools: StreamingPools,
-    stream_workers: crate::render::streaming::loaders::StreamWorkers,
+    stream_workers: StreamWorkers,
     // Which scene exclusively owns each deferred bucket, so scene residency
     // can claim it as a member.
     shader_deferral: ShaderDeferral,
@@ -72,7 +75,7 @@ pub(crate) struct GraphicsSystem {
     // band, so the draw path scissors it and off-band rows do not bleed over the
     // panel chrome. Empty when no ScrollPanel was declared; handed to
     // OverlaySystem (inside `OverlayAssets`) at the end of init.
-    clip_rects: overlay_maps::ClipRects,
+    clip_rects: maps::ClipRects,
     // Device capability flags, queried from the backend once it is built. Drives
     // the capability gating at init: a settings row whose feature the device
     // cannot provide (e.g. ray-traced reflections without hardware ray tracing)
@@ -121,13 +124,13 @@ impl GraphicsSystem {
             backend: None,
             scene_flow: None,
             loaded_fonts: text::FontSet::default(),
-            sprite_texture_slots: overlay_maps::TextureSlots::new(),
+            sprite_texture_slots: maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
             stat_hud_chips: Vec::new(),
             stream_pools: StreamingPools::default(),
-            stream_workers: Default::default(),
+            stream_workers: StreamWorkers::default(),
             shader_deferral: ShaderDeferral::default(),
-            clip_rects: overlay_maps::ClipRects::new(),
+            clip_rects: maps::ClipRects::new(),
             // All-capable until the backend reports otherwise at init.
             caps: backend::DeviceCapabilities::ALL,
             snapshot: snapshot::RenderSnapshot::default(),
@@ -146,6 +149,13 @@ impl GraphicsSystem {
     // Detect the GPU performance profile for quality auto-config and what the
     // device can run. Probes the real device in production; a test-injected
     // profile takes its place so unit tests never create a GPU handle.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "test builds read an injected profile through `self`"
+        )
+    )]
     fn detect_device(&self) -> backend::DeviceProbe {
         #[cfg(test)]
         if let Some(hooks) = &self.test_hooks {
@@ -157,6 +167,30 @@ impl GraphicsSystem {
         // A machine with no GPU at all never reaches here: the run resolved to
         // headless and this system was left out of the schedule.
         crate::platform::device::probe_device().unwrap_or(backend::DeviceProbe::UNKNOWN)
+    }
+
+    // The display the window would open on. Tests and a host's embedded view
+    // read none: the view is sized by its host, not by the display, so the
+    // predicted output is the authored window size.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "test builds skip the probe through `self`"
+        )
+    )]
+    fn detect_display(
+        &self,
+        ctx: &PipelineContext<'_>,
+    ) -> Option<concinnity_engine::window::display_mode::DisplayProbe> {
+        #[cfg(test)]
+        if self.test_hooks.is_some() {
+            return None;
+        }
+        if ctx.resource::<backend::init::EmbeddedSurface>().is_some() {
+            return None;
+        }
+        crate::platform::device::probe_display()
     }
 }
 

@@ -5,7 +5,7 @@
 Screen-space 2D rectangle drawn as a UI overlay each frame.
 
 Sprites are pixel-anchored quads with an RGBA tint. They draw alongside
-[TextLabel](TextLabel.md)s, ordered behind labels so text sits on top.
+[`TextLabel`](TextLabel.md)s, ordered behind labels so text sits on top.
 
 A sprite with a `texture` draws that image, multiplied by the tint (use a
 white tint to show the image unchanged; the tint's alpha fades it).

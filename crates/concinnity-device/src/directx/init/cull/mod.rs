@@ -3,8 +3,8 @@
 //! shadow, G-buffer and two-pass occlusion passes built over them.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::{SceneData, WorldShader};
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{SceneData, WorldShader};
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, DxTargets};
@@ -85,14 +85,14 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     let compute = compute::build_compute_cull(
         gpu,
         compute::ComputeInputs {
+            world,
             bindless: &bindless,
             plan,
             descriptors,
             targets,
         },
     )?;
-    let two_pass =
-        two_pass::build_two_pass_cull(gpu, &bindless, &compute, plan, occlusion_two_pass)?;
+    let two_pass = two_pass::build_two_pass_cull(gpu, &bindless, &compute, occlusion_two_pass)?;
     let shadow_cull = shadow::build_shadow_cull(gpu, &compute, plan, shadow_enabled, spot_slices)?;
     let gbuffer_pass = gbuffer::build_gbuffer_pass(gpu, &compute, plan, gbuffer_enabled)?;
     write_instance_records(world, plan, albedo_count, &bindless, &compute);
@@ -117,6 +117,12 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         main_prepass_pso: bindless.psos.prepass,
         world_pipelines: bindless.world_pipelines,
         bucket_stride: plan.n_cull,
+        variants: compute.variants,
+        variant_buffers: compute.variant_buffers,
+        variant_ptrs: compute.variant_ptrs,
+        live_buckets: (0..=gpu.hw.frames())
+            .map(|_| std::sync::atomic::AtomicU64::new(u64::MAX))
+            .collect(),
         bindless_main_shaders: bindless.shaders,
         object_buffer_resources: bindless.object_buffers,
         object_buffer_ptrs: bindless.object_ptrs,
@@ -130,15 +136,17 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         draw_args_buffer_resources: compute.draw_args_buffers,
         draw_args_buffer_ptrs: compute.draw_args_ptrs,
         indirect_cmd_buffers: compute.indirect_buffers,
+        indirect_commands: compute.indirect_commands,
+        compact: compute.compact,
+        group_count_buffers: compute.group_count_buffers,
         cull_status_buffers: compute.status_buffers,
         indirect_cmd_buffers_2: two_pass.indirect_buffers,
         shadow_bindless_root_sig: shadow_cull.bindless_root_sig,
         shadow_bindless_pso: shadow_cull.bindless_pso,
         shadow_bindless_cmd_sig: shadow_cull.cmd_sig,
         cull_pso_shadow: shadow_cull.cull_pso,
-        shadow_indirect_buffers: shadow_cull.indirect_buffers,
-        shadow_cull_status_buffers: shadow_cull.status_buffers,
-        spot_indirect_buffers: shadow_cull.spot_indirect_buffers,
+        shadow_views: shadow_cull.views,
+        spot_views: shadow_cull.spot_views,
         prev_model_buffers: gbuffer_pass.prev_model_buffers,
         model_history_root_sig: gbuffer_pass.model_history_root_sig,
         model_history_pso: gbuffer_pass.model_history_pso,
@@ -190,7 +198,7 @@ fn write_instance_records(
     bindless: &BindlessPass,
     compute: &ComputeCull,
 ) {
-    use concinnity_core::gfx::render_types::{
+    use concinnity_engine::gfx::render_types::{
         GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
     };
     if plan.n_instances == 0 || bindless.object_ptrs.is_empty() {

@@ -21,8 +21,11 @@ pub(crate) mod mesh;
 pub(crate) mod physics;
 /// `Planet` argument checks.
 pub(crate) mod planet;
+pub(crate) mod planet_ground;
 /// `Prop` argument checks.
 pub(crate) mod prop;
+/// `Screenshot` checks.
+pub(crate) mod screenshot;
 /// `SdfVolume` argument checks.
 pub(crate) mod sdf_volume;
 /// `Shader` argument checks.
@@ -31,6 +34,8 @@ pub(crate) mod shader;
 pub use shader::is_shader_extension;
 use std::collections::HashSet;
 pub(crate) mod shape;
+/// `Terrain` argument checks.
+pub(crate) mod terrain;
 /// `TextLabel` argument checks.
 pub(crate) mod text_label;
 pub(crate) mod texture;
@@ -54,6 +59,11 @@ fn check_authored_asset(
         RegisteredType::Shader => shader::check(name, args),
         RegisteredType::Prop => prop::check(name, args),
         RegisteredType::Planet => planet::check(name, args),
+        RegisteredType::PlanetGround => planet_ground::check(name, args),
+        RegisteredType::Terrain => {
+            terrain::warn(name, args);
+            Ok(())
+        }
         RegisteredType::SdfVolume => sdf_volume::check(name, args),
         RegisteredType::VoxelChunk => voxel_chunk::check(name, args),
         RegisteredType::VoxelWorld => voxel_world::check(name, args),
@@ -61,9 +71,12 @@ fn check_authored_asset(
         RegisteredType::TriggerVolume => physics::check(name, args),
         RegisteredType::AudioEmitter => audio::check_emitter(name, args),
         RegisteredType::AudioCue => audio::check_cue(name, args),
-        RegisteredType::PropBody => audio::check_prop_body(name, args),
+        RegisteredType::PropBody => {
+            physics::warn_prop_body(name, args);
+            audio::check_prop_body(name, args)
+        }
         RegisteredType::TextLabel => text_label::check(name, args),
-        RegisteredType::WaterSurface => water_surface::check(name, args),
+        RegisteredType::Screenshot => screenshot::check(name, args),
         _ => Ok(()),
     }
 }
@@ -141,6 +154,9 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     }
 
     shape::check_shape(assets, &mut errors);
+    screenshot::check_unique_files(assets, &mut errors);
+    water_surface::check_sea_swell(assets, &mut errors);
+    planet_ground::check_squares(assets, &mut errors);
 
     if errors.is_empty() {
         Ok(())

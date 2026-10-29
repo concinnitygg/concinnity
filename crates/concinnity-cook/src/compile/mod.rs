@@ -20,7 +20,7 @@ pub(crate) mod file;
 pub(crate) mod font;
 /// Build-time mesh generators + payload compilers. The runtime-side mesh helpers
 /// they share (tangents, the voxel mesher, chunk streaming) stay in
-/// `concinnity_core::geometry`; this module re-exports what cook code names.
+/// `concinnity_engine::geometry`; this module re-exports what cook code names.
 pub(crate) mod geometry;
 pub mod mesh;
 pub(crate) mod physics_budget;

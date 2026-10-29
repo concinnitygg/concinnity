@@ -1,10 +1,10 @@
 //! Texture-pool slot updates + IBL / color-grading hot-swap. Driven both by
 //! the streaming subsystem (per-slot upload + eviction placeholders) and by
-//! asset hot-reload (`cn debug` only) for envmaps + LUTs.
+//! asset hot-reload (`cn run -f` only) for envmaps + LUTs.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::bake;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::bake;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use crate::metal::context::MtlContext;
 use crate::metal::texture::{upload_texture, upload_texture_image};
@@ -42,7 +42,7 @@ impl MtlContext {
     }
 
     // Swap the live 3D color-grading LUT for a fresh payload. Driven by
-    // asset hot-reload (`cn debug` only). The composite pass binds
+    // asset hot-reload (`cn run -f` only). The composite pass binds
     // `self.color_lut` every frame, so the new texture is sampled on the
     // next `draw_frame` with no pipeline rebuild.
     pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
@@ -52,7 +52,7 @@ impl MtlContext {
     }
 
     // Swap the live IBL cubemap pair for a freshly precomputed envmap payload.
-    // Driven by asset hot-reload (`cn debug` only). The fragment shader binds
+    // Driven by asset hot-reload (`cn run -f` only). The fragment shader binds
     // `self.env_map.irradiance` and `self.env_map.prefilter` every frame, so
     // the new cubes are sampled on the next `draw_frame` with no pipeline
     // rebuild. The new payload may declare different mip / face sizes than

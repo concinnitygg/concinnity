@@ -18,9 +18,9 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{
     args_without_id, entry_handle, entry_handles, find_entry, replace_args,
 };
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use serde_json::Value;
 use std::sync::OnceLock;
 

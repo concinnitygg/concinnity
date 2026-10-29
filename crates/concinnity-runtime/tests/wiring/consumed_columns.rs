@@ -14,11 +14,11 @@
 //! rest of the `GraphicsSystem` init sweep) need a device to reach, so they
 //! stay covered by the flag alone.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     AudioEmitter, Behavior, EngineDefaults, HitRegion, KeyBinding, PhysicsJoint, Prop, PropBody,
     Screen, ScrollPanel, TriggerVolume,
 };
-use concinnity_core::ecs::{ComponentTag, World};
+use concinnity_engine::ecs::{ComponentTag, World};
 
 use concinnity_runtime::SYSTEMS;
 

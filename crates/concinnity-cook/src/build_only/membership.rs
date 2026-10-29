@@ -49,7 +49,7 @@ fn scope(children: &mut [serde_json::Value], key: &str, host: &str, types: &[Reg
         };
         let args = entry
             .entry("args")
-            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::default()));
         if let serde_json::Value::Object(args) = args
             && !args.contains_key(key)
         {

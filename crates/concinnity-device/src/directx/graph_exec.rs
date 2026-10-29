@@ -1,6 +1,6 @@
 //! DirectX-side executor for the render graph. `DxContext::execute_graph`
 //! walks the `CompiledGraph` produced by the shared
-//! `concinnity_core::render::render_graph::build_frame_graph`
+//! `concinnity_engine::render::render_graph::build_frame_graph`
 //! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
 //! Vulkan executors; every backend now drives the same builder.
 //!
@@ -42,20 +42,21 @@
 //! reads those pools in its vertex stage, with the transition between them
 //! derived from the graph rather than emitted inline.
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{ClusterParams, TextDrawCall};
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::{EffectBlocks, FogBlocks};
-use concinnity_core::render::particles::ParticleFrame;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{ClusterParams, TextDrawCall};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_core::render::uniforms::{GBufferView, PassCamera};
-use concinnity_core::render::{pass_timing, render_graph};
-use concinnity_core::transform::mat4_inverse;
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::render::{backend::pass_timing, render_graph};
+use concinnity_engine::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
 use std::mem::ManuallyDrop;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -472,7 +473,9 @@ fn emit_graph_restores(
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
     use super::barrier_translate::d3d12_state;
-    use concinnity_core::render::render_graph::{ResourceState, barrier_coverage_gaps_for_driven};
+    use concinnity_engine::render::render_graph::{
+        ResourceState, barrier_coverage_gaps_for_driven,
+    };
 
     let driven: Vec<bool> = registry.driven().collect();
     let gaps = barrier_coverage_gaps_for_driven(graph, &driven);
@@ -557,6 +560,10 @@ pub(in crate::directx) struct MainPassExtent {
 
 // GPU virtual addresses of this frame's view / light / shadow constant buffers.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the shared suffix names what each field holds: a GPU virtual address"
+)]
 pub(in crate::directx) struct FrameGpuBuffers {
     pub view_gva: u64,
     pub light_gva: u64,
@@ -639,8 +646,10 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // Seconds since the engine started. Consumed by ParticlesDraw's
     // bundled compute sim (delta-time computed against the last
     // per-emitter elapsed snapshot stored on `DxContext`).
-    // Narrowed at each use; the water's motion takes it whole.
+    // Narrowed at each use.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     // Camera near-plane in view units. Consumed by `FogFroxel` to map the
     // front edge of the froxel volume onto view-space depth, and by
     // `Upscale` (FSR3 dispatch's `cameraNear`).
@@ -664,9 +673,9 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     pub effects: EffectBlocks,
     // How the particle and transparent passes treat the reactive mask, and
     // whether TAA, the upscaler or the reactive view reads it.
-    pub reactive: concinnity_core::render::reactive_mask::ReactiveMaskPlan,
+    pub reactive: concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan,
     // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_core::render::grass::GrassBender],
+    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
     // This frame's particle clock, advanced before recording; `None` when the
     // particle passes are inert.
     pub particle: Option<ParticleFrame>,
@@ -701,11 +710,12 @@ impl DxContext {
         // and Metal's `prepare_particle_pass` hoist.
         let particle_ref = params.particle.as_ref();
         if let Some(frame) = particle_ref {
-            self.write_particle_params(params.frame_idx, frame);
+            self.write_particle_params(params.frame_idx, frame, params.vp_mat);
         }
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
         // slot it fills alternates frame to frame.
+        let grass_started = std::time::Instant::now();
         let grass_frame = graph
             .pass(PassId::Grass)
             .is_some()
@@ -720,6 +730,10 @@ impl DxContext {
                 })
             })
             .flatten();
+        self.state.spans.set(FrameSpans {
+            grass_us: concinnity_host::clock::micros_since(grass_started),
+            ..self.state.spans.get()
+        });
 
         // Resolve every graph-driven resource's barrier target and every pass's
         // aliasing barriers once, on the main thread, then share the tables
@@ -1101,6 +1115,7 @@ impl DxContext {
         super::transparent::TransparentView::new(
             &self.pass_camera(params, params.vp_mat),
             self.uniforms.lights.uniforms(),
+            &self.state.view.daylight,
         )
     }
 
@@ -1259,7 +1274,7 @@ impl DxContext {
                 self.encode_fog(cmd, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
-            PassId::WaterSim => self.encode_water_sim(cmd, params.elapsed),
+            PassId::WaterSim => self.encode_water_sim(cmd, params.frame_idx, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
             PassId::ParticlesSim => {
                 // Integrates each live emitter's persistent pool. The graph's only
@@ -1271,18 +1286,21 @@ impl DxContext {
                     self.encode_particles_sim(cmd, params.frame_idx, *frame);
                 }
             }
-            PassId::ParticlesDraw => {
-                self.targets
-                    .reactive_mask
-                    .clear(cmd, params.reactive.particles);
+            PassId::ParticlesDraw | PassId::ParticlesLateDraw => {
+                let late = pass_id == PassId::ParticlesLateDraw;
+                let reactive = if late {
+                    params.reactive.late_particles
+                } else {
+                    params.reactive.particles
+                };
+                self.targets.reactive_mask.clear(cmd, reactive);
                 if let Some(frame) = particle_frame {
                     self.encode_particles_draw(
                         cmd,
                         params.frame_idx,
                         frame,
-                        params.vp_mat,
                         params.frustum,
-                        params.reactive.particles,
+                        super::particle::ParticleStage { reactive, late },
                     );
                 }
             }
@@ -1329,12 +1347,13 @@ impl DxContext {
                 // bloom + composite then sample via `scene_srv_for_post`).
                 self.encode_upscale(cmd, params)?;
             }
+            PassId::PropProbe => self.encode_prop_probe(cmd, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
                 // Recorded ahead of `Transparent` in the frame's submission, each
                 // plane's resolve left shader-readable for it.
-                self.encode_planar_reflections(cmd, params)?;
+                self.encode_planar_reflections(cmd, params);
             }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
@@ -1346,7 +1365,7 @@ impl DxContext {
                     .reactive_mask
                     .clear(cmd, params.reactive.transparent);
                 let view = self.build_transparent_view(params);
-                self.advance_transparent_water(params.frame_idx, params.elapsed, params.cam_pos);
+                self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
                 self.encode_transparent(
                     cmd,
                     params.frame_idx,
@@ -1386,6 +1405,7 @@ impl DxContext {
             PassId::SsgiResolve => {
                 self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
             }
+            PassId::Disocclusion => self.encode_disocclusion(cmd, params.frame_idx)?,
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (DXR inline `RayQuery`). Traces
                 // a reflection ray per glossy pixel against the scene TLAS and

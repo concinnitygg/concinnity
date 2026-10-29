@@ -4,8 +4,8 @@
 //! The subject is shared with `edit/worlds_tests.rs`, which covers the switcher the
 //! same panel becomes once a world is open.
 
-use concinnity_core::components::{FrameInput, Sprite, TextLabel};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite, TextLabel};
+use concinnity_engine::ecs::World;
 
 use super::fixtures::{
     VP, hook_at, open_project, press_modal, prop_entry, set_world_name, world_names,

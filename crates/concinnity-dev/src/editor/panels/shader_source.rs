@@ -5,7 +5,7 @@
 //! is `shader_diagnostics`; what a new file starts as is `shader_templates`
 //! and `sdf_templates`.
 
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 use std::path::{Path, PathBuf};
 
 use super::shader_edit::ShaderEdit;
@@ -78,10 +78,10 @@ pub(crate) fn starter_path(dir: &Path, name: &str, exists: impl Fn(&Path) -> boo
     if !exists(&first) {
         return first;
     }
-    (1..)
+    (1..=u32::MAX)
         .map(|i| shaders.join(format!("{name}_{i}.hlsl")))
         .find(|p| !exists(p))
-        .expect("an unbounded search finds a free name")
+        .expect("four billion candidates hold a free name")
 }
 
 // How a world line declares `path`: relative to `root` when it is under it,

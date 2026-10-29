@@ -11,10 +11,10 @@
 //!
 //! Mirrors src/metal/line.rs.
 
-use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::fullscreen::align_up;
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::align_up;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -38,7 +38,7 @@ const OCCLUDED_ALPHA: f32 = 0.12;
 
 // `LineView` is a GPU-free layout struct that lives in `core::render`;
 // re-export it so `crate::directx::line::LineView` is the local path.
-pub(in crate::directx) use concinnity_core::render::uniforms::LineView;
+pub(in crate::directx) use concinnity_engine::render::uniforms::LineView;
 
 // Line-pass state on the context: the resources, built on the first frame that
 // submits lines so a world that never draws any pays nothing, plus the

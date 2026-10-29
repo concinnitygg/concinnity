@@ -272,7 +272,7 @@ mod tests {
         assert_eq!(x * x + z, 0.0);
     }
 
-    // The one function with no libm counterpart, so the formula is ours: a
+    // No libm counterpart, so the formula is ours: a
     // negative dividend must come back in [0, |rhs|), not negative like fmod.
     #[test]
     fn rem_euclid_matches_std_across_signs() {

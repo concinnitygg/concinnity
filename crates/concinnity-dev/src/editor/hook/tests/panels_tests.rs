@@ -10,9 +10,9 @@
 //! others: the View panel's rows toggling what shows, and the Templates panel's
 //! pick opening a detail panel whose apply adds the template's entries.
 
-use concinnity_core::components::{FrameInput, ShaderStage, Sprite, TextInput, TextLabel};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{FrameInput, ShaderStage, Sprite, TextInput, TextLabel};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::fixtures::{hook, set_input, world_with_input};
 use crate::editor::hook::EditorHook;
@@ -77,7 +77,7 @@ fn show_every_element(p: &dyn Panel, world: &mut World) {
 fn visible_sprites(p: &dyn Panel, world: &World) -> Vec<AssetId> {
     let ids = &p.ids().sprites;
     world
-        .join2::<Sprite, concinnity_core::components::Identity>()
+        .join2::<Sprite, concinnity_engine::components::Identity>()
         .filter(|(_, s, identity)| s.visible && ids.contains(&identity.id()))
         .map(|(_, _, identity)| identity.id())
         .collect()
@@ -398,7 +398,7 @@ fn template_pick_opens_detail_then_apply_adds_idempotently() {
 fn template_detail_rows_and_close() {
     let mut h = hook(Vec::new());
     h.open_template_detail(0);
-    let rows = h.template_rows(0);
+    let rows = EditorHook::template_rows(0);
     let names = rows.iter().filter(|r| !r.is_header).count();
     assert_eq!(
         names,

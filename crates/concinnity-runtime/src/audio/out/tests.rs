@@ -1,5 +1,5 @@
 use super::*;
-use concinnity_core::components::Rolloff;
+use concinnity_engine::components::Rolloff;
 use concinnity_testing::fixtures::wav::pcm16_mono;
 use kira::backend::mock::MockBackend;
 

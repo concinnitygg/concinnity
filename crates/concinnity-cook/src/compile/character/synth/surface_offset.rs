@@ -84,7 +84,7 @@ mod tests {
         fx.params.direction = [0.0; 3];
         let d = displace(&fx.input());
         assert!(vec3::length(d[back]) > 0.09);
-        let dir = vec3::vec3_normalize(d[back]);
+        let dir = vec3::normalize(d[back]);
         assert!(dir[2] < -0.99, "outward along the normal: {dir:?}");
     }
 }

@@ -13,7 +13,7 @@ const INIT_WORLD_JSONL: &str = r#"["TextLabel",{"$id":"hello_world","content":"H
 "#;
 
 /// Create a new project in a new directory at `path`.
-pub fn new(path: &str) -> std::io::Result<()> {
+pub(crate) fn new(path: &str) -> std::io::Result<()> {
     // A pre-existing empty directory is a valid target; one that already holds
     // a world is not.
     if let Some(world) = existing_world(Path::new(path)) {
@@ -28,7 +28,7 @@ pub fn new(path: &str) -> std::io::Result<()> {
 }
 
 /// Create a new project in the working directory.
-pub fn init() -> std::io::Result<()> {
+pub(crate) fn init() -> std::io::Result<()> {
     init_in_dir(".")
 }
 

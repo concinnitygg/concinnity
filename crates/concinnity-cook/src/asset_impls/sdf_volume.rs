@@ -1,9 +1,9 @@
-use concinnity_core::components::SdfVolume;
-use concinnity_core::components::sdf_programs::SdfPrograms;
+use concinnity_engine::components::SdfVolume;
 #[cfg(test)]
-use concinnity_core::platform::Platform;
-use concinnity_core::platform::PlatformSet;
-use concinnity_core::render::shader_source::SourceFile;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::platform::PlatformSet;
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::source::SourceFile;
 
 use crate::asset::BuildCtx;
 use crate::authoring::source_args::sdf_volume_source_path;

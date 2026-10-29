@@ -1,16 +1,16 @@
-// The host half of frame submission: core's `frame_submit::submit` timed by
+// The host half of frame submission: core's `submit::submit` timed by
 // the monotonic clock, with a device loss reported to the crash handler.
 
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::frame_submit::{self, FramePolicy, SubmitOutcome};
-use concinnity_core::render::snapshot::RenderSnapshot;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::frame::snapshot::RenderSnapshot;
+use concinnity_engine::render::frame::submit::{self, FramePolicy, SubmitOutcome};
 
 pub(crate) fn submit(
     policy: &mut FramePolicy,
     snap: &mut RenderSnapshot,
     backend: &mut dyn RenderBackend,
 ) -> SubmitOutcome {
-    let outcome = frame_submit::submit(
+    let outcome = submit::submit(
         policy,
         snap,
         backend,
@@ -25,14 +25,13 @@ pub(crate) fn submit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::profile::RenderStats;
-    use concinnity_core::render::backend::recording::recording_backend;
-    use concinnity_host::clock::micros_since;
-    use std::time::Instant;
+    use concinnity_engine::profile::RenderStats;
+    use concinnity_engine::render::backend::recording::recording_backend;
+    use concinnity_host::clock::monotonic_micros;
 
     // Submit one frame to a backend whose draw takes `draw` and reports
     // `gpu_wait_us`, returning the frame's render stats and the wall time the
-    // whole call took.
+    // whole call took, on the same clock the submission reads.
     fn submit_timed(draw: std::time::Duration, gpu_wait_us: u32) -> (RenderStats, u32) {
         let (state, mut backend) = recording_backend();
         {
@@ -40,13 +39,13 @@ mod tests {
             s.on_draw = Some(Box::new(move || std::thread::sleep(draw)));
             s.render_stats.gpu_wait_us = gpu_wait_us;
         }
-        let started = Instant::now();
+        let started = monotonic_micros();
         let outcome = submit(
             &mut FramePolicy::default(),
             &mut RenderSnapshot::default(),
             &mut backend,
         );
-        let wall = micros_since(started);
+        let wall = u32::try_from(monotonic_micros() - started).unwrap_or(u32::MAX);
         (outcome.render_stats.expect("a drawn frame"), wall)
     }
 

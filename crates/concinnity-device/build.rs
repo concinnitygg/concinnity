@@ -19,9 +19,11 @@
 //! 5. Derive the hash of the shader-compile sources that `shader_cache` folds
 //!    into every artifact key (see `emit_shader_compile_source_hash`).
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::metal::bindless_textures;
-use concinnity_core::render::shader_programs::{ShaderProgram, Table, dx, metal, shared, spd};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::shader::programs::metal::bindless_textures;
+use concinnity_engine::render::shader::programs::{
+    ShaderProgram, Table, commands, dx, metal, shared, spd,
+};
 use concinnity_shader::HlslTarget;
 use concinnity_toolchain::{
     Backend, EmittedMsl, ShaderArtifact, hash_sources, msl_binds, msl_binds_a_resource,
@@ -91,8 +93,26 @@ const CULL_REGISTERS: &[(&str, &str)] = &[
     ("objects", "t0"),
     ("draw_args", "t1"),
     ("hiz_tex", "t2"),
-    ("commands", "u0"),
+    ("variants", "t3"),
+    ("group_counts", "u0"),
     ("cull_status", "u1"),
+];
+
+// The scan and the scatter that pack a cull's draws, from `directx/cull.rs`:
+// one root signature, the list lengths and the commands sharing its last slot.
+const CULL_SCAN_REGISTERS: &[(&str, &str)] = &[
+    ("params", "b0"),
+    ("variants", "t0"),
+    ("group_counts", "u0"),
+    ("stream_counts", "u2"),
+];
+const CULL_SCATTER_REGISTERS: &[(&str, &str)] = &[
+    ("params", "b0"),
+    ("variants", "t0"),
+    ("draw_args", "t1"),
+    ("group_counts", "u0"),
+    ("cull_status", "u1"),
+    ("commands", "u2"),
 ];
 
 // One program and the registers its DirectX root signature declares.
@@ -122,12 +142,21 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: MAIN_BINDLESS_REGISTERS,
     },
     DxilAbi {
+        program: &shared::MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::MAIN_BINDLESS_GROUND_FRAG,
         registers: MAIN_BINDLESS_REGISTERS,
     },
+    DxilAbi {
+        program: &shared::MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
+        registers: MAIN_BINDLESS_REGISTERS,
+    },
     // The draw cull. Its registers are pinned in the source because declaration
-    // order would hand `cull_status` u0 and `commands` u1, the reverse of what
-    // `directx/cull.rs` binds; the shadow variant declares no status or Hi-Z.
+    // order would hand `cull_status` u0 and `group_counts` u1, the reverse of
+    // what `directx/cull.rs` binds; the shadow variant declares no Hi-Z or
+    // variant block.
     DxilAbi {
         program: &shared::CULL_PHASE1,
         registers: CULL_REGISTERS,
@@ -142,8 +171,17 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
             ("cull", "b0"),
             ("objects", "t0"),
             ("draw_args", "t1"),
-            ("commands", "u0"),
+            ("group_counts", "u0"),
+            ("cull_status", "u1"),
         ],
+    },
+    DxilAbi {
+        program: &shared::CULL_SCAN,
+        registers: CULL_SCAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &commands::CULL_SCATTER,
+        registers: CULL_SCATTER_REGISTERS,
     },
     DxilAbi {
         program: &shared::MODEL_HISTORY,
@@ -369,20 +407,83 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_VERT,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG,
         registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: WATER_WAKE_REGISTERS,
     },
     DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT,
         registers: WATER_OCEAN_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
         registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: WATER_WAKE_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+        registers: WATER_OCEAN_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+        registers: WATER_WAKE_REGISTERS,
     },
     // The simulated ocean's kernels, under their own root signature in
     // `directx/water_sim.rs`: the root constants, the spectrum and row
     // transforms as root views, and one table of the four mip UAVs.
+    // The wake's kernels, under their own root signature in
+    // `directx/water_sim.rs`: the block as a root CBV, the state and the
+    // transform as root views, and a table of the field's two mip views.
+    DxilAbi {
+        program: &shared::WATER_WAKE_ROWS,
+        registers: &[("params", "b0"), ("state", "u1"), ("work", "u2")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_COLUMNS,
+        registers: &[("params", "b0"), ("work", "u2")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_INVERSE,
+        registers: &[("params", "b0"), ("state", "u1"), ("work", "u2")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_SHADE,
+        registers: &[("params", "b0"), ("state", "u1"), ("dst_field", "u3")],
+    },
+    DxilAbi {
+        program: &shared::WATER_WAKE_MIP,
+        registers: &[("dst_field", "u3"), ("src_field", "t4")],
+    },
     DxilAbi {
         program: &shared::WATER_FFT_ROWS,
         registers: &[("params", "b0"), ("spectrum", "t5"), ("rows", "u6")],
@@ -441,11 +542,23 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: GLASS_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: GLASS_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG,
         registers: WATER_BODY_LIGHT_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT,
+        registers: WATER_BODY_LIGHT_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
         registers: WATER_BODY_LIGHT_REGISTERS,
     },
     DxilAbi {
@@ -453,7 +566,15 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         registers: WATER_RT_REGISTERS,
     },
     DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        registers: WATER_RT_REGISTERS,
+    },
+    DxilAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
+        registers: WATER_RT_TEXTURED_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
     // The compute families whose root signatures live in
@@ -490,7 +611,7 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::PARTICLE_SIMULATE,
-        registers: &[("params", "b0"), ("pool", "u0")],
+        registers: &[("params", "b0"), ("pool", "u0"), ("frame_rows", "t1")],
     },
     // The raster remainder, from `src/directx/{particle,decal,line}.rs` and
     // `pipeline.rs`. Only the particle pair has a `CN_BACKEND_DIRECTX` branch, and only
@@ -503,6 +624,18 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::PARTICLE_FRAG,
+        registers: &[
+            ("albedo", "t1"),
+            ("albedo_sampler", "s0"),
+            ("scene_depth", "t2"),
+        ],
+    },
+    DxilAbi {
+        program: &shared::PARTICLE_LIT_VERT,
+        registers: &[("view", "b0"), ("params", "b1"), ("pool", "t0")],
+    },
+    DxilAbi {
+        program: &shared::PARTICLE_LIT_FRAG,
         registers: &[
             ("albedo", "t1"),
             ("albedo_sampler", "s0"),
@@ -566,8 +699,12 @@ const RT_REFLECTIONS_REGISTERS: &[(&str, &str)] = &[
     ("probe_cube_sampler", "s3"),
 ];
 
-const RT_REFLECTIONS_TEXTURED_REGISTERS: &[(&str, &str)] =
-    &[("tex_pool", "t0, space1"), ("pool_sampler", "s2")];
+const RT_REFLECTIONS_TEXTURED_REGISTERS: &[(&str, &str)] = &[
+    ("tex_pool", "t0, space1"),
+    ("pool_sampler", "s2"),
+    ("canopy_cb", "b6"),
+    ("canopy_tables_sb", "t13"),
+];
 
 // The transparent pass's root signatures, from `src/directx/transparent.rs`,
 // which glass and water both draw under. The probe cube array, its records and
@@ -670,6 +807,9 @@ const WATER_OCEAN_REGISTERS: &[(&str, &str)] = &[
     ("ocean_sampler", "s4"),
 ];
 
+// A planet sea's wake field, the third SRV of the oceans' table.
+const WATER_WAKE_REGISTERS: &[(&str, &str)] = &[("wake_field", "t17")];
+
 // The light every water fragment's body is lit by: the cascaded shadow and the
 // sky irradiance cube, a table and a CBV past the probe set in both signatures.
 const WATER_BODY_LIGHT_REGISTERS: &[(&str, &str)] = &[
@@ -751,7 +891,7 @@ const SHADER_COMPILE_SOURCES: &[&str] = &[
 // that reads the main pass's depth gets both variants. Every array a program
 // binds is unsized or a single resource, so no capacity reaches the source.
 fn precompile_spirv() {
-    use concinnity_core::render::shader_programs::vk;
+    use concinnity_engine::render::shader::programs::vk;
 
     concinnity_toolchain::precompile_shader_artifacts(
         &artifacts(&vk::TABLE, Platform::Vulkan, |_| HlslTarget::Spirv),
@@ -966,8 +1106,8 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
 const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // The draw cull's decision half. Its buffers are pinned by register() and
     // the Hi-Z texture takes texture(0) from declaration order; the slots are
-    // what `metal/cull.rs` binds once for this dispatch and the ICB encode
-    // dispatch that follows it on the same encoder.
+    // what `metal/cull.rs` binds once for this dispatch and the scan and
+    // scatter that follow it on the same encoder.
     MetalAbi {
         program: &shared::CULL_PHASE1,
         slots: &[&[
@@ -975,6 +1115,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("draw_args", "buffer(1)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+            ("variants", "buffer(8)"),
+            ("group_counts", "buffer(9)"),
             ("hiz_tex", "texture(0)"),
         ]],
         argument_ids: &[],
@@ -987,7 +1129,20 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("objects", "buffer(0)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+            ("variants", "buffer(8)"),
+            ("group_counts", "buffer(9)"),
             ("hiz_tex", "texture(0)"),
+        ]],
+        argument_ids: &[],
+    },
+    // The scan between the decision and the encode, on the same encoder.
+    MetalAbi {
+        program: &shared::CULL_SCAN,
+        slots: &[&[
+            ("variants", "buffer(8)"),
+            ("group_counts", "buffer(9)"),
+            ("stream_counts", "buffer(10)"),
+            ("params", "buffer(11)"),
         ]],
         argument_ids: &[],
     },
@@ -998,6 +1153,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("draw_args", "buffer(1)"),
             ("cull", "buffer(2)"),
             ("cull_status", "buffer(5)"),
+            ("group_counts", "buffer(9)"),
         ]],
         argument_ids: &[],
     },
@@ -1077,6 +1233,43 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("spectrum", "buffer(5)"),
             ("rows", "buffer(6)"),
         ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_ROWS,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("state", "buffer(1)"),
+            ("work", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_COLUMNS,
+        slots: &[&[("params", "buffer(0)"), ("work", "buffer(2)")]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_INVERSE,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("state", "buffer(1)"),
+            ("work", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_SHADE,
+        slots: &[&[
+            ("params", "buffer(0)"),
+            ("state", "buffer(1)"),
+            ("dst_field", "texture(3)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_WAKE_MIP,
+        slots: &[&[("dst_field", "texture(3)"), ("src_field", "texture(4)")]],
         argument_ids: &[],
     },
     MetalAbi {
@@ -1256,7 +1449,17 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
     },
     MetalAbi {
+        program: &shared::MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG,
+        slots: &[MAIN_BINDLESS_SLOTS, CANOPY_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
+    },
+    MetalAbi {
         program: &shared::MAIN_BINDLESS_GROUND_FRAG,
+        slots: &[MAIN_BINDLESS_SLOTS, GRASS_GROUND_SLOTS],
+        argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
+    },
+    MetalAbi {
+        program: &shared::MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
         slots: &[MAIN_BINDLESS_SLOTS, GRASS_GROUND_SLOTS],
         argument_ids: MAIN_BINDLESS_ARGUMENT_IDS,
     },
@@ -1384,22 +1587,38 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("params", "buffer(6)"),
             ("ocean_displacement", "texture(9)"),
             ("ocean_sampler", "sampler(6)"),
+            ("wake_field", "texture(11)"),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_FRAG,
-        slots: WATER_SLOTS,
+        slots: WATER_SEA_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG,
+        slots: WATER_SEA_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_FRAG_RT,
-        slots: WATER_RT_SLOTS,
+        slots: WATER_SEA_RT_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT,
+        slots: WATER_SEA_RT_SLOTS,
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_SEA_FRAG_RT_TEXTURED,
-        slots: WATER_RT_TEXTURED_SLOTS,
+        slots: WATER_SEA_RT_TEXTURED_SLOTS,
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
+        slots: WATER_SEA_RT_TEXTURED_SLOTS,
         argument_ids: &[],
     },
     // The HLSL families. Their Metal indices come from the `register()`
@@ -1469,6 +1688,24 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
+    MetalAbi {
+        program: &shared::PARTICLE_LIT_VERT,
+        slots: &[&[
+            ("pool", "buffer(0)"),
+            ("view", "buffer(1)"),
+            ("params", "buffer(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::PARTICLE_LIT_FRAG,
+        slots: &[&[
+            ("albedo", "texture(0)"),
+            ("albedo_sampler", "sampler(0)"),
+            ("scene_depth", "texture(2)"),
+        ]],
+        argument_ids: &[],
+    },
     // The fullscreen post fragments. Each source is one texture/sampler pair at
     // the index its register names, and the constants ride buffer(0), which is
     // what `metal/post/{post_device,ssao}.rs` bind.
@@ -1517,6 +1754,22 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
+    // The disocclusion stages read by point load, so their samplers are
+    // compiled out.
+    MetalAbi {
+        program: &shared::DISOCCLUSION_MARK,
+        slots: &[&[
+            ("gbuffer", "texture(0)"),
+            ("velocity", "texture(1)"),
+            ("previous", "texture(2)"),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::DISOCCLUSION_SNAPSHOT,
+        slots: &[&[("gbuffer", "texture(0)"), ("velocity", "texture(1)")]],
+        argument_ids: &[],
+    },
     // The SSGI stages read every source but the hit radiance and the occlusion
     // by point load, so the samplers those sources declare are compiled out and
     // only the scene's and the occlusion's survive.
@@ -1554,6 +1807,8 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("prev_pyramid", "texture(4)"),
             ("history", "texture(5)"),
             ("age", "texture(6)"),
+            ("prev_age", "texture(7)"),
+            ("reflectance", "texture(8)"),
         ]],
         argument_ids: &[],
     },
@@ -1597,6 +1852,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("prev_pyramid", "texture(4)"),
             ("history", "texture(5)"),
             ("age", "texture(6)"),
+            ("prev_age", "texture(7)"),
         ]],
         argument_ids: &[],
     },
@@ -1701,7 +1957,11 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::PARTICLE_SIMULATE,
-        slots: &[&[("pool", "buffer(0)"), ("params", "buffer(2)")]],
+        slots: &[&[
+            ("pool", "buffer(0)"),
+            ("frame_rows", "buffer(1)"),
+            ("params", "buffer(2)"),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
@@ -1873,11 +2133,13 @@ const RT_REFLECTIONS_SLOTS: &[(&str, &str)] = &[
     ("cluster_list", "buffer(10)"),
 ];
 
-// The textured RT resolve's bindless pool: the main pass's texture block,
-// bound at the pool's offset.
+// The textured RT resolve's bindless pool (the main pass's texture block, bound
+// at the pool's offset) and the canopy block its grass-covered hits shade from.
 const RT_REFLECTIONS_POOL_SLOTS: &[(&str, &str)] = &[
     ("spvDescriptorSet3", "buffer(7)"),
     ("pool_sampler", "sampler(5)"),
+    ("canopy_cb", "buffer(12)"),
+    ("canopy_tables_sb", "buffer(13)"),
 ];
 
 const GLASS_SLOTS: &[&[(&str, &str)]] = &[
@@ -1955,6 +2217,38 @@ const WATER_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
     TRANSPARENT_POOL_SLOTS,
     WATER_BODY_LIGHT_SLOTS,
     WATER_OCEAN_SLOTS,
+];
+// A planet sea's wake field, which its fragments shade from too.
+const WATER_WAKE_SLOTS: &[(&str, &str)] = &[("wake_field", "texture(11)")];
+const WATER_SEA_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
+    WATER_WAKE_SLOTS,
+];
+const WATER_SEA_RT_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    TRANSPARENT_TRACE_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
+    WATER_WAKE_SLOTS,
+];
+const WATER_SEA_RT_TEXTURED_SLOTS: &[&[(&str, &str)]] = &[
+    TRANSPARENT_SLOTS,
+    TRANSPARENT_PROBE_SLOTS,
+    SCENE_COLOR_SLOTS,
+    PLANAR_SLOTS,
+    TRANSPARENT_TRACE_SLOTS,
+    TRANSPARENT_POOL_SLOTS,
+    WATER_BODY_LIGHT_SLOTS,
+    WATER_OCEAN_SLOTS,
+    WATER_WAKE_SLOTS,
 ];
 
 // Every DirectX program's registers against the root signature its host

@@ -7,12 +7,12 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::{InputKey, KeyEvent, KeyPress, WindowMode};
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::math::narrow_f32;
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::{InputKey, KeyEvent, KeyPress, WindowMode};
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,
@@ -40,6 +40,10 @@ unsafe extern "C" {
 // The window, view, and input state shared by the macOS backends. The backend
 // keeps whatever it additionally needs to present (Metal: the `MTKView` this
 // view upcasts from; Vulkan: the surface built from the view's CAMetalLayer).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent cursor, menu and chrome states of the OS window"
+)]
 pub(crate) struct AppKitWindow {
     // None in embedded mode (no separate NSWindow is created).
     window: Option<Retained<NSWindow>>,
@@ -129,8 +133,8 @@ impl AppKitWindow {
 
     // The general pasteboard, reachable in every window mode: it is the
     // system's, not the window's.
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(&mut self.clipboard)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        &mut self.clipboard
     }
 
     // The view the backend renders into, for the presentation resources it owns
@@ -468,6 +472,12 @@ impl AppKitWindow {
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         let window = self.window.as_deref()?;
         display_mode::current(Some(window))
+    }
+
+    // How fast the engine window's screen can refresh. None in embedded mode,
+    // matching display_modes.
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        display_mode::refresh(self.window.as_deref()?)
     }
 
     // Remember the display mode to hold while the window is in native

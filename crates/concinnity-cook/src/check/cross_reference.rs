@@ -28,7 +28,7 @@ pub(crate) fn cross_refs_for(
     args: &serde_json::Value,
 ) -> Vec<CrossRef> {
     use crate::authoring::registry::build_only::Prefab;
-    use concinnity_core::components::{
+    use concinnity_engine::components::{
         AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, Prop, VoxelChunk,
         VoxelWorld,
     };
@@ -1167,7 +1167,21 @@ mod tests {
     fn follow_without_target_field_fails() {
         let mut assets = follow_world();
         assets[3].args["controller"]["follow"] = serde_json::json!({});
-        assert!(err_text(&assets).contains("`controller.follow.target` is required"));
+        assert!(err_text(&assets).contains("needs a `target`"));
+    }
+
+    // A follow camera follows a prop in place of a rig, but not both.
+    #[test]
+    fn follow_takes_a_prop_or_a_target() {
+        let mut assets = follow_world();
+        assets.push(asset("ball", RegisteredType::Prop, serde_json::json!({})));
+        assets[3].args["controller"]["follow"] = serde_json::json!({"prop": "ball"});
+        assert!(validate_cross_references(&assets).is_ok());
+        assets[3].args["controller"]["follow"]["prop"] = serde_json::json!("ghost");
+        assert!(err_text(&assets).contains("'ghost' not found"));
+        assets[3].args["controller"]["follow"] =
+            serde_json::json!({"prop": "ball", "target": "hero"});
+        assert!(err_text(&assets).contains("names both"));
     }
 
     #[test]

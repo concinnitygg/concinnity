@@ -12,12 +12,12 @@
 // per-allocation, so one atomic per tag is not a hot line and needs none of the
 // sharding the global counters use.
 
+use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 use crate::memory::tag::{MemTag, Realm};
 
-// One tag's counters in one realm. A budget of zero is "no budget set": a
-// subsystem budgeted at zero bytes is not a case worth modeling.
+// One tag's counters in one realm. A stored budget of zero is "no budget set".
 struct Cell {
     bytes: AtomicU64,
     peak: AtomicU64,
@@ -38,22 +38,25 @@ impl Cell {
     }
 }
 
-// What one tag holds in one realm, as read at a moment.
+/// What one tag holds in one realm, as read at a moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TagUsage {
+    /// The subsystem the bytes are attributed to.
     pub tag: MemTag,
+    /// Host or device memory.
     pub realm: Realm,
+    /// Bytes held now.
     pub bytes: u64,
-    // High-water mark of `bytes` since process start.
+    /// High-water mark of `bytes` since process start.
     pub peak_bytes: u64,
-    // The ceiling this tag is expected to stay under, when one was declared.
-    pub budget: Option<u64>,
+    /// The ceiling this tag is expected to stay under, when one was declared.
+    pub budget: Option<NonZeroU64>,
 }
 
 impl TagUsage {
-    // Nothing reported. Distinct from a reported zero only in that no reporter
-    // has touched the tag, which is why a readout hides it rather than drawing
-    // an empty row.
+    /// Nothing reported. Distinct from a reported zero only in that no reporter
+    /// has touched the tag, which is why a readout hides it rather than drawing
+    /// an empty row.
     pub const fn empty(tag: MemTag, realm: Realm) -> Self {
         Self {
             tag,
@@ -68,15 +71,14 @@ impl TagUsage {
         self.bytes > 0 || self.peak_bytes > 0 || self.budget.is_some()
     }
 
+    /// Whether the tag holds more than its budget.
     pub fn over_budget(&self) -> bool {
-        self.budget.is_some_and(|b| self.bytes > b)
+        self.budget.is_some_and(|b| self.bytes > b.get())
     }
 
-    // How much of the budget is spent, or `None` when the tag has no budget.
+    /// How much of the budget is spent, or `None` when the tag has no budget.
     pub fn fraction(&self) -> Option<f32> {
-        self.budget
-            .filter(|&b| b > 0)
-            .map(|b| self.bytes as f32 / b as f32)
+        self.budget.map(|b| self.bytes as f32 / b.get() as f32)
     }
 }
 
@@ -92,7 +94,7 @@ impl LedgerSnapshot {
         self.entries[entry_index(tag, realm)]
     }
 
-    /// The tags something has reported into, in realm order. What a readout
+    /// The tags something has reported into, in tag order. What a readout
     /// lists: an unreported tag is absent rather than a row of zeroes.
     pub fn reported(&self, realm: Realm) -> impl Iterator<Item = TagUsage> + '_ {
         MemTag::ALL
@@ -154,8 +156,10 @@ impl Ledger {
     /// increments; one that knows its total should `set` it instead.
     pub fn add(&self, tag: MemTag, realm: Realm, bytes: u64) {
         let cell = self.cell(tag, realm);
-        let total = cell.bytes.fetch_add(bytes, Relaxed).saturating_add(bytes);
-        cell.observe(total);
+        let (Ok(held) | Err(held)) = cell
+            .bytes
+            .fetch_update(Relaxed, Relaxed, |held| Some(held.saturating_add(bytes)));
+        cell.observe(held.saturating_add(bytes));
     }
 
     /// Give up `bytes` under `tag`. Saturates at zero: a reporter that
@@ -182,41 +186,30 @@ impl Ledger {
     }
 
     /// The ceiling the tag is expected to stay under. `None` clears it.
-    pub fn set_budget(&self, tag: MemTag, realm: Realm, budget: Option<u64>) {
+    pub fn set_budget(&self, tag: MemTag, realm: Realm, budget: Option<NonZeroU64>) {
         self.cell(tag, realm)
             .budget
-            .store(budget.unwrap_or(0), Relaxed);
+            .store(budget.map_or(0, NonZeroU64::get), Relaxed);
     }
 
-    /// Set (or clear, with `None`) the byte budget for one tag and realm.
+    /// One tag's current usage in one realm.
     pub fn usage(&self, tag: MemTag, realm: Realm) -> TagUsage {
         let cell = self.cell(tag, realm);
-        let budget = cell.budget.load(Relaxed);
         TagUsage {
             tag,
             realm,
             bytes: cell.bytes.load(Relaxed),
             peak_bytes: cell.peak.load(Relaxed),
-            budget: (budget > 0).then_some(budget),
+            budget: NonZeroU64::new(cell.budget.load(Relaxed)),
         }
     }
 
-    /// One tag's current usage in one realm.
+    /// Every tag's usage in every realm, read in one pass.
     pub fn snapshot(&self) -> LedgerSnapshot {
         LedgerSnapshot {
             entries: core::array::from_fn(|i| {
                 self.usage(MemTag::ALL[i / Realm::COUNT], Realm::ALL[i % Realm::COUNT])
             }),
-        }
-    }
-
-    /// Drop every report and budget, including the peaks. For a host tearing a
-    /// world down and building another, whose old numbers describe nothing.
-    pub fn clear(&self) {
-        for cell in &self.cells {
-            cell.bytes.store(0, Relaxed);
-            cell.peak.store(0, Relaxed);
-            cell.budget.store(0, Relaxed);
         }
     }
 }
@@ -264,6 +257,16 @@ mod tests {
     // The idempotent form: a pool republishing its total every frame must not
     // accumulate.
     #[test]
+    fn adding_past_the_top_saturates() {
+        let ledger = Ledger::new();
+        ledger.add(MemTag::Meshes, Realm::Host, u64::MAX - 1);
+        ledger.add(MemTag::Meshes, Realm::Host, 8);
+        let usage = ledger.usage(MemTag::Meshes, Realm::Host);
+        assert_eq!(usage.bytes, u64::MAX);
+        assert_eq!(usage.peak_bytes, u64::MAX);
+    }
+
+    #[test]
     fn set_replaces_rather_than_accumulates() {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 8_000);
@@ -286,11 +289,9 @@ mod tests {
     #[test]
     fn a_budget_reads_back_and_clears() {
         let ledger = Ledger::new();
-        ledger.set_budget(MemTag::Chunks, Realm::Device, Some(4_096));
-        assert_eq!(
-            ledger.usage(MemTag::Chunks, Realm::Device).budget,
-            Some(4_096)
-        );
+        let budget = NonZeroU64::new(4_096);
+        ledger.set_budget(MemTag::Chunks, Realm::Device, budget);
+        assert_eq!(ledger.usage(MemTag::Chunks, Realm::Device).budget, budget);
 
         ledger.set_budget(MemTag::Chunks, Realm::Device, None);
         assert_eq!(ledger.usage(MemTag::Chunks, Realm::Device).budget, None);
@@ -299,7 +300,7 @@ mod tests {
     #[test]
     fn over_budget_and_fraction_track_the_ceiling() {
         let ledger = Ledger::new();
-        ledger.set_budget(MemTag::Meshes, Realm::Device, Some(1_000));
+        ledger.set_budget(MemTag::Meshes, Realm::Device, NonZeroU64::new(1_000));
         ledger.set(MemTag::Meshes, Realm::Device, 500);
         let under = ledger.usage(MemTag::Meshes, Realm::Device);
         assert!(!under.over_budget());
@@ -364,17 +365,6 @@ mod tests {
         let snap = ledger.snapshot();
         assert!(snap.get(MemTag::Textures, Realm::Device).is_reported());
         assert_eq!(snap.reported(Realm::Device).count(), 1);
-    }
-
-    #[test]
-    fn clear_drops_every_report_and_budget() {
-        let ledger = Ledger::new();
-        ledger.set(MemTag::Textures, Realm::Device, 4_096);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(8_192));
-        ledger.clear();
-
-        assert!(ledger.snapshot().is_empty());
-        assert_eq!(ledger.usage(MemTag::Textures, Realm::Device).peak_bytes, 0);
     }
 
     // Every cell must be its own account; an indexing slip would show as one

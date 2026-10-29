@@ -26,7 +26,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 vulkan = ["concinnity-runtime/vulkan"]
 
 [dependencies]
-concinnity-core = { workspace = true }
+concinnity-engine = { workspace = true }
 concinnity-runtime = { workspace = true }
 concinnity-host = { workspace = true }
 thiserror = { workspace = true }
@@ -37,7 +37,7 @@ concinnity-testing = { workspace = true }
 tempfile = { workspace = true }
 
 [build-dependencies]
-cbindgen = "0.29"
+cbindgen = { workspace = true }
 concinnity-toolchain = { workspace = true }
 
 [lints]

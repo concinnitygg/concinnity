@@ -50,8 +50,8 @@
 //! allocation, clone and drop happens on the main thread.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::retire_pool::RetirePool;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -60,8 +60,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::IUnknown;
 
-use concinnity_core::render::block_alloc::Placement;
-use concinnity_core::render::block_pool::{BlockGrowth, BlockPool, ReserveError};
+use concinnity_engine::render::buffers::block_pool::Placement;
+use concinnity_engine::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
 
 // Placement granularity every heap size is rounded to. D3D12 places resources
 // at 64 KiB by default, so a block that is not a multiple of it ends in bytes

@@ -3,7 +3,7 @@
 // else a compile. Every backend fetches its built-ins through this one path.
 //
 // The match is on the source digest rather than on hot-reload being off, and
-// that distinction is the whole point. `cn debug` and `cn editor` both run with
+// that distinction is the whole point. `cn run -f` and `cn edit` both run with
 // hot-reload on, so a mode check would leave the two binaries a developer
 // actually runs compiling every shader at startup, and needing dxc to do it.
 // Comparing digests means an unedited shader takes the embedded artifact in
@@ -12,11 +12,11 @@
 use std::borrow::Cow;
 
 #[cfg(any(backend_dx, backend_vk))]
-use concinnity_core::platform::Platform;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::RenderResult;
 #[cfg(any(backend_dx, backend_vk))]
-use concinnity_core::render::shader_programs::{ShaderProgram, Variant};
-use concinnity_core::render::shader_source::source_digest;
+use concinnity_engine::render::shader::programs::{ShaderProgram, Variant};
+use concinnity_engine::render::shader::source::source_digest;
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_shader::HlslTarget;
 
@@ -124,7 +124,7 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_engine::render::backend::error::RenderError;
 
     const SOURCE: &str = "#define A 1\nBODY\n";
     static EMBEDDED: &[u8] = b"embedded bytes";

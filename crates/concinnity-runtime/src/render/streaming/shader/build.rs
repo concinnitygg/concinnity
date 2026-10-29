@@ -3,9 +3,9 @@
 // edit, and the pipeline build, all on a thread of its own. What comes back is
 // installed on the frame thread by `BuiltShader::install`.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines, RenderBackend};
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines, RenderBackend};
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -15,7 +15,7 @@ use crate::live_edit::shader_overrides::ShaderOverrides;
 
 // Where a deferred bucket's compiled stage container is read from.
 pub(crate) enum ShaderPayloadSource {
-    // RAM-backed world (`cn debug`, `cn editor`): the payload bytes.
+    // RAM-backed world (`cn run -f`, `cn edit`): the payload bytes.
     Bytes(Vec<u8>),
     // Disk-backed world (`cn run`): the payload's absolute range in its blob.
     Disk { path: String, offset: u64, len: u64 },

@@ -6,10 +6,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend_init::{EmbeddedSurface, SwapchainConfig};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::hdr_output::HdrOutputMode;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{EmbeddedSurface, SwapchainConfig};
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::output::hdr::HdrOutputMode;
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -120,7 +120,7 @@ pub(super) fn setup(
             signals,
             window_delegate,
             hdr_mode,
-        } = setup_window_and_view(mtm, &device, config, hdr)?;
+        } = setup_window_and_view(mtm, &device, config, hdr);
         // Second queue + per-queue events for the render graph's
         // two-queue schedule. Falls back to a single-queue submission
         // when the device will not create them.
@@ -168,7 +168,7 @@ pub(crate) fn setup_window_and_view(
     device: &ProtocolObject<dyn MTLDevice>,
     config: WindowConfig<'_>,
     hdr: HdrRequest,
-) -> RenderResult<WindowSetup> {
+) -> WindowSetup {
     // Resolve the swapchain color-output mode. EDR support is per-display,
     // so the answer depends on which screen the window will land on. In
     // windowed mode we use `NSWindow::screen()` after attaching; in embedded
@@ -221,8 +221,7 @@ pub(crate) fn setup_window_and_view(
             config.width,
             config.height,
             config.title_bar,
-        )
-        .map_err(RenderError::Other)?;
+        );
         let content_rect = window.contentRectForFrameRect(window.frame());
         let mtk_view =
             MTKView::initWithFrame_device(MTKView::alloc(mtm), content_rect, Some(device));
@@ -240,7 +239,7 @@ pub(crate) fn setup_window_and_view(
     let drawable = mtk_view.drawableSize();
     let (initial_w, initial_h) = initial_target_size((drawable.width, drawable.height), &config);
 
-    Ok(WindowSetup {
+    WindowSetup {
         window,
         mtk_view,
         pump_events,
@@ -249,11 +248,11 @@ pub(crate) fn setup_window_and_view(
         signals,
         window_delegate,
         hdr_mode,
-    })
+    }
 }
 
 // Re-resolve the swapchain color-output mode on the view a live world reload
-// (`cn editor` SAVE) inherits, returning it with the initial target size. The
+// (`cn edit` SAVE) inherits, returning it with the initial target size. The
 // reload is only chosen when the swapchain REQUEST is unchanged, but the
 // display's actual EDR headroom can still have changed since the original build
 // (a monitor plugged/unplugged, HDR toggled), which flips the resolved mode and
@@ -344,7 +343,7 @@ fn configure_mtk_view(mtk_view: &MTKView, hdr_mode: HdrOutputMode, capture_enabl
     mtk_view.setSampleCount(1);
     // The drawable defaults to `framebufferOnly` (write-as-attachment only),
     // which forbids using it as a blit source. Under the capture-enabled
-    // (`cn debug`) path the `screenshot` command blits the last presented
+    // (`cn run -f`) path the `screenshot` command blits the last presented
     // drawable back to the host, so switch it off there. Left at the default
     // in production so a normal `cn run` pays nothing for a debug-only feature.
     if capture_enabled {
@@ -388,7 +387,7 @@ pub(crate) fn set_display_sync(mtk_view: &MTKView, on: bool) {
 // layer is reported and treated as a no-op (the renderer then falls back to
 // the standard sRGB SDR path silently; we already log warn-level above when
 // EDR is requested but not achievable).
-fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
+fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr::HdrEncoding) {
     let Some(layer) = mtk_view.layer() else {
         tracing::warn!(
             "HDR display requested but MTKView has no backing layer: falling back to SDR"
@@ -415,13 +414,13 @@ fn configure_hdr_layer(mtk_view: &MTKView, encoding: hdr_output::HdrEncoding) {
     //     directly; the panel decodes via the PQ EOTF. Same Display P3
     //     primaries as the linear path so the gamut situation is unchanged.
     let (name, label): (_, &str) = match encoding {
-        hdr_output::HdrEncoding::ExtendedLinear => (
+        hdr::HdrEncoding::ExtendedLinear => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceExtendedLinearDisplayP3 },
             "kCGColorSpaceExtendedLinearDisplayP3",
         ),
-        hdr_output::HdrEncoding::Pq => (
+        hdr::HdrEncoding::Pq => (
             // SAFETY: the CoreGraphics color-space name is a framework-owned static that outlives
             // this borrow.
             unsafe { kCGColorSpaceDisplayP3_PQ },

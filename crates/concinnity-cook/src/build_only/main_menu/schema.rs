@@ -2,8 +2,8 @@
 
 use std::vec;
 
-use concinnity_core::components::{AuthoredAction, Font, NamedAction};
-use concinnity_core::ecs::{AssetFields, FieldTable, NameRef};
+use concinnity_engine::components::{AuthoredAction, Font, NamedAction};
+use concinnity_engine::ecs::{AssetFields, FieldTable, NameRef};
 
 /// A ready-made menu declared in a single line.
 ///
@@ -28,7 +28,9 @@ use concinnity_core::ecs::{AssetFields, FieldTable, NameRef};
 /// **Generated names** are prefixed with the menu's `name` (`<name>_btn_0`,
 /// `<name>_label_0`, `<name>_cursor`, ...), so they never clash with
 /// hand-authored assets and you never reference them by hand.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct MainMenu {
     /// Menu entries, top to bottom. Each one is a clickable button.
@@ -117,7 +119,7 @@ pub struct MainMenu {
     Default,
     serde::Serialize,
     serde::Deserialize,
-    concinnity_core::components::Vocabulary,
+    concinnity_engine::components::Vocabulary,
 )]
 #[serde(rename_all = "lowercase")]
 pub enum SettingsProfile {
@@ -134,7 +136,9 @@ pub enum SettingsProfile {
 }
 
 /// One entry in a [`MainMenu`](#mainmenu).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 pub struct MainMenuItem {
     /// Button text.
     pub label: String,
@@ -175,9 +179,9 @@ impl AssetFields for MenuItemAction {
 }
 
 #[cfg(feature = "schema")]
-impl concinnity_core::ecs::schema::Described for MenuItemAction {
-    const TYPE: concinnity_core::ecs::schema::FieldType =
-        <NamedAction as concinnity_core::ecs::schema::Described>::TYPE;
+impl concinnity_engine::ecs::schema::Described for MenuItemAction {
+    const TYPE: concinnity_engine::ecs::schema::FieldType =
+        <NamedAction as concinnity_engine::ecs::schema::Described>::TYPE;
 }
 
 impl MainMenuItem {
@@ -269,7 +273,7 @@ mod tests {
         assert_eq!(
             m.items[0].action,
             fires(AuthoredAction::Story(
-                concinnity_core::components::StoryCommand::Start
+                concinnity_engine::components::StoryCommand::Start
             ))
         );
         assert_eq!(m.title, "Ash");
@@ -331,7 +335,7 @@ mod tests {
         assert_eq!(
             back.settings_back_action,
             Some(AuthoredAction::Story(
-                concinnity_core::components::StoryCommand::TogglePause
+                concinnity_engine::components::StoryCommand::TogglePause
             ))
         );
     }

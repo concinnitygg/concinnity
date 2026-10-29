@@ -6,9 +6,9 @@
 //! cluster's lights and blend only its cluster's probes. Mirrors
 //! `src/metal/light_cull.rs`.
 
-use concinnity_core::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterParams};
+use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -107,7 +107,7 @@ pub(in crate::directx) fn build_cluster_light_buffer(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12Resource> {
     let len = u64::from(CLUSTER_LIST_LEN) * size_of::<u32>() as u64;
-    create_uav_buffer(device, len, D3D12_RESOURCE_STATE_COMMON)
+    create_uav_buffer(device, len)
 }
 
 // Allocate + persistently map the per-frame `ClusterParams` constant buffers

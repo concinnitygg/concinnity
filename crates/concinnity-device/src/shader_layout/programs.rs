@@ -17,9 +17,9 @@
 use std::collections::BTreeMap;
 
 use crate::shader::source;
-use concinnity_core::platform::Platform;
-use concinnity_core::render::shader_programs::{ShaderProgram, metal, shared};
-use concinnity_core::render::shader_source::Splice;
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::shader::programs::{ShaderProgram, metal, shared};
+use concinnity_engine::render::shader::source::Splice;
 use concinnity_shader::layout::StructLayout;
 
 // The module whose decorations state `platform`'s layout. The split is the
@@ -216,6 +216,11 @@ pub(super) static GRASS_GENERATE: Program = Program {
 
 pub(super) static WATER_FFT_ROWS: Program = Program {
     row: &shared::WATER_FFT_ROWS,
+    splices: &[],
+};
+
+pub(super) static WATER_WAKE_ROWS: Program = Program {
+    row: &shared::WATER_WAKE_ROWS,
     splices: &[],
 };
 

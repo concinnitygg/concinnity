@@ -3,7 +3,7 @@
 //! This module is the single place where "type name + JSON args → `BlobAssetDef`"
 //! is implemented.
 use crate::authoring::AuthoringError;
-use concinnity_core::ecs::{AssetOrigin, BlobAssetDef};
+use concinnity_engine::ecs::{AssetOrigin, BlobAssetDef};
 
 use crate::authoring::registry::{RegisteredType, Registration};
 
@@ -20,18 +20,18 @@ pub struct AssetRequest {
 
 /// Validate an `AssetRequest` and produce a `BlobAssetDef`
 ///
-/// Returns Err if:
-/// - The type name is unknown
-/// - The type's origin is not External (not addable)
-/// - The type is a resource asset (External, but compiles into the resource
-///   stream and has no component discriminant)
-/// - The resolved args do not deserialize into the type's args, or the baked
-///   component cannot be serialized
-///
 /// Does not perform payload compilation (shaders, images, etc.). The cook
 /// pipeline (entry, pack, and validate) calls this first, then runs its
 /// compilation pass over the resulting defs; concinnity-dev's asset-adding path
 /// (`cn add` and its FFI entry) calls it to validate each entry before writing it.
+///
+/// # Errors
+///
+/// Returns an error if: - The type name is unknown - The type's origin is not
+/// External (not addable) - The type is a resource asset (External, but
+/// compiles into the resource   stream and has no component discriminant) - The
+/// resolved args do not deserialize into the type's args, or the baked
+/// component cannot be serialized
 pub fn create_asset_def(req: &AssetRequest) -> Result<BlobAssetDef, AuthoringError> {
     if let Some(ct) = RegisteredType::parse(&req.asset_type) {
         let reg = ct.registration();
@@ -71,7 +71,7 @@ fn resolve_args(reg: &Registration, supplied: Option<&serde_json::Value>) -> ser
     let mut base = reg
         .default_args
         .clone()
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
 
     if let Some(serde_json::Value::Object(supplied_map)) = supplied {
         if let serde_json::Value::Object(ref mut base_map) = base {
@@ -89,8 +89,8 @@ fn resolve_args(reg: &Registration, supplied: Option<&serde_json::Value>) -> ser
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::ProceduralMesh;
-    use concinnity_core::ecs::AssetPayload;
+    use concinnity_engine::components::ProceduralMesh;
+    use concinnity_engine::ecs::AssetPayload;
 
     fn shader_reg() -> Registration {
         Registration {

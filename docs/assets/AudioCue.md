@@ -4,11 +4,11 @@
 
 Plays audio when a [Screen](Screen.md) is shown.
 
-A cue links a [Screen](Screen.md) to an [AudioClip](AudioClip.md): whenever UI
+A cue links a [Screen](Screen.md) to an [`AudioClip`](AudioClip.md): whenever UI
 navigation makes the screen active (a `show` or `toggle` action, a
-[KeyBinding](KeyBinding.md), dismissing an overlay back to it, or being the
+[`KeyBinding`](KeyBinding.md), dismissing an overlay back to it, or being the
 world's initial screen), the clip plays. Cues play flat on the main mix with
-no 3D position; use an [AudioEmitter](AudioEmitter.md) for positional sound.
+no 3D position; use an [`AudioEmitter`](AudioEmitter.md) for positional sound.
 
 The `kind` decides the playback behavior:
 
@@ -21,7 +21,7 @@ The `kind` decides the playback behavior:
 ## Parameters
 
 - `screen`: A string. The [Screen](Screen.md) whose activation triggers this cue. Optional.
-- `clip`: A string. The [AudioClip](AudioClip.md) to play. Optional.
+- `clip`: A string. The [`AudioClip`](AudioClip.md) to play. Optional.
 - `kind`: A string (see [CueKind](CueKind.md)). Playback behavior: a looping `music` track or a one-shot `sound`. Defaults to `"sound"`.
 - `volume`: A float. Linear gain applied to the clip (1.0 leaves it unchanged). Defaults to `1.0`.
 - `bus`: A string (see [AudioBus](AudioBus.md)). Mix bus the cue routes through. Defaults to `music` for a music cue and `sfx` for a sound cue; set `voice` for dialogue.

@@ -2,9 +2,9 @@
 //! and cube samplers, the IBL cubes, the color-grading LUT, and the SSAO
 //! fallback.
 
-use concinnity_core::bake;
-use concinnity_core::render::backend_init::MediaPayloads;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::bake;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::MediaPayloads;
 
 use super::InitGpu;
 use crate::vulkan::context::VkSceneAssets;

@@ -3,10 +3,10 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile;
-use concinnity_core::profile::PassTiming;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{hdr_output, pass_timing};
+use concinnity_engine::profile;
+use concinnity_engine::profile::PassTiming;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{backend::pass_timing, output::hdr};
 
 use crate::gpu_wait::GpuWait;
 use crate::vulkan::context::VkContext;
@@ -107,6 +107,9 @@ impl VkContext {
         self.hw.device.begin_frame();
         // Same tick for the staged geometry writes' ring and command buffers.
         self.geometry_uploads.get_mut().begin_frame();
+        // Past the same fence: re-point this slot's sets and framebuffers at
+        // whatever a settings change since its last frame rebuilt.
+        self.rewire_features(frame)?;
 
         // Periodic footprint readout, for measuring the pool under streaming
         // churn at scale. Inert unless debug logging is enabled.
@@ -234,7 +237,7 @@ impl VkContext {
         // `draw_calls` through `inc_draw_calls` (interior-mutability since
         // the encoders run through `&self`); the rest is filled here from
         // context state.
-        let counts = concinnity_core::render::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -267,15 +270,15 @@ impl VkContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev),
+                .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // EDR headroom for the StatHud `EDR x.X` chip, taken from the
             // `HdrOutputMode` resolved at init. `Some` only on the HDR path
             // (Vulkan has no portable max-EDR query, so the value is the
             // synthesized placeholder set in `init`); `None` on SDR blanks the
             // chip. Mirrors `DxContext` / `MtlContext::render_stats`.
             max_edr: match self.hw.hdr_mode {
-                hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-                hdr_output::HdrOutputMode::Sdr => None,
+                hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+                hdr::HdrOutputMode::Sdr => None,
             },
             ..profile::RenderStats::default()
         });

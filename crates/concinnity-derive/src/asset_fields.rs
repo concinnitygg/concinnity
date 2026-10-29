@@ -62,7 +62,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         authored.push(AuthoredField { field, attrs, key });
     }
 
-    let fields_path = quote!(::concinnity_core::ecs::asset_fields);
+    let fields_path = quote!(::concinnity_engine::ecs::asset_fields);
     let asset_name = input.ident.to_string();
     let mut probes = Vec::new();
     let mut params = Vec::new();
@@ -150,12 +150,12 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             quote!(::core::option::Option::Some(#key))
         };
         probes.push(quote! {
-            (&&&&::concinnity_core::ecs::asset_fields::probe::Probe::<#ty>::NEW)
+            (&&&&::concinnity_engine::ecs::asset_fields::probe::Probe::<#ty>::NEW)
                 .collect(prefix, #key, out);
         });
         if owned {
             probes.push(quote! {
-                ::concinnity_core::ecs::asset_fields::probe::owned_file(prefix, #key, out);
+                ::concinnity_engine::ecs::asset_fields::probe::owned_file(prefix, #key, out);
             });
         }
     }
@@ -163,7 +163,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     if !params.is_empty() {
         probes.push(quote! {
             for (key, meta) in <Self as #fields_path::AssetFields>::PARAMS {
-                ::concinnity_core::ecs::asset_fields::probe::param(prefix, key, *meta, out);
+                ::concinnity_engine::ecs::asset_fields::probe::param(prefix, key, *meta, out);
             }
         });
     }
@@ -175,7 +175,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     } else {
         quote! {
             #[allow(unused_imports)]
-            use ::concinnity_core::ecs::asset_fields::probe::{
+            use ::concinnity_engine::ecs::asset_fields::probe::{
                 ByNested as _, ByNothing as _, ByReference as _, ByVocabulary as _,
             };
             #(#probes)*
@@ -230,14 +230,14 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         quote!()
     };
     Ok(quote! {
-        impl #impl_generics ::concinnity_core::ecs::asset_fields::AssetFields
+        impl #impl_generics ::concinnity_engine::ecs::asset_fields::AssetFields
             for #ident #ty_generics #where_clause
         {
             #params_items
             #live_items
             fn collect_fields(
                 prefix: &str,
-                out: &mut ::concinnity_core::ecs::asset_fields::FieldTable,
+                out: &mut ::concinnity_engine::ecs::asset_fields::FieldTable,
             ) {
                 #body
             }
@@ -289,7 +289,7 @@ mod tests {
         assert!(!out.contains("std ::"), "{out}");
         assert!(!out.contains("alloc ::"), "{out}");
         assert!(
-            out.contains(":: concinnity_core :: ecs :: asset_fields :: AssetFields"),
+            out.contains(":: concinnity_engine :: ecs :: asset_fields :: AssetFields"),
             "{out}"
         );
     }

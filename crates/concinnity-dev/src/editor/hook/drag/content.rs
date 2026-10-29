@@ -9,9 +9,9 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::find_entry;
-use concinnity_core::components::{Camera3D, FrameInput, Transform};
-use concinnity_core::ecs::{PickIndex, World};
-use concinnity_core::math::pick::PickRay;
+use concinnity_engine::components::{Camera3D, FrameInput, Transform};
+use concinnity_engine::ecs::{PickIndex, World};
+use concinnity_engine::gfx::pick::PickRay;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, entry_type, pick};
@@ -194,7 +194,7 @@ impl EditorHook {
             .resource::<PickIndex>()
             .into_iter()
             .flat_map(|index| index.entries.iter())
-            .filter_map(|e| concinnity_core::math::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
+            .filter_map(|e| concinnity_engine::gfx::pick::ray_aabb_face(&ray, e.bb_min, e.bb_max))
             .min_by(|a, b| a.t.total_cmp(&b.t));
         let t = hit.map_or_else(
             || {
@@ -244,8 +244,7 @@ impl EditorHook {
         let Some(ray) = pick::camera_ray(world, vp, mouse) else {
             return;
         };
-        let hit = self
-            .ray_hit_names(world, &ray)
+        let hit = Self::ray_hit_names(world, &ray)
             .into_iter()
             .find_map(|name| {
                 let idx = find_entry(&self.entries, &name)?;
@@ -268,7 +267,7 @@ impl EditorHook {
     }
 
     // The names of the pick-index entries the ray strikes, nearest first.
-    fn ray_hit_names(&self, world: &World, ray: &PickRay) -> Vec<String> {
+    fn ray_hit_names(world: &World, ray: &PickRay) -> Vec<String> {
         let Some(index) = world.resource::<PickIndex>() else {
             return Vec::new();
         };
@@ -276,7 +275,7 @@ impl EditorHook {
             .entries
             .iter()
             .filter_map(|e| {
-                let t = concinnity_core::math::pick::ray_aabb(ray, e.bb_min, e.bb_max)?;
+                let t = concinnity_engine::gfx::pick::ray_aabb(ray, e.bb_min, e.bb_max)?;
                 Some((t, pick::resolve_name(e.asset_id)?))
             })
             .collect();

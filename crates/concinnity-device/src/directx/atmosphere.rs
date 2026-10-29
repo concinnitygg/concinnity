@@ -1,4 +1,4 @@
-//! The atmosphere for the D3D12 backend (see `concinnity_core::render::atmosphere`):
+//! The atmosphere for the D3D12 backend (see `concinnity_engine::render::environment::atmosphere`):
 //! the tables, the compute pass that builds them, the haze pass that blends
 //! the aerial volume over the opaque scene, and the sky pipeline that draws
 //! the sky-view table behind it. The irradiance cube the last kernel writes
@@ -16,14 +16,14 @@
 use concinnity_core::math::SaturatingFrom;
 use std::cell::Cell;
 
-use concinnity_core::render::atmosphere::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
     SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -146,6 +146,7 @@ impl DxSkyCube {
                     mips: SKY_CUBE_PLAN.mips(),
                     cubes: 1,
                     state: RESTING,
+                    render_target: false,
                     label,
                 },
             )
@@ -366,12 +367,14 @@ fn sky_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [0] root CBV b0   AtmosphereParams
 //   [1] table  t0     scene depth
 //   [2] table  t1     aerial volume
+//   [3] table  t2-t3  transmittance and multiple scattering
 // Static linear-clamp sampler s0.
 fn aerial_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::Pixel)
         .srv_table(0, 1, Visibility::Pixel)
         .srv_table(1, 1, Visibility::Pixel)
+        .srv_table(2, 2, Visibility::Pixel)
         .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
         .build(device, "aerial perspective root sig")
 }
@@ -426,6 +429,10 @@ fn aerial_pso(
 impl DxAtmosphere {
     // The tables, pipelines and parameter ring, and the irradiance cube,
     // whose SRV replaces the environment's in its slot.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "stored, so a borrow would only add a copy"
+    )]
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,
         settings: AtmosphereSettings,
@@ -817,6 +824,9 @@ impl DxContext {
         unsafe { cmd.set_graphics_srv_table(1, atmo.depth_srv_gpu) };
         // SAFETY: the aerial volume's SRV slot lives in the heap set above.
         unsafe { cmd.set_graphics_srv_table(2, atmo.srv_gpu[3]) };
+        // SAFETY: the transmittance and multiple-scattering SRVs sit next to each other in the
+        // heap set above, so the table starting at the first covers both.
+        unsafe { cmd.set_graphics_srv_table(3, atmo.srv_gpu[0]) };
         // SAFETY: the target, pipeline, root signature and every table the draw reads are bound
         // above.
         unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
@@ -857,7 +867,7 @@ impl DxContext {
 
     // The view block's `irradiance` lane.
     pub(in crate::directx) fn irradiance_lane(&self) -> f32 {
-        concinnity_core::render::sky::irradiance_lane(
+        concinnity_engine::render::environment::sky::irradiance_lane(
             self.scene.env_map.prefilter_mip_count > 0,
             self.atmosphere.is_some(),
         )

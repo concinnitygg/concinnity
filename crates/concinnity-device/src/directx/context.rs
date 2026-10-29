@@ -3,25 +3,25 @@
 // drive all three backends identically.
 
 use crate::gpu_wait::GpuWait;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::gfx::render_types::{
     InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
 };
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::frame_plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_reload::ShaderReload;
-use concinnity_core::render::{
-    backend, backend_init, hdr_output, lights, pass_timing, slot_rewrites,
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
+    backend, backend::init, backend::pass_timing, light::lights, output::hdr, slots::rewrites,
 };
-use concinnity_core::window::display_mode;
-use concinnity_core::{components, profile};
+use concinnity_engine::window::display_mode;
+use concinnity_engine::{components, profile};
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::CloseHandle;
@@ -57,7 +57,7 @@ pub(super) const BACK_BUFFERS: usize = 3;
 // Constant buffer alignment required by D3D12.
 pub(super) const CB_ALIGN: u64 = 256;
 
-pub(super) fn align256(n: u64) -> u64 {
+pub(super) const fn align256(n: u64) -> u64 {
     (n + CB_ALIGN - 1) & !(CB_ALIGN - 1)
 }
 
@@ -83,7 +83,7 @@ pub(super) fn build_timestamp_resources(
     }
     // Heap holds one block of [whole_frame_start, whole_frame_end, then
     // PASS_COUNT (start, end) pairs] per in-flight frame. See
-    // `concinnity_core::render::pass_timing` for the slot layout.
+    // `concinnity_engine::render::backend::pass_timing` for the slot layout.
     //
     // Timing: `execute_graph` issues an EndQuery before and after each pass's
     // encode, and the resolve at the end of the command list copies the whole block
@@ -203,7 +203,7 @@ pub(super) struct DxUniforms {
     // The values the light ring carries, which slots of it are stale, and the
     // local lights' reach. `record_frame` writes the frame's own slot, so no
     // in-flight read is raced.
-    pub lights: concinnity_core::render::light_state::LightState,
+    pub lights: concinnity_engine::render::light::state::LightState,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
@@ -307,7 +307,7 @@ pub(super) struct DxInstanced {
 impl DxInstanced {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
-            any_lod: concinnity_core::gfx::lod::any_cluster_has_lod(&clusters),
+            any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
             clusters,
         }
     }
@@ -361,6 +361,8 @@ pub(super) struct ProbeState {
     // The three convolution kernels and their root signatures, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
+    // The world's prop probe, captured whole every frame it rides.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 impl ProbeState {
@@ -375,6 +377,7 @@ impl ProbeState {
             gpu,
             bake: super::probe::DxProbeBake::default(),
             prefilter,
+            prop: super::prop_probe::PropProbe::default(),
         }
     }
 }
@@ -388,7 +391,7 @@ impl ProbeState {
 // every copy has been re-pointed, every list recorded against the old resource
 // has retired, and the tick's fence wait covers the upload submission itself.
 pub(super) struct StreamState {
-    pub pool_rewrites: slot_rewrites::SlotRewriteQueue,
+    pub pool_rewrites: rewrites::SlotRewriteQueue,
     pub frame: u64,
     pub retires: RetirePool<StreamedUploadRetire>,
     // `frames + 1`: a swap lands between frames, after the previous frame's
@@ -400,7 +403,7 @@ pub(super) struct StreamState {
 impl StreamState {
     pub(super) fn new(frames: usize) -> Self {
         Self {
-            pool_rewrites: slot_rewrites::SlotRewriteQueue::new(frames),
+            pool_rewrites: rewrites::SlotRewriteQueue::new(frames),
             frame: 0,
             retires: RetirePool::new(),
             retire_depth: frames as u64 + 1,
@@ -559,10 +562,10 @@ pub(super) struct DxRayTracing {
     pub accel: Option<super::raytrace::RtAccelData>,
     // How the acceleration structure is kept current as props move (the
     // launch's `--rt-dynamic` request; `Auto` by default).
-    pub dynamic_mode: concinnity_core::render::rt_geom::RtDynamicMode,
+    pub dynamic_mode: concinnity_engine::render::rt_accel::geom::RtDynamicMode,
     // Whether the per-frame BVH update is failing, so a failure is logged once
     // per streak rather than every frame.
-    pub update_streak: concinnity_core::render::rt_accel::FailureStreak,
+    pub update_streak: concinnity_engine::render::rt_accel::FailureStreak,
     // BVHs dropped mid-run (a refresh removed the last geometry), held until no
     // frame still in flight can trace them, timed against `retire_tick`, which
     // advances once per frame.
@@ -598,16 +601,16 @@ pub(super) struct DxHardware {
     // capability and checked again before any RT build.
     pub rt_capable: bool,
     // The resolved HDR-output mode. (The DXGI format is in `swapchain.format`.)
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches.
-    pub swapchain_config: backend_init::SwapchainConfig,
+    pub swapchain_config: init::SwapchainConfig,
     // The user's chosen fullscreen display mode, held on the monitor while the
     // window is in (borderless) fullscreen and restored on exit / drop.
     // Reconciled once per frame in `window_closed`.
     pub fullscreen_display: crate::win32::display_mode::FullscreenDisplayMode,
-    // Win32 window. `Option` so a live `cn editor` world reload can MOVE the
+    // Win32 window. `Option` so a live `cn edit` world reload can MOVE the
     // window (and its live cursor / menu / keymap state) into the rebuilt
     // context; a normal context always holds `Some`. Access via `win`/`win_mut`.
     pub win_state: Option<Box<WindowState>>,
@@ -651,16 +654,16 @@ impl DxHardware {
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
     pub(super) fn max_edr(&self) -> Option<f32> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 
     // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
-    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+    pub(super) fn hdr_encoding(&self) -> Option<hdr::HdrEncoding> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 }
@@ -730,7 +733,7 @@ pub(crate) struct DxContext {
     // bloom chain runs and feeds the bloom-prefilter + composite root constants.
     pub(super) post_process: PostProcessParams,
     // The scale the frame's HDR chain is written at, advanced once per frame.
-    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
+    pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
 
     // Unified geometry G-buffer pre-pass. `Some` whenever any screen-space
     // consumer (SSR, SSGI, SSAO, TAA, or temporal upscaling) is enabled: one
@@ -748,6 +751,11 @@ pub(crate) struct DxContext {
     // targets from. Held once for the backend rather than reserved per effect in
     // `init/heap_layout.rs`.
     pub(super) post: super::post::descriptors::PostDescriptors,
+    // Feature state a settings change replaced, freed once no frame in flight
+    // can name it.
+    pub(super) retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool<
+        super::quality::RetiredEffect,
+    >,
 
     // SSAO (GTAO). See [`SsaoState`].
     pub(super) ssao: SsaoState,
@@ -767,6 +775,10 @@ pub(crate) struct DxContext {
     // Reuses the SSR pre-pass G-buffer (so `ssr` is also `Some` whenever this
     // is); the render-graph `PassId::Ssgi` node is gated on `ssgi.is_some()`.
     pub(super) ssgi: Option<super::post::ssgi::SsgiResources>,
+
+    // The reactive mask's disocclusion mark. `Some` while an upscaler that
+    // reads the mask runs over the G-buffer pre-pass.
+    pub(super) disocclusion: Option<super::post::disocclusion::DxDisocclusionPass>,
 
     // Roughness-aware reflection composite: the SSR / RT resolve writes reflected
     // radiance + weight, then this blurs it by surface roughness (a reduced-res blur
@@ -810,6 +822,10 @@ pub(crate) struct DxContext {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub(super) water_sim: Option<super::water_sim::DxOceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
+    pub(super) wake_frame: Option<concinnity_engine::render::environment::water::wake::WakeFrame>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
@@ -838,7 +854,10 @@ pub(crate) struct DxContext {
     pub(super) grass: Option<super::grass::GrassResources>,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Cell<Option<concinnity_core::render::grass::GrassLodView>>,
+    pub(super) grass_lod: Cell<Option<concinnity_engine::render::environment::grass::GrassLodView>>,
+    // What the canopy block is filled from: the grass's far fields and the
+    // planet's ground. `None` when the world has neither.
+    pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
     // The far field's canopy block, one copy per frame in flight. See
     // [`super::canopy`].
     pub(super) canopy: super::canopy::DxCanopy,
@@ -880,11 +899,11 @@ pub(crate) struct DxContext {
     // the world's pair rather than the engine's.
     pub(super) world_shader: Option<components::ShaderPrograms>,
 
-    // Fixed descriptor-heap slots for the live-toggleable Quality effects (TAA /
-    // SSAO / SSR / SSGI / RT-reflection output). Minted once at init (the slots
-    // are reserved unconditionally) and stashed so `apply_quality_settings` can
-    // build a launched-off feature into its slot without re-deriving the heap
-    // layout.
+    // Fixed descriptor-heap slots for the live-toggleable features outside the
+    // post block (the G-buffer and the glass reflection render targets). Minted
+    // once at init (the slots are reserved unconditionally) and stashed so a
+    // settings rebuild can build a launched-off feature into its slot without
+    // re-deriving the heap layout.
     pub(super) quality_slots: super::quality::QualitySlotHandles,
 
     // Scene-captured reflection probes. See [`ProbeState`].
@@ -946,8 +965,12 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 }
 
 impl DxContext {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
+    )]
     pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
-        drive_frame(self, params)
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
     }
 
     // Drain any queued D3D12 validation messages and emit them via tracing.
@@ -963,7 +986,10 @@ impl DxContext {
     // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
     // stale" reading).
     pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        self.diagnostics.frame_stats.get()
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.diagnostics.frame_stats.get()
+        }
     }
 
     // Current GPU memory residency in bytes. `Local` is the dedicated VRAM
@@ -1003,7 +1029,7 @@ impl DxContext {
     // `FrameGraphInputs::rt_reflections_enabled` in `record_frame::seed_inputs`
     // and the `scene_srv_for_post` precedence.
     pub(super) fn rt_reflections_active(&self) -> bool {
-        self.reflection_path().rt_trace
+        self.reflection_path().rt_trace()
     }
 
     // Which reflection stages run this frame, from the authored SSR resolve and
@@ -1361,7 +1387,7 @@ impl DxContext {
         self.spot_shadow.frusta = data
             .spot_shadows
             .iter()
-            .map(concinnity_core::render::spot_shadow::slice_frustum)
+            .map(concinnity_engine::render::shadow::spot::slice_frustum)
             .collect();
         self.state.planner.shadow.reset_spots();
         self.uniforms.lights.move_local(&data.lights, uniforms);
@@ -1376,7 +1402,7 @@ impl DxContext {
         self.uniforms.lights.set_directional(lights);
     }
 
-    pub(crate) fn set_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.state.planner.shadow.cadence = cadence;
     }
 
@@ -1387,12 +1413,12 @@ impl DxContext {
     // feature whose resources are currently live has settings to mutate; the rest
     // are skipped (the value still persists for the next launch). SSAO / SSR /
     // auto-exposure are fully scalar, so they are replaced wholesale; SSGI's trace
-    // resolution sizes its targets and rides `apply_quality_settings` with its ray
+    // resolution sizes its targets and rides its rebuild with its ray
     // count, so only its scalar intensity / distance are updated. The SSR settings live one level deeper than Metal's (inside the
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
     pub(crate) fn update_quality_params(
         &mut self,
-        g: &concinnity_core::settings::ResolvedGraphics,
+        g: &concinnity_engine::settings::ResolvedGraphics,
     ) {
         if let (Some(live), Some(res)) = (g.ssao(), self.ssao.resources.as_mut()) {
             res.settings = live;
@@ -1487,6 +1513,7 @@ impl FrameDevice for DxContext {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
+            self.particle.system.rebase(rebase);
         }
         Ok(())
     }
@@ -1498,6 +1525,9 @@ impl FrameDevice for DxContext {
         }
         if let Some(ssgi) = self.ssgi.as_mut() {
             ssgi.reset_history();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.reset_history();
         }
         if let Some(upscaler) = &self.upscale.backend {
             upscaler.request_history_reset();
@@ -1564,6 +1594,7 @@ impl FrameDevice for DxContext {
             ],
             lines: params.lines,
             world_hidden: params.world_hidden,
+            prop_probe: params.prop_probe.is_some(),
         })
     }
 
@@ -1575,6 +1606,7 @@ impl FrameDevice for DxContext {
     ) -> RenderResult<()> {
         let FrameParams {
             elapsed: elapsed_f64,
+            water_time,
             fov_y_radians,
             near,
             cam_pos,
@@ -1582,13 +1614,17 @@ impl FrameDevice for DxContext {
             lines,
             world_hidden,
             grass_benders,
+            water_stirs,
+            particle_bursts,
             ..
         } = *frame_params;
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
         let DxFrame {
             frame,
             gpu_wait,
             start_cmd,
         } = frame;
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
         // Reflection-probe count + records into this frame's ring CBV and records
         // buffer, which every probe-reading pass binds. A ring (one of each per
         // frame) so this write never races a prior frame's in-flight GPU read.
@@ -1598,7 +1634,7 @@ impl FrameDevice for DxContext {
             params.upload(frame);
         }
 
-        let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64));
+        let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64), particle_bursts, frame);
 
         // 2. Open the END cmd list (Composite + final timestamp +
         //    ResolveQueryData + per-frame restore barriers). The
@@ -1638,6 +1674,7 @@ impl FrameDevice for DxContext {
             },
             crate::directx::draw::RecordFrameView {
                 elapsed: elapsed_f64,
+                water_time,
                 fov_y_radians,
                 near,
                 cam_pos,
@@ -1660,6 +1697,7 @@ impl FrameDevice for DxContext {
         let capture = self.record_frame_capture(&end_cmd, &back_buffer);
 
         self.finish_frame_stats();
+        let waited_before_submit = gpu_wait.micros();
         let started = std::time::Instant::now();
         let mut pass_lists = recorded.pass_cmd_lists;
         let submitted = self.close_end_list(frame).and_then(|()| {
@@ -1669,7 +1707,10 @@ impl FrameDevice for DxContext {
         pass_lists.clear();
         self.pass_lists.set(pass_lists);
         let mut stats = self.diagnostics.frame_stats.get();
-        stats.submit_present_us = concinnity_host::clock::micros_since(started);
+        // The present's block on the display already counts as GPU wait.
+        let present_wait = stats.gpu_wait_us.saturating_sub(waited_before_submit);
+        stats.submit_present_us =
+            concinnity_host::clock::micros_since(started).saturating_sub(present_wait);
         self.diagnostics.frame_stats.set(stats);
         // A submitted frame's capture waits for the fence value it signaled; a
         // failed one is reported as a dropped frame by the caller.
@@ -1698,6 +1739,9 @@ impl FrameDevice for DxContext {
         }
         if let Some(ssgi) = self.ssgi.as_mut() {
             ssgi.advance();
+        }
+        if let Some(disocclusion) = self.disocclusion.as_mut() {
+            disocclusion.advance();
         }
     }
 }

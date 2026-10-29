@@ -6,9 +6,9 @@
 //! textures, audio, fonts, shaders, ...) and clicking one opens it in the
 //! standard edit form. Layout half only; `hook/edit/import.rs` owns the actions.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};
@@ -444,7 +444,7 @@ fn layout_scrollbar(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

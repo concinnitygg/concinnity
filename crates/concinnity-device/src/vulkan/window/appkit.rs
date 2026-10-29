@@ -12,13 +12,13 @@
 //! and the window's backing scale each time the swapchain asks.
 
 use ash::vk;
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::MainThreadOnly;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSView};
@@ -49,8 +49,7 @@ impl AppKitVkWindow {
         let mtm = objc2::MainThreadMarker::new().ok_or_else(|| {
             RenderError::Other("the Vulkan window must be created on the main thread".to_string())
         })?;
-        let window = chrome::create_window(mtm, title, width, height, title_bar)
-            .map_err(RenderError::Other)?;
+        let window = chrome::create_window(mtm, title, width, height, title_bar);
         let content_rect = window.contentRectForFrameRect(window.frame());
 
         // A layer-hosting NSView: assigning the layer before `wantsLayer` makes
@@ -124,7 +123,7 @@ impl AppKitVkWindow {
         self.win.take_input()
     }
 
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
         self.win.clipboard()
     }
 
@@ -170,6 +169,10 @@ impl AppKitVkWindow {
 
     pub(crate) fn current_display_mode(&self) -> Option<DisplayMode> {
         self.win.current_display_mode()
+    }
+
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        self.win.display_refresh()
     }
 
     pub(crate) fn set_display_mode(&mut self, mode: DisplayMode) {
@@ -219,6 +222,10 @@ impl AppKitVkWindow {
     }
 
     // Vulkan instance extensions required for surface creation on macOS.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::ext::metal_surface::NAME]
             .into_iter()

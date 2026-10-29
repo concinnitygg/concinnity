@@ -13,11 +13,11 @@
 //! un-jittered current / previous VPs in-shader so projection jitter never
 //! contaminates motion. Mirrors src/metal/post/gbuffer.rs.
 
-use concinnity_core::gfx::frustum::Frustum;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::depth::DEPTH_CLEAR;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::ModelHistoryParams;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::depth::DEPTH_CLEAR;
+use concinnity_engine::render::uniforms::ModelHistoryParams;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -39,9 +39,9 @@ use crate::directx::{builtin_shaders, com};
 // the SSR / SSAO G-buffer so the resolve / kernel maths is byte-identical.
 pub(crate) const GBUFFER_NORMAL_DEPTH_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-// Single-channel perceptual roughness. 1.0 = fully rough (cleared background),
-// 0.0 = mirror.
-pub(crate) const GBUFFER_ROUGHNESS_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8_UNORM;
+// Perceptual roughness (r) + specular F0 (gba). Roughness 1.0 = fully rough
+// (cleared background), 0.0 = mirror.
+pub(crate) const GBUFFER_ROUGHNESS_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 
 // Screen-space motion (prev_uv - cur_uv). Cleared to 0 (no motion).
 pub(crate) const GBUFFER_VELOCITY_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16_FLOAT;
@@ -52,15 +52,15 @@ pub(crate) const GBUFFER_VELOCITY_FORMAT: DXGI_FORMAT = DXGI_FORMAT_R16G16_FLOAT
 // two together.
 pub(in crate::directx) const GBUFFER_ROUGHNESS_CLEAR: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 
-// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat,
-// the previous clock and camera position, and the motion flag. Matches the
-// `GbView` cbuffer in `gbuffer_common.hlsl`.
+// Size of the per-frame view UBO: jittered_vp + cur_vp + prev_vp + view_mat +
+// prev_model_carry, the previous clock and camera position, and the motion
+// flag. Matches the `GbView` cbuffer in `gbuffer_common.hlsl`.
 const GBUFFER_VIEW_UBO_SIZE: u64 = size_of::<GBufferView>() as u64;
 
 // `GBufferView` (the `GbView` cbuffer) is a GPU-free layout struct that lives in
 // `core::render`; re-export it so
 // `crate::directx::post::gbuffer::GBufferView` is unchanged.
-pub(in crate::directx) use concinnity_core::render::uniforms::GBufferView;
+pub(in crate::directx) use concinnity_engine::render::uniforms::GBufferView;
 
 // Root signatures
 
@@ -207,7 +207,7 @@ pub(in crate::directx) fn build_model_history(
 
 // Descriptor-slot handles for the three G-buffer SRVs, minted by the caller
 // (which owns the heap layout). `Copy` so the caller can both pass it to `new`
-// and stash a copy for the live `apply_quality_settings` rebuild.
+// and stash a copy for the live settings rebuild.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct GbufferSlots {
     pub normal_depth_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -464,11 +464,7 @@ impl DxContext {
             let size = align256((self.cull.bucket_stride * size_of::<[[f32; 4]; 4]>()) as u64);
             let mut ring = Vec::with_capacity(self.hw.frames());
             for _ in 0..self.hw.frames() {
-                ring.push(crate::directx::texture::create_uav_buffer(
-                    device,
-                    size,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?);
+                ring.push(crate::directx::texture::create_uav_buffer(device, size)?);
             }
             self.cull.prev_model_buffers = ring;
             self.cull.model_history_root_sig = Some(root_sig);
@@ -670,8 +666,6 @@ impl DxContext {
             return;
         };
         let indirect = &self.cull.indirect_cmd_buffers[frame_idx];
-        let stride = crate::directx::cull::INDIRECT_COMMAND_STRIDE as usize;
-        let prefix = self.state.draw.skinned_record_base();
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let main_view_gva = com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]);
 
@@ -727,31 +721,13 @@ impl DxContext {
             // SAFETY: bucket 0's pre-pass PSO is owned by `self.cull` and matches the root
             // signature above.
             unsafe { cmd.SetPipelineState(pso) };
-            let prefix_count = u32::saturating_from(prefix);
-            // SAFETY: the camera cull filled this frame's indirect buffer, and the command
-            // signature matches the pre-pass root signature bound above.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cmd_sig,
-                    prefix_count,
-                    indirect,
-                    0,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(cmd, cmd_sig, indirect, 0));
         }
         // The material-referenced shader buckets write their own regions of the
         // command buffer, each drawn under its own pre-pass PSO; a bucket whose
         // Shader is not resident is skipped, matching what the color pass will
         // draw.
-        self.inc_draw_calls(self.execute_prepass_bucket_regions(
-            cmd,
-            cmd_sig,
-            indirect,
-            u32::saturating_from(prefix),
-        ));
+        self.inc_draw_calls(self.execute_prepass_bucket_regions(cmd, cmd_sig, indirect, frame_idx));
 
         // Skinned tail: bind the current deformed VB (slot 0) + the previous-frame
         // deformed VB (slot 1) + the skinned IB, then one `ExecuteIndirect`
@@ -795,20 +771,12 @@ impl DxContext {
             unsafe { cmd.IASetVertexBuffers(0, Some(&[*cur_vbv, prev_vbv])) };
             // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
             unsafe { cmd.IASetIndexBuffer(Some(&raw const self.skinned.index_buffer_view)) };
-            let skinned_count = u32::saturating_from(self.state.draw.n_skinned);
-            // SAFETY: the cull wrote the skinned tail at `prefix * stride` inside this frame's
-            // indirect buffer, and the root arguments bound for the prefix persist.
-            unsafe {
-                cmd.ExecuteIndirect(
-                    cmd_sig,
-                    skinned_count,
-                    indirect,
-                    (prefix * stride) as u64,
-                    None::<&ID3D12Resource>,
-                    0,
-                );
-            }
-            self.inc_draw_calls(1);
+            self.inc_draw_calls(self.execute_main_stream(
+                cmd,
+                cmd_sig,
+                indirect,
+                concinnity_engine::gfx::render_types::SKINNED_STREAM,
+            ));
             // The current deformed buffer is posed this frame, so next frame's
             // history slot (this slot) is valid -- prime the ring.
             self.skinned

@@ -21,6 +21,11 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 /// Replace `path` with whatever `write` emits, creating the directory above it
 /// if needed. A failure anywhere leaves the existing file untouched and no temp
 /// behind.
+///
+/// # Errors
+///
+/// Returns an error if `path` has no parent, the directory cannot be created,
+/// `write` fails, or the temp file cannot be renamed over `path`.
 #[expect(
     clippy::let_underscore_must_use,
     reason = "the publish error is what the caller needs; removing the temp is best effort"
@@ -51,6 +56,10 @@ fn temp_path(path: &Path) -> PathBuf {
 
 /// [`replace`] with `bytes`, synced to the device before the rename, so a crash
 /// right after leaves the new file rather than an empty one.
+///
+/// # Errors
+///
+/// Returns an error if writing, syncing, or renaming the file fails.
 pub fn replace_durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     replace(path, |out| {
         out.write_all(bytes)?;

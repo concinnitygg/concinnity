@@ -17,10 +17,10 @@
 //! off; init does that only when capture is enabled.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::image_decode::PixelLayout;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output::HdrEncoding;
+use concinnity_engine::gfx::image_decode::PixelLayout;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::hdr::HdrEncoding;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -44,14 +44,14 @@ impl MtlContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn debug`).
+    // `RenderBackend` vtable (bin-only `cn run -f`).
     pub(in crate::metal) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
         // `None` both before the first present and in production (capture is a
-        // `cn debug`-only feature; see `last_present_texture`). The retained
+        // `cn run -f`-only feature; see `last_present_texture`). The retained
         // texture keeps the drawable's color surface alive for the read-back.
         let src = self.last_present_texture.clone().ok_or_else(|| {
             RenderError::Other(
-                "screenshot: no frame has been presented yet (capture is cn debug only)"
+                "screenshot: no frame has been presented yet (capture is cn run -f only)"
                     .to_string(),
             )
         })?;

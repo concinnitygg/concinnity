@@ -22,9 +22,9 @@ pub fn set_entry_id(entry: &mut Value, id: &str) {
     };
     let args = obj
         .entry("args")
-        .or_insert_with(|| Value::Object(Default::default()));
+        .or_insert_with(|| Value::Object(serde_json::Map::default()));
     if args.is_null() {
-        *args = Value::Object(Default::default());
+        *args = Value::Object(serde_json::Map::default());
     }
     if let Some(args) = args.as_object_mut() {
         args.insert(ID_KEY.to_string(), Value::String(id.to_string()));
@@ -35,7 +35,7 @@ pub fn set_entry_id(entry: &mut Value, id: &str) {
 /// been assembled yet. Args that are not an object come back unchanged.
 pub fn args_with_id(mut args: Value, id: &str) -> Value {
     if args.is_null() {
-        args = Value::Object(Default::default());
+        args = Value::Object(serde_json::Map::default());
     }
     if let Some(obj) = args.as_object_mut() {
         obj.insert(ID_KEY.to_string(), Value::String(id.to_string()));

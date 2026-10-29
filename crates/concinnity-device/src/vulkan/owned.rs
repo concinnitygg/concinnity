@@ -30,8 +30,8 @@
 //! context's retiring objects are drained by its successor.
 
 use ash::vk;
-use concinnity_core::render::retire_pool::RetirePool;
-use concinnity_core::render::shadow_bias;
+use concinnity_engine::render::buffers::retire_pool::RetirePool;
+use concinnity_engine::render::shadow::bias;
 use std::sync::{Arc, Mutex};
 
 // One retired object, tagged with the call that destroys it.
@@ -296,7 +296,7 @@ impl VkDevice {
     // convention's clamp when it was, and render unclamped when it was not.
     pub(in crate::vulkan) fn depth_bias_clamp(&self) -> f32 {
         if self.inner.caps.depth_bias_clamp {
-            shadow_bias::RASTER_CLAMP
+            bias::RASTER_CLAMP
         } else {
             0.0
         }

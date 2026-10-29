@@ -1,11 +1,13 @@
 //! Which upscaler a world's request resolves to, and the order the backends
 //! fall back through when one fails to initialize.
 
-use concinnity_core::components::UpscalerBackend;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::upscaler::{UpscalerAvailability, VendorUpscaler, upscaler_order};
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::components::UpscalerBackend;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::output::upscaler::{
+    UpscalerAvailability, VendorUpscaler, requested_upscaler, upscaler_order,
+};
+use concinnity_engine::settings::ResolvedGraphics;
 
 /// What temporal upscaling was asked for: the upscaler, and the render preset
 /// DLSS runs if it is the one built. Kept by a backend so a resize rebuilds
@@ -96,6 +98,13 @@ impl UpscaleRequest {
         mut build: impl FnMut(ResolvedBackend, DlssPreset) -> RenderResult<Option<T>>,
     ) -> RenderResult<(Option<T>, ResolvedBackend)> {
         let (width, height) = output;
+        if let Some(missing) = self.take_unbundled_request(available) {
+            tracing::warn!(
+                "temporal upscaling: {:?} was requested but this build does not bundle it, \
+                 falling back",
+                ResolvedBackend::from(missing)
+            );
+        }
         for candidate in backend_order(self.backend, available.without(self.refused)) {
             if candidate == ResolvedBackend::Native {
                 break;
@@ -116,6 +125,22 @@ impl UpscaleRequest {
     }
 }
 
+impl UpscaleRequest {
+    // The requested vendor upscaler when `available` lacks it, reported once:
+    // it is marked refused so a rebuild does not report it again.
+    fn take_unbundled_request(
+        &mut self,
+        available: UpscalerAvailability,
+    ) -> Option<VendorUpscaler> {
+        let requested = requested_upscaler(self.backend)?;
+        if available.contains(requested) || self.refused.contains(requested) {
+            return None;
+        }
+        self.refused.mark(requested);
+        Some(requested)
+    }
+}
+
 fn vendor_of(backend: ResolvedBackend) -> Option<VendorUpscaler> {
     match backend {
         ResolvedBackend::Dlss => Some(VendorUpscaler::Dlss),
@@ -128,7 +153,7 @@ fn vendor_of(backend: ResolvedBackend) -> Option<VendorUpscaler> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::UpscalerBackend as B;
+    use concinnity_engine::components::UpscalerBackend as B;
 
     fn avail(dlss: bool, xess: bool, fsr: bool) -> UpscalerAvailability {
         UpscalerAvailability { dlss, xess, fsr }
@@ -239,6 +264,25 @@ mod tests {
             assert_eq!((built, resolved), (None, ResolvedBackend::Native));
         }
         assert_eq!(tried, 3);
+    }
+
+    #[test]
+    fn an_unbundled_request_is_reported_once() {
+        let mut fsr = request(B::Fsr3);
+        let available = avail(true, false, false);
+        assert_eq!(
+            fsr.take_unbundled_request(available),
+            Some(VendorUpscaler::Fsr)
+        );
+        assert_eq!(fsr.take_unbundled_request(available), None);
+        assert_eq!(
+            request(B::Fsr3).take_unbundled_request(avail(false, false, true)),
+            None
+        );
+        assert_eq!(
+            request(B::Auto).take_unbundled_request(avail(false, false, false)),
+            None
+        );
     }
 
     #[test]

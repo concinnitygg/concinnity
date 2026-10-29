@@ -3,13 +3,13 @@
 //! line), the log window's pinned-tail scroll, the /del ghost autocomplete, and
 //! the command dispatch: /add and /del mutate the working entries exactly like
 //! their panel counterparts, the build command compiles the in-memory entries
-//! on a worker thread (in-process -- a separate `cn build` process would leave
+//! on a worker thread (in-process -- a separate `cn cook` process would leave
 //! this editor's name table empty), and everything reports through the shared
 //! log sink.
 
 use concinnity_cook::authoring::world::{entry_handle, find_entry, set_entry_id};
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 use std::sync::atomic::Ordering;
 
 use crate::editor::entry_list::build_text;

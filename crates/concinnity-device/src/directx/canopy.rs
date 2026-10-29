@@ -3,9 +3,9 @@
 // main pass's root CBV at b8, and its layers' view tables beside it, rewritten
 // only when they change and bound as the root SRV at t24.
 
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::grass::canopy_table::MAX_CANOPY_TABLE_ROWS;
-use concinnity_core::render::uniforms::canopy::CanopyParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::grass::canopy_table::MAX_CANOPY_TABLE_ROWS;
+use concinnity_engine::render::uniforms::canopy::CanopyParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -127,19 +127,25 @@ impl DxCanopy {
 }
 
 impl DxContext {
-    // Refresh this frame's canopy block from the world's grass and the planet
-    // tiles drawn this frame, into ring slot `slot`.
-    pub(super) fn upload_canopy(&self, slot: usize) {
+    // Refresh this frame's canopy block, `time` seconds into the world, from
+    // the world's grass and planet ground and the planet tiles drawn this
+    // frame, into ring slot `slot`.
+    pub(super) fn upload_canopy(&self, slot: usize, time: f64) {
+        let lod = self.grass_lod.get();
+        let hand_off = self
+            .grass
+            .as_ref()
+            .zip(lod.as_ref())
+            .map(|(grass, lod)| (lod, grass.crossfade_phase()));
+        self.canopy.params.set(
+            self.canopy_field
+                .as_ref()
+                .map_or_else(CanopyParams::default, |field| {
+                    self.state.canopy_params(field, hand_off, time)
+                }),
+        );
         self.canopy
-            .params
-            .set(match (&self.grass, &self.grass_lod.get()) {
-                (Some(grass), Some(lod)) => self
-                    .state
-                    .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
-                _ => CanopyParams::default(),
-            });
-        self.canopy
-            .set_tables(self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()));
+            .set_tables(self.canopy_field.as_ref().map_or(&[], |f| f.tables()));
         self.canopy.write(slot);
     }
 }

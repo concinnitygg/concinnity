@@ -56,7 +56,7 @@ fn unwrap_result(response: &Value) -> Value {
 fn explain(port: u16, message: &str) -> String {
     if message.contains("cannot connect") {
         format!(
-            "{message}\nStart an app with `cn debug`, or `cn editor --debug-port {port}`, then retry."
+            "{message}\nStart an app with `cn run --debug-port {port}`, or `cn edit --debug-port {port}`, then retry."
         )
     } else {
         message.to_string()
@@ -70,8 +70,8 @@ mod tests {
     #[test]
     fn an_unreachable_app_names_the_commands_that_start_one() {
         let text = explain(8777, "cannot connect to http://127.0.0.1:8777/mcp: refused");
-        assert!(text.contains("cn debug"));
-        assert!(text.contains("cn editor --debug-port 8777"));
+        assert!(text.contains("cn run --debug-port 8777"));
+        assert!(text.contains("cn edit --debug-port 8777"));
     }
 
     #[test]

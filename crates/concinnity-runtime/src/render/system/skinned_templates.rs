@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
-use concinnity_core::ecs::PipelineContext;
-use concinnity_core::gfx::mesh_payload::{PayloadMorphs, SkinnedVertex};
-use concinnity_core::gfx::render_types::SkinnedDrawObject;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::world_load::skinned::{self, SkinnedTemplate};
+use concinnity_engine::ecs::PipelineContext;
+use concinnity_engine::gfx::mesh_payload::{PayloadMorphs, SkinnedVertex};
+use concinnity_engine::gfx::render_types::SkinnedDrawObject;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::world_load::skinned::{self, SkinnedTemplate};
 
 use super::GraphicsSystem;
 

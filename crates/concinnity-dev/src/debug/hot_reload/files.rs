@@ -99,9 +99,11 @@ mod tests {
     }
 
     // A catalog path relative to the working directory matches the absolute
-    // path the watcher reports for the same file.
+    // path the watcher reports for the same file. Both sides resolve against
+    // the working directory, so it is held still for the test.
     #[test]
     fn a_relative_catalog_path_matches_its_absolute_event_path() {
+        let _state = crate::test_support::in_temp_cwd();
         let index = FileIndex::new([("cn-none/water.hlsl", 4)]);
         let absolute = std::env::current_dir().unwrap().join("cn-none/water.hlsl");
         assert_eq!(

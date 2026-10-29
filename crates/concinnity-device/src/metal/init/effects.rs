@@ -5,19 +5,19 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::post::upscale::UpscaleJitter;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::post::ssao::SsaoPass;
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::post::ssgi::SsgiPass;
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssr::SsrPass;
-use concinnity_core::render::post::ssr::settings::SsrSettings;
-use concinnity_core::render::uniforms::ExposureMeasurement;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::auto_exposure::{AutoExposureSettings, ExposureAdaptation};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::post::ssao::SsaoPass;
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::render::post::ssgi::SsgiPass;
+use concinnity_engine::render::post::ssgi::settings::SsgiSettings;
+use concinnity_engine::render::post::ssr::SsrPass;
+use concinnity_engine::render::post::ssr::settings::SsrSettings;
+use concinnity_engine::render::uniforms::ExposureMeasurement;
+use concinnity_engine::settings::ResolvedGraphics;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
@@ -69,18 +69,8 @@ impl EffectSettings {
 
     // Whether SSR, SSGI or RT reflections run: all three need the reflection
     // targets and the G-buffer the unified pre-pass produces.
-    fn reflections(&self) -> bool {
+    pub(in crate::metal) fn reflections(&self) -> bool {
         self.ssr.is_some() || self.ssgi.is_some() || self.rt_reflection.is_some()
-    }
-
-    // Whether the unified G-buffer pre-pass runs at all. It gates two things
-    // that must agree: the pool (which owns the pre-pass's three color
-    // channels) and the pre-pass's own targets + pipelines. If they disagreed,
-    // a consumer would read a label the pool never created. `needs_velocity` is
-    // true when TAA is on or temporal upscaling is on (the MetalFX scaler
-    // consumes motion vectors).
-    pub(in crate::metal) fn gbuffer_needed(&self, needs_velocity: bool) -> bool {
-        self.reflections() || self.ssao.is_some() || needs_velocity
     }
 }
 
@@ -141,7 +131,8 @@ pub(super) fn build_upscale(
         scaler: upscaler,
         scale,
         jitter: UpscaleJitter::default(),
-        reset: Default::default(),
+        reset: concinnity_engine::render::temporal::history_reset::UpscalerResetLatch::default(),
+        exposure: auto_exposure::UpscalerExposure::default(),
     }
 }
 

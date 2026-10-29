@@ -4,10 +4,10 @@
 // pipelines can drop the moment the new ones are in place: a frame still in
 // flight keeps drawing with what it encoded.
 
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::{PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
 
 use super::super::MtlContext;
 use super::super::pipeline_builder::{VolumeBuild, volume_for};

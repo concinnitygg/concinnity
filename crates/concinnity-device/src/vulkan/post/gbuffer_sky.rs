@@ -5,7 +5,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 use super::gbuffer::{GBUFFER_VIEW_UBO_SIZE, PREPASS_TARGETS};
 use crate::vulkan::allocator::PooledBuffer;

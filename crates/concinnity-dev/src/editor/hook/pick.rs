@@ -9,10 +9,10 @@
 //! click on the same spot cycles through overlapping hits near-to-far, which is
 //! the only way to reach an occluded object without gizmos.
 
-use concinnity_core::components::{Camera3D, FrameInput};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{PickIndex, World};
-use concinnity_core::math::pick::{PickRay, ray_aabb, screen_ray};
+use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{PickIndex, World};
+use concinnity_engine::gfx::pick::{PickRay, ray_aabb, screen_ray};
 use concinnity_host::thread::asset_id;
 
 use super::EditorHook;

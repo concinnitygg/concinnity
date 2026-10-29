@@ -2,8 +2,8 @@
 // args: no schema rejects an unknown field, so a misspelled `$id` would
 // otherwise pass as an anonymous asset.
 
-use concinnity_core::components::GRAPHICS_SECTIONS;
-use concinnity_core::ecs::AssetOrigin;
+use concinnity_engine::components::GRAPHICS_SECTIONS;
+use concinnity_engine::ecs::AssetOrigin;
 use serde_json::Value;
 
 use super::WORLD_JSONL;
@@ -83,8 +83,8 @@ mod tests {
     #[cfg(feature = "schema")]
     #[test]
     fn every_section_is_named_by_its_graphics_config_field() {
-        use concinnity_core::components::GraphicsConfig;
-        use concinnity_core::ecs::schema::{Body, FieldType, Schema};
+        use concinnity_engine::components::GraphicsConfig;
+        use concinnity_engine::ecs::schema::{Body, FieldType, Schema};
         let Body::Fields(fields) = GraphicsConfig::SCHEMA.body else {
             panic!("GraphicsConfig has fields");
         };

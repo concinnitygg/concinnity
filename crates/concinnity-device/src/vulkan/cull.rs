@@ -1,9 +1,9 @@
 //! Compute-driven cull pass for the Vulkan backend. One compute
 //! invocation per build-time `DrawObject` frustum / distance-tests the
-//! object and writes its `VkDrawIndexedIndirectCommand` (with
-//! `instance_count` 0 for culled / disabled objects) into this frame's
-//! indirect buffer. The bindless Main pass then consumes the buffer via
-//! one `cmd_draw_indexed_indirect`. Must run outside any render pass
+//! object, and the packing (`vulkan/compact.rs`) writes the kept ones'
+//! `VkDrawIndexedIndirectCommand`s into one list per stream of this frame's
+//! indirect buffer. The bindless Main pass then draws each list with one
+//! indirect draw. Must run outside any render pass
 //! (Vulkan disallows compute dispatch inside a render pass), which is
 //! why the graph dispatch site in `vulkan/draw.rs::record_frame` sits
 //! before `cmd_begin_render_pass` for Shadow / Main.
@@ -17,19 +17,51 @@
 //! graph orders.
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::{SaturatingFrom, saturating_u32};
-use concinnity_core::render::uniforms::vulkan::{CullHizParams, CullParams};
+use concinnity_engine::gfx::cull_status::CullStatus;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
+use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams};
 
 use crate::vulkan::record::cmd_push_constants;
-use concinnity_core::transform::IDENTITY;
 
+use super::allocator::PooledBuffer;
+use super::compact::{CompactPass, DrawLists};
 use super::context::VkContext;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
     saturating_u32(size_of::<vk::DrawIndexedIndirectCommand>());
+
+// The most views one shadow pass culls: its cascades or its spot slices.
+const MAX_SHADOW_VIEWS: usize =
+    if render_types::NUM_SHADOW_CASCADES > render_types::MAX_SHADOWED_SPOTS {
+        render_types::NUM_SHADOW_CASCADES
+    } else {
+        render_types::MAX_SHADOWED_SPOTS
+    };
+
+// One shadow view of one frame: the shadow kernel's set over the view's group
+// counts and status, the packing's set over them and the view's lists, and
+// the lists its draws read.
+pub(in crate::vulkan) struct VkShadowView {
+    pub(in crate::vulkan) cull_set: vk::DescriptorSet,
+    pub(in crate::vulkan) compact_set: vk::DescriptorSet,
+    pub(in crate::vulkan) lists: PooledBuffer,
+    pub(in crate::vulkan) _status: PooledBuffer,
+    pub(in crate::vulkan) _group_counts: PooledBuffer,
+    // Commands `lists` holds ahead of its count slots.
+    pub(in crate::vulkan) commands: usize,
+}
+
+impl VkShadowView {
+    pub(in crate::vulkan) fn lists(&self) -> DrawLists {
+        DrawLists {
+            buffer: self.lists.buffer(),
+            commands: self.commands,
+        }
+    }
+}
 
 impl VkContext {
     // Shader-bucket regions the cull kernel routes between: the world default
@@ -41,26 +73,20 @@ impl VkContext {
     }
 
     // The main pipeline a probe or planar face draws its one command stream
-    // under: the canopy twin's when the world has one, so a far band seen in a
-    // face keeps its canopy, else the default's.
+    // under: the default's fullest grass variant when the world has one, so a
+    // far band seen in a face keeps its canopy, else the default's.
     pub(in crate::vulkan) fn face_bindless_pipeline(
         &self,
     ) -> Option<&crate::vulkan::owned::OwnedPipeline> {
-        let twin = self
+        let superset = self
             .cull
             .world_pipelines
-            .canopy_twin()
-            .and_then(|twin| self.cull.world_pipelines.get(twin as usize));
-        match twin {
+            .superset_bucket()
+            .and_then(|bucket| self.cull.world_pipelines.get(bucket as usize));
+        match superset {
             Some(pipelines) => Some(&pipelines.main),
             None => self.cull.bindless_pipeline.as_ref(),
         }
-    }
-
-    // Byte offset of shader bucket `b`'s command region in an indirect buffer.
-    pub(in crate::vulkan) fn bucket_region_offset(&self, bucket: usize) -> vk::DeviceSize {
-        (bucket * self.cull.bucket_stride) as vk::DeviceSize
-            * vk::DeviceSize::from(INDIRECT_COMMAND_STRIDE)
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
@@ -118,7 +144,9 @@ impl VkContext {
             cam_pos,
             object_count: u32::saturating_from(self.state.draw.record_count()),
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
-            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         params.planes = frustum.packed_planes();
         // SAFETY: `cmd` is in the recording state, and the cull pipeline is owned by
@@ -178,14 +206,57 @@ impl VkContext {
         // SAFETY: the pipeline, both sets and the push constants above are bound on this recording
         // command buffer.
         unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        if let (Some(&set), Some(lists)) = (
+            self.cull.compact_sets.get(frame_idx),
+            self.cull.indirect_buffers.get(frame_idx),
+        ) {
+            self.encode_compaction(
+                cmd,
+                CompactPass {
+                    set,
+                    lists: self.main_lists(lists.buffer()),
+                    params: self.compact_params(CullStatus::DRAWN),
+                },
+            );
+        }
+    }
+
+    // The main view's lists in `buffer`, a frame's phase-1 or phase-2
+    // indirect buffer.
+    pub(in crate::vulkan) fn main_lists(&self, buffer: vk::Buffer) -> DrawLists {
+        DrawLists {
+            buffer,
+            commands: self.cull.indirect_commands,
+        }
+    }
+
+    // What the main view's packing packs: this frame's records, keeping those
+    // with outcome `drawn`.
+    fn compact_params(&self, drawn: u32) -> GpuCompactParams {
+        GpuCompactParams {
+            object_count: u32::saturating_from(self.state.draw.record_count()),
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            drawn,
+            ..Default::default()
+        }
+    }
+
+    // How the main view's lists sit in its indirect buffers.
+    pub(in crate::vulkan) fn stream_layout(&self) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: u32::saturating_from(self.state.draw.record_count()),
+        }
     }
 
     // Per-cascade GPU cull for the GPU-driven shadow pass: each re-rendered
     // cascade's frustum test of every record (static + instances + skinned)
     // against that cascade's light frustum (extracted from `light_vps[c]`; no
-    // Hi-Z) writes the cascade's indirect buffer through its (frame, cascade)
-    // cull set. Must run outside any render pass, so the caller dispatches it at
-    // the top of `encode_shadow_pass`. Mirrors
+    // Hi-Z), packed into the cascade's lists. Must run outside any render pass,
+    // so the caller dispatches it at the top of `encode_shadow_pass`. Mirrors
     // `directx/cull.rs::encode_shadow_culls`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
@@ -194,58 +265,67 @@ impl VkContext {
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
-        let Some(sets) = self.cull.shadow_cull_sets.get(frame_idx) else {
+        let Some(views) = self.cull.shadow_views.get(frame_idx) else {
             return;
         };
-        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
-            render_types::NUM_SHADOW_CASCADES];
+        let mut culls = [None; render_types::NUM_SHADOW_CASCADES];
         let mut kept = 0;
-        for (c, &set) in sets.iter().enumerate() {
+        for (c, view) in views.iter().enumerate() {
             if render_mask & (1u32 << c) == 0 {
                 continue;
             }
-            views[kept] = (
-                set,
-                Frustum::from_shadow(self.state.planner.shadow.uniforms.light_vps[c]),
-            );
+            let light_vp = self.state.planner.shadow.uniforms.light_vps[c];
+            culls[kept] = Some((view, Frustum::from_shadow(light_vp)));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+        self.encode_view_culls(cmd, &culls[..kept], cam_pos);
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same shadow kernel, each
     // refreshed slice's casters kept against that spot's light frustum into the
-    // slice's own indirect buffer. The eye stays the camera, so each caster
-    // draws the LOD the main pass does.
+    // slice's own lists. The kernel picks no LOD: each caster draws the
+    // camera-keyed LOD the frame's draw args already carry.
     pub(in crate::vulkan) fn encode_spot_culls(
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let Some(sets) = self.cull.spot_cull_sets.get(frame_idx) else {
+        let Some(views) = self.cull.spot_views.get(frame_idx) else {
             return;
         };
-        let mut views = [(vk::DescriptorSet::null(), Frustum::from_shadow(IDENTITY));
-            render_types::MAX_SHADOWED_SPOTS];
+        let mut culls = [None; render_types::MAX_SHADOWED_SPOTS];
         let mut kept = 0;
         for slice in self.spot_shadow.refreshed_slices() {
             let slice = slice as usize;
-            views[kept] = (sets[slice], self.spot_shadow.frusta[slice]);
+            culls[kept] = views
+                .get(slice)
+                .map(|view| (view, self.spot_shadow.frusta[slice]));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &views[..kept], cam_pos);
+        self.encode_view_culls(cmd, &culls[..kept], cam_pos);
+    }
+
+    // What a shadow view's cull and packing cover: this frame's records, at
+    // most as many as the view holds, one stream and the skinned tail.
+    pub(in crate::vulkan) fn shadow_layout(&self, view: &VkShadowView) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: render_types::culled_records(self.state.draw.record_count(), view.commands),
+        }
     }
 
     // One shadow-kernel dispatch per view, each testing every record against
-    // the view's frustum and writing the indirect buffer its cull set binds. Ends
-    // with one memory barrier ordering the writes before the shadow draws'
-    // `cmd_draw_indexed_indirect` reads. A no-op when the GPU-driven shadow
-    // resources are absent, `draw.record_count() == 0`, or no view asked for.
+    // the view's frustum, then every view's packing into its lists. Ends with
+    // one memory barrier ordering the lists' writes before the shadow draws'
+    // indirect reads. A no-op when the GPU-driven shadow resources are absent,
+    // `draw.record_count() == 0`, or no view asked for.
     fn encode_view_culls(
         &self,
         cmd: vk::CommandBuffer,
-        views: &[(vk::DescriptorSet, Frustum)],
+        views: &[Option<(&VkShadowView, Frustum)>],
         cam_pos: [f32; 3],
     ) {
         let (Some(pipeline), Some(layout)) = (
@@ -258,31 +338,32 @@ impl VkContext {
             return;
         }
         let device = &self.hw.device;
-        let object_count = u32::saturating_from(self.state.draw.record_count());
 
         // SAFETY: `cmd` is in the recording state, and the shadow cull pipeline is owned by
         // `self.cull`, which outlives this recording.
         unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
-        for (set, frustum) in views {
+        let mut passes = [CompactPass::default(); MAX_SHADOW_VIEWS];
+        let mut packed_views = 0;
+        for (pass, (view, frustum)) in passes.iter_mut().zip(views.iter().flatten()) {
+            let packed = self.shadow_layout(view);
             let mut params = CullParams {
                 planes: [[0.0; 4]; 6],
                 cam_pos,
-                object_count,
-                // The shadow kernel writes one depth-only stream into the
-                // view's own indirect buffer, so it never strides by bucket.
+                object_count: packed.records,
                 bucket_count: 1,
-                bucket_stride: object_count,
+                skinned_base: packed.skinned_base,
+                exclude_first: 0,
+                exclude_end: 0,
             };
             params.planes = frustum.packed_planes();
-            // SAFETY: the caller hands live per-view sets built against the shadow cull layout,
-            // borrowed for the call.
+            // SAFETY: the view's cull set was built against the shadow cull layout.
             unsafe {
                 device.cmd_bind_descriptor_sets(
                     cmd,
                     vk::PipelineBindPoint::COMPUTE,
                     layout.handle(),
                     0,
-                    std::slice::from_ref(set),
+                    std::slice::from_ref(&view.cull_set),
                     &[],
                 );
             }
@@ -299,8 +380,21 @@ impl VkContext {
             }
             // SAFETY: the pipeline, this view's set and its push constants are bound on the
             // recording command buffer.
-            unsafe { device.cmd_dispatch(cmd, object_count.div_ceil(64), 1, 1) };
+            unsafe { device.cmd_dispatch(cmd, packed.records.div_ceil(64), 1, 1) };
+            *pass = CompactPass {
+                set: view.compact_set,
+                lists: view.lists(),
+                params: GpuCompactParams {
+                    object_count: packed.records,
+                    bucket_count: 1,
+                    skinned_base: packed.skinned_base,
+                    drawn: CullStatus::DRAWN,
+                    ..Default::default()
+                },
+            };
+            packed_views += 1;
         }
+        self.encode_compactions(cmd, &passes[..packed_views]);
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
@@ -356,7 +450,9 @@ impl VkContext {
             cam_pos,
             object_count: u32::saturating_from(self.state.draw.record_count()),
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
-            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         params.planes = frustum.packed_planes();
 
@@ -414,6 +510,19 @@ impl VkContext {
         // SAFETY: the pipeline, both sets and the push constants above are bound on this recording
         // command buffer.
         unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        if let (Some(&set), Some(lists)) = (
+            self.cull.compact_sets2.get(frame_idx),
+            self.cull.indirect_buffers2.get(frame_idx),
+        ) {
+            self.encode_compaction(
+                cmd,
+                CompactPass {
+                    set,
+                    lists: self.main_lists(lists.buffer()),
+                    params: self.compact_params(CullStatus::REDRAW),
+                },
+            );
+        }
     }
 }
 
@@ -421,7 +530,7 @@ impl VkContext {
 mod tests {
     use concinnity_core::math::SaturatingFrom;
     // The `CullParams` layout test lives with the struct in
-    // `concinnity_core::render::uniforms::vulkan`. The struct-size == push-range
+    // `concinnity_engine::render::uniforms::vulkan`. The struct-size == push-range
     // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
     #[test]
     fn cull_params_size_matches_push_range() {

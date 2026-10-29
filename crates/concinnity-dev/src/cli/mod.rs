@@ -1,17 +1,13 @@
 //! The `concinnity` binary's argv face: the clap command tree, the value enums
-//! that mirror engine types so no other layer carries a clap dependency, the
-//! macOS validation re-exec, and the dispatch that turns a parsed command into
-//! a call.
+//! that mirror engine types so no other layer carries a clap dependency, and
+//! the dispatch that turns a parsed command into a call.
 
 mod commands;
 mod dispatch;
 mod launch_args;
-mod reexec;
 mod value_enums;
 
 use clap::Parser;
-
-use commands::{EditorArgs, RenderArgs};
 
 pub(crate) use commands::Commands;
 
@@ -38,11 +34,17 @@ impl Invocation {
     /// before spawning a thread or touching Metal.
     pub fn from_args() -> Self {
         let cli = Cli::parse();
-        reexec::reexec_with_metal_validation(&cli);
+        if let Some(args) = cli.command.launch_args(cli.quiet) {
+            concinnity_runtime::reexec_with_metal_validation(args.graphics_validation);
+        }
         Self(cli)
     }
 
     /// Run the command the arguments named, against `tree`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error the command failed with.
     pub fn dispatch(&self, tree: &concinnity_host::store::paths::StateTree) -> std::io::Result<()> {
         dispatch::dispatch(&self.0, tree)
     }
@@ -51,43 +53,18 @@ impl Invocation {
 #[derive(Parser, Debug)]
 #[command(name = "concinnity")]
 #[command(about = BANNER, long_about = None)]
-// clap renders its own flag as "{name} {version}", which is the pair
-// `command::version_line` prints, so `cn version` and `cn --version` render
-// the same line off one source. The auto-generated flag is off only so the
-// short can carry `-v` alongside clap's conventional `-V`.
-#[command(version = crate::command::version_details(), disable_version_flag = true)]
+#[command(arg_required_else_help = true)]
+// clap renders its own `-V, --version` as "{name} {version}", which is the
+// pair `command::version_line` prints, so `cn version` and `cn --version`
+// render the same line off one source.
+#[command(version = crate::command::version_details())]
 pub(crate) struct Cli {
     #[command(subcommand)]
-    pub(crate) command: Option<Commands>,
+    pub(crate) command: Commands,
 
-    /// Print the version
-    #[arg(short = 'V', short_alias = 'v', long, action = clap::ArgAction::Version)]
-    pub(crate) version: (),
-}
-
-// What a bare `concinnity` runs. Launching the binary with no argv at all --
-// a double click, where there is no terminal to type a subcommand into --
-// opens the editor on the world discovered from `worlds/`.
-static DEFAULT_COMMAND: Commands = Commands::Editor(EditorArgs {
-    file: None,
-    debug_port: None,
-    validation: None,
-    render: RenderArgs {
-        graphics_api: None,
-        launch: launch_args::LaunchArgsArg::NONE,
-        rt_dynamic: None,
-        rt_skinned_geometry: None,
-        dlss_preset: None,
-        fixed_frame_rate: None,
-        hide: Vec::new(),
-    },
-});
-
-impl Cli {
-    /// The command this run performs: the one argv named, or [`DEFAULT_COMMAND`].
-    pub(crate) fn resolved_command(&self) -> &Commands {
-        self.command.as_ref().unwrap_or(&DEFAULT_COMMAND)
-    }
+    /// Do not print log messages
+    #[arg(short = 'q', long, global = true)]
+    pub(crate) quiet: bool,
 }
 
 #[cfg(test)]
@@ -103,28 +80,27 @@ mod tests {
         Cli::command().debug_assert();
     }
 
-    // A bare invocation is the double-click case: no terminal, no subcommand,
-    // and the useful thing to do is open a window.
+    // A bare invocation prints the help rather than running anything.
     #[test]
-    fn a_bare_invocation_runs_the_editor() {
-        let cli = Cli::try_parse_from(["concinnity"]).unwrap();
-        assert!(cli.command.is_none());
-        let Commands::Editor(a) = cli.resolved_command() else {
-            panic!("expected the editor by default");
-        };
-        assert!(a.file.is_none());
-        assert!(a.debug_port.is_none());
-        assert!(a.validation.is_none());
-        assert_eq!(a.render.launch, launch_args::LaunchArgsArg::NONE);
-        assert!(a.render.rt_dynamic.is_none());
-        assert!(a.render.rt_skinned_geometry.is_none());
-        assert!(a.render.dlss_preset.is_none());
+    fn a_bare_invocation_asks_for_a_command() {
+        let err = Cli::try_parse_from(["concinnity"]).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 
-    // The default is `editor` itself, not a look-alike: an unknown subcommand
-    // still fails rather than silently falling back to it.
     #[test]
-    fn an_unknown_subcommand_is_still_an_error() {
+    fn the_version_is_upper_case_v_only() {
+        let err = Cli::try_parse_from(["concinnity", "-V"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert!(Cli::try_parse_from(["concinnity", "-v"]).is_err());
+        let cli = Cli::try_parse_from(["concinnity", "version"]).unwrap();
+        assert!(matches!(cli.command, Commands::Version));
+    }
+
+    #[test]
+    fn an_unknown_subcommand_is_an_error() {
         assert!(Cli::try_parse_from(["concinnity", "edtior"]).is_err());
     }
 }

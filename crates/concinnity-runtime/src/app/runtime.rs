@@ -1,10 +1,12 @@
 //! The `Runtime` value: a world plus the loop state that drives it.
 
-use concinnity_core::budget::{MemoryBudget, ThreadBudget};
-use concinnity_core::components::AppConfig;
-use concinnity_core::ecs::{StepResult, World};
-use concinnity_core::error::WorldError;
-use concinnity_core::fanout::Fanout;
+use crate::app::clock::SimClock;
+use crate::app::pacing::FramePacer;
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::components::AppConfig;
+use concinnity_engine::ecs::{StepResult, World};
+use concinnity_engine::error::WorldError;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::sys::{cpu, memory};
 use concinnity_host::thread::jobs::{self, configure, pool};
@@ -16,12 +18,13 @@ use crate::app::render_mode;
 use crate::app::startup_error::StartupError;
 use crate::lend::SYSTEMS;
 use crate::render::system::RenderInitFailure;
-use concinnity_core::ecs::ActiveRenderBackend;
-use concinnity_core::input::mailbox::InputMailbox;
-use concinnity_core::launch::LaunchRequest;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::render_mode::{RenderMode, Resolution};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::ecs::ActiveRenderBackend;
+use concinnity_engine::input::mailbox::InputMailbox;
+use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::backend::render_mode::{RenderMode, Resolution};
+use concinnity_engine::shutdown::ShutdownToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeStatus {
@@ -42,10 +45,10 @@ pub struct Runtime {
     shutdown: ShutdownToken,
     // FPS-cap pacer, run before each world step so no system pays the sleep
     // inside its own step time (see `app::pacing`).
-    pacer: crate::app::pacing::FramePacer,
+    pacer: FramePacer,
     // Fixed-timestep accumulator; publishes the frame's `SimTiming` and
     // `FrameTime` resources before each world step (see `app::clock`).
-    clock: crate::app::clock::SimClock,
+    clock: SimClock,
     // The pipelined render half's go-ahead, waited on before each step so the
     // tick starts no earlier than its frame can be recorded. `None` when serial.
     frame_gate: Option<crate::app::frame_gate::FrameGate>,
@@ -73,8 +76,8 @@ impl Runtime {
             world: World::new(),
             state: None,
             shutdown: ShutdownToken::new(),
-            pacer: Default::default(),
-            clock: Default::default(),
+            pacer: FramePacer::default(),
+            clock: SimClock::default(),
             frame_gate: None,
             launch: LaunchRequest::default(),
             render_mode: None,
@@ -98,9 +101,12 @@ impl Runtime {
         self
     }
 
-    // The launch request, for the runtime entry that adds to it before start.
-    pub(crate) fn launch_mut(&mut self) -> &mut LaunchRequest {
-        &mut self.launch
+    // The launch arguments the run takes: the world's own when it holds any,
+    // replacing the request's whole, as `LaunchRequest::publish` takes them.
+    pub(crate) fn launch_args(&self) -> &LaunchArgs {
+        self.world
+            .resource::<LaunchArgs>()
+            .unwrap_or(&self.launch.args)
     }
 
     /// The state tree this runtime runs against, if it has one.
@@ -124,6 +130,11 @@ impl Runtime {
     /// the directory it was launched from. A caller with a tree of its own
     /// builds the runtime with [`in_tree`](Self::in_tree) instead. The world's own
     /// `AppConfig.home` overrides either at `start`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the blob at `path` or one of its overflow siblings
+    /// cannot be read or decoded.
     pub fn from_blob(path: &Path) -> Result<Self, StartupError> {
         let mut runtime = Self::new();
         runtime.load_blob_from(path)?;
@@ -133,7 +144,12 @@ impl Runtime {
 
     /// Load assets and blob payload data from the primary blob under this runtime's
     /// state tree, and populate the world. Replaces any previously loaded
-    /// world. `NoStateRoot` when the runtime has no tree to read from.
+    /// world.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StartupError::NoStateRoot`] when the runtime has no tree to
+    /// read from, or an error if the blob cannot be read or decoded.
     pub fn load_blob(&mut self) -> Result<(), StartupError> {
         let primary = self.primary_blob().ok_or(StartupError::NoStateRoot)?;
         self.load_blob_from(&primary)?;
@@ -181,17 +197,17 @@ impl Runtime {
         for (id, asset) in assets {
             world.add(asset, id);
         }
-        world.insert_resource(concinnity_core::ecs::BlobSceneGroups(scene_groups));
-        world.insert_resource(concinnity_core::ecs::BlobMeshBounds(mesh_bounds));
+        world.insert_resource(concinnity_engine::ecs::BlobSceneGroups(scene_groups));
+        world.insert_resource(concinnity_engine::ecs::BlobMeshBounds(mesh_bounds));
         // Absent for a world with no physics content, which is also a world
         // with no PhysicsSystem to read it.
         if let Some(budget) = physics_budget {
-            world.insert_resource(concinnity_core::ecs::WorldPhysicsBudget(budget));
+            world.insert_resource(concinnity_engine::ecs::WorldPhysicsBudget(budget));
         }
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the
         // renderer reads the TextureTable to build its shared texture pool.
-        concinnity_core::resource::install_tables(&mut world, &mut resources);
+        concinnity_engine::resource::install_tables(&mut world, &mut resources);
         self.world = world;
     }
 
@@ -213,6 +229,11 @@ impl Runtime {
 
     /// Build the world's systems and run their `init`. Must run once, before
     /// the first step.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has already started, no renderer can
+    /// serve the resolved render mode, or a system's `init` fails.
     pub fn start(&mut self) -> Result<(), WorldError> {
         if self.status != RuntimeStatus::Created {
             return Err(WorldError::AlreadyStarted);
@@ -262,13 +283,25 @@ impl Runtime {
     pub fn render_resolution(&mut self) -> Resolution {
         if self.render_mode.is_none() {
             // Before the first probe, which runs on the graphics API this
-            // process renders with: the player's choice, from the settings the
-            // world's home holds.
-            crate::platform::select_persisted(self.writable_tree().as_ref());
+            // process renders with: the launch's, else the player's choice
+            // from the settings the world's home holds.
+            match self.launch_graphics_api() {
+                Some(api) => {
+                    crate::platform::select(Some(api));
+                }
+                None => {
+                    crate::platform::select_persisted(self.writable_tree().as_ref());
+                }
+            }
         }
         *self
             .render_mode
             .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))
+    }
+
+    // The graphics API the launch asks for.
+    fn launch_graphics_api(&self) -> Option<Platform> {
+        self.launch_args().graphics_api
     }
 
     // Point the runtime-writable state (`settings`, `saves/`, `crashes/`, the
@@ -445,7 +478,8 @@ impl Runtime {
         self.clock.publish(
             &mut self.world,
             Instant::now(),
-            self.launch.fixed_frame_rate,
+            self.launch.args.fixed_frame_rate,
+            self.launch.args.start_at(),
         );
         self.world.step()
     }
@@ -456,14 +490,13 @@ impl Runtime {
     }
 
     /// Run this on the run loop with default options, consuming it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime fails to start (see
+    /// [`start`](Self::start)).
     pub fn run(self) -> Result<(), WorldError> {
-        self.run_with(crate::app::run::RunOptions::default())
-    }
-
-    // Run this on the run loop, consuming it. Drives frames until the
-    // window closes, a system stops the world, or CTRL+C is received.
-    pub(crate) fn run_with(self, options: crate::app::run::RunOptions) -> Result<(), WorldError> {
-        crate::app::run::start_runtime(self, options)
+        crate::app::run::start_runtime(self)
     }
 }
 

@@ -7,7 +7,7 @@ a binary glTF file with `source` + `primitive_index`.
 
 Use when you want full control over shape: custom furniture,
 architectural details, signage, or any form a generator cannot
-produce. For standard shapes use [ProceduralMesh](ProceduralMesh.md).
+produce. For standard shapes use [`ProceduralMesh`](ProceduralMesh.md).
 
 Normals and tangents are computed automatically at build time.
 **Do not supply normals or tangents.**

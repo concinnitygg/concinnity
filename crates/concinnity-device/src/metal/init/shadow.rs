@@ -1,11 +1,11 @@
 //! Cascade and spot shadow states: the shadow maps, the compare sampler, and
 //! the static spot projections.
 
-use concinnity_core::gfx::render_types::{self, NUM_SHADOW_CASCADES, SpotShadowData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::ShadowParams;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::spot_shadow;
+use concinnity_engine::gfx::render_types::{self, NUM_SHADOW_CASCADES, SpotShadowData};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::ShadowParams;
+use concinnity_engine::render::shadow::spot;
 use objc2_metal::{
     MTLDevice as _, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
     MTLSamplerMinMagFilter,
@@ -98,10 +98,7 @@ pub(super) fn build_spot_shadow(
         map,
         buffer,
         count,
-        frusta: spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect(),
+        frusta: spot_shadows.iter().map(spot::slice_frustum).collect(),
         render_mask: 0,
     })
 }

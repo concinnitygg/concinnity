@@ -3,13 +3,13 @@
 //! joint-count changes.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::SkinnedVertex;
-use concinnity_core::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, geometry_repack, rt_geom};
-use concinnity_core::transform::IDENTITY;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::mesh_payload::SkinnedVertex;
+use concinnity_engine::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{backend, rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::transform::IDENTITY;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer as _, MTLComputePipelineState, MTLDevice, MTLResourceOptions};
@@ -26,7 +26,7 @@ fn upload_skinned_index_buffer(
 ) -> RenderResult<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>> {
     let buffer = device
         .newBufferWithLength_options(
-            rt_geom::skinned_index_buffer_bytes(indices.len()),
+            geom::skinned_index_buffer_bytes(indices.len()),
             MTLResourceOptions::StorageModeShared,
         )
         .ok_or_else(|| allocation_failed(format_args!("{label} skinned index buffer")))?;
@@ -104,7 +104,7 @@ pub(crate) struct MorphBinding {
 impl MtlContext {
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // new geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a SkinnedMesh's re-imported `.glb`
+    // hot-reload (`cn run -f` only) when a SkinnedMesh's re-imported `.glb`
     // no longer fits in its init-time slot. Walks every
     // `SkinnedDrawObject` in order: for each slot in `changes`, the new
     // vertices / indices are appended to a fresh CPU buffer; for unchanged
@@ -140,7 +140,7 @@ impl MtlContext {
 
         // Stop the GPU + CPU pipelines so we can safely read the old buffers
         // and atomically swap. Costs a frame-time stall but only fires under
-        // `cn debug` and only when the source `.glb` size actually changed.
+        // `cn run -f` and only when the source `.glb` size actually changed.
         self.wait_idle();
 
         let old_v_len = v_buf.length() / size_of::<SkinnedVertex>();
@@ -208,12 +208,12 @@ impl MtlContext {
 
     // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the
     // shared skinned vertex / index buffers in place. Driven by asset
-    // hot-reload (`cn debug` only).
+    // hot-reload (`cn run -f` only).
     //
     // Like [`MtlContext::update_mesh_geometry`], this rewrites a live buffer
     // region with no in-flight fence. There is no steady-state skinned
     // streamer (skinned meshes upload once at init and are never evicted), so
-    // the only caller is the human-paced `cn debug` hot-reload, which stalls
+    // the only caller is the human-paced `cn run -f` hot-reload, which stalls
     // for the reload: no frame racing this write is plausibly in flight.
     // Production (non-debug) callers must not take this path.
     //

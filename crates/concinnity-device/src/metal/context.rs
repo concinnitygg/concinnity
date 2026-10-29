@@ -1,14 +1,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
-use concinnity_core::profile;
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::scene_state::SceneState;
-use concinnity_core::render::shader_reload::ShaderReload;
-use concinnity_core::render::{
-    backend, backend_init, decal, error, hdr_output, particles, spot_shadow,
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
+use concinnity_engine::profile;
+use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::render::{
+    backend, backend::error, backend::init, decal, output::hdr, particles, shadow::spot,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -40,7 +41,7 @@ use super::transient_pool::TransientTexturePool;
 // carries pool indices into it. Worlds with more than this many textures fall
 // back to clamped indices (logged once at init).
 pub(super) const BINDLESS_TEXTURE_COUNT: usize =
-    concinnity_core::render::uniforms::BINDLESS_POOL_SIZE;
+    concinnity_engine::render::uniforms::BINDLESS_POOL_SIZE;
 
 // Fragment buffer index the bindless static pass binds its `BindlessTextures`
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
@@ -106,7 +107,10 @@ pub(super) struct ProbeState {
     // buffers may still be reading those buffers/textures, so they are parked
     // here and freed once the frames-in-flight fence guarantees the bake has
     // retired.
-    pub retire_pool: concinnity_core::render::retire_pool::RetirePool<super::probe::RetiredBake>,
+    pub retire_pool:
+        concinnity_engine::render::buffers::retire_pool::RetirePool<super::probe::RetiredBake>,
+    // The world's prop probe, captured a face a frame inside the frame.
+    pub prop: super::prop_probe::PropProbe,
 }
 
 // Cascaded shadow map resources + the cascade schedule. `enabled` is false when
@@ -147,7 +151,7 @@ pub(super) struct SpotShadowState {
 impl SpotShadowState {
     // Slices that re-render this frame.
     pub(super) fn refreshed_slices(&self) -> impl Iterator<Item = u32> {
-        spot_shadow::refreshed_slices(self.render_mask, self.count)
+        spot::refreshed_slices(self.render_mask, self.count)
     }
 }
 
@@ -161,7 +165,7 @@ pub(super) struct FrameRings {
     // same slots as `object`. Written by `build_record_buffers`.
     pub draw_args: super::frame_rings::TransientRing,
     // Which `object` / `draw_args` slots already hold the instance tail.
-    pub instance_tail: concinnity_core::render::record_pack::StaticSlots,
+    pub instance_tail: concinnity_engine::render::record_pack::StaticSlots,
     // Packs the static draws' records into those slots.
     pub packer: crate::record_pack::RecordPacker,
     // Ring of per-frame model-history buffers for the GPU-driven G-buffer /
@@ -177,7 +181,7 @@ pub(super) struct FrameRings {
     // `build_probe_records`.
     pub probe_records: super::frame_rings::TransientRing,
     // Which `probe_records` slots hold the book's current records.
-    pub probe_tail: concinnity_core::render::record_pack::StaticSlots,
+    pub probe_tail: concinnity_engine::render::record_pack::StaticSlots,
     // Ring of per-skinned-object joint-palette buffers, one inner buffer per
     // object. Written by `build_joint_buffers`.
     pub joint: super::frame_rings::JointRing,
@@ -209,6 +213,10 @@ pub(super) struct WaterState {
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
     pub ocean: Option<super::water_sim::OceanSim>,
+    // The wake's history, and this frame's block and lane once a frame that
+    // runs it has advanced it.
+    pub wake: WakeHistory,
+    pub wake_frame: Option<WakeFrame>,
 }
 
 // Transparent glass: the `GlassPanel` producer and the see-through mesh path.
@@ -374,14 +382,14 @@ pub(super) struct MtlHardware {
     // The resolved swapchain color-output mode. EDR negotiation can fall the
     // world's HDR request back to SDR, so this can disagree with
     // `swapchain_config`.
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // The swapchain config (ring depth + HDR request) this context was built
     // with, reported by `hot_swap_config` so a live editor reload reuses this
     // hardware only when the new world's config still matches. Holding the
     // request rather than the negotiated mode keeps a display without EDR
     // headroom from forcing a rebuild every save.
-    pub swapchain_config: backend_init::SwapchainConfig,
-    // `Option` so a live `cn editor` world reload can MOVE the window (and its
+    pub swapchain_config: init::SwapchainConfig,
+    // `Option` so a live `cn edit` world reload can MOVE the window (and its
     // live cursor / keymap / fullscreen state) into the rebuilt context; a
     // normal context always holds `Some`. Access via `window`/`window_mut`.
     pub window: Option<WindowState>,
@@ -410,16 +418,16 @@ impl MtlHardware {
     // Maximum extended-range multiplier on the HDR path, `None` on SDR.
     pub(super) fn max_edr(&self) -> Option<f32> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 
     // HDR encoding (scRGB-linear vs PQ) on the HDR path, `None` on SDR.
-    pub(super) fn hdr_encoding(&self) -> Option<hdr_output::HdrEncoding> {
+    pub(super) fn hdr_encoding(&self) -> Option<hdr::HdrEncoding> {
         match self.hdr_mode {
-            hdr_output::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
-            hdr_output::HdrOutputMode::Sdr => None,
+            hdr::HdrOutputMode::Hdr { encoding, .. } => Some(encoding),
+            hdr::HdrOutputMode::Sdr => None,
         }
     }
 }
@@ -551,7 +559,7 @@ pub(super) struct CompositeState {
 // Only ever accessed from the main thread.
 pub(crate) struct MtlContext {
     // Color texture of the most recently presented drawable, retained so the
-    // `cn debug` `screenshot` command can blit it back to a host buffer and
+    // `cn run -f` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
     // `hot_reload` (the path that runs the debug endpoint able to request a
     // capture); `None` in production and before the first present, so a
@@ -583,13 +591,16 @@ pub(crate) struct MtlContext {
     pub(super) scene: MtlSceneAssets,
     // All scene lights packed and pushed to the fragment shader at buffer(4),
     // with the local lights' reach. Pushed every draw, so no copy is ever stale.
-    pub(super) lights: concinnity_core::render::light_state::LightState,
+    pub(super) lights: concinnity_engine::render::light::state::LightState,
+    // What the canopy block is filled from: the grass's far fields and the
+    // planet's ground. `None` when the world has neither.
+    pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
     // The far field's canopy block, refreshed each frame and pushed to the
     // fragment shader at buffer(21).
-    pub(super) canopy: concinnity_core::render::uniforms::canopy::CanopyParams,
+    pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,
     // How this frame's view resolves the grass: where it coarsens, thins and
     // hands over to the canopy. `None` without grass.
-    pub(super) grass_lod: Option<concinnity_core::render::grass::GrassLodView>,
+    pub(super) grass_lod: Option<concinnity_engine::render::environment::grass::GrassLodView>,
     // Its layers' view tables, at buffer(22).
     pub(super) canopy_tables: super::canopy::CanopyTables,
     // Cascaded shadow map + its schedule. See [`ShadowState`].
@@ -615,7 +626,7 @@ pub(crate) struct MtlContext {
     // of 0 skips the bloom passes entirely.
     pub(super) post_process: render_types::PostProcessParams,
     // The scale the frame's HDR chain is written at, advanced once per frame.
-    pub(super) pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure,
+    pub(super) pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure,
     // Temporal-anti-aliasing feature state: the toggle, resolve pipeline,
     // ping-pong history buffers, and per-frame bookkeeping. See [`TaaState`].
     pub(super) taa: TaaState,
@@ -642,6 +653,9 @@ pub(crate) struct MtlContext {
     // Screen-space-GI feature state: resolved tunables and the shared pass
     // with its pyramids and accumulation. See [`SsgiState`].
     pub(super) ssgi: SsgiState,
+    // The reactive mask's disocclusion mark, built beside a MetalFX scaler
+    // that reads the mask.
+    pub(super) disocclusion: Option<super::post::MtlDisocclusionPass>,
     // Hardware-ray-traced-reflection feature state: resolved tunables, the
     // scene acceleration structure, the dynamic-update mode + failure flag, and
     // the resolve / textured-resolve / skinning pipelines. See [`RtState`].
@@ -679,10 +693,11 @@ pub(crate) struct MtlContext {
     // The world default Shader's compiled programs, `None` for the engine's
     // own. Kept past init for the skinned pipeline built at upload and for the
     // hot-reload rebuild.
-    pub(super) world_shader: Option<concinnity_core::components::ShaderPrograms>,
+    pub(super) world_shader: Option<concinnity_engine::components::ShaderPrograms>,
     // Keep each presented drawable's texture retained so `screenshot` can
     // blit it back (the view is blit-readable under the same flag). On under
-    // the dev loop and `cn run --screenshot`; false in plain production.
+    // the dev loop and for a run that takes screenshots; false in plain
+    // production.
     pub(super) capture: bool,
     // Skinned-mesh rendering feature state: the shared skinned vertex / index
     // buffers, the pre-skin pipeline and its deformed buffers, and the morph
@@ -705,6 +720,10 @@ pub(crate) struct MtlContext {
     // Monotonic counter over frames that build per-frame buffers; `% depth`
     // selects this frame's ring slot. Advanced once per such frame.
     pub(super) frame_ring_index: u64,
+    // Feature state a settings change replaced, freed once no frame in flight
+    // can name it.
+    pub(super) retired_effects:
+        concinnity_engine::render::buffers::retire_pool::RetirePool<super::quality::RetiredEffect>,
     pub(super) rings: FrameRings,
     pub(super) water: WaterState,
     // The grass field, when the world grows one. See [`super::grass`].
@@ -761,6 +780,10 @@ pub(super) fn debug_assert_main_thread(entry: &str) {
 // keeps addressing exactly the records those buffers hold. The reflection-probe
 // bake is the one such consumer: it builds its buffers once and renders the six
 // cube faces one per frame, while runtime spawns keep growing the live list.
+// Bytes of a set of lists' execution ranges: one per stream.
+pub(super) const STREAM_RANGE_BYTES: usize =
+    render_types::DRAW_STREAMS * size_of::<render_types::GpuExecutionRange>();
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DrawRecordCounts {
     pub total: usize,
@@ -770,7 +793,7 @@ pub(super) struct DrawRecordCounts {
 impl DrawRecordCounts {
     // Command slots holding the static objects + folded instances, which draw
     // through the static index buffer. `block` is where the record set starts in
-    // the target ICB: 0 for the main ICB, the cascade's block for the shadow ICB.
+    // the target ICB.
     // `None` when the set has no such records.
     pub(super) fn prefix(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.skinned_base > 0).then(|| block..block + self.skinned_base)
@@ -780,14 +803,6 @@ impl DrawRecordCounts {
     // vertices through the skinned index buffer. `None` when nothing is folded.
     pub(super) fn skinned_tail(&self, block: usize) -> Option<std::ops::Range<usize>> {
         (self.total > self.skinned_base).then(|| block + self.skinned_base..block + self.total)
-    }
-}
-
-// The `NSRange` an indirect-draw `executeCommandsInBuffer` takes for `r`.
-pub(super) fn ns_range(r: std::ops::Range<usize>) -> objc2_foundation::NSRange {
-    objc2_foundation::NSRange {
-        location: r.start,
-        length: r.end - r.start,
     }
 }
 
@@ -918,6 +933,11 @@ impl MtlContext {
             )
             .ok_or_else(|| super::error::allocation_failed("cull status buffer"))?;
         self.cull.status_buffer = Some(status);
+        self.cull.group_counts = Some(self.private_buffer(
+            render_types::group_count_words(concinnity_core::math::saturating_u32(new_cap)) * 4,
+            "cull group counts",
+        )?);
+        self.cull.ranges = Some(self.private_buffer(STREAM_RANGE_BYTES, "cull list ranges")?);
 
         // Second-pass ICB + argument buffer, only when two-pass occlusion is on.
         if self.cull.two_pass_occlusion {
@@ -950,6 +970,8 @@ impl MtlContext {
                 unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
             }
             self.cull.icbs_2 = icbs_2;
+            self.cull.ranges_2 =
+                Some(self.private_buffer(STREAM_RANGE_BYTES, "phase-2 cull list ranges")?);
         }
 
         self.cull.icbs = icbs;
@@ -957,76 +979,110 @@ impl MtlContext {
         Ok(())
     }
 
-    // Ensure the GPU-driven shadow view ICBs and their status buffers have a
-    // slot for every view of every record: `views * count` per set (view `v`'s
-    // live at `[v*count, (v+1)*count)`, the same stride `encode_shadow_culls`
-    // writes at and the shadow render passes execute), for the cascades and
-    // for the spot slices. A no-op for non-bindless / no-shadow contexts (no
-    // shadow decision pipeline). First built for every view of the scene's
-    // record reserve; growth past that rounds to a power of two. Called
-    // from `draw_frame` (where `&mut self` is available) right after
-    // `ensure_icb_capacity`, so the encode pass only ever reads sized ICBs.
+    // A GPU-only buffer of `bytes`, at least one word, zero-filled at creation.
+    fn private_buffer(
+        &self,
+        bytes: usize,
+        label: &str,
+    ) -> error::RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
+        self.hw
+            .device
+            .newBufferWithLength_options(bytes.max(4), MTLResourceOptions::StorageModePrivate)
+            .ok_or_else(|| super::error::allocation_failed(label))
+    }
+
+    // Ensure the GPU-driven shadow views have a cull slot each with a command
+    // slot for every record, and their shared status scratch a word for every
+    // record, for the cascades and for the spot slices. A no-op for
+    // non-bindless / no-shadow contexts (no shadow decision pipeline). First
+    // built for the scene's record reserve; growth past that rounds to a power
+    // of two. Called from `draw_frame` (where `&mut self` is available) right
+    // after `ensure_icb_capacity`, so the shadow culls only ever write sized
+    // ICBs.
     pub(super) fn ensure_shadow_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         if self.cull.shadow_pipeline.is_none() {
             return Ok(());
         }
         let mut cascades = std::mem::take(&mut self.cull.shadow_views);
-        let grown = self.grow_shadow_view_icb(&mut cascades, NUM_SHADOW_CASCADES, count);
+        let grown = self.grow_shadow_views(&mut cascades, NUM_SHADOW_CASCADES, count);
         self.cull.shadow_views = cascades;
         grown?;
         let mut spots = std::mem::take(&mut self.cull.spot_views);
-        let grown = self.grow_shadow_view_icb(&mut spots, self.spot_shadow.count as usize, count);
+        let grown = self.grow_shadow_views(&mut spots, self.spot_shadow.count as usize, count);
         self.cull.spot_views = spots;
         grown
     }
 
-    // Grow one view set's ICB, argument buffer and status buffer to hold
-    // `views * count` command slots. A set with no view stays empty.
-    fn grow_shadow_view_icb(
+    // Grow one view set to `views` cull slots of `count` command slots each,
+    // with a status word per command slot. A set with no view stays empty.
+    fn grow_shadow_views(
         &self,
         set: &mut crate::metal::cull::ShadowViewIcb,
         views: usize,
         count: usize,
     ) -> error::RenderResult<()> {
-        let Some(arg_encoder) = &self.cull.icb_arg_encoder else {
-            return Ok(());
-        };
-        let needed = count.saturating_mul(views);
-        if needed == 0 || (set.icb.is_some() && needed <= set.capacity) {
+        if self.cull.icb_arg_encoder.is_none()
+            || views == 0
+            || count == 0
+            || (set.views.len() == views && count <= set.capacity)
+        {
             return Ok(());
         }
-        let reserved = self.cull.reserved_records.saturating_mul(views);
-        let new_cap = super::cull::icb_capacity(needed, reserved);
-        let icb = self.build_cull_icb(new_cap)?;
-        let arg_buf = if let Some(buf) = set.arg_buffer.take() {
-            buf
-        } else {
-            let len = arg_encoder.encodedLength().max(16);
+        let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
+        let mut slots = Vec::with_capacity(views);
+        for _ in 0..views {
+            slots.push(self.build_cull_slot(new_cap, "shadow view")?);
+        }
+        set.status = Some(
             self.hw
                 .device
-                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or_else(|| super::error::allocation_failed("shadow view ICB argument buffer"))?
-        };
-        // SAFETY: the shadow view argument buffer was sized to `encodedLength()`.
-        unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buf), 0) };
-        // SAFETY: slot 0 is the single `[[id(0)]]` member of the kernel's
-        // `ICBContainer` struct in `arg_buf`, exactly like the main ICB.
-        unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
-        // One status word per command slot: each view's decision dispatch
-        // writes its region, the encode dispatch reads them all back.
-        let status = self
-            .hw
-            .device
-            .newBufferWithLength_options(
-                new_cap * size_of::<u32>(),
-                MTLResourceOptions::StorageModePrivate,
-            )
-            .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?;
-        set.arg_buffer = Some(arg_buf);
-        set.status = Some(status);
-        set.icb = Some(icb);
+                .newBufferWithLength_options(
+                    new_cap * size_of::<u32>(),
+                    MTLResourceOptions::StorageModePrivate,
+                )
+                .ok_or_else(|| super::error::allocation_failed("shadow view cull status buffer"))?,
+        );
+        set.views = slots;
         set.capacity = new_cap;
         Ok(())
+    }
+
+    // One single-stream cull slot of `cap` command slots: its ICB, the
+    // argument buffer wiring it into the scatter, its group counts and its
+    // lists' ranges. Fails on a non-bindless context, which has no argument
+    // encoder.
+    fn build_cull_slot(
+        &self,
+        cap: usize,
+        label: &str,
+    ) -> error::RenderResult<super::cull::CullSlot> {
+        let arg_encoder = self
+            .cull
+            .icb_arg_encoder
+            .as_ref()
+            .ok_or_else(|| super::error::allocation_failed("cull slot argument encoder"))?;
+        let icb = self.build_cull_icb(cap)?;
+        let len = arg_encoder.encodedLength().max(16);
+        let arg_buffer = self
+            .hw
+            .device
+            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| super::error::allocation_failed(label))?;
+        // SAFETY: the slot's argument buffer is sized to `encodedLength()`; the
+        // previous slot's encoding was fully written before re-pointing the encoder.
+        unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0) };
+        // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
+        // member, exactly like the main ICBs.
+        unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
+        Ok(super::cull::CullSlot {
+            icb,
+            arg_buffer,
+            group_counts: self.private_buffer(
+                render_types::group_count_words(concinnity_core::math::saturating_u32(cap)) * 4,
+                label,
+            )?,
+            ranges: self.private_buffer(STREAM_RANGE_BYTES, label)?,
+        })
     }
 
     // Ensure `slot_count` per-planar-slot mirror cull ICBs exist, each with a
@@ -1052,30 +1108,16 @@ impl MtlContext {
         // Reuse the main phase-1 ICB argument encoder: a mirror ICB has the
         // identical `ICBContainer` layout (one `[[id(0)]]` member). Absent on
         // non-bindless contexts, where there is no GPU cull to mirror.
-        let arg_encoder = match &self.cull.icb_arg_encoder {
-            Some(e) => e.clone(),
-            None => return Ok(()),
-        };
+        if self.cull.icb_arg_encoder.is_none() {
+            return Ok(());
+        }
         if self.cull.mirror_slots.len() == slot_count && count <= self.cull.mirror_icb_capacity {
             return Ok(());
         }
         let new_cap = super::cull::icb_capacity(count, self.cull.reserved_records);
         let mut slots = Vec::with_capacity(slot_count);
         for _ in 0..slot_count {
-            let icb = self.build_cull_icb(new_cap)?;
-            let len = arg_encoder.encodedLength().max(16);
-            let arg_buffer = self
-                .hw
-                .device
-                .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                .ok_or_else(|| super::error::allocation_failed("mirror ICB argument buffer"))?;
-            // SAFETY: this slot's argument buffer is sized to `encodedLength()`; the
-            // previous slot's encoding was fully written before re-pointing the encoder.
-            unsafe { arg_encoder.setArgumentBuffer_offset(Some(&arg_buffer), 0) };
-            // SAFETY: the ICB goes at slot 0 of `arg_buffer`, the single `[[id(0)]]`
-            // member, exactly like the main + shadow ICBs.
-            unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(&icb), 0) };
-            slots.push(super::cull::MirrorCullSlot { icb, arg_buffer });
+            slots.push(self.build_cull_slot(new_cap, "mirror cull slot")?);
         }
         // Shared single-pass status scratch: the mirror cull writes per-object
         // status the same as phase 1, but nothing reads it (no phase-2 over the
@@ -1141,6 +1183,7 @@ impl MtlContext {
         let mut stats = self.diagnostics.frame_stats;
         // `gpu_wait_us` was written by `draw_frame` itself and rides along in
         // `frame_stats`.
+        stats.spans = self.state.spans.get();
         stats.gpu_frame_us = self
             .diagnostics
             .gpu_time_us
@@ -1170,7 +1213,7 @@ impl MtlContext {
             .auto_exposure
             .adaptation
             .as_ref()
-            .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev);
+            .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev);
         // Surface the active panel's EDR headroom. `None` on SDR: both the
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.
@@ -1238,6 +1281,7 @@ impl MtlContext {
             let pipelines = super::particle::build_particle_pipelines(
                 &self.hw.device,
                 self.hot_reload.enabled,
+                self.frames_in_flight + 1,
             )?;
             self.particle.pipelines = Some(pipelines);
         }
@@ -1480,12 +1524,5 @@ mod tests {
             assert_eq!(c.prefix(block).expect("prefix").start, block);
             assert_eq!(tail.end, block + c.total);
         }
-    }
-
-    #[test]
-    fn ns_range_carries_start_and_length() {
-        let r = ns_range(9..12);
-        assert_eq!(r.location, 9);
-        assert_eq!(r.length, 3);
     }
 }

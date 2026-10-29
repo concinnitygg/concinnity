@@ -11,9 +11,9 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::water::WaterBody;
-use concinnity_core::render::water::frame::WaterMotion;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::water::frame::WaterMotion;
+use concinnity_engine::water::WaterBody;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -23,7 +23,7 @@ use crate::directx::context::dump_on_err;
 use crate::directx::transparent::{
     RecordUpload, ShapePsos, TransparentProducer, create_transparent_pso, upload_record,
 };
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 
 // The programs one water shape draws with: a rectangle's, or a planet sea's.
 struct WaterPrograms {
@@ -45,6 +45,14 @@ const SEA: WaterPrograms = WaterPrograms {
     frag: &builtin_shaders::WATER_SEA_FRAG,
     frag_rt: &builtin_shaders::WATER_SEA_FRAG_RT,
     frag_rt_textured: &builtin_shaders::WATER_SEA_FRAG_RT_TEXTURED,
+};
+
+// A planet sea lit from its own sky, where it reaches.
+const SEA_DAYLIGHT: WaterPrograms = WaterPrograms {
+    vert: &builtin_shaders::WATER_SEA_VERT,
+    frag: &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG,
+    frag_rt: &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT,
+    frag_rt_textured: &builtin_shaders::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
 };
 
 // Compile a shape's vertex + fragment shaders. The fragment comes in an MSAA
@@ -133,7 +141,7 @@ pub(in crate::directx) fn build_water_producer(
     let sea = surfaces
         .iter()
         .any(|b| b.sea.is_some())
-        .then(|| build.shape(&SEA))
+        .then(|| -> RenderResult<_> { Ok([build.shape(&SEA)?, build.shape(&SEA_DAYLIGHT)?]) })
         .transpose()?;
 
     let mut records = Vec::with_capacity(surfaces.len());
@@ -230,7 +238,7 @@ impl WaterBuild<'_> {
 #[cfg(test)]
 mod tests {
     // The `WaterParams` / `WaterWaveGpu` layout tests live with the structs in
-    // `concinnity_core::render::uniforms`, and are checked against the compiled shader
+    // `concinnity_engine::render::uniforms`, and are checked against the compiled shader
     // by `shader_layout`.
 
     // The water shaders compile at runtime from the shared single source, so a
@@ -239,7 +247,7 @@ mod tests {
     #[test]
     fn water_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for programs in [&super::RECTANGLE, &super::SEA] {
+        for programs in [&super::RECTANGLE, &super::SEA, &super::SEA_DAYLIGHT] {
             for msaa in [1u32, 4] {
                 super::compile_water_shaders(programs, msaa, false)
                     .unwrap_or_else(|e| panic!("water shaders (msaa={msaa}) must compile: {e}"));
@@ -252,7 +260,7 @@ mod tests {
     #[test]
     fn water_rt_shaders_compile() {
         concinnity_shader::require_dxc!();
-        for programs in [&super::RECTANGLE, &super::SEA] {
+        for programs in [&super::RECTANGLE, &super::SEA, &super::SEA_DAYLIGHT] {
             for msaa in [1u32, 4] {
                 super::compile_water_rt_shaders(programs, msaa, false)
                     .unwrap_or_else(|e| panic!("water_rt shaders (msaa={msaa}) must compile: {e}"));

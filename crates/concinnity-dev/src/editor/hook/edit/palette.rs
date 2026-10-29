@@ -7,8 +7,8 @@
 //! the Display menu's state. The palette closes on commit, on Escape, and on a
 //! click outside it.
 
-use concinnity_core::components::{FrameInput, InputKey};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, InputKey};
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::navigate;
 use crate::editor::hook::{EditorHook, scroll_step};

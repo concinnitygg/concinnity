@@ -1,37 +1,35 @@
 // JSON arg parsing for the box, cylinder, plane, and sphere generators; the
-// geometry itself is `concinnity_core::geometry`.
+// geometry itself is `concinnity_engine::geometry`.
 
 use super::json_args::{f32_arg, u32_arg};
 
 type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 type GeomResult = Result<(Verts, Vec<u16>), String>;
 
-pub(super) fn build_box(args: &serde_json::Value) -> GeomResult {
+pub(super) fn build_box(args: &serde_json::Value) -> (Verts, Vec<u16>) {
     let he =
         super::parse_f32x3(args.get("half_extents"), "half_extents").unwrap_or([0.5, 0.5, 0.5]);
-    Ok(concinnity_core::geometry::build_box(he))
+    concinnity_engine::geometry::build_box(he)
 }
 
 pub(super) fn build_cylinder(args: &serde_json::Value) -> GeomResult {
     let radius = f32_arg(args, "radius", 0.5);
     let height = f32_arg(args, "height", 1.0);
     let segments = u32_arg(args, "segments", 16)?;
-    concinnity_core::geometry::build_cylinder(radius, height, segments)
+    concinnity_engine::geometry::build_cylinder(radius, height, segments)
 }
 
-pub(super) fn build_plane(args: &serde_json::Value) -> GeomResult {
+pub(super) fn build_plane(args: &serde_json::Value) -> (Verts, Vec<u16>) {
     let half_width = f32_arg(args, "half_width", 1.0);
     let half_depth = f32_arg(args, "half_depth", 1.0);
-    Ok(concinnity_core::geometry::build_plane(
-        half_width, half_depth,
-    ))
+    concinnity_engine::geometry::build_plane(half_width, half_depth)
 }
 
 pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
     let radius = f32_arg(args, "radius", 1.0);
     let rings = u32_arg(args, "rings", 12)?;
     let segments = u32_arg(args, "segments", 16)?;
-    concinnity_core::geometry::build_sphere(radius, rings, segments)
+    concinnity_engine::geometry::build_sphere(radius, rings, segments)
 }
 
 #[cfg(test)]
@@ -52,7 +50,7 @@ mod tests {
 
     #[test]
     fn box_defaults_to_a_unit_cube() {
-        let (verts, idxs) = build_box(&serde_json::json!({})).unwrap();
+        let (verts, idxs) = build_box(&serde_json::json!({}));
         assert_eq!(verts.len(), 6 * 4);
         assert_eq!(idxs.len(), 6 * 6);
         let (mn, mx) = bounds(&verts);
@@ -63,7 +61,7 @@ mod tests {
     #[test]
     fn box_half_extents_set_the_bounds_and_uv_tiling() {
         let args = serde_json::json!({"half_extents": [2.0, 3.0, 4.0]});
-        let (verts, _) = build_box(&args).unwrap();
+        let (verts, _) = build_box(&args);
         let (mn, mx) = bounds(&verts);
         assert_eq!(mn, [-2.0, -3.0, -4.0]);
         assert_eq!(mx, [2.0, 3.0, 4.0]);
@@ -96,7 +94,7 @@ mod tests {
 
     #[test]
     fn plane_defaults_to_a_two_meter_square() {
-        let (verts, _) = build_plane(&serde_json::json!({})).unwrap();
+        let (verts, _) = build_plane(&serde_json::json!({}));
         let (mn, mx) = bounds(&verts);
         assert_eq!(mn, [-1.0, 0.0, -1.0]);
         assert_eq!(mx, [1.0, 0.0, 1.0]);
@@ -105,7 +103,7 @@ mod tests {
     #[test]
     fn plane_args_set_the_extents() {
         let args = serde_json::json!({"half_width": 3.0, "half_depth": 5.0});
-        let (verts, idxs) = build_plane(&args).unwrap();
+        let (verts, idxs) = build_plane(&args);
         assert_eq!(verts.len(), 4);
         assert_eq!(idxs, vec![0, 1, 2, 2, 3, 0]);
         let (mn, mx) = bounds(&verts);

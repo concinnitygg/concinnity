@@ -16,10 +16,10 @@
 //! Both size the read-back from the copyable footprint: D3D12 aligns each row
 //! to `D3D12_TEXTURE_DATA_PITCH_ALIGNMENT` (256 bytes), which the decode strips.
 
-use concinnity_core::gfx::image_decode::PixelLayout;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hdr_output::HdrEncoding;
+use concinnity_engine::gfx::image_decode::PixelLayout;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::hdr::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -38,7 +38,7 @@ impl DxContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
     // success. Distinct name from the `RenderBackend::screenshot` trait method
     // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn debug`).
+    // `RenderBackend` vtable (bin-only `cn run -f`).
     pub(crate) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
         let Some(back_idx) = self.swapchain.last_present_index else {
             return Err(RenderError::Other(

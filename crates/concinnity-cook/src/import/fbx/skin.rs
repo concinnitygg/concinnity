@@ -8,9 +8,9 @@
 // a cluster (unweighted parents in the chain) extend the chain with their
 // scene-pose transform instead.
 
-use concinnity_core::components::{SkeletonJoint, SkinnedVertexData, VertexData};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::transform::{
+use concinnity_engine::components::{SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::transform::{
     IDENTITY, Mat4, decompose, euler_yxz_from_quat, mat4_affine_inverse, mat4_mul,
     mat4_transform_point,
 };

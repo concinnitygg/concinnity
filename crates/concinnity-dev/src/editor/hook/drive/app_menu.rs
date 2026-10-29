@@ -7,12 +7,12 @@
 //! View menu is a second way into the same panel toggles, sharing their one
 //! apply (`toggle_view_row`).
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 
 impl EditorHook {
-    /// Install the session's menu bar. Called only from the `cn editor` run
+    /// Install the session's menu bar. Called only from the `cn edit` run
     /// path, so a hook built for a test never reaches `AppKit`.
     #[cfg(target_os = "macos")]
     pub(crate) fn with_app_menu(self) -> Self {
@@ -47,6 +47,7 @@ impl EditorHook {
     #[cfg(not(target_os = "macos"))]
     #[expect(
         clippy::needless_pass_by_ref_mut,
+        clippy::unused_self,
         reason = "same signature as the macOS menu driver"
     )]
     pub(in crate::editor::hook) fn drive_app_menu(&mut self, _world: &mut World) {}

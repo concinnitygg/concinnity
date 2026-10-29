@@ -5,10 +5,10 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::take_entry_id;
-use concinnity_core::components::{ProceduralMesh, Story, VolumetricFog};
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::world_load::source_maps::ProceduralMeshSourceMap;
-use concinnity_core::render::{backend, volumetric_fog};
+use concinnity_engine::components::{ProceduralMesh, Story, VolumetricFog};
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::render::world_load::source_maps::ProceduralMeshSourceMap;
+use concinnity_engine::render::{backend, environment::volumetric_fog};
 use concinnity_host::thread::asset_id;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
@@ -23,8 +23,8 @@ pub(crate) struct FogReloadResult {
 // Re-read `world.jsonl` and push the first declared `VolumetricFog` through
 // [`RenderBackend::update_fog_settings`]. Disabled / missing assets push
 // `None`. Each authored asset runs through the same clamp chain as init:
-// [`concinnity_core::components::VolumetricFog::from_args`] (asset-side floors) then
-// [`concinnity_core::render::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
+// [`concinnity_engine::components::VolumetricFog::from_args`] (asset-side floors) then
+// [`concinnity_engine::render::environment::volumetric_fog::FogSettings::resolve`] (gfx-side ceilings),
 // so a reload cannot land out-of-range values.
 //
 // `last_pushed` is the dedupe state owned by the caller; the function
@@ -347,7 +347,7 @@ pub(super) fn reload_procedural_meshes(
 // Re-expand the world's stories from disk and return every compiled `Story`
 // whose graph changed since the last pass. The expansion is the same one the
 // build runs (`expand_world_from_str` includes the StoryImport pass), so the
-// returned graphs match what a fresh `cn debug` would compile; `cn debug`
+// returned graphs match what a fresh `cn run -f` would compile; `cn run -f`
 // only, where the interner is warm and re-interning the generated names
 // yields the ids the running world already carries. `snapshots` is the
 // caller-owned name -> compiled-args map used to skip unchanged stories (a

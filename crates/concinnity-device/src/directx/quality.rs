@@ -1,82 +1,91 @@
 //! Runtime application of the Quality-group settings (TAA / SSAO / SSR / SSGI /
-//! auto-exposure). Each gates a render pass whose GPU resources (pipelines,
-//! render targets) are built once at init from the world's settings assets, so
-//! applying a change at runtime means building or tearing down those resources.
+//! RT reflections / auto-exposure). Each gates a render pass whose GPU
+//! resources (pipelines, render targets) are built once at init from the
+//! world's settings assets, so applying a change at runtime means building or
+//! tearing down those resources.
 //!
-//! Unlike the Vulkan backend, DirectX picks its scene-input + occlusion sources
-//! DYNAMICALLY every frame (`scene_srv_for_post`, `ssao_ao_srv_gpu`, and each
-//! feature's render-graph gate read the live `Option` state at encode time), so a
-//! toggle needs no descriptor rewrite and no swapchain rebuild: it just builds the
-//! effect into its pre-reserved fixed heap slot (the slots are reserved
-//! unconditionally at init, see `init/mod.rs`) or drops it. The next frame's draw
-//! adapts. The one coupling is SSAO's `ao_output`, which lives in the transient
-//! pool only while SSAO is on and shares a heap region with `bloom_top`; toggling
-//! it rebuilds the pool and re-views both, mirroring the resize path.
+//! A change rebuilds only the features its plan names, and never waits on the
+//! device. DirectX picks its scene-input and occlusion sources every frame
+//! (`scene_srv_for_post`, `ssao_ao_srv_gpu`, and each feature's render-graph
+//! gate read the live `Option` state at encode time), so a frame recorded after
+//! the apply names only the new resources. A frame recorded before it keeps
+//! everything it names alive: a replaced feature's COM objects wait in
+//! `retired_effects` for `frames_in_flight + 1` frames, and every
+//! shader-visible descriptor a rebuilt feature writes is a fresh slot of the
+//! post block, whose freed slots wait out the same window. The transient pool
+//! is planned for every reachable feature, so no toggle repacks it.
 //!
-//! Ray-traced reflections toggle the same way, with two extra costs: turning them
-//! on builds the scene acceleration structure (`build_rt_accel`, a one-shot
-//! fence-waited BLAS + TLAS over current geometry) plus the DXR reflection pass,
-//! so a live enable hitches once proportional to triangle count; and RT is only
-//! live-toggleable on a GPU that reports the DXR 1.1 tier (queried once at init
-//! into `hw.rt_capable`), which the resolved settings already respect. The RT output reserves its fixed heap slot unconditionally like
-//! the other five features, so an enable builds into it without shifting any other
-//! slot; the dynamic `scene_srv_for_post` picks the RT output over SSR each frame,
-//! so no rewire or rebuild is needed.
+//! Turning RT on still builds the scene acceleration structure with a CPU wait
+//! (`build_rt_accel`, a one-shot fence-waited BLAS + TLAS over current
+//! geometry), so a live enable hitches once proportional to triangle count.
 
-use concinnity_core::gfx::{auto_exposure, render_types};
-use concinnity_core::render::backend_init;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_core::render::post::reflection_path::ReflectionPath;
-use concinnity_core::render::post::rt_reflections;
-use concinnity_core::render::render_graph::{
-    BackendTraits, BuildStatus, FeatureGates, PoolGates, plan_pool_slots,
+use concinnity_engine::gfx::{auto_exposure, render_types};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
+use concinnity_engine::render::backend::init;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::reflection_path::ReflectionPath;
+use concinnity_engine::render::post::rt_reflections;
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
+use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::settings::apply::{
+    ApplyPlan, RebuildFeature, RebuildSet, SettingsTarget, apply_plan, rebuild_each,
 };
-use concinnity_core::settings::ResolvedGraphics;
-use concinnity_core::settings::apply::{ApplyPlan, SettingsTarget, apply_plan};
-use windows::Win32::Graphics::Direct3D12::*;
 
-use concinnity_core::render::post::device::PostExtent;
-
+use super::auto_exposure::AutoExposureResources;
 use super::context::DxContext;
 use super::post::gbuffer::GbufferSlots;
-use super::post::reflection_composite::build_reflection_composite;
+use super::post::post_device::PostTarget;
+use super::post::reflection_composite::{DxReflectionCompositePass, build_reflection_composite};
+use super::post::rt_reflections::{RetiredRtOutput, RtReflectionsResources};
 use super::post::ssao::SsaoResources;
-use crate::directx::descriptor_slot::SrvSlot;
+use super::post::ssgi::SsgiResources;
+use super::post::ssr::SsrResources;
+use super::post::taa::TaaResources;
+use super::raytrace::SkinPipeline;
+use super::transparent::GlassReflectionLayers;
 
-// The fixed descriptor-heap slots the live-toggleable effects build into. Minted
-// once at init (the slots are reserved unconditionally, independent of the
-// init-time quality gates) and stashed on `DxContext` so a live toggle can
-// construct a launched-off feature into its slot without re-deriving the heap
-// layout. The handles are stable for the context's lifetime: a resize rewrites
-// the resources behind them but never moves the slots.
+// The fixed descriptor-heap slots of the live-toggleable features outside the
+// post block. Minted once at init (the slots are reserved unconditionally,
+// independent of the init-time quality gates) and stashed on `DxContext` so a
+// live toggle can construct a launched-off feature into its slot without
+// re-deriving the heap layout. The G-buffer is kept once built and its colors
+// live in a pool no toggle repacks, so its slots are written once per resize.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct QualitySlotHandles {
-    pub rt_output_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub rt_output_srv: (D3D12_CPU_DESCRIPTOR_HANDLE, SrvSlot),
     pub gbuffer: GbufferSlots,
     pub glass_reflection: super::transparent::GlassReflectionSlots,
 }
 
+// A feature's state a settings change replaced, held until no frame in flight
+// can name it, then dropped.
+#[expect(
+    dead_code,
+    reason = "held so the COM objects stay valid until the retire pool drops them"
+)]
+pub(in crate::directx) enum RetiredEffect {
+    Taa(TaaResources),
+    Ssr(SsrResources),
+    Ssgi(SsgiResources),
+    Ssao(SsaoResources),
+    Composite(DxReflectionCompositePass),
+    Blur(PostTarget),
+    AutoExposure(AutoExposureResources),
+    RtPass(RtReflectionsResources),
+    RtOutput(RetiredRtOutput),
+    RtSkin(SkinPipeline),
+    GlassLayers(GlassReflectionLayers),
+}
+
 impl DxContext {
-    // Bring the toggle-controlled features to match `g`, applied between frames
-    // (the GraphicsSystem reads the SettingCommand before the next draw_frame).
-    // A build failure returns early and leaves the prior state intact.
-    pub(crate) fn apply_quality_settings(&mut self, g: &ResolvedGraphics) -> RenderResult<()> {
-        // Every build / teardown below frees or replaces GPU resources a prior
-        // frame may still reference; drain the device first so the swap is safe.
-        self.wait_idle();
-
-        let hot_reload = self.hot_reload.enabled;
-        let render_w = self.targets.extent.render_width;
-        let render_h = self.targets.extent.render_height;
-        let slots = self.quality_slots;
-
-        // RT is gated on the GPU reporting the DXR 1.1 tier: a non-DXR GPU cannot
-        // build the acceleration structure. TAA resources stay present while the
-        // built upscaler consumes the velocity pre-pass; the TAA resolve is then
-        // dropped from the graph. The SSR resources' `resolve` half is built only
-        // when SSR itself is authored.
+    // Rebuild `features` to match `g`, between frames (the GraphicsSystem
+    // drain runs before the next `draw_frame`). A feature whose build fails
+    // keeps its previous state; the first error comes back once every feature
+    // has run.
+    fn rebuild_planned(&mut self, g: &ResolvedGraphics, features: RebuildSet) -> RenderResult<()> {
+        // RT is gated on the GPU reporting the DXR 1.1 tier. TAA resources stay
+        // present while the built upscaler consumes the velocity pre-pass; the
+        // TAA resolve is then dropped from the graph.
         let plan = FeaturePlan::resolve(
             g,
             BackendFacts {
@@ -84,46 +93,77 @@ impl DxContext {
                 upscaling: self.upscale.backend.is_some(),
             },
         );
-        let rt_settings = plan.rt;
-        let desired_rt = rt_settings.is_some();
-        let desired_ssr = plan.ssr;
-        let desired_ssgi = plan.ssgi;
-        let desired_ssao = plan.ssao;
-        let desired_ae = plan.auto_exposure;
-        let desired_taa = plan.temporal;
-        let ssr_needed = plan.ssr_resources;
-        let gbuffer_needed = plan.gbuffer;
+        let rebuilt = rebuild_each(features, |feature| self.rebuild_feature(feature, g, &plan));
+        // SSR, SSGI and RT share the SSR resources (the resolve half is SSR's).
+        let shares_ssr = [
+            RebuildFeature::Ssr,
+            RebuildFeature::Ssgi,
+            RebuildFeature::RtReflections,
+        ]
+        .into_iter()
+        .any(|f| features.contains(f));
+        let ssr = if shares_ssr {
+            self.rebuild_ssr(g, &plan)
+        } else {
+            Ok(())
+        };
+        self.refresh_gates(g);
+        rebuilt.and(ssr)
+    }
 
-        // Unified G-buffer pre-pass (shared dependency): build it before any
-        // consumer that samples it. Kept alive once built (a later toggle-off of
-        // the last consumer leaves it resident until the next launch / resize),
-        // which is harmless: with no consumer the graph omits its readers.
-        if gbuffer_needed && self.gbuffer.is_none() {
-            // Its three color targets are pooled, so the pool has to place them
-            // before the feature can view them. Rebuilding with the G-buffer gate
-            // on also relocates `ao_output` / `bloom_top`, which the rebuild
-            // re-points.
-            self.rebuild_transient_pool_and_consumers(self.ssao.resources.is_some(), true)?;
+    fn rebuild_feature(
+        &mut self,
+        feature: RebuildFeature,
+        g: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        match feature {
+            RebuildFeature::GBuffer => self.rebuild_gbuffer(plan.gbuffer),
+            RebuildFeature::Taa => self.rebuild_taa(plan.temporal),
+            RebuildFeature::Ssao => self.rebuild_ssao(g),
+            // After the loop, with SSGI and RT, which share its resources.
+            RebuildFeature::Ssr => Ok(()),
+            RebuildFeature::Ssgi => self.rebuild_ssgi(g),
+            RebuildFeature::RtReflections => self.rebuild_rt(plan.rt),
+            RebuildFeature::ReflectionComposite => self.rebuild_reflection_composite(g, plan),
+            RebuildFeature::AutoExposure => self.rebuild_auto_exposure(g, plan.auto_exposure),
+        }
+    }
+
+    // Park `effect` until the frames recorded so far have retired.
+    fn retire_effect(&mut self, effect: RetiredEffect) {
+        self.retired_effects.push(effect);
+    }
+
+    fn render_size(&self) -> (u32, u32) {
+        (
+            self.targets.extent.render_width,
+            self.targets.extent.render_height,
+        )
+    }
+
+    // The unified G-buffer pre-pass. Kept alive once built (a later toggle-off
+    // of the last consumer leaves it resident until the next launch), which is
+    // harmless: with no consumer the graph omits its readers. Its three color
+    // targets are pooled, and the pool places them whatever the settings.
+    fn rebuild_gbuffer(&mut self, wanted: bool) -> RenderResult<()> {
+        if wanted && self.gbuffer.is_none() {
             let pooled = self
                 .targets
                 .transient_pool
                 .gbuffer_pooled()
                 .ok_or_else(|| {
-                    RenderError::Other(
-                        "transient pool missing the gbuffer color targets after enable".into(),
-                    )
+                    RenderError::Other("transient pool missing the gbuffer color targets".into())
                 })?;
+            let (width, height) = self.render_size();
             let gbuffer = super::post::gbuffer::GbufferResources::new(
                 super::post::gbuffer::GbufferDeviceCtx {
                     alloc: &self.hw.alloc,
                     info_queue: self.hw.info_queue.as_ref(),
                     hot_reload: self.hot_reload.enabled,
                 },
-                super::post::gbuffer::GbufferExtent {
-                    width: render_w,
-                    height: render_h,
-                },
-                slots.gbuffer,
+                super::post::gbuffer::GbufferExtent { width, height },
+                self.quality_slots.gbuffer,
                 &pooled,
             )?;
             self.gbuffer = Some(gbuffer);
@@ -132,193 +172,228 @@ impl DxContext {
         if self.gbuffer.is_some() {
             self.enable_gbuffer_prepass()?;
         }
+        Ok(())
+    }
 
-        // TAA, SSR and SSGI take their targets' descriptors from the shared post
-        // block, which gets a dropped target's slots back and which every
-        // consumer reads per frame, so a toggle needs no re-bind.
-        if desired_taa && self.taa.is_none() {
-            let taa =
-                super::post::taa::TaaResources::new(&self.post_device(0), render_w, render_h)?;
-            self.taa = Some(taa);
-        } else if !desired_taa && self.taa.is_some() {
-            self.taa = None;
+    // The TAA resources, present while TAA or the upscaler consumes velocity.
+    fn rebuild_taa(&mut self, wanted: bool) -> RenderResult<()> {
+        match FeatureChange::of(wanted, self.taa.is_some()) {
+            FeatureChange::Build => {
+                let (width, height) = self.render_size();
+                self.taa = Some(TaaResources::new(&self.post_device(0), width, height)?);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.taa.take() {
+                    self.retire_effect(RetiredEffect::Taa(old));
+                }
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
         }
+        Ok(())
+    }
 
-        // SSR pre-pass + resolve. `g.ssr()` (Option) drives the resolve half:
-        // `Some` builds it (SSR authored), `None` leaves it off (SSGI-only /
-        // RT-only build the pre-pass but no resolve), matching init.
-        if ssr_needed && self.ssr.is_none() {
-            let ssr = super::post::ssr::SsrResources::new(
-                &self.post_device(0),
-                render_w,
-                render_h,
-                g.ssr(),
-            )?;
-            self.ssr = Some(ssr);
-        } else if !ssr_needed && self.ssr.is_some() {
-            self.ssr = None;
+    // The SSR resources: built whenever SSR, SSGI or RT runs, with the resolve
+    // half only while SSR itself does. A change in either builds a fresh set.
+    fn rebuild_ssr(&mut self, g: &ResolvedGraphics, plan: &FeaturePlan) -> RenderResult<()> {
+        let has_resolve = self.ssr.as_ref().map(|s| s.resolve.is_some());
+        let wanted = plan.ssr_resources.then_some(plan.ssr);
+        if wanted == has_resolve {
+            return Ok(());
         }
+        let fresh = match wanted {
+            Some(resolve) => {
+                let (width, height) = self.render_size();
+                Some(SsrResources::new(
+                    &self.post_device(0),
+                    width,
+                    height,
+                    g.ssr().filter(|_| resolve),
+                )?)
+            }
+            None => None,
+        };
+        if let Some(old) = std::mem::replace(&mut self.ssr, fresh) {
+            self.retire_effect(RetiredEffect::Ssr(old));
+        }
+        Ok(())
+    }
 
-        // SSGI (samples the unified G-buffer; `gbuffer_needed` keeps it alive). A
-        // new trace resolution resizes every target, so it rebuilds the pass; the
-        // ray count rides the settings.
-        let ssgi_rescaled = match (g.ssgi(), self.ssgi.as_ref()) {
+    // SSGI. A new trace resolution resizes every target, so it builds a fresh
+    // pass; the ray count rides the settings.
+    fn rebuild_ssgi(&mut self, g: &ResolvedGraphics) -> RenderResult<()> {
+        let wanted = g.ssgi();
+        let rescaled = match (wanted, self.ssgi.as_ref()) {
             (Some(settings), Some(live)) => settings.gi_scale != live.settings.gi_scale,
             _ => false,
         };
-        if let Some(settings) = g.ssgi()
-            && (self.ssgi.is_none() || ssgi_rescaled)
-        {
-            if ssgi_rescaled {
-                self.ssgi = None;
-            }
-            let ssgi = super::post::ssgi::SsgiResources::new(
-                &self.post_device(0),
-                render_w,
-                render_h,
-                settings,
-            )?;
-            self.ssgi = Some(ssgi);
-        } else if !desired_ssgi && self.ssgi.is_some() {
-            self.ssgi = None;
-        } else if let (Some(settings), Some(ssgi)) = (g.ssgi(), self.ssgi.as_mut()) {
-            ssgi.settings = settings;
-        }
-
-        // Ray-traced reflections. Turning on builds the scene acceleration
-        // structure (one-shot, fence-waited) + the DXR pass into the fixed RT
-        // output slot; the unified G-buffer it samples is built above
-        // (`gbuffer_needed` folds in `desired_rt`). Turning off drops both
-        // (their COM resources release on drop); `scene_srv_for_post` falls back
-        // to the SSR resolve / HDR dynamically next frame, so no rewire is needed.
-        match (rt_settings, self.rt_reflections.as_mut()) {
-            (Some(settings), Some(rt)) => {
-                // Already live: take the new trace resolution / shadow choice and
-                // resize the output target to it (the device is idle).
-                let resized = settings.divisor != rt.settings.divisor;
-                rt.settings = settings;
-                if resized {
-                    let heap = &self.descriptors.srv_heap;
-                    // SAFETY: a property query on a live descriptor heap; it only reads.
-                    let srv_cpu_base = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
-                    let srv_gpu_base = SrvSlot::at(heap, self.descriptors.srv_descriptor_size, 0);
-                    rt.resize_to(
-                        &self.hw.device,
-                        render_w,
-                        render_h,
-                        srv_cpu_base,
-                        srv_gpu_base,
-                    )?;
+        match (wanted, self.ssgi.is_some()) {
+            (Some(settings), built) if !built || rescaled => {
+                let (width, height) = self.render_size();
+                let fresh = SsgiResources::new(&self.post_device(0), width, height, settings)?;
+                if let Some(old) = self.ssgi.replace(fresh) {
+                    self.retire_effect(RetiredEffect::Ssgi(old));
                 }
             }
-            (Some(settings), None) => self.build_rt_runtime(settings)?,
+            (Some(settings), _) => {
+                if let Some(ssgi) = self.ssgi.as_mut() {
+                    ssgi.settings = settings;
+                }
+            }
+            (None, _) => {
+                if let Some(old) = self.ssgi.take() {
+                    self.retire_effect(RetiredEffect::Ssgi(old));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // SSAO over the pool's `ao_output`, which the pool places whatever the
+    // settings. The main pass's occlusion binding (`ssao_ao_srv_gpu`) falls
+    // back to the 1x1 white slot when it is off.
+    fn rebuild_ssao(&mut self, g: &ResolvedGraphics) -> RenderResult<()> {
+        match (g.ssao(), self.ssao.resources.is_some()) {
+            (Some(settings), false) => {
+                let ao_output = self
+                    .targets
+                    .transient_pool
+                    .resource_for("ao_output")
+                    .ok_or_else(|| RenderError::Other("transient pool missing ao_output".into()))?
+                    .clone();
+                let (width, height) = self.render_size();
+                let ssao = SsaoResources::new(
+                    &self.post_device(0),
+                    settings,
+                    PostExtent { width, height },
+                    &ao_output,
+                )?;
+                self.ssao.resources = Some(ssao);
+            }
+            (None, true) => {
+                if let Some(old) = self.ssao.resources.take() {
+                    self.retire_effect(RetiredEffect::Ssao(old));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // Ray-traced reflections. Turning on builds the DXR pass and the scene
+    // acceleration structure; turning off retires both, and
+    // `scene_srv_for_post` falls back to the SSR resolve / HDR next frame. A
+    // new trace resolution moves the output to fresh descriptors. The glass
+    // reflection pre-pass follows the trace divisor.
+    fn rebuild_rt(
+        &mut self,
+        settings: Option<rt_reflections::RtReflectionSettings>,
+    ) -> RenderResult<()> {
+        let size = self.render_size();
+        match (settings, self.rt_reflections.as_mut()) {
+            (Some(settings), Some(rt)) => {
+                if let Some(old) = rt.retrace(&self.hw.device, &self.post, settings, size)? {
+                    self.retire_effect(RetiredEffect::RtOutput(old));
+                }
+            }
+            (Some(settings), None) => self.build_rt_runtime(settings),
             (None, Some(_)) => {
-                self.rt_reflections = None;
-                self.rt.accel = None;
-                self.rt.skin = None;
+                if let Some(old) = self.rt_reflections.take() {
+                    self.retire_effect(RetiredEffect::RtPass(old));
+                }
+                if let Some(old) = self.rt.skin.take() {
+                    self.retire_effect(RetiredEffect::RtSkin(old));
+                }
+                if let Some(accel) = self.rt.accel.take() {
+                    self.rt.retired.push(self.rt.retire_tick, accel);
+                }
             }
             (None, None) => {}
         }
-
-        // The glass reflection pre-pass follows the live RT trace divisor.
         let divisor = self
             .rt_reflections
             .as_ref()
             .map_or(1, |rt| rt.settings.divisor);
-        if let Some(t) = self.transparent.as_mut() {
-            t.set_reflection_divisor(&self.hw.device, (render_w, render_h), divisor)?;
-        }
-
-        // Reflection composite: the on-screen target the SSR/RT resolve writes its
-        // radiance+weight into, then blurs/blends over the scene by roughness.
-        // Present whenever a resolve can composite (`ReflectionPath::composite`,
-        // the gate init builds it under), with its targets taken from the post
-        // block. Without this reconcile a
-        // live RT/SSR enable on a world that authored neither leaves it `None`, so
-        // `encode_reflection_composite` early-returns and the resolve's reflection
-        // is computed but never shown (`scene_srv_for_post` / glass / the forward
-        // `reflections_enabled` fade all gate on its presence). A live composite
-        // takes a new blur resolution in place; every consumer reads its targets'
-        // descriptors per frame, so the new blur needs no re-bind.
-        let refl_composite_needed =
-            ReflectionPath::new(desired_ssr, desired_rt, self.rt.accel.is_some()).composite;
-        if refl_composite_needed && self.reflection_composite.is_none() {
-            let rc = build_reflection_composite(
-                &self.post_device(0),
-                g.reflection_blur_scale(),
-                render_w,
-                render_h,
-            )?;
-            self.reflection_composite = Some(rc);
-        } else if !refl_composite_needed && self.reflection_composite.is_some() {
-            self.reflection_composite = None;
-        } else if let Some(mut rc) = self.reflection_composite.take() {
-            let r = rc.set_blur_scale(
-                &self.post_device(0),
-                g.reflection_blur_scale(),
-                PostExtent {
-                    width: render_w,
-                    height: render_h,
-                },
-            );
-            self.reflection_composite = Some(rc);
-            r?;
-        }
-
-        // Auto-exposure. Needs no descriptor-heap slots (own root UAVs +
-        // readback ring). When it turns off the static authored EV drives
-        // exposure again (the GraphicsSystem re-pushes `update_post_process`
-        // after this call), so only the GPU + adaptation state is swapped here.
-        if desired_ae && self.auto_exposure.resources.is_none() {
-            let resources =
-                super::auto_exposure::AutoExposureResources::new(&self.hw.alloc, hot_reload)?;
-            self.auto_exposure.resources = Some(resources);
-            self.auto_exposure.adaptation = g.auto_exposure().map(|settings| {
-                auto_exposure::ExposureAdaptation::new(settings, g.auto_exposure_bias_ev())
-            });
-        } else if !desired_ae && self.auto_exposure.resources.is_some() {
-            self.auto_exposure.resources = None;
-            self.auto_exposure.adaptation = None;
-        }
-
-        // SSAO. Its blurred `ao_output` is a transient-pool resource that only
-        // exists while SSAO is on and shares a heap region with `bloom_top`, so a
-        // toggle rebuilds the pool (relocating `bloom_top`, which bloom re-views)
-        // and, on a turn-on, constructs the SSAO resources over the freshly
-        // pooled `ao_output`. The main pass's occlusion binding
-        // (`ssao_ao_srv_gpu`) falls back to the 1x1 white slot when off, so a
-        // turn-off needs no rewire beyond dropping the resources.
-        let ssao_was = self.ssao.resources.is_some();
-        let gbuffer_enabled = self.gbuffer.is_some();
-        if let Some(settings) = g.ssao()
-            && !ssao_was
+        if let Some(t) = self.transparent.as_mut()
+            && let Some(old) =
+                t.set_reflection_divisor(&self.hw.device, &self.post, size, divisor)?
         {
-            self.rebuild_transient_pool_and_consumers(true, gbuffer_enabled)?;
-            let ao_resource = self
-                .targets
-                .transient_pool
-                .resource_for("ao_output")
-                .ok_or_else(|| {
-                    RenderError::Other("transient pool missing ao_output after SSAO enable".into())
-                })?
-                .clone();
-            let ssao = SsaoResources::new(
-                &self.post_device(0),
-                settings,
-                PostExtent {
-                    width: render_w,
-                    height: render_h,
-                },
-                &ao_resource,
-            )?;
-            self.ssao.resources = Some(ssao);
-        } else if !desired_ssao && ssao_was {
-            // Drop before the pool rebuild removes the `ao_output` it points at.
-            self.ssao.resources = None;
-            self.rebuild_transient_pool_and_consumers(false, gbuffer_enabled)?;
+            self.retire_effect(RetiredEffect::GlassLayers(old));
         }
+        Ok(())
+    }
 
-        self.refresh_gates(g);
+    // The roughness-aware reflection composite, present whenever a resolve
+    // can composite (`ReflectionPath::composite`, the gate init builds it
+    // under). It follows the post-build RT state, so a failed RT enable falls
+    // back to the SSR resolve. A live composite takes a new blur resolution in
+    // place; every consumer reads its targets' descriptors per frame.
+    fn rebuild_reflection_composite(
+        &mut self,
+        g: &ResolvedGraphics,
+        plan: &FeaturePlan,
+    ) -> RenderResult<()> {
+        let wanted = ReflectionPath::new(
+            plan.ssr,
+            self.rt_reflections.is_some(),
+            self.rt.accel.is_some(),
+        )
+        .composite();
+        let (width, height) = self.render_size();
+        match FeatureChange::of(wanted, self.reflection_composite.is_some()) {
+            FeatureChange::Build => {
+                let rc = build_reflection_composite(
+                    &self.post_device(0),
+                    g.reflection_blur_scale(),
+                    width,
+                    height,
+                )?;
+                self.reflection_composite = Some(rc);
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.reflection_composite.take() {
+                    self.retire_effect(RetiredEffect::Composite(old));
+                }
+            }
+            FeatureChange::Update => {
+                if let Some(mut rc) = self.reflection_composite.take() {
+                    let replaced = rc.set_blur_scale(
+                        &self.post_device(0),
+                        g.reflection_blur_scale(),
+                        PostExtent { width, height },
+                    );
+                    self.reflection_composite = Some(rc);
+                    if let Some(old) = replaced? {
+                        self.retire_effect(RetiredEffect::Blur(old));
+                    }
+                }
+            }
+            FeatureChange::Absent => {}
+        }
+        Ok(())
+    }
+
+    // Auto-exposure: its own root UAVs and readback ring, no descriptor-heap
+    // slots. When it turns off the static authored EV drives exposure again
+    // (the plan pushes the composite after this), so only the GPU and
+    // adaptation state is swapped here.
+    fn rebuild_auto_exposure(&mut self, g: &ResolvedGraphics, wanted: bool) -> RenderResult<()> {
+        match FeatureChange::of(wanted, self.auto_exposure.resources.is_some()) {
+            FeatureChange::Build => {
+                let resources =
+                    AutoExposureResources::new(&self.hw.alloc, self.hot_reload.enabled)?;
+                self.auto_exposure.resources = Some(resources);
+                self.auto_exposure.adaptation = g.auto_exposure().map(|settings| {
+                    auto_exposure::ExposureAdaptation::new(settings, g.auto_exposure_bias_ev())
+                });
+            }
+            FeatureChange::Drop => {
+                if let Some(old) = self.auto_exposure.resources.take() {
+                    self.retire_effect(RetiredEffect::AutoExposure(old));
+                }
+                self.auto_exposure.adaptation = None;
+            }
+            FeatureChange::Update | FeatureChange::Absent => {}
+        }
         Ok(())
     }
 
@@ -349,29 +424,21 @@ impl DxContext {
     // toggle-on). Mirrors the init RT block: a shader-compile failure leaves
     // `rt_reflections` `None` and the renderer stays on SSR (a soft failure,
     // returns `Ok`), while an empty scene or an AS-build error leaves only
-    // `rt.accel` `None` until `rt_dynamic_update` seeds it. The caller has
-    // ensured the unified G-buffer pre-pass exists and drained the device
-    // (`wait_idle`). The skin pipeline is built before the BVH, since whether
-    // skinned geometry can join decides whether a scene with no static geometry
-    // gets one (a build failure is non-fatal: static geometry still reflects,
-    // just without skinned hits).
-    fn build_rt_runtime(
-        &mut self,
-        settings: rt_reflections::RtReflectionSettings,
-    ) -> RenderResult<()> {
+    // `rt.accel` `None` until `rt_dynamic_update` seeds it. The G-buffer
+    // rebuild, which runs first, has built the pre-pass it samples. The skin
+    // pipeline is built before the BVH, since whether skinned geometry can join
+    // decides whether a scene with no static geometry gets one (a build failure
+    // is non-fatal: static geometry still reflects, just without skinned hits).
+    fn build_rt_runtime(&mut self, settings: rt_reflections::RtReflectionSettings) {
         let hot_reload = self.hot_reload.enabled;
-        let slots = self.quality_slots;
-        let rt = match super::post::rt_reflections::RtReflectionsResources::new(
+        let rt = match RtReflectionsResources::new(
             super::post::rt_reflections::RtBuildContext {
                 alloc: &self.hw.alloc,
                 width: self.targets.extent.render_width,
                 height: self.targets.extent.render_height,
             },
             settings,
-            super::post::rt_reflections::RtOutputDescriptors {
-                output_rtv: slots.rt_output_rtv,
-                output_srv: slots.rt_output_srv,
-            },
+            &self.post,
             super::post::rt_reflections::RtBuildInit {
                 info_queue: self.hw.info_queue.as_ref(),
                 hot_reload,
@@ -380,100 +447,12 @@ impl DxContext {
             Ok(rt) => rt,
             Err(e) => {
                 tracing::warn!("RT reflections pass build failed (keeping SSR): {e}");
-                return Ok(());
+                return;
             }
         };
         self.rt_reflections = Some(rt);
         self.rt.skin = super::raytrace::build_rt_skin(&self.hw.device, hot_reload);
         self.rebuild_rt_accel();
-        Ok(())
-    }
-
-    // Rebuild the transient pool with the given gates (which of `ao_output` and
-    // the G-buffer color targets it places), then re-point every consumer of a
-    // pooled resource. Mirrors `handle_resize`'s transient-pool + bloom +
-    // G-buffer steps (the device is idle when this is reached).
-    //
-    // **Every** pooled consumer has to be re-pointed here, not just the one the
-    // caller is toggling: a rebuild repacks the whole pool, so changing the SSAO
-    // gate relocates the G-buffer's targets and vice versa. Re-pointing only the
-    // toggled feature leaves the other one's descriptors naming freed memory.
-    fn rebuild_transient_pool_and_consumers(
-        &mut self,
-        ssao_enabled: bool,
-        gbuffer_enabled: bool,
-    ) -> RenderResult<()> {
-        self.targets.transient_pool.rebuild(
-            &self.hw.device,
-            &self.hw.command_queue,
-            &plan_pool_slots(
-                PoolGates {
-                    ssao: ssao_enabled,
-                    gbuffer: gbuffer_enabled,
-                },
-                (
-                    self.targets.extent.render_width,
-                    self.targets.extent.render_height,
-                ),
-                (
-                    self.targets.extent.output_width,
-                    self.targets.extent.output_height,
-                ),
-            )?,
-        )?;
-        if let Some(pooled) = self.targets.transient_pool.gbuffer_pooled() {
-            // SAFETY: a property query on a live descriptor heap; it only reads.
-            let srv_cpu_base = unsafe {
-                self.descriptors
-                    .srv_heap
-                    .GetCPUDescriptorHandleForHeapStart()
-            };
-            let srv_gpu_base = SrvSlot::at(
-                &self.descriptors.srv_heap,
-                self.descriptors.srv_descriptor_size,
-                0,
-            );
-            let device = self.hw.device.clone();
-            if let Some(gbuffer) = self.gbuffer.as_mut() {
-                gbuffer.repoint_pooled(&device, srv_cpu_base, srv_gpu_base, &pooled);
-            }
-        }
-        self.repoint_pooled_post_targets()
-    }
-
-    // View the rebuilt pool's `bloom_top` and `ao_output` from the passes that
-    // write them.
-    fn repoint_pooled_post_targets(&mut self) -> RenderResult<()> {
-        let pool = &self.targets.transient_pool;
-        let bloom_top = pool
-            .resource_for("bloom_top")
-            .ok_or_else(|| {
-                RenderError::Other("transient pool missing bloom_top after rebuild".to_string())
-            })?
-            .clone();
-        let ao_output = pool.resource_for("ao_output").cloned();
-        let extent = &self.targets.extent;
-        let output = PostExtent {
-            width: extent.output_width,
-            height: extent.output_height,
-        };
-        let render = PostExtent {
-            width: extent.render_width,
-            height: extent.render_height,
-        };
-        if let Some(mut bloom) = self.bloom.take() {
-            let r = bloom.repoint_top(&self.post_device(0), output, &bloom_top);
-            self.bloom = Some(bloom);
-            r?;
-        }
-        if let Some(ao_output) = ao_output
-            && let Some(mut ssao) = self.ssao.resources.take()
-        {
-            let r = ssao.repoint_output(&self.post_device(0), render, &ao_output);
-            self.ssao.resources = Some(ssao);
-            r?;
-        }
-        Ok(())
     }
 }
 
@@ -489,8 +468,12 @@ impl DxContext {
 }
 
 impl SettingsTarget for DxContext {
-    fn rebuild_features(&mut self, graphics: &ResolvedGraphics) -> RenderResult<()> {
-        self.apply_quality_settings(graphics)
+    fn rebuild_features(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        features: RebuildSet,
+    ) -> RenderResult<()> {
+        self.rebuild_planned(graphics, features)
     }
 
     fn push_feature_params(&mut self, graphics: &ResolvedGraphics) {
@@ -505,7 +488,7 @@ impl SettingsTarget for DxContext {
         self.set_ambient_intensity(value);
     }
 
-    fn push_shadow_cadence(&mut self, cadence: backend_init::ShadowCadence) {
+    fn push_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.set_shadow_cadence(cadence);
     }
 

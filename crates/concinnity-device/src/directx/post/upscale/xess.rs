@@ -7,9 +7,9 @@
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 

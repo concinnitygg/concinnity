@@ -5,13 +5,12 @@
 // by a scene other than the start scene). The streaming pump calls in here as
 // those scenes pin and unpin, handing over a pipeline its worker already built.
 
-use concinnity_core::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use std::sync::Arc;
 
 use super::MtlContext;
-use super::bucket_pipelines::{build_bucket_pipelines, replacement};
+use super::bucket_pipelines::{BucketPipelines, build_bucket_pipelines, replacement};
 use super::init::pipelines::make_vertex_descriptor;
 use super::pipeline_builder::{MtlPipelineBuilder, world_shader_for};
 
@@ -23,12 +22,14 @@ impl MtlContext {
     pub(super) fn install_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<()> {
         self.cull.world_pipelines.slot(bucket)?;
-        let grass = self.cull.world_pipelines.grass(bucket as usize);
-        let prepared = world_shader_for(prepared, self.bucket_build()).filter(|p| p.grass == grass);
+        let family = self.build_family(bucket, programs, true)?;
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let prepared =
+            world_shader_for(prepared, self.bucket_build()).filter(|p| p.variant == variant);
         let pipelines = match prepared {
             Some(pipelines) => pipelines,
             None => build_bucket_pipelines(
@@ -36,12 +37,12 @@ impl MtlContext {
                 &make_vertex_descriptor(),
                 bucket as usize,
                 Some(programs),
-                grass,
+                variant,
                 self.bucket_build(),
             )?,
         };
         self.cull.world_pipelines.install(bucket, pipelines)?;
-        Ok(())
+        self.install_family(family)
     }
 
     // Rebuild one world Shader's pipelines from hot-reloaded programs, or swap
@@ -52,13 +53,14 @@ impl MtlContext {
     pub(super) fn update_world_shader(
         &mut self,
         bucket: u32,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<PreparedPipelines>,
     ) -> RenderResult<PipelineSwap> {
         if bucket == 0 {
             let prepared = world_shader_for(prepared, self.bucket_build());
+            let family = self.build_family(0, programs, false)?;
             self.update_default_world_shader(programs, prepared)?;
-            self.update_grass_twins(programs)?;
+            self.install_family(family)?;
             return Ok(PipelineSwap::Swapped);
         }
         self.cull.world_pipelines.slot(bucket)?;
@@ -66,44 +68,55 @@ impl MtlContext {
             return Ok(PipelineSwap::NotResident);
         }
         let build = self.bucket_build();
+        let family = self.build_family(bucket, programs, false)?;
         let pipelines = replacement(
             &self.hw.device,
             bucket as usize,
             Some(programs),
-            self.cull.world_pipelines.grass(bucket as usize),
+            self.cull.world_pipelines.variant(bucket as usize),
             build,
             self.cull.world_pipelines.get(bucket as usize),
             world_shader_for(prepared, build),
         )?;
         self.cull.world_pipelines.install(bucket, pipelines)?;
+        self.install_family(family)?;
         Ok(PipelineSwap::Swapped)
     }
 
-    // Rebuild the default Shader's grass twins from its fresh programs, when
-    // the world has them. Built here rather than on a worker: only a hot reload
-    // of the default Shader reaches them.
-    fn update_grass_twins(
-        &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
-    ) -> RenderResult<()> {
-        let twins = self.cull.world_pipelines.grass_twins();
-        for (twin, grass) in [
-            (twins.canopy, GrassShading::Canopy),
-            (twins.ground, GrassShading::Ground),
-        ] {
-            let Some(twin) = twin else {
+    // Shader `shader`'s grass variants built from its fresh programs, when it
+    // has them: every one when `install`ing, else those already resident.
+    // Built here rather than on a worker: only a pin or a hot reload of the
+    // Shader reaches them. All are built before any is installed, so a
+    // failure keeps the live family whole.
+    fn build_family(
+        &self,
+        shader: u32,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        install: bool,
+    ) -> RenderResult<Vec<(u32, BucketPipelines)>> {
+        let mut built = Vec::new();
+        for bucket in self.cull.world_pipelines.family(shader) {
+            if !install && !self.cull.world_pipelines.resident(bucket as usize) {
                 continue;
-            };
+            }
             let pipelines = replacement(
                 &self.hw.device,
-                twin as usize,
+                bucket as usize,
                 Some(programs),
-                grass,
+                self.cull.world_pipelines.variant(bucket as usize),
                 self.bucket_build(),
-                self.cull.world_pipelines.get(twin as usize),
+                self.cull.world_pipelines.get(bucket as usize),
                 None,
             )?;
-            self.cull.world_pipelines.install(twin, pipelines)?;
+            built.push((bucket, pipelines));
+        }
+        Ok(built)
+    }
+
+    // Install a family `build_family` built.
+    fn install_family(&mut self, built: Vec<(u32, BucketPipelines)>) -> RenderResult<()> {
+        for (bucket, pipelines) in built {
+            self.cull.world_pipelines.install(bucket, pipelines)?;
         }
         Ok(())
     }
@@ -114,7 +127,7 @@ impl MtlContext {
         Arc::new(MtlPipelineBuilder {
             device: self.hw.device.clone(),
             targets: self.bucket_build(),
-            grass: self.cull.world_pipelines.grass_shadings(),
+            variants: self.cull.world_pipelines.variants(),
         })
     }
 
@@ -124,6 +137,10 @@ impl MtlContext {
     // Metal's alone: DirectX and Vulkan command lists do NOT keep a pipeline
     // alive, so their evict drains the device first.
     pub(super) fn evict_world_shader(&mut self, bucket: u32) {
+        let family = self.cull.world_pipelines.family(bucket);
+        for b in family {
+            self.cull.world_pipelines.evict(b);
+        }
         self.cull.world_pipelines.evict(bucket);
     }
 }

@@ -2,11 +2,11 @@
 //! params blocks carry no host-shape gate, so each is checked against all three
 //! targets.
 
-use concinnity_core::gfx::render_types::{
+use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
-use concinnity_core::render::atmosphere::AtmosphereParams;
-use concinnity_core::render::uniforms::{
+use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
+use concinnity_engine::render::uniforms::{
     AutoExposureParams, ExposureMeasurement, HizParams, TaaParams,
 };
 
@@ -37,6 +37,10 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
         moon_up,
         galaxies,
         depth_inv_vp,
+        surface_land,
+        surface_water,
+        surface_east,
+        surface_share,
     }))]
 }
 
@@ -84,6 +88,7 @@ pub(in crate::shader_layout) fn composite() -> Vec<Case> {
         depth_far,
         reactive_valid,
         night_vision,
+        night_nits,
     }))]
 }
 
@@ -121,14 +126,14 @@ pub(in crate::shader_layout) fn ssgi() -> Vec<Case> {
         max_distance,
         tan_half_fov_y,
         aspect,
-        thickness,
+        thickness_per_depth,
         history_valid,
         rays,
         frame,
         levels,
         gi_scale,
         history_scale,
-        [_pad] => [],
+        min_thickness,
     }))]
 }
 

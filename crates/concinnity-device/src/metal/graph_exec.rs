@@ -79,23 +79,23 @@
 //! resources are ever introduced, the point-1 assumption breaks even within a
 //! queue, and explicit `MTLFence`s become necessary.)
 
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types::{
+use concinnity_core::math::narrow_f32;
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::{
     ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
     TextDrawCall,
 };
-use concinnity_core::math::narrow_f32;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::ParticleFrame;
-use concinnity_core::render::planar_reflection::PlanarFramePlan;
-use concinnity_core::render::reactive_mask::ReactiveMaskPlan;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::particles::ParticleFrame;
+use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
-use concinnity_core::render::render_graph;
-use concinnity_core::render::render_graph::{
+use concinnity_engine::render::render_graph;
+use concinnity_engine::render::render_graph::{
     CompiledGraph, CompiledPass, PassId, PassQueue, PassRecorder, PassScratch, execute_passes,
     presenter_index,
 };
-use concinnity_core::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan;
+use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -133,6 +133,8 @@ pub(in crate::metal) struct GraphSubmission {
 // completion handler attached by `draw_frame`.
 pub(in crate::metal) struct GraphFrameParams<'a> {
     pub cmd_buf: &'a ProtocolObject<dyn MTLCommandBuffer>,
+    // The particle bursts systems asked for this frame.
+    pub particle_bursts: &'a [concinnity_engine::render::particles::ParticleBurst],
     pub cam_pos: [f32; 3],
     pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // Per-skinned-object morph weights for this frame, from the same ring slot
@@ -148,8 +150,10 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // every geometry sub-path so nothing of the world draws behind the menu.
     pub world_hidden: bool,
     // Seconds since the world started, which each pass narrows to f32 where
-    // it needs no more; the water's motion takes it whole.
+    // it needs no more.
     pub elapsed: f64,
+    // The simulated instant the water is drawn at.
+    pub water_time: f64,
     pub vp: [[f32; 4]; 4],
     // Inverse of `vp`, computed once in `draw_frame` and shared by every pass
     // that reconstructs world-space position from depth (fog / decals /
@@ -354,7 +358,11 @@ impl MtlContext {
         // to happen before the read-only `encode_particles` path runs. We
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
-        let particle_frame = self.prepare_particle_pass(narrow_f32(params.elapsed));
+        let particle_frame = self.prepare_particle_pass(
+            narrow_f32(params.elapsed),
+            params.particle_bursts,
+            params.ring_slot,
+        );
         self.diagnostics
             .draw_calls_accum
             .store(0, Ordering::Relaxed);
@@ -524,40 +532,7 @@ impl MtlContext {
     ) -> RenderResult<u32> {
         Ok(match pass_id {
             PassId::Cull => {
-                let object_buffer =
-                    pass_input(params.object_buffer, PassId::Cull, "object_buffer")?;
-                let draw_args_buffer =
-                    pass_input(params.draw_args_buffer, PassId::Cull, "draw_args_buffer")?;
-                // Skinned fold: pre-skin into this frame's deformed
-                // buffer in the Cull command buffer (before the cull dispatch).
-                // Committed before Main, so Metal hazard-tracks the deformed
-                // write ahead of the main pass's vertex read. Only when the fold
-                // is active (deformed buffer supplied).
-                if let Some(deformed) = params.deformed_skinned {
-                    self.encode_main_skin(
-                        cmd_buf,
-                        deformed,
-                        super::raytrace::MainSkinBuffers {
-                            joints: params.skinned_joint_bufs,
-                            morph_weights: params.skinned_morph_weight_bufs,
-                        },
-                    )?;
-                }
-                self.encode_cull(
-                    cmd_buf,
-                    object_buffer,
-                    draw_args_buffer,
-                    params.frustum,
-                    params.cam_pos,
-                    self.draw_record_counts(),
-                )?;
-                // GPU-driven shadow views: fill the cascade and spot-slice ICBs
-                // in this same Cull command buffer (committed before the Shadow
-                // and SpotShadow render passes' command buffers), so the
-                // cross-command-buffer FIFO order makes them ready when those
-                // passes read them -- the same ordering the main cull -> Main ICB
-                // relies on. A no-op when the shadow-bindless path is inactive.
-                self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
+                self.encode_cull_stage(cmd_buf, params)?;
                 0
             }
             PassId::HizBuild | PassId::HizFinal => {
@@ -595,6 +570,7 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
+                    regions: self.main_regions(),
                 },
             )?,
             PassId::Shadow => {
@@ -635,6 +611,7 @@ impl MtlContext {
                     bindless_tex_args: params.bindless_tex_args,
                     deformed_skinned: params.deformed_skinned,
                     counts: self.draw_record_counts(),
+                    regions: self.main_regions(),
                 },
                 crate::metal::draw::main::MainPassExtras {
                     world_hidden: params.world_hidden,
@@ -716,6 +693,7 @@ impl MtlContext {
                     pass_input(params.ssgi_params, PassId::SsgiResolve, "ssgi_params")?;
                 self.encode_ssgi_resolve(cmd_buf, ssgi_params)?
             }
+            PassId::Disocclusion => self.encode_disocclusion(cmd_buf)?,
             PassId::RtReflections => {
                 let rt_params = pass_input(
                     params.rt_reflection_params,
@@ -774,7 +752,7 @@ impl MtlContext {
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd_buf)?,
             PassId::WaterSim => {
-                self.encode_water_sim(cmd_buf, params.elapsed)?;
+                self.encode_water_sim(cmd_buf, params.water_time)?;
                 0
             }
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd_buf)?,
@@ -822,7 +800,14 @@ impl MtlContext {
             PassId::ParticlesDraw => {
                 let write = params.reactive.particles;
                 let draws = if let Some(frame) = particle_frame {
-                    self.encode_particles_draw(cmd_buf, *frame, params.vp, params.frustum, write)?
+                    self.encode_particles_draw(
+                        cmd_buf,
+                        *frame,
+                        params.vp,
+                        params.frustum,
+                        write,
+                        None,
+                    )?
                 } else {
                     0
                 };
@@ -830,6 +815,24 @@ impl MtlContext {
                     self.clear_reactive_mask(cmd_buf, write)?;
                 }
                 draws
+            }
+            PassId::ParticlesLateDraw => {
+                let scene_pre_taa = pass_input(
+                    params.scene_pre_taa,
+                    PassId::ParticlesLateDraw,
+                    "scene_pre_taa",
+                )?;
+                match particle_frame {
+                    Some(frame) => self.encode_particles_draw(
+                        cmd_buf,
+                        *frame,
+                        params.vp,
+                        params.frustum,
+                        params.reactive.late_particles,
+                        Some(scene_pre_taa),
+                    )?,
+                    None => 0,
+                }
             }
             PassId::Lines => self.encode_lines(cmd_buf, params.vp)?,
             PassId::Composite => {
@@ -846,58 +849,10 @@ impl MtlContext {
                     pass_input(params.scene_pre_taa, PassId::Upscale, "scene_pre_taa")?;
                 self.encode_upscale(cmd_buf, scene_pre_taa, params.reactive.readable)?
             }
-            PassId::Transparent => {
-                let scene_pre_taa =
-                    pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
-                let view = concinnity_core::render::uniforms::TransparentView::new(
-                    &self.pass_camera(params),
-                    self.lights.uniforms(),
-                );
-                // The mirrors `PlanarReflection` rendered this frame, if the pass
-                // samples mirrors at all (the same gate that put the node in the
-                // graph). A reflector whose slot was not rendered keeps its probe
-                // path.
-                let mirrors = if self.planar_mirrors_needed() {
-                    params.planar
-                } else {
-                    PlanarFramePlan::default()
-                };
-
-                // Gather every translucent producer's draws, then let the
-                // shared encoder sort them back-to-front and issue them.
-                let mut draws = Vec::new();
-                self.collect_water_transparent_draws(
-                    &view,
-                    params.elapsed,
-                    params.bindless_tex_args.is_some(),
-                    &mirrors,
-                    &mut draws,
-                );
-                self.collect_glass_transparent_draws(
-                    &view,
-                    params.bindless_tex_args.is_some(),
-                    &mirrors,
-                    &mut draws,
-                );
-                // Transparent glass MESHES (Layer 2): imported `transparent`
-                // materials traced per-pixel when RT is live. Inert otherwise
-                // (those meshes render opaque in the main pass).
-                self.collect_mesh_transparent_draws(
-                    &view,
-                    params.bindless_tex_args.is_some(),
-                    &mut draws,
-                );
-                self.encode_transparent(
-                    cmd_buf,
-                    scene_pre_taa,
-                    &draws,
-                    super::transparent::TransparentFrame {
-                        view: &view,
-                        rt_params: params.rt_reflection_params,
-                        bindless_tex_args: params.bindless_tex_args,
-                        reactive: params.reactive.transparent,
-                    },
-                )?
+            PassId::Transparent => self.encode_transparent_stage(cmd_buf, params)?,
+            PassId::PropProbe => {
+                self.encode_prop_probe(cmd_buf, params)?;
+                0
             }
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
@@ -911,6 +866,109 @@ impl MtlContext {
                 self.encode_raymarch(cmd_buf, &view, params.frustum)?
             }
         })
+    }
+
+    // The Cull pass: the skinned pre-skin fold, the main cull, and the shadow-view culls.
+    fn encode_cull_stage(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        params: &GraphFrameParams<'_>,
+    ) -> RenderResult<()> {
+        let object_buffer = pass_input(params.object_buffer, PassId::Cull, "object_buffer")?;
+        let draw_args_buffer =
+            pass_input(params.draw_args_buffer, PassId::Cull, "draw_args_buffer")?;
+        // Skinned fold: pre-skin into this frame's deformed
+        // buffer in the Cull command buffer (before the cull dispatch).
+        // Committed before Main, so Metal hazard-tracks the deformed
+        // write ahead of the main pass's vertex read. Only when the fold
+        // is active (deformed buffer supplied).
+        if let Some(deformed) = params.deformed_skinned {
+            self.encode_main_skin(
+                cmd_buf,
+                deformed,
+                super::raytrace::MainSkinBuffers {
+                    joints: params.skinned_joint_bufs,
+                    morph_weights: params.skinned_morph_weight_bufs,
+                },
+            )?;
+        }
+        self.encode_cull(
+            cmd_buf,
+            object_buffer,
+            draw_args_buffer,
+            super::cull::CullView {
+                frustum: params.frustum,
+                cam_pos: params.cam_pos,
+                daylight: &self.state.view.daylight,
+                variants: &self.cull.variants,
+                exclude: [0, 0],
+                capture_tiles: None,
+            },
+            self.draw_record_counts(),
+        )?;
+        // GPU-driven shadow views: fill the cascade and spot-slice ICBs
+        // in this same Cull command buffer (committed before the Shadow
+        // and SpotShadow render passes' command buffers), so the
+        // cross-command-buffer FIFO order makes them ready when those
+        // passes read them -- the same ordering the main cull -> Main ICB
+        // relies on. A no-op when the shadow-bindless path is inactive.
+        self.encode_shadow_culls(cmd_buf, object_buffer, draw_args_buffer)?;
+        Ok(())
+    }
+
+    // The Transparent pass: every translucent producer's draws, sorted and issued.
+    fn encode_transparent_stage(
+        &self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        params: &GraphFrameParams<'_>,
+    ) -> RenderResult<u32> {
+        let scene_pre_taa = pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
+        let view = concinnity_engine::render::uniforms::TransparentView::new(
+            &self.pass_camera(params),
+            self.lights.uniforms(),
+            &self.state.view.daylight,
+        );
+        // The mirrors `PlanarReflection` rendered this frame, if the pass
+        // samples mirrors at all (the same gate that put the node in the
+        // graph). A reflector whose slot was not rendered keeps its probe
+        // path.
+        let mirrors = if self.planar_mirrors_needed() {
+            params.planar
+        } else {
+            PlanarFramePlan::default()
+        };
+
+        // Gather every translucent producer's draws, then let the
+        // shared encoder sort them back-to-front and issue them.
+        let mut draws = Vec::new();
+        self.collect_water_transparent_draws(
+            &view,
+            params.water_time,
+            params.bindless_tex_args.is_some(),
+            &mirrors,
+            &mut draws,
+        );
+        self.collect_glass_transparent_draws(
+            &view,
+            params.bindless_tex_args.is_some(),
+            &mirrors,
+            &mut draws,
+        );
+        // Transparent glass MESHES (Layer 2): imported `transparent`
+        // materials traced per-pixel when RT is live. Inert otherwise
+        // (those meshes render opaque in the main pass).
+        self.collect_mesh_transparent_draws(&view, params.bindless_tex_args.is_some(), &mut draws);
+        self.encode_transparent(
+            cmd_buf,
+            scene_pre_taa,
+            &draws,
+            super::transparent::TransparentFrame {
+                view: &view,
+                rt_params: params.rt_reflection_params,
+                bindless_tex_args: params.bindless_tex_args,
+                reactive: params.reactive.transparent,
+            },
+        )
     }
 }
 

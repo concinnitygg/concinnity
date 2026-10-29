@@ -8,9 +8,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::cull::ShadowViewIcb;
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use objc2::rc::Retained;
 use objc2_metal::{MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction};
 
@@ -126,11 +126,11 @@ impl MtlContext {
         };
         let taa = rebuild_if_live!(
             self.taa.pass.is_some(),
-            concinnity_core::render::post::taa::build_pipeline(&post_device)
+            concinnity_engine::render::post::taa::build_pipeline(&post_device)
         );
         let bloom = rebuild_if_live!(
             self.bloom.is_some(),
-            concinnity_core::render::post::bloom::build_pipelines(&post_device)
+            concinnity_engine::render::post::bloom::build_pipelines(&post_device)
         );
         // The main pass rebuilds together with the GPU cull and the bindless
         // argument encoders, whose layouts come from the same sources. A world
@@ -148,7 +148,7 @@ impl MtlContext {
                 device,
                 0,
                 self.world_shader.as_ref(),
-                GrassShading::None,
+                SurfaceVariant::Plain,
                 build,
                 self.cull.main_pipeline.as_ref(),
                 None,
@@ -201,19 +201,23 @@ impl MtlContext {
         let static_vdesc = static_vertex_descriptor();
         let ssao = rebuild_if_live!(
             self.ssao.pass.is_some(),
-            concinnity_core::render::post::ssao::build_pipelines(&post_device)
+            concinnity_engine::render::post::ssao::build_pipelines(&post_device)
         );
         let ssr_resolve = rebuild_if_live!(
             self.ssr.resolve.is_some(),
-            concinnity_core::render::post::ssr::build_pipeline(&post_device)
+            concinnity_engine::render::post::ssr::build_pipeline(&post_device)
         );
         let reflection_composite = rebuild_if_live!(
             self.ssr.composite.is_some(),
-            concinnity_core::render::post::reflection_composite::build_pipelines(&post_device)
+            concinnity_engine::render::post::reflection_composite::build_pipelines(&post_device)
         );
         let ssgi = rebuild_if_live!(
             self.ssgi.pass.is_some(),
-            concinnity_core::render::post::ssgi::build_pipelines(&post_device)
+            concinnity_engine::render::post::ssgi::build_pipelines(&post_device)
+        );
+        let disocclusion = rebuild_if_live!(
+            self.disocclusion.is_some(),
+            concinnity_engine::render::post::disocclusion::build_pipelines(&post_device)
         );
         let rt_reflections = rebuild_if_live!(
             self.rt.pipelines.resolve.is_some(),
@@ -263,10 +267,11 @@ impl MtlContext {
             self.arg_buffers.bindless_sampler_args = Some(sampler_args);
             self.cull.pipeline = Some(cull.decide);
             self.cull.pipeline_phase2 = Some(cull.decide_phase2);
-            self.cull.encode_pipeline = Some(cull.encode);
+            self.cull.scan_pipeline = Some(cull.scan);
+            self.cull.scatter_pipeline = Some(cull.scatter);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
             // Force the ICB rebuilds on the next frame so every argument buffer
-            // is re-encoded with the arg encoder the new encode kernel produced.
+            // is re-encoded with the arg encoder the new scatter produced.
             // The status buffers and the phase-2 ICB are rebuilt by the same
             // `ensure_*_capacity` passes that rebuild the ICBs.
             self.cull.icbs = Vec::new();
@@ -309,6 +314,9 @@ impl MtlContext {
         if let (Some(p), Some(pass)) = (ssgi, self.ssgi.pass.as_mut()) {
             pass.swap_pipelines(p);
         }
+        if let (Some(p), Some(pass)) = (disocclusion, self.disocclusion.as_mut()) {
+            pass.swap_pipelines(p);
+        }
         if let Some(p) = rt_reflections {
             self.rt.pipelines.resolve = Some(p);
         }
@@ -343,7 +351,7 @@ impl MtlContext {
     // by [`Self::reload_shaders`].
     pub(super) fn update_default_world_shader(
         &mut self,
-        programs: &concinnity_core::components::ShaderPrograms,
+        programs: &concinnity_engine::components::ShaderPrograms,
         prepared: Option<BucketPipelines>,
     ) -> RenderResult<()> {
         // A scene-less world never built a main pipeline; there is nothing for
@@ -353,7 +361,7 @@ impl MtlContext {
                 &self.hw.device,
                 0,
                 Some(programs),
-                GrassShading::None,
+                SurfaceVariant::Plain,
                 self.bucket_build(),
                 self.cull.main_pipeline.as_ref(),
                 prepared,

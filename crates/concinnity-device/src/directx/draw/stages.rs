@@ -1,16 +1,17 @@
 //! The stages `DxContext::draw_frame` runs in order around `record_frame`, and
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
-use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile;
-use concinnity_core::profile::PassTiming;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::{
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::profile;
+use concinnity_engine::profile::PassTiming;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
 };
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::System::Threading::WaitForSingleObject;
@@ -31,6 +32,8 @@ pub(in crate::directx) struct PlanArgs<'a> {
     pub(in crate::directx) render_size: [u32; 2],
     pub(in crate::directx) lines: &'a [LineVertex],
     pub(in crate::directx) world_hidden: bool,
+    // The world's prop probe rides this frame.
+    pub(in crate::directx) prop_probe: bool,
 }
 
 impl DxContext {
@@ -147,6 +150,10 @@ impl DxContext {
         // could still reference a range freed `frames + 1` ticks ago, so those
         // bytes become placeable again here.
         self.hw.alloc.begin_frame();
+        // Same tick for the post block's freed descriptor slots and the feature
+        // state a settings change replaced.
+        self.post.begin_frame();
+        self.retired_effects.tick();
         // Same tick for the staged geometry writes' ring and copy lists.
         self.geometry_uploads.get_mut().begin_frame();
 
@@ -173,6 +180,11 @@ impl DxContext {
         // disabled.
         self.update_auto_exposure(elapsed, frame);
         self.pre_exposure.advance(self.post_process.exposure);
+        if let Some(up) = &self.upscale.backend
+            && self.upscale.exposure.advance(&self.pre_exposure)
+        {
+            up.request_history_reset();
+        }
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
@@ -279,7 +291,7 @@ impl DxContext {
         // `draw_calls` through `inc_draw_calls` (an interior-mutability path
         // because the encoders run through `&self`); the rest is filled here
         // from context state.
-        let counts = concinnity_core::render::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -311,7 +323,7 @@ impl DxContext {
                 .auto_exposure
                 .adaptation
                 .as_ref()
-                .map(concinnity_core::gfx::auto_exposure::ExposureAdaptation::current_ev),
+                .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev),
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),
@@ -480,6 +492,7 @@ impl DxContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.backend.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
+                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -499,7 +512,12 @@ impl DxContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    fn frame_content(&self, lines: &[LineVertex], world_hidden: bool) -> FrameContent {
+    fn frame_content(
+        &self,
+        lines: &[LineVertex],
+        world_hidden: bool,
+        prop_probe: bool,
+    ) -> FrameContent {
         FrameContent {
             world_hidden,
             cull_records: self.state.draw.record_count(),
@@ -507,6 +525,7 @@ impl DxContext {
             bloom_intensity: self.post_process.bloom_intensity,
             bvh_live: self.rt.accel.is_some(),
             emitters: !self.particle.system.is_empty(),
+            late_emitters: self.particle.system.draws_after_transparent(),
             fog: self.fog.settings.is_some_and(|s| s.contributes()),
             decals: !self.decal.set.is_empty(),
             visible_surfaces: self
@@ -527,6 +546,7 @@ impl DxContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+            prop_probe,
         }
     }
 
@@ -540,9 +560,10 @@ impl DxContext {
             render_size,
             lines,
             world_hidden,
+            prop_probe,
         } = args;
         let resident = self.resident_features(render_size);
-        let content = self.frame_content(lines, world_hidden);
+        let content = self.frame_content(lines, world_hidden, prop_probe);
         // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
         // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
         // FFX returns it in input-pixel coordinates, the Halton path's units.
@@ -588,7 +609,9 @@ impl DxContext {
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;
         self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
         if self.upscale.backend.is_some() {
-            self.upscale.jitter.set(plan.camera.jitter_px);
+            self.upscale
+                .jitter
+                .set(jitter::pixel_center_offset(plan.camera.jitter_px));
         }
         Ok(plan)
     }

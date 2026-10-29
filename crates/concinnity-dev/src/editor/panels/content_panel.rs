@@ -6,8 +6,8 @@
 //! and click handling live in `hook/edit/content.rs`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};

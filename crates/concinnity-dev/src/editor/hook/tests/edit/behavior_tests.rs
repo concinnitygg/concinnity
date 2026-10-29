@@ -5,8 +5,8 @@
 //! the cards each draws, and the palette's filter. What the keyboard does with
 //! these actions is `tests/behavior_keys_tests.rs`.
 
-use concinnity_core::components::{InputKey, TextInput};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{InputKey, TextInput};
+use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::graph::CardKind;
 use crate::editor::behavior::panel::{BehaviorAction, Status, ViewMode};

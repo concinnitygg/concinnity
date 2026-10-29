@@ -2,7 +2,7 @@
 
 # PropColliderShape
 
-The collision volume a [PropCollider](PropCollider.md)'s `shape` names. The
+The collision volume a [`PropCollider`](PropCollider.md)'s `shape` names. The
 single accepted vocabulary: the build rejects an authored name this does not
 recognize, and the runtime resolves the same name through it.
 

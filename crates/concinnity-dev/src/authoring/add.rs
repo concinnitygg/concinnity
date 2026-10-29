@@ -388,7 +388,7 @@ fn validated_entry(
         let mut resolved = rt
             .registration()
             .default_args
-            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
         if let (serde_json::Value::Object(base), serde_json::Value::Object(supplied)) =
             (&mut resolved, args)
         {
@@ -421,7 +421,7 @@ fn validated_entry(
 // and normalized through the typed schema. The def's baked bytes are postcard
 // and cannot round-trip to JSON.
 fn normalized_args_value(asset_type: &str, args: &serde_json::Value) -> serde_json::Value {
-    let empty = || serde_json::Value::Object(Default::default());
+    let empty = || serde_json::Value::Object(serde_json::Map::default());
     let Some(ct) = RegisteredType::parse(asset_type) else {
         return empty();
     };
@@ -447,7 +447,7 @@ fn import_entry(asset_type: &str, name: &str, source: &str) -> std::io::Result<s
         .registration();
     let mut args = reg
         .default_args
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
     if let serde_json::Value::Object(map) = &mut args {
         map.insert(
             "source".to_string(),
@@ -585,7 +585,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 
         // 3D scene files: one SceneImport line. The build expands it into
         // Textures / Materials / Meshes / Models / Props at compile time, so
-        // world.jsonl stays compact (see concinnity_core::bake::import).
+        // world.jsonl stays compact (see concinnity_engine::bake::import).
         //
         // A `.glb` is checked for the panorama-sphere packaging first: those
         // files carry an environment image, not geometry, and importing one as
@@ -813,7 +813,7 @@ fn split_entry(
         .get("args")
         .filter(|a| !a.is_null())
         .cloned()
-        .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::default()));
     Ok((id, args))
 }
 
@@ -862,7 +862,10 @@ fn entry_from_type_name(type_str: &str) -> std::io::Result<serde_json::Value> {
     };
     create_asset_def(&req)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let args = normalized_args_value(type_str, &serde_json::Value::Object(Default::default()));
+    let args = normalized_args_value(
+        type_str,
+        &serde_json::Value::Object(serde_json::Map::default()),
+    );
 
     Ok(serde_json::json!({ "type": type_str, "args": args }))
 }

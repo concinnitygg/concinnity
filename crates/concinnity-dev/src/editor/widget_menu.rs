@@ -4,8 +4,8 @@
 //! components at reserved ids, placed each frame by the owning panel, which
 //! also routes the press.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::theme;
 use super::widget::{self, place_rounded, point_in};
@@ -166,7 +166,7 @@ pub(crate) fn hide_menu(world: &mut World, ids: &MenuIds) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     const IDS: MenuIds = MenuIds {
         dot_bg: AssetId(1),

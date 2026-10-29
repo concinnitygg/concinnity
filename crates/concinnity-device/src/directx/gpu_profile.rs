@@ -6,7 +6,7 @@
 //! dedicated VRAM). Returns `None` when no adapter can run the renderer, which
 //! resolves the run to headless.
 
-use concinnity_core::render::backend::{
+use concinnity_engine::render::backend::{
     DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor, classify_tier,
 };
 use windows::Win32::Graphics::Dxgi::*;

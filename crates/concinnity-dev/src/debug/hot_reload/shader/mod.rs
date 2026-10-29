@@ -11,9 +11,9 @@ mod compile;
 #[cfg(test)]
 mod tests;
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::render::backend::{LiveEdit, PipelineBuilder, PipelineSwap};
-use concinnity_core::render::world_load::source_maps::{ShaderSourceEntry, ShaderSourceMap};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::render::backend::{LiveEdit, PipelineBuilder, PipelineSwap};
+use concinnity_engine::render::world_load::source_maps::{ShaderSourceEntry, ShaderSourceMap};
 use concinnity_runtime::live_edit::shader_overrides::ShaderOverrides;
 use std::sync::Arc;
 use std::time::Instant;

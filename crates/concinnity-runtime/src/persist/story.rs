@@ -1,9 +1,9 @@
 // Story saves kept as files under the host's save directory: the auto-save is
 // `auto`, manual slots are `save1`.. (1-based on disk, matching the slot-menu
-// labels). The save's shape is `concinnity_core::story::StorySave`; what this
+// labels). The save's shape is `concinnity_engine::story::StorySave`; what this
 // owns is the files, written off the sim thread.
 
-use concinnity_core::story::{SaveSlot, StorySave, StoryStore};
+use concinnity_engine::story::{SaveSlot, StorySave, StoryStore};
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::store::writer::FileWriter;
 use std::path::{Path, PathBuf};

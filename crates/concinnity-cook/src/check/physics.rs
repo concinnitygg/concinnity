@@ -3,8 +3,8 @@
 //! Also the authored shape the build sizes a world's spawn reservation from:
 //! which of its assets can create collider-bearing props while it runs.
 
-use concinnity_core::components::PropColliderShape;
 use concinnity_core::math::narrow_f32;
+use concinnity_engine::components::PropColliderShape;
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -185,7 +185,7 @@ pub(crate) fn collider_spawn_sources(assets: &[WorldJsonlAsset]) -> ColliderSpaw
     let is_collider_prop =
         |name: &serde_json::Value| name.as_str().is_some_and(|n| collider_props.contains(&n));
 
-    let defaults = concinnity_core::components::cook::Spawner::default();
+    let defaults = concinnity_engine::components::cook::Spawner::default();
     for asset in assets {
         match asset.asset_type {
             RegisteredType::Spawner if asset.args.get("template").is_some_and(is_collider_prop) => {
@@ -240,9 +240,46 @@ fn spawn_templates(args: &serde_json::Value) -> Vec<&serde_json::Value> {
     out
 }
 
+/// Warn about a `PropBody` that will not behave as its args suggest.
+pub(crate) fn warn_prop_body(name: &str, args: &serde_json::Value) {
+    for warning in prop_body_warnings(name, args) {
+        tracing::warn!("{warning}");
+    }
+}
+
+// A buoyant body left at mass 0 takes its mass from its collider at 1 kg per
+// cubic meter, a thousandth of water's density, so it rides almost entirely
+// above the water whatever it is meant to be.
+fn prop_body_warnings(name: &str, args: &serde_json::Value) -> Vec<String> {
+    let buoyant = args.get("buoyancy").is_some_and(|b| !b.is_null());
+    let mass = args
+        .get("mass")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    if buoyant && mass <= 0.0 {
+        vec![format!(
+            "Asset '{name}': PropBody has `buoyancy` but no `mass`, so it weighs 1 kg per cubic \
+             meter of its collider and rides almost entirely above the water; give it a mass to \
+             set how deep it floats"
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_buoyant_body_without_mass_is_warned_about() {
+        let warns = |args: serde_json::Value| prop_body_warnings("b", &args).len();
+        assert_eq!(warns(serde_json::json!({"buoyancy": {}})), 1);
+        assert_eq!(warns(serde_json::json!({"buoyancy": {}, "mass": 0.0})), 1);
+        assert_eq!(warns(serde_json::json!({"buoyancy": {}, "mass": 40.0})), 0);
+        assert_eq!(warns(serde_json::json!({"buoyancy": null})), 0);
+        assert_eq!(warns(serde_json::json!({})), 0);
+    }
 
     fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
         WorldJsonlAsset {
@@ -406,7 +443,7 @@ mod tests {
                 serde_json::json!({"template": "crate"}),
             ),
         ];
-        let defaults = concinnity_core::components::cook::Spawner::default();
+        let defaults = concinnity_engine::components::cook::Spawner::default();
         let spawner = &collider_spawn_sources(&assets).spawners[0];
         assert_eq!(spawner.interval, defaults.interval);
         assert_eq!(spawner.lifetime, defaults.lifetime);

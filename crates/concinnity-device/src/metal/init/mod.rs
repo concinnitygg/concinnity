@@ -23,13 +23,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use crate::metal::canopy::CanopyTables;
-use concinnity_core::gfx::render_types::{ClusterParams, PostProcessParams};
-use concinnity_core::render::backend_init::BackendInit;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_core::render::scene_state::{DrawList, SceneState};
-use concinnity_core::render::shader_reload::ShaderReload;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::render_types::{ClusterParams, PostProcessParams};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::scene_state::{DrawList, SceneState};
+use concinnity_engine::render::shader::reload::ShaderReload;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use self::effects::EffectSettings;
 use super::context::{MtlContext, MtlHardware, debug_assert_main_thread};
@@ -81,7 +81,6 @@ struct Features {
     // when MetalFX runs, the drawable resolution otherwise.
     render: (u32, u32),
     taa_enabled: bool,
-    ssao_enabled: bool,
     gbuffer_enabled: bool,
     post_process: PostProcessParams,
 }
@@ -122,7 +121,6 @@ impl Features {
             output,
             render,
             taa_enabled,
-            ssao_enabled: plan.ssao,
             gbuffer_enabled: plan.gbuffer,
             // Pair the authored tunables with the resolved mode's output flags.
             // On the SDR path both flags stay 0.0 and the shader runs the full
@@ -136,7 +134,7 @@ impl Features {
 
 impl MtlContext {
     // Create a window and Metal render pipeline from the assembled backend
-    // inputs (see `concinnity_core::render::backend_init::BackendInit` for per-field docs).
+    // inputs (see `concinnity_engine::render::backend::init::BackendInit` for per-field docs).
     // The shadow pass is engine-internal and enabled whenever
     // `shadows.map_size > 0`.
     pub(crate) fn new(init: BackendInit<'_>) -> RenderResult<Self> {
@@ -146,7 +144,7 @@ impl MtlContext {
     // The shared constructor. `reuse == None` creates a fresh device + command
     // queue + window (the normal `new` path); `reuse == Some` rebuilds the
     // world's content on the hardware an outgoing context handed over for a
-    // live `cn editor` reload, keeping its window so a save does not recreate
+    // live `cn edit` reload, keeping its window so a save does not recreate
     // it. Everything after the hardware is identical: the same pipelines,
     // buffers, textures, and targets are built from `init` either way.
     fn build(init: BackendInit<'_>, reuse: Option<MtlHardware>) -> RenderResult<Self> {
@@ -243,7 +241,7 @@ impl MtlContext {
                 scene.env_map.irradiance = cubes.irradiance;
                 scene.env_map.prefilter = cubes.prefilter;
                 scene.env_map.prefilter_mip_count =
-                    concinnity_core::render::atmosphere::SKY_CUBE_PLAN.mips();
+                    concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN.mips();
                 Some(state)
             }
 
@@ -257,6 +255,7 @@ impl MtlContext {
             &gpu,
             cull::CullInputs {
                 world_shaders: &world_shaders,
+                draws: &world.draw_objects,
                 vert_desc: &vert_desc,
                 features: &features,
                 shadow_enabled: shadow.enabled,
@@ -281,6 +280,12 @@ impl MtlContext {
             hot_reload,
         )?;
         let ssgi = effects::build_ssgi(&post_device, &settings, features.render)?;
+        let disocclusion = crate::metal::post::build_disocclusion(
+            &post_device,
+            &upscale,
+            features.gbuffer_enabled,
+            features.render,
+        )?;
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
@@ -346,12 +351,13 @@ impl MtlContext {
             graph_scratch: None,
             instanced,
             scene,
-            lights: concinnity_core::render::light_state::LightState::new(
+            lights: concinnity_engine::render::light::state::LightState::new(
                 light_uniforms,
                 &local_lights,
                 1,
             ),
-            canopy: Default::default(),
+            canopy_field: fx.canopy,
+            canopy: concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
             grass_lod: None,
             canopy_tables: CanopyTables::default(),
             shadow,
@@ -362,13 +368,14 @@ impl MtlContext {
             composite,
             bloom,
             post_process: features.post_process,
-            pre_exposure: concinnity_core::gfx::auto_exposure::PreExposure::UNIT,
+            pre_exposure: concinnity_engine::gfx::auto_exposure::PreExposure::UNIT,
             taa,
             upscale,
             ssao,
             ssr,
             gbuffer,
             ssgi,
+            disocclusion,
             rt,
             lines: LineState::new(frames_in_flight),
             decal,
@@ -386,6 +393,7 @@ impl MtlContext {
             prepared_slot: None,
             frames_in_flight: frames_in_flight.max(1),
             frame_ring_index: 0,
+            retired_effects: concinnity_engine::render::buffers::retire_pool::RetirePool::new(),
             rings,
             water,
             grass,
@@ -414,7 +422,7 @@ impl MtlContext {
 
     // Re-upload a new world's GPU content onto this live context, reusing the
     // retained device + command queue + window instead of recreating them.
-    // Drives the `cn editor` live SAVE: after a structural edit recompiles the
+    // Drives the `cn edit` live SAVE: after a structural edit recompiles the
     // blobs, GraphicsSystem transplants the running backend into the rebuilt
     // world and calls this so the edit applies with no window recreation.
     //

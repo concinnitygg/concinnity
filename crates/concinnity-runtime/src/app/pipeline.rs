@@ -19,12 +19,12 @@
 //! channel returns render stats, op-replay results, and the consumed snapshot
 //! for buffer reuse.
 
-use concinnity_core::ecs::Parked;
-use concinnity_core::ecs::StepResult;
-use concinnity_core::input::snapshot::InputPacket;
-use concinnity_core::render::backend::RenderBackend;
-use concinnity_core::render::feedback::FrameFeedback;
-use concinnity_core::render::snapshot::RenderSnapshot;
+use concinnity_engine::ecs::Parked;
+use concinnity_engine::ecs::StepResult;
+use concinnity_engine::input::snapshot::InputPacket;
+use concinnity_engine::render::backend::RenderBackend;
+use concinnity_engine::render::frame::feedback::FrameFeedback;
+use concinnity_engine::render::frame::snapshot::RenderSnapshot;
 use concinnity_host::thread::set_current_thread_role;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
@@ -34,8 +34,8 @@ use crate::app::budget::main_thread_role;
 use crate::app::frame_gate::FrameGo;
 use crate::app::runtime::Runtime;
 use crate::render::system::submit::submit;
-use concinnity_core::render::frame_submit::{FramePolicy, GoTiming};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_engine::render::frame::submit::{FramePolicy, GoTiming};
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::clock::micros_since;
 
 // The channel pair, published (parked, so the per-step take never re-boxes)
@@ -55,9 +55,8 @@ pub(crate) struct PipelineChannels {
 // moves the Runtime to the sim thread, and runs the render half here. A world
 // that never built a backend (headless) falls back to the serial loop. A
 // panic on the sim thread is re-raised here after the render half drains, so
-// the process fails the same way a serial panic does. `screenshot` captures
-// the last presented frame on the way out (skipped after a device loss).
-pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
+// the process fails the same way a serial panic does.
+pub(crate) fn run_pipelined(mut runtime: Runtime) {
     let Some(mut backend) = runtime.take_render_backend() else {
         crate::app::runloop::run_loop(&mut runtime, false, |_| {});
         return;
@@ -101,7 +100,7 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
         feedback_tx,
     };
     let rendered = render_half(backend.as_mut(), &ends, &shutdown);
-    // What the run actually drew, which `--frames N` only requested: a pixel A/B
+    // What the run actually drew, which `--limit-frames N` only requested: a pixel A/B
     // of a temporal world is a comparison of the frame it stopped on, so the
     // capture harness reads this back and refuses a run that stopped elsewhere.
     tracing::info!("pipeline: {} frame(s) submitted", rendered.submitted);
@@ -116,12 +115,6 @@ pub(crate) fn run_pipelined(mut runtime: Runtime, screenshot: Option<&str>) {
     if !rendered.device_lost {
         backend.wait_idle();
         backend.finish_captures();
-        if let Some(path) = screenshot {
-            match backend.screenshot(path) {
-                Ok(saved) => tracing::info!("screenshot saved: {}", saved),
-                Err(e) => tracing::warn!("screenshot failed: {}", e),
-            }
-        }
     }
 }
 
@@ -272,7 +265,7 @@ fn wait_for_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::render::backend::recording::{Call, recording_backend};
+    use concinnity_engine::render::backend::recording::{Call, recording_backend};
 
     // The input a go-ahead carries is sampled after the window's events are
     // pumped, so it never misses events that arrived since the last draw.

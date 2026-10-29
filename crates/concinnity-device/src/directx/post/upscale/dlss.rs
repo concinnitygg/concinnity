@@ -7,11 +7,11 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::dlss::DlssPreset;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::history_reset::UpscalerResetLatch;
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::output::dlss::DlssPreset;
+use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::Interface;
 
@@ -65,17 +65,17 @@ struct NgxSession {
 
 impl Drop for NgxSession {
     fn drop(&mut self) {
-        // SAFETY: the feature and the bag are each released at most once (only when non-null), and
-        // the shutdown names the device NGX was initialized on, which this session still holds.
-        unsafe {
-            if !self.feature.is_null() {
-                NVSDK_NGX_D3D12_ReleaseFeature(self.feature);
-            }
-            if !self.params.is_null() {
-                NVSDK_NGX_D3D12_DestroyParameters(self.params);
-            }
-            NVSDK_NGX_D3D12_Shutdown1(self.device.as_raw());
+        if !self.feature.is_null() {
+            // SAFETY: the feature is non-null and released only here, once.
+            unsafe { NVSDK_NGX_D3D12_ReleaseFeature(self.feature) };
         }
+        if !self.params.is_null() {
+            // SAFETY: the bag is non-null and destroyed only here, once.
+            unsafe { NVSDK_NGX_D3D12_DestroyParameters(self.params) };
+        }
+        // SAFETY: the shutdown names the device NGX was initialized on, which this session still
+        // holds.
+        unsafe { NVSDK_NGX_D3D12_Shutdown1(self.device.as_raw()) };
     }
 }
 
@@ -245,17 +245,21 @@ impl UpscaleBackend for DlssUpscaler {
             (P_DEPTH, inputs.depth),
             (P_MOTION_VECTORS, inputs.motion_vectors),
         ];
-        // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and each
-        // resource is a COM object the frame keeps alive until the list executes.
-        unsafe {
-            for (name, resource) in resources {
+        for (name, resource) in resources {
+            // SAFETY: `params` is the live bag, every name is a NUL-terminated constant, and each
+            // resource is a COM object the frame keeps alive until the list executes.
+            unsafe {
                 NVSDK_NGX_Parameter_SetD3d12Resource(params, name.as_ptr(), resource.as_raw());
             }
+        }
+        let reset = crate::upscale_reset::consume(&self.reset);
+        // SAFETY: `params` is the live bag.
+        unsafe {
             set_evaluate_parameters(
                 params,
                 camera.jitter_offset,
                 camera.pre_exposure,
-                crate::upscale_reset::consume(&self.reset),
+                reset,
                 self.extent,
             );
         }

@@ -6,7 +6,7 @@
 //! texels are roughly the size of the projected rect, and culls the AABB when
 //! its nearest projected depth is behind the rasterized occluder depth.
 //!
-//! Three compute kernels build it (see `src/render/shaders/hiz_build.hlsl`):
+//! Three compute kernels build it (see `src/render/shader/hlsl/hiz_build.hlsl`):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over
@@ -25,9 +25,9 @@
 //! that target).
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::hiz_spd::{self, Plan};
-use concinnity_core::render::uniforms::HizSpdParams;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::hiz::spd::{self, Plan};
+use concinnity_engine::render::uniforms::HizSpdParams;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -42,7 +42,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::uav_barrier;
 
 // UAV descriptors one SPD dispatch binds, one per level it can write.
-const HIZ_SPD_UAVS: u32 = hiz_spd::LEVELS;
+const HIZ_SPD_UAVS: u32 = spd::LEVELS;
 
 // Compute pipelines + texture + per-mip descriptors for the Hi-Z build. Built
 // alongside the GPU-cull pipeline (same gating condition: bindless main pass
@@ -277,7 +277,7 @@ impl HiZResources {
             mip_uav_cpus,
             mip_uav_gpus,
         } = target;
-        let mip_count = hiz_spd::pyramid_mip_count(width, height);
+        let mip_count = spd::pyramid_mip_count(width, height);
         if mip_count == 0 {
             return Err(RenderError::Other("hiz: zero mip count".to_string()));
         }
@@ -328,7 +328,7 @@ impl HiZResources {
         width: u32,
         height: u32,
     ) -> RenderResult<()> {
-        let new_mip_count = hiz_spd::pyramid_mip_count(width, height);
+        let new_mip_count = spd::pyramid_mip_count(width, height);
         let texture = create_hiz_texture(device, width, height, new_mip_count)?;
         write_hiz_srv(device, &texture, new_mip_count, self.srv_cpu);
         write_hiz_mip_uavs(device, &texture, new_mip_count, &self.mip_uav_cpus);

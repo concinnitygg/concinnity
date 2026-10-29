@@ -3,10 +3,10 @@
 //! against.
 
 use ash::vk;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::SceneData;
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::SceneData;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
@@ -26,7 +26,14 @@ pub(super) struct ComputeCull {
     pub(super) draw_args_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) indirect_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) status_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
+    // Per-frame `GpuCullVariants`, host-visible, written each frame.
+    pub(super) variant_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) hiz: Option<crate::vulkan::hiz::HiZResources>,
+    // The scan and scatter, each frame's group-count scratch (both phases),
+    // and each frame's phase-1 packing set.
+    pub(super) compact: Option<crate::vulkan::compact::VkCompactKernels>,
+    pub(super) group_count_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
+    pub(super) compact_sets: Vec<vk::DescriptorSet>,
 }
 
 #[derive(Clone, Copy)]
@@ -37,13 +44,14 @@ pub(super) struct ComputeInputs<'a> {
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) plan: &'a CullPlan,
     pub(super) bindless: &'a BindlessPass,
-    pub(super) shader_bucket_count: usize,
+    // Commands every shader bucket's region holds between them.
+    pub(super) indirect_commands: usize,
     pub(super) occlusion_two_pass: bool,
 }
 
 // `N` compute-stage SSBOs at bindings `0..N`, the shape of every cull kernel's
 // set 0.
-pub(super) fn cull_set_bindings<const N: usize>() -> [Binding; N] {
+pub(in crate::vulkan) fn cull_set_bindings<const N: usize>() -> [Binding; N] {
     std::array::from_fn(|b| {
         (
             u32::saturating_from(b),
@@ -53,11 +61,21 @@ pub(super) fn cull_set_bindings<const N: usize>() -> [Binding; N] {
     })
 }
 
-// Set 0 of the phase-1 and phase-2 kernels: object, draw-args,
-// indirect-command and cull-status SSBOs.
-pub(super) fn main_cull_set() -> [Binding; 4] {
+// Set 0 of the phase-1 and phase-2 kernels: object, draw-args, group-count,
+// cull-status and variant SSBOs.
+pub(in crate::vulkan) fn main_cull_set() -> [Binding; 5] {
     cull_set_bindings()
 }
+
+// Set 0 of the shadow kernel: object, draw-args, group-count and cull-status
+// SSBOs.
+pub(in crate::vulkan) fn shadow_cull_set() -> [Binding; 4] {
+    cull_set_bindings()
+}
+
+// Bytes of one frame's variant SSBO.
+pub(in crate::vulkan) const VARIANT_BUFFER_BYTES: u64 =
+    size_of::<render_types::GpuCullVariants>() as u64;
 
 // Build the compute cull and its Hi-Z pyramid, and write the static instance
 // records into the object and draw-args buffers.
@@ -79,7 +97,7 @@ pub(super) fn build_compute_cull(
         descriptors,
         plan,
         bindless,
-        shader_bucket_count,
+        indirect_commands,
         occlusion_two_pass,
     } = inputs;
     let CullPlan {
@@ -116,16 +134,18 @@ pub(super) fn build_compute_cull(
     // condition as the bindless pass: the compute kernel writes one
     // indirect draw command per build-time object, which the bindless main
     // pass issues with a single multiDrawIndexedIndirect.
+    let mut packing = (None, Vec::new(), Vec::new());
     type CullPipelineResources = (
         Option<VkCullKernels>,
         Vec<vk::DescriptorSet>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
+        Vec<crate::vulkan::allocator::PooledBuffer>,
         Option<crate::vulkan::hiz::HiZResources>,
     );
-    let (kernels, cull_sets, draw_args_buffers, indirect_buffers, hiz): CullPipelineResources =
+    let (kernels, cull_sets, draw_args_buffers, indirect_buffers, variant_buffers, hiz): CullPipelineResources =
         if bindless_active {
-            // Set 0: object SSBO + draw-args SSBO + indirect-command SSBO +
+            // Set 0: object SSBO + draw-args SSBO + group-count SSBO +
             // cull-status SSBO (binding 3: phase-1 writes the per-object cull
             // outcome for two-pass occlusion; the phase-2 kernel reads it).
             let set_layout = create_descriptor_set_layout(device, &main_cull_set())?;
@@ -175,13 +195,16 @@ pub(super) fn build_compute_cull(
             let n = n_cull as u64;
             let object_buffer_size = n * size_of::<render_types::GpuObjectData>() as u64;
             let draw_args_size = n * size_of::<render_types::GpuDrawArgs>() as u64;
-            // One `n_cull`-command region per shader bucket: the cull kernel writes
-            // every record's slot in each region and the main pass issues one
-            // indirect draw per region under that bucket's pipeline.
-            let indirect_size =
-                shader_bucket_count as u64 * n * size_of::<vk::DrawIndexedIndirectCommand>() as u64;
+            // One region per shader bucket, of the records it can take, each
+            // holding its stream's list from its start, then the lists'
+            // counts: the main pass issues one indirect draw per list under
+            // its bucket's pipeline.
+            let indirect_size = crate::vulkan::compact::indirect_buffer_bytes(indirect_commands);
+            let group_count_size = crate::vulkan::compact::group_count_bytes(n_cull);
             let mut da_buffers = Vec::with_capacity(frames);
             let mut ind_buffers = Vec::with_capacity(frames);
+            let mut var_buffers = Vec::with_capacity(frames);
+            let mut count_buffers = Vec::with_capacity(frames);
             for _ in 0..frames {
                 da_buffers.push(alloc.create_buffer(
                     draw_args_size,
@@ -190,13 +213,29 @@ pub(super) fn build_compute_cull(
                 )?);
                 ind_buffers.push(alloc.create_buffer(
                     indirect_size,
-                    vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+                    crate::vulkan::compact::INDIRECT_USAGE,
                     vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 )?);
+                count_buffers.push(alloc.create_buffer(
+                    group_count_size,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )?);
+                var_buffers.push(alloc.create_buffer(
+                    VARIANT_BUFFER_BYTES,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                )?);
             }
+            crate::vulkan::compact::zero_indirect_buffers(
+                device,
+                command_pool,
+                graphics_queue,
+                &ind_buffers,
+            )?;
 
             // One cull set per frame: that frame's object / draw-args /
-            // indirect-command buffers at bindings 0 / 1 / 2.
+            // group-count buffers at bindings 0 / 1 / 2.
             let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
             let sets =
                 alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
@@ -204,14 +243,42 @@ pub(super) fn build_compute_cull(
                 SetWrites::new(set)
                     .storage_buffer(0, object_buffers[i].buffer(), object_buffer_size)
                     .storage_buffer(1, da_buffers[i].buffer(), draw_args_size)
-                    .storage_buffer(2, ind_buffers[i].buffer(), indirect_size)
+                    .storage_buffer(2, count_buffers[i].buffer(), group_count_size)
                     .storage_buffer(
                         3,
                         cull_status_buffers[i].buffer(),
                         n * size_of::<u32>() as u64,
                     )
+                    .storage_buffer(4, var_buffers[i].buffer(), VARIANT_BUFFER_BYTES)
                     .apply(device);
             }
+
+            // The phase-1 packing: one set per frame over the same buffers.
+            let compact = crate::vulkan::compact::build_compact_kernels(device, hot_reload)?;
+            let compact_layouts: Vec<_> =
+                (0..frames).map(|_| compact.set_layout.handle()).collect();
+            let compact_sets = alloc_descriptor_sets(
+                device,
+                descriptors.descriptor_pool.handle(),
+                &compact_layouts,
+            )?;
+            for (i, &set) in compact_sets.iter().enumerate() {
+                crate::vulkan::compact::write_compact_set(
+                    device,
+                    set,
+                    &crate::vulkan::compact::CompactBuffers {
+                        variants: (var_buffers[i].buffer(), VARIANT_BUFFER_BYTES),
+                        draw_args: (da_buffers[i].buffer(), draw_args_size),
+                        status: (cull_status_buffers[i].buffer(), n * size_of::<u32>() as u64),
+                        group_counts: (count_buffers[i].buffer(), group_count_size),
+                        lists: crate::vulkan::compact::DrawLists {
+                            buffer: ind_buffers[i].buffer(),
+                            commands: indirect_commands,
+                        },
+                    },
+                );
+            }
+            packing = (Some(compact), count_buffers, compact_sets);
 
             let kernels = VkCullKernels {
                 pipeline,
@@ -219,9 +286,9 @@ pub(super) fn build_compute_cull(
                 pipeline_layout,
                 set_layout,
             };
-            (Some(kernels), sets, da_buffers, ind_buffers, Some(hiz))
+            (Some(kernels), sets, da_buffers, ind_buffers, var_buffers, Some(hiz))
         } else {
-            (None, Vec::new(), Vec::new(), Vec::new(), None)
+            (None, Vec::new(), Vec::new(), Vec::new(), Vec::new(), None)
         };
 
     // GPU-driven instanced merge: write each instance's `GpuObjectData`
@@ -234,7 +301,7 @@ pub(super) fn build_compute_cull(
     // geometry) and the world declares instanced props. Mirrors
     // `directx/init/mod.rs`.
     if n_instances > 0 && !object_buffers.is_empty() {
-        use concinnity_core::gfx::render_types::{
+        use concinnity_engine::gfx::render_types::{
             GpuDrawArgs, GpuObjectData, draw_args_flags, instance_object_records,
         };
         let records = instance_object_records(
@@ -271,6 +338,10 @@ pub(super) fn build_compute_cull(
         draw_args_buffers,
         indirect_buffers,
         status_buffers: cull_status_buffers,
+        variant_buffers,
         hiz,
+        compact: packing.0,
+        group_count_buffers: packing.1,
+        compact_sets: packing.2,
     })
 }

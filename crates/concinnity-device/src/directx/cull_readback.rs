@@ -10,9 +10,9 @@
 //! presented pixels. Readback is synchronous (it idles the GPU), so it is a
 //! probe-only path, never a per-frame one. Mirrors `src/vulkan/cull_readback.rs`.
 
-use concinnity_core::gfx::cull_status;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::cull_status;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::context::DxContext;

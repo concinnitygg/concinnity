@@ -1,0 +1,445 @@
+//! Rewriting a world's GPU content underneath the running frame.
+//!
+//! The asset hot-reload rebuilders, the per-draw material and cull-distance
+//! writes the editor previews with, and the world swap a live reload performs
+//! on the retained device. The queries here (`draw_geometry_size`,
+//! `draw_lod_index_counts`, `hot_swap_config`) exist so the caller can tell
+//! whether the cheap in-place write fits before it asks for the rebuild.
+
+use crate::components::ShaderPrograms;
+use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use crate::gfx::render_types::{DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedIndex};
+use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::backend::init::{BackendInit, SwapchainConfig};
+use crate::render::backend::{PreparedPipelines, SceneHost};
+use crate::render::sdf::programs::SdfPrograms;
+use alloc::vec::Vec;
+
+/// What a pipeline rebuild from fresh programs did
+/// ([`LiveEdit::update_world_shader`], [`LiveEdit::replace_sdf_volume_pipelines`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipelineSwap {
+    /// The live pipelines were rebuilt and swapped in.
+    Swapped,
+    /// Nothing the programs feed has a pipeline installed, so nothing was built.
+    NotResident,
+}
+
+/// One draw slot's fresh geometry, supplied to
+/// [`LiveEdit::rebuild_static_geometry`] when an asset hot-reload
+/// changed its vertex / index count and the slot can no longer hold the new
+/// data in place. The backend rebuilds the entire shared vertex / index
+/// buffer; draws not named here keep their current geometry, copied byte-for-
+/// byte from the live buffers. `indices` are mesh-relative (0-based); the
+/// backend rebases them onto whatever new vertex region the draw lands in.
+pub struct DrawGeometryUpdate {
+    /// The draw slot whose geometry is replaced.
+    pub draw_idx: DrawIndex,
+    /// Replacement vertices.
+    pub vertices: Vec<Vertex>,
+    /// Replacement indices, mesh-relative.
+    pub indices: Vec<u16>,
+    /// One slice per additional LOD, ordered mip 0 → mip N-1. Each is
+    /// `(switch_distance, mesh-relative indices)`. Empty for meshes
+    /// declared `lod_levels <= 1`.
+    pub lod_alternates: Vec<(f32, Vec<u16>)>,
+}
+
+/// One skinned draw slot's fresh geometry, supplied to
+/// [`LiveEdit::rebuild_skinned_geometry`] when an asset hot-reload
+/// changed its vertex / index count and the slot can no longer hold the new
+/// data in its existing region of the shared skinned vertex / index buffers.
+/// The backend rebuilds both shared buffers; slots not named here keep their
+/// current geometry, copied byte-for-byte from the live buffers and re-based
+/// onto whatever new vertex region they land in. `indices` are mesh-relative
+/// (0-based); the backend rebases them onto the new vertex region.
+pub struct SkinnedDrawGeometryUpdate {
+    /// The skinned slot whose geometry is replaced.
+    pub skinned_index: SkinnedIndex,
+    /// Replacement vertices.
+    pub vertices: Vec<SkinnedVertex>,
+    /// Replacement indices, mesh-relative.
+    pub indices: Vec<u16>,
+}
+
+/// The post-rebuild layout for one skinned slot, returned by
+/// [`LiveEdit::rebuild_skinned_geometry`] so the asset hot-reload
+/// helper can refresh its `SkinnedMeshSourceEntry`s'
+/// `vertex_base` / `vertex_count` / `index_count` to point at the new
+/// regions. Returned for every slot (both the ones whose geometry was
+/// replaced and the ones whose geometry was carried over) because the
+/// rebuild may have shifted every slot's `vertex_base`.
+/// Constructed only by the `cn run -f` binary's skinned-rebuild reload pass;
+/// reads as dead under `cargo check --lib`.
+pub struct SkinnedSlotLayout {
+    /// The skinned slot this layout describes.
+    pub skinned_index: SkinnedIndex,
+    /// First vertex of the slot's region in the shared skinned buffer.
+    pub vertex_base: u32,
+    /// Vertices in the slot's region.
+    pub vertex_count: usize,
+    /// Indices in the slot's region.
+    pub index_count: usize,
+}
+
+/// The paths an asset hot-reload and the editor's live previews mutate a
+/// built world through.
+///
+/// Reached through [`RenderBackend::live_edit`](super::RenderBackend::live_edit),
+/// so the per-frame trait carries none of it. All defaulted, so a shipped
+/// backend that never reloads an asset implements none of it. The edits that only rewrite the scene's draw slots are defaulted
+/// over [`SceneHost`]. Without a scene the size queries report `None`, which is
+/// what makes the callers above decide there is nothing to rewrite, and the
+/// rewrites report [`RenderError::Unsupported`], so a reload is never counted
+/// as applied when nothing changed.
+pub trait LiveEdit: SceneHost {
+    /// Shared atomic flag the backend polls at frame start to trigger a
+    /// shader rebuild. `Some` only under `cn run -f` on backends that ship
+    /// hot-reload; `None` on production runs and on backends that do not. The
+    /// debug server reads this to forward `reload-shaders` commands; the
+    /// filesystem watcher writes it directly. Default: `None`.
+    fn shader_reload_flag(&self) -> Option<alloc::sync::Arc<core::sync::atomic::AtomicBool>> {
+        None
+    }
+
+    /// Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
+    /// Driven by asset hot-reload (`cn run -f` only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without LUT reload, or
+    /// an error if the payload does not fit a LUT or cannot be uploaded.
+    fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
+        let _ = (size, data);
+        Err(RenderError::Unsupported {
+            op: "update_color_lut",
+        })
+    }
+
+    /// `(vertex_count, index_count)` for the static draw at `draw_idx`, or
+    /// `None` when the index is out of range / the backend does not expose
+    /// the field. Used by asset hot-reload to detect size-changing
+    /// reloads before attempting [`Self::update_mesh_geometry`], which
+    /// rejects size mismatches.
+    fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
+        self.scene()?.draw_geometry_size(draw_idx)
+    }
+
+    /// Per-LOD-alternate index counts for the static draw at `draw_idx`,
+    /// ordered from LOD1 upward (LOD0 is reported by
+    /// [`Self::draw_geometry_size`]). Returns `None` when the index is out of
+    /// range or the backend does not expose its LOD layout. Used by asset
+    /// hot-reload alongside [`Self::draw_geometry_size`] to detect
+    /// size-changing reloads: a `.glb` that re-exports with a different LOD
+    /// breakdown queues the entry for [`Self::rebuild_static_geometry`]
+    /// instead of [`Self::update_mesh_geometry`]'s in-place write.
+    fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
+        self.scene()?.draw_lod_index_counts(draw_idx)
+    }
+
+    /// Rebuild the shared static-mesh vertex + index buffers, replacing the
+    /// geometry of each `DrawGeometryUpdate.draw_idx` with the new
+    /// vertices / indices / LOD alternates. Draws not named in `changes`
+    /// keep their current geometry, copied byte-for-byte from the live
+    /// buffers. The slot's `vertex_count`, `index_count`, and
+    /// `lod_alternates` index offsets are rewritten as the new buffers are
+    /// laid out. Driven by asset hot-reload (`cn run -f` only) when a
+    /// size-changing `.glb` re-export means the existing
+    /// [`Self::update_mesh_geometry`] in-place write no longer fits.
+    /// `wait_idle` first; the rebuild swaps the GPU buffers wholesale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if a change names no draw or the new buffers cannot be
+    /// allocated.
+    fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
+        let _ = changes;
+        Err(RenderError::Unsupported {
+            op: "rebuild_static_geometry",
+        })
+    }
+
+    /// Replace a `SkinnedMesh` draw slot's vertex + index data in place.
+    /// Driven by asset hot-reload (`cn run -f` only). Reuses the slot's
+    /// existing vertex region + index region in the shared skinned vertex /
+    /// index buffers (created once by [`SkinnedDraws::upload_skinned`](super::SkinnedDraws::upload_skinned)), so the new
+    /// geometry must match the slot's init-time vertex count + index count
+    /// and the new skeleton must keep the same joint count; pipelines stay
+    /// untouched, only the bytes change. `vertex_base` is the init-time
+    /// vertex offset (in vertex units) into the shared buffer; indices are
+    /// rebased onto it before writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without in-place
+    /// skinned writes, or an error if the slot is unknown or the new geometry
+    /// does not match its layout.
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        vertex_base: u32,
+        verts: &[SkinnedVertex],
+        idxs: &[u16],
+    ) -> RenderResult<()> {
+        let _ = (skinned_index, vertex_base, verts, idxs);
+        Err(RenderError::Unsupported {
+            op: "update_skinned_mesh_geometry",
+        })
+    }
+
+    /// Rebuild the shared skinned-mesh vertex + index buffers, replacing the
+    /// geometry of each `SkinnedDrawGeometryUpdate.skinned_index` with the
+    /// new vertices / indices. Slots not named in `changes` keep their
+    /// current geometry, copied byte-for-byte from the live buffers and
+    /// re-based onto the new vertex region they land in. Returns the
+    /// post-rebuild layout (one [`SkinnedSlotLayout`] per slot, in
+    /// `skinned_index` order) so the caller can refresh its source-map
+    /// `vertex_base` / `vertex_count` / `index_count` to point at the new
+    /// regions. Driven by asset hot-reload (`cn run -f` only) when a
+    /// size-changing `.glb` re-export means the existing
+    /// [`Self::update_skinned_mesh_geometry`] in-place write no longer fits.
+    /// The backend `wait_idle`s first; the rebuild swaps the GPU buffers
+    /// wholesale. The skinned pipelines, shadow + velocity + SSAO + SSR
+    /// variants, and `skinned_draw_objects` slot metadata
+    /// (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
+    /// all stay untouched; only the `index_offset` / `index_count` on each
+    /// `SkinnedDrawObject` (and the buffers themselves) move.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if a change names no slot or the new buffers cannot be
+    /// allocated.
+    fn rebuild_skinned_geometry(
+        &mut self,
+        changes: Vec<SkinnedDrawGeometryUpdate>,
+    ) -> RenderResult<Vec<SkinnedSlotLayout>> {
+        let _ = changes;
+        Err(RenderError::Unsupported {
+            op: "rebuild_skinned_geometry",
+        })
+    }
+
+    /// Update a skinned slot's joint count and resize the backend's per-slot
+    /// joint-matrix buffers to match. Driven by asset hot-reload (`cn run -f`
+    /// only) when a re-imported `.glb`'s skeleton has a different joint
+    /// count than the slot was initialized with. Shrinking truncates the
+    /// per-slot Vec; growing seeds the new entries to identity so the slot
+    /// renders undeformed on the next `update_skinned_pose`. The skinned
+    /// shaders consume the joints buffer through a pointer (not a fixed-
+    /// size array) and use vertex-attribute-encoded joint indices, so no
+    /// pipeline or shader rebuild is required for a joint-count change;
+    /// only the CPU-side per-slot buffer and `SkinnedDrawObject.joint_count`
+    /// change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `skinned_index` names no slot.
+    fn update_skinned_skeleton(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        new_joint_count: usize,
+    ) -> RenderResult<()> {
+        match self.scene_mut() {
+            Some(scene) => scene.update_skinned_skeleton(skinned_index, new_joint_count),
+            None => Err(RenderError::Unsupported {
+                op: "update_skinned_skeleton",
+            }),
+        }
+    }
+
+    /// Replace a `Mesh` draw slot's vertex + index data in place. Driven by
+    /// asset hot-reload (`cn run -f` only). Reuses the slot's existing offset
+    /// in the shared vertex / index buffers, so the new geometry must match
+    /// the slot's init-time vertex count + index count; a size-changing
+    /// reload returns an error so the caller can queue
+    /// [`Self::rebuild_static_geometry`] instead, which repacks the shared
+    /// buffers. Each entry in
+    /// `lod_alternates` (`(switch_distance, mesh-relative indices)`) is
+    /// written to the matching slot's pre-allocated LOD index region; the
+    /// number of LODs and each LOD's index count must match the slot's
+    /// init-time layout, otherwise the call returns an error so the caller
+    /// can queue [`Self::rebuild_static_geometry`]. `switch_distance` is
+    /// re-stored per LOD so a JSON-side tweak to `lod_distances` propagates
+    /// without a process restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if the
+    /// slot is unknown or the new geometry or LOD layout does not match it.
+    fn update_mesh_geometry(
+        &mut self,
+        draw_idx: DrawIndex,
+        verts: &[Vertex],
+        idxs: &[u16],
+        lod_alternates: &[(f32, Vec<u16>)],
+    ) -> RenderResult<()> {
+        self.edit_geometry(&mut |scene, writer| {
+            scene.update_mesh_geometry(draw_idx, verts, idxs, lod_alternates, writer)
+        })
+        .unwrap_or(Err(RenderError::Unsupported {
+            op: "update_mesh_geometry",
+        }))
+    }
+
+    /// Replace the live IBL environment map with a freshly precomputed payload.
+    /// `payload` is the serialized byte format emitted by
+    /// `crate::bake::environment_map::compile_environment_map_payload`
+    /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
+    /// share a single byte format. Driven by asset hot-reload (`cn run -f`
+    /// only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without
+    /// environment-map reload, or an error if the payload does not decode or
+    /// cannot be uploaded.
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+        let _ = payload;
+        Err(RenderError::Unsupported {
+            op: "update_environment_map",
+        })
+    }
+
+    /// Rewrite a draw slot's material parameters + texture/normal-map pool
+    /// indices in place. Driven by the editor's live draw seam when a Prop edits
+    /// its `material` arg. The caller gates on
+    /// [`DeviceCapabilities::rewrites_draws`](super::DeviceCapabilities::rewrites_draws), which a backend reports once its
+    /// GPU records and ray-tracing geometry table follow the rewritten slot.
+    fn set_draw_material(
+        &mut self,
+        draw_idx: DrawIndex,
+        material: MaterialUniforms,
+        texture_slot: usize,
+        normal_map_slot: usize,
+    ) {
+        if let Some(scene) = self.scene_mut() {
+            scene.set_draw_material(draw_idx, material, texture_slot, normal_map_slot);
+        }
+    }
+
+    /// Replace one row of the material parameter table with a material's new
+    /// `params`; `row` is [`crate::render::material_params::row_of`] of its
+    /// handle. Every draw reading the row picks the values up on the next
+    /// frame. Driven by the editor's live material seam. Default no-op, for a
+    /// backend that draws no world Shader.
+    fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
+        let _ = (row, params);
+    }
+
+    /// Bring what the backend keeps of the world's planet to `shape`, which
+    /// keeps the planet's center and radius: its sea's shore, where its grass
+    /// roots and its ground's far field (see
+    /// [`reshape_planet`](crate::render::environment::reshape::reshape_planet)).
+    /// The tiles stream again on their own. Driven by the editor's live planet
+    /// seam. Default no-op, for a backend that draws no planet.
+    fn reshape_planet(&mut self, shape: &crate::planet::PlanetShape) {
+        let _ = shape;
+    }
+
+    /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
+    /// live draw seam when a Prop edits its `cull_distance` arg. Gated by the
+    /// same [`DeviceCapabilities::rewrites_draws`](super::DeviceCapabilities::rewrites_draws) flag.
+    fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
+        if let Some(scene) = self.scene_mut() {
+            scene.set_draw_cull_distance(draw_idx, cull_distance);
+        }
+    }
+
+    /// Rebuild one world Shader's pipeline from freshly compiled programs.
+    /// Driven by asset hot-reload (`cn run -f` and `cn edit`) when one of the
+    /// Shader's files is saved or a `reload-assets` debug tool call fires.
+    /// Bucket 0 is the world default program; any other bucket is a
+    /// Material-named Shader. The backend builds the replacement first and only
+    /// swaps when the build succeeds, so a compile error never overwrites a live
+    /// pipeline. A bucket whose pipeline is not installed (its scene is not
+    /// loaded) builds nothing and reports [`PipelineSwap::NotResident`].
+    /// `prepared` is the pipeline a
+    /// [`DrawStreaming::pipeline_builder`](super::DrawStreaming::pipeline_builder)
+    /// already built from `programs`; the backend swaps it in rather than
+    /// building, unless it was built against targets the backend no longer
+    /// draws into.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without shader reload,
+    /// or an error if the replacement pipeline fails to build.
+    fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<PipelineSwap> {
+        let _ = (bucket, programs, prepared);
+        Err(RenderError::Unsupported {
+            op: "update_world_shader",
+        })
+    }
+
+    /// Rebuild one raymarched `SdfVolume`'s pipelines from a freshly compiled
+    /// field. Driven by asset hot-reload (`cn run -f` and `cn edit`) when the
+    /// volume's field file is saved. `volume` is the volume's position in
+    /// [`WorldFx::sdf_volumes`](crate::render::backend::init::WorldFx::sdf_volumes),
+    /// the order the backend built them in. Every pipeline the volume draws
+    /// with is rebuilt from `programs`: its surface or volumetric pipeline, and
+    /// its shadow caster when it casts one, keeping the flags it was built
+    /// with. Every replacement is built before any is swapped in, so a failed
+    /// build leaves the live pipelines drawing. A volume the backend holds no
+    /// pipelines for builds nothing and reports [`PipelineSwap::NotResident`].
+    /// `prepared` is what a
+    /// [`DrawStreaming::pipeline_builder`](super::DrawStreaming::pipeline_builder)
+    /// already built from `programs`, taken on the same terms as in
+    /// [`Self::update_world_shader`] and also only when it was built for the
+    /// volume's own flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without SDF reload, or
+    /// an error if a replacement pipeline fails to build.
+    fn replace_sdf_volume_pipelines(
+        &mut self,
+        volume: usize,
+        programs: &SdfPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<PipelineSwap> {
+        let _ = (volume, programs, prepared);
+        Err(RenderError::Unsupported {
+            op: "replace_sdf_volume_pipelines",
+        })
+    }
+
+    /// The swapchain-level configuration this live backend can hot-swap a world
+    /// onto, or `None` when the backend cannot reload a world in place (it must
+    /// be fully rebuilt instead). Read by the renderer when a transplanted
+    /// backend is handed a new world (the `cn edit` live SAVE): the swap reuses
+    /// the backend via [`Self::reload_world`] only when this equals the new
+    /// world's `BackendInit::swapchain_config`; a `None` or a mismatch routes to a
+    /// full rebuild (recreating the window). Default `None`: DirectX / Vulkan
+    /// (and any backend without a real `reload_world`) always rebuild.
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        None
+    }
+
+    /// Re-upload a new world's GPU content onto this already-constructed backend,
+    /// reusing the live device + window + swapchain instead of building a new one.
+    /// Driven by the `cn edit` live SAVE: after a structural edit recompiles the
+    /// blobs, the renderer transplants the running backend into the rebuilt
+    /// world and calls this so the edit applies without recreating the OS window
+    /// or re-initializing the GPU device. The backend waits for the GPU to idle,
+    /// drops the old world's content resources, and rebuilds them from `init` on
+    /// the retained hardware. Only ever called when [`Self::hot_swap_config`]
+    /// reported a config matching `init.swapchain_config()`, so the swapchain
+    /// (pixel format / frames-in-flight / EDR) is guaranteed unchanged. Default
+    /// [`RenderError::Unsupported`], which routes the swap to a full rebuild.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend that cannot reload in
+    /// place, or an error if rebuilding the world's GPU content fails.
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
+        let _ = init;
+        Err(RenderError::Unsupported { op: "reload_world" })
+    }
+}

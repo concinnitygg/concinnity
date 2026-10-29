@@ -2,8 +2,8 @@
 //! lock that are session state rather than edits, and how an isolate composes
 //! with them and with unhide.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::HiddenAssets;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::HiddenAssets;
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::{entry, hook, row_of, seed_tree, world_with_input};

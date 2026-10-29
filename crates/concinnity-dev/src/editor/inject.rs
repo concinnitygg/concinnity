@@ -10,10 +10,10 @@
 //! text-input system, which is real runtime code, not editor-only.)
 
 use concinnity_cook::authoring::spec::{AssetSpec, asset};
-use concinnity_core::components::{
+use concinnity_engine::components::{
     DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
 };
-use concinnity_core::ecs::{FontHandle, PickIndex, TransientSaves, World};
+use concinnity_engine::ecs::{FontHandle, PickIndex, TransientSaves, World};
 
 use super::hud_ids::HudIds;
 use super::panels::registry::{self, PanelKey};
@@ -31,7 +31,7 @@ const REF_W: f32 = 1280.0;
 // two. A bake failure leaves the panels on the built-in face: a mis-sized HUD
 // still beats an invisible one.
 fn hud_font(world: &mut World) -> Option<FontHandle> {
-    concinnity_core::defaults::hud_font(&mut world.context()).ok()
+    concinnity_engine::defaults::hud_font(&mut world.context()).ok()
 }
 
 // Inject the editor HUD: every registered floating panel and the top bar
@@ -294,9 +294,9 @@ fn text_field(placeholder: &str, font: Option<FontHandle>) -> TextInput {
 mod tests {
     use super::super::panels::{assets_panel, form_panel, preview, template, template_panel, view};
     use super::*;
-    use concinnity_core::components::Identity;
-    use concinnity_core::ecs::asset_id::AssetId;
-    use concinnity_core::resource::FontTable;
+    use concinnity_engine::components::Identity;
+    use concinnity_engine::ecs::asset_id::AssetId;
+    use concinnity_engine::resource::FontTable;
 
     // The editor draws its own chrome, so injection turns the world's title bar
     // off in place -- keeping the rest of the authored window untouched. Where
@@ -535,7 +535,7 @@ mod tests {
     // not shift any field. Pins the spec builders against drift.
     #[test]
     fn constructors_materialize_expected_components() {
-        use concinnity_core::components::TextAlign;
+        use concinnity_engine::components::TextAlign;
 
         let s = button_sprite([10.0, 20.0, 100.0, 40.0], [1.0, 0.0, 0.0, 1.0], true);
         assert_eq!((s.x, s.y, s.width, s.height), (10.0, 20.0, 100.0, 40.0));

@@ -45,6 +45,10 @@ const ENTRY_SHAPE: &str = "an entry is a [\"Type\", {args}] array";
 /// A line is a JSON array of `["Type"]` or `["Type", {args}]`; blank lines and
 /// lines starting with `//` are skipped. Every malformed line is reported, not
 /// just the first. Entry order is preserved.
+///
+/// # Errors
+///
+/// Returns a [`ParseError`] listing every malformed line.
 pub fn parse_world_jsonl(content: &str) -> Result<Vec<Value>, ParseError> {
     let mut entries = Vec::new();
     let mut errors = Vec::new();
@@ -70,6 +74,10 @@ pub fn parse_world_jsonl(content: &str) -> Result<Vec<Value>, ParseError> {
 
 /// Parse one entry written as a world line, `["Type", {args}]` or `["Type"]`,
 /// into a `{"type", "args"}` object.
+///
+/// # Errors
+///
+/// Returns an error if `text` is not JSON or not a well-formed world line.
 pub fn parse_entry(text: &str) -> Result<Value, String> {
     let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     entry_from_line(value)
@@ -77,7 +85,7 @@ pub fn parse_entry(text: &str) -> Result<Value, String> {
 
 /// Convert one parsed world line into a `{"type", "args"}` object. A line
 /// with no args column reads as empty args.
-pub fn entry_from_line(value: Value) -> Result<Value, String> {
+fn entry_from_line(value: Value) -> Result<Value, String> {
     let columns = match value {
         Value::Array(columns) => columns,
         Value::Object(_) => return Err(format!("{ENTRY_SHAPE}, not an object")),
@@ -110,9 +118,13 @@ pub fn entry_from_line(value: Value) -> Result<Value, String> {
 }
 
 /// The world line for one `{"type", "args"}` entry: compact
-/// `["Type", {args}]`, both columns always written, no newline. Fails on an
-/// entry a line cannot hold (no type, args that are not an object, or a key
-/// beside the two), rather than dropping what does not fit.
+/// `["Type", {args}]`, both columns always written, no newline.
+///
+/// # Errors
+///
+/// Returns an error if the entry is one a line cannot hold (no type, args that
+/// are not an object, or a key beside the two), rather than dropping what does
+/// not fit.
 pub fn entry_line(entry: &Value) -> std::io::Result<String> {
     let bad = |msg: String| std::io::Error::new(std::io::ErrorKind::InvalidData, msg);
     let obj = entry
@@ -143,6 +155,11 @@ pub fn entry_line(entry: &Value) -> std::io::Result<String> {
 }
 
 /// Serialize entries as world file text, one line per entry.
+///
+/// # Errors
+///
+/// Returns an error if an entry is one a world line cannot hold (see
+/// [`entry_line`]).
 pub fn write_world_jsonl(entries: &[Value]) -> std::io::Result<String> {
     let mut out = String::new();
     for entry in entries {

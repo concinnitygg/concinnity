@@ -19,7 +19,7 @@
 /// };
 /// ```
 #[derive(
-    Debug, Clone, Default, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields,
+    Debug, Clone, Default, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
 )]
 pub struct Include {
     /// Path of the world file to inline, relative to the file this line is in.

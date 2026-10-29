@@ -10,12 +10,12 @@
 //! the thin half that puts the result into the build cache
 //! (`crate::cache::thumbnails`).
 
-use concinnity_core::bake::texture as texture_payload;
-use concinnity_core::bake::texture::{TextureFormat, downscale_rgba};
-use concinnity_core::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
-use concinnity_core::components::{Material, Model};
-use concinnity_core::gfx::raster;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::bake::texture as texture_payload;
+use concinnity_engine::bake::texture::{TextureFormat, downscale_rgba};
+use concinnity_engine::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
+use concinnity_engine::components::{Material, Model};
+use concinnity_engine::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
@@ -136,7 +136,7 @@ pub(crate) fn collect(
             continue;
         };
         let Ok((verts, indices, _)) =
-            concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
+            concinnity_engine::gfx::mesh_payload::deserialize_with_lods(bytes)
         else {
             out.skip(name);
             continue;
@@ -249,7 +249,7 @@ fn collect_models(
                 continue;
             };
             let Ok((verts, indices, _)) =
-                concinnity_core::gfx::mesh_payload::deserialize_with_lods(bytes)
+                concinnity_engine::gfx::mesh_payload::deserialize_with_lods(bytes)
             else {
                 continue;
             };
@@ -337,7 +337,7 @@ fn texture_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
 // A tonemapped face of an environment map's prefilter chain: the mip whose
 // face size is nearest the thumbnail budget.
 fn envmap_preview(payload: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
-    let view = concinnity_core::bake::environment_map::deserialize(payload).ok()?;
+    let view = concinnity_engine::bake::environment_map::deserialize(payload).ok()?;
     let (mip_index, face) = view
         .prefilter_mip_bytes
         .iter()
@@ -416,8 +416,8 @@ fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::SubMeshRef;
-    use concinnity_core::ecs::{MaterialHandle, MeshHandle};
+    use concinnity_engine::components::SubMeshRef;
+    use concinnity_engine::ecs::{MaterialHandle, MeshHandle};
 
     fn record(kind: ResourceKind, handle: u32, blob: u32, offset: u64, len: u64) -> ResourceRecord {
         ResourceRecord {
@@ -462,14 +462,15 @@ mod tests {
     // A tiny RGBA8 texture payload, a box mesh payload, and their records.
     fn textured_meshed_result() -> PipelineResult {
         let mut result = empty_result();
-        let tex = texture_payload::serialize(&concinnity_core::bake::texture::TextureImage::rgba8(
-            2,
-            2,
-            vec![
-                255, 0, 0, 255, 255, 0, 0, 255, //
-                255, 0, 0, 255, 255, 0, 0, 255,
-            ],
-        ));
+        let tex =
+            texture_payload::serialize(&concinnity_engine::bake::texture::TextureImage::rgba8(
+                2,
+                2,
+                vec![
+                    255, 0, 0, 255, 255, 0, 0, 255, //
+                    255, 0, 0, 255, 255, 0, 0, 255,
+                ],
+            ));
         let mesh = crate::compile::geometry::compile_mesh_payload(
             &serde_json::json!({ "generator": "box" }),
         )

@@ -6,9 +6,9 @@
 //! drives own -- when a drag or glide starts, what it writes to the live camera,
 //! and what hands control back.
 
-use concinnity_core::components::{Camera3D, FrameInput, InputKey, Transform};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{FrameTime, PickEntry, PickIndex, World};
+use concinnity_engine::components::{Camera3D, FrameInput, InputKey, Transform};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{FrameTime, PickEntry, PickIndex, World};
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::VP;
@@ -29,7 +29,7 @@ fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
     let mut world = World::new();
     world.add_component(Camera3D {
         position: pos,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(pos, 0.0, 0.0),
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
         near: 0.05,
         view_distance: None,
@@ -119,7 +119,11 @@ fn alt_drag_tumbles_the_camera_around_the_selection() {
     // The view matrix is rewritten alongside the pose, never left stale.
     assert_eq!(
         camera(&world).view_matrix,
-        concinnity_core::gfx::camera::view_matrix(after, camera(&world).yaw, camera(&world).pitch)
+        concinnity_engine::gfx::camera::view_matrix(
+            after,
+            camera(&world).yaw,
+            camera(&world).pitch
+        )
     );
 }
 
@@ -286,8 +290,8 @@ fn digit_keys_map_to_bookmark_slots() {
 // to it from wherever the camera has since moved.
 #[test]
 fn a_saved_bookmark_recalls_the_pose_it_captured() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let (mut world, _) = camera_world([1.0, 2.0, 3.0]);
     let mut h = hook();
 
@@ -324,8 +328,8 @@ fn recalling_an_empty_slot_does_nothing() {
 // write the pose in one frame.
 #[test]
 fn a_recall_cancels_an_in_flight_tumble() {
-    isolate_state_dir();
     let _guard = crate::test_support::lock();
+    isolate_state_dir();
     let (world, _) = camera_world([0.0, 0.0, 10.0]);
     let mut h = hook();
     select(&mut h, &["box"]);

@@ -2,7 +2,7 @@
 // KeyBindings name their targets by `$id`, resolved when the args deserialize
 // into a `UiAction`.
 
-use concinnity_core::components::NamedAction;
+use concinnity_engine::components::NamedAction;
 use serde_json::Value;
 
 use crate::authoring::spec::ArgValue;
@@ -31,8 +31,8 @@ fn json_arg(value: Value) -> ArgValue {
 
 #[cfg(test)]
 mod tests {
-    use concinnity_core::components::{AuthoredAction, ScreenCommand, StoryCommand, UiAction};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{AuthoredAction, ScreenCommand, StoryCommand, UiAction};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     use super::*;
     use crate::authoring::spec::json::arg_value_to_json;

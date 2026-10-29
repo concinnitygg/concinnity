@@ -3,7 +3,7 @@
 //! and View buttons as compact rounded chips at its right end. This lives in the
 //! editor crate (not in a client ECS system) so no editor code is compiled into
 //! the shipped runtime: the HUD is driven from the editor's `FrameHook` tick,
-//! which runs only under `cn editor`.
+//! which runs only under `cn edit`.
 //!
 //! These are plain `Sprite` + `TextLabel` components (injected by `inject.rs` at
 //! reserved ids). Each frame the hook re-anchors the bar to the window width
@@ -15,9 +15,9 @@
 //! same frame `GraphicsSystem` draws it. The whole HUD toggles with F1 (see
 //! `hook.rs`).
 
-use concinnity_core::components::{FrameInput, TextAlign};
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::{FrameInput, TextAlign};
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::sim::SimState;
@@ -74,6 +74,10 @@ const STOP_TINT_ARMED: [f32; 4] = [0.44, 0.22, 0.24, 1.0];
 
 // Per-frame top-bar state the hook hands to `apply_layout` and `hit_test`.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a per-frame snapshot of independent top-bar chip states"
+)]
 pub(crate) struct HudState {
     // Are there unsaved edits (Save active)?
     pub dirty: bool,
@@ -425,7 +429,7 @@ fn place_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn state(dirty: bool, view: bool, visible: bool) -> HudState {
         HudState {

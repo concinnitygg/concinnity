@@ -23,11 +23,11 @@
 //! rebuild; see `crate::vulkan::raytrace`).
 
 use ash::vk;
-use concinnity_core::gfx::render_types::RtParams;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::post::rt_reflections::RtReflectionSettings;
-use concinnity_core::render::rt_accel::seed_wanted;
+use concinnity_engine::gfx::render_types::RtParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::post::rt_reflections::RtReflectionSettings;
+use concinnity_engine::render::rt_accel::seed_wanted;
 
 use super::super::allocator::{DeviceAllocator, PooledBuffer};
 use super::super::context::{HDR_FORMAT, VkContext};
@@ -641,6 +641,25 @@ impl RtReflectionsResources {
         Ok(())
     }
 
+    // Take `settings`, rebuilding the output at its trace resolution for a
+    // `width` x `height` render when that moved. Nothing in the resolve sets
+    // names the output, and the replaced image and framebuffer wait out the
+    // frames in flight on their own.
+    pub(in crate::vulkan) fn retrace(
+        &mut self,
+        alloc: &DeviceAllocator,
+        device: &VkDevice,
+        settings: RtReflectionSettings,
+        (width, height): (u32, u32),
+    ) -> RenderResult<()> {
+        let (w, h) = settings.trace_extent(width, height);
+        self.settings = settings;
+        if (w, h) == (self.extent.width, self.extent.height) {
+            return Ok(());
+        }
+        self.build_targets(alloc, device, width, height)
+    }
+
     // Forget what each frame's acceleration-structure bindings point at, so the
     // next frame rewires them. A replaced BVH can reuse a destroyed one's handles.
     pub(in crate::vulkan) fn forget_accel(&mut self) {
@@ -830,6 +849,7 @@ impl VkContext {
                 frame_idx,
                 shared,
                 skinned,
+                spans: &self.state.spans,
             },
         );
         crate::rt_report::report_rt_update(&mut self.rt.update_streak, updated);

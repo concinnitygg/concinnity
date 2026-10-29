@@ -9,10 +9,10 @@
 //! in `directx/cull.rs`.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::surface::{self, GrassShading};
-use concinnity_core::render::shadow_bias;
-use concinnity_core::render::world_pipelines::BucketSource;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::surface::{self, SurfaceVariant};
+use concinnity_engine::render::shader::world_pipelines::BucketSource;
+use concinnity_engine::render::shadow::bias;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -30,12 +30,12 @@ use crate::directx::texture::HDR_FORMAT;
 // the engine template still matches, else a compile here. The DXIL pool is
 // unbounded, so no pool size reaches the text.
 pub(in crate::directx) fn world_entry(
-    world: &concinnity_core::components::ShaderPrograms,
+    world: &concinnity_engine::components::ShaderPrograms,
     program: &surface::Program,
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_core::platform::Platform::DirectX,
+        platform: concinnity_engine::platform::Platform::DirectX,
         hot_reload,
     };
     crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)
@@ -53,7 +53,11 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
         vs: builtin_shaders::MAIN_BINDLESS_VERT.compile(hot_reload)?,
         ps: builtin_shaders::MAIN_BINDLESS_FRAG.compile(hot_reload)?,
         canopy_ps: builtin_shaders::MAIN_BINDLESS_CANOPY_FRAG.compile(hot_reload)?,
+        canopy_daylight_ps: builtin_shaders::MAIN_BINDLESS_CANOPY_DAYLIGHT_FRAG
+            .compile(hot_reload)?,
         ground_ps: builtin_shaders::MAIN_BINDLESS_GROUND_FRAG.compile(hot_reload)?,
+        ground_daylight_ps: builtin_shaders::MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG
+            .compile(hot_reload)?,
         prepass_vs: builtin_shaders::MAIN_PREPASS_VERT.compile(hot_reload)?,
         prepass_ps: builtin_shaders::MAIN_PREPASS_FRAG.compile(hot_reload)?,
     })
@@ -148,8 +152,8 @@ pub(super) fn create_main_bindless_root_signature(
 // Mirrors the bindless main root signature's object-id delivery so the shared
 // cull command signature works against it: [0] is the per-command b0 object-id
 // root constant (set by the `ExecuteIndirect` command signature, so it MUST stay
-// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] a per-cascade b2
-// cascade-index root constant (set once per cascade's `ExecuteIndirect`), [3]
+// at root parameter 0), [1] the shadow UBO CBV (light_vps), [2] the per-view b2
+// `ShadowPassPush` root constants (set once per view's `ExecuteIndirect`), [3]
 // the per-frame `StructuredBuffer<GpuObjectData>` root SRV the VS reads `model`
 // from, and [4] the shared vertex stream. All vertex-stage only (depth-only pass, no pixel shader).
 pub(in crate::directx) fn create_shadow_bindless_root_signature(
@@ -160,8 +164,14 @@ pub(in crate::directx) fn create_shadow_bindless_root_signature(
         .constant_dwords(0, 1, Visibility::Vertex)
         // [1] b1: shadow UBO (light_vps[4] + cascade_splits).
         .cbv(1, Visibility::Vertex)
-        // [2] b2: cascade index (set per cascade's ExecuteIndirect).
-        .constant_dwords(2, 1, Visibility::Vertex)
+        // [2] b2: the view's `ShadowPassPush` (set per view's ExecuteIndirect).
+        .constant_dwords(
+            2,
+            crate::directx::root_constants::root_dwords::<
+                concinnity_engine::gfx::render_types::ShadowPassPush,
+            >(),
+            Visibility::Vertex,
+        )
         // [3] t0: per-frame StructuredBuffer<GpuObjectData>.
         .srv(0, Visibility::Vertex)
         // [4] t1: the shared vertex stream, where a planet tile's morph reads
@@ -237,9 +247,9 @@ pub(in crate::directx) fn create_shadow_pso(
         // shadows correctly.
         .raster(Raster {
             bias: DepthBias {
-                constant: i32::saturating_from(shadow_bias::RASTER_CONSTANT),
-                clamp: shadow_bias::RASTER_CLAMP,
-                slope: shadow_bias::RASTER_SLOPE,
+                constant: i32::saturating_from(bias::RASTER_CONSTANT),
+                clamp: bias::RASTER_CLAMP,
+                slope: bias::RASTER_SLOPE,
             },
             ..Raster::default()
         })
@@ -258,19 +268,25 @@ pub(in crate::directx) struct BindlessMainShaders {
     pub ps: Vec<u8>,
     // The main fragment that shades a far band as canopy.
     pub canopy_ps: Vec<u8>,
+    // `canopy_ps` lit from a planet's own sky.
+    pub canopy_daylight_ps: Vec<u8>,
     // The main fragment that shades the ground under grass alone.
     pub ground_ps: Vec<u8>,
+    // `ground_ps` lit from a planet's own sky.
+    pub ground_daylight_ps: Vec<u8>,
     pub prepass_vs: Vec<u8>,
     pub prepass_ps: Vec<u8>,
 }
 
 impl BindlessMainShaders {
-    // The main fragment that shades `grass`.
-    pub(in crate::directx) fn main_ps(&self, grass: GrassShading) -> &[u8] {
-        match grass {
-            GrassShading::None => &self.ps,
-            GrassShading::Ground => &self.ground_ps,
-            GrassShading::Canopy => &self.canopy_ps,
+    // The main fragment that shades `variant`.
+    pub(in crate::directx) fn main_ps(&self, variant: SurfaceVariant) -> &[u8] {
+        match variant {
+            SurfaceVariant::Plain => &self.ps,
+            SurfaceVariant::Ground => &self.ground_ps,
+            SurfaceVariant::GroundDaylight => &self.ground_daylight_ps,
+            SurfaceVariant::Canopy => &self.canopy_ps,
+            SurfaceVariant::CanopyDaylight => &self.canopy_daylight_ps,
         }
     }
 }
@@ -285,9 +301,9 @@ pub(in crate::directx) struct BucketPsos {
     pub prepass: Option<ID3D12PipelineState>,
     // The world Shader the bucket compiles, `None` for the engine's own
     // programs, kept so the pre-pass can be built or rebuilt later.
-    pub programs: Option<concinnity_core::components::ShaderPrograms>,
-    // What of the grass the main fragment shades.
-    pub grass: GrassShading,
+    pub programs: Option<concinnity_engine::components::ShaderPrograms>,
+    // Which of its Shader's main fragments the bucket draws with.
+    pub variant: SurfaceVariant,
 }
 
 // The root signatures a bucket's PSOs bind: the main pass's, and the G-buffer
@@ -319,7 +335,7 @@ pub(in crate::directx) fn build_bucket_pipeline(
             targets.world(),
             bucket,
             programs,
-            source.grass,
+            source.variant,
         );
     }
     let engine = targets.engine_default;
@@ -330,12 +346,12 @@ pub(in crate::directx) fn build_bucket_pipeline(
         bucket,
         BucketStages {
             vs: &engine.vs,
-            ps: engine.main_ps(source.grass),
+            ps: engine.main_ps(source.variant),
             prepass_vs: &engine.prepass_vs,
             prepass_ps: &engine.prepass_ps,
         },
     )?;
-    psos.grass = source.grass;
+    psos.variant = source.variant;
     Ok(psos)
 }
 
@@ -345,11 +361,15 @@ pub(in crate::directx) fn build_world_shader_pso(
     info_queue: Option<&ID3D12InfoQueue>,
     targets: WorldPsoTargets<'_>,
     bucket: usize,
-    programs: &concinnity_core::components::ShaderPrograms,
-    grass: GrassShading,
+    programs: &concinnity_engine::components::ShaderPrograms,
+    variant: SurfaceVariant,
 ) -> RenderResult<BucketPsos> {
     let vs = world_entry(programs, &surface::MAIN_VERTEX, targets.hot_reload)?;
-    let ps = world_entry(programs, surface::main_fragment(grass), targets.hot_reload)?;
+    let ps = world_entry(
+        programs,
+        surface::main_fragment(variant),
+        targets.hot_reload,
+    )?;
     // A pre-pass that does not compile costs the bucket its G-buffer draws,
     // not its shading: `create_bucket_psos` warns over the empty stages.
     let (prepass_vs, prepass_ps) = match targets.root_sigs.prepass {
@@ -369,14 +389,14 @@ pub(in crate::directx) fn build_world_shader_pso(
         },
     )?;
     psos.programs = Some(programs.clone());
-    psos.grass = grass;
+    psos.variant = variant;
     Ok(psos)
 }
 
 // A world Shader's pre-pass stages, or empty ones with a warning when they do
 // not compile.
 fn world_prepass_stages(
-    programs: &concinnity_core::components::ShaderPrograms,
+    programs: &concinnity_engine::components::ShaderPrograms,
     hot_reload: bool,
     bucket: usize,
 ) -> (Vec<u8>, Vec<u8>) {
@@ -432,7 +452,7 @@ pub(in crate::directx) fn build_prepass_for(
 // Where a bucket's pre-pass stages come from.
 #[derive(Clone, Copy)]
 pub(in crate::directx) enum PrepassSource<'a> {
-    World(&'a concinnity_core::components::ShaderPrograms, bool),
+    World(&'a concinnity_engine::components::ShaderPrograms, bool),
     Engine(&'a BindlessMainShaders),
 }
 
@@ -488,7 +508,7 @@ fn create_bucket_psos(
         main,
         prepass,
         programs: None,
-        grass: GrassShading::None,
+        variant: SurfaceVariant::Plain,
     })
 }
 

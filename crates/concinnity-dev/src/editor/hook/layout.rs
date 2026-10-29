@@ -1,9 +1,9 @@
 //! `EditorHook`: the floating panels' focus stack, published draw layers, and
 //! each panel's on-screen origin -- all derived from the panel registry.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{CursorShape, HudLayers, World};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{CursorShape, HudLayers, World};
 
 use super::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::panels::asset_list::{self, ListRow};
@@ -208,7 +208,7 @@ impl EditorHook {
     }
 
     // The world-line entries of template `i` (its typed specs via the app bridge).
-    pub(super) fn template_entries(&self, i: usize) -> Vec<serde_json::Value> {
+    pub(super) fn template_entries(i: usize) -> Vec<serde_json::Value> {
         concinnity_cook::authoring::template::TEMPLATES
             .get(i)
             .map(crate::authoring::world_template_entries)
@@ -217,8 +217,8 @@ impl EditorHook {
 
     // Template `i`'s assets as the shared grouped rows (types + names alphabetical,
     // identical to the Assets panel's list).
-    pub(super) fn template_rows(&self, i: usize) -> Vec<ListRow> {
-        asset_list::grouped_rows(&self.template_entries(i), None)
+    pub(super) fn template_rows(i: usize) -> Vec<ListRow> {
+        asset_list::grouped_rows(&Self::template_entries(i), None)
     }
 
     // The View panel's toggle rows: one checkbox per `registry::VIEW_ROWS`

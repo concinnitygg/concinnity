@@ -245,6 +245,11 @@ pub(crate) fn expand_world(
 /// resolving bare source filenames under `assets_dir`. Returns the fully
 /// expanded asset list. Does not run semantic validation; see
 /// `crate::build_only::prepare_world` for the full build-pipeline front half.
+///
+/// # Errors
+///
+/// Returns an error if the world fails to parse or structurally validate, or an
+/// expansion pass fails.
 pub fn expand_world_from_str<'a>(
     source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&Path>,

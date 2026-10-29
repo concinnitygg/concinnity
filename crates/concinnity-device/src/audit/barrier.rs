@@ -31,9 +31,11 @@ enum Reason {
     // transition can express it: the Hi-Z reduction's per-mip chain, where one
     // mip is written while the previous is sampled; the MSAA resolve step, which
     // needs its source and destination in the resolve states for the length of
-    // one call; and the refraction snapshots, where a pass copies the attachment
-    // it is blending into because a fragment cannot sample it. Each opens and
-    // closes within one node, so no net state crosses the node boundary.
+    // one call; the refraction snapshots, where a pass copies the attachment
+    // it is blending into because a fragment cannot sample it; and the cull's
+    // packing, whose scan and scatter read what the dispatch before them wrote.
+    // Each opens and closes within one node, so no net state crosses the node
+    // boundary.
     IntraPass,
     // Resource creation, staging upload, and resize transitions. Outside any
     // frame's command stream.
@@ -157,6 +159,13 @@ const AUDITS: &[BackendAudit] = &[
                 Reason::Ungraphed,
             ),
             ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
+            ("compact.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
+            (
+                "compact_test.rs",
+                "cmd_pipeline_barrier",
+                1,
+                Reason::OutOfFrame,
+            ),
             // The model-history ring: the snapshot dispatch writes the slot a
             // pre-pass `frames_in_flight - 1` frames ago read, so the write is
             // fenced behind those vertex reads and released to the next frame's.
@@ -175,6 +184,17 @@ const AUDITS: &[BackendAudit] = &[
             // pass's sample. Neither the targets nor the shared mirror depth is a
             // graph resource.
             ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
+            // The prop probe's faces: one orders each face's cull and packing
+            // after the previous face's packing and indirect draw used the
+            // shared slot, the other each face's render after the previous
+            // face's (and the last frame's convolution's) use of its
+            // attachments. Neither the slot nor the capture is a graph resource.
+            (
+                "prop_probe.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::Ungraphed,
+            ),
             // Each plane's cluster lists, binned over its reflected view: one
             // orders the binning after the plane's previous mirror render read
             // them, the other before this render reads them. Per-plane lists are
@@ -300,6 +320,9 @@ const AUDITS: &[BackendAudit] = &[
             // the simulation node, each mip handed back to the resting state
             // once written so the next reduction reads it.
             ("water_sim.rs", ".ResourceBarrier(", 3, Reason::IntraPass),
+            // The wake's field, opened for unordered access after the ocean's
+            // arrays in the same node, each mip handed back the same way.
+            ("water_wake.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // The one-shot zero-init of a new emitter's pool, into COPY_DEST and
             // back to its UNORDERED_ACCESS resting state. The pool's
             // UAV -> NON_PIXEL_SHADER_RESOURCE pair crosses the sim -> draw node
@@ -399,14 +422,20 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "auto_exposure.rs",
                 ".ResourceBarrier(",
-                4,
+                3,
                 Reason::Ungraphed,
             ),
             ("cull.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
+            ("compact.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
             // Four for the mirror targets and their cull's indirect buffer, two
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.
             ("planar.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
+            // The prop probe's capture into and out of its face targets' state,
+            // the shared multisampled color around each face's resolve, and its
+            // cube of the probe array back after the convolution. None is a graph
+            // resource.
+            ("prop_probe.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not
             // model, borrowed for the upscaler's read); the other transitions the

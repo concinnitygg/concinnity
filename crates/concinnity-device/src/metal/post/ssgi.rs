@@ -1,14 +1,14 @@
 //! Metal's share of screen-space global illumination, which is its settings and
 //! where the pass reads and writes this frame. Every stage -- the pipelines, the
 //! depth pyramids, the accumulation and all the draws -- is written once in
-//! `concinnity_core::render::post::ssgi` and reaches Metal through
+//! `concinnity_engine::render::post::ssgi` and reaches Metal through
 //! `MtlPostDevice`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::ssgi::settings::SsgiSettings;
-use concinnity_core::render::post::ssgi::{SsgiPass, SsgiResolveInputs, SsgiTraceInputs};
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::ssgi::settings::SsgiSettings;
+use concinnity_engine::render::post::ssgi::{SsgiPass, SsgiResolveInputs, SsgiTraceInputs};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 
@@ -74,8 +74,11 @@ impl MtlContext {
         ssgi_params: &render_types::SsgiParams,
     ) -> RenderResult<u32> {
         // With no G-buffer there is nothing to trace against, so skip the pass.
-        let (Some(pass), Some(normal_depth)) = (&self.ssgi.pass, self.gbuffer_normal_depth())
-        else {
+        let (Some(pass), Some(normal_depth), Some(reflectance)) = (
+            &self.ssgi.pass,
+            self.gbuffer_normal_depth(),
+            self.gbuffer_roughness(),
+        ) else {
             return Ok(0);
         };
         pass.encode(
@@ -85,6 +88,7 @@ impl MtlContext {
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 velocity: self.ssgi_velocity()?,
+                reflectance,
             },
             ssgi_params,
         )?;

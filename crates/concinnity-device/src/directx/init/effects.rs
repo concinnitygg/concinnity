@@ -3,18 +3,20 @@
 //! unified G-buffer, and the decal, fog, particle, auto-exposure, raymarch,
 //! planar reflection and transparent resources.
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::gfx::render_types::DrawObject;
-use concinnity_core::render::backend_init::{PlanarBudget, SdfVolumeSource, WorldFx};
-use concinnity_core::render::decal::{self, DecalRecord};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{ParticleEmitterRecord, ParticleSystem};
-use concinnity_core::render::planar_reflection::PlanarReflectors;
-use concinnity_core::render::post::device::PostExtent;
-use concinnity_core::render::post::ssao::settings::SsaoSettings;
-use concinnity_core::render::volumetric_fog::FogSettings;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::render_types::DrawObject;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{PlanarBudget, SdfVolumeSource, WorldFx};
+use concinnity_engine::render::decal::{self, DecalRecord};
+use concinnity_engine::render::environment::volumetric_fog::FogSettings;
+use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleSystem};
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::render::post::device::PostExtent;
+use concinnity_engine::render::post::ssao::settings::SsaoSettings;
+use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::water::WaterBody;
+use concinnity_engine::water::ocean::OceanPlan;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, DSV_GLASS_REFLECTION_DEPTH_SLOT, RtvHeapLayout};
@@ -94,11 +96,12 @@ pub(super) fn build_upscale(
         backend: upscaler,
         requested,
         jitter: std::cell::Cell::new([0.0, 0.0]),
+        exposure: auto_exposure::UpscalerExposure::default(),
     })
 }
 
-// The fixed descriptor slots of the live-toggleable Quality effects, stashed so
-// the runtime `apply_quality_settings` can build a launched-off feature into
+// The fixed descriptor slots of the live-toggleable features outside the post
+// block, stashed so a settings rebuild can build a launched-off feature into
 // its slot without re-deriving the heap layout. The init builds take their
 // slots from here too.
 pub(super) fn build_quality_slots(
@@ -113,8 +116,6 @@ pub(super) fn build_quality_slots(
     let dsv_descriptor_size =
         heaps::descriptor_size(&gpu.hw.device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
     QualitySlotHandles {
-        rt_output_rtv: swapchain.rtv(rtv.rt_output_slot),
-        rt_output_srv: srv(layout.rt_output_srv_slot),
         gbuffer: GbufferSlots {
             normal_depth_rtv: swapchain.rtv(rtv.gbuffer_base_slot),
             normal_depth_srv: srv(layout.gbuffer_srv_base_slot),
@@ -128,21 +129,16 @@ pub(super) fn build_quality_slots(
                 DSV_GBUFFER_DEPTH_SLOT,
             ),
         },
-        glass_reflection: {
-            let base = layout.glass_reflection_srv_base_slot;
-            crate::directx::transparent::GlassReflectionSlots {
-                rtv: [
-                    swapchain.rtv(rtv.glass_reflection_base_slot),
-                    swapchain.rtv(rtv.glass_reflection_base_slot + 1),
-                ],
-                dsv: heaps::cpu_handle(
-                    &targets.depth.heap,
-                    dsv_descriptor_size,
-                    DSV_GLASS_REFLECTION_DEPTH_SLOT,
-                ),
-                srv_cpu: std::array::from_fn(|i| descriptors.slot_cpu(base + i)),
-                windows: std::array::from_fn(|w| descriptors.slot_gpu(base + 2 * w)),
-            }
+        glass_reflection: crate::directx::transparent::GlassReflectionSlots {
+            rtv: [
+                swapchain.rtv(rtv.glass_reflection_base_slot),
+                swapchain.rtv(rtv.glass_reflection_base_slot + 1),
+            ],
+            dsv: heaps::cpu_handle(
+                &targets.depth.heap,
+                dsv_descriptor_size,
+                DSV_GLASS_REFLECTION_DEPTH_SLOT,
+            ),
         },
     }
 }
@@ -313,6 +309,30 @@ pub(super) fn build_gbuffer(
 // Projected decals: pipeline + unit-cube buffers + per-frame uniform rings.
 // Always built so runtime `add_decal` works from a world that started with
 // none; pre-authored decals get their albedo SRV written here.
+// The simulated oceans, whose arrays every water draw binds.
+pub(super) fn build_water_sim(
+    gpu: &InitGpu<'_>,
+    descriptors: &DxDescriptors,
+    water_surfaces: &[WaterBody],
+    ocean: &OceanPlan,
+) -> RenderResult<Option<crate::directx::water_sim::DxOceanSim>> {
+    if water_surfaces.is_empty() {
+        return Ok(None);
+    }
+    let base = descriptors.layout.ocean_base_slot;
+    crate::directx::water_sim::DxOceanSim::new(
+        &gpu.hw.alloc,
+        ocean,
+        &crate::directx::water_sim::OceanSlots {
+            cpu: |i| descriptors.slot_cpu(base + i),
+            gpu: descriptors.slot_gpu(base),
+            stride: descriptors.srv_descriptor_size,
+        },
+        gpu.hot_reload,
+    )
+    .map(Some)
+}
+
 pub(super) fn build_decals(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
@@ -497,18 +517,22 @@ pub(super) fn build_auto_exposure(
 // The atmosphere, when the world declares one: its tables in the atmosphere's
 // heap slots, and its irradiance cube's SRV in the environment's irradiance
 // slot, so every pass that reaches the environment's diffuse light reads it.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "handed on to the atmosphere, which stores it"
+)]
 pub(super) fn build_atmosphere(
     gpu: &InitGpu<'_>,
     descriptors: &DxDescriptors,
     scene: &DxSceneAssets,
-    settings: Option<concinnity_core::render::atmosphere::AtmosphereSettings>,
+    settings: Option<concinnity_engine::render::environment::atmosphere::AtmosphereSettings>,
     msaa_samples: u32,
 ) -> RenderResult<Option<crate::directx::atmosphere::DxAtmosphere>> {
     use crate::directx::atmosphere::{
         ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere, DxSkyCube,
     };
     use crate::directx::probe_prefilter::PrefilterSlots;
-    use concinnity_core::render::atmosphere::SKY_CUBE_PLAN;
+    use concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN;
     let Some(settings) = settings else {
         return Ok(None);
     };
@@ -673,11 +697,12 @@ pub(super) struct TransparentInputs<'a> {
     pub(super) descriptors: &'a DxDescriptors,
     pub(super) targets: &'a DxTargets,
     pub(super) reflection_slots: crate::directx::transparent::GlassReflectionSlots,
+    pub(super) post: &'a PostDescriptors,
     // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.
     pub(super) reflection_divisor: u32,
     pub(super) planar_slots: &'a [Option<usize>],
     pub(super) glass_panels: &'a [GlassPanel],
-    pub(super) water_surfaces: &'a [concinnity_core::render::water::WaterBody],
+    pub(super) water_surfaces: &'a [WaterBody],
     pub(super) draw_objects: &'a [DrawObject],
 }
 
@@ -698,6 +723,7 @@ pub(super) fn build_transparent(
         descriptors,
         targets,
         reflection_slots,
+        post,
         reflection_divisor,
         planar_slots,
         glass_panels,
@@ -727,7 +753,10 @@ pub(super) fn build_transparent(
             let (water_planar_slots, glass_planar_slots) =
                 planar_slots.split_at(water_surfaces.len());
             Some(TransparentResources::new(
-                crate::directx::transparent::TransparentDeviceCtx { alloc: &hw.alloc },
+                crate::directx::transparent::TransparentDeviceCtx {
+                    alloc: &hw.alloc,
+                    post,
+                },
                 crate::directx::transparent::TransparentBuildConfig {
                     msaa_samples: targets.hdr.msaa_samples,
                     width: targets.extent.render_width,

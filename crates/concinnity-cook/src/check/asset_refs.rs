@@ -10,9 +10,9 @@
 //
 // This is build-time-only authoring logic; the asset data structs it operates
 // on, and their runtime `Component` impls, live in
-// concinnity-core.
+// concinnity-engine.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, PhysicsJointKind, Prop,
     VoxelChunk, VoxelWorld,
 };
@@ -159,13 +159,17 @@ impl CrossReferenced for Camera3D {
         else {
             return Vec::new();
         };
-        // The target resolves generically; only its required-ness is here.
-        if is_blank(follow.get("target")) {
-            return vec![CrossRef::Issue(format!(
-                "Camera3D '{name}': `controller.follow.target` is required (the SkinnedMesh to follow)"
-            ))];
+        // The target or prop resolves generically; only that exactly one is
+        // named is checked here.
+        match (is_blank(follow.get("target")), is_blank(follow.get("prop"))) {
+            (true, true) => vec![CrossRef::Issue(format!(
+                "Camera3D '{name}': `controller.follow` needs a `target` (the SkinnedMesh to follow) or a `prop` (the Prop to follow)"
+            ))],
+            (false, false) => vec![CrossRef::Issue(format!(
+                "Camera3D '{name}': `controller.follow` names both a `target` and a `prop`; it follows one"
+            ))],
+            _ => Vec::new(),
         }
-        Vec::new()
     }
 }
 

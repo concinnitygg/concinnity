@@ -1,7 +1,7 @@
 use super::*;
-use concinnity_core::budget::{MemoryBudget, ThreadBudget};
-use concinnity_core::components::{AppConfig, FramePriority};
-use concinnity_core::ecs::FrameRateCap;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::components::{AppConfig, FramePriority};
+use concinnity_engine::ecs::FrameRateCap;
 
 fn thread_budget(runtime: &Runtime) -> ThreadBudget {
     *runtime.world().resource().expect("thread budget published")
@@ -98,7 +98,7 @@ fn the_launch_request_survives_a_world_load_and_restart() {
         dev_loop: true,
         ..Default::default()
     };
-    let mut runtime = Runtime::new().with_launch(launch);
+    let mut runtime = Runtime::new().with_launch(launch.clone());
     runtime.start().unwrap();
     assert_eq!(runtime.world().resource::<LaunchRequest>(), Some(&launch));
 
@@ -112,9 +112,9 @@ fn the_launch_request_survives_a_world_load_and_restart() {
 // report is scheduled; an ordinary one leaves a declared config inert.
 #[test]
 fn only_a_benchmark_launch_arms_the_world() {
-    use concinnity_core::benchmark::BenchmarkRun;
-    use concinnity_core::components::BenchmarkConfig;
-    use concinnity_core::launch::LaunchArgs;
+    use concinnity_engine::benchmark::BenchmarkRun;
+    use concinnity_engine::components::BenchmarkConfig;
+    use concinnity_engine::launch::{LaunchArgs, LaunchCommand};
 
     let declared = || {
         let mut world = World::new();
@@ -130,7 +130,7 @@ fn only_a_benchmark_launch_arms_the_world() {
 
     let mut benchmarked = Runtime::from_world(declared()).with_launch(LaunchRequest {
         args: LaunchArgs {
-            benchmark: true,
+            command: LaunchCommand::Bench,
             ..LaunchArgs::NONE
         },
         ..Default::default()
@@ -144,28 +144,56 @@ fn only_a_benchmark_launch_arms_the_world() {
 // launch's and are what the run publishes.
 #[test]
 fn an_apps_args_replace_the_launchs() {
-    use concinnity_core::benchmark::BenchmarkRun;
-    use concinnity_core::launch::LaunchArgs;
+    use concinnity_engine::benchmark::BenchmarkRun;
+    use concinnity_engine::launch::{LaunchArgs, LaunchCommand};
 
     let mut world = World::new();
     let args = LaunchArgs {
-        benchmark: true,
-        frames: Some(9),
+        command: LaunchCommand::Bench,
+        limit_frames: Some(9),
         ..LaunchArgs::NONE
     };
-    world.insert_resource(args);
+    world.insert_resource(args.clone());
     let mut runtime = Runtime::from_world(world).with_launch(LaunchRequest {
         args: LaunchArgs {
-            frames: Some(1),
+            limit_frames: Some(1),
             ..LaunchArgs::NONE
         },
         ..Default::default()
     });
     runtime.start().unwrap();
-    let launch = runtime.world().resource::<LaunchRequest>().copied();
+    let launch = runtime.world().resource::<LaunchRequest>().cloned();
     assert_eq!(launch.map(|l| l.args), Some(args));
     assert!(runtime.world().resource::<LaunchArgs>().is_none());
     assert!(runtime.world().resource::<BenchmarkRun>().is_some());
+}
+
+// An app's own args replace the launch's whole, as `publish` takes them, so
+// the API chosen before start is the one the run publishes.
+#[test]
+fn an_apps_args_choose_the_graphics_api_whole() {
+    let launch = |api| LaunchRequest {
+        args: LaunchArgs {
+            graphics_api: api,
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    };
+    let mut world = World::new();
+    world.insert_resource(LaunchArgs {
+        graphics_api: Some(Platform::Vulkan),
+        ..LaunchArgs::NONE
+    });
+    let runtime = Runtime::from_world(world).with_launch(launch(Some(Platform::Metal)));
+    assert_eq!(runtime.launch_graphics_api(), Some(Platform::Vulkan));
+    let mut world = World::new();
+    world.insert_resource(LaunchArgs::NONE);
+    let runtime = Runtime::from_world(world).with_launch(launch(Some(Platform::Metal)));
+    assert_eq!(runtime.launch_graphics_api(), None);
+    let runtime = Runtime::from_world(World::new()).with_launch(launch(Some(Platform::DirectX)));
+    assert_eq!(runtime.launch_graphics_api(), Some(Platform::DirectX));
+    let runtime = Runtime::from_world(World::new());
+    assert_eq!(runtime.launch_graphics_api(), None);
 }
 
 // from_world hands the runtime a world that is already populated, in the

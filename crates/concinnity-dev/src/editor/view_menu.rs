@@ -4,8 +4,8 @@
 //! and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
 //! hook (`hook/drive/view_menu.rs`) owns the open state and routing.
 
-use concinnity_core::ecs::{ViewOverrides, World};
-pub(crate) use concinnity_core::gfx::view_modes::{ShowFlags, ViewMode};
+use concinnity_engine::ecs::{ViewOverrides, World};
+pub(crate) use concinnity_engine::gfx::view_modes::{ShowFlags, ViewMode};
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::outlines::{Category, CategorySet};
@@ -188,8 +188,8 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     fn injected_world() -> World {
         ids().test_world()

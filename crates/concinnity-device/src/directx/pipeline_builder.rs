@@ -7,12 +7,12 @@
 // against with its own. The pipeline library is the frame thread's, so a
 // worker's PSO builds uncached.
 
-use concinnity_core::components::ShaderPrograms;
-use concinnity_core::components::sdf_programs::SdfPrograms;
-use concinnity_core::render::backend::{PipelineBuilder, PreparedPipelines};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::shader_programs::raymarch::VolumeFlags;
-use concinnity_core::render::shader_programs::surface::GrassShading;
+use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{PipelineBuilder, PreparedPipelines};
+use concinnity_engine::render::sdf::programs::SdfPrograms;
+use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
+use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12InfoQueue, ID3D12RootSignature};
 
 use super::init::pipelines::{BucketPsos, BucketRootSigs, WorldPsoTargets, build_world_shader_pso};
@@ -43,8 +43,8 @@ pub(super) struct DxPipelineBuilder {
     pub world: Option<Targets<BucketRootSigs>>,
     // `None` when the world declares no volume.
     pub volumes: Option<Targets<VolumeRootSigs>>,
-    // Per bucket: what of the grass its main fragment shades.
-    pub grass: Vec<GrassShading>,
+    // Per bucket: which of its Shader's main fragments it draws with.
+    pub variants: Vec<SurfaceVariant>,
 }
 
 // A world Shader's main-pass and pre-pass PSOs and what they were built for.
@@ -80,7 +80,10 @@ impl PipelineBuilder for DxPipelineBuilder {
             },
             bucket as usize,
             programs,
-            self.grass.get(bucket as usize).copied().unwrap_or_default(),
+            self.variants
+                .get(bucket as usize)
+                .copied()
+                .unwrap_or_default(),
         )?;
         Ok(PreparedPipelines::new(PreparedWorldShader {
             targets,

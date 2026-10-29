@@ -291,7 +291,7 @@ impl Build<'_> {
         }
         // A spawn only relates to something when a behavior is waiting on it.
         if body.spawns
-            && let Some(spawned) = self.find(&self.triggers, "spawned")
+            && let Some(spawned) = Self::find(&self.triggers, "spawned")
         {
             self.link(to, spawned, Some(SPAWNS));
         }
@@ -311,7 +311,7 @@ impl Build<'_> {
     // Whether an entity is one the map draws: reached by more than one behavior,
     // or already a card because something in the world fires on it.
     fn meets(&self, name: &str) -> bool {
-        self.shared.iter().any(|n| n == name) || self.find(&self.assets, name).is_some()
+        self.shared.iter().any(|n| n == name) || Self::find(&self.assets, name).is_some()
     }
 
     fn push(&mut self, card: Card) -> usize {
@@ -319,12 +319,12 @@ impl Build<'_> {
         self.cards.len() - 1
     }
 
-    fn find(&self, index: &[(String, usize)], key: &str) -> Option<usize> {
+    fn find(index: &[(String, usize)], key: &str) -> Option<usize> {
         index.iter().find(|(k, _)| k == key).map(|(_, i)| *i)
     }
 
     fn trigger(&mut self, caption: &str) -> usize {
-        if let Some(at) = self.find(&self.triggers, caption) {
+        if let Some(at) = Self::find(&self.triggers, caption) {
             return at;
         }
         let card = self.push(card(
@@ -338,7 +338,7 @@ impl Build<'_> {
     }
 
     fn variable(&mut self, name: &str) -> usize {
-        if let Some(at) = self.find(&self.variables, name) {
+        if let Some(at) = Self::find(&self.variables, name) {
             return at;
         }
         let card = self.push(card(name, "variable".to_string(), CardKind::Variable, None));
@@ -349,7 +349,7 @@ impl Build<'_> {
     // The asset `name` addresses. A card says which type the world declares it
     // as, or that the world declares nothing by that name at all.
     fn asset(&mut self, name: &str, want: Ref) -> usize {
-        if let Some(at) = self.find(&self.assets, name) {
+        if let Some(at) = Self::find(&self.assets, name) {
             return at;
         }
         let found = declared(self.world, name, want.asset_type());
@@ -382,7 +382,7 @@ impl Build<'_> {
             )
         });
         let name = told.map_or("story", |entry| entry.name.as_str());
-        if let Some(at) = self.find(&self.assets, name) {
+        if let Some(at) = Self::find(&self.assets, name) {
             return at;
         }
         let card = self.push(match told {

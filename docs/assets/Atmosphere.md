@@ -7,7 +7,7 @@ into blue overhead, white haze at the horizon and red at sunset, and that
 looks right from the ground to high above it.
 
 The air is a shell `height_km` thick around the planet. With a
-[Planet](Planet.md) in the world it wraps that planet, at its center and
+[`Planet`](Planet.md) in the world it wraps that planet, at its center and
 radius. Without one, it wraps a sphere of `planet_radius_km` whose top is at
 height 0, so a flat world sits on a gently curved ground far below it.
 
@@ -20,19 +20,25 @@ layer `ozone_center_km` up absorbs a little orange, which keeps the
 twilight sky blue rather than gray. Coefficients are per kilometer of air
 at the ground (for ozone, at the layer's center).
 
-The sun is the first [DirectionalLight](DirectionalLight.md): its direction
+The sun is the first [`DirectionalLight`](DirectionalLight.md): its direction
 is where the sun is, and its `color * intensity` is the sunlight above the
 air. The light that reaches the camera is that sunlight dimmed and
 reddened by the air it crossed, and that is what lights the scene: white at
 noon, orange and weak at sunset, gone once the sun is below the horizon. A
-[SkyRotation](SkyRotation.md) is the day cycle: with its axis along the
+[`SkyRotation`](SkyRotation.md) is the day cycle: with its axis along the
 planet's pole the sun rises and sets as the sky turns, and on a planet its
 height also follows where on the planet the camera stands.
 
+On a [`Planet`](Planet.md), its ground and sea are lit point by point: each
+takes the sun (and a [`NightSky`](NightSky.md)'s moon) through the air above
+it and the light of its own sky, so seen from high above, the day side is
+lit, a reddened band runs along the terminator and the night side is dark,
+lit by the moon where it is up.
+
 The sky is drawn behind everything, with the sun's disc in it. Distant
 surfaces fade into the air's color (aerial perspective), behind any
-[VolumetricFog](VolumetricFog.md), which stays the nearer layer. The sky
-lights the scene in place of an [EnvironmentMap](EnvironmentMap.md): its
+[`VolumetricFog`](VolumetricFog.md), which stays the nearer layer. The sky
+lights the scene in place of an [`EnvironmentMap`](EnvironmentMap.md): its
 light fills the shadows, and shiny surfaces reflect it, following the sun
 through the day.
 
@@ -51,7 +57,7 @@ One per world. The defaults are Earth's.
 - `ozone_absorption`: An array of 3 floats. Ozone absorption per kilometer at the center of the ozone layer. Defaults to `[0.00065, 0.001881, 0.000085]`.
 - `ozone_center_km`: A float. Height of the ozone layer's densest point, in kilometers. Defaults to `25.0`.
 - `ozone_width_km`: A float. Full width of the ozone layer, in kilometers: its density falls off linearly to nothing half this far above and below its center. Defaults to `30.0`.
-- `ground_albedo`: An array of 3 floats. Linear-space color of the ground as seen from far above: the light it bounces back into the air. Defaults to `[0.3, 0.3, 0.3]`.
+- `ground_albedo`: An array of 3 floats. Linear-space color of the ground as seen from far above: the light it bounces back into the air. Around a [Planet](Planet.md), what the sky reflects and lights surfaces with below the horizon is the planet's own ground and sea near the camera instead. Defaults to `[0.3, 0.3, 0.3]`.
 - `sun_angular_diameter_deg`: A float. Angular diameter of the sun's disc, in degrees. Clamped to `[0.05, 10]`. Defaults to `0.53`.
 - `sun_disc_intensity`: A float. Brightness of the sun's disc, as a multiple of the sunlight it casts. 0 hides the disc. Defaults to `1000.0`.
 - `apparent_radius_km`: A float. Radius, in kilometers, of the planet the sky is drawn over while the camera is near the ground, in place of the true one. A small planet's own sky is a flat deep blue with a pale sun at sunset, since a ray along its horizon crosses little air; drawn over an Earth-sized radius it gets a pale horizon and red sunsets. The haze over the ground keeps its true distances, and the horizon still meets the ground where it really is. At least 1. `null` (the default) draws the sky over the true radius.

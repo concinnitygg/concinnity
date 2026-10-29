@@ -8,7 +8,7 @@
 //! panel's shown state; the top-bar "View" button opens / closes this panel.
 //! The title bar, close button, and row draw come from the shared `list_panel`.
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use super::list_panel::{self, ListIds, Row};
 use super::registry::{self, PanelKey};
@@ -88,7 +88,7 @@ pub(crate) fn place(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], m
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

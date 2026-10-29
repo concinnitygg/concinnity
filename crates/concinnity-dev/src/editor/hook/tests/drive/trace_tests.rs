@@ -3,8 +3,8 @@
 //! its node, the state a stop clears, and the Ctrl+click that toggles a card's
 //! breakpoint.
 
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{FrameTime, World};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{FrameTime, World};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::behavior::graph::CardKind;
@@ -17,7 +17,7 @@ use crate::editor::sim;
 
 // A world carrying one published trace tick for behavior `b`'s first node.
 fn traced_world(id: AssetId, hit: bool) -> World {
-    use concinnity_core::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
+    use concinnity_engine::ecs::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
     let mut world = World::new();
     let event = TraceEvent {
         behavior: id,

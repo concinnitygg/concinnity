@@ -6,10 +6,10 @@
 
 // A world holding the console's command-line field.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput, TextLabel,
 };
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::tests::fixtures::{
     entry, hook, select, world_with_fields, world_with_input,
@@ -277,11 +277,8 @@ fn a_second_build_is_refused_while_one_is_running() {
 // the frame loop never stalls on a cook.
 #[test]
 fn the_build_command_runs_on_a_worker_and_reports_back() {
-    let _guard = crate::test_support::lock();
+    let _state = crate::test_support::in_temp_cwd();
     isolate_state_dir();
-    let dir = tempfile::tempdir().expect("temp dir");
-    let prev = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(dir.path()).expect("enter temp cwd");
 
     let mut h = hook(vec![
         serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}}),
@@ -298,7 +295,6 @@ fn the_build_command_runs_on_a_worker_and_reports_back() {
         std::thread::yield_now();
     }
     let log = log_text(&h);
-    std::env::set_current_dir(prev).expect("restore cwd");
 
     assert!(
         log.contains("cook finished") || log.contains("cook failed"),

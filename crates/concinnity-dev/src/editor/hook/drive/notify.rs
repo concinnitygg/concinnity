@@ -4,7 +4,7 @@
 //! resolves presses (a card runs its action and dismisses, the overflow row
 //! opens the Console, where the full history lives).
 
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::panels::registry::PanelKey;

@@ -13,11 +13,11 @@
 // tests finds its quiet frame as the rest of the suite drains -- only a whole
 // deadline with no quiet frame fails.
 
-use concinnity_core::components::{
+use concinnity_engine::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Collider, PhysicsConfig, Prop,
     PropCollider, Transform,
 };
-use concinnity_core::ecs::World;
+use concinnity_engine::ecs::World;
 use concinnity_runtime::SYSTEMS;
 
 const WARMUP_FRAMES: usize = 64;
@@ -84,7 +84,7 @@ fn static_world() -> World {
         world.insert(
             e,
             Collider(PropCollider {
-                shape: concinnity_core::components::PropColliderShape::Cuboid,
+                shape: concinnity_engine::components::PropColliderShape::Cuboid,
                 half_extents: [10.0, 0.5, 10.0],
                 ..Default::default()
             }),

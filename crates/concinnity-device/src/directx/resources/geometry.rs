@@ -4,9 +4,9 @@
 //! waits on the GPU. Also the blocking `write_geometry_region` helper for the
 //! hot-reload paths that rewrite a region in place.
 
-use concinnity_core::render::backend::{GeometryEdit, SceneHost};
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
+use concinnity_engine::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::allocator::DeviceAllocator;

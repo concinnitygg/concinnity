@@ -20,12 +20,12 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveWrite;
-use concinnity_core::render::transparent;
-use concinnity_core::render::uniforms::TransparentView;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
+use concinnity_engine::render::transparent;
+use concinnity_engine::render::uniforms::TransparentView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSString, ns_string};
@@ -76,6 +76,17 @@ pub(in crate::metal) struct TransparentDraw {
     // World-space distance from camera to the draw's center, used for the
     // back-to-front sort. Larger = farther = drawn first.
     pub(in crate::metal) sort_distance: f32,
+    // A second slice of the same buffers drawn right after under its own
+    // pipeline, in the scene pass only: a planet sea's inner rings, which
+    // shade without the planet's own sky.
+    pub(in crate::metal) then: Option<DrawSlice>,
+}
+
+// A slice of a draw's indices and the pipeline it draws under.
+pub(in crate::metal) struct DrawSlice {
+    pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    pub(in crate::metal) index_count: u32,
+    pub(in crate::metal) index_offset_bytes: usize,
 }
 
 // Copy a `#[repr(C)]` uniform struct into an owned byte buffer for a
@@ -145,21 +156,32 @@ fn encode_transparent_draw(
     for (slot, samp) in &d.fragment_samplers {
         enc.set_fragment_sampler(samp.as_ref(), *slot);
     }
+    draw_slice(enc, d, d.index_count, d.index_offset_bytes);
+    Ok(())
+}
+
+// Draw `index_count` of `d`'s indices from `index_offset_bytes` under the
+// bound pipeline and `d`'s bindings.
+fn draw_slice(
+    enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+    d: &TransparentDraw,
+    index_count: u32,
+    index_offset_bytes: usize,
+) {
     // SAFETY: the index range is the record's own slice of `d.index_buffer`, which the record
     // keeps alive past the draw.
     unsafe {
         enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
             MTLPrimitiveType::Triangle,
-            d.index_count as usize,
+            index_count as usize,
             d.index_type,
             &d.index_buffer,
-            d.index_offset_bytes,
+            index_offset_bytes,
             1,
             d.base_vertex as isize,
             0,
         );
     }
-    Ok(())
 }
 
 impl MtlContext {
@@ -174,7 +196,13 @@ impl MtlContext {
     // re-render alive for it. A device whose Metal compiler rejects the ray
     // query is exactly that failure.
     pub(in crate::metal) fn rt_transparent_active(&self) -> bool {
-        self.reflection_path().rt_trace && self.transparent_rt_pipelines_ready()
+        self.reflection_path().rt_trace() && self.transparent_rt_pipelines_ready()
+    }
+
+    // Whether water traces its own reflection this frame: the BVH is live and
+    // the resolved settings afford the in-place water trace.
+    pub(in crate::metal) fn water_rt_live(&self) -> bool {
+        self.rt.accel.is_some() && self.rt.settings.is_some_and(|s| s.water_trace)
     }
 
     // Whether every live transparent producer built its ray-traced pipeline,
@@ -242,6 +270,10 @@ impl MtlContext {
             }
             enc.set_vertex_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
             enc.set_fragment_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
+            // A sea's wake rides the same sampler; a rectangle never reads it.
+            use super::water_wake::WAKE_FIELD_TEXTURE_INDEX;
+            enc.set_vertex_texture(&a.wake, WAKE_FIELD_TEXTURE_INDEX);
+            enc.set_fragment_texture(&a.wake, WAKE_FIELD_TEXTURE_INDEX);
         }
         // The main camera's cluster grid, which bins the probes a surface
         // blends, takes the params at buffer(12) and the lists at buffer(13).
@@ -492,6 +524,10 @@ impl MtlContext {
 
         for &i in &order {
             encode_transparent_draw(&enc, &draws[i], &draws[i].pipeline)?;
+            if let Some(then) = &draws[i].then {
+                enc.set_pipeline(&then.pipeline);
+                draw_slice(&enc, &draws[i], then.index_count, then.index_offset_bytes);
+            }
         }
 
         Ok(u32::saturating_from(order.len()))

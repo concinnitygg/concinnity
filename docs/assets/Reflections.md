@@ -4,7 +4,7 @@
 
 Reflections on glossy surfaces (water, polished floors): screen-space,
 hardware ray-traced, or neither. The `reflections` section of
-[GraphicsConfig](GraphicsConfig.md); a field left unset takes the default
+[`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default
 below.
 
 Both methods are on by default, which is the look on capable hardware. The
@@ -12,6 +12,10 @@ Both methods are on by default, which is the look on capable hardware. The
 the high tier and permits ray tracing only on the top tier; where ray
 tracing is not permitted or the GPU lacks it, `screen_space` takes over. A
 ceiling only ever reduces, so turning a method off here holds on every tier.
+
+The reflection's Fresnel starts from the surface's own head-on reflectance,
+so a metal reflects its surroundings across its whole face, tinted by its
+color, while a dielectric reflects mostly at grazing angles.
 
 ## Parameters
 

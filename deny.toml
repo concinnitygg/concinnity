@@ -10,6 +10,12 @@ ignore = [
     # fontdue to switch or replacing fontdue outright. Revisit if fontdue moves
     # off ttf-parser.
     "RUSTSEC-2026-0192",
+    # ruzstd < 0.9.1 decompression bomb. The cook's own zstd decoding is on
+    # 0.9.1; the remaining 0.7 copy is pinned by basisu 0.1.0 (the latest),
+    # which inflates zstd-supercompressed Basis levels at cook time only, on
+    # source assets the project author supplies. Drop once basisu moves past
+    # ruzstd 0.7.
+    "RUSTSEC-2026-0344",
 ]
 
 [licenses]

@@ -1,7 +1,7 @@
 // `cn docs`: write the asset reference pages under docs/assets/.
 //
 // The prose, keys, types and defaults all come from the schema the derives
-// compile into the engine (`concinnity_core::ecs::schema`, behind the `schema`
+// compile into the engine (`concinnity_engine::ecs::schema`, behind the `schema`
 // feature): `reference` walks it from the authoring registry and renders each
 // body, `defaults` serializes what an omitted key reads as, and `page`
 // assembles the pages. Nothing is read from the engine's sources, so any build
@@ -63,7 +63,7 @@ fn pages(docs: &[AssetDoc]) -> BTreeMap<String, String> {
 /// `root` is the directory the pages go under; `None` uses the working
 /// directory. Unchanged pages are left alone, so running this on an
 /// up-to-date tree touches nothing.
-pub fn docs(root: Option<&str>) -> io::Result<()> {
+pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
     let pages = pages(&reference::build(&reference::registry_assets()));
     let dir = PathBuf::from(root.unwrap_or(".")).join(PAGES_DIR);
     let (written, removed) = write_pages(&dir, &pages)?;
@@ -121,8 +121,8 @@ fn remove_stale_pages(dir: &Path, keep: &BTreeMap<String, String>) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::ecs::asset_fields::{ApplyClass, ParamMeta, ParamRange};
-    use concinnity_core::ecs::schema::{
+    use concinnity_engine::ecs::asset_fields::{ApplyClass, ParamMeta, ParamRange};
+    use concinnity_engine::ecs::schema::{
         Body, FieldDefault, FieldSchema, FieldType, TypeSchema, ValueSchema, VariantSchema,
     };
     use std::collections::BTreeMap as Map;

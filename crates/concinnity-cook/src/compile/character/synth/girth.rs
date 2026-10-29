@@ -15,7 +15,7 @@ pub(crate) fn displace(input: &SynthInput<'_>) -> Vec<[f32; 3]> {
             let mut d = [0.0_f32; 3];
             for (j, w) in input.region_influences(v) {
                 if let Some(r) = try_normalize(input.frames[j].radial(v.pos), 1e-6) {
-                    vec3::vec3_add(&mut d, vec3::scale(r, w * input.params.amplitude));
+                    vec3::add_assign(&mut d, vec3::scale(r, w * input.params.amplitude));
                 }
             }
             d
@@ -39,7 +39,7 @@ mod tests {
             if vec3::length(radial) < 1e-6 {
                 assert_eq!(*d, [0.0; 3], "pole vertices sit on the axis and stay");
             } else {
-                let expected = vec3::scale(vec3::vec3_normalize(radial), 0.1);
+                let expected = vec3::scale(vec3::normalize(radial), 0.1);
                 assert!(
                     vec3::length(vec3::sub(*d, expected)) < 1e-5,
                     "{d:?} vs {expected:?}"

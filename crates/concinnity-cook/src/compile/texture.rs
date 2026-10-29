@@ -1,9 +1,9 @@
 //! Compiles a Texture component's args into the binary payload that
 //! `GraphicsSystem` reads at runtime, and decodes file-backed texture sources
 //! (PNG / JPEG / DDS / TGA / glb-embedded images) into RGBA pixels for both the
-//! build pipeline and the `cn debug` asset hot-reload path.
+//! build pipeline and the `cn run -f` asset hot-reload path.
 //!
-//! Payload format: `concinnity_core::bake::texture::serialize`. RGBA8 images
+//! Payload format: `concinnity_engine::bake::texture::serialize`. RGBA8 images
 //! are stored with their full box-filtered mip chain, so the runtime uploads
 //! levels without generating any.
 //!
@@ -18,15 +18,15 @@
 //! 3. No other files need to change.
 
 // The pre-compiled payload `deserialize` / `serialize` and the resolution-cap
-// `downscale_rgba` stay in concinnity-core (no image-decode deps); the file ->
+// `downscale_rgba` stay in concinnity-engine (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
-use concinnity_core::bake::texture::{
-    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
-};
-use concinnity_core::components::Texture;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
+use concinnity_engine::bake::texture::{
+    TextureFormat, TextureImage, TextureMip, downscale_rgba, serialize,
+};
+use concinnity_engine::components::Texture;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -35,7 +35,7 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
     match generator {
         "checker" | "brick" | "concrete" | "grass" | "sky" | "wood" | "tile" | "metal"
-        | "terrain" | "stone" | "plaster" | "" => Ok(()),
+        | "terrain" | "stone" | "plaster" | "puff" | "" => Ok(()),
         other => Err(format!("unknown texture generator '{other}'")),
     }
 }
@@ -81,6 +81,7 @@ fn texture_image(
         "terrain" => rgba8_image(generate_terrain(tex.resolution)),
         "stone" => rgba8_image(generate_stone(tex.resolution)),
         "plaster" => rgba8_image(generate_plaster(tex.resolution)),
+        "puff" => rgba8_image(generate_puff(tex.resolution)),
         "" => {
             if tex.source.is_empty() {
                 return Err("file-backed Texture requires a `source` path".to_string());
@@ -189,6 +190,11 @@ fn cap_block_mips(mips: Vec<TextureMip>, max_size: u32) -> Vec<TextureMip> {
 /// edited file, so a texture that builds also reloads. Only a `.glb` / `.gltf`
 /// source is searched for under `assets_dir`; the flat image formats read the
 /// path the world declared.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or does not decode in the format
+/// its extension names.
 pub fn decode_source(
     source: &str,
     image_index: u32,
@@ -233,7 +239,7 @@ pub fn decode_source(
 
 // Decode a KTX2 to RGBA8 for the runtime asset hot-reload live preview. The
 // build path keeps KTX2 block-compressed; this decodes/transcodes the base
-// level so `cn debug` can show an edited texture without a compressed upload.
+// level so `cn run -f` can show an edited texture without a compressed upload.
 fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
     let bytes = read_source(source, "KTX2 texture")?;
     crate::codec::ktx2::decode_ktx2_rgba8(&bytes).map_err(|e| format!("'{source}': {e}"))
@@ -447,6 +453,11 @@ fn load_gltf_image(
 /// single asset hot-reload pass: the worker thread keeps a
 /// `HashMap<String, gltf::Gltf>` and calls this entry point per texture
 /// instead of re-parsing the file 43+ times.
+///
+/// # Errors
+///
+/// Returns an error if the image cannot be read from `doc`, is not PNG or JPEG,
+/// or does not decode.
 pub fn decode_glb_image_from_doc(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
@@ -873,6 +884,24 @@ fn generate_stone(resolution: u32) -> (u32, u32, Vec<u8>) {
     (size, size, pixels)
 }
 
+// A soft white puff for sprites: opaque in the middle, fading to clear at the
+// rim along `(1 - r^2)^2`, so a particle drawn with it reads as a droplet or a
+// wisp rather than a square.
+fn generate_puff(resolution: u32) -> (u32, u32, Vec<u8>) {
+    let size = resolution.max(8);
+    let half = size as f32 * 0.5;
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 + 0.5 - half) / half;
+            let dy = (y as f32 + 0.5 - half) / half;
+            let fade = (1.0 - (dx * dx + dy * dy)).max(0.0);
+            pixels.extend_from_slice(&[255, 255, 255, u8::saturating_from(255.0 * fade * fade)]);
+        }
+    }
+    (size, size, pixels)
+}
+
 // Smooth painted plaster: near-white base with very low-frequency noise that
 // simulates slight surface irregularities from hand-application. Suitable for
 // interior room walls, ceilings, and any neutral indoor surface. Color sits
@@ -1280,7 +1309,7 @@ mod tests {
     // compile_texture_payload: file-backed branch and payload envelope
 
     fn deserialize(payload: &[u8]) -> TextureImage {
-        concinnity_core::bake::texture::deserialize(payload).expect("deserialize payload")
+        concinnity_engine::bake::texture::deserialize(payload).expect("deserialize payload")
     }
 
     #[test]
@@ -1299,7 +1328,7 @@ mod tests {
         assert_eq!((image.width(), image.height()), (2, 1));
         assert_eq!(image.mips[0].data, data);
         // The stored chain is the one the backends used to box-filter at upload.
-        let reference = concinnity_core::render::mipmap::generate_mip_chain(2, 1, &data);
+        let reference = concinnity_engine::render::mipmap::generate_mip_chain(2, 1, &data);
         assert_eq!(image.mips.len(), reference.len());
         for (mip, level) in image.mips.iter().zip(&reference) {
             assert_eq!((mip.width, mip.height), (level.width, level.height));
@@ -1692,7 +1721,7 @@ mod tests {
     fn validate_texture_generator_known_generators_ok() {
         for name in &[
             "checker", "brick", "concrete", "grass", "sky", "wood", "tile", "metal", "terrain",
-            "stone", "plaster", "",
+            "stone", "plaster", "puff", "",
         ] {
             let args = serde_json::json!({"generator": name});
             assert!(
@@ -1765,6 +1794,18 @@ mod tests {
             avg_r > 55 && avg_r < 135,
             "expected dark gray, avg_r={avg_r}"
         );
+    }
+
+    // A puff is white throughout, solid at its middle and clear at its rim.
+    #[test]
+    fn generate_puff_fades_to_its_rim() {
+        let (w, h, px) = generate_puff(32);
+        assert_eq!((w, h), (32, 32));
+        let alpha = |x: u32, y: u32| px[((y * 32 + x) * 4 + 3) as usize];
+        assert!(alpha(16, 16) > 245);
+        assert_eq!(alpha(0, 0), 0);
+        assert!(alpha(16, 4) < alpha(16, 10));
+        assert!(px.chunks(4).all(|c| c[..3] == [255, 255, 255]));
     }
 
     #[test]

@@ -1,55 +1,57 @@
 // GraphicsSystem one-time setup: backend creation, draw-list build, and the
 // shader / texture / streaming wiring performed on the first tick.
 
-use concinnity_core::bake::{font, texture};
-use concinnity_core::components::{
+use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::{font, texture};
+use concinnity_engine::components::{
     BlockType, GraphicsConfig, Model, Planet, Shader, ShaderPrograms, StreamingConfig, SubMeshRef,
     VoxelWorld, Window,
 };
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{OverlayImages, PayloadLocator, PipelineContext};
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::gfx::render_types::{DrawIndex, DrawObject, FarFieldTint, InstancedCluster};
-use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::backend_init::EmbeddedSurface;
-use concinnity_core::render::queues::ActiveDeviceCaps;
-use concinnity_core::render::world_load::stream_seed::{
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{OverlayImages, PayloadLocator, PipelineContext};
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::gfx::render_types::{DrawIndex, DrawObject, FarFieldTint, InstancedCluster};
+use concinnity_engine::render::backend::init::EmbeddedSurface;
+use concinnity_engine::render::frame::queues::ActiveDeviceCaps;
+use concinnity_engine::render::world_load::stream_seed::{
     StreamGeometry, StreamSeed, plan_stream_seed,
 };
-use concinnity_core::render::{backend, backend_init, draw_list};
-use concinnity_core::resource::{FontTable, MaterialTable, TextureTable};
-use concinnity_core::settings::apply::{ApplyPlan, LiveChanges};
+use concinnity_engine::render::{backend, backend::init, draw_list};
+use concinnity_engine::resource::{FontTable, MaterialTable, TextureTable};
+use concinnity_engine::settings::apply::{ApplyPlan, LiveChanges};
 
 use super::backend_handoff::RuntimeHandoff;
 use super::skinned_templates::SkinnedUpload;
 use super::streaming::StreamingSetup;
-use super::{FrameCounter, GraphicsSystem, RenderInitFailure, overlay_maps, scene_flow};
+use super::{FrameCounter, GraphicsSystem, RenderInitFailure, flow, maps};
 use crate::live_edit::hot_reload_sources::{
     HotReloadSources, procedural_mesh_snapshot, resolve_sdf_fields,
 };
-use concinnity_core::launch::LaunchRequest;
-use concinnity_core::render::extract::gather_lights;
-use concinnity_core::render::world_load::blob_release::{blobs_to_release, retained_blobs};
-use concinnity_core::render::world_load::draw_geometry::probe_placements;
-use concinnity_core::render::world_load::media;
-use concinnity_core::render::world_load::prop_draws::{PropDrawInputs, assemble_prop_draws};
-use concinnity_core::render::world_load::skinned::{self, SkinnedAssembly};
-use concinnity_core::render::world_load::source_maps::{
+use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::render::frame::extract::gather_lights;
+use concinnity_engine::render::world_load::blob_release::{blobs_to_release, retained_blobs};
+use concinnity_engine::render::world_load::draw_geometry::probe_placements;
+use concinnity_engine::render::world_load::media;
+use concinnity_engine::render::world_load::prop_draws::{PropDrawInputs, assemble_prop_draws};
+use concinnity_engine::render::world_load::skinned::{self, SkinnedAssembly};
+use concinnity_engine::render::world_load::source_maps::{
     ColorLutSource, EnvironmentMapSource, ShaderSourceMap, SkinnedMeshSourceMap, TextureNameSlots,
     TextureSourceMap, mesh_source_map, procedural_mesh_source_map, skinned_mesh_source_map,
     texture_catalog,
 };
-use concinnity_core::render::world_load::tables::{self, DecodedMaterials, TexturePool};
-use concinnity_core::render::world_load::texture_payloads::{
+use concinnity_engine::render::world_load::tables::{self, DecodedMaterials, TexturePool};
+use concinnity_engine::render::world_load::texture_payloads::{
     TexturePayloads, TextureSlotSkips, decode_texture_payloads,
 };
-use concinnity_core::render::world_load::world_fx::drain_world_fx;
-use concinnity_core::render::world_load::world_scan::{
+use concinnity_engine::render::world_load::world_fx::drain_world_fx;
+use concinnity_engine::render::world_load::world_scan::{
     capture_hud_chips, color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
 };
-use concinnity_core::settings::quality::resolve_ceiling;
-use concinnity_core::settings::system::{DisplayReport, SettingsInit, SettingsSlot, SettingsState};
-use concinnity_core::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
+use concinnity_engine::settings::quality::resolve_ceiling;
+use concinnity_engine::settings::system::{
+    DisplayReport, SettingsInit, SettingsSlot, SettingsState,
+};
+use concinnity_engine::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
 
 mod decode;
 
@@ -59,7 +61,7 @@ use decode::{WorldLoad, WorldPayloads};
 // settings state: the launch's ray-tracing requests, the quality ceiling
 // (planar-reflection budget), and the drained StreamingConfig.
 struct ResolvedRenderConfig {
-    launch: backend_init::RenderLaunch,
+    launch: init::RenderLaunch,
     quality_ceiling: QualityCeiling,
     streaming_config: Option<StreamingConfig>,
     // Raw world ambient (`IndirectLighting.ambient_intensity`, no user override),
@@ -94,7 +96,7 @@ impl GraphicsSystem {
         &self,
         ctx: &mut PipelineContext<'_>,
         launch: &LaunchRequest,
-        persisted: &concinnity_core::settings::StoredSettings,
+        persisted: &concinnity_engine::settings::StoredSettings,
     ) -> DetectedQuality {
         let backend::DeviceProbe {
             profile: gpu_profile,
@@ -105,7 +107,7 @@ impl GraphicsSystem {
             "gpu",
             &format!("{:?} {:?}", gpu_profile.vendor, gpu_profile.tier),
         );
-        // `--quality-preset` wins and is never persisted; a preset never
+        // `--graphics-quality` wins and is never persisted; a preset never
         // chosen seeds and persists `Auto` once.
         let preset = launch.resolve_quality_preset(persisted, ctx.resources);
         let ceiling = resolve_ceiling(preset, &gpu_profile);
@@ -129,11 +131,11 @@ impl GraphicsSystem {
         &mut self,
         ctx: &mut PipelineContext<'_>,
         launch: &LaunchRequest,
-        persisted: &concinnity_core::settings::StoredSettings,
+        persisted: &concinnity_engine::settings::StoredSettings,
         quality: &DetectedQuality,
     ) -> (ResolvedRenderConfig, SettingsState) {
         let window = ctx.drain::<Window>().into_iter().next();
-        self.frames = FrameCounter::new(launch.args.frames);
+        self.frames = FrameCounter::new(launch.args.limit_frames);
         let mut streaming_config = ctx.drain::<StreamingConfig>().into_iter().next();
         let graphics = ctx.drain::<GraphicsConfig>().into_iter().next();
         let authored = WorldSettings::new(WorldAssets {
@@ -149,11 +151,22 @@ impl GraphicsSystem {
             preset: quality.preset,
             ceiling: &quality.ceiling,
             window,
+            display: self.detect_display(ctx),
             authored,
-            // `--vsync`, `--fps-cap` and `--dlss-preset` win for this launch,
-            // shown on the row and never persisted unless the row itself changes.
+            // `--vsync`, `--limit-fps`, `--window-mode` and `--dlss-preset` win for
+            // this launch, shown on the row and never persisted unless the row
+            // itself changes.
             session: launch.session_overrides(),
         });
+        let [width, height] = settings.predicted_output();
+        tracing::info!(
+            "auto-config: output {width}x{height} predicted, temporal upscaling {}",
+            if settings.resolved().graphics.anti_aliasing.upscaling {
+                "on"
+            } else {
+                "off"
+            },
+        );
         if let Some(sc) = streaming_config.as_mut() {
             settings.apply_to_streaming(sc);
         }
@@ -161,11 +174,11 @@ impl GraphicsSystem {
         settings.sync_menu_labels(ctx, persisted);
         // Each ScrollPanel's per-element clip band, captured before
         // UiInputSystem drains the ScrollPanels (GraphicsSystem.init runs first).
-        self.clip_rects = overlay_maps::scroll_clip_rects(ctx);
+        self.clip_rects = maps::scroll_clip_rects(ctx);
 
         (
             ResolvedRenderConfig {
-                launch: backend_init::RenderLaunch {
+                launch: init::RenderLaunch {
                     rt_dynamic: launch.resolve_rt_dynamic(),
                     rt_skinned_geometry: launch.resolve_rt_skinned_geometry(),
                 },
@@ -179,8 +192,9 @@ impl GraphicsSystem {
 
     // Apply the persisted window mode, publish the Resolution row's mode list
     // (backend-enumerated, else the static preset fallback), apply a persisted
-    // display-mode choice to the backend, and seed the frame-rate-cap resource +
-    // the Resolution row's dynamic value label. Runs after the backend is built.
+    // display-mode choice to the backend, log and publish the display's refresh
+    // range, and seed the frame-rate-cap resource + the Resolution row's dynamic
+    // value label. Runs after the backend is built.
     fn finalize_display_modes(
         &mut self,
         ctx: &mut PipelineContext<'_>,
@@ -198,8 +212,13 @@ impl GraphicsSystem {
             if let Some(resolution) = settings.resolution() {
                 backend.set_display_mode(resolution);
             }
-            report
+            (report, backend.display_refresh())
         });
+        let (reported, refresh) = reported.unzip();
+        if let Some(refresh) = refresh.flatten() {
+            tracing::info!("display: {}", refresh.label());
+            ctx.insert_resource(refresh);
+        }
         settings.adopt_display(ctx, reported);
     }
 
@@ -276,14 +295,7 @@ impl GraphicsSystem {
     ) -> Option<SceneDraws> {
         // A geometry-less world (e.g. text-only) is valid: the backend is
         // initialized with empty geometry buffers and only the text path runs.
-        let draw_list::DrawListData {
-            vertices: mut all_vertices,
-            indices: mut all_indices,
-            mut draw_objects,
-            mut instanced_clusters,
-            mesh_handle_to_draws,
-            ..
-        } = assemble_prop_draws(
+        let data = assemble_prop_draws(
             ctx,
             PropDrawInputs {
                 model_map: &world.model_map,
@@ -295,6 +307,17 @@ impl GraphicsSystem {
             },
             self.extractor.pick_candidates_mut(),
         )?;
+        self.extractor.set_prop_probe(
+            concinnity_engine::render::probe::prop::PropProbeTarget::resolve(ctx, &data),
+        );
+        let draw_list::DrawListData {
+            vertices: mut all_vertices,
+            indices: mut all_indices,
+            mut draw_objects,
+            mut instanced_clusters,
+            mesh_handle_to_draws,
+            ..
+        } = data;
 
         // Taken before streaming plans its geometry, so a Shader's far band is
         // seen whichever scene its draws stream with.
@@ -328,9 +351,9 @@ impl GraphicsSystem {
 
     // Run init, marking the system failed when any step of it fails.
     pub(super) fn try_init(&mut self, ctx: &mut PipelineContext<'_>) -> Option<()> {
-        let launch = ctx.resource::<LaunchRequest>().copied().unwrap_or_default();
+        let launch = ctx.resource::<LaunchRequest>().cloned().unwrap_or_default();
         let persisted = ctx
-            .resource::<concinnity_core::settings::StoredSettings>()
+            .resource::<concinnity_engine::settings::StoredSettings>()
             .cloned()
             .unwrap_or_default();
         let quality = self.detect_quality(ctx, &launch, &persisted);
@@ -390,30 +413,48 @@ impl GraphicsSystem {
         let cluster_count = instanced_clusters.len();
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
-        let planet_grass = planet.as_ref().and_then(|p| {
-            concinnity_core::render::world_load::world_scan::planet_grass(
-                p,
-                &concinnity_core::render::terrain::grass_by_id(ctx),
-            )
+        let planet_surface = planet.as_ref().map(|p| {
+            let surface = concinnity_engine::render::world_load::world_fx::PlanetSurface {
+                tint: p
+                    .material
+                    .and_then(|h| world.materials.map.get(&h))
+                    .map_or(
+                        concinnity_engine::render::material_entry::MaterialEntry::UNTEXTURED,
+                        |e| *e,
+                    )
+                    .uniforms
+                    .tint,
+                grass: concinnity_engine::render::world_load::world_scan::planet_grass(
+                    p,
+                    &concinnity_engine::render::environment::terrain::grass_by_id(ctx),
+                ),
+                covers: concinnity_engine::render::environment::ground::GroundCovers::of(
+                    p,
+                    |h| world.materials.map.get(&h).copied(),
+                    u32::saturating_from(world.texture_count),
+                ),
+            };
+            (p, surface)
         });
-        let planet_far_field = planet_grass
-            .as_ref()
-            .map(concinnity_core::render::grass::PlanetGrass::far_field);
         let fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
             world.texture_count,
             &world.terrains,
-            planet_grass,
-            planet.as_ref(),
+            planet_surface,
             quality_ceiling.ocean,
         );
+        let planet_far_field = fx
+            .canopy
+            .as_ref()
+            .and_then(concinnity_engine::render::environment::grass::CanopyField::planet_range);
         self.extractor.set_grows_grass(fx.grass.is_some());
-        self.extractor.set_atmosphere(fx.atmosphere);
+        self.extractor
+            .set_atmosphere(fx.atmosphere, concinnity_host::thread::jobs::pool());
         let sdf_fields = if capture_sources {
             resolve_sdf_fields(&fx.sdf_volumes, self.assets_dir().as_deref())
         } else {
-            Default::default()
+            concinnity_engine::render::world_load::source_maps::SdfFieldMap::default()
         };
         let decal_count = fx.decals.len();
         let particle_count = fx.particles.len();
@@ -439,7 +480,7 @@ impl GraphicsSystem {
         // requirements from them (a world with no 3D content drops every
         // scene-scoped feature before any backend resource is sized), and
         // hand the result to the backend this process renders with.
-        use concinnity_core::render::backend_init::{
+        use concinnity_engine::render::backend::init::{
             BackendInit, MediaPayloads, PlanarBudget, SceneData, WorldShader,
         };
         let mut backend_init = BackendInit {
@@ -466,12 +507,13 @@ impl GraphicsSystem {
                 n_skinned: world.skinned.draw_objects.len(),
                 // Worst-case resident chunk count, so the GPU-cull buffers
                 // reserve a chunk record region (0 for a non-voxel world).
-                n_chunk_max: concinnity_core::render::stream_pools::budget::chunk_record_reserve(
-                    voxel_world
-                        .as_ref()
-                        .map(|vw| u32::saturating_from(vw.impostor_radius())),
-                    planet.is_some(),
-                ),
+                n_chunk_max:
+                    concinnity_engine::render::streaming::pools::budget::chunk_record_reserve(
+                        voxel_world
+                            .as_ref()
+                            .map(|vw| u32::saturating_from(vw.impostor_radius())),
+                        planet.is_some(),
+                    ),
                 material_params: world.materials.params,
             },
             // One entry per world Shader, indexed by ShaderHandle value;
@@ -481,16 +523,17 @@ impl GraphicsSystem {
                 .shaders
                 .iter()
                 .zip(
-                    concinnity_core::render::world_load::far_band_shaders::far_band_shaders(
+                    concinnity_engine::render::world_load::far_band_shaders::far_band_shaders(
                         world.shaders.shaders.len(),
                         far_bands,
                         planet_far_field.is_some(),
+                        planet.is_some(),
                     ),
                 )
-                .map(|(s, canopy)| WorldShader {
+                .map(|(s, grass)| WorldShader {
                     programs: s.programs.as_ref(),
                     deferred: s.deferred,
-                    canopy,
+                    grass,
                 })
                 .collect(),
             media: MediaPayloads {
@@ -511,7 +554,7 @@ impl GraphicsSystem {
                 resolution: quality_ceiling.planar_reflection_resolution,
             },
             fx,
-            requirements: Default::default(),
+            requirements: init::RenderRequirements::default(),
         };
         backend_init.resolve_requirements();
         match self.build_backend(ctx, backend_init) {
@@ -531,7 +574,7 @@ impl GraphicsSystem {
 
         // The backend bakes a cube per placement.
         if let Some(backend) = self.backend.as_deref_mut() {
-            backend.set_reflection_probes(&probe_placements);
+            backend.set_reflection_probes(&probe_placements, self.extractor.prop_probe().is_some());
         }
 
         let (hot_reload_sources, texture_name_slots) = if capture_sources {
@@ -601,7 +644,7 @@ impl GraphicsSystem {
 
         self.finalize_backend_config(ctx, &mut settings);
 
-        self.scene_flow = scene_flow::start_flow(
+        self.scene_flow = flow::start_flow(
             ctx,
             self.extractor.scene_visibility_mut(),
             self.backend.as_deref_mut(),

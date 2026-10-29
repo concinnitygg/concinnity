@@ -1,4 +1,4 @@
-// The environment drawn as the background (see `concinnity_core::render::sky`):
+// The environment drawn as the background (see `concinnity_engine::render::environment::sky`):
 // a fullscreen draw at the tail of each opaque scene pass (the main camera, a
 // reflection-probe face, a planar mirror), inside that pass's own render pass so
 // the sky costs no extra load or store of its targets, and one at the tail of
@@ -9,10 +9,10 @@
 // mirror already bound for its own viewpoint.
 
 use ash::vk;
-use concinnity_core::gfx::view_modes::ViewMode;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph::PassId;
-use concinnity_core::render::{pass_timing, sky};
+use concinnity_engine::gfx::view_modes::ViewMode;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::{backend::pass_timing, environment::sky};
 
 use super::builtin_shaders::CompileProgram;
 use super::context::VkContext;
@@ -70,7 +70,7 @@ impl VkSky {
 // only where the depth still holds the clear.
 pub(in crate::vulkan) fn build_sky_pipeline(
     device: &VkDevice,
-    fragment: &concinnity_core::render::shader_programs::ShaderProgram,
+    fragment: &concinnity_engine::render::shader::programs::ShaderProgram,
     layout: vk::PipelineLayout,
     main_render_pass: vk::RenderPass,
     samples: vk::SampleCountFlags,
@@ -128,9 +128,13 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         global_set: vk::DescriptorSet,
         frame_idx: usize,
+        from_cube: bool,
     ) {
         let device = &self.hw.device;
-        if let Some((pipeline, layout, atmosphere_set)) = self.atmosphere_sky(frame_idx) {
+        let atmosphere = self
+            .atmosphere_sky(frame_idx)
+            .filter(|_| !(from_cube && self.scene.prefilter_mip_count > 0));
+        if let Some((pipeline, layout, atmosphere_set)) = atmosphere {
             // The atmosphere's sky layout takes the global set and the atmosphere's set.
             draw_sky_triangle(device, cmd, pipeline, layout, &[global_set, atmosphere_set]);
             self.inc_draw_calls(1);
@@ -162,7 +166,12 @@ impl VkContext {
                 );
             };
         }
-        self.encode_sky(cmd, self.descriptors.global_sets[frame_idx], frame_idx);
+        self.encode_sky(
+            cmd,
+            self.descriptors.global_sets[frame_idx],
+            frame_idx,
+            false,
+        );
         if let Some((pool, (_, end))) = stamps {
             // SAFETY: as above.
             unsafe {

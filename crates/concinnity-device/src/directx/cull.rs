@@ -1,11 +1,12 @@
 //! Compute-driven GPU culling: one thread per build-time `DrawObject`
 //! frustum/distance-tests the object's `GpuObjectData` AABB against the six
 //! CPU-extracted frustum planes, optionally Hi-Z-occlusion-tests it against the
-//! previous frame's depth pyramid (see `directx/hiz.rs`), and writes one
-//! `ExecuteIndirect` command into the per-frame argument buffer: survivors get
-//! `instance_count = 1`, culled or disabled objects get `instance_count = 0`
-//! (a no-op draw). The main bindless pass then issues the whole buffer with a
-//! single `ExecuteIndirect`, so the CPU never walks the draw list.
+//! previous frame's depth pyramid (see `directx/hiz.rs`), and counts the ones
+//! it keeps per stream; `directx/compact.rs` then packs their `ExecuteIndirect`
+//! commands into one list per stream in the per-frame argument buffer, with
+//! the list's length behind the commands. The main bindless pass issues each
+//! list with one `ExecuteIndirect` by that count, so the CPU never walks the
+//! draw list.
 //!
 //! The frustum and distance maths mirror `gfx::frustum` exactly (the six
 //! planes are extracted CPU-side already normalized) so the GPU path culls
@@ -14,19 +15,24 @@
 //! object id) followed by `D3D12_DRAW_INDEXED_ARGUMENTS`, matching the command
 //! signature built by `create_cull_command_signature`. Mirrors src/metal/cull.rs.
 
-use concinnity_core::gfx::frustum::{Frustum, Plane};
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::MAX_SHADOWED_SPOTS;
+use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile::FanOutTiming;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::model_history::HistoryMode;
-use concinnity_core::render::uniforms::directx::CullParams;
+use concinnity_engine::gfx::cull_status::CullStatus;
+use concinnity_engine::gfx::frustum::{Frustum, Plane};
+use concinnity_engine::gfx::lod;
+use concinnity_engine::gfx::render_types::{
+    GpuCompactParams, MAX_SHADOWED_SPOTS, StreamLayout, culled_records,
+};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::scene_state::CaptureTiles;
+use concinnity_engine::render::temporal::model_history::HistoryMode;
+use concinnity_engine::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::builtin_shaders::{self, CompileProgram as _};
 use crate::directx::com;
+use crate::directx::compact::{CompactPass, DrawLists, UavSpan};
 use crate::directx::context::DxContext;
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
@@ -68,13 +74,22 @@ pub(in crate::directx) struct CullState {
     // pre-pass. `None` marks a bucket whose Shader is not resident yet: its
     // scene has not pinned, so both passes skip those draws (see
     // `world_shaders.rs`).
-    pub world_pipelines: concinnity_core::render::world_pipelines::WorldPipelines<
+    pub world_pipelines: concinnity_engine::render::shader::world_pipelines::WorldPipelines<
         super::init::pipelines::BucketPsos,
     >,
-    // Commands reserved per shader-bucket region in the indirect buffers, fixed
-    // at init to the record capacity the buffers were sized for. Bucket `b`'s
-    // region starts at command `b * bucket_stride`.
+    // Commands reserved per single-stream region (a probe face, a spot slice),
+    // fixed at init to the record capacity the buffers were sized for.
     pub bucket_stride: usize,
+    // The routes and the bucket regions of the indirect buffers, fixed at
+    // init: each bucket's region holds the records it can take.
+    pub variants: concinnity_engine::gfx::render_types::GpuCullVariants,
+    // Per-slot upload copies of `variants` with that slot's view, bound at
+    // root param [6] of every view cull, persistently mapped.
+    pub variant_buffers: Vec<PooledBuffer>,
+    pub variant_ptrs: Vec<*mut u8>,
+    // Per slot, the buckets its view can pick, a bit each (see
+    // `GpuCullVariants::live_buckets`); the others' regions skip executing.
+    pub live_buckets: Vec<std::sync::atomic::AtomicU64>,
     // The engine's compiled bindless main-pass stages, retained so a shader
     // bucket warmed mid-session can build its pipeline without recompiling the
     // HLSL. See [`super::init::pipelines::BindlessMainShaders`].
@@ -98,9 +113,17 @@ pub(in crate::directx) struct CullState {
     // args + per-frame cull-decision bits the kernel reads).
     pub draw_args_buffer_resources: Vec<PooledBuffer>,
     pub draw_args_buffer_ptrs: Vec<*mut u8>,
-    // Per-frame indirect-command buffers the cull kernel writes (UAV) and the
-    // main pass consumes (`ExecuteIndirect`). Resting `INDIRECT_ARGUMENT`.
+    // Per-frame indirect-command buffers the cull packs its lists into (UAV)
+    // and the main pass consumes (`ExecuteIndirect`). Resting
+    // `INDIRECT_ARGUMENT`. Each holds `indirect_commands` commands, every
+    // bucket region's back to back, then the lists' counts.
     pub indirect_cmd_buffers: Vec<ID3D12Resource>,
+    pub indirect_commands: usize,
+    // The scan and scatter that pack each cull's kept draws per stream, and
+    // each slot's group-count scratch (phase 2 reusing phase 1's once its
+    // packing has read it). Resting `UNORDERED_ACCESS`.
+    pub compact: Option<super::compact::DxCompactKernels>,
+    pub group_count_buffers: Vec<ID3D12Resource>,
     // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
     // phase-2 reads. Resting `UNORDERED_ACCESS`.
     pub cull_status_buffers: Vec<ID3D12Resource>,
@@ -109,26 +132,22 @@ pub(in crate::directx) struct CullState {
     // GPU-driven shadow pass. A depth-only bindless pipeline whose VS
     // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
     // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
-    // cull command signature rebuilt against its root sig. `shadow_indirect_buffers`
-    // is one buffer per frame-in-flight sized `NUM_SHADOW_CASCADES * record_count()`
-    // commands -- cascade `c`'s region is `[c*cull_count, (c+1)*cull_count)`,
-    // written by binding the cull output UAV at a per-cascade GPU-address offset.
-    // `shadow_cull_status_buffers` is a per-frame scratch the shadow cull writes
-    // but never reads (kept separate from `cull_status_buffers`, which the
-    // phase-2 main cull consumes AFTER the shadow pass). All `Some`/non-empty
-    // only when the bindless cull path is active AND shadows are enabled.
+    // cull command signature rebuilt against its root sig. `shadow_views` is
+    // one per frame-in-flight with a packed region per cascade, kept apart from
+    // `cull_status_buffers`, which the phase-2 main cull consumes AFTER the
+    // shadow pass. All `Some`/non-empty only when the bindless cull path is
+    // active AND shadows are enabled.
     pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
     pub shadow_bindless_pso: Option<ID3D12PipelineState>,
     pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
     // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
     pub cull_pso_shadow: Option<ID3D12PipelineState>,
-    pub shadow_indirect_buffers: Vec<ID3D12Resource>,
-    pub shadow_cull_status_buffers: Vec<ID3D12Resource>,
-    // The spot shadow pass's indirect buffers, one per frame-in-flight with one
-    // region of `bucket_stride` commands per spot slice, written by the same
-    // shadow kernel. Its own buffer, so the spot pass shares no state with the
-    // cascade pass. Empty when the world has no shadowed spot.
-    pub spot_indirect_buffers: Vec<ID3D12Resource>,
+    pub shadow_views: Vec<DxShadowViews>,
+    // The spot shadow pass's views, one per frame-in-flight with a packed
+    // region per spot slice, written by the same shadow kernel. Its own, so the
+    // spot pass shares no state with the cascade pass. Empty when the world has
+    // no shadowed spot.
+    pub spot_views: Vec<DxShadowViews>,
     // Per-frame model-history buffers (one column-major `float4x4` per cull
     // record), device-local: only the snapshot kernel writes them and only the
     // pre-pass reads them, so the host never touches their bytes. Frame `R`
@@ -190,6 +209,7 @@ pub(in crate::directx) fn create_cull_root_signature(
         .srv_table(2, 1, All) // [3] t2 Hi-Z Texture2D<float> covering all mips
         .uav(0, All) // [4] u0 RWStructuredBuffer<IndirectCommand>
         .uav(1, All) // [5] u1 RWStructuredBuffer<uint> cull_status (two-pass)
+        .srv(3, All) // [6] t3 StructuredBuffer<CullVariants> routes + bucket regions
         .build(device, "cull root sig")
 }
 
@@ -244,13 +264,17 @@ pub(in crate::directx) fn create_cull_command_signature(
 }
 
 // One cull into a region of an indirect buffer: the region that receives the
-// survivors, the frustum to test the frame's records against, and the eye the
-// kernel picks each record's LOD by (and, for the main kernel, its distance).
+// survivors, the frustum to test the frame's records against, the eye the
+// kernel picks each record's LOD by (and, for the main kernel, its distance),
+// the records `[first, end)` it leaves out (a prop's own capture leaves out
+// the prop), and the coarse grid it packs planet tiles through, if any.
 #[derive(Clone, Copy)]
 pub(in crate::directx) struct RegionCull {
     pub region: usize,
     pub frustum: Frustum,
     pub eye: [f32; 3],
+    pub exclude: [u32; 2],
+    pub capture_tiles: Option<CaptureTiles>,
 }
 
 impl RegionCull {
@@ -264,28 +288,83 @@ impl RegionCull {
             }; 6],
         },
         eye: [0.0; 3],
+        exclude: [0, 0],
+        capture_tiles: None,
     };
 }
 
 // The kernel and output buffer a run of region culls shares. Region `r`'s
-// commands start at command `r * region_stride`.
+// commands start at command `r * region_stride`, or with `packing` at
+// `r * packing.lists_stride` bytes, its lists there.
 #[derive(Clone, Copy)]
 struct RegionCullPass<'a> {
     pso: &'a ID3D12PipelineState,
     indirect: &'a ID3D12Resource,
     status_gva: u64,
     region_stride: usize,
+    packing: Option<RegionPacking<'a>>,
+}
+
+// Where a run of region culls packs each region's kept draws: its own
+// group-count scratch, status and lists, each `*_stride` bytes past the last
+// region's.
+#[derive(Clone, Copy)]
+pub(in crate::directx) struct RegionPacking<'a> {
+    pub(in crate::directx) group_counts: &'a ID3D12Resource,
+    pub(in crate::directx) group_stride: u64,
+    pub(in crate::directx) status: &'a ID3D12Resource,
+    pub(in crate::directx) status_stride: u64,
+    pub(in crate::directx) lists_stride: u64,
+}
+
+// One frame's shadow views of one pass, a region of `bucket_stride` records
+// each: their lists, status and group counts. Resting in COMMON until first
+// used, then the lists in INDIRECT_ARGUMENT and the rest in UNORDERED_ACCESS.
+pub(in crate::directx) struct DxShadowViews {
+    pub lists: ID3D12Resource,
+    pub status: ID3D12Resource,
+    pub group_counts: ID3D12Resource,
+}
+
+// Bytes of one shadow view's status: a word per record.
+pub(in crate::directx) fn shadow_status_bytes(n_cull: usize) -> u64 {
+    crate::directx::context::align256((n_cull * size_of::<u32>()) as u64).max(256)
 }
 
 // Per-frame buffer fill + encoder
 
 impl DxContext {
-    // Where this frame's draws growing grass route: the grass twins, and where
-    // the blades start handing the field to the canopy.
-    fn grass_route(&self) -> concinnity_core::render::record_pack::GrassRoute {
-        concinnity_core::render::record_pack::GrassRoute {
-            twins: self.cull.world_pipelines.grass_twins(),
-            far_start: self.grass_lod.get().map_or(0.0, |l| l.fade_start()),
+    // Write slot `slot`'s variant block: the routes and bucket regions, seen
+    // from the main view, where the grass hands over to the canopy and under
+    // the view's planet sky; and note which buckets that view can pick.
+    fn write_cull_variants(&self, slot: usize) {
+        let Some(&ptr) = self.cull.variant_ptrs.get(slot) else {
+            return;
+        };
+        let mut variants = self.cull.variants;
+        variants.set_view(
+            self.grass_lod.get().map_or(0.0, |l| l.fade_start()),
+            &self.state.view.daylight,
+        );
+        if let Some(live) = self.cull.live_buckets.get(slot) {
+            live.store(
+                variants.live_buckets(self.shader_bucket_count(), &self.state.view.daylight),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        let bytes = bytemuck::bytes_of(&variants);
+        // SAFETY: the slot's buffer was mapped at init with room for one block, and its
+        // fence has signaled (or it is the probe bake's reserved slot before its capture is
+        // submitted), so the GPU does not read it while this copy runs.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
+    }
+
+    // The variant block slot `slot`'s view culls read, at root param [6].
+    fn bind_cull_variants(&self, cmd: &ID3D12GraphicsCommandList, slot: usize) {
+        if let Some(buffer) = self.cull.variant_buffers.get(slot) {
+            // SAFETY: the command list is recording, and the slot's variant buffer is live and
+            // CPU-written before the frame's submit.
+            unsafe { cmd.SetComputeRootShaderResourceView(6, com::gpu_va(buffer)) };
         }
     }
 
@@ -298,23 +377,18 @@ impl DxContext {
     }
 
     // The main PSO a probe or planar face draws its one command stream under:
-    // the canopy twin's when the world has one, so a far band seen in a face
-    // keeps its canopy, else the default's.
+    // the default's fullest grass variant when the world has one, so a far
+    // band seen in a face keeps its canopy, else the default's.
     pub(in crate::directx) fn face_bindless_pso(&self) -> Option<&ID3D12PipelineState> {
-        let twin = self
+        let superset = self
             .cull
             .world_pipelines
-            .canopy_twin()
-            .and_then(|twin| self.cull.world_pipelines.get(twin as usize));
-        match twin {
+            .superset_bucket()
+            .and_then(|bucket| self.cull.world_pipelines.get(bucket as usize));
+        match superset {
             Some(psos) => Some(&psos.main),
             None => self.cull.main_bindless_pso.as_ref(),
         }
-    }
-
-    // Byte offset of shader bucket `b`'s command region in an indirect buffer.
-    pub(in crate::directx) fn bucket_region_offset(&self, bucket: usize) -> u64 {
-        (bucket * self.cull.bucket_stride) as u64 * u64::from(INDIRECT_COMMAND_STRIDE)
     }
 
     // Pack ring slot `slot`'s `StructuredBuffer<GpuObjectData>` and
@@ -333,13 +407,11 @@ impl DxContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) -> FanOutTiming {
-        use concinnity_core::gfx::render_types::{
-            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
-            normal_pool_index, pack_skinned_record,
+        use concinnity_engine::gfx::render_types::{
+            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_flags, normal_pool_index,
+            pack_skinned_record,
         };
-        use concinnity_core::render::record_pack::{
-            PackView, StaticPack, draw_bucket, pool_object_record,
-        };
+        use concinnity_engine::render::record_pack::{PackView, StaticPack, pool_object_record};
         let (Some(&objects), Some(&args)) = (
             self.cull.object_buffer_ptrs.get(slot),
             self.cull.draw_args_buffer_ptrs.get(slot),
@@ -377,8 +449,7 @@ impl DxContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_route: self.grass_route(),
-            tile_morph: self.state.tile_morph,
+            routes: self.cull.world_pipelines.routes(),
         };
 
         let n_static = self
@@ -410,7 +481,7 @@ impl DxContext {
         // `resident` clear disables it, and the cull kernel never reads a disabled
         // record's stale object.
         let runtime_base = self.state.draw.runtime_record_base();
-        let grass_route = self.grass_route();
+        let routes = self.cull.world_pipelines.routes();
         let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
             let Some((rec, arg)) = records
                 .get_mut(runtime_base + k)
@@ -419,7 +490,7 @@ impl DxContext {
                 return;
             };
             *rec = pool_object_record(obj, texture_count);
-            rec.tile_morph = view.tile_morph_row(obj);
+            rec.tile_morph = concinnity_engine::render::record_pack::object_tile_morph(obj);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
             // carry no alternates and land on LOD0 either way; a clone inherits
@@ -435,7 +506,7 @@ impl DxContext {
                 index_offset: u32::saturating_from(index_offset),
                 base_vertex: obj.base_vertex.cast_unsigned(),
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
+                    | routes.draw_bits(obj)
                     | model_history.draw_flags(runtime_base + k, i),
             };
         });
@@ -449,6 +520,7 @@ impl DxContext {
             flags: 0,
         };
         let reserve_end = (runtime_base + self.state.draw.n_runtime).min(draw_args.len());
+        self.write_cull_variants(slot);
         for arg in draw_args
             .get_mut(runtime_base + n_resident_runtime..reserve_end)
             .unwrap_or_default()
@@ -575,8 +647,9 @@ impl DxContext {
             hiz_mip_count,
             hiz_enabled,
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
-            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
-            _pad: [0; 2],
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         cull_params.planes = frustum.packed_planes();
 
@@ -602,15 +675,83 @@ impl DxContext {
             // SAFETY: the Hi-Z SRV slot lives in the heap set above.
             unsafe { cmd.set_compute_srv_table(3, srv) };
         }
-        let indirect_gva = com::gpu_va(indirect);
-        // SAFETY: the indirect buffer is owned by `self.cull` for this frame slot.
-        unsafe { cmd.SetComputeRootUnorderedAccessView(4, indirect_gva) };
+        // SAFETY: the slot's group counts rest in UNORDERED_ACCESS, so they bind with no
+        // transition.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(4, self.group_counts_gva(frame_idx)) };
         // SAFETY: the cull-status buffer rests in UNORDERED_ACCESS, so it binds with no transition.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
+        self.bind_cull_variants(cmd, frame_idx);
         // One thread per build-time object, 64-wide threadgroups.
         let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
         // SAFETY: the cull pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(groups, 1, 1) };
+        if let Some(pass) = self.compact_pass(
+            frame_idx,
+            self.main_lists(indirect),
+            self.shader_bucket_count(),
+            CullStatus::DRAWN,
+        ) {
+            self.encode_compaction(cmd, pass);
+        }
+    }
+
+    // The main view's lists in `buffer`, a slot's phase-1 or phase-2 indirect
+    // buffer.
+    pub(in crate::directx) fn main_lists<'a>(&self, buffer: &'a ID3D12Resource) -> DrawLists<'a> {
+        DrawLists {
+            buffer,
+            base: 0,
+            commands: self.cull.indirect_commands,
+        }
+    }
+
+    // How the main view's lists sit in its indirect buffers.
+    pub(in crate::directx) fn stream_layout(&self) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: u32::saturating_from(self.shader_bucket_count()),
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: u32::saturating_from(self.state.draw.record_count()),
+        }
+    }
+
+    // GPU address of slot `slot`'s group-count scratch.
+    fn group_counts_gva(&self, slot: usize) -> u64 {
+        self.cull
+            .group_count_buffers
+            .get(slot)
+            .map_or(0, com::gpu_va)
+    }
+
+    // Slot `slot`'s packing into `lists`, routing between `buckets` and
+    // keeping the records with outcome `drawn`.
+    fn compact_pass<'a>(
+        &'a self,
+        slot: usize,
+        lists: DrawLists<'a>,
+        buckets: usize,
+        drawn: u32,
+    ) -> Option<CompactPass<'a>> {
+        Some(CompactPass {
+            variants: com::gpu_va(self.cull.variant_buffers.get(slot)?),
+            draw_args: com::gpu_va(self.cull.draw_args_buffer_resources.get(slot)?),
+            group_counts: UavSpan {
+                buffer: self.cull.group_count_buffers.get(slot)?,
+                offset: 0,
+            },
+            status: UavSpan {
+                buffer: self.cull.cull_status_buffers.get(slot)?,
+                offset: 0,
+            },
+            lists,
+            params: GpuCompactParams {
+                object_count: u32::saturating_from(self.state.draw.record_count()),
+                bucket_count: u32::saturating_from(buckets),
+                skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                drawn,
+                ..Default::default()
+            },
+        })
     }
 
     // Cull one reflection-probe cube face into the reserved capture slot
@@ -656,8 +797,9 @@ impl DxContext {
             // pipeline, so every record is routed into region 0: a bucketed draw
             // is captured into the probe cube with default shading.
             bucket_count: 1,
-            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
-            _pad: [0; 2],
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         cull_params.planes = frustum.packed_planes();
 
@@ -685,14 +827,20 @@ impl DxContext {
             // SAFETY: the Hi-Z SRV slot lives in the heap set above and stays a live descriptor.
             unsafe { cmd.set_compute_srv_table(3, srv) };
         }
-        let indirect_gva = com::gpu_va(indirect);
-        // SAFETY: the indirect buffer was moved to UNORDERED_ACCESS by the barrier above.
-        unsafe { cmd.SetComputeRootUnorderedAccessView(4, indirect_gva) };
+        // SAFETY: the slot's group counts rest in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(4, self.group_counts_gva(slot)) };
         // SAFETY: the slot's cull-status buffer is live and rests in UNORDERED_ACCESS.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
+        self.bind_cull_variants(cmd, slot);
         let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
         // SAFETY: the cull pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(groups, 1, 1) };
+        // The face draws one stream, packed into the indirect buffer moved to
+        // UNORDERED_ACCESS above.
+        if let Some(pass) = self.compact_pass(slot, self.main_lists(indirect), 1, CullStatus::DRAWN)
+        {
+            self.encode_compaction(cmd, pass);
+        }
         let to_indirect = transition_barrier(
             indirect,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -707,8 +855,8 @@ impl DxContext {
     // re-rendered cascade tests every record (static + instances + skinned)
     // against that cascade's light frustum, with NO Hi-Z (sun cascades have no
     // light-space depth pyramid) and NO per-object distance cull (the view
-    // `cull_distance` must not silence shadows), into cascade `c`'s region of
-    // this frame's shadow indirect buffer. Skipped cascades (not in
+    // `cull_distance` must not silence shadows), packed into cascade `c`'s
+    // region of this frame's shadow views. Skipped cascades (not in
     // `render_mask`) keep their prior region untouched, as their depth slice is
     // not re-rendered. A no-op when the GPU-driven shadow resources are absent
     // or `draw.record_count() == 0`.
@@ -719,11 +867,10 @@ impl DxContext {
         render_mask: u32,
         cam_pos: [f32; 3],
     ) {
-        use concinnity_core::gfx::render_types::NUM_SHADOW_CASCADES;
-        let (Some(pso), Some(indirect), Some(status)) = (
+        use concinnity_engine::gfx::render_types::NUM_SHADOW_CASCADES;
+        let (Some(pso), Some(views)) = (
             self.cull.cull_pso_shadow.as_ref(),
-            self.cull.shadow_indirect_buffers.get(frame_idx),
-            self.cull.shadow_cull_status_buffers.get(frame_idx),
+            self.cull.shadow_views.get(frame_idx),
         ) else {
             return;
         };
@@ -745,27 +892,22 @@ impl DxContext {
                 region: c,
                 frustum: Frustum::from_shadow(*light_vp),
                 eye: cam_pos,
+                ..RegionCull::EMPTY
             };
             kept += 1;
         }
         self.encode_region_culls(
             cmd,
             frame_idx,
-            RegionCullPass {
-                pso,
-                indirect,
-                status_gva: com::gpu_va(status),
-                // The cascade pass reads each region at `c * record_count()`.
-                region_stride: self.state.draw.record_count(),
-            },
+            self.shadow_cull_pass(pso, views),
             &regions[..kept],
         );
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same frustum-only shadow
     // kernel as the cascades, each refreshed slice's casters kept against that
-    // spot's light frustum into the slice's region of this frame's spot indirect
-    // buffer. The kernel picks no LOD: each caster draws the camera-keyed LOD
+    // spot's light frustum packed into the slice's region of this frame's spot
+    // views. The kernel picks no LOD: each caster draws the camera-keyed LOD
     // the frame's draw args already carry, the one the main pass draws. A no-op
     // when the GPU-driven shadow path is absent.
     pub(in crate::directx) fn encode_spot_culls(
@@ -774,10 +916,9 @@ impl DxContext {
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
-        let (Some(pso), Some(indirect), Some(status)) = (
+        let (Some(pso), Some(views)) = (
             self.cull.cull_pso_shadow.as_ref(),
-            self.cull.spot_indirect_buffers.get(frame_idx),
-            self.cull.shadow_cull_status_buffers.get(frame_idx),
+            self.cull.spot_views.get(frame_idx),
         ) else {
             return;
         };
@@ -788,20 +929,65 @@ impl DxContext {
                 region: slice as usize,
                 frustum: self.spot_shadow.frusta[slice as usize],
                 eye: cam_pos,
+                ..RegionCull::EMPTY
             };
             kept += 1;
         }
         self.encode_region_culls(
             cmd,
             frame_idx,
-            RegionCullPass {
-                pso,
-                indirect,
-                status_gva: com::gpu_va(status),
-                region_stride: self.cull.bucket_stride,
-            },
+            self.shadow_cull_pass(pso, views),
             &regions[..kept],
         );
+    }
+
+    // A shadow pass's run of region culls, each view packing its kept draws
+    // into its own region of `views`.
+    fn shadow_cull_pass<'a>(
+        &self,
+        pso: &'a ID3D12PipelineState,
+        views: &'a DxShadowViews,
+    ) -> RegionCullPass<'a> {
+        use crate::directx::compact::{group_count_bytes, indirect_buffer_bytes};
+        let n_cull = self.cull.bucket_stride;
+        RegionCullPass {
+            pso,
+            indirect: &views.lists,
+            status_gva: com::gpu_va(&views.status),
+            region_stride: n_cull,
+            packing: Some(RegionPacking {
+                group_counts: &views.group_counts,
+                group_stride: group_count_bytes(n_cull),
+                status: &views.status,
+                status_stride: shadow_status_bytes(n_cull),
+                lists_stride: indirect_buffer_bytes(n_cull),
+            }),
+        }
+    }
+
+    // View `region`'s lists in `views`, for the shadow draws.
+    pub(in crate::directx) fn shadow_lists<'a>(
+        &self,
+        views: &'a DxShadowViews,
+        region: usize,
+    ) -> DrawLists<'a> {
+        let n_cull = self.cull.bucket_stride;
+        DrawLists {
+            buffer: &views.lists,
+            base: region as u64 * crate::directx::compact::indirect_buffer_bytes(n_cull),
+            commands: n_cull,
+        }
+    }
+
+    // How a shadow view's lists sit in its region: one stream and the skinned
+    // tail, over the records the view's cull covers.
+    pub(in crate::directx) fn shadow_layout(&self) -> StreamLayout<'_> {
+        StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records: culled_records(self.state.draw.record_count(), self.cull.bucket_stride),
+        }
     }
 
     // Reflected-frustum mirror cull for the planar reflection pass, into each
@@ -819,14 +1005,13 @@ impl DxContext {
         frame_idx: usize,
         planes: &[RegionCull],
         indirect: &ID3D12Resource,
-        status_gva: u64,
-        // Per-plane region stride, in commands: the FIXED build-time record capacity
+        // Per-plane list capacity, in commands: the FIXED build-time record capacity
         // the indirect buffer was sized with (`PlanarReflectionSet::n_cull`) and that
-        // the face render's `region_offset` reads with. MUST single-source with the
-        // reader -- NOT the live `draw.record_count()`, which can be smaller than the
-        // capacity (e.g. the skinned tail goes inactive when the RT-skin pipeline
-        // fails to build), shifting plane >= 1's read offset off the written region.
+        // the face render reads with. MUST single-source with the reader -- NOT the
+        // live `draw.record_count()`, which can be smaller than the capacity (e.g. the
+        // skinned tail goes inactive when the RT-skin pipeline fails to build).
         region_count: usize,
+        packing: RegionPacking<'_>,
     ) {
         let Some(pso) = self.cull.cull_kernels.as_ref().map(|k| &k.pso) else {
             return;
@@ -837,15 +1022,16 @@ impl DxContext {
             RegionCullPass {
                 pso,
                 indirect,
-                status_gva,
+                status_gva: com::gpu_va(packing.status),
                 region_stride: region_count,
+                packing: Some(packing),
             },
             planes,
         );
     }
 
-    // One cull dispatch per region in `regions`, each testing every record
-    // against that region's frustum (Hi-Z off) and writing its `ExecuteIndirect`
+    // One cull dispatch per region in `regions`, each testing every record the
+    // region has room for against that region's frustum (Hi-Z off) and writing its `ExecuteIndirect`
     // commands at `region * region_stride` in `pass.indirect`. The object +
     // draw-args inputs are the frame's camera-independent buffers the main cull
     // reads, so only the frustum, eye and output region differ per dispatch.
@@ -864,13 +1050,10 @@ impl DxContext {
         let Some(cull_root) = self.cull.cull_kernels.as_ref().map(|k| &k.root_sig) else {
             return;
         };
-        let n_cull = self.state.draw.record_count();
+        let n_cull = culled_records(self.state.draw.record_count(), pass.region_stride);
         if n_cull == 0 || regions.is_empty() {
             return;
         }
-        // The live count never exceeds the region stride the buffer is laid out
-        // with, so every region's commands stay inside it.
-        debug_assert!(n_cull <= pass.region_stride);
 
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
@@ -895,50 +1078,106 @@ impl DxContext {
         // SAFETY: the command list is recording, and the pass's indirect buffer rests in
         // INDIRECT_ARGUMENT between uses.
         unsafe { cmd.ResourceBarrier(&[to_uav]) };
-        // SAFETY: the cull root signature is owned by `self.cull` for the context's lifetime.
-        unsafe { cmd.SetComputeRootSignature(cull_root) };
-        // SAFETY: the pass's PSO is a live cull kernel built against the root signature above.
-        unsafe { cmd.SetPipelineState(pass.pso) };
-        // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
-        unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
-        // SAFETY: `object_gva` addresses this frame's live object buffer.
-        unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
-        // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
-        unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
-        if let Some(srv) = hiz_srv {
-            // SAFETY: the Hi-Z SRV slot is a live descriptor in the heap set above.
-            unsafe { cmd.set_compute_srv_table(3, srv) };
-        }
-        // SAFETY: `pass.status_gva` addresses the pass's live cull-status buffer.
-        unsafe { cmd.SetComputeRootUnorderedAccessView(5, pass.status_gva) };
+        // The cull's root arguments, bound again after each region's packing,
+        // which runs under its own root signature.
+        let bind = || {
+            // SAFETY: the cull root signature is owned by `self.cull` for the context's lifetime.
+            unsafe { cmd.SetComputeRootSignature(cull_root) };
+            // SAFETY: the pass's PSO is a live cull kernel built against the root signature above.
+            unsafe { cmd.SetPipelineState(pass.pso) };
+            // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
+            unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
+            // SAFETY: `object_gva` addresses this frame's live object buffer.
+            unsafe { cmd.SetComputeRootShaderResourceView(1, object_gva) };
+            // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
+            unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
+            if let Some(srv) = hiz_srv {
+                // SAFETY: the Hi-Z SRV slot is a live descriptor in the heap set above.
+                unsafe { cmd.set_compute_srv_table(3, srv) };
+            }
+            // SAFETY: `pass.status_gva` addresses the pass's live cull-status buffer.
+            unsafe { cmd.SetComputeRootUnorderedAccessView(5, pass.status_gva) };
+            self.bind_cull_variants(cmd, frame_idx);
+        };
+        bind();
 
-        for r in regions {
+        for (i, r) in regions.iter().enumerate() {
+            if i > 0 && pass.packing.is_some() {
+                bind();
+            }
             let mut cull_params = CullParams {
                 planes: [[0.0; 4]; 6],
                 cam_pos: r.eye,
-                object_count: u32::saturating_from(n_cull),
+                object_count: n_cull,
                 // Unused with Hi-Z disabled (the reprojection is never taken).
                 prev_view_proj: [[0.0; 4]; 4],
                 hiz_size,
                 hiz_mip_count,
                 hiz_enabled: 0,
                 bucket_count: 1,
-                bucket_stride: u32::saturating_from(pass.region_stride),
-                _pad: [0; 2],
+                skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                exclude_first: r.exclude[0],
+                exclude_end: r.exclude[1],
             };
             cull_params.planes = r.frustum.packed_planes();
             // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root
             // constants.
             unsafe { cmd.set_compute_root_constants(0, &cull_params) };
-            // Root UAV GPU addresses only need element alignment (the stride is
-            // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.
-            let region_gva = base_gva
-                + (r.region * pass.region_stride * INDIRECT_COMMAND_STRIDE as usize) as u64;
-            // SAFETY: the live count fits the region stride, so the region's commands stay inside
-            // the indirect buffer opened for unordered access above.
-            unsafe { cmd.SetComputeRootUnorderedAccessView(4, region_gva) };
+            let Some(packing) = pass.packing else {
+                // Root UAV GPU addresses only need element alignment (the stride is
+                // a multiple of 4), like the instanced path's per-bucket root-SRV bumps.
+                let region_gva = base_gva
+                    + (r.region * pass.region_stride * INDIRECT_COMMAND_STRIDE as usize) as u64;
+                // SAFETY: the cull covers no more records than the region stride, so the region's
+                // commands stay inside the indirect buffer opened for unordered access above.
+                unsafe { cmd.SetComputeRootUnorderedAccessView(4, region_gva) };
+                // SAFETY: the cull pipeline and every root argument it reads are bound above.
+                unsafe { cmd.Dispatch(n_cull.div_ceil(64), 1, 1) };
+                continue;
+            };
+            let region = r.region as u64;
+            let group_counts = UavSpan {
+                buffer: packing.group_counts,
+                offset: region * packing.group_stride,
+            };
+            let status = UavSpan {
+                buffer: packing.status,
+                offset: region * packing.status_stride,
+            };
+            let counts_gva = com::gpu_va(group_counts.buffer) + group_counts.offset;
+            // SAFETY: the region's group counts lie inside the pass's scratch, which rests in
+            // UNORDERED_ACCESS.
+            unsafe { cmd.SetComputeRootUnorderedAccessView(4, counts_gva) };
+            let status_gva = com::gpu_va(status.buffer) + status.offset;
+            // SAFETY: as above, for the region's status.
+            unsafe { cmd.SetComputeRootUnorderedAccessView(5, status_gva) };
             // SAFETY: the cull pipeline and every root argument it reads are bound above.
-            unsafe { cmd.Dispatch(u32::saturating_from(n_cull).div_ceil(64), 1, 1) };
+            unsafe { cmd.Dispatch(n_cull.div_ceil(64), 1, 1) };
+            let Some(variants) = self.cull.variant_buffers.get(frame_idx) else {
+                continue;
+            };
+            self.encode_compaction(
+                cmd,
+                CompactPass {
+                    variants: com::gpu_va(variants),
+                    draw_args: draw_args_gva,
+                    group_counts,
+                    status,
+                    lists: DrawLists {
+                        buffer: pass.indirect,
+                        base: region * packing.lists_stride,
+                        commands: pass.region_stride,
+                    },
+                    params: GpuCompactParams {
+                        object_count: n_cull,
+                        bucket_count: 1,
+                        skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                        drawn: CullStatus::DRAWN,
+                        ..Default::default()
+                    }
+                    .with_capture_tiles(r.capture_tiles),
+                },
+            );
         }
 
         let to_indirect = transition_barrier(
@@ -1003,8 +1242,9 @@ impl DxContext {
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
-            bucket_stride: u32::saturating_from(self.cull.bucket_stride),
-            _pad: [0; 2],
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            exclude_first: 0,
+            exclude_end: 0,
         };
         cull_params.planes = frustum.packed_planes();
 
@@ -1026,14 +1266,23 @@ impl DxContext {
         // HizBuild node rewrote the texels in place).
         // SAFETY: the Hi-Z SRV slot is a live descriptor in the heap set above.
         unsafe { cmd.set_compute_srv_table(3, hiz.srv_gpu) };
-        let indirect_gva = com::gpu_va(indirect);
-        // SAFETY: the indirect buffer is owned by `self.cull` for this frame slot.
-        unsafe { cmd.SetComputeRootUnorderedAccessView(4, indirect_gva) };
+        // SAFETY: phase 1's packing has read this slot's group counts (the graph orders Main and
+        // its pre-pass between), and they rest in UNORDERED_ACCESS.
+        unsafe { cmd.SetComputeRootUnorderedAccessView(4, self.group_counts_gva(frame_idx)) };
         // SAFETY: phase 1 wrote this frame's cull-status buffer, which rests in UNORDERED_ACCESS.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
+        self.bind_cull_variants(cmd, frame_idx);
         let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
         // SAFETY: the phase-2 pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(groups, 1, 1) };
+        if let Some(pass) = self.compact_pass(
+            frame_idx,
+            self.main_lists(indirect),
+            self.shader_bucket_count(),
+            CullStatus::REDRAW,
+        ) {
+            self.encode_compaction(cmd, pass);
+        }
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested

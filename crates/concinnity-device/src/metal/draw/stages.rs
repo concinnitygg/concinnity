@@ -1,16 +1,17 @@
 //! The stages `MtlContext::draw_frame` runs in order around its render-graph
 //! dispatch.
 
-use concinnity_core::gfx::render_types::LineVertex;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::profile;
-use concinnity_core::render::error;
-use concinnity_core::render::frame_plan::{
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::profile;
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::error;
+use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
 };
-use concinnity_core::render::model_history::HistoryMode;
-use concinnity_core::render::reactive_mask::ReactiveReader;
-use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::temporal::model_history::HistoryMode;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLDevice as _};
@@ -35,6 +36,8 @@ pub(super) struct PlanArgs<'a> {
     pub(super) render_size: [u32; 2],
     pub(super) lines: &'a [LineVertex],
     pub(super) world_hidden: bool,
+    // The world's prop probe rides this frame.
+    pub(super) prop_probe: bool,
 }
 
 // The recorded frame's presenting command buffer and its completion join.
@@ -84,7 +87,7 @@ impl MtlContext {
         // Reset this frame's render stats; the draw counters below accumulate
         // into `diagnostics.frame_stats`, and `render_stats()` reports them (plus the GPU
         // frame time) to the profiler overlay.
-        let counts = concinnity_core::render::object_counts::object_counts(
+        let counts = concinnity_engine::render::backend::object_counts::object_counts(
             self.state.draw.objects.len(),
             self.instanced.clusters.iter().map(|c| c.instances.len()),
             self.state.skinned.draw_objects.iter().map(|o| o.visible),
@@ -200,6 +203,9 @@ impl MtlContext {
         let frame_id = self.frame_ring_index;
         let ring_slot = usize::saturating_from(frame_id % self.frames_in_flight as u64);
         self.frame_ring_index = frame_id.wrapping_add(1);
+        // Settings-replaced feature state the fence now proves no frame reads.
+        self.retired_effects
+            .collect(frame_id, self.frames_in_flight as u64);
 
         // Hand back the pooled ranges whose retire frame has passed and release
         // any heap left holding nothing. Ticked here, past the fence, so a range
@@ -241,6 +247,9 @@ impl MtlContext {
         // exposure multiplier unchanged.
         self.update_auto_exposure(elapsed, ring_slot);
         self.pre_exposure.advance(self.post_process.exposure);
+        if self.upscale.scaler.is_some() && self.upscale.exposure.advance(&self.pre_exposure) {
+            self.upscale.reset.request();
+        }
     }
 
     // What this backend has built, for the frame's graph gates.
@@ -257,6 +266,7 @@ impl MtlContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.scaler.as_ref().map(|s| ResidentUpscaler {
                 reads_reactive: ReactiveReader::MetalFx.reads() && s.reactive,
+                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.pipelines.is_some(),
             fog: self.fog.pipeline.is_some(),
@@ -271,7 +281,12 @@ impl MtlContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    pub(super) fn frame_content(&self, world_hidden: bool, lines: &[LineVertex]) -> FrameContent {
+    pub(super) fn frame_content(
+        &self,
+        world_hidden: bool,
+        lines: &[LineVertex],
+        prop_probe: bool,
+    ) -> FrameContent {
         FrameContent {
             world_hidden,
             cull_records: self.cull_count(),
@@ -279,6 +294,7 @@ impl MtlContext {
             bloom_intensity: self.post_process.bloom_intensity,
             bvh_live: self.rt.accel.is_some(),
             emitters: !self.particle.system.is_empty(),
+            late_emitters: self.particle.system.draws_after_transparent(),
             fog: self.fog.settings.is_some_and(|s| s.contributes()),
             decals: !self.decal.set.is_empty(),
             visible_surfaces: (self.water.pipeline.is_some()
@@ -297,6 +313,7 @@ impl MtlContext {
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
+            prop_probe: prop_probe && self.prop_probe_supported(),
         }
     }
 
@@ -310,9 +327,17 @@ impl MtlContext {
             render_size,
             lines,
             world_hidden,
+            prop_probe,
         } = args;
         let resident = self.resident_features();
-        let content = self.frame_content(world_hidden, lines);
+        let content = self.frame_content(world_hidden, lines, prop_probe);
+        // MetalFX takes the 16-frame Halton cycle, which covers its output
+        // pixels better than the TAA cycle.
+        let upscaler_jitter = self
+            .upscale
+            .scaler
+            .as_ref()
+            .map(|_| concinnity_engine::gfx::jitter::offset(self.state.planner.jitter_phase()));
         let surface = SurfaceInputs {
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
@@ -324,7 +349,7 @@ impl MtlContext {
             render_size,
             resident,
             content,
-            upscaler_jitter: None,
+            upscaler_jitter,
             lights: &self.lights,
             probes: self.probe.book.records(),
             fog: self.fog.settings,
@@ -337,7 +362,7 @@ impl MtlContext {
                     self.ssgi
                         .pass
                         .as_ref()
-                        .map(concinnity_core::render::post::ssgi::SsgiPass::frame),
+                        .map(concinnity_engine::render::post::ssgi::SsgiPass::frame),
                 ),
                 rt: self.rt.settings,
                 history_scale: self.pre_exposure.history_scale(),
@@ -347,10 +372,10 @@ impl MtlContext {
         self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
         self.cull.cur_view_proj = plan.camera.cur_vp;
         self.cluster_params = plan.cluster;
-        // MetalFX expects the jitter in render pixels; TAA reads it from the
-        // projection itself.
+        // MetalFX expects the jitter in render pixels, measured from the sample
+        // back to the pixel center; TAA reads it from the projection itself.
         if self.upscale.scaler.is_some() {
-            let [x, y] = plan.camera.jitter_px;
+            let [x, y] = concinnity_engine::gfx::jitter::pixel_center_offset(plan.camera.jitter_px);
             self.upscale
                 .jitter
                 .store(x, y, std::sync::atomic::Ordering::Release);
@@ -374,7 +399,7 @@ impl MtlContext {
 
         // Retain this drawable's color texture so the headless `screenshot`
         // command can blit the last presented frame back to the host. Only
-        // under `hot_reload` (the `cn debug` path that runs the debug endpoint able
+        // under `hot_reload` (the `cn run -f` path that runs the debug endpoint able
         // to request a capture, and the only path where the MTKView has
         // `framebufferOnly` switched off so this texture is blit-readable);
         // production keeps this `None`. Reading it next frame is safe: the
@@ -528,10 +553,15 @@ impl MtlContext {
             // compute pass consume. They must outlive the command buffer,
             // hence the bindings handed back to the caller, which holds them
             // through to `cmd_buf.commit()`.
+            let packed = std::time::Instant::now();
             let records = match records {
                 Some(history) => self.build_record_buffers(ring_slot, cam_pos, history)?,
                 None => None,
             };
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
             let (object_buffer, draw_args) = match records {
                 Some(records) => {
                     self.diagnostics.frame_stats.packing_fan_out = records.packing;
@@ -557,10 +587,9 @@ impl MtlContext {
                 // Per-planar-slot mirror cull ICBs: one per distinct reflection
                 // plane, each sized to cull_count. A no-op (clears the slots) when
                 // the world has no planar set (RT on, or no flat reflectors).
-                let mirror_slots = self
-                    .planar_reflection
-                    .as_ref()
-                    .map_or(0, |s| s.layout.planes().len());
+                // The prop probe culls into one more slot after the planes'.
+                let mirror_slots =
+                    self.prop_probe_cull_slot() + usize::from(self.probe.prop.capturing());
                 self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
             }
             let cull_draw_args = draw_args;
@@ -583,6 +612,7 @@ impl MtlContext {
             // fully static scene pays just a matrix compare here. Non-fatal: a
             // transient rebuild failure keeps last frame's BVH rather than stopping
             // the renderer.
+            let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(
                 crate::metal::raytrace::RtFrame {
                     id: frame_id,
@@ -590,6 +620,10 @@ impl MtlContext {
                 },
                 skinned_joint_bufs,
             );
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
 
             (
                 object_buffer,

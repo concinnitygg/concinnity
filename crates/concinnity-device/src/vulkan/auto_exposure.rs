@@ -11,10 +11,10 @@
 //! `metal/auto_exposure.rs` and `directx/auto_exposure.rs`.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure::HISTOGRAM_BINS;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::{AutoExposureParams, ExposureMeasurement};
+use concinnity_engine::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
@@ -27,7 +27,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::record::Recorder;
-use concinnity_core::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
+use concinnity_engine::render::uniforms::vulkan::AUTO_EXPOSURE_PUSH_BYTES;
 
 // Compile the auto-exposure build + average compute kernels.
 fn compile_auto_exposure_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec<u8>)> {

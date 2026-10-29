@@ -1,10 +1,10 @@
 // Persisted behavior state, the one thing this crate lends
-// `concinnity_core::behavior::BehaviorSystem`: a `state` file under the host's
+// `concinnity_engine::behavior::BehaviorSystem`: a `state` file under the host's
 // save directory. The state's shape and its keying are the system's (see
-// `concinnity_core::behavior::BehaviorState`); what this owns is the file,
+// `concinnity_engine::behavior::BehaviorState`); what this owns is the file,
 // written off the sim thread.
 
-use concinnity_core::behavior::{BehaviorState, BehaviorStore};
+use concinnity_engine::behavior::{BehaviorState, BehaviorStore};
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::store::writer::FileWriter;
 use std::path::{Path, PathBuf};
@@ -48,19 +48,19 @@ fn state_file(dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{
+    use concinnity_engine::components::{
         Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, Variables,
     };
-    use concinnity_core::ecs::World;
+    use concinnity_engine::ecs::World;
 
     // The store this host attaches is reached by a `save` node and read back at the
     // next start: the seam between the system and the file is live, not just
     // constructible.
     #[test]
     fn a_saving_world_restores_its_variable_through_the_file_store() {
-        use concinnity_core::behavior::{BehaviorStore, BehaviorSystem};
-        use concinnity_core::components::{BehaviorLiteral, VariableDecl};
-        use concinnity_core::ecs::System;
+        use concinnity_engine::behavior::{BehaviorStore, BehaviorSystem};
+        use concinnity_engine::components::{BehaviorLiteral, VariableDecl};
+        use concinnity_engine::ecs::System;
 
         let tree = concinnity_testing::TempTree::new();
         let dir = tree.join("state");
@@ -113,8 +113,8 @@ mod tests {
     // A written state reads back from its file.
     #[test]
     fn state_round_trips_through_the_file() {
-        use concinnity_core::behavior::{BehaviorState, BehaviorStore};
-        use concinnity_core::components::BehaviorLiteral;
+        use concinnity_engine::behavior::{BehaviorState, BehaviorStore};
+        use concinnity_engine::components::BehaviorLiteral;
 
         let tree = concinnity_testing::TempTree::new();
         let dir = tree.join("state");

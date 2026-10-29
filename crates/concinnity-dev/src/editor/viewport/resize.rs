@@ -5,7 +5,7 @@
 //! dimensions grow. The hook owns the drag state and the per-panel size override;
 //! this module is stateless geometry so it stays unit-testable.
 
-use concinnity_core::ecs::CursorShape;
+use concinnity_engine::ecs::CursorShape;
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -16,6 +16,10 @@ pub(crate) const BORDER: f32 = 6.0;
 // Which of a panel's edges the pointer's grab band covers. A single edge is an
 // edge resize; two adjacent edges are a corner.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per window edge; a corner grab sets two"
+)]
 pub(crate) struct Edges {
     pub left: bool,
     pub right: bool,

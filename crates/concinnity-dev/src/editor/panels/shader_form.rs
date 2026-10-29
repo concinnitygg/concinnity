@@ -4,7 +4,7 @@
 //! other entries.
 
 use concinnity_cook::authoring::world::{entry_handles, find_entry};
-use concinnity_core::components::ShaderStage;
+use concinnity_engine::components::ShaderStage;
 
 use super::form_extras::{ExtraControl, ExtraRow};
 use super::shader_edit::check_name;
@@ -37,7 +37,7 @@ pub(crate) struct UsedBy {
     pub(crate) on: bool,
     // The Shader it names now, when that is another one.
     pub(crate) other: Option<String>,
-    // Read from an included file, so not the editor's to change.
+    // Not the editor's to change (see `EntryList::is_read_only`).
     pub(crate) read_only: bool,
     // The `params` it sets, for the Shader to read.
     pub(crate) params: Option<String>,
@@ -218,7 +218,7 @@ impl ShaderForm {
         out.push(ExtraRow::label("Used by", none));
         for (i, m) in self.used_by.iter().enumerate() {
             let status = match (&m.other, m.read_only) {
-                (_, true) => Some("included".to_string()),
+                (_, true) => Some("read-only".to_string()),
                 (Some(other), false) => Some(format!("names '{other}'")),
                 (None, false) => None,
             };
@@ -574,26 +574,36 @@ mod tests {
 
     #[test]
     fn starters_cycle_and_a_read_only_material_stays_put() {
-        let entries = EntryList::with_includes(vec![
-            SourcedEntry {
-                entry: material("inc", None),
-                file: Some("lib.jsonl".into()),
-            },
-            SourcedEntry {
-                entry: material("own", None),
-                file: None,
-            },
-        ]);
+        let include = json!({"type": "Include", "args": {"path": "lib.jsonl"}});
+        let inc = |e| SourcedEntry {
+            entry: e,
+            file: Some("lib.jsonl".into()),
+        };
+        let own = |e| SourcedEntry {
+            entry: e,
+            file: None,
+        };
+        // Included twice, so its entries are read-only.
+        let entries = EntryList::with_includes(
+            vec![
+                own(include.clone()),
+                inc(material("inc", None)),
+                own(include),
+                inc(material("inc", None)),
+                own(material("own", None)),
+            ],
+            std::path::Path::new("world.jsonl"),
+        );
         let mut form = ShaderForm::open(&entries, None);
         for _ in 0..=shader_templates::FRAGMENT.len() {
             form.press(FRAGMENT_STARTER);
         }
         assert_eq!(form.fragment_starter, 1);
         form.press(MATERIAL);
-        form.press(MATERIAL + 1);
-        assert!(!form.used_by[0].on && form.used_by[1].on);
+        form.press(MATERIAL + 2);
+        assert!(!form.used_by[0].on && form.used_by[2].on);
         let rows = form.rows(&[], &Paths::default());
-        assert_eq!(row(&rows, "inc").detail.as_deref(), Some("included"));
+        assert_eq!(row(&rows, "inc").detail.as_deref(), Some("read-only"));
     }
 
     #[test]
@@ -626,7 +636,7 @@ mod tests {
     }
 
     fn render_types_max() -> usize {
-        concinnity_core::gfx::render_types::MAX_SHADER_BUCKETS
+        concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS
     }
 
     #[test]
@@ -681,12 +691,15 @@ mod tests {
             file: Some("lib.jsonl".into()),
         };
         let include = json!({"type": "Include", "args": {"$id": "lib", "path": "lib.jsonl"}});
-        let mut entries = EntryList::with_includes(vec![
-            own(include),
-            inc(shader("a")),
-            inc(shader("b")),
-            own(shader("c")),
-        ]);
+        let mut entries = EntryList::with_includes(
+            vec![
+                own(include),
+                inc(shader("a")),
+                inc(shader("b")),
+                own(shader("c")),
+            ],
+            std::path::Path::new("world.jsonl"),
+        );
         let mut form = ShaderForm::open(&entries, Some(3));
         form.press(DEFAULT);
         form.place_default(&mut entries, 3);

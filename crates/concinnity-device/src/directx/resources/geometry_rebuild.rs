@@ -5,10 +5,10 @@
 //! round-trip (READBACK staging for the old contents, UPLOAD staging for
 //! the new ones) where Metal can just read `StorageModeShared` `contents()`.
 
-use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, geometry_repack, rt_geom};
+use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{backend, rt_accel::geom, slots::geometry_repack};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 
@@ -34,7 +34,7 @@ impl DxContext {
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> RenderResult<()> {
         // Stop the GPU + CPU pipelines so the readback + swap can run safely.
-        // Costs a frame-time stall but only fires under `cn debug` when the
+        // Costs a frame-time stall but only fires under `cn run -f` when the
         // source `.glb` size actually changed.
         self.wait_idle();
 
@@ -190,6 +190,7 @@ impl DxContext {
         {
             layout.apply_to(obj);
         }
+        self.state.placement.forget_layout();
         self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
             BufferLocation: com::gpu_va(&new_vbuf),
             SizeInBytes: u32::saturating_from(new_v_bytes),
@@ -217,7 +218,7 @@ impl DxContext {
 
     // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
     // fresh geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn debug` only) when a `SkinnedMesh` re-import has a
+    // hot-reload (`cn run -f` only) when a `SkinnedMesh` re-import has a
     // different vertex / index count than its init-time slot. Walks every
     // `SkinnedDrawObject` in order: for each slot in `changes`, the new
     // vertices / indices are appended to a fresh CPU buffer; for unchanged
@@ -328,7 +329,7 @@ impl DxContext {
         let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
         let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
         // Whole u32 words for the index buffer; see `upload_skinned`.
-        let ibuf_bytes = rt_geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
+        let ibuf_bytes = geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
         let new_vbuf = self.hw.alloc.alloc_buffer(
             new_v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,

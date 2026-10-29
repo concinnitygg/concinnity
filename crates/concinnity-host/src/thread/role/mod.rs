@@ -20,7 +20,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use concinnity_core::components::FramePriority;
+use concinnity_engine::components::FramePriority;
 
 #[cfg(target_vendor = "apple")]
 mod apple;

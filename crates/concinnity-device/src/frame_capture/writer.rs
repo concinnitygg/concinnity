@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use super::image::{CaptureImage, save_png};
@@ -239,8 +239,8 @@ fn write(capture: PendingCapture, encode: Encode) {
 mod tests {
     use super::*;
     use crate::frame_capture::readback::{Mapped, ReadbackPool};
-    use concinnity_core::gfx::image_decode::PixelLayout;
-    use concinnity_core::render::error::RenderError;
+    use concinnity_engine::gfx::image_decode::PixelLayout;
+    use concinnity_engine::render::backend::error::RenderError;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Host bytes standing in for one mapped read-back buffer.
@@ -319,6 +319,10 @@ mod tests {
     fn flush_waits_for_a_capture_still_on_the_writer_thread() {
         static BYTES: [u8; 8] = [0; 8];
         static SAVED: AtomicUsize = AtomicUsize::new(0);
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "stands in for the image encoder, which can fail"
+        )]
         fn slow_save(_: &str, _: &CaptureImage, _: &[u8]) -> RenderResult<()> {
             std::thread::sleep(std::time::Duration::from_millis(30));
             SAVED.fetch_add(1, Ordering::SeqCst);
@@ -339,6 +343,10 @@ mod tests {
     fn dropping_the_writer_finishes_captures_already_sent() {
         static BYTES: [u8; 8] = [0; 8];
         static SAVED: AtomicUsize = AtomicUsize::new(0);
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "stands in for the image encoder, which can fail"
+        )]
         fn slow_save(_: &str, _: &CaptureImage, _: &[u8]) -> RenderResult<()> {
             std::thread::sleep(std::time::Duration::from_millis(10));
             SAVED.fetch_add(1, Ordering::SeqCst);

@@ -1,4 +1,4 @@
-//! The grass field on Metal (see `concinnity_core::render::grass`): the bend
+//! The grass field on Metal (see `concinnity_engine::render::environment::grass`): the bend
 //! pass that relaxes and stamps the trampling field, the kernel that places
 //! this frame's visible blades and, a second time, the nearest shadow
 //! cascade's, and the indirect draws, one per detail level, that render them at
@@ -12,21 +12,23 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::planet::Rebase;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::grass::bend::GRASS_BEND_WORDS;
-use concinnity_core::render::grass::lod::{GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT};
-use concinnity_core::render::grass::{
+use concinnity_engine::planet::Rebase;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::grass::bend::GRASS_BEND_WORDS;
+use concinnity_engine::render::environment::grass::lod::{
+    GRASS_BAND_REGION, GRASS_LOD_COUNT, GRASS_REGION_COUNT,
+};
+use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBendPass, GrassBender, GrassCamera,
     GrassField, GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
-use concinnity_core::render::shader_programs::metal::prepass_buffers;
-use concinnity_core::render::shadow_bias;
-use concinnity_core::render::uniforms::grass::{
+use concinnity_engine::render::shader::programs::metal::prepass_buffers;
+use concinnity_engine::render::shadow::bias;
+use concinnity_engine::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassTileGpu, PlanetGrassTileGpu,
     grass_args_offset,
 };
-use concinnity_core::render::uniforms::{GBufferView, ViewUniforms};
+use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -47,7 +49,7 @@ use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::pass_timing::PassId;
 use super::scoped_encoder::ScopedEncoder;
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 
 // Where the grass draws read their block and blades (`grass.hlsl`), clear of
 // every main-pass and pre-pass slot.
@@ -561,9 +563,9 @@ impl MtlContext {
         enc.set_pipeline(&grass.pipelines.shadow);
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.setDepthBias_slopeScale_clamp(
-            shadow_bias::RASTER_CONSTANT,
-            shadow_bias::RASTER_SLOPE,
-            shadow_bias::RASTER_CLAMP,
+            bias::RASTER_CONSTANT,
+            bias::RASTER_SLOPE,
+            bias::RASTER_CLAMP,
         );
         enc.setCullMode(MTLCullMode::None);
         enc.set_vertex_value(&pass.params, SHADOW_PARAMS_INDEX);
@@ -602,7 +604,7 @@ impl MtlContext {
         enc.set_vertex_value(main, 0);
         enc.set_vertex_value(gbuffer, prepass_buffers::VIEW);
         enc.set_fragment_value(gbuffer, prepass_buffers::VIEW);
-        self.draw_grass(enc, grass, &grass.pipelines.prepass, frame);
+        Self::draw_grass(enc, grass, &grass.pipelines.prepass, frame);
         enc.popDebugGroup();
         u32::saturating_from(GRASS_REGION_COUNT)
     }
@@ -622,7 +624,7 @@ impl MtlContext {
         enc.pushDebugGroup(ns_string!("grass"));
         enc.set_depth_stencil(&self.targets.depth_state);
         enc.set_vertex_value(view, 0);
-        self.draw_grass(enc, grass, &grass.pipelines.main, frame);
+        Self::draw_grass(enc, grass, &grass.pipelines.main, frame);
         enc.popDebugGroup();
         u32::saturating_from(GRASS_REGION_COUNT)
     }
@@ -631,7 +633,6 @@ impl MtlContext {
     // two-sided, the band's under the pipeline that discards the pixels the
     // canopy shows.
     fn draw_grass(
-        &self,
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         grass: &GrassState,
         pipelines: &GrassDrawPipelines,
@@ -673,7 +674,7 @@ fn dispatch_groups(
         depth: z as usize,
     };
     let threads = MTLSize {
-        width: concinnity_core::render::grass::tiles::GRASS_GROUP_SIZE as usize,
+        width: concinnity_engine::render::environment::grass::tiles::GRASS_GROUP_SIZE as usize,
         height: 1,
         depth: 1,
     };

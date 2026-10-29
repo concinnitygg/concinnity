@@ -5,9 +5,10 @@
 //! client holds only a `Box<dyn RenderBackend>` and never names a concrete
 //! backend context.
 
-use concinnity_core::platform::Platform;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{backend, backend_init};
+use concinnity_engine::platform::Platform;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{backend, backend::init};
+use concinnity_engine::window::display_mode::DisplayProbe;
 
 /// The graphics APIs this build can render with, the target's native one
 /// first. Empty on a target with no window layer.
@@ -43,11 +44,35 @@ pub fn probe_device(platform: Platform) -> Option<backend::DeviceProbe> {
     }
 }
 
+/// Read the display a window would open on before any window exists, so the
+/// quality preset can decide upscaling from the output size. `None` where the
+/// window layer does not read it yet (GLFW).
+pub fn probe_display() -> Option<DisplayProbe> {
+    #[cfg(all(target_os = "macos", any(backend_metal, backend_vk)))]
+    {
+        crate::appkit::display_mode::main_display_probe()
+    }
+    #[cfg(all(target_os = "windows", any(backend_dx, backend_vk)))]
+    {
+        crate::win32::display_mode::primary_display_probe()
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", any(backend_metal, backend_vk)),
+        all(target_os = "windows", any(backend_dx, backend_vk))
+    )))]
+    {
+        None
+    }
+}
+
 /// Route the assembled `BackendInit` to the backend its `platform` names.
 /// Construction inputs are documented on `BackendInit` itself.
-pub fn init_backend(
-    init: backend_init::BackendInit<'_>,
-) -> RenderResult<Box<dyn backend::RenderBackend>> {
+///
+/// # Errors
+///
+/// Returns an error if this build has no backend for the platform, or that
+/// backend fails to initialize.
+pub fn init_backend(init: init::BackendInit<'_>) -> RenderResult<Box<dyn backend::RenderBackend>> {
     match init.platform {
         #[cfg(backend_dx)]
         Platform::DirectX => crate::directx::DxContext::new(init)

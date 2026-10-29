@@ -1,7 +1,7 @@
 // Assembles the asset reference: one documented entry per authorable asset,
 // plus the reference types their fields reach.
 //
-// Everything comes from the schema the derives emit (`concinnity_core::ecs::schema`),
+// Everything comes from the schema the derives emit (`concinnity_engine::ecs::schema`),
 // reached through the authoring registry: each registered type names its args
 // schema, and a field's type names the nested struct or enum it holds.
 //
@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use concinnity_core::ecs::schema::{
+use concinnity_engine::ecs::schema::{
     self, Body, FieldSchema, TypeSchema, ValueSchema, VariantSchema,
 };
 

@@ -4,10 +4,10 @@
 
 use std::cell::Cell;
 
-use concinnity_core::fanout::Fanout;
-use concinnity_core::gfx::render_types::{DrawObject, GpuObjectData};
-use concinnity_core::profile::{FanOutJudge, FanOutTiming};
-use concinnity_core::render::record_pack::{
+use concinnity_core::fanout::FanOut;
+use concinnity_core::fanout::{FanOutJudge, FanOutTiming};
+use concinnity_engine::gfx::render_types::{DrawObject, GpuObjectData};
+use concinnity_engine::render::record_pack::{
     MAX_PACK_CHUNKS, PackChunk, PackView, StaticPack, chunk_count,
 };
 use concinnity_host::thread::jobs::pool;
@@ -35,7 +35,7 @@ impl RecordPacker {
         let jobs = pool();
         let workers = jobs.workers();
         let mut judge = self.judge.get();
-        let count = if judge.fans_out(records, workers) {
+        let count = if judge.decide(records, workers) {
             chunk_count(records, workers)
         } else {
             1
@@ -56,10 +56,10 @@ impl RecordPacker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::gfx::render_types::{FarFieldTint, GpuDrawArgs, MaterialUniforms};
     use concinnity_core::math::SaturatingFrom;
-    use concinnity_core::render::model_history::{HistoryMode, ModelHistory};
-    use concinnity_core::render::record_pack::{MIN_CHUNK_RECORDS, pool_object_record};
+    use concinnity_engine::gfx::render_types::{FarFieldTint, GpuDrawArgs, MaterialUniforms};
+    use concinnity_engine::render::record_pack::{MIN_CHUNK_RECORDS, pool_object_record};
+    use concinnity_engine::render::temporal::model_history::{HistoryMode, ModelHistory};
 
     fn object(i: usize) -> DrawObject {
         let x = i as f32;
@@ -115,8 +115,7 @@ mod tests {
             cam_pos: [0.0; 3],
             mesh_glass_active: false,
             horizon: None,
-            grass_route: Default::default(),
-            tile_morph: None,
+            routes: concinnity_engine::render::shader::world_pipelines::ShaderRoutes::default(),
         };
         packer.pack(
             StaticPack {
@@ -148,7 +147,7 @@ mod tests {
         };
         judge.observe(1, false, inline_ms);
         fanned.judge.set(judge);
-        assert!(fanned.judge.get().fans_out(objects.len(), 8));
+        assert!(fanned.judge.get().decide(objects.len(), 8));
         assert_eq!(pack_with(&inline, &objects), pack_with(&fanned, &objects));
     }
 

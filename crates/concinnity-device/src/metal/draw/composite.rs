@@ -16,11 +16,12 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use std::cell::Cell;
 
-use concinnity_core::gfx::render_types;
-use concinnity_core::gfx::render_types::TextDrawCall;
-use concinnity_core::render::error::RenderError;
-use concinnity_core::render::fullscreen;
-use concinnity_core::render::fullscreen::TextBindCache;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::TextDrawCall;
+use concinnity_engine::render::backend::error::RenderError;
+use concinnity_engine::render::fullscreen;
+use concinnity_engine::render::fullscreen::TextBindCache;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -119,6 +120,10 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
                 .adaptation
                 .as_ref()
                 .map_or(0.0, |a| a.night_vision(self.ctx.state.view.sunlight)),
+            night_nits: auto_exposure::nits_per_exposed(
+                self.ctx.state.view.sunlight,
+                self.ctx.post_process.exposure,
+            ),
         };
         enc.set_fragment_value(&composite, 0);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
@@ -160,7 +165,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         idx: usize,
         call: &TextDrawCall,
         binds: &mut TextBindCache,
-    ) -> concinnity_core::render::error::RenderResult<()> {
+    ) -> concinnity_engine::render::backend::error::RenderResult<()> {
         if call.vertices.is_empty() {
             return Ok(());
         }
@@ -235,7 +240,7 @@ impl MtlContext {
         scene_color: &Retained<ProtocolObject<dyn MTLTexture>>,
         text_calls: &[TextDrawCall],
         reactive_valid: bool,
-    ) -> concinnity_core::render::error::RenderResult<u32> {
+    ) -> concinnity_engine::render::backend::error::RenderResult<u32> {
         let composite_pass_desc = self
             .window()
             .view

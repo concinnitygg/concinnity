@@ -1,6 +1,6 @@
 // The macOS system clipboard: the general pasteboard's plain-string slot.
 
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::window::clipboard::Clipboard;
 use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 use objc2_foundation::NSString;
 

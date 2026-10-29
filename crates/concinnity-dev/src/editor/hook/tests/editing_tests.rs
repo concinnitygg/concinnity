@@ -5,8 +5,8 @@
 //! disclosed vector. Also what survives a reinjection, a panel toggle, and a
 //! delete that shifts the open form's index.
 
-use concinnity_core::components::{FrameInput, Sprite, TextInput};
-use concinnity_core::ecs::World;
+use concinnity_engine::components::{FrameInput, Sprite, TextInput};
+use concinnity_engine::ecs::World;
 
 use super::fixtures::{
     click_row, entry, entry_with_args, hook, row_of, seed_tree, set_field, world_with_fields,
@@ -824,7 +824,15 @@ fn edit_form_grows_an_array_and_edits_the_new_element() {
         .iter()
         .position(|f| f.key == "waves.1.amplitude")
         .expect("the second wave's amplitude field");
-    set_field(&mut world, form_panel::form_input(ej), "4.5");
+    // Wheel down until it is in the window, then edit its control.
+    for _ in 0..h.form.fields.len() {
+        if visible_slot(ej, h.form.scroll, h.form_window()).is_some() {
+            break;
+        }
+        h.scroll_form(1.0, &mut world);
+    }
+    let slot = visible_slot(ej, h.form.scroll, h.form_window()).expect("amplitude in view");
+    set_field(&mut world, form_panel::form_input(slot), "4.5");
     h.apply_form(FormAction::Confirm, &mut world);
     let ws = h
         .entries

@@ -120,7 +120,7 @@ impl std::error::Error for StartupError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::error::AssetError;
+    use concinnity_engine::error::AssetError;
 
     // A load failure to classify. Which one it is does not matter here; that
     // it survives into the log line does.

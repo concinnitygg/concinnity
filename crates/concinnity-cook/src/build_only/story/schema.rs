@@ -105,7 +105,9 @@
 ///     ..Default::default()
 /// };
 /// ```
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_core::ecs::AssetFields)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, concinnity_engine::ecs::AssetFields,
+)]
 #[serde(default)]
 pub struct StoryImport {
     /// Path to the Markdown story file, relative to the project root.

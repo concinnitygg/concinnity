@@ -10,9 +10,9 @@
 //! keeps the dimensions it was created with until the world is rebuilt, which
 //! SAVE does.
 
-use concinnity_core::components::{CharacterCapsule, CharacterShape};
-use concinnity_core::ecs::{SkinnedMeshHandle, World};
-use concinnity_core::render::live_preview::shape as shape_preview;
+use concinnity_engine::components::{CharacterCapsule, CharacterShape};
+use concinnity_engine::ecs::{SkinnedMeshHandle, World};
+use concinnity_engine::render::live_preview::shape as shape_preview;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

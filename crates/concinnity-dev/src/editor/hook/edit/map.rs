@@ -10,8 +10,8 @@
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{WorldJsonlAsset, args_without_id, entry_handles};
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
 use serde_json::Value;
 
 use crate::editor::asset_handle::AssetHandle;

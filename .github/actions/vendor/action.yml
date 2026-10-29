@@ -1,0 +1,42 @@
+name: Vendor third-party binaries
+description: Runs scripts/vendor.py for this host, building on macOS what upstream publishes no release for
+runs:
+  using: composite
+  steps:
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+
+    - name: Restore Vendored Binaries
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          vendor
+          !vendor/.build
+        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/vendor.py') }}
+
+    - name: Install Ninja
+      if: runner.os == 'macOS' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: command -v ninja || brew install ninja
+
+    - name: Fetch Vendored Binaries
+      shell: bash
+      run: python scripts/vendor.py fetch
+
+    - name: Build Vendored Binaries
+      if: runner.os == 'macOS'
+      shell: bash
+      run: python scripts/vendor.py build
+
+    # Saved before the build so a failing test does not throw away a source build.
+    - name: Save Vendored Binaries
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          vendor
+          !vendor/.build
+        key: ${{ steps.restore.outputs.cache-primary-key }}

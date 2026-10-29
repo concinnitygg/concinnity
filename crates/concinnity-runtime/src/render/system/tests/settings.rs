@@ -1,41 +1,39 @@
 use super::*;
-use concinnity_core::benchmark::BenchmarkRun;
-use concinnity_core::components::{
-    BenchmarkConfig, FrameCapture, KeyBinding, UiAction, WindowMode,
-};
-use concinnity_core::render::backend_init::EmbeddedSurface;
-use concinnity_core::render::rt_geom::RtDynamicMode;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::{KeyBinding, Screenshot, UiAction, WindowMode};
+use concinnity_engine::launch::LaunchArgs;
+use concinnity_engine::render::backend::init::EmbeddedSurface;
+use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
+use concinnity_engine::window::display_mode::DisplayMode;
 
-// The `--quality-preset` launch flag has to reach the CEILING, not merely the
-// menu label. On a mid-tier GPU `Auto` resolves to the `High` ceiling, which
-// clamps ray-traced reflections off and logs nothing about it, so a probe that
-// forces `ultra` and never checks would measure a non-RT frame and read it as a
-// result. Both halves are asserted on the same GPU and the same authored world.
+// The `--graphics-quality` launch flag has to reach the CEILING, not merely the
+// menu label. On an entry-tier GPU `Auto` resolves to the `Medium` ceiling,
+// which clamps ray-traced reflections off and logs nothing about it, so a probe
+// that forces `ultra` and never checks would measure a non-RT frame and read it
+// as a result. Both halves are asserted on the same GPU and the same authored world.
 #[test]
 fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     let authored = effects(|e| {
         e.reflections.ray_traced = true;
     });
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Auto);
 
-    let (clamped, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
+    let (clamped, hooks) = recording_hooks_with(profile_at(GpuTier::EntryDiscrete));
     let mut world = effects_scene(authored.clone()).build();
     world.insert_resource(settings.clone());
     init_graphics(&mut world, hooks);
     assert_eq!(settings_state(&world).quality_preset(), QualityPreset::Auto);
     assert!(
         !lock(&clamped).init.as_ref().unwrap().rt_reflections_on,
-        "the Auto -> High ceiling clamps RT off, silently"
+        "the Auto -> Medium ceiling clamps RT off, silently"
     );
 
-    let (forced, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
+    let (forced, hooks) = recording_hooks_with(profile_at(GpuTier::EntryDiscrete));
     let mut world = effects_scene(authored).build();
     world.insert_resource(settings);
     world.insert_resource(LaunchRequest {
         args: LaunchArgs {
-            quality_preset: Some(QualityPreset::Ultra),
+            graphics_quality: Some(QualityPreset::Ultra),
             ..LaunchArgs::NONE
         },
         ..Default::default()
@@ -49,6 +47,45 @@ fn the_quality_preset_flag_reaches_the_ray_tracing_ceiling() {
     assert!(
         lock(&forced).init.as_ref().unwrap().rt_reflections_on,
         "the Ultra ceiling the flag forced permits RT on the same GPU"
+    );
+}
+
+// The `--upscaling` and `--rt-reflections` flags reach the backend over the
+// user's persisted choices and the ceiling, in either direction. On a mid-tier
+// GPU `Auto` resolves to the `High` ceiling, which leaves ray tracing off.
+#[test]
+fn the_upscaling_and_ray_tracing_flags_beat_saved_and_preset_choices() {
+    let authored = effects(|e| {
+        e.reflections.ray_traced = true;
+    });
+    let run = |saved: Option<bool>, flag: Option<bool>| {
+        let mut settings = concinnity_engine::settings::StoredSettings::default();
+        settings.graphics.quality_preset = Some(QualityPreset::Auto);
+        settings.graphics.temporal_upscaling = saved;
+        settings.graphics.ray_traced_reflections = saved;
+        let (state, hooks) = recording_hooks_with(profile_at(GpuTier::MidDiscrete));
+        let mut world = effects_scene(authored.clone()).build();
+        world.insert_resource(settings);
+        world.insert_resource(LaunchRequest {
+            args: LaunchArgs {
+                upscaling: flag,
+                rt_reflections: flag,
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        });
+        init_graphics(&mut world, hooks);
+        let s = lock(&state);
+        let init = s.init.as_ref().unwrap();
+        (init.upscaling, init.rt_reflections_on)
+    };
+    assert!(!run(None, None).1, "the Auto -> High ceiling leaves RT off");
+    assert_eq!(run(Some(false), Some(true)), (true, true));
+    assert_eq!(run(Some(true), Some(false)), (false, false));
+    assert_eq!(
+        run(Some(true), None),
+        (true, true),
+        "no flag keeps the saved choice"
     );
 }
 
@@ -69,8 +106,11 @@ fn the_ray_tracing_flags_reach_the_backend() {
     let (state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     world.insert_resource(LaunchRequest {
-        rt_dynamic: Some(RtDynamicMode::Rebuild),
-        rt_skinned_geometry: Some(false),
+        args: LaunchArgs {
+            rt_dynamic: Some(RtDynamicMode::Rebuild),
+            rt_skinned_geometry: Some(false),
+            ..LaunchArgs::NONE
+        },
         ..Default::default()
     });
     init_graphics(&mut world, hooks);
@@ -92,35 +132,31 @@ fn capture_stays_off_without_a_launch_request() {
     assert!(!lock(&state).init.as_ref().unwrap().capture);
 }
 
-// The launch's screenshot request reaches the backend through the world's
-// `LaunchRequest`.
+// A run that takes screenshots keeps the presented frame readable, with no
+// capture request asking for it; the same world played normally does not.
 #[test]
-fn a_capture_launch_request_reaches_the_backend() {
-    let (state, hooks) = recording_hooks();
-    let mut world = scene_builder().build();
-    world.insert_resource(LaunchRequest {
-        capture: true,
-        ..Default::default()
-    });
-    init_graphics(&mut world, hooks);
-    assert!(lock(&state).init.as_ref().unwrap().capture);
-}
-
-// A benchmark that saves frames along the way keeps the presented frame
-// readable, with no launch request asking for it.
-#[test]
-fn a_benchmark_with_captures_arms_frame_capture() {
-    let (state, hooks) = recording_hooks();
-    let mut world = scene_builder().build();
-    world.insert_resource(BenchmarkRun::new(BenchmarkConfig {
-        captures: vec![FrameCapture {
+fn a_run_taking_screenshots_arms_frame_capture() {
+    let armed = |args: LaunchArgs| {
+        let (state, hooks) = recording_hooks();
+        let mut b = scene_builder();
+        b.push(Screenshot {
             seconds: 1.0,
-            path: "shot.png".to_string(),
-        }],
-        ..Default::default()
+            file: "shot.png".to_string(),
+            hud: true,
+        });
+        let mut world = b.build();
+        world.insert_resource(LaunchRequest {
+            args,
+            ..Default::default()
+        });
+        init_graphics(&mut world, hooks);
+        lock(&state).init.as_ref().unwrap().capture
+    };
+    assert!(armed(LaunchArgs {
+        command: concinnity_engine::launch::LaunchCommand::Bench,
+        ..LaunchArgs::NONE
     }));
-    init_graphics(&mut world, hooks);
-    assert!(lock(&state).init.as_ref().unwrap().capture);
+    assert!(!armed(LaunchArgs::NONE));
 }
 
 // A key bound to a screenshot keeps the presented frame readable, with no
@@ -197,7 +233,7 @@ fn an_embedded_surface_resource_reaches_the_backend() {
 // publishes the mode list and the frame-rate cap.
 #[test]
 fn persisted_display_and_system_overrides_reach_the_backend() {
-    let mut settings = concinnity_core::settings::StoredSettings::default();
+    let mut settings = concinnity_engine::settings::StoredSettings::default();
     settings.graphics.quality_preset = Some(QualityPreset::Custom);
     settings.graphics.window_mode = Some(WindowMode::Fullscreen);
     settings.graphics.resolution = Some([1920, 1080, 60]);
@@ -228,7 +264,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     // rather than publishing an empty dropdown.
     assert!(
         !world
-            .resource::<concinnity_core::ecs::DisplayModes>()
+            .resource::<concinnity_engine::ecs::DisplayModes>()
             .expect("mode list published for the dropdown")
             .0
             .is_empty()

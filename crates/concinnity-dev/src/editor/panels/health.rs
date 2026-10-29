@@ -30,13 +30,13 @@
 //! sums every resident item. The per-frame system timings are the one thing
 //! accumulated every tick, because a rate needs the whole window.
 
-use concinnity_core::budget::drift::MemoryDrift;
-use concinnity_core::budget::{MemoryBudget, ThreadBudget};
-use concinnity_core::ecs::World;
 use concinnity_core::math::narrow_f32;
 use concinnity_core::memory::{LedgerSnapshot, MemStats, MemTag, Realm, SizeClass};
-use concinnity_core::render::backend::GpuProfile;
-use concinnity_core::render::stream_pools::StreamingRuntime;
+use concinnity_engine::budget::drift::MemoryDrift;
+use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::backend::GpuProfile;
+use concinnity_engine::render::streaming::pools::StreamingRuntime;
 use concinnity_host::sys::cpu::CpuSampler;
 use concinnity_host::sys::memory;
 use std::time::{Duration, Instant};
@@ -195,7 +195,7 @@ pub(crate) fn tag_rows(snap: &HealthSnapshot) -> Vec<TagRow> {
                 Some(budget) => format!(
                     "{} / {}",
                     bytes_text(Some(usage.bytes as f64)),
-                    bytes_text(Some(budget as f64))
+                    bytes_text(Some(budget.get() as f64))
                 ),
                 None => bytes_text(Some(usage.bytes as f64)),
             },
@@ -396,7 +396,8 @@ fn pool_bytes(world: &World) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::budget::drift::DriftVerdict;
+    use concinnity_engine::budget::drift::DriftVerdict;
+    use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -561,7 +562,7 @@ mod tests {
     fn tagged_snapshot() -> HealthSnapshot {
         let ledger = concinnity_core::memory::Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 3 * GB / 2);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(2 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(2 * GB));
         ledger.set(MemTag::Meshes, Realm::Device, GB / 4);
         ledger.set(MemTag::Scratch, Realm::Host, 64 * 1024);
         HealthSnapshot {
@@ -595,7 +596,7 @@ mod tests {
     fn a_row_past_its_budget_is_flagged() {
         let ledger = concinnity_core::memory::Ledger::new();
         ledger.set(MemTag::Chunks, Realm::Device, 3 * GB);
-        ledger.set_budget(MemTag::Chunks, Realm::Device, Some(GB));
+        ledger.set_budget(MemTag::Chunks, Realm::Device, NonZeroU64::new(GB));
         let snap = HealthSnapshot {
             tags: ledger.snapshot(),
             ..Default::default()

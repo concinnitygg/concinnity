@@ -1,4 +1,4 @@
-//! The simulated ocean on Vulkan (see `concinnity_core::render::water::ocean`):
+//! The simulated ocean on Vulkan (see `concinnity_engine::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels.
 //!
@@ -11,14 +11,14 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::ShaderProgram;
-use concinnity_core::render::uniforms::ocean::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shader::programs::ShaderProgram;
+use concinnity_engine::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
-use concinnity_core::render::water::ocean::OceanPlan;
-use concinnity_core::render::water::ocean::foam::FoamClock;
-use concinnity_core::render::water::ocean::initial::initial_spectrum;
+use concinnity_engine::water::ocean::OceanPlan;
+use concinnity_engine::water::ocean::foam::FoamClock;
+use concinnity_engine::water::ocean::initial::initial_spectrum;
 use std::cell::Cell;
 
 use super::allocator::{PooledBuffer, PooledImage};
@@ -36,6 +36,7 @@ use super::texture::{
     GpuUploadContext, LayoutTransition, SubresourceRange, one_shot_submit,
     transition_image_layout_range,
 };
+use super::water_wake::{WakeField, WakeSim};
 
 const CASCADE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
@@ -55,12 +56,14 @@ fn kernel_bindings() -> [Binding; 7] {
     ]
 }
 
-// What the water draw binds: both arrays over every mip and layer, in
-// `GENERAL`, and the sampler they are read through.
+// What the water draw binds: both arrays over every mip and layer and the
+// wake's field (a stand-in where none runs), in `GENERAL`, and the sampler
+// they are read through.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct OceanViews {
     pub displacement: vk::ImageView,
     pub slopes: vk::ImageView,
+    pub wake: vk::ImageView,
     pub sampler: vk::Sampler,
 }
 
@@ -79,6 +82,10 @@ pub(in crate::vulkan) struct OceanSim {
     slopes: CascadeArray,
     sampler: OwnedSampler,
     kernels: Option<OceanKernels>,
+    // The wake a planet sea runs, `Some` when the plan asks for one, and the
+    // still field a sea binds where none does.
+    wake: Option<WakeSim>,
+    wake_stand_in: Option<WakeField>,
 }
 
 struct OceanKernels {
@@ -103,6 +110,7 @@ impl OceanSim {
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
         plan: &OceanPlan,
+        frames: usize,
         max_anisotropy: f32,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -146,18 +154,33 @@ impl OceanSim {
                 hot_reload,
             )?)
         };
+        let wake = (plan.wake && kernels.is_some())
+            .then(|| WakeSim::new(gpu, frames, hot_reload))
+            .transpose()?;
+        let wake_stand_in = wake
+            .is_none()
+            .then(|| WakeField::new(gpu, 1, 1))
+            .transpose()?;
         Ok(Self {
             displacement,
             slopes,
             sampler,
             kernels,
+            wake,
+            wake_stand_in,
         })
     }
 
     pub(in crate::vulkan) fn views(&self) -> OceanViews {
+        let wake = match (&self.wake, &self.wake_stand_in) {
+            (Some(w), _) => w.field.sampled,
+            (None, Some(s)) => s.sampled,
+            (None, None) => vk::ImageView::null(),
+        };
         OceanViews {
             displacement: self.displacement.sampled,
             slopes: self.slopes.sampled,
+            wake,
             sampler: self.sampler.handle(),
         }
     }
@@ -165,6 +188,11 @@ impl OceanSim {
     // Whether any body simulates an ocean, which puts `WaterSim` in the graph.
     pub(in crate::vulkan) fn simulates(&self) -> bool {
         self.kernels.is_some()
+    }
+
+    // Whether a planet sea runs a wake.
+    pub(in crate::vulkan) fn wakes(&self) -> bool {
+        self.wake.is_some()
     }
 }
 
@@ -376,8 +404,15 @@ fn compute_step(rec: &Recorder<'_>) {
 
 impl VkContext {
     // Encode the `WaterSim` node: for every simulation, evolve and transform
-    // its rows, then its columns into mip 0, then reduce down the mips.
-    pub(in crate::vulkan) fn encode_water_sim(&self, rec: &Recorder<'_>, time: f64) {
+    // its rows, then its columns into mip 0, then reduce down the mips; then
+    // run the wake one frame forward, in frame slot `frame_idx`, when a sea
+    // runs one.
+    pub(in crate::vulkan) fn encode_water_sim(
+        &self,
+        rec: &Recorder<'_>,
+        frame_idx: usize,
+        time: f64,
+    ) {
         let Some(k) = self.water_sim.as_ref().and_then(|o| o.kernels.as_ref()) else {
             return;
         };
@@ -436,6 +471,12 @@ impl VkContext {
                 rec.dispatch(groups, groups, cascades);
             }
             compute_step(rec);
+        }
+        let wake = self.water_sim.as_ref().and_then(|o| o.wake.as_ref());
+        if let (Some(wake), Some(frame)) = (wake, &self.wake_frame)
+            && wake.encode(rec, frame_idx, &frame.params, compute_step)
+        {
+            self.wake.ran();
         }
         // The water draw samples what the kernels wrote.
         rec.pipeline_barrier(

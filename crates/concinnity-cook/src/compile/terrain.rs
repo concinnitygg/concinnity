@@ -1,13 +1,13 @@
 //! Cooking a `Terrain`: the height grid, from generated noise or a decoded
 //! heightmap `Texture`, and each layer's density mask, from its decoded
 //! `Texture`. The images are decoded here; the grid and mask math is
-//! `concinnity_core::terrain`'s.
+//! `concinnity_engine::terrain`'s.
 
 use std::path::Path;
 
-use concinnity_core::components::{Terrain, validate};
-use concinnity_core::terrain::payload::TerrainPayload;
-use concinnity_core::terrain::{DensityMask, TerrainGrid, heightmap_heights, noise_heights};
+use concinnity_engine::components::{Terrain, validate};
+use concinnity_engine::terrain::payload::TerrainPayload;
+use concinnity_engine::terrain::{DensityMask, TerrainGrid, heightmap_heights, noise_heights};
 
 use crate::authoring::registry::RegisteredType;
 use crate::build_only::expand::schema_args;
@@ -101,7 +101,7 @@ pub(crate) fn compile_terrain_payload<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::terrain::terrain_chunks;
+    use concinnity_engine::terrain::terrain_chunks;
     use serde_json::json;
 
     fn no_textures(_: &str) -> Option<&'static serde_json::Value> {
@@ -144,7 +144,7 @@ mod tests {
         );
         assert_eq!(
             p.grid.resolution(),
-            concinnity_core::terrain::MIN_TERRAIN_RESOLUTION
+            concinnity_engine::terrain::MIN_TERRAIN_RESOLUTION
         );
     }
 

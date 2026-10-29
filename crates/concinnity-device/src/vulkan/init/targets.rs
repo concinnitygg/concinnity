@@ -2,8 +2,8 @@
 //! their framebuffers, and the transient image pool.
 
 use ash::vk;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::{Features, InitGpu};
 use crate::vulkan::context::{HDR_FORMAT, SwapchainState, VkTargets};
@@ -15,7 +15,6 @@ pub(super) struct TargetInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
     pub(super) features: &'a Features,
     pub(super) render_extent: vk::Extent2D,
-    pub(super) ssao_enabled: bool,
 }
 
 // Build the render-resolution scene targets.
@@ -33,7 +32,6 @@ pub(super) fn build_render_targets(
         swapchain,
         features,
         render_extent,
-        ssao_enabled,
     } = inputs;
     let (device, msaa_samples) = (&hw.device, features.msaa_samples);
     let main_render_pass = create_main_render_pass(device, HDR_FORMAT, msaa_samples)?;
@@ -63,7 +61,9 @@ pub(super) fn build_render_targets(
     )?;
 
     // Transient image pool: the graph-owned transients (`ao_output`,
-    // `bloom_top`, and the three G-buffer color channels). Built before the
+    // `bloom_top`, and the three G-buffer color channels), planned for every
+    // feature a settings change can turn on so a toggle never repacks it.
+    // Built before the
     // composite and the main pass bind its `bloom_top` and `ao_output`, and
     // before the G-buffer pre-pass so its framebuffers bind the pooled MRT
     // channels.
@@ -77,10 +77,7 @@ pub(super) fn build_render_targets(
         },
         frames,
         &plan_pool_slots(
-            PoolGates {
-                ssao: ssao_enabled,
-                gbuffer: features.gbuffer_enabled,
-            },
+            PoolGates::REACHABLE,
             (render_extent.width, render_extent.height),
             (swapchain.extent.width, swapchain.extent.height),
         )?,

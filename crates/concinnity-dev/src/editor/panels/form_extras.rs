@@ -5,8 +5,8 @@
 //! type's business (`hook/form_extras.rs`); this is how one looks and where a
 //! click on it lands.
 
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
@@ -161,7 +161,7 @@ pub(crate) fn place(world: &mut World, row: &ExtraRow, slot: &Slot, ids: SlotIds
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn check(on: bool, enabled: bool) -> ExtraRow {
         ExtraRow {

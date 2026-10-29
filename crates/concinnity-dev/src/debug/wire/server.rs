@@ -4,11 +4,11 @@
 //! to `crate::mcp::AppServer`, which parses the HTTP request and answers the
 //! MCP message it carried from the verb table in `super::super::catalog`.
 
-use concinnity_core::components::Camera3D;
-use concinnity_core::ecs::World;
-use concinnity_core::fanout::Fanout;
-use concinnity_core::render::stream_pools::{StreamingPressure, StreamingRuntime};
-use concinnity_core::shutdown::ShutdownToken;
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::components::Camera3D;
+use concinnity_engine::ecs::World;
+use concinnity_engine::render::streaming::pools::{StreamingPressure, StreamingRuntime};
+use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_host::thread::{ThreadRole, asset_id, set_current_thread_role};
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
@@ -42,7 +42,7 @@ pub(crate) struct DebugServer {
     frame: u64,
     // The asset / shader / world.jsonl reload drive. The server owns the
     // session's one driver so the `reload-assets` command can reach its
-    // pending flag; the drive itself is shared with the plain `cn editor`
+    // pending flag; the drive itself is shared with the plain `cn edit`
     // path (see `crate::debug::hot_reload::HotReloadDriver`).
     reload: hot_reload::HotReloadDriver,
     // Active camera-move motion installed by a `camera-move` call, advanced
@@ -168,8 +168,8 @@ impl FrameHook for DebugServer {
         // Process thread + memory budgets (fixed at start) plus the live RSS
         // (one cheap syscall per tick, dev-only), for the `budget` query.
         if let (Some(threads), Some(memory)) = (
-            world.resource::<concinnity_core::budget::ThreadBudget>(),
-            world.resource::<concinnity_core::budget::MemoryBudget>(),
+            world.resource::<concinnity_engine::budget::ThreadBudget>(),
+            world.resource::<concinnity_engine::budget::MemoryBudget>(),
         ) {
             state.budget = Some(BudgetSnapshot {
                 threads: BudgetThreads {
@@ -186,7 +186,7 @@ impl FrameHook for DebugServer {
             });
         }
         // Opportunistically pick up the shader-reload flag the backend exposes
-        // (Some only under `cn debug` on hot-reload backends); once captured,
+        // (Some only under `cn run -f` on hot-reload backends); once captured,
         // the `reload-shaders` verb can fire the flag. The backend sits in
         // the world's parked slot between ticks.
         if state.shader_reload.is_none()

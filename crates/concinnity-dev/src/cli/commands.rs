@@ -1,15 +1,10 @@
 // The command tree itself: every subcommand `concinnity` accepts and the
 // arguments it takes. Parsing only -- what each command does lives behind
 // `dispatch`.
-use concinnity_core::launch::LaunchRequest;
-use std::num::NonZeroU32;
+use concinnity_engine::launch::{DEFAULT_DEBUG_PORT, LaunchArgs};
 
-use concinnity_core::gfx::view_modes::ShowFlags;
-
-use super::launch_args::LaunchArgsArg;
-use super::value_enums::{
-    BundleFormatArg, DlssPresetArg, GraphicsApiArg, RtDynamicArg, ShowFlagArg,
-};
+use super::launch_args::{BenchScope, LaunchArgsArg, RunScope};
+use super::value_enums::BundleFormatArg;
 
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -21,40 +16,40 @@ pub(crate) enum Commands {
     #[command(name = "new")]
     New(NewArgs),
 
-    /// Build a world from worlds/ into binary blobs
-    #[command(name = "build")]
-    Build(BuildArgs),
+    /// Cook an app into binary blobs
+    #[command(name = "cook")]
+    Cook(CookArgs),
 
-    /// Run a compiled world
+    /// Validate an app without cooking it
+    #[command(name = "check")]
+    Check(CheckArgs),
+
+    /// Run an app
     //
-    // Production path: no debug server and no command channel. A shipped run
-    // is neither remotely inspectable nor remotely driven: use `cn debug` for
-    // that.
+    // Without -f: the cooked blobs, cooking the discovered world first when
+    // there are none. With -f: the named world cooked in memory and
+    // hot-reloaded. --debug-port serves the debug protocol (MCP) either way.
     #[command(name = "run")]
     Run(RunArgs),
 
-    /// Run interpreted directly from a world jsonl file
+    /// Benchmark an app and print what its frames cost
     //
-    // Compiles the world in memory (no prior `cn build` needed) and stands
-    // up the localhost debug server.
-    // This is the development run, and the path the agentic loop / a host UI
-    // use when they need to read or drive runtime state: the port it opens
-    // serves MCP.
-    #[command(name = "debug")]
-    Debug(DebugArgs),
+    // Finds its world the way `run` does.
+    #[command(name = "bench")]
+    Bench(BenchArgs),
 
-    /// Edit a world in-engine with a save-back HUD [default command]
+    /// Edit an app in-engine with a save-back HUD
     //
-    // Compiles world.jsonl in memory (no prior `cn build` needed, and the blobs
+    // Compiles world.jsonl in memory (no prior `cn cook` needed, and the blobs
     // one wrote are neither read nor refreshed here), overlays the editor HUD (a
     // SAVE button plus an add-asset button), and persists edits by writing
     // world.jsonl. No command channel unless --debug-port is given (which
-    // stands up the same MCP debug server `cn debug` uses, so an agent can
+    // stands up the same MCP debug server `cn run` uses, so an agent can
     // drive an editor session).
-    #[command(name = "editor")]
-    Editor(EditorArgs),
+    #[command(name = "edit")]
+    Edit(EditArgs),
 
-    /// Add an asset to the active world
+    /// Add an asset to the active app
     //
     // TARGET can be:
     //   - A file path  (shaders/pbr.vert, models/scene.obj)
@@ -64,7 +59,7 @@ pub(crate) enum Commands {
     #[command(name = "add")]
     Add(AddArgs),
 
-    /// Remove an asset from the active world by its id
+    /// Remove an asset from the active app by its id
     //
     // ID is the `$id` an entry declares in its args (e.g. "pbr_vert"), or the
     // `<Type>#<ordinal>` handle of an anonymous one (e.g. "Prop#3").
@@ -75,26 +70,22 @@ pub(crate) enum Commands {
     #[command(name = "list")]
     List(ListArgs),
 
-    /// Print an asset's effective entry from the expanded world
+    /// Print an asset's effective entry from the expanded app
     //
-    // Prints the full JSONL line for ID as the build sees it, including
-    // assets that only exist through build-time expansion or injection. The
+    // Prints the full JSONL line for ID as the cook sees it, including
+    // assets that only exist through cook-time expansion or injection. The
     // output can be pasted into world.jsonl verbatim to override a default.
     #[command(name = "explain")]
     Explain(ExplainArgs),
 
-    /// Regenerate the asset reference pages under docs/assets
+    /// Regenerate the asset reference pages
     //
     // Renders the asset schema compiled into this build, rustdoc included, so
     // it needs no source tree.
     #[command(name = "docs")]
     Docs(DocsArgs),
 
-    /// Validate a world without building
-    #[command(name = "test")]
-    Test(TestArgs),
-
-    /// Package a built world into a distributable app
+    /// Package a cooked app for distribution
     #[command(name = "export")]
     Export(ExportArgs),
 
@@ -111,91 +102,20 @@ pub(crate) enum Commands {
     Version,
 }
 
-// The argv face of the launch-time render knobs on the engine's `LaunchRequest`.
-// Each is a diagnostic: omitting it leaves the shipping behavior, and none is
-// persisted, so a probe run can force one without writing settings. Flattened
-// into every command that launches a world (`run` / `debug` / `editor`).
-#[derive(Debug, Default, clap::Args)]
-pub(crate) struct RenderArgs {
-    /// Render with this graphics API instead of the native one
-    // Outranks the settings-menu choice, unpersisted. One the build did not
-    // compile in (Vulkan needs `--features vulkan` on macOS and Windows), or
-    // one with no usable device, falls back to the native API with a warning.
-    // Chosen before the world cooks, so its shaders are built for the API that
-    // draws them.
-    #[arg(long, value_enum)]
-    pub(crate) graphics_api: Option<GraphicsApiArg>,
-
-    // The flags an app's own command line also takes (`--benchmark`,
-    // `--vsync`, `--fps-cap`, `--quality-preset`, `--frames`), described in
-    // the engine's table. `--quality-preset` outranks the settings-menu choice;
-    // only the `ultra` ceiling permits ray-traced reflections, so an RT probe
-    // that omits it measures a frame with RT clamped off.
-    #[command(flatten)]
-    pub(crate) launch: LaunchArgsArg,
-
-    /// How the ray-tracing acceleration structure tracks moving props
-    // Omitted = `auto`, the dirty-gated TLAS rebuild a shipped run uses.
-    #[arg(long, value_enum)]
-    pub(crate) rt_dynamic: Option<RtDynamicArg>,
-
-    /// Whether skinned meshes join the ray-tracing acceleration structure
-    // Omitted = in. `--rt-skinned-geometry false` leaves the BVH over static +
-    // instanced geometry only, which isolates the skinned trace path.
-    #[arg(long)]
-    pub(crate) rt_skinned_geometry: Option<bool>,
-
-    /// Force the DLSS render preset for this launch, unpersisted
-    // Outranks the settings-menu choice, so a probe can run a preset without
-    // writing settings. Ignored unless DLSS is the upscaler.
-    #[arg(long, value_enum)]
-    pub(crate) dlss_preset: Option<DlssPresetArg>,
-
-    /// Step the frame clock by exactly 1/RATE seconds per frame, whatever the wall time
-    // So a capture at frame N sees the same clock on every launch: anything
-    // animated by the clock, a world Shader's vertex hook included, lands in
-    // the same place, and a pixel A/B of it is not noise.
-    #[arg(long, value_name = "RATE")]
-    pub(crate) fixed_frame_rate: Option<NonZeroU32>,
-
-    /// Start with a feature pass off, as the editor's View menu turns it off; repeatable
-    // So a probe can hold a frame with one pass removed against the same frame
-    // with it on, each captured at an exact frame of its own launch.
-    #[arg(long, value_enum, value_name = "FLAG")]
-    pub(crate) hide: Vec<ShowFlagArg>,
-}
-
-impl RenderArgs {
-    // Fix the graphics API this process renders with: the flag, else the
-    // player's settings-menu choice in `tree`. Runs before anything cooks or
-    // probes the device.
-    pub(crate) fn select_graphics_api(&self, tree: &concinnity_host::store::paths::StateTree) {
-        match self.graphics_api {
-            Some(api) => {
-                concinnity_runtime::platform::select(Some(api.into()));
-            }
-            None => {
-                concinnity_runtime::platform::select_persisted(Some(tree));
-            }
-        }
-    }
-
-    // The launch request these flags make, with the command's own validation
-    // flag and whether it runs a development session.
-    pub(crate) fn launch(&self, validation: Option<bool>, dev_loop: bool) -> LaunchRequest {
-        LaunchRequest {
-            capture: false,
-            dev_loop,
-            args: self.launch.0,
-            validation,
-            rt_dynamic: self.rt_dynamic.map(Into::into),
-            rt_skinned_geometry: self.rt_skinned_geometry,
-            dlss_preset: self.dlss_preset.map(Into::into),
-            fixed_frame_rate: self.fixed_frame_rate,
-            show: self.hide.iter().fold(ShowFlags::all(), |show, &flag| {
-                show.with(flag.into(), false)
-            }),
-        }
+impl Commands {
+    // The launch a world-running command asks for, `quiet` from the root
+    // command. `None` for a command that runs no world.
+    pub(crate) fn launch_args(&self, quiet: bool) -> Option<LaunchArgs> {
+        let args = match self {
+            Self::Run(a) => &a.launch.args,
+            Self::Bench(a) => &a.launch.args,
+            Self::Edit(a) => &a.launch.args,
+            _ => return None,
+        };
+        Some(LaunchArgs {
+            quiet,
+            ..args.clone()
+        })
     }
 }
 
@@ -204,7 +124,7 @@ impl RenderArgs {
 // not exist is an error.
 #[derive(Debug, clap::Args)]
 pub(crate) struct WorldArg {
-    /// Path to a world JSONL file (default: discover from worlds/)
+    /// Path to a world JSONL file (default: the discovered one)
     #[arg(short = 'f', long)]
     file: Option<String>,
 }
@@ -216,80 +136,37 @@ impl WorldArg {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct DebugArgs {
+pub(crate) struct RunArgs {
     #[command(flatten)]
     pub(crate) world: WorldArg,
 
-    /// Port for the localhost runtime debug server
-    #[arg(long, default_value_t = 8777)]
-    pub(crate) debug_port: u16,
+    #[command(flatten)]
+    pub(crate) launch: LaunchArgsArg<RunScope>,
+}
 
-    /// Enable graphics API validation, overriding the build profile
-    // Omitting the flag defers to the build profile. See `RunArgs::validation`.
-    #[arg(long)]
-    pub(crate) validation: Option<bool>,
+#[derive(Debug, clap::Args)]
+pub(crate) struct BenchArgs {
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
 
     #[command(flatten)]
-    pub(crate) render: RenderArgs,
+    pub(crate) launch: LaunchArgsArg<BenchScope>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct EditArgs {
+    #[command(flatten)]
+    pub(crate) world: WorldArg,
+
+    #[command(flatten)]
+    pub(crate) launch: LaunchArgsArg<RunScope>,
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct McpArgs {
     /// Port the runtime debug server is listening on
-    #[arg(long, default_value_t = 8777)]
+    #[arg(long, default_value_t = DEFAULT_DEBUG_PORT)]
     pub(crate) debug_port: u16,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct EditorArgs {
-    /// Path to a world JSONL file (default: discover from worlds/)
-    #[arg(short = 'f', long)]
-    pub(crate) file: Option<String>,
-
-    /// Start the localhost debug server on this port alongside the editor
-    // Absent leaves the editor without a command channel; present makes an
-    // editor session inspectable and drivable by any MCP client.
-    #[arg(long)]
-    pub(crate) debug_port: Option<u16>,
-
-    /// Enable graphics API validation, overriding the build profile
-    // Omitting the flag defers to the build profile. See `RunArgs::validation`.
-    #[arg(long)]
-    pub(crate) validation: Option<bool>,
-
-    #[command(flatten)]
-    pub(crate) render: RenderArgs,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct RunArgs {
-    /// Enable graphics API validation, overriding the build profile
-    // The DirectX / Vulkan debug layers, or on macOS the Metal API-validation
-    // layer (the process re-execs once with `MTL_DEBUG_LAYER` set, since Metal
-    // cannot toggle it from inside a running process). Omitting the flag defers
-    // to the build profile: on for debug builds, off for release. Pass
-    // `--validation false` to force it off in a debug build. The heavier Metal
-    // shader validation is not enabled by this flag; set `MTL_SHADER_VALIDATION=1`
-    // in the environment for that.
-    #[arg(long)]
-    pub(crate) validation: Option<bool>,
-
-    /// Step simulation and rendering serially on one thread instead of pipelining them
-    // A/B comparison, escape hatch.
-    #[arg(long)]
-    pub(crate) serial: bool,
-
-    /// Keep every system's internal work on the sim thread instead of the job pool
-    // Determinism oracle, escape hatch.
-    #[arg(long)]
-    pub(crate) serial_schedule: bool,
-
-    /// Capture the last presented frame to this PNG when the run stops
-    #[arg(long)]
-    pub(crate) screenshot: Option<String>,
-
-    #[command(flatten)]
-    pub(crate) render: RenderArgs,
 }
 
 #[derive(Debug, clap::Args)]
@@ -317,7 +194,7 @@ pub(crate) struct RmArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct TestArgs {
+pub(crate) struct CheckArgs {
     #[command(flatten)]
     pub(crate) world: WorldArg,
 }
@@ -327,8 +204,8 @@ pub(crate) struct ListArgs {
     #[command(flatten)]
     pub(crate) world: WorldArg,
 
-    /// List the expanded world the build produces
-    // build-time macros are expanded and injected defaults included,
+    /// List the expanded world the cook produces
+    // cook-time macros are expanded and injected defaults included,
     // each row tagged with its provenance (authored / injected / expanded).
     #[arg(long)]
     pub(crate) expanded: bool,
@@ -363,11 +240,11 @@ pub(crate) struct NewArgs {
 }
 
 #[derive(Debug, clap::Args)]
-pub(crate) struct BuildArgs {
+pub(crate) struct CookArgs {
     #[command(flatten)]
     pub(crate) world: WorldArg,
 
-    /// Also show the build's informational messages, such as each imported mesh
+    /// Also show the cook's informational messages, such as each imported mesh
     #[arg(short, long)]
     pub(crate) verbose: bool,
 }
@@ -405,86 +282,155 @@ pub(crate) struct ExportArgs {
 // Argument-parsing tests. The engine-launching dispatch and the Metal re-exec
 // are exercised by the `tests/cli.rs` integration tests, which run the built
 // binary; these cover the clap surface -- the command tree, the per-subcommand
-// defaults, and the value-enum parsing -- without a process.
+// defaults, and the value parsing -- without a process.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::Cli;
     use clap::Parser;
-    use concinnity_core::render::dlss::DlssPreset;
-    use concinnity_core::render::rt_geom::RtDynamicMode;
-    use concinnity_core::settings::QualityPreset;
+    use concinnity_engine::gfx::view_modes::ShowFlags;
+    use concinnity_engine::launch::LaunchCommand;
+    use concinnity_engine::render::output::dlss::DlssPreset;
+    use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
+    use concinnity_engine::settings::QualityPreset;
+    use core::num::NonZeroU32;
 
-    // Every world-launching command carries the render flags, and each one
-    // defaults to absent (which the engine resolves to today's behavior).
+    fn launch(argv: &[&str]) -> LaunchArgs {
+        let cli = Cli::try_parse_from(argv).unwrap();
+        cli.command
+            .launch_args(cli.quiet)
+            .expect("a launch command")
+    }
+
+    // Every world-launching command defaults every flag to absent, which the
+    // engine resolves to today's behavior, and names its own launch command.
     #[test]
-    fn the_render_flags_default_to_absent_on_every_launch_command() {
-        for argv in [
-            vec!["concinnity", "run"],
-            vec!["concinnity", "debug"],
-            vec!["concinnity", "editor"],
+    fn the_launch_flags_default_to_absent_on_every_launch_command() {
+        for (command, expected) in [
+            ("run", LaunchCommand::Run),
+            ("bench", LaunchCommand::Bench),
+            ("edit", LaunchCommand::Run),
         ] {
-            let cli = Cli::try_parse_from(&argv).unwrap();
-            let render = match cli.resolved_command() {
-                Commands::Run(a) => &a.render,
-                Commands::Debug(a) => &a.render,
-                Commands::Editor(a) => &a.render,
-                _ => panic!("expected a launch command for {argv:?}"),
-            };
-            assert!(render.graphics_api.is_none(), "{argv:?}");
-            assert_eq!(render.launch, LaunchArgsArg::NONE, "{argv:?}");
-            assert!(render.rt_dynamic.is_none(), "{argv:?}");
-            assert!(render.rt_skinned_geometry.is_none(), "{argv:?}");
-            assert!(render.dlss_preset.is_none(), "{argv:?}");
-            assert!(render.fixed_frame_rate.is_none(), "{argv:?}");
-            assert!(render.hide.is_empty(), "{argv:?}");
+            assert_eq!(
+                launch(&["concinnity", command]),
+                LaunchArgs {
+                    command: expected,
+                    ..LaunchArgs::NONE
+                },
+                "{command}"
+            );
+        }
+        let cli = Cli::try_parse_from(["concinnity", "cook"]).unwrap();
+        assert_eq!(cli.command.launch_args(false), None);
+    }
+
+    #[test]
+    fn the_launch_flags_parse_on_every_launch_command() {
+        for command in ["run", "bench", "edit"] {
+            let args = launch(&[
+                "concinnity",
+                command,
+                "--graphics-api",
+                "vulkan",
+                "--graphics-quality",
+                "ultra",
+                "--rt-dynamic",
+                "rebuild",
+                "--no-rt-skinned-geometry",
+                "--dlss-preset",
+                "m",
+                "--fixed-frame-rate",
+                "60",
+                "--hide-pass",
+                "reactive",
+                "--hide-pass",
+                "fog",
+                "--hide-pass",
+                "reactive",
+            ]);
+            assert_eq!(
+                args.graphics_api,
+                Some(concinnity_engine::platform::Platform::Vulkan),
+                "{command}"
+            );
+            assert_eq!(args.graphics_quality, Some(QualityPreset::Ultra));
+            assert_eq!(args.rt_dynamic, Some(RtDynamicMode::Rebuild));
+            assert_eq!(args.rt_skinned_geometry, Some(false));
+            assert_eq!(args.dlss_preset, Some(DlssPreset::M));
+            assert_eq!(args.fixed_frame_rate, NonZeroU32::new(60));
+            assert_eq!(
+                args.show,
+                ShowFlags::all()
+                    .with(ShowFlags::REACTIVE, false)
+                    .with(ShowFlags::FOG, false),
+            );
         }
     }
 
     #[test]
-    fn the_render_flags_map_onto_the_launch_request() {
-        let cli = Cli::try_parse_from([
+    fn only_bench_takes_the_bench_flags() {
+        let args = launch(&[
             "concinnity",
-            "run",
-            "--quality-preset",
-            "ultra",
-            "--rt-dynamic",
-            "rebuild",
-            "--rt-skinned-geometry",
-            "false",
-            "--dlss-preset",
-            "m",
-            "--fixed-frame-rate",
-            "60",
-            "--hide",
-            "reactive",
-            "--hide",
-            "fog",
-            "--hide",
-            "reactive",
-        ])
-        .unwrap();
-        let Commands::Run(args) = cli.resolved_command() else {
-            panic!("expected run");
-        };
-        assert_eq!(
-            args.render.launch(Some(true), true),
-            LaunchRequest {
-                capture: false,
-                dev_loop: true,
-                args: concinnity_core::launch::LaunchArgs {
-                    quality_preset: Some(QualityPreset::Ultra),
-                    ..concinnity_core::launch::LaunchArgs::NONE
-                },
-                validation: Some(true),
-                rt_dynamic: Some(RtDynamicMode::Rebuild),
-                rt_skinned_geometry: Some(false),
-                dlss_preset: Some(DlssPreset::M),
-                fixed_frame_rate: NonZeroU32::new(60),
-                show: ShowFlags::all()
-                    .toggled(ShowFlags::REACTIVE)
-                    .toggled(ShowFlags::FOG),
+            "bench",
+            "--start-at",
+            "2",
+            "--stop-at",
+            "30",
+            "--screenshot-at",
+            "4:start",
+        ]);
+        assert_eq!(args.start_at(), Some(2.0));
+        assert_eq!(args.stop_at(), Some(30.0));
+        assert_eq!(args.screenshot_at.len(), 1);
+        for flag in ["--start-at", "--stop-at", "--screenshot-at"] {
+            for command in ["run", "edit"] {
+                assert!(
+                    Cli::try_parse_from(["concinnity", command, flag, "1"]).is_err(),
+                    "{command} {flag}"
+                );
             }
+        }
+    }
+
+    // The flags the reworked command line dropped or renamed are refused.
+    #[test]
+    fn the_retired_flags_are_refused() {
+        for argv in [
+            &["concinnity", "run", "--benchmark"][..],
+            &["concinnity", "run", "--serial"],
+            &["concinnity", "run", "--serial-schedule"],
+            &["concinnity", "run", "--screenshot", "a.png"],
+            &["concinnity", "run", "--screenshots"],
+            &["concinnity", "run", "--validation", "true"],
+            &["concinnity", "run", "--fps-cap", "60"],
+            &["concinnity", "run", "--frames", "60"],
+            &["concinnity", "run", "--quality-preset", "ultra"],
+            &["concinnity", "run", "--hide", "fog"],
+            &["concinnity", "run", "--upscaling", "on"],
+        ] {
+            assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn the_retired_commands_are_unknown() {
+        for command in ["build", "test", "debug", "editor"] {
+            assert!(
+                Cli::try_parse_from(["concinnity", command]).is_err(),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn quiet_is_taken_before_or_after_the_command() {
+        assert!(launch(&["concinnity", "-q", "run"]).quiet);
+        assert!(launch(&["concinnity", "bench", "--quiet"]).quiet);
+        assert!(!launch(&["concinnity", "run"]).quiet);
+        assert!(
+            Cli::try_parse_from(["concinnity", "cook", "-q"])
+                .unwrap()
+                .quiet
         );
     }
 
@@ -496,81 +442,34 @@ mod tests {
     }
 
     #[test]
-    fn the_render_flags_parse_on_every_launch_command() {
-        for command in ["run", "debug", "editor"] {
-            let cli = Cli::try_parse_from([
-                "concinnity",
-                command,
-                "--graphics-api",
-                "vulkan",
-                "--quality-preset",
-                "ultra",
-                "--rt-dynamic",
-                "rebuild",
-                "--rt-skinned-geometry",
-                "false",
-                "--dlss-preset",
-                "l",
-                "--fixed-frame-rate",
-                "30",
-                "--hide",
-                "reactive",
-                "--hide",
-                "fog",
-            ])
-            .unwrap();
-            let render = match cli.resolved_command() {
-                Commands::Run(a) => &a.render,
-                Commands::Debug(a) => &a.render,
-                Commands::Editor(a) => &a.render,
-                _ => panic!("expected a launch command for {command}"),
-            };
-            assert_eq!(
-                render.graphics_api,
-                Some(GraphicsApiArg::Vulkan),
-                "{command}"
-            );
-            assert_eq!(
-                render.launch.0.quality_preset,
-                Some(QualityPreset::Ultra),
-                "{command}"
-            );
-            assert!(
-                matches!(render.rt_dynamic, Some(RtDynamicArg::Rebuild)),
-                "{command}"
-            );
-            assert_eq!(render.rt_skinned_geometry, Some(false), "{command}");
-            assert!(
-                matches!(render.dlss_preset, Some(DlssPresetArg::L)),
-                "{command}"
-            );
-            assert_eq!(render.fixed_frame_rate, NonZeroU32::new(30), "{command}");
-            assert_eq!(
-                render.launch(None, false).show,
-                ShowFlags::all()
-                    .with(ShowFlags::REACTIVE, false)
-                    .with(ShowFlags::FOG, false),
-                "{command}"
-            );
-        }
-    }
-
-    #[test]
-    fn debug_starts_the_server_on_the_named_world() {
-        let cli = Cli::try_parse_from(["concinnity", "debug", "-f", "world.jsonl"]).unwrap();
-        let Commands::Debug(a) = cli.resolved_command() else {
-            panic!("expected debug");
+    fn run_takes_a_world_and_a_debug_port() {
+        let cli = Cli::try_parse_from(["concinnity", "run", "-f", "world.jsonl"]).unwrap();
+        let Commands::Run(a) = &cli.command else {
+            panic!("expected run");
         };
         assert_eq!(a.world.file(), Some("world.jsonl"));
-        assert_eq!(a.debug_port, 8777, "the same default cn mcp dials");
+        assert_eq!(a.launch.args.debug_port, None);
+        let port = |argv: &[&str]| launch(argv).debug_port;
+        assert_eq!(
+            port(&["concinnity", "run", "--debug-port"]),
+            Some(DEFAULT_DEBUG_PORT),
+            "the same default cn mcp dials"
+        );
+        assert_eq!(
+            port(&["concinnity", "run", "--debug-port", "9100"]),
+            Some(9100)
+        );
+        assert_eq!(
+            launch(&["concinnity", "run", "--no-graphics-validation"]).graphics_validation,
+            Some(false)
+        );
     }
 
     #[test]
-    fn debug_takes_no_subcommand() {
+    fn run_takes_no_subcommand() {
         for argv in [
-            ["concinnity", "debug", "send"],
-            ["concinnity", "debug", "screenshot"],
-            ["concinnity", "debug", "watch"],
+            ["concinnity", "run", "send"],
+            ["concinnity", "run", "screenshot"],
         ] {
             assert!(Cli::try_parse_from(argv).is_err(), "{argv:?}");
         }
@@ -579,12 +478,12 @@ mod tests {
     #[test]
     fn mcp_defaults_to_the_debug_port() {
         let cli = Cli::try_parse_from(["concinnity", "mcp"]).unwrap();
-        let Commands::Mcp(a) = cli.resolved_command() else {
+        let Commands::Mcp(a) = &cli.command else {
             panic!("expected mcp");
         };
-        assert_eq!(a.debug_port, 8777);
+        assert_eq!(a.debug_port, DEFAULT_DEBUG_PORT);
         let cli = Cli::try_parse_from(["concinnity", "mcp", "--debug-port", "9001"]).unwrap();
-        let Commands::Mcp(a) = cli.resolved_command() else {
+        let Commands::Mcp(a) = &cli.command else {
             panic!("expected mcp");
         };
         assert_eq!(a.debug_port, 9001);
@@ -593,7 +492,7 @@ mod tests {
     #[test]
     fn export_defaults() {
         let cli = Cli::try_parse_from(["concinnity", "export"]).unwrap();
-        let Commands::Export(e) = cli.resolved_command() else {
+        let Commands::Export(e) = &cli.command else {
             panic!("expected export");
         };
         assert_eq!(e.out, "dist");
@@ -611,7 +510,7 @@ mod tests {
     fn add_requires_a_target() {
         assert!(Cli::try_parse_from(["concinnity", "add"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "add", "Logger", "--id", "log"]).unwrap();
-        let Commands::Add(a) = cli.resolved_command() else {
+        let Commands::Add(a) = &cli.command else {
             panic!("expected add");
         };
         assert_eq!(a.target, "Logger");
@@ -621,7 +520,7 @@ mod tests {
     #[test]
     fn init_takes_no_arguments() {
         let cli = Cli::try_parse_from(["concinnity", "init"]).unwrap();
-        assert!(matches!(cli.resolved_command(), Commands::Init));
+        assert!(matches!(cli.command, Commands::Init));
         assert!(Cli::try_parse_from(["concinnity", "init", "extra"]).is_err());
     }
 
@@ -629,45 +528,61 @@ mod tests {
     fn new_requires_a_path() {
         assert!(Cli::try_parse_from(["concinnity", "new"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "new", "my-app"]).unwrap();
-        let Commands::New(a) = cli.resolved_command() else {
+        let Commands::New(a) = &cli.command else {
             panic!("expected new");
         };
         assert_eq!(a.path, "my-app");
     }
 
-    // `build` and `test` share the same optional --file, defaulting to discovery.
+    // `run`, `bench`, `cook`, `check` and `edit` share the same optional
+    // --file, defaulting to discovery.
     #[test]
-    fn build_and_test_take_an_optional_world_file() {
-        let cli = Cli::try_parse_from(["concinnity", "build"]).unwrap();
-        let Commands::Build(a) = cli.resolved_command() else {
-            panic!("expected build");
+    fn the_world_commands_take_an_optional_world_file() {
+        let file = |argv: &[&str]| -> Option<String> {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let world = match &cli.command {
+                Commands::Cook(a) => &a.world,
+                Commands::Check(a) => &a.world,
+                Commands::Run(a) => &a.world,
+                Commands::Bench(a) => &a.world,
+                Commands::Edit(a) => &a.world,
+                _ => panic!("expected a world command for {argv:?}"),
+            };
+            world.file().map(str::to_string)
         };
-        assert!(a.world.file().is_none());
+        for command in ["cook", "check", "run", "bench", "edit"] {
+            assert_eq!(file(&["concinnity", command]), None, "{command}");
+            assert_eq!(
+                file(&["concinnity", command, "-f", "w.jsonl"]).as_deref(),
+                Some("w.jsonl")
+            );
+            assert_eq!(
+                file(&["concinnity", command, "--file", "w.jsonl"]).as_deref(),
+                Some("w.jsonl")
+            );
+        }
+    }
 
-        let cli = Cli::try_parse_from(["concinnity", "build", "-f", "w.jsonl"]).unwrap();
-        let Commands::Build(a) = cli.resolved_command() else {
-            panic!("expected build");
+    #[test]
+    fn cook_shows_its_messages_when_verbose() {
+        let cli = Cli::try_parse_from(["concinnity", "cook", "-v"]).unwrap();
+        let Commands::Cook(a) = &cli.command else {
+            panic!("expected cook");
         };
-        assert_eq!(a.world.file(), Some("w.jsonl"));
-
-        let cli = Cli::try_parse_from(["concinnity", "test", "--file", "w.jsonl"]).unwrap();
-        let Commands::Test(a) = cli.resolved_command() else {
-            panic!("expected test");
-        };
-        assert_eq!(a.world.file(), Some("w.jsonl"));
+        assert!(a.verbose);
     }
 
     #[test]
     fn list_flags_are_independent() {
         let cli = Cli::try_parse_from(["concinnity", "list"]).unwrap();
-        let Commands::List(a) = cli.resolved_command() else {
+        let Commands::List(a) = &cli.command else {
             panic!("expected list");
         };
         assert!(!a.expanded);
         assert!(!a.systems);
 
         let cli = Cli::try_parse_from(["concinnity", "list", "--expanded", "--systems"]).unwrap();
-        let Commands::List(a) = cli.resolved_command() else {
+        let Commands::List(a) = &cli.command else {
             panic!("expected list");
         };
         assert!(a.expanded);
@@ -678,7 +593,7 @@ mod tests {
     fn explain_requires_an_id() {
         assert!(Cli::try_parse_from(["concinnity", "explain"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "explain", "gfx", "-f", "w.jsonl"]).unwrap();
-        let Commands::Explain(a) = cli.resolved_command() else {
+        let Commands::Explain(a) = &cli.command else {
             panic!("expected explain");
         };
         assert_eq!(a.id, "gfx");
@@ -689,7 +604,7 @@ mod tests {
     fn rm_requires_an_id() {
         assert!(Cli::try_parse_from(["concinnity", "rm"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "rm", "Prop#3"]).unwrap();
-        let Commands::Rm(a) = cli.resolved_command() else {
+        let Commands::Rm(a) = &cli.command else {
             panic!("expected rm");
         };
         assert_eq!(a.id, "Prop#3");
@@ -699,7 +614,7 @@ mod tests {
     fn add_takes_a_scaffold_template() {
         let cli = Cli::try_parse_from(["concinnity", "add", "scene.glb", "-t", "minimal-3d-world"])
             .unwrap();
-        let Commands::Add(a) = cli.resolved_command() else {
+        let Commands::Add(a) = &cli.command else {
             panic!("expected add");
         };
         assert_eq!(a.target, "scene.glb");
@@ -709,78 +624,16 @@ mod tests {
     #[test]
     fn docs_root_defaults_to_the_current_directory() {
         let cli = Cli::try_parse_from(["concinnity", "docs"]).unwrap();
-        let Commands::Docs(a) = cli.resolved_command() else {
+        let Commands::Docs(a) = &cli.command else {
             panic!("expected docs");
         };
         assert_eq!(a.root.as_deref(), Some("."));
 
         let cli = Cli::try_parse_from(["concinnity", "docs", "--root", "/engine"]).unwrap();
-        let Commands::Docs(a) = cli.resolved_command() else {
+        let Commands::Docs(a) = &cli.command else {
             panic!("expected docs");
         };
         assert_eq!(a.root.as_deref(), Some("/engine"));
-    }
-
-    // Validation is tri-state: absent means "default for this build profile",
-    // so an explicit `false` must survive parsing as a value rather than
-    // collapsing into the absent case.
-    #[test]
-    fn run_validation_is_tri_state() {
-        let cli = Cli::try_parse_from(["concinnity", "run"]).unwrap();
-        let Commands::Run(a) = cli.resolved_command() else {
-            panic!("expected run");
-        };
-        assert_eq!(a.validation, None);
-
-        for (arg, expected) in [("true", true), ("false", false)] {
-            let cli = Cli::try_parse_from(["concinnity", "run", "--validation", arg]).unwrap();
-            let Commands::Run(a) = cli.resolved_command() else {
-                panic!("expected run");
-            };
-            assert_eq!(a.validation, Some(expected));
-        }
-    }
-
-    #[test]
-    fn run_benchmarks_only_when_asked() {
-        let benchmark = |args: &[&str]| {
-            let cli = Cli::try_parse_from(args).unwrap();
-            let Commands::Run(a) = cli.resolved_command() else {
-                panic!("expected run");
-            };
-            a.render.launch.0.benchmark
-        };
-        assert!(!benchmark(&["concinnity", "run"]));
-        assert!(benchmark(&["concinnity", "run", "--benchmark"]));
-    }
-
-    #[test]
-    fn editor_takes_a_file_debug_port_and_validation() {
-        let cli = Cli::try_parse_from(["concinnity", "editor"]).unwrap();
-        let Commands::Editor(a) = cli.resolved_command() else {
-            panic!("expected editor");
-        };
-        assert!(a.file.is_none());
-        assert!(a.debug_port.is_none());
-        assert!(a.validation.is_none());
-
-        let cli = Cli::try_parse_from([
-            "concinnity",
-            "editor",
-            "-f",
-            "w.jsonl",
-            "--debug-port",
-            "9001",
-            "--validation",
-            "false",
-        ])
-        .unwrap();
-        let Commands::Editor(a) = cli.resolved_command() else {
-            panic!("expected editor");
-        };
-        assert_eq!(a.file.as_deref(), Some("w.jsonl"));
-        assert_eq!(a.debug_port, Some(9001));
-        assert_eq!(a.validation, Some(false));
     }
 
     #[test]
@@ -803,7 +656,7 @@ mod tests {
             "--dmg",
         ])
         .unwrap();
-        let Commands::Export(e) = cli.resolved_command() else {
+        let Commands::Export(e) = &cli.command else {
             panic!("expected export");
         };
         assert_eq!(e.world.file(), Some("w.jsonl"));
@@ -813,23 +666,5 @@ mod tests {
         assert_eq!(e.out, "build");
         assert_eq!(e.format, BundleFormatArg::Dir);
         assert!(e.dmg);
-    }
-
-    #[test]
-    fn debug_takes_a_port_and_validation_without_a_client() {
-        let cli = Cli::try_parse_from([
-            "concinnity",
-            "debug",
-            "--debug-port",
-            "9100",
-            "--validation",
-            "true",
-        ])
-        .unwrap();
-        let Commands::Debug(a) = cli.resolved_command() else {
-            panic!("expected debug");
-        };
-        assert_eq!(a.debug_port, 9100);
-        assert_eq!(a.validation, Some(true));
     }
 }

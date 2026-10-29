@@ -1,13 +1,13 @@
 //! Vulkan's share of bloom, which is where the chain's scene and top octave
 //! come from this frame. The chain itself -- its pipelines, the octaves below
 //! the top, and every draw -- is written once in
-//! `concinnity_core::render::post::bloom` and reaches Vulkan through
+//! `concinnity_engine::render::post::bloom` and reaches Vulkan through
 //! `VkPostDevice`.
 
 use ash::vk;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::post::bloom::{BloomInputs, BloomPass, top_extent};
-use concinnity_core::render::render_graph::PixelFormat;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::post::bloom::{BloomInputs, BloomPass, top_extent};
+use concinnity_engine::render::render_graph::PixelFormat;
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::pass_cache::AttachmentRest;

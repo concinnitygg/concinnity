@@ -6,10 +6,10 @@
 //! height. Plain `Sprite` / `TextLabel` components driven each frame by the
 //! editor hook, which owns the drag, the commit path, and the selection.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::character_shape::{Row, SliderRow};
 use super::registry::PanelKey;
@@ -355,7 +355,7 @@ mod tests {
     use super::super::character_shape::{self, Rows};
     use super::*;
     use concinnity_cook::compile::character::builtin_schema;
-    use concinnity_core::components::{Sprite, TextLabel};
+    use concinnity_engine::components::{Sprite, TextLabel};
 
     fn injected_world() -> World {
         ids().test_world()

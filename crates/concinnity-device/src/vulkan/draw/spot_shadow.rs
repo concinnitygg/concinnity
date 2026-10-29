@@ -11,10 +11,10 @@
 //! which stays correct until a caster moves.
 
 use ash::vk;
-use concinnity_core::gfx::render_types::{ShadowUniforms, SpotShadowData};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::{csm, spot_shadow};
+use concinnity_engine::gfx::render_types::{ShadowUniforms, SpotShadowData};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::{shadow::csm, shadow::spot};
 
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
@@ -140,10 +140,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
         ubo_stride: stride,
         sets,
         _descriptor_pool: descriptor_pool,
-        frusta: spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect(),
+        frusta: spot_shadows.iter().map(spot::slice_frustum).collect(),
         render_mask: 0,
     })
 }
@@ -173,10 +170,7 @@ impl VkSpotShadow {
         }
         upload_records(&self.data_buffer, spot_shadows);
         upload_strided(&self.ubo, &slice_uniforms(spot_shadows), self.ubo_stride);
-        self.frusta = spot_shadows
-            .iter()
-            .map(spot_shadow::slice_frustum)
-            .collect();
+        self.frusta = spot_shadows.iter().map(spot::slice_frustum).collect();
     }
 }
 
@@ -194,8 +188,8 @@ fn upload_strided<T: Copy>(buffer: &PooledBuffer, records: &[T], stride: u64) {
 
 impl VkContext {
     // One depth-only render pass per scheduled spot slice, GPU-driven like the
-    // cascades: a per-slice cull against the spot's light frustum writes the
-    // slice's own indirect buffer, and the slice draws it through the shared
+    // cascades: a per-slice cull against the spot's light frustum packs the
+    // slice's own lists, and the slice draws them through the shared
     // bindless shadow pipeline with that slice's uniforms at set 0. Slices with
     // no records still clear, so the main pass samples valid depth.
     // pub(in crate::vulkan) so the render-graph executor can dispatch it.
@@ -209,8 +203,8 @@ impl VkContext {
             return;
         }
         let device = &self.hw.device;
-        let gpu_driven = self.shadow_views_drawable()
-            && self.cull.spot_indirect_buffers.get(frame_idx).is_some();
+        let views = self.cull.spot_views.get(frame_idx);
+        let gpu_driven = self.shadow_views_drawable() && views.is_some();
 
         // Cull every refreshed slice before opening any render pass (Vulkan
         // disallows compute inside one).
@@ -222,7 +216,7 @@ impl VkContext {
         for slice in self.spot_shadow.refreshed_slices() {
             let framebuffer = &self.spot_shadow.framebuffers[slice as usize];
             self.begin_shadow_slice(cmd, framebuffer.handle(), sz);
-            if gpu_driven {
+            if gpu_driven && let Some(view) = views.and_then(|v| v.get(slice as usize)) {
                 self.draw_shadow_view(
                     device,
                     cmd,
@@ -231,8 +225,7 @@ impl VkContext {
                         uniforms_set: self.spot_shadow.sets[slice as usize],
                         // Every spot slice carries its own matrix in `light_vps[0]`.
                         vp_index: 0,
-                        indirect: self.cull.spot_indirect_buffers[frame_idx][slice as usize]
-                            .buffer(),
+                        view,
                     },
                 );
             }

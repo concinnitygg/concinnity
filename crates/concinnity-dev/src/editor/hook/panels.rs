@@ -4,9 +4,9 @@
 //! open state, the hidden pass -- lives on the registry and its consumers; each
 //! impl supplies only what is panel-specific.
 
-use concinnity_core::components::FrameInput;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::FrameInput;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::EditorHook;
 use crate::editor::behavior::panel::ViewMode;
@@ -18,8 +18,8 @@ use crate::editor::panels::template::{self, TemplatesAction};
 use crate::editor::panels::view::{self, ViewAction};
 use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
-    lighting, lighting_panel, shader_list_panel, shader_source_panel, story_panel, template_panel,
-    variables_panel,
+    lighting, lighting_panel, planet_panel, shader_list_panel, shader_source_panel, story_panel,
+    template_panel, variables_panel,
 };
 use crate::editor::text_area::layout::Metrics;
 use crate::editor::viewport::snap;
@@ -423,10 +423,10 @@ pub(crate) struct TemplateDetailPanel;
 impl TemplateDetailPanel {
     // The open template's grouped-row count (1 when none is open, matching the
     // panel's minimum footprint).
-    fn row_count(&self, hook: &EditorHook) -> usize {
+    fn row_count(hook: &EditorHook) -> usize {
         hook.templates
             .detail
-            .map_or(1, |i| hook.template_rows(i).len())
+            .map_or(1, |i| EditorHook::template_rows(i).len())
     }
 }
 
@@ -449,12 +449,12 @@ impl Panel for TemplateDetailPanel {
         hook.close_template_detail();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        template_panel::size(self.row_count(hook))
+        template_panel::size(Self::row_count(hook))
     }
     // The list tracks the template's asset count; the height resizes only when
     // there are more rows than the default window shows.
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        template_panel::max_size(self.row_count(hook))
+        template_panel::max_size(Self::row_count(hook))
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         template_panel::default_origin(vp[0])
@@ -489,7 +489,7 @@ impl Panel for TemplateDetailPanel {
             return;
         };
         let s = hook.effective_size(PanelKey::TemplateDetail);
-        let data = hook.template_detail_data(i);
+        let data = EditorHook::template_detail_data(i);
         let view = hook.make_template_view(&data, mouse);
         template_panel::place(world, &view, o, s);
     }
@@ -541,6 +541,66 @@ impl Panel for LightingPanel {
         let data = hook.lighting_data();
         let view = hook.make_lighting_view(&data, mouse);
         lighting_panel::place(world, &view, o, s);
+    }
+}
+
+pub(crate) struct PlanetPanel;
+
+impl Panel for PlanetPanel {
+    fn key(&self) -> PanelKey {
+        PanelKey::Planet
+    }
+    fn ids(&self) -> &'static HudIds {
+        planet_panel::ids()
+    }
+    fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
+        hook.planet.focus = None;
+        hook.planet.status = None;
+        hook.seed_planet(world);
+    }
+    fn on_close(&self, hook: &mut EditorHook, _world: &mut World) {
+        hook.planet_tool.put_down();
+    }
+    fn size(&self, hook: &EditorHook) -> [f32; 2] {
+        planet_panel::size(hook.planet_rows().len(), hook.planet_strip())
+    }
+    fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
+        planet_panel::default_origin(vp)
+    }
+    fn press(
+        &self,
+        hook: &mut EditorHook,
+        world: &mut World,
+        mx: f32,
+        my: f32,
+        o: [f32; 2],
+    ) -> bool {
+        let s = hook.effective_size(PanelKey::Planet);
+        let action = {
+            let rows = hook.planet_rows();
+            let view = hook.make_planet_view(&rows, "", [mx, my]);
+            planet_panel::hit_test(&view, mx, my, o, s)
+        };
+        handled(action, |a| hook.apply_planet_action(a, world))
+    }
+    fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
+        let s = hook.effective_size(PanelKey::Planet);
+        let rows = hook.planet_rows().len();
+        let strip = hook.planet_strip();
+        widget::point_in(mx, my, planet_panel::body_rect(o, s[0], strip, rows))
+    }
+    fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
+        hook.scroll_planet(delta);
+    }
+    fn frame_keys(&self, hook: &mut EditorHook, _world: &mut World, input: &FrameInput) {
+        hook.planet_tool_keys(input);
+    }
+    fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
+        let s = hook.effective_size(PanelKey::Planet);
+        let rows = hook.planet_rows();
+        let pick = hook.planet_pick_label();
+        let view = hook.make_planet_view(&rows, &pick, mouse);
+        planet_panel::place(world, &view, o, s);
     }
 }
 
@@ -672,7 +732,7 @@ pub(crate) struct ShadersPanel;
 impl ShadersPanel {
     // The rows as last built; the frame drive rebuilds them first while the
     // panel shows.
-    fn row_count(&self, hook: &EditorHook) -> usize {
+    fn row_count(hook: &EditorHook) -> usize {
         hook.shaders.rows.len()
     }
 }
@@ -688,14 +748,14 @@ impl Panel for ShadersPanel {
         true
     }
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader_list_panel::max_size(self.row_count(hook))
+        shader_list_panel::max_size(Self::row_count(hook))
     }
     // Opening builds the rows before the panel's first draw.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.shader_rows();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader_list_panel::size(self.row_count(hook))
+        shader_list_panel::size(Self::row_count(hook))
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
         shader_list_panel::default_origin(vp[0])

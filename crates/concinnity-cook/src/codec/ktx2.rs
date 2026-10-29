@@ -18,8 +18,8 @@
 // runtime upload path handle single-layer 2D textures only.
 
 use basisu::{DecodeFlags, SourceFormat, TargetFormat, Transcoder};
-use concinnity_core::bake::texture::{TextureFormat, TextureImage, TextureMip};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::bake::texture::{TextureFormat, TextureImage, TextureMip};
 use ktx2::{Format, Reader, SupercompressionScheme};
 
 // VkFormat values for the BCn block formats this compiler accepts, matched
@@ -225,7 +225,7 @@ fn compile_basis(bytes: &[u8]) -> Result<TextureImage, String> {
     })
 }
 
-// Decode a KTX2 to RGBA8 for the `cn debug` hot-reload live preview, which
+// Decode a KTX2 to RGBA8 for the `cn run -f` hot-reload live preview, which
 // uploads RGBA8 rather than a compressed texture. Reuses `compile_ktx2`, then
 // decodes the base level: Basis and BC1/3/5 have decoders here; BC7 does not.
 pub(crate) fn decode_ktx2_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
@@ -261,7 +261,7 @@ fn decompress_level(
 // Decompress a zstd frame into its raw bytes.
 fn inflate_zstd(data: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Read;
-    let mut decoder = ruzstd::StreamingDecoder::new(data)
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(data)
         .map_err(|e| format!("zstd frame header invalid: {e}"))?;
     let mut out = Vec::new();
     decoder

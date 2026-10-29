@@ -4,7 +4,7 @@
 // graph-ownership rules (one graph per mesh, no unreferenced clips) are
 // world-global passes in crate::check::cross_reference.
 
-use concinnity_core::animation::anim_graph::CmpOp;
+use concinnity_engine::animation::anim_graph::CmpOp;
 use serde_json::Value;
 
 pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
@@ -412,7 +412,7 @@ mod tests {
     // The blend kinds matched above are the tags core's `AnimationBlend` writes.
     #[test]
     fn blend_kinds_match_the_animation_blend_tags() {
-        use concinnity_core::components::AnimationBlend;
+        use concinnity_engine::components::AnimationBlend;
 
         let kind = |blend: AnimationBlend| serde_json::to_value(blend).unwrap()["kind"].clone();
         let blend1d = AnimationBlend::Blend1d {

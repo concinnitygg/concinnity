@@ -150,7 +150,7 @@ pub(in crate::pipeline) fn desugar_gltf_meshes(
     assets_dir: Option<&Path>,
     progress: &StageProgress<'_>,
 ) -> std::io::Result<()> {
-    use concinnity_core::components::VertexData;
+    use concinnity_engine::components::VertexData;
     use std::collections::HashMap;
 
     // One split chunk: its vertices and index buffer.

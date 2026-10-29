@@ -1,10 +1,10 @@
 //! Scene data: the probe-set, view, light and shadow constant-buffer rings, the
 //! static local-light buffer, and the clustered light binning.
 
-use concinnity_core::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms};
-use concinnity_core::render::csm;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::{ProbeSet, ViewUniforms};
+use concinnity_engine::gfx::render_types::{GpuLight, LightUniforms, ShadowUniforms};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::shadow::csm;
+use concinnity_engine::render::uniforms::{ProbeSet, ViewUniforms};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
@@ -16,7 +16,7 @@ use crate::directx::light_cull::{self as lc, LightCullState};
 
 pub(super) fn build_uniforms(
     gpu: &InitGpu<'_>,
-    light_uniforms: LightUniforms,
+    light_uniforms: &LightUniforms,
     local_lights: &[GpuLight],
 ) -> RenderResult<DxUniforms> {
     let hw = gpu.hw;
@@ -156,7 +156,7 @@ pub(super) fn build_uniforms(
         }
     }
     for ptr in &light_ubo_ptrs {
-        upload_light_uniforms(*ptr, &light_uniforms);
+        upload_light_uniforms(*ptr, light_uniforms);
     }
 
     // Per-scene local-light storage buffer: a single UPLOAD resource filled
@@ -182,8 +182,8 @@ pub(super) fn build_uniforms(
         light_ubo_resources,
         light_ubo_ptrs,
         local_light_buffer,
-        lights: concinnity_core::render::light_state::LightState::new(
-            light_uniforms,
+        lights: concinnity_engine::render::light::state::LightState::new(
+            *light_uniforms,
             local_lights,
             frames,
         ),

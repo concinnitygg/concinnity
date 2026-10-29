@@ -6,49 +6,28 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Runtime vocabulary for the Concinnity engine: GPU layouts, ECS components, registry, CPU kernels"
+description = "The no_std foundation of the Concinnity engine: math, allocation tracking, thread fan-out"
 readme = "README.md"
-keywords = ["gamedev", "graphics", "ecs", "concinnity"]
+keywords = ["gamedev", "math", "no-std", "concinnity"]
 categories = ["game-engines", "no-std"]
 include = [
     "/README.md",
     "/src",
-    "/tests",
-    "/build.rs",
 ]
 
 [features]
+# The timing harness and test fan-outs other crates' tests share.
+test-support = []
 # Per-size-class allocation histograms, for development binaries only. The
 # global counters and the tagged ledger ship unconditionally; this is the tier a
 # shipped build should not pay for on every allocation.
 detail = []
-# The authored schema's static description, rustdoc included, for authoring tools.
-schema = ["dep:erased-serde"]
-# A do-nothing and a recording `RenderBackend` for other crates' tests.
-test-support = []
 
 [dependencies]
-
-bytemuck = { workspace = true, features = ["derive"] }
-concinnity-derive = { workspace = true }
-erased-serde = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
-fontdue = { version = "0.9", default-features = false, features = ["hashbrown", "simd"] }
-hashbrown = { workspace = true }
-libm = "0.2"
-postcard = { workspace = true, features = ["alloc"] }
-serde = { workspace = true, features = ["alloc", "derive"] }
-serde_bytes = { version = "0.11", default-features = false, features = ["alloc"] }
-spin = { version = "0.12.3", default-features = false, features = ["once", "spin_mutex"] }
-thiserror = { workspace = true }
-tracing = { workspace = true }
+libm = { workspace = true }
 
 [dev-dependencies]
-ciborium = { workspace = true }
-rayon = { workspace = true }
-serde_json = { workspace = true, features = ["preserve_order"] }
-
-[build-dependencies]
-rayon = { workspace = true }
+spin = { workspace = true, features = ["spin_mutex"] }
 
 [lints]
 workspace = true

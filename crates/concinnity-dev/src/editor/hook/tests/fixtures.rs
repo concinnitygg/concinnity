@@ -6,10 +6,12 @@
 use crate::editor::{behavior, modal, widget};
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::write_world_jsonl;
-use concinnity_core::components::{Camera3D, FrameInput, InputKey, KeyEvent, TextInput, Transform};
-use concinnity_core::ecs::asset_id::AssetId;
-use concinnity_core::ecs::{Entity, PickEntry, PickIndex, World};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{
+    Camera3D, FrameInput, InputKey, KeyEvent, TextInput, Transform,
+};
+use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::ecs::{Entity, PickEntry, PickIndex, World};
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id;
 
@@ -202,7 +204,7 @@ pub(in crate::editor::hook) fn pick_world(
     let mut world = world_with_fields();
     world.add_component(Camera3D {
         position: cam_pos,
-        view_matrix: concinnity_core::gfx::camera::view_matrix(cam_pos, 0.0, 0.0),
+        view_matrix: concinnity_engine::gfx::camera::view_matrix(cam_pos, 0.0, 0.0),
         fov_y_degrees: 90.0,
         near: 0.05,
         view_distance: None,

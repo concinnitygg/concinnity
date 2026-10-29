@@ -7,7 +7,7 @@
 //! never replaced.
 //!
 //! The cube math + the staggered-bake state machine are backend-agnostic
-//! (`concinnity_core::render::reflection_probe`); this module drives the placement intake + the
+//! (`concinnity_engine::render::probe::capture`); this module drives the placement intake + the
 //! GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
 //!
 //! `set_reflection_probes` converts the graphics-system placements (auto-seeding a
@@ -25,16 +25,19 @@
 //! shaders (see the `reflection_probes.md` DX/VK port checklist).
 
 use ash::vk;
-use concinnity_core::gfx::frustum::Frustum;
-use concinnity_core::gfx::render_types;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::probe_bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
-use concinnity_core::render::probe_book::ProbeBook;
-use concinnity_core::render::radiance_storage::FaceStorage;
-use concinnity_core::render::reflection_probe::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::TileMorphView;
+use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
+use concinnity_engine::render::probe::book::ProbeBook;
+use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
+use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::scene_state::CaptureTiles;
 
 use super::allocator::PooledBuffer;
+use super::compact::{CompactPass, DrawLists};
 use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
@@ -46,8 +49,8 @@ use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
-use concinnity_core::render::uniforms::FaceCamera;
-use concinnity_core::render::uniforms::vulkan::CullParams;
+use concinnity_engine::render::uniforms::vulkan::CullParams;
+use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
 // clamp, shared with the DirectX and Metal backends (and with the build-time CPU
@@ -66,18 +69,64 @@ const PROBE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // with the one default bindless pipeline, so a bucketed record must land in
 // region 0 to appear at all -- with default shading, which is the documented
 // trade the DirectX and Metal capture paths make too.
-fn capture_cull_params(frustum: &Frustum, cam_pos: [f32; 3], n_cull: u32) -> CullParams {
+fn capture_cull_params(view: CaptureCull<'_>, n_cull: u32, skinned_base: u32) -> CullParams {
+    let CaptureCull {
+        frustum,
+        eye: cam_pos,
+        exclude: [exclude_first, exclude_end],
+        ..
+    } = view;
     let mut params = CullParams {
         planes: [[0.0; 4]; 6],
         cam_pos,
         object_count: n_cull,
         bucket_count: 1,
-        // Never indexed with `bucket_count == 1` (region 0 starts at 0), but it
-        // names the region capacity the caller sized its buffer with.
-        bucket_stride: n_cull,
+        skinned_base,
+        exclude_first,
+        exclude_end,
     };
     params.planes = frustum.packed_planes();
     params
+}
+
+// The view an off-camera cull tests records against: its frustum, the eye the
+// LOD pick reads, the records `[first, end)` it leaves out (a prop's own
+// capture leaves out the prop), and the coarse grid it draws planet tiles
+// through, if any.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct CaptureCull<'a> {
+    pub(in crate::vulkan) frustum: &'a Frustum,
+    pub(in crate::vulkan) eye: [f32; 3],
+    pub(in crate::vulkan) exclude: [u32; 2],
+    pub(in crate::vulkan) capture_tiles: Option<CaptureTiles>,
+}
+
+// What a capture cull packs: one stream and the skinned tail over its records.
+fn capture_compact_params(n_cull: u32, skinned_base: u32) -> GpuCompactParams {
+    GpuCompactParams {
+        object_count: n_cull,
+        bucket_count: 1,
+        skinned_base,
+        drawn: concinnity_engine::gfx::cull_status::CullStatus::DRAWN,
+        ..Default::default()
+    }
+}
+
+// A probe face's or a mirror plane's own packing: its set, its lists, and the
+// records its buffers hold.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct FacePacking {
+    pub(in crate::vulkan) set: vk::DescriptorSet,
+    pub(in crate::vulkan) lists: DrawLists,
+    pub(in crate::vulkan) records: usize,
+}
+
+impl FacePacking {
+    // The records a cull of `live` records covers: no more than the buffers
+    // hold.
+    fn culled(&self, live: usize) -> u32 {
+        render_types::culled_records(live, self.records)
+    }
 }
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
@@ -91,14 +140,18 @@ impl VkContext {
     // placement; a world whose array cannot grow keeps the sky. Pushed once
     // after construction; the cube capture that fills the probe set runs across
     // later frames.
-    pub(super) fn set_reflection_probes(&mut self, placements: &[ProbePlacement]) {
+    pub(super) fn set_reflection_probes(
+        &mut self,
+        placements: &[ProbePlacement],
+        prop_probe: bool,
+    ) {
         let placements = placements.to_vec();
         // Idle first when probes are installed: the frames in flight may sample
         // the cubes the next bake overwrites.
         if self.probe.book.count() > 0 {
             self.wait_idle();
         }
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements));
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
         crate::probe_report::report_probe_placement(placed);
     }
 
@@ -133,6 +186,7 @@ impl VkContext {
                 self.scene.prefilter_mip_count,
                 self.irradiance_lane(),
                 self.state.view.sky_rot,
+                self.state.tile_morph_view(),
             );
         }
     }
@@ -181,15 +235,22 @@ impl VkContext {
         };
         let eye = capture.eye;
         let b = &capture.bake;
-        let (cull_set, hiz_set, framebuffer, global_set, bindless_set, indirect, copy_src) = (
+        let (cull_set, hiz_set, framebuffer, global_set, bindless_set, copy_src) = (
             b.cull_set,
             b.hiz_set,
             b.framebuffer.handle(),
             b.global_sets[face],
             b.bindless_sets[face],
-            b.indirect_buf.buffer(),
             b.copy_source(),
         );
+        let packing = FacePacking {
+            set: b.compact_set,
+            lists: DrawLists {
+                buffer: b.indirect_buf.buffer(),
+                commands: b.records,
+            },
+            records: b.records,
+        };
         let capture_image = capture.prefilter.capture_image();
 
         // Snapshot the live texture pool into this face's set. The set has
@@ -283,8 +344,14 @@ impl VkContext {
                 );
             }
         }
-        let frustum = reflection_probe::face_frustum(eye, face, capture.capture_distance);
-        self.encode_probe_cull(cmd, cull_set, hiz_set, &frustum, eye);
+        let frustum = capture::face_frustum(eye, face, capture.capture_distance);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye,
+            exclude: [0, 0],
+            capture_tiles: None,
+        };
+        self.encode_probe_cull(cmd, cull_set, hiz_set, packing, view);
         self.encode_main_into_face(
             cmd,
             framebuffer,
@@ -292,9 +359,10 @@ impl VkContext {
             FaceView {
                 global_set,
                 storage: FaceStorage::PROBE,
+                sky_from_cube: false,
             },
             bindless_set,
-            indirect,
+            packing,
         );
         // The face color rests in SHADER_READ_ONLY_OPTIMAL after the render pass;
         // flip it to TRANSFER_SRC for the copy into the capture cube. This exact
@@ -475,19 +543,17 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         cull_set: vk::DescriptorSet,
         hiz_set: Option<vk::DescriptorSet>,
-        frustum: &Frustum,
-        cam_pos: [f32; 3],
+        packing: FacePacking,
+        view: CaptureCull<'_>,
     ) {
         let Some(kernels) = self.cull.cull_kernels.as_ref() else {
             return;
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
         let device = &self.hw.device;
-        let params = capture_cull_params(
-            frustum,
-            cam_pos,
-            u32::saturating_from(self.state.draw.record_count()),
-        );
+        let records = packing.culled(self.state.draw.record_count());
+        let skinned_base = u32::saturating_from(self.state.draw.skinned_record_base());
+        let params = capture_cull_params(view, records, skinned_base);
         // SAFETY: `cmd` is recording outside a render pass, and the cull kernel pipeline is owned
         // by `self.cull`.
         unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
@@ -525,9 +591,17 @@ impl VkContext {
                 &params,
             );
         }
-        let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
         // SAFETY: the cull pipeline, its sets and push constants are bound above.
-        unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        unsafe { device.cmd_dispatch(cmd, records.div_ceil(64), 1, 1) };
+        self.encode_compaction(
+            cmd,
+            CompactPass {
+                set: packing.set,
+                lists: packing.lists,
+                params: capture_compact_params(records, skinned_base)
+                    .with_capture_tiles(view.capture_tiles),
+            },
+        );
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
@@ -559,11 +633,12 @@ impl VkContext {
         area: FaceArea,
         view: FaceView,
         bindless_set: vk::DescriptorSet,
-        indirect: vk::Buffer,
+        packing: FacePacking,
     ) {
         let FaceView {
             global_set,
             storage,
+            sky_from_cube,
         } = view;
         let (Some(pipeline), Some(layout)) = (
             self.face_bindless_pipeline(),
@@ -638,13 +713,17 @@ impl VkContext {
                 &[],
             );
         }
-        let draw_count = u32::saturating_from(self.state.draw.skinned_record_base());
-        let stride = u32::saturating_from(size_of::<vk::DrawIndexedIndirectCommand>());
-        // SAFETY: `indirect` is the caller's cull output, ordered before this read by its barrier.
-        unsafe { device.cmd_draw_indexed_indirect(cmd, indirect, 0, draw_count, stride) };
+        let records = packing.culled(self.state.draw.record_count());
+        let face = StreamLayout {
+            regions: &self.cull.variants.regions,
+            bucket_count: 1,
+            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+            records,
+        };
+        self.draw_stream(cmd, packing.lists, 0, face.slots(0));
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_core::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, global_set, self.current_frame);
+        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
+            self.encode_sky(cmd, global_set, self.current_frame, sky_from_cube);
         }
         // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
         // above.
@@ -706,7 +785,7 @@ impl ProbeBakeDevice for VkContext {
             &bake.object_buf,
             &bake.draw_args_buf,
             eye,
-            concinnity_core::render::model_history::HistoryMode::Untracked,
+            concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
         );
 
         // The capture cube each face copies into, and the probe cube the
@@ -729,7 +808,8 @@ impl ProbeBakeDevice for VkContext {
             &self.hw.alloc,
             pipelines,
             &PLAN,
-            super::probe_prefilter::PrefilterTarget::probe(cubes, index, PLAN.mips())?,
+            super::probe_prefilter::PrefilterTarget::probe(cubes, index, &PLAN)?,
+            super::probe_prefilter::CaptureFaces::Copied,
         )?;
 
         let rendering = RenderingBake {
@@ -745,6 +825,7 @@ impl ProbeBakeDevice for VkContext {
             self.scene.prefilter_mip_count,
             self.irradiance_lane(),
             self.state.view.sky_rot,
+            self.state.tile_morph_view(),
         );
         Ok(rendering)
     }
@@ -841,11 +922,14 @@ impl ProbeBakeDevice for VkContext {
 }
 
 // The view an off-camera render draws from: the global set holding its view
-// block, and the scale that block writes the face at, which its clear follows.
+// block, the scale that block writes the face at, which its clear follows, and
+// whether its sky is read from the environment's cube rather than an
+// atmosphere's sky-view table.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FaceView {
     pub(in crate::vulkan) global_set: vk::DescriptorSet,
     pub(in crate::vulkan) storage: FaceStorage,
+    pub(in crate::vulkan) sky_from_cube: bool,
 }
 
 // Where an off-camera render draws in its framebuffer: the full `extent` the
@@ -891,18 +975,26 @@ impl RenderingBake {
     // the sky the capture lights with. reflections_enabled stays 0: no resolve
     // runs over a probe face, so the bake captures the full forward probe
     // specular -- here the sky, since the bake binds an EMPTY ProbeSet.
-    fn write_face_views(&self, prefilter_mip_count: u32, irradiance: f32, sky_rot: [[f32; 4]; 3]) {
+    fn write_face_views(
+        &self,
+        prefilter_mip_count: u32,
+        irradiance: f32,
+        sky_rot: [[f32; 4]; 3],
+        tile_morph: TileMorphView,
+    ) {
         let eye = self.eye;
         for (face, buf) in self.bake.view_bufs.iter().enumerate() {
             let view = ViewUniforms::face(FaceCamera {
-                vp: reflection_probe::face_view_projection(eye, face),
-                view: reflection_probe::face_view_matrix(eye, face),
+                vp: capture::face_view_projection(eye, face),
+                view: capture::face_view_matrix(eye, face),
                 cam_pos: eye,
                 elapsed: self.elapsed,
                 prefilter_mip_count: prefilter_mip_count as f32,
                 sky_rot,
                 irradiance,
                 pre_exposure: FaceStorage::PROBE.scale(),
+                daylight: DaylightBlock::OFF,
+                tile_morph,
             });
             buf.write_val(0, &view);
         }
@@ -1005,6 +1097,11 @@ struct BakeResources {
     draw_args_buf: PooledBuffer,
     indirect_buf: PooledBuffer,
     _status_buf: PooledBuffer,
+    // The records the cull buffers hold, the face's packing set and its
+    // group-count scratch.
+    records: usize,
+    compact_set: vk::DescriptorSet,
+    _group_counts: PooledBuffer,
     // The material parameter table as the bake started; every face's set binds it.
     _params_buf: PooledBuffer,
     _pool: OwnedDescriptorPool,
@@ -1036,7 +1133,7 @@ impl BakeResources {
     }
 
     fn new(ctx: &VkContext) -> RenderResult<Self> {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, GpuObjectData};
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
         let device = &ctx.hw.device;
         let alloc = &ctx.hw.alloc;
         let msaa = ctx.targets.msaa_samples != vk::SampleCountFlags::TYPE_1;
@@ -1135,8 +1232,9 @@ impl BakeResources {
         let n = ctx.state.draw.record_count();
         let object_size = (n * size_of::<GpuObjectData>()) as u64;
         let args_size = (n * size_of::<GpuDrawArgs>()) as u64;
-        let indirect_size = (n * size_of::<vk::DrawIndexedIndirectCommand>()) as u64;
+        let indirect_size = super::compact::indirect_buffer_bytes(n);
         let status_size = (n * size_of::<u32>()) as u64;
+        let group_count_size = super::compact::group_count_bytes(n);
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let object_buf =
             alloc.create_buffer(object_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
@@ -1144,7 +1242,12 @@ impl BakeResources {
             alloc.create_buffer(args_size, vk::BufferUsageFlags::STORAGE_BUFFER, host)?;
         let indirect_buf = alloc.create_buffer(
             indirect_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::INDIRECT_BUFFER,
+            super::compact::INDIRECT_USAGE,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+        let group_counts = alloc.create_buffer(
+            group_count_size,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         let status_buf = alloc.create_buffer(
@@ -1183,20 +1286,8 @@ impl BakeResources {
         let tex_pool = u32::saturating_from(ctx.cull.bindless_pool_size);
         let has_hiz = u32::from(ctx.cull.hiz.is_some());
         let faces = u32::saturating_from(CAPTURE_FACES);
-        // The six per-face global sets, the four cull SSBOs, the object SSBO,
-        // texture pool, parameter table and vertex stream of each face's
-        // bindless set, and a Hi-Z set (an image and a UBO) when the world runs
-        // Hi-Z.
-        let pool_sizes = PoolSizes::default()
-            .sets(&global_set(), faces)
-            .add(vk::DescriptorType::STORAGE_BUFFER, 4 + 3 * faces)
-            .add(
-                vk::DescriptorType::SAMPLED_IMAGE,
-                faces * tex_pool + has_hiz,
-            )
-            .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
-            .build();
-        let max_sets = 1 + 2 * faces + has_hiz;
+        let pool_sizes = probe_pool_sizes(faces, tex_pool, has_hiz).build();
+        let max_sets = 2 + 2 * faces + has_hiz;
         // The per-face bindless sets below come from `cull.bindless_set_layout`,
         // so this pool has to declare update-after-bind whenever that layout
         // does.
@@ -1220,12 +1311,42 @@ impl BakeResources {
             pool.handle(),
             std::slice::from_ref(&cull_kernels.set_layout.handle()),
         )?[0];
+        let variants = ctx
+            .cull
+            .variant_buffers
+            .first()
+            .ok_or_else(|| RenderError::Other("probe: no cull variant buffer".into()))?
+            .buffer();
         SetWrites::new(cull_set)
             .storage_buffer(0, object_buf.buffer(), object_size)
             .storage_buffer(1, draw_args_buf.buffer(), args_size)
-            .storage_buffer(2, indirect_buf.buffer(), indirect_size)
+            .storage_buffer(2, group_counts.buffer(), group_count_size)
             .storage_buffer(3, status_buf.buffer(), status_size)
+            .storage_buffer(4, variants, super::init::VARIANT_BUFFER_BYTES)
             .apply(device);
+        let compact_layout = ctx
+            .cull
+            .compact
+            .as_ref()
+            .ok_or_else(|| RenderError::Other("probe: the cull packing is not initialized".into()))?
+            .set_layout
+            .handle();
+        let compact_set =
+            alloc_descriptor_sets(device, pool.handle(), std::slice::from_ref(&compact_layout))?[0];
+        super::compact::write_compact_set(
+            device,
+            compact_set,
+            &super::compact::CompactBuffers {
+                variants: (variants, super::init::VARIANT_BUFFER_BYTES),
+                draw_args: (draw_args_buf.buffer(), args_size),
+                status: (status_buf.buffer(), status_size),
+                group_counts: (group_counts.buffer(), group_count_size),
+                lists: DrawLists {
+                    buffer: indirect_buf.buffer(),
+                    commands: n,
+                },
+            },
+        );
 
         // The material parameter table as the bake starts, for every face.
         let params_buf = ctx
@@ -1287,6 +1408,9 @@ impl BakeResources {
             draw_args_buf,
             indirect_buf,
             _status_buf: status_buf,
+            records: n,
+            compact_set,
+            _group_counts: group_counts,
             _params_buf: params_buf,
             _pool: pool,
             cull_set,
@@ -1343,8 +1467,55 @@ fn make_host_buffer(
     Ok(buf)
 }
 
+// The bake's pool: the per-face global sets, one cull set, each face's
+// bindless set (its object SSBO, parameter table and vertex stream, and the
+// texture pool of `tex_pool` images), and a Hi-Z set (an image and a UBO) when
+// the world runs Hi-Z.
+fn probe_pool_sizes(faces: u32, tex_pool: u32, has_hiz: u32) -> PoolSizes {
+    PoolSizes::default()
+        .sets(&global_set(), faces)
+        .sets(&super::init::main_cull_set(), 1)
+        .sets(&super::compact::compact_set(), 1)
+        .add(vk::DescriptorType::STORAGE_BUFFER, 3 * faces)
+        .add(
+            vk::DescriptorType::SAMPLED_IMAGE,
+            faces * tex_pool + has_hiz,
+        )
+        .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
+}
+
 #[cfg(test)]
 mod tests {
+    // The pool holds every binding of every set the bake allocates.
+    #[test]
+    fn the_probe_pool_covers_its_sets() {
+        use crate::vulkan::descriptor_layout::{PoolSizes, global_set};
+        let faces = u32::saturating_from(CAPTURE_FACES);
+        let bindless = PoolSizes::default()
+            .add(vk::DescriptorType::STORAGE_BUFFER, 3 * faces)
+            .add(vk::DescriptorType::SAMPLED_IMAGE, faces * 8);
+        let pool = probe_pool_sizes(faces, 8, 0);
+        assert!(pool.covers(&[
+            (&global_set(), faces),
+            (&crate::vulkan::init::main_cull_set(), 1),
+            (&crate::vulkan::compact::compact_set(), 1),
+        ]));
+        let total = |p: &PoolSizes, ty| p.count(ty);
+        let need = PoolSizes::default()
+            .sets(&global_set(), faces)
+            .sets(&crate::vulkan::init::main_cull_set(), 1)
+            .sets(&crate::vulkan::compact::compact_set(), 1);
+        for ty in [
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+        ] {
+            assert!(
+                total(&pool, ty) >= total(&need, ty) + total(&bindless, ty),
+                "{ty:?}"
+            );
+        }
+    }
+
     use super::*;
 
     // A capture routes every record into region 0. Getting this wrong is
@@ -1352,10 +1523,22 @@ mod tests {
     // material carries a world shader -- so it is pinned rather than eyeballed.
     #[test]
     fn a_capture_cull_routes_every_record_into_one_region() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [0.0; 3], 12);
+        let frustum = Frustum::from_camera(IDENTITY, None);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye: [0.0; 3],
+            exclude: [0, 0],
+            capture_tiles: None,
+        };
+        let p = capture_cull_params(view, 12, 10);
         assert_eq!(p.bucket_count, 1, "one region, whatever the world declares");
         assert_eq!(p.object_count, 12);
-        assert_eq!(p.bucket_stride, 12, "stride names the region capacity");
+        assert_eq!(p.skinned_base, 10);
+        let c = capture_compact_params(12, 10);
+        assert_eq!(
+            (c.bucket_count, c.object_count, c.skinned_base),
+            (1, 12, 10)
+        );
     }
 
     // Every byte the shader reads must be written. `cmd_push_constants` takes a
@@ -1365,9 +1548,16 @@ mod tests {
     // That is how the mirror render lost its draws.
     #[test]
     fn the_capture_push_covers_the_whole_shader_block() {
-        let p = capture_cull_params(&Frustum::from_camera(IDENTITY, None), [1.0, 2.0, 3.0], 4);
+        let frustum = Frustum::from_camera(IDENTITY, None);
+        let view = CaptureCull {
+            frustum: &frustum,
+            eye: [1.0, 2.0, 3.0],
+            exclude: [5, 7],
+            capture_tiles: None,
+        };
+        let p = capture_cull_params(view, 4, 3);
         let bytes = bytemuck::bytes_of(&p);
-        assert_eq!(bytes.len(), 120, "cull.hlsl's push_constant block is 120 B");
+        assert_eq!(bytes.len(), 128, "cull.hlsl's push_constant block is 128 B");
         // The two routing fields live in the last 8 bytes: the exact span a
         // 112-byte push left undefined.
         assert_eq!(
@@ -1377,9 +1567,15 @@ mod tests {
         );
         assert_eq!(
             &bytes[116..120],
-            &4u32.to_le_bytes(),
-            "bucket_stride written"
+            &3u32.to_le_bytes(),
+            "skinned_base written"
         );
+        assert_eq!(
+            &bytes[120..124],
+            &5u32.to_le_bytes(),
+            "exclude_first written"
+        );
+        assert_eq!(&bytes[124..128], &7u32.to_le_bytes(), "exclude_end written");
     }
 
     const IDENTITY: [[f32; 4]; 4] = [

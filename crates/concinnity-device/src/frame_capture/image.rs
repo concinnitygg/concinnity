@@ -1,7 +1,7 @@
 // The shape of a read-back frame and turning its bytes into a PNG.
 
-use concinnity_core::gfx::image_decode::{self, PixelLayout};
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::image_decode::{self, PixelLayout};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use crate::png_encode::encode_png_rows;
 

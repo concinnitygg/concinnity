@@ -4,17 +4,17 @@
 //! never rebuilds them.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
-use concinnity_core::gfx::render_types::DrawObject;
-use concinnity_core::render::backend_init::{PlanarBudget, SdfVolumeSource};
-use concinnity_core::render::decal::{DecalRecord, DecalSet};
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};
-use concinnity_core::render::planar_reflection::PlanarReflectors;
-use concinnity_core::render::volumetric_fog::FogSettings;
-use concinnity_core::render::water::WaterBody;
-use concinnity_core::render::water::ocean::OceanPlan;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
+use concinnity_engine::gfx::render_types::DrawObject;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::init::{PlanarBudget, SdfVolumeSource};
+use concinnity_engine::render::decal::{DecalRecord, DecalSet};
+use concinnity_engine::render::environment::volumetric_fog::FogSettings;
+use concinnity_engine::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::water::WaterBody;
+use concinnity_engine::water::ocean::OceanPlan;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -167,7 +167,11 @@ pub(super) fn build_particles(
     let pipelines = if particles.is_empty() {
         None
     } else {
-        Some(build_particle_pipelines(device, gpu.hot_reload)?)
+        Some(build_particle_pipelines(
+            device,
+            gpu.hot_reload,
+            gpu.frames_in_flight + 1,
+        )?)
     };
     for rec in particles {
         let state = build_emitter_gpu_state(device, &rec)?;
@@ -175,7 +179,11 @@ pub(super) fn build_particles(
             .insert(rec, state)
             .map_err(|_| RenderError::Other("particles: no free emitter slot".into()))?;
     }
-    Ok(ParticleState { system, pipelines })
+    Ok(ParticleState {
+        system,
+        pipelines,
+        rows_slot: 0,
+    })
 }
 
 // Planar reflection slots: group every flat reflector (water surfaces + glass
@@ -258,6 +266,8 @@ pub(super) fn build_water(
         sea,
         surfaces,
         ocean,
+        wake: concinnity_engine::render::environment::water::wake::WakeHistory::default(),
+        wake_frame: None,
     })
 }
 

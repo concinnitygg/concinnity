@@ -11,35 +11,49 @@ pub(in crate::vulkan) mod spot_shadow;
 mod stages;
 
 use ash::vk;
-use concinnity_core::gfx::lod;
-use concinnity_core::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_core::fanout::FanOutTiming;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::profile::FanOutTiming;
-use concinnity_core::render::backend::FrameParams;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::frame_plan::{
+use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
+use concinnity_engine::gfx::{jitter, lod};
+use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::frame::plan::{
     CameraInputs, EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
-use concinnity_core::render::model_history::HistoryMode;
-use concinnity_core::render::pass_timing;
-use concinnity_core::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
-use concinnity_core::render::scene_state::SceneState;
+use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
+use concinnity_engine::render::scene_state::SceneState;
+use concinnity_engine::render::temporal::model_history::HistoryMode;
 // `ViewUniforms` (the std140 main-pass `ViewBlock` UBO) is a GPU-free layout
 // struct that lives in `core::render`; re-export it so
 // `crate::vulkan::draw::ViewUniforms` is unchanged for the passes that fill it.
-pub(in crate::vulkan) use concinnity_core::render::uniforms::ViewUniforms;
+pub(in crate::vulkan) use concinnity_engine::render::uniforms::ViewUniforms;
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
 
 impl VkContext {
-    // Where this frame's draws growing grass route: the grass twins, and where
-    // the blades start handing the field to the canopy.
-    fn grass_route(&self) -> concinnity_core::render::record_pack::GrassRoute {
-        concinnity_core::render::record_pack::GrassRoute {
-            twins: self.cull.world_pipelines.grass_twins(),
-            far_start: self.grass_lod.map_or(0.0, |l| l.fade_start()),
+    // Write this frame's variant block into frame `frame_idx`'s buffer: the
+    // routes and bucket regions, seen from the main view, where the grass
+    // hands over to the canopy and under the view's planet sky; and note which
+    // buckets that view can pick.
+    fn write_cull_variants(&self, frame_idx: usize) {
+        let Some(buffer) = self.cull.variant_buffers.get(frame_idx) else {
+            return;
+        };
+        let mut variants = self.cull.variants;
+        variants.set_view(
+            self.grass_lod.map_or(0.0, |l| l.fade_start()),
+            &self.state.view.daylight,
+        );
+        if let Some(live) = self.cull.live_buckets.get(frame_idx) {
+            live.store(
+                variants.live_buckets(self.shader_bucket_count(), &self.state.view.daylight),
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
+        buffer.write_val(0, &variants);
     }
 
     // Pack this frame's bindless cull records into frame `frame_idx`'s
@@ -63,6 +77,7 @@ impl VkContext {
         };
         let packing = self.build_records_into(objects, args, cam_pos, history);
         self.patch_instance_lod_into(args, cam_pos);
+        self.write_cull_variants(frame_idx);
         packing
     }
 
@@ -74,7 +89,7 @@ impl VkContext {
     // bake shares that body and deliberately leaves its instance tail zeroed,
     // which disables instances in a bake.
     fn patch_instance_lod_into(&self, buf: &super::allocator::PooledBuffer, cam_pos: [f32; 3]) {
-        use concinnity_core::gfx::render_types::{GpuDrawArgs, draw_args_flags};
+        use concinnity_engine::gfx::render_types::{GpuDrawArgs, draw_args_flags};
         if !self.instanced.any_lod {
             return;
         }
@@ -113,13 +128,11 @@ impl VkContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) -> FanOutTiming {
-        use concinnity_core::gfx::render_types::{
-            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_bucket_bits, draw_args_flags,
-            normal_pool_index, pack_skinned_record,
+        use concinnity_engine::gfx::render_types::{
+            GpuDrawArgs, GpuObjectData, albedo_pool_index, draw_args_flags, normal_pool_index,
+            pack_skinned_record,
         };
-        use concinnity_core::render::record_pack::{
-            PackView, StaticPack, draw_bucket, pool_object_record,
-        };
+        use concinnity_engine::render::record_pack::{PackView, StaticPack, pool_object_record};
         let texture_count = u32::saturating_from(self.scene.textures.len());
         let record_stride = size_of::<GpuObjectData>();
         let args_stride = size_of::<GpuDrawArgs>();
@@ -142,8 +155,7 @@ impl VkContext {
                 .state
                 .horizon_occluder
                 .and_then(|o| o.seen_from(cam_pos)),
-            grass_route: self.grass_route(),
-            tile_morph: self.state.tile_morph,
+            routes: self.cull.world_pipelines.routes(),
         };
 
         // The static draws, one record each at their own index, packed in
@@ -185,10 +197,10 @@ impl VkContext {
         // one draws unconditionally; a freed slot's `resident` clear disables
         // it, and the cull kernel skips a disabled record's stale object.
         let runtime_base = self.state.draw.runtime_record_base();
-        let grass_route = self.grass_route();
+        let routes = self.cull.world_pipelines.routes();
         let n_resident_runtime = self.state.draw.for_each_runtime_record(|k, i, obj| {
             let mut record = pool_object_record(obj, texture_count);
-            record.tile_morph = view.tile_morph_row(obj);
+            record.tile_morph = concinnity_engine::render::record_pack::object_tile_morph(obj);
             objects.write_val((runtime_base + k) * record_stride, &record);
             // `camera_distance` falls back to the model translation for a
             // non-cullable object, so the LOD pick works off a NaN AABB. Chunks
@@ -205,7 +217,7 @@ impl VkContext {
                 index_offset: u32::saturating_from(index_offset),
                 base_vertex: obj.base_vertex.cast_unsigned(),
                 flags: draw_args_flags(opaque_visible, obj.resident, obj.cullable())
-                    | draw_args_bucket_bits(draw_bucket(obj, cam_pos, grass_route))
+                    | routes.draw_bits(obj)
                     | model_history.draw_flags(runtime_base + k, i),
             };
             args.write_val((runtime_base + k) * args_stride, &rec);
@@ -329,7 +341,12 @@ impl VkContext {
         // Skipped while the world is hidden, which traces nothing; a topology
         // change stays owed to the next frame that draws it.
         if !world_hidden {
+            let rt_started = std::time::Instant::now();
             self.rt_dynamic_update(start_cmd, frame_idx);
+            self.state.spans.set(FrameSpans {
+                rt_accel_us: concinnity_host::clock::micros_since(rt_started),
+                ..self.state.spans.get()
+            });
         }
         // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
         unsafe {
@@ -354,6 +371,7 @@ impl VkContext {
             bloom_chain: self.bloom.is_some(),
             upscaler: self.upscale.as_ref().map(|u| ResidentUpscaler {
                 reads_reactive: u.reactive_reader().reads(),
+                disocclusion: self.disocclusion.is_some(),
             }),
             particles: self.particle.resources.is_some(),
             fog: self.fog.resources.is_some(),
@@ -371,7 +389,12 @@ impl VkContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    fn frame_content(&self, lines_published: bool, world_hidden: bool) -> FrameContent {
+    fn frame_content(
+        &self,
+        lines_published: bool,
+        world_hidden: bool,
+        prop_probe: bool,
+    ) -> FrameContent {
         FrameContent {
             world_hidden,
             cull_records: self.state.draw.record_count(),
@@ -379,6 +402,7 @@ impl VkContext {
             bloom_intensity: self.post_process.bloom_intensity,
             bvh_live: self.rt.accel.is_some(),
             emitters: !self.particle.system.is_empty(),
+            late_emitters: self.particle.system.draws_after_transparent(),
             fog: self.fog.settings.is_some_and(|s| s.contributes()),
             decals: !self.decal.set.is_empty(),
             visible_surfaces: self
@@ -403,6 +427,7 @@ impl VkContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
+            prop_probe,
         }
     }
 
@@ -416,9 +441,10 @@ impl VkContext {
             render_size,
             lines_published,
             world_hidden,
+            prop_probe,
         } = args;
         let resident = self.resident_features(render_size);
-        let content = self.frame_content(lines_published, world_hidden);
+        let content = self.frame_content(lines_published, world_hidden, prop_probe);
         // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
         // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
         let phase = self.state.planner.jitter_phase();
@@ -451,7 +477,8 @@ impl VkContext {
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;
         self.spot_shadow.render_mask = self.state.planner.shadow.spot_mask;
         if let Some(up) = self.upscale.as_ref() {
-            up.jitter().set(plan.camera.jitter_px);
+            up.jitter()
+                .set(jitter::pixel_center_offset(plan.camera.jitter_px));
         }
         Ok(plan)
     }
@@ -465,6 +492,8 @@ struct PlanArgs {
     render_size: [u32; 2],
     lines_published: bool,
     world_hidden: bool,
+    // The world's prop probe rides this frame.
+    prop_probe: bool,
 }
 
 // What `begin` acquired for a frame: its in-flight slot, the swapchain image,
@@ -501,6 +530,7 @@ impl FrameDevice for VkContext {
             self.decal.set.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
+            self.particle.system.rebase(rebase);
         }
         Ok(())
     }
@@ -512,6 +542,9 @@ impl FrameDevice for VkContext {
         }
         if let Some(ssgi) = &mut self.ssgi {
             ssgi.reset_history();
+        }
+        if let Some(disocclusion) = &mut self.disocclusion {
+            disocclusion.reset_history();
         }
         if let Some(upscaler) = &self.upscale {
             upscaler.request_history_reset();
@@ -544,6 +577,11 @@ impl FrameDevice for VkContext {
         };
         // Only a frame that renders moves the history's pre-exposure on.
         self.pre_exposure.advance(self.post_process.exposure);
+        if let Some(up) = &self.upscale
+            && self.upscale_exposure.advance(&self.pre_exposure)
+        {
+            up.request_history_reset();
+        }
 
         // The outer "end" buffer: Composite + the post-graph work, submitted
         // after the "start" buffer and every per-pass buffer.
@@ -569,11 +607,12 @@ impl FrameDevice for VkContext {
         let extent = self.targets.render_extent;
         self.size_grass([extent.width, extent.height], frame_idx)?;
         self.grass_lod = self.grass.as_ref().map(|g| {
-            g.field
-                .lod_view(concinnity_core::render::grass::lod::focal_length(
+            g.field.lod_view(
+                concinnity_engine::render::environment::grass::lod::focal_length(
                     extent.height,
                     params.fov_y_radians,
-                ))
+                ),
+            )
         });
 
         let start_cmd = self.record_frame_start(frame_idx, params.world_hidden)?;
@@ -609,6 +648,7 @@ impl FrameDevice for VkContext {
             render_size: [frame.extent.width, frame.extent.height],
             lines_published: !params.lines.is_empty(),
             world_hidden: params.world_hidden,
+            prop_probe: params.prop_probe.is_some(),
         })
     }
 
@@ -620,6 +660,7 @@ impl FrameDevice for VkContext {
     ) -> RenderResult<()> {
         let FrameParams {
             elapsed,
+            water_time,
             fov_y_radians,
             near,
             cam_pos,
@@ -627,6 +668,8 @@ impl FrameDevice for VkContext {
             lines,
             world_hidden,
             grass_benders,
+            water_stirs,
+            particle_bursts,
             ..
         } = *frame_params;
         let VkFrame {
@@ -647,6 +690,7 @@ impl FrameDevice for VkContext {
             );
         }
         self.prepare_atmosphere(frame_idx, plan.atmosphere);
+        self.prepare_water_wake(cam_pos, water_time, water_stirs);
         self.write_cluster_params(frame_idx, &plan.cluster);
         self.uniforms.view_ubo_buffers[frame_idx].write_val(0, &plan.view);
 
@@ -659,18 +703,24 @@ impl FrameDevice for VkContext {
                 self.uniforms.lights.uniforms(),
             );
         }
-        self.uniforms.canopy = match (&self.grass, &self.grass_lod) {
-            (Some(grass), Some(lod)) => self
-                .state
-                .canopy_params(&grass.field.canopy, (lod, grass.crossfade_phase())),
-            _ => Default::default(),
-        };
+        let hand_off = self
+            .grass
+            .as_ref()
+            .zip(self.grass_lod.as_ref())
+            .map(|(grass, lod)| (lod, grass.crossfade_phase()));
+        self.uniforms.canopy = self
+            .canopy_field
+            .as_ref()
+            .map_or_else(Default::default, |field| {
+                self.state.canopy_params(field, hand_off, water_time)
+            });
         self.uniforms.canopy_buffers[frame_idx].write_val(0, &self.uniforms.canopy);
         self.uniforms.canopy_tables.update(
-            self.grass.as_ref().map_or(&[], |g| g.field.canopy.tables()),
+            self.canopy_field.as_ref().map_or(&[], |f| f.tables()),
             frame_idx,
         );
 
+        self.prepare_prop_probe(frame_params.prop_probe, plan.inputs.prop_probe_enabled);
         // Reflection-probe count + records (global set 0 bindings 7 + 17): count
         // 0 (sky reflection) until a probe bakes, so the forward shader keeps the
         // sky path. Uploaded every frame so a later install is picked up
@@ -682,7 +732,12 @@ impl FrameDevice for VkContext {
         // frame whose plan runs the cull, so the `PassId::Cull` dispatch the
         // graph executor records below sees fresh data.
         if let Some(history) = plan.records {
+            let packed = std::time::Instant::now();
             let packing = self.build_record_buffers(frame_idx, cam_pos, history);
+            self.state.spans.set(FrameSpans {
+                record_pack_us: concinnity_host::clock::micros_since(packed),
+                ..self.state.spans.get()
+            });
             let mut stats = self.frame_stats.get();
             stats.packing_fan_out = packing;
             self.frame_stats.set(stats);
@@ -701,8 +756,10 @@ impl FrameDevice for VkContext {
             cur_vp: plan.camera.cur_vp,
             fov_y_radians,
             elapsed,
+            water_time,
             near,
             grass_benders,
+            particle_bursts,
             planar: self
                 .planar_reflection
                 .as_ref()
@@ -724,24 +781,6 @@ impl FrameDevice for VkContext {
         submit.clear();
         submit.push(start_cmd);
         self.execute_graph(&plan.graph, &params, &mut submit)?;
-
-        self.finish_frame_stats();
-
-        // End-of-frame timestamp for the profiler overlay. Pairs with the
-        // TOP_OF_PIPE write near the top of the function (the block's first pair).
-        if let Some(pool) = self.hw.timestamp_query_pool {
-            let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_write_timestamp(
-                    cmd,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    pool,
-                    wf_end,
-                );
-            }
-        }
 
         self.finish_frame_stats();
 
@@ -795,6 +834,9 @@ impl FrameDevice for VkContext {
         }
         if let Some(ssgi) = &mut self.ssgi {
             ssgi.advance();
+        }
+        if let Some(disocclusion) = &mut self.disocclusion {
+            disocclusion.advance();
         }
     }
 }

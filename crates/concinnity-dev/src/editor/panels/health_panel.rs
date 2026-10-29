@@ -12,9 +12,9 @@
 //! Read-only: the panel has no controls beyond its close button, so a body press
 //! is swallowed rather than resolved to an action.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
-use concinnity_core::ecs::asset_id::AssetId;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
+use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::health::{self, HealthSnapshot, Meter, TagRow};
 use super::registry::PanelKey;
@@ -311,10 +311,11 @@ fn place_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::budget::drift::{DriftVerdict, MemoryDrift};
-    use concinnity_core::components::{Sprite, TextLabel};
     use concinnity_core::math::SaturatingFrom;
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
+    use concinnity_engine::budget::drift::{DriftVerdict, MemoryDrift};
+    use concinnity_engine::components::{Sprite, TextLabel};
+    use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
 
@@ -346,7 +347,7 @@ mod tests {
     fn tagged_snapshot() -> HealthSnapshot {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 2 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
         ledger.set(MemTag::Meshes, Realm::Device, GB / 2);
         ledger.set(MemTag::Scratch, Realm::Host, 1024);
         HealthSnapshot {
@@ -628,7 +629,7 @@ mod tests {
     fn a_row_past_its_budget_is_colored_as_a_warning() {
         let ledger = Ledger::new();
         ledger.set(MemTag::Textures, Realm::Device, 8 * GB);
-        ledger.set_budget(MemTag::Textures, Realm::Device, Some(4 * GB));
+        ledger.set_budget(MemTag::Textures, Realm::Device, NonZeroU64::new(4 * GB));
         let snap = HealthSnapshot {
             tags: ledger.snapshot(),
             ..snapshot()

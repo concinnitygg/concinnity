@@ -1,5 +1,5 @@
-use concinnity_core::components::{Sprite, TextLabel};
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::components::{Sprite, TextLabel};
 
 use super::*;
 use crate::editor::text_area::Scroll;

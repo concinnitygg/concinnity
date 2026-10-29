@@ -1,0 +1,238 @@
+// Reads the compiled font payload back: the write half is `payload::serialize`,
+// and the two must agree field for field.
+
+use crate::bake::font::metrics::GlyphMetrics;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::bake::decode::{ByteReader, checked_product};
+use crate::render::overlay::text::{FontMetrics, LoadedFont, derive_cap_px};
+
+// Bytes each glyph's metrics occupy in the payload: char code, four atlas
+// coordinates, advance, and two bearings.
+const GLYPH_STRIDE: usize = 4 + 2 + 2 + 2 + 2 + 4 + 4 + 4;
+
+// Decoded font payload: atlas width, atlas height, supersample factor,
+// rasterization size (px), RGBA atlas pixels, and per-glyph metrics.
+pub(crate) type DecodedFont = (u32, u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
+
+/// Deserialize a font payload back into atlas dimensions, the atlas supersample
+/// factor, the rasterization size, RGBA pixels, and metrics.
+///
+/// # Errors
+///
+/// Returns an error if the payload is truncated or its sizes overflow.
+pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, String> {
+    let mut r = ByteReader::new(bytes, "font payload");
+    let atlas_w = r.u32()?;
+    let atlas_h = r.u32()?;
+    let supersample = r.u32()?;
+    let size_px = r.u32()?;
+
+    // Dimensions come from the payload, so the atlas footprint is checked
+    // rather than computed: a wrapped product would pass the length check
+    // below and decode the metrics from the wrong offset.
+    let pixel_bytes = checked_product("font atlas", &[atlas_w as usize, atlas_h as usize, 4])?;
+    let rgba = r.take(pixel_bytes)?.to_vec();
+
+    let glyph_count = r.u32()? as usize;
+    let metrics_bytes = checked_product("font metrics", &[glyph_count, GLYPH_STRIDE])?;
+    if r.remaining() < metrics_bytes {
+        return Err(format!(
+            "font payload truncated: need {} metric bytes, have {}",
+            metrics_bytes,
+            r.remaining()
+        ));
+    }
+    let mut metrics = Vec::with_capacity(glyph_count);
+    for _ in 0..glyph_count {
+        metrics.push(GlyphMetrics {
+            char_code: r.u32()?,
+            atlas_x: r.u16()?,
+            atlas_y: r.u16()?,
+            atlas_w: r.u16()?,
+            atlas_h: r.u16()?,
+            advance_px: r.f32()?,
+            bearing_x: r.f32()?,
+            bearing_y: r.f32()?,
+        });
+    }
+    Ok((atlas_w, atlas_h, supersample, size_px, rgba, metrics))
+}
+
+/// A font atlas as the backend uploads it: width, height and RGBA pixels.
+pub type FontAtlas = (u32, u32, Vec<u8>);
+
+/// A font payload as the face text lays out with, drawn from atlas slot
+/// `slot`, and the atlas that slot uploads.
+///
+/// # Errors
+///
+/// Returns an error if the payload does not deserialize (see [`deserialize`]).
+pub fn load_face(slot: usize, bytes: &[u8]) -> Result<(LoadedFont, FontAtlas), String> {
+    let (atlas_w, atlas_h, supersample, size_px, rgba, metrics) = deserialize(bytes)?;
+    let metrics: FontMetrics = metrics.into_iter().map(|m| (m.char_code, m)).collect();
+    let size_px = size_px as f32;
+    let face = LoadedFont {
+        atlas_slot: slot,
+        cap_px: derive_cap_px(&metrics, size_px),
+        metrics,
+        atlas_w,
+        atlas_h,
+        size_px,
+        supersample: supersample.max(1) as f32,
+    };
+    Ok((face, (atlas_w, atlas_h, rgba)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+    use concinnity_core::math::SaturatingFrom;
+
+    // A payload in the wire format the cook crate emits.
+    fn payload(atlas_w: u32, atlas_h: u32, glyphs: &[GlyphMetrics]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&atlas_w.to_le_bytes());
+        out.extend_from_slice(&atlas_h.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&32u32.to_le_bytes());
+        out.extend(core::iter::repeat_n(
+            0xABu8,
+            (atlas_w as usize) * (atlas_h as usize) * 4,
+        ));
+        out.extend_from_slice(&u32::saturating_from(glyphs.len()).to_le_bytes());
+        for m in glyphs {
+            out.extend_from_slice(&m.char_code.to_le_bytes());
+            out.extend_from_slice(&m.atlas_x.to_le_bytes());
+            out.extend_from_slice(&m.atlas_y.to_le_bytes());
+            out.extend_from_slice(&m.atlas_w.to_le_bytes());
+            out.extend_from_slice(&m.atlas_h.to_le_bytes());
+            out.extend_from_slice(&m.advance_px.to_le_bytes());
+            out.extend_from_slice(&m.bearing_x.to_le_bytes());
+            out.extend_from_slice(&m.bearing_y.to_le_bytes());
+        }
+        out
+    }
+
+    fn glyph(char_code: u32) -> GlyphMetrics {
+        GlyphMetrics {
+            char_code,
+            atlas_x: 1,
+            atlas_y: 2,
+            atlas_w: 3,
+            atlas_h: 4,
+            advance_px: 5.5,
+            bearing_x: 6.5,
+            bearing_y: 7.5,
+        }
+    }
+
+    // A header field written with the wrong endianness or offset would still
+    // decode, so the round trip pins every field to its own value.
+    #[test]
+    fn decodes_a_well_formed_payload() {
+        let glyphs = [glyph(u32::from(b'A')), glyph(u32::from(b'B'))];
+        let bytes = payload(4, 2, &glyphs);
+        let (w, h, ss, size_px, rgba, metrics) = deserialize(&bytes).unwrap();
+        assert_eq!((w, h, ss, size_px), (4, 2, 2, 32));
+        assert_eq!(rgba.len(), 4 * 2 * 4);
+        assert!(rgba.iter().all(|b| *b == 0xAB));
+        assert_eq!(metrics.len(), 2);
+        assert_eq!(metrics[0].char_code, u32::from(b'A'));
+        assert_eq!(metrics[1].char_code, u32::from(b'B'));
+        assert_eq!(metrics[1].atlas_x, 1);
+        assert_eq!(metrics[1].advance_px, 5.5);
+        assert_eq!(metrics[1].bearing_y, 7.5);
+    }
+
+    #[test]
+    fn decodes_a_payload_with_no_glyphs() {
+        let (_, _, _, _, _, metrics) = deserialize(&payload(1, 1, &[])).unwrap();
+        assert!(metrics.is_empty());
+    }
+
+    #[test]
+    fn rejects_a_payload_shorter_than_the_header() {
+        for len in 0..16 {
+            let bytes = vec![0u8; len];
+            assert!(deserialize(&bytes).is_err(), "len {len} decoded");
+        }
+    }
+
+    #[test]
+    fn rejects_a_payload_truncated_mid_atlas() {
+        let mut bytes = payload(8, 8, &[glyph(u32::from(b'x'))]);
+        bytes.truncate(16 + 40);
+        assert!(deserialize(&bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_a_payload_truncated_before_the_glyph_count() {
+        let full = payload(2, 2, &[]);
+        let bytes = &full[..full.len() - 2];
+        assert!(deserialize(bytes).is_err());
+    }
+
+    #[test]
+    fn rejects_a_payload_truncated_mid_metrics() {
+        let mut bytes = payload(2, 2, &[glyph(u32::from(b'q')), glyph(u32::from(b'r'))]);
+        bytes.truncate(bytes.len() - 5);
+        let err = deserialize(&bytes).unwrap_err();
+        assert!(err.contains("truncated"), "{}", err);
+    }
+
+    // Dimensions large enough that `w * h * 4` wraps: the product must be
+    // rejected rather than producing a small length that passes the bounds
+    // check and decodes the metrics from inside the atlas.
+    #[test]
+    fn rejects_atlas_dimensions_that_overflow_the_footprint() {
+        let mut bytes = u32::MAX.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        let err = deserialize(&bytes).unwrap_err();
+        assert!(err.contains("overflow"), "{}", err);
+    }
+
+    // A plausible-looking but oversized atlas must not be trusted into an
+    // allocation; it exceeds the buffer and has to be reported as truncated.
+    #[test]
+    fn rejects_an_atlas_larger_than_the_buffer() {
+        let mut bytes = 4096u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&4096u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 64]);
+        let err = deserialize(&bytes).unwrap_err();
+        assert!(err.contains("unexpected end"), "{}", err);
+    }
+
+    // A glyph count near u32::MAX must be rejected on the declared size, not
+    // by attempting the allocation it asks for.
+    #[test]
+    fn rejects_an_absurd_glyph_count() {
+        let mut bytes = payload(1, 1, &[]);
+        let count_at = bytes.len() - 4;
+        bytes[count_at..].copy_from_slice(&u32::MAX.to_le_bytes());
+        let err = deserialize(&bytes).unwrap_err();
+        assert!(err.contains("truncated"), "{}", err);
+    }
+
+    // The face keys its glyphs by code point, takes its slot, and reads the
+    // payload's sizes; its atlas is the payload's pixels.
+    #[test]
+    fn a_payload_loads_as_a_face_and_its_atlas() {
+        let bytes = payload(2, 2, &[glyph(u32::from(b'H'))]);
+        let (face, (w, h, rgba)) = load_face(3, &bytes).expect("loads");
+        assert_eq!(face.atlas_slot, 3);
+        assert_eq!((face.atlas_w, face.atlas_h, w, h), (2, 2, 2, 2));
+        assert_eq!(face.size_px, 32.0);
+        assert_eq!(face.supersample, 2.0);
+        assert!(face.metrics.contains_key(&u32::from(b'H')));
+        assert_eq!(rgba.len(), 16);
+        assert!(load_face(0, &bytes[..3]).is_err());
+    }
+}

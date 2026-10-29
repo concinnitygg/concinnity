@@ -3,12 +3,12 @@
 //! completed work on a later frame and push it through the backend `update_*`
 //! calls. Keeps the (seconds-long) decode off the render thread.
 
-use concinnity_core::bake::texture::TextureImage;
-use concinnity_core::components::build_skeleton_from_joint_defs;
-use concinnity_core::fanout::Fanout;
-use concinnity_core::gfx::render_types;
-use concinnity_core::render::backend;
-use concinnity_core::render::world_load::source_maps::{
+use concinnity_core::fanout::FanOut;
+use concinnity_engine::bake::texture::TextureImage;
+use concinnity_engine::components::build_skeleton_from_joint_defs;
+use concinnity_engine::gfx::render_types;
+use concinnity_engine::render::backend;
+use concinnity_engine::render::world_load::source_maps::{
     ColorLutSource, MeshSourceEntry, SkinnedMeshSourceEntry, TextureSourceEntry,
 };
 use concinnity_host::thread::jobs::pool;
@@ -379,7 +379,7 @@ pub(super) fn decode_asset_batch(
 
 // Refresh `SkinnedMeshSourceEntry`s' captured `vertex_base` / `vertex_count`
 // / `index_count` from the post-rebuild layouts returned by
-// [`concinnity_core::render::backend::RenderBackend::rebuild_skinned_geometry`]. Entries
+// [`concinnity_engine::render::backend::RenderBackend::rebuild_skinned_geometry`]. Entries
 // whose `skinned_index` is not in `layouts` are left untouched (the backend
 // did not include them in the rebuild), but a typical Metal rebuild
 // returns one layout per slot since the whole shared buffer is re-laid out,

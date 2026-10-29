@@ -5,8 +5,8 @@
 //! the body is a code text area. A world with no `StoryImport` shows a single
 //! "+ Create story" row instead.
 
-use concinnity_core::components::TextAlign;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextAlign;
+use concinnity_engine::ecs::World;
 
 use super::registry::PanelKey;
 use crate::editor::hud_ids::{hud_ids, panel_base};
@@ -276,8 +276,8 @@ fn place_header(world: &mut World, view: &StoryView<'_>, o: [f32; 2], w: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{Sprite, TextLabel};
-    use concinnity_core::ecs::asset_id::AssetId;
+    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::ecs::asset_id::AssetId;
 
     const M: Metrics = Metrics {
         line_h: 20.0,

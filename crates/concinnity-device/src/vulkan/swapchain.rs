@@ -3,9 +3,9 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::hdr_output;
-use concinnity_core::render::render_graph::{PoolGates, plan_pool_slots};
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::output::hdr;
+use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
 use super::context::{HDR_FORMAT, VkContext, VkTargets};
@@ -209,10 +209,7 @@ impl VkContext {
             },
             self.frames_in_flight,
             &plan_pool_slots(
-                PoolGates {
-                    ssao: self.ssao.is_some(),
-                    gbuffer: self.gbuffer.is_some(),
-                },
+                PoolGates::REACHABLE,
                 (render_ext.width, render_ext.height),
                 (ext.width, ext.height),
             )?,
@@ -268,7 +265,9 @@ impl VkContext {
 
         self.rebuild_screen_space_targets(render_ext)?;
         self.rebuild_scene_pass_targets(render_ext)?;
-        self.rebuild_ssao_and_composite_inputs(render_ext)
+        self.rebuild_ssao_and_composite_inputs(render_ext)?;
+        self.mark_features_wired();
+        Ok(())
     }
 
     // Rebuild the unified G-buffer and every screen-space reader of it at the new
@@ -325,6 +324,7 @@ impl VkContext {
             self.ssgi = Some(ssgi);
             rebuilt?;
         }
+        self.sync_disocclusion(render_ext)?;
 
         // Rebuild the RT-reflection output target + re-wire its static
         // descriptors (the SSR pre-pass G-buffer / roughness + the HDR resolves
@@ -623,10 +623,14 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
+            let scene_views: Vec<vk::ImageView> = (0..self.frames_in_flight)
+                .map(|i| self.post_scene_image(i).view)
+                .collect();
             p.rebuild(
                 &self.hw.device,
                 crate::vulkan::particle::ParticlePassTargets {
                     hdr_resolve_views: &hdr_views,
+                    scene_views: &scene_views,
                     reactive_mask_views: &mask_views,
                     depth_views: &depth_views,
                     extent: render_ext,
@@ -685,6 +689,7 @@ impl VkContext {
             let channels = composite_channels(
                 &self.targets,
                 self.gbuffer.as_ref(),
+                self.ssao.is_some(),
                 self.scene.ssao_white.view,
                 i,
             );
@@ -750,7 +755,7 @@ pub(super) struct SwapchainConfig {
     // resolve in init.rs), so the chosen encoding and color space stay in
     // sync. Each arm falls back through scRGB to the SDR default if its
     // preferred pair is unexpectedly absent.
-    pub hdr_mode: hdr_output::HdrOutputMode,
+    pub hdr_mode: hdr::HdrOutputMode,
     // Lock presentation to the display refresh. `true` forces FIFO (always
     // present, vsync); `false` prefers MAILBOX (uncapped render loop, no
     // tearing), then IMMEDIATE, falling back to FIFO when neither is offered.
@@ -808,7 +813,7 @@ pub(super) fn create_swapchain_inner(
         hdr_mode,
         vsync,
     } = config;
-    use concinnity_core::render::hdr_output::{HdrEncoding, HdrOutputMode};
+    use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
     // SAFETY: a property query on a live handle; it only reads.
     let caps = unsafe { surface_loader.get_physical_device_surface_capabilities(pd, surface) }
         .map_err(|e| super::error::map_vk_result(e, "surface caps"))?;
@@ -1105,17 +1110,19 @@ pub(super) fn write_composite_channel_set(
     );
 }
 
-// Frame slot `i`'s composite channel sources: the G-buffer's and the pooled
-// SSAO output's views, `white` wherever one does not exist.
+// Frame slot `i`'s composite channel sources: the G-buffer's and, while SSAO
+// is built, the pooled SSAO output's views, `white` wherever one does not
+// exist.
 pub(super) fn composite_channels(
     targets: &VkTargets,
     gbuffer: Option<&super::post::gbuffer::GbufferResources>,
+    ssao_built: bool,
     white: vk::ImageView,
     i: usize,
 ) -> CompositeChannels {
-    let ao = targets
-        .transient_pool
-        .view_for("ao_output", i)
+    let ao = ssao_built
+        .then(|| targets.transient_pool.view_for("ao_output", i))
+        .flatten()
         .unwrap_or(white);
     let reactive = targets
         .reactive_mask_images

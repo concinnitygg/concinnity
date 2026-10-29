@@ -8,9 +8,9 @@ bodies to reserve.
 Optional: a world with physics bodies but no `PhysicsConfig` simulates over a
 flat floor at Y = 0, and receives one carrying these values at start so the
 settings are a component rather than a fallback. Physics runs whenever the world
-declares a `PhysicsConfig`, a [RigidBody](RigidBody.md), a
-[PropBody](PropBody.md), a [TriggerVolume](TriggerVolume.md), or a
-[SkinnedMesh](SkinnedMesh.md) with a `capsule`.
+declares a `PhysicsConfig`, a [`RigidBody`](RigidBody.md), a
+[`PropBody`](PropBody.md), a [`TriggerVolume`](TriggerVolume.md), or a
+[`SkinnedMesh`](SkinnedMesh.md) with a `capsule`.
 
 Every [Terrain](Terrain.md) in the world is solid ground. A world with no
 terrain stands on a flat floor at Y = 0.

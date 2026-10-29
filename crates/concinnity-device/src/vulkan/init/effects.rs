@@ -4,12 +4,12 @@
 //! resources.
 
 use ash::vk;
-use concinnity_core::gfx::auto_exposure;
-use concinnity_core::render::backend_init::{PlanarBudget, WorldFx};
-use concinnity_core::render::decal;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::planar_reflection::PlanarReflectors;
-use concinnity_core::settings::ResolvedGraphics;
+use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::backend::init::{PlanarBudget, WorldFx};
+use concinnity_engine::render::decal;
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
+use concinnity_engine::settings::ResolvedGraphics;
 
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};
@@ -321,8 +321,13 @@ pub(super) fn build_taa_and_wire_scene_inputs(
     // the 1x1 white fallback stands in when a world built no G-buffer / no
     // SSAO.
     for (i, &set) in composite.sets.iter().enumerate() {
-        let channels =
-            composite_channels(targets, screen.gbuffer.as_ref(), scene.ssao_white.view, i);
+        let channels = composite_channels(
+            targets,
+            screen.gbuffer.as_ref(),
+            screen.ssao.is_some(),
+            scene.ssao_white.view,
+            i,
+        );
         write_composite_channel_set(device, set, &channels);
     }
     Ok(taa)
@@ -505,11 +510,15 @@ pub(super) fn build_world_effects(
     // probe / sky reflection. Mirrors `metal::planar`'s bindless gate.
     let planar_reflection = if planar.planes().is_empty() {
         None
-    } else if let Some(kernels) = cull.cull_kernels.as_ref() {
+    } else if let (Some(kernels), Some(compact)) =
+        (cull.cull_kernels.as_ref(), cull.compact.as_ref())
+    {
         let cull_sources = crate::vulkan::planar::PlanarCullSources {
             frame_object_buffers: &cull.object_buffers,
             frame_draw_args_buffers: &cull.draw_args_buffers,
+            frame_variant_buffers: &cull.variant_buffers,
             cull_set_layout: kernels.set_layout.handle(),
+            compact_set_layout: compact.set_layout.handle(),
             cull_count: n_cull,
             hiz: cull
                 .hiz
@@ -567,6 +576,7 @@ pub(super) fn build_world_effects(
                     queue: graphics_queue,
                 },
                 &fx.ocean,
+                frames,
                 scene.anisotropy,
                 hot_reload,
             )

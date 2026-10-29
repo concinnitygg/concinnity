@@ -3,9 +3,9 @@
 Test scaffolding shared by the workspace. A dev-dependency only: nothing here
 ships, and `publish = false` keeps it out of a release.
 
-It depends on `concinnity-core` and nothing else in the workspace, so any crate
-can take it as a dev-dependency without a cycle and without pulling an engine
-tier into its graph.
+It depends only on `concinnity-core` and `concinnity-engine`, the bottom of
+the workspace, so any crate can take it as a dev-dependency without a cycle
+and without pulling a std or GPU tier into its graph.
 
 - `TempTree` and `write_into`: every path a test writes, under a directory that
   deletes itself.

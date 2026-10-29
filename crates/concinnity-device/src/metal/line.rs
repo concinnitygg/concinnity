@@ -12,8 +12,8 @@
 //! hardware.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::gfx::render_types::LineVertex;
-use concinnity_core::render::error::{RenderError, RenderResult};
+use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -120,7 +120,7 @@ impl MtlContext {
         else {
             return Ok(0);
         };
-        let view = concinnity_core::render::uniforms::LineView {
+        let view = concinnity_engine::render::uniforms::LineView {
             vp,
             occluded_alpha: OCCLUDED_ALPHA,
             pre_exposure: self.pre_exposure.value(),

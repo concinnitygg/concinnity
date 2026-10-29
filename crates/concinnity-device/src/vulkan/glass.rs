@@ -10,11 +10,11 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
-use concinnity_core::components::GlassPanel;
-use concinnity_core::geometry::glass_quad::build_glass_quad;
-use concinnity_core::gfx::mesh_payload::Vertex;
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::uniforms::GlassParams;
+use concinnity_engine::components::GlassPanel;
+use concinnity_engine::geometry::glass_quad::build_glass_quad;
+use concinnity_engine::gfx::mesh_payload::Vertex;
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::uniforms::GlassParams;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::transparent::{
@@ -310,7 +310,7 @@ pub(in crate::vulkan) fn build_glass_mesh_producer(
 #[cfg(test)]
 mod tests {
     // The `TransparentView` / `GlassParams` layout tests live with the structs
-    // in `concinnity_core::render::uniforms`, and are checked against the compiled
+    // in `concinnity_engine::render::uniforms`, and are checked against the compiled
     // shader by `shader_layout`.
 
     // The see-through mesh family compiles from the shared single source at

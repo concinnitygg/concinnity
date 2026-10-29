@@ -3,8 +3,8 @@
 //! working directory at a fresh project for the edits that write files under
 //! its assets.
 
-use concinnity_core::components::ShaderStage;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::ShaderStage;
+use concinnity_engine::ecs::World;
 use concinnity_host::store::paths::StateTree;
 use std::path::{Path, PathBuf};
 
@@ -60,7 +60,7 @@ pub(super) fn shader_names(h: &EditorHook) -> Vec<String> {
 pub(super) fn form_world() -> World {
     let mut world = world_with_fields();
     for id in modal::ids().field_ids() {
-        world.push_identified(id, concinnity_core::components::TextInput::default());
+        world.push_identified(id, concinnity_engine::components::TextInput::default());
     }
     world
 }
@@ -135,15 +135,24 @@ pub(super) fn message(h: &EditorHook) -> String {
 }
 
 // Run `test` with the working directory at a fresh project whose assets live
-// under it, as `cn editor` runs.
+// under it, as `cn edit` runs.
 pub(super) fn in_project(test: impl FnOnce(&Path)) {
-    let _guard = crate::test_support::lock();
-    let tree = concinnity_testing::TempTree::new();
-    let old = std::env::current_dir().unwrap();
-    std::env::set_current_dir(tree.path()).unwrap();
-    let root = std::env::current_dir().unwrap();
+    // Hands the binary's other tests back their project however `test` ends.
+    // Bound after the cwd guard, so it drops first, while the lock is held.
+    struct Reopen;
+    impl Drop for Reopen {
+        fn drop(&mut self) {
+            crate::test_support::isolate_state_dir();
+        }
+    }
+
+    let _state = crate::test_support::in_temp_cwd();
+    // The working directory as it reads back, which project-relative paths are
+    // stripped against: on macOS the temporary directory sits behind the
+    // `/private` symlink, and `canonicalize` on Windows would add a `\\?\`
+    // prefix the working directory does not carry.
+    let root = std::env::current_dir().expect("the working directory reads back");
+    let _reopen = Reopen;
     crate::project::open(StateTree::at(&root));
     test(&root);
-    std::env::set_current_dir(old).unwrap();
-    crate::test_support::isolate_state_dir();
 }

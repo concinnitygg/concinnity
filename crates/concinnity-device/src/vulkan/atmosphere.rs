@@ -1,4 +1,4 @@
-//! The atmosphere for the Vulkan backend (see `concinnity_core::render::atmosphere`):
+//! The atmosphere for the Vulkan backend (see `concinnity_engine::render::environment::atmosphere`):
 //! the tables, the compute pass that builds them, the haze pass that blends
 //! the aerial volume over the opaque scene, and the sky pipeline that draws
 //! the sky-view table behind it. The irradiance cube the last kernel writes is
@@ -17,14 +17,14 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::atmosphere::{
+use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
     SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
-use concinnity_core::render::error::RenderResult;
-use concinnity_core::render::shader_programs::ShaderProgram;
+use concinnity_engine::render::shader::programs::ShaderProgram;
 
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
@@ -39,7 +39,9 @@ use super::owned::{
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
 use super::pipeline_desc::{Blend, GraphicsPipelineDesc, compute_pipeline};
-use super::probe_prefilter::{PrefilterGpu, PrefilterTarget, ProbePrefilterPipelines};
+use super::probe_prefilter::{
+    CaptureFaces, PrefilterGpu, PrefilterTarget, ProbePrefilterPipelines,
+};
 use super::probe_set::{self, CubeImage};
 use super::record::Recorder;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
@@ -166,9 +168,9 @@ fn sky_bindings() -> [Binding; 3] {
     ]
 }
 
-// The haze pass's set: the constants, the scene depth, the aerial volume and
-// its sampler.
-fn aerial_bindings() -> [Binding; 4] {
+// The haze pass's set: the constants, the scene depth, the aerial volume, its
+// sampler, and the transmittance and multiple-scattering tables.
+fn aerial_bindings() -> [Binding; 6] {
     use vk::DescriptorType as T;
     let f = vk::ShaderStageFlags::FRAGMENT;
     [
@@ -176,6 +178,8 @@ fn aerial_bindings() -> [Binding; 4] {
         (1, T::SAMPLED_IMAGE, f),
         (2, T::SAMPLED_IMAGE, f),
         (3, T::SAMPLER, f),
+        (4, T::SAMPLED_IMAGE, f),
+        (5, T::SAMPLED_IMAGE, f),
     ]
 }
 
@@ -487,8 +491,10 @@ impl VkAtmosphere {
             PrefilterTarget {
                 image: sky_image,
                 cube: 0,
+                first_mip: SKY_CUBE_PLAN.first_mip(),
                 mip_views: &sky_mip_views,
             },
+            CaptureFaces::Copied,
         )?;
         one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
             // The sky cube and its capture rest sampled from the start, the
@@ -685,8 +691,10 @@ impl VkAtmosphere {
             SetWrites::new(*set)
                 .uniform_buffer(0, ubo.buffer(), params_size)
                 .sampled_image(1, targets.depth_views[i.min(last_depth)])
-                .sampled_image_in(2, tables[3].view, vk::ImageLayout::GENERAL)
+                .sampled_image_in(2, tables[AERIAL].view, vk::ImageLayout::GENERAL)
                 .sampler(3, sampler.handle())
+                .sampled_image_in(4, tables[TRANSMITTANCE].view, vk::ImageLayout::GENERAL)
+                .sampled_image_in(5, tables[MULTISCATTER].view, vk::ImageLayout::GENERAL)
                 .apply(device);
         }
         let framebuffers = create_framebuffers(
@@ -1120,7 +1128,7 @@ impl VkContext {
 
     // The view block's `irradiance` lane.
     pub(in crate::vulkan) fn irradiance_lane(&self) -> f32 {
-        concinnity_core::render::sky::irradiance_lane(
+        concinnity_engine::render::environment::sky::irradiance_lane(
             self.scene.prefilter_mip_count > 0,
             self.atmosphere.is_some(),
         )

@@ -6,8 +6,8 @@
 //! Escape exits back to the free-cursor edit mode. The camera keeps its flown
 //! pose, so entering play mode afterwards continues from there.
 
-use concinnity_core::components::{Camera3D, FrameInput};
-use concinnity_core::ecs::{FrameTime, World};
+use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::{FrameTime, World};
 
 use super::EditorHook;
 
@@ -101,7 +101,7 @@ impl EditorHook {
         cam.position = position;
         cam.yaw = yaw;
         cam.pitch = pitch;
-        cam.view_matrix = concinnity_core::gfx::camera::view_matrix(position, yaw, pitch);
+        cam.view_matrix = concinnity_engine::gfx::camera::view_matrix(position, yaw, pitch);
     }
 }
 

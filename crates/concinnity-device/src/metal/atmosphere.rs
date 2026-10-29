@@ -1,4 +1,4 @@
-//! The atmosphere (see `concinnity_core::render::atmosphere`): its tables, the
+//! The atmosphere (see `concinnity_engine::render::environment::atmosphere`): its tables, the
 //! compute pass that builds them, the haze pass that blends the aerial volume
 //! over the opaque scene, and the sky pipeline that draws the sky-view table
 //! behind it. The irradiance cube the last kernel writes is the environment's
@@ -7,13 +7,13 @@
 //! reflections from the environment takes the atmosphere's.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_core::render::atmosphere::{
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
     SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
-use concinnity_core::render::error::{RenderError, RenderResult};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -388,6 +388,8 @@ impl MtlContext {
         enc.set_fragment_value(params, 0);
         enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
         enc.set_fragment_texture(&atmo.aerial, 1);
+        enc.set_fragment_texture(&atmo.transmittance, 2);
+        enc.set_fragment_texture(&atmo.multiscatter, 3);
         set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 1);
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
@@ -403,16 +405,16 @@ impl MtlContext {
     // the scene is drawn from. A frame without inputs leaves the passes out.
     pub(super) fn prepare_atmosphere(
         &mut self,
-        frame: Option<AtmosphereFrame>,
+        frame: Option<&AtmosphereFrame>,
         view: AtmosphereView,
     ) {
         if let Some(atmo) = self.atmosphere.as_mut() {
-            atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, &f, &view));
+            atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, f, &view));
             atmo.sky_cube.work = match frame {
                 Some(f) => {
                     atmo.sky_cube
                         .schedule
-                        .plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
+                        .plan(SkyCubeKey::new(&atmo.settings, f, &view.sky_rot))
                 }
                 None => SkyCubeWork::default(),
             };
@@ -424,7 +426,7 @@ impl MtlContext {
     // The view block's `irradiance` lane: whether the irradiance cube holds
     // real diffuse light this run.
     pub(super) fn irradiance_lane(&self) -> f32 {
-        concinnity_core::render::sky::irradiance_lane(
+        concinnity_engine::render::environment::sky::irradiance_lane(
             self.scene.env_map.prefilter_mip_count > 0,
             self.atmosphere.is_some(),
         )

@@ -2,11 +2,11 @@
 // `compile_*_payload` functions that pack generator output into the binary
 // blob. The generators themselves (room, extrude, primitives, water grid)
 // and the payload tail (tangents, LOD alternates, serialization)
-// live in `concinnity_core::geometry` / `concinnity_core::bake::mesh`; this
+// live in `concinnity_engine::geometry` / `concinnity_engine::bake::mesh`; this
 // module parses world.jsonl args and calls down into them.
 //
 // Adding a new generator
-// 1. Add the build_* geometry function in `concinnity_core::geometry`.
+// 1. Add the build_* geometry function in `concinnity_engine::geometry`.
 // 2. Add a pub(super) parsing wrapper in the appropriate submodule here.
 // 3. Add a branch to the match in compile_mesh_payload().
 
@@ -15,12 +15,12 @@ mod json_args;
 mod primitives;
 mod room;
 
-use concinnity_core::bake::mesh::{bounding_sphere_radius, vertices_from_data};
-use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
-use concinnity_core::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
-use concinnity_core::gfx::{lod, mesh_payload};
-use concinnity_core::math::vec3::{vec3_add, vec3_face_normal, vec3_normalize};
+use concinnity_core::math::vec3::{add_assign, face_normal, normalize};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
+use concinnity_engine::bake::mesh::{bounding_sphere_radius, vertices_from_data};
+use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::geometry::{PaletteSlot, Vert, build_voxel_mesh, compute_tangents};
+use concinnity_engine::gfx::{lod, mesh_payload};
 use json_args::{f32_arg, u32_arg};
 
 // Raw inline vertex form: position, color, uv (inline input, before normals
@@ -43,10 +43,10 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
     let generator = args.get("generator").and_then(|v| v.as_str()).unwrap_or("");
 
     let (vertices, indices): (Vec<Vert>, Vec<u16>) = match generator {
-        "room" => room::build_room(args)?,
-        "box" => primitives::build_box(args)?,
+        "room" => room::build_room(args),
+        "box" => primitives::build_box(args),
         "cylinder" => primitives::build_cylinder(args)?,
-        "plane" => primitives::build_plane(args)?,
+        "plane" => primitives::build_plane(args),
         "sphere" => primitives::build_sphere(args)?,
         // The `water_grid` generator stays in the runtime crate (the GPU
         // backends call it directly), so reach it there for the compile branch.
@@ -54,7 +54,7 @@ pub(crate) fn compile_mesh_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
             let half_width = f32_arg(args, "half_width", 10.0);
             let half_depth = f32_arg(args, "half_depth", 10.0);
             let subdivisions = u32_arg(args, "subdivisions", 64)?;
-            concinnity_core::geometry::water_grid::build_water_grid(
+            concinnity_engine::geometry::water_grid::build_water_grid(
                 half_width,
                 half_depth,
                 subdivisions,
@@ -89,7 +89,12 @@ fn finish_mesh_payload(
                 .collect()
         })
         .unwrap_or_default();
-    concinnity_core::bake::mesh::finish_mesh_payload(vertices, indices, lod_levels, &lod_distances)
+    concinnity_engine::bake::mesh::finish_mesh_payload(
+        vertices,
+        indices,
+        lod_levels,
+        &lod_distances,
+    )
 }
 
 // Compile typed vertex and index data into a packed binary mesh payload.
@@ -149,19 +154,19 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
         let ia = indices[t * 3] as usize;
         let ib = indices[t * 3 + 1] as usize;
         let ic = indices[t * 3 + 2] as usize;
-        let n = vec3_face_normal(
+        let n = face_normal(
             vertex_data[ia].pos,
             vertex_data[ib].pos,
             vertex_data[ic].pos,
         );
-        vec3_add(&mut normals[ia], n);
-        vec3_add(&mut normals[ib], n);
-        vec3_add(&mut normals[ic], n);
+        add_assign(&mut normals[ia], n);
+        add_assign(&mut normals[ib], n);
+        add_assign(&mut normals[ic], n);
     }
     let pnt: Vec<Vert> = vertex_data
         .iter()
         .enumerate()
-        .map(|(i, v)| (v.pos, vec3_normalize(normals[i]), v.color, v.uv))
+        .map(|(i, v)| (v.pos, normalize(normals[i]), v.color, v.uv))
         .collect();
     let tangents = compute_tangents(&pnt, indices);
 
@@ -382,8 +387,12 @@ pub(crate) fn compile_room_payload(args: &serde_json::Value) -> Result<Vec<u8>, 
         (hw, hd, ch)
     };
 
-    let (vertices, indices) =
-        concinnity_core::geometry::build_room_geometry(half_width, half_depth, 0.0, ceiling_height);
+    let (vertices, indices) = concinnity_engine::geometry::build_room_geometry(
+        half_width,
+        half_depth,
+        0.0,
+        ceiling_height,
+    );
     finish_mesh_payload(vertices, &indices, args)
 }
 
@@ -480,8 +489,8 @@ fn parse_f32x2(v: Option<&serde_json::Value>, label: &str) -> Result<[f32; 2], S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
-    use concinnity_core::gfx::mesh_payload::{
+    use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+    use concinnity_engine::gfx::mesh_payload::{
         Vertex, deserialize_skinned_with_lods, deserialize_with_lods,
     };
 

@@ -11,10 +11,8 @@ Vulkan beside it:
 | iOS      | none       | No window layer yet; runs headless.                  |
 | Android  | none       | No window layer yet; runs headless.                  |
 
-A build with two backends renders with the native one unless told otherwise:
-the Graphics API row of the settings menu chooses for the next launch, and
-`--graphics-api vulkan` on `cn run` / `cn debug` / `cn editor` chooses for one
-launch. A build with one backend shows the row grayed out.
+A build with two backends renders with the native one unless told otherwise.
+Use `--graphics-api vulkan` for runtime-related commands.
 
 ## Cargo features
 
@@ -103,7 +101,7 @@ checkout, install a
 [DXC release](https://github.com/microsoft/DirectXShaderCompiler/releases) and
 put its `bin/` on `PATH`.
 
-A built binary needs no compiler to draw its own shaders. `cn build` needs one
+A built binary needs no compiler to draw its own shaders. `cn cook` needs one
 to cook a world that declares a `Shader` or an `SdfVolume`, whose authored HLSL
 compiles alongside the engine's.
 

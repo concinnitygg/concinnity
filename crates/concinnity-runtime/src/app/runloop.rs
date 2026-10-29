@@ -1,5 +1,5 @@
 //! The shared render/event loop that drives a live `Runtime`. Both the compiled
-//! `cn run` runtime (`run::start_runtime`) and the interpreted `cn debug` path
+//! `cn run` runtime (`run::start_runtime`) and the interpreted `cn run -f` path
 //! (in the editor crate) pump the same loop; the only difference is the per-tick
 //! hook the debug path threads through to run its frame hook. Keeping the platform
 //! event-pump and window-activation glue in one place means it is not duplicated
@@ -11,7 +11,7 @@
 //! all other platforms a tight Rust loop is used, which is what the Vulkan /
 //! DirectX renderers expect.
 
-use concinnity_core::ecs::StepResult;
+use concinnity_engine::ecs::StepResult;
 use concinnity_host::thread::set_current_thread_role;
 
 use crate::app::budget::main_thread_role;

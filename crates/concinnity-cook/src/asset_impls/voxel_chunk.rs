@@ -1,4 +1,4 @@
-use concinnity_core::components::VoxelChunk;
+use concinnity_engine::components::VoxelChunk;
 
 use crate::authoring::registry::RegisteredType;
 
@@ -41,8 +41,8 @@ mod tests {
         let assets = [block_type("stone")];
         let ctx = BuildCtx {
             name: "chunk",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &assets,
@@ -60,8 +60,8 @@ mod tests {
         let assets = [block_type("dirt")];
         let ctx = BuildCtx {
             name: "chunk",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &assets,
@@ -79,8 +79,8 @@ mod tests {
     fn a_compile_error_is_reported_as_invalid_data() {
         let ctx = BuildCtx {
             name: "chunk",
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
+            targets: concinnity_engine::platform::PlatformSet::single(
+                concinnity_engine::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: &[],

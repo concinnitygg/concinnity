@@ -10,9 +10,9 @@
 //! job, not this path's.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::ecs::{Entity, World};
 use concinnity_core::math::narrow_f32;
-use concinnity_core::render::live_preview::draw::{self as draw_preview, DrawMaterial};
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::render::live_preview::draw::{self as draw_preview, DrawMaterial};
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value};
 

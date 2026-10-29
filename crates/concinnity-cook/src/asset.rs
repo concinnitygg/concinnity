@@ -7,11 +7,11 @@
 //! `BuildCtx` is the build-time context handed to each impl. It lives here
 //! because it is build-only: the runtime never compiles a payload. It carries
 //! the shader `Platform` the build cooks for; the enum itself stays in
-//! concinnity-core, since the engine selects a Shader stage's source with it at
+//! concinnity-engine, since the engine selects a Shader stage's source with it at
 //! runtime.
 
-use concinnity_core::ecs::Component;
-use concinnity_core::platform::PlatformSet;
+use concinnity_engine::ecs::Component;
+use concinnity_engine::platform::PlatformSet;
 use std::path::Path;
 
 use crate::authoring::world::WorldJsonlAsset;

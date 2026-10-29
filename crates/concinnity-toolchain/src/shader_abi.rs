@@ -14,7 +14,11 @@ pub fn msl_binds(msl: &str, param: &str, attribute: &str) -> bool {
 }
 
 /// The parameter list of `entry` in an emitted MSL translation unit, split at
-/// top-level commas. Errs when no function of that name carries a leading stage
+/// top-level commas.
+///
+/// # Errors
+///
+/// Returns an error if no function named `entry` carries a leading stage
 /// qualifier (`fragment`, `vertex` or `kernel`).
 pub fn msl_entry_params(msl: &str, entry: &str) -> Result<Vec<String>, String> {
     let needle = format!("{entry}(");

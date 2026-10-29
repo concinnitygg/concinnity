@@ -1,7 +1,7 @@
 // The Windows system clipboard as UTF-16 text (CF_UNICODETEXT), opened on
 // behalf of the window: Win32 only lets an owning window replace its contents.
 
-use concinnity_core::window::clipboard::Clipboard;
+use concinnity_engine::window::clipboard::Clipboard;
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,

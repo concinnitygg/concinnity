@@ -8,7 +8,7 @@
 // `serde_json::Value` with the core bridge, so the element shapes are
 // single-sourced and match the specs the editor and world templates use.
 
-use concinnity_core::components::Font;
+use concinnity_engine::components::Font;
 use std::collections::HashMap;
 
 use super::expand::{asset_name, registered_type};

@@ -14,9 +14,9 @@ use std::ffi::{CString, c_char, c_void};
 use std::ptr;
 
 use ash::vk;
-use concinnity_core::gfx::jitter;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::reactive_mask::ReactiveReader;
+use concinnity_engine::gfx::jitter;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
     ImageViewInfo, OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend,

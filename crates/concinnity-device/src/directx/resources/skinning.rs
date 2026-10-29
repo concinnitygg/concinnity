@@ -4,13 +4,13 @@
 //! The per-slot CPU records these uploads read live in the scene's
 //! `SkinnedSlots`.
 
-use concinnity_core::gfx::mesh_payload;
-use concinnity_core::gfx::mesh_payload::{SkinnedVertex, Vertex};
-use concinnity_core::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_core::math::SaturatingFrom;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::render::{geometry_repack, rt_geom};
-use concinnity_core::transform::IDENTITY;
+use concinnity_engine::gfx::mesh_payload;
+use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
+use concinnity_engine::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -130,7 +130,7 @@ impl DxContext {
         let skinned_index_buffer = upload_buffer_padded(
             &self.hw.alloc,
             idx_bytes,
-            rt_geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            geom::skinned_index_buffer_bytes(indices.len()) as u64,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
@@ -236,11 +236,7 @@ impl DxContext {
             let mut deformed_buffers: Vec<ID3D12Resource> = Vec::with_capacity(frames);
             let mut deformed_vbvs: Vec<D3D12_VERTEX_BUFFER_VIEW> = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let buf = create_uav_buffer(
-                    &self.hw.device,
-                    deformed_bytes,
-                    D3D12_RESOURCE_STATE_COMMON,
-                )?;
+                let buf = create_uav_buffer(&self.hw.device, deformed_bytes)?;
                 let vbv = D3D12_VERTEX_BUFFER_VIEW {
                     BufferLocation: com::gpu_va(&buf),
                     SizeInBytes: u32::saturating_from(deformed_bytes),
@@ -288,7 +284,7 @@ impl DxContext {
 
     // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the shared
     // skinned vertex / index buffers in place. Driven by asset hot-reload
-    // (`cn debug` only). The slot's vertex region starts at
+    // (`cn run -f` only). The slot's vertex region starts at
     // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
     // vertices wide; the index region lives at the slot's init-time
     // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`

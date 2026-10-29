@@ -1,8 +1,8 @@
 //! Test scaffolding shared by the workspace.
 //!
-//! A dev-dependency only. It depends on `concinnity-core` and nothing else in
-//! the workspace, so any crate can take it without a cycle and without pulling
-//! an engine tier into its graph.
+//! A dev-dependency only. It depends only on `concinnity-core` and
+//! `concinnity-engine`, the bottom of the workspace, so any crate can take it
+//! without a cycle and without pulling a std or GPU tier into its graph.
 //!
 //! What it offers:
 //!
@@ -47,5 +47,5 @@ pub use wait::eventually;
 /// lifts it afterwards. Call this directly from a test binary that should never
 /// open a window at all.
 pub fn forbid_windows() {
-    concinnity_core::window::policy::forbid_windows();
+    concinnity_engine::window::policy::forbid_windows();
 }

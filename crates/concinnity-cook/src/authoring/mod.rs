@@ -3,7 +3,7 @@
 //! Owns world.jsonl parsing and I/O plus structural validation
 //! (`world`), the authoring type vocabulary (`registry`, whose
 //! `RegisteredType` is instantiated from the shared registry list in
-//! concinnity-core), the asset cross-reference metadata (`refs`,
+//! concinnity-engine), the asset cross-reference metadata (`refs`,
 //! `resource_type`), the world's places and the moves between them (`flow`),
 //! the typed authoring vocabulary (`spec`) and the world
 //! templates built from it (`template`). Everything here operates on the

@@ -25,7 +25,7 @@
 //! applications running against one checkout do share this file, and the later
 //! flush wins; what the loser had cached is recomputed on its next launch.
 //!
-//! The container format is `concinnity_core::blob`, which is I/O-free; the file
+//! The container format is `concinnity_engine::blob`, which is I/O-free; the file
 //! reads and writes live in `segment`.
 
 mod segment;
@@ -33,7 +33,7 @@ mod segment;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-pub use concinnity_core::blob::CacheEntryKind;
+pub use concinnity_engine::blob::CacheEntryKind;
 pub use segment::Segment;
 
 /// How much payload the segment may hold. Every shader edit orphans the

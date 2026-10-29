@@ -12,9 +12,9 @@
 // pivots / offsets / PostRotation are outside the supported envelope and log
 // a warning instead of silently mis-posing.
 
-use concinnity_core::animation::skeleton;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_core::transform::{decompose, euler_yxz_from_quat, mat4_mul};
+use concinnity_engine::animation::skeleton;
+use concinnity_engine::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{BTreeMap, HashMap};
 
@@ -45,6 +45,11 @@ pub(crate) fn fbx_animation_names(path: &str) -> Result<Vec<String>, String> {
 /// `animation_index`, baked at `sample_rate` keys per second and resolved
 /// against the `skin_index`-th skinned mesh's skeleton. Curves targeting nodes
 /// that are not skeleton joints are dropped, mirroring the glTF importer.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be parsed, has no matching skin or
+/// animation, or its curves cannot be resolved.
 pub fn import_fbx_animation(
     path: &str,
     animation_index: u32,
@@ -555,8 +560,8 @@ mod tests {
     // pose origin so the joint's bind translation drops out.
     fn rotated_x_axis(key: &ImportedKeyframe) -> [f32; 3] {
         let m = key.pose.to_matrix();
-        let origin = concinnity_core::transform::mat4_transform_point(&m, [0.0, 0.0, 0.0]);
-        let tip = concinnity_core::transform::mat4_transform_point(&m, [1.0, 0.0, 0.0]);
+        let origin = concinnity_engine::transform::mat4_transform_point(&m, [0.0, 0.0, 0.0]);
+        let tip = concinnity_engine::transform::mat4_transform_point(&m, [1.0, 0.0, 0.0]);
         [tip[0] - origin[0], tip[1] - origin[1], tip[2] - origin[2]]
     }
 

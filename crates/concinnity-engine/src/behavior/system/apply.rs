@@ -1,0 +1,477 @@
+// The write phase of a tick: land one body's effects on the world.
+//
+// Nothing here reads the world back, so the runs apply in job order and each
+// sees exactly what the one before it left.
+
+use super::eval::Resume;
+use super::instance::{self, Instance};
+use super::{BehaviorSystem, Deferred};
+use crate::behavior::{Effect, Val, position};
+use crate::components::{
+    DespawnRequest, PlayCue, ReparentRequest, SceneCommand, ScreenCommand, SpawnRequest,
+    StoryCommand, StoryPlayback, VisibilityRequest, WakeRequest,
+};
+use crate::ecs::{Entity, PipelineContext};
+use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use concinnity_core::math::SaturatingFrom;
+
+impl BehaviorSystem {
+    // Land one body's effects. Returns whether a `save` was requested.
+    pub(super) fn apply(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        i: usize,
+        entity: Option<Entity>,
+        effects: impl Iterator<Item = Effect>,
+    ) -> bool {
+        let mut save_requested = false;
+        for effect in effects {
+            match effect {
+                Effect::SetVar { slot, value, add } => {
+                    if let Some(current) = self.vars.get_mut(slot as usize) {
+                        *current = if add {
+                            add_vals(*current, value)
+                        } else {
+                            value
+                        };
+                    }
+                }
+                Effect::SetLocal { slot, value, add } => {
+                    let Some(instance) = self.instance_mut(i, entity) else {
+                        continue;
+                    };
+                    let Some(current) = instance.locals.get_mut(slot as usize) else {
+                        continue;
+                    };
+                    *current = if add {
+                        add_vals(*current, value)
+                    } else {
+                        value
+                    };
+                }
+                Effect::After {
+                    node,
+                    seconds,
+                    bindings,
+                } => {
+                    // A non-positive wait would run the block on the next tick
+                    // rather than this one, which reads as a bug rather than as
+                    // "immediately"; the countdown handles it either way, so it
+                    // is queued like any other.
+                    self.pending.push(Deferred {
+                        program: i,
+                        entity,
+                        resume: Some(Resume { node, bindings }),
+                        seconds,
+                    });
+                }
+                Effect::SetTransform {
+                    entity,
+                    transform,
+                    cut,
+                } => {
+                    let moved = position::write(ctx.components, entity, transform);
+                    if moved == position::Moved::Camera {
+                        self.report_driven_camera(ctx, entity);
+                    }
+                    if moved != position::Moved::Nothing && cut {
+                        PendingHistoryReset::raise(ctx, HistoryResetCauses::CAMERA_CUT);
+                    }
+                }
+                Effect::Spawn(spawn) => {
+                    ctx.events_mut::<SpawnRequest>().send(SpawnRequest {
+                        template: spawn.template,
+                        name: None,
+                        transform: spawn.transform,
+                        lifetime_secs: spawn.lifetime,
+                    });
+                }
+                Effect::Despawn(entity) => {
+                    ctx.events_mut::<DespawnRequest>().send(DespawnRequest {
+                        target: entity.into(),
+                    });
+                }
+                Effect::Reparent { child, parent } => {
+                    ctx.events_mut::<ReparentRequest>().send(ReparentRequest {
+                        child: child.into(),
+                        parent: parent.map(Into::into),
+                    });
+                }
+                Effect::Visible(entity, visible) => {
+                    ctx.events_mut::<VisibilityRequest>()
+                        .send(VisibilityRequest {
+                            target: entity.into(),
+                            visible,
+                        });
+                }
+                Effect::Wake(entity) => {
+                    ctx.events_mut::<WakeRequest>()
+                        .send(WakeRequest { target: entity });
+                }
+                Effect::Sound(cue) => {
+                    ctx.events_mut::<PlayCue>().send(cue);
+                }
+                Effect::Scene { scene, transition } => {
+                    ctx.events_mut::<SceneCommand>()
+                        .send(SceneCommand { scene, transition });
+                }
+                Effect::Screen(screen) => {
+                    ctx.events_mut::<ScreenCommand>()
+                        .send(ScreenCommand::Show(screen));
+                }
+                Effect::Story(playback) => {
+                    let command = match playback {
+                        StoryPlayback::Start => StoryCommand::Start,
+                        StoryPlayback::Continue => StoryCommand::Continue,
+                    };
+                    ctx.events_mut::<StoryCommand>().send(command);
+                }
+                Effect::Save => save_requested = true,
+            }
+        }
+        save_requested
+    }
+
+    // A camera another system rewrites every tick keeps a behavior's write for
+    // one frame only; say so once a world.
+    fn report_driven_camera(&mut self, ctx: &PipelineContext<'_>, camera: Entity) {
+        if self.reported_driven_camera {
+            return;
+        }
+        let Some(driver) = position::camera_driver(ctx, camera) else {
+            return;
+        };
+        self.reported_driven_camera = true;
+        tracing::warn!(
+            "behavior: a set_transform moved the camera, but {driver} rewrites its pose every \
+             tick, so the move lasts one frame"
+        );
+    }
+
+    fn instance_mut(&mut self, i: usize, entity: Option<Entity>) -> Option<&mut Instance> {
+        let at = instance::find(&self.instances[i], entity)?;
+        self.instances[i].get_mut(at)
+    }
+}
+
+// Adding to a local keeps its declared type.
+fn add_vals(current: Val, delta: Val) -> Val {
+    match (current, delta) {
+        (Val::Int(a), b) => {
+            Val::Int(a.saturating_add(i32::saturating_from(b.as_f32().unwrap_or(0.0))))
+        }
+        (Val::Float(a), b) => Val::Float(a + b.as_f32().unwrap_or(0.0)),
+        (Val::Vec3(a), Val::Vec3(b)) => Val::Vec3([a[0] + b[0], a[1] + b[1], a[2] + b[2]]),
+        // Booleans and entities have no addition; assignment wins.
+        (_, b) => b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::behavior::SpawnEffect;
+    use crate::behavior::system::test_world::world_with;
+    use crate::camera::camera3d::Camera3DArgs;
+    use crate::components::{
+        Behavior, BehaviorLiteral, BehaviorLocal, BehaviorSource, Camera3D, CueKind, PropInstance,
+        Transform,
+    };
+    use crate::ecs::{AudioClipHandle, EventCursor, System, World, asset_id::AssetId};
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    // One prop-scoped behavior carrying a single integer local, over a world
+    // holding one prop, ticked once so the system holds its programs and the
+    // instance they run against: instances are created by the tick's resync,
+    // not by init, and only a scoped one carries locals.
+    fn started(local: BehaviorLiteral) -> (BehaviorSystem, World, Entity) {
+        let mut world = world_with(vec![Behavior {
+            on: BehaviorSource::Start,
+            scope: vec![String::from("Prop")],
+            locals: vec![BehaviorLocal {
+                name: String::from("hp"),
+                value: local,
+            }],
+            ..Behavior::default()
+        }]);
+        let prop = world.push(PropInstance);
+        let mut sys = BehaviorSystem::new();
+        sys.init(&mut world.context());
+        sys.tick(&mut world.context(), 0.016, 0.016);
+        (sys, world, prop)
+    }
+
+    fn local(sys: &BehaviorSystem) -> Val {
+        sys.instances[0][0].locals[0]
+    }
+
+    fn apply(
+        sys: &mut BehaviorSystem,
+        world: &mut World,
+        entity: Entity,
+        effects: Vec<Effect>,
+    ) -> bool {
+        sys.apply(&mut world.context(), 0, Some(entity), effects.into_iter())
+    }
+
+    fn sent<E: 'static>(world: &mut World) -> usize {
+        let mut cursor = EventCursor::default();
+        world
+            .context()
+            .events::<E>()
+            .map_or(0, |e| e.read(&mut cursor).count())
+    }
+
+    #[test]
+    fn a_local_is_assigned_or_added_to() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(3));
+        let write = |value, add| Effect::SetLocal {
+            slot: 0,
+            value,
+            add,
+        };
+
+        apply(&mut sys, &mut world, prop, vec![write(Val::Int(4), false)]);
+        assert_eq!(local(&sys), Val::Int(4));
+
+        apply(&mut sys, &mut world, prop, vec![write(Val::Int(2), true)]);
+        assert_eq!(local(&sys), Val::Int(6));
+    }
+
+    // A write addressed to an instance or a slot that does not exist is
+    // dropped rather than landing on a neighbor.
+    #[test]
+    fn a_write_to_an_absent_instance_or_slot_lands_nowhere() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(3));
+
+        // No instance is scoped to the world, so this addresses none of them.
+        sys.apply(
+            &mut world.context(),
+            0,
+            None,
+            [Effect::SetLocal {
+                slot: 0,
+                value: Val::Int(9),
+                add: false,
+            }]
+            .into_iter(),
+        );
+        assert_eq!(local(&sys), Val::Int(3));
+
+        apply(
+            &mut sys,
+            &mut world,
+            prop,
+            vec![Effect::SetLocal {
+                slot: 7,
+                value: Val::Int(9),
+                add: false,
+            }],
+        );
+        assert_eq!(local(&sys), Val::Int(3));
+    }
+
+    #[test]
+    fn a_write_to_an_undeclared_variable_slot_lands_nowhere() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let before = sys.vars.clone();
+        apply(
+            &mut sys,
+            &mut world,
+            prop,
+            vec![Effect::SetVar {
+                slot: 99,
+                value: Val::Int(1),
+                add: false,
+            }],
+        );
+        assert_eq!(sys.vars, before);
+    }
+
+    #[test]
+    fn each_request_effect_sends_its_own_event() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let entity = world.push(PropInstance);
+        let saved = apply(
+            &mut sys,
+            &mut world,
+            prop,
+            vec![
+                Effect::Spawn(SpawnEffect {
+                    template: AssetId(1),
+                    transform: Transform::default(),
+                    lifetime: Some(2.0),
+                }),
+                Effect::Despawn(entity),
+                Effect::Reparent {
+                    child: entity,
+                    parent: Some(entity),
+                },
+                Effect::Reparent {
+                    child: entity,
+                    parent: None,
+                },
+                Effect::Visible(entity, false),
+                Effect::Wake(entity),
+                Effect::Sound(PlayCue {
+                    clip: AudioClipHandle::new(1),
+                    kind: CueKind::Sound,
+                    volume: 1.0,
+                    priority: 0,
+                }),
+                Effect::Scene {
+                    scene: AssetId(2),
+                    transition: crate::components::SceneTransition::Cut,
+                },
+                Effect::Screen(AssetId(3)),
+                Effect::Story(StoryPlayback::Start),
+                Effect::Story(StoryPlayback::Continue),
+                Effect::Save,
+            ],
+        );
+        assert!(saved, "a save effect has to be reported to the caller");
+        assert_eq!(sent::<SpawnRequest>(&mut world), 1);
+        assert_eq!(sent::<DespawnRequest>(&mut world), 1);
+        assert_eq!(sent::<ReparentRequest>(&mut world), 2);
+        assert_eq!(sent::<VisibilityRequest>(&mut world), 1);
+        assert_eq!(sent::<WakeRequest>(&mut world), 1);
+        assert_eq!(sent::<PlayCue>(&mut world), 1);
+        assert_eq!(sent::<SceneCommand>(&mut world), 1);
+        assert_eq!(sent::<ScreenCommand>(&mut world), 1);
+        assert_eq!(sent::<StoryCommand>(&mut world), 2);
+    }
+
+    #[test]
+    fn a_transform_effect_writes_the_entity_that_carries_one() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let entity = world.push(PropInstance);
+        world.insert(entity, Transform::default());
+        let moved = Transform {
+            position: [1.0, 2.0, 3.0],
+            ..Transform::default()
+        };
+        apply(
+            &mut sys,
+            &mut world,
+            prop,
+            vec![Effect::SetTransform {
+                entity,
+                transform: moved,
+                cut: false,
+            }],
+        );
+        assert_eq!(
+            world.get::<Transform>(entity).map(|t| t.position),
+            Some([1.0, 2.0, 3.0])
+        );
+
+        // An entity carrying no transform is left alone rather than gaining one.
+        let bare = world.push(PropInstance);
+        apply(
+            &mut sys,
+            &mut world,
+            prop,
+            vec![Effect::SetTransform {
+                entity: bare,
+                transform: moved,
+                cut: false,
+            }],
+        );
+        assert!(world.get::<Transform>(bare).is_none());
+    }
+
+    // A camera is moved through its pose; only a move marked as a cut asks the
+    // next frame to drop its temporal history.
+    #[test]
+    fn a_transform_write_moves_a_camera_and_a_cut_raises_a_history_reset() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let camera = world.push(Camera3D::bake(Camera3DArgs::default()));
+        let mut write = |world: &mut World, x: f32, cut: bool| {
+            let transform = Transform {
+                position: [x, 0.0, 0.0],
+                ..Transform::default()
+            };
+            apply(
+                &mut sys,
+                world,
+                prop,
+                vec![Effect::SetTransform {
+                    entity: camera,
+                    transform,
+                    cut,
+                }],
+            );
+            PendingHistoryReset::take(&mut world.context())
+        };
+        assert!(!write(&mut world, 1.0, false).any());
+        assert_eq!(
+            world.get::<Camera3D>(camera).map(|c| c.position),
+            Some([1.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            write(&mut world, 500.0, true),
+            HistoryResetCauses::CAMERA_CUT
+        );
+        assert_eq!(
+            world.get::<Camera3D>(camera).map(|c| c.position),
+            Some([500.0, 0.0, 0.0])
+        );
+    }
+
+    // A write to a camera the world's CameraTrack drives is undone the next
+    // tick: reported, once.
+    #[test]
+    fn a_write_to_a_driven_camera_is_reported_once() {
+        let (mut sys, mut world, prop) = started(BehaviorLiteral::Int(0));
+        let camera = world.push(Camera3D::bake(Camera3DArgs::default()));
+        let write = |sys: &mut BehaviorSystem, world: &mut World| {
+            let effect = Effect::SetTransform {
+                entity: camera,
+                transform: Transform::default(),
+                cut: false,
+            };
+            apply(sys, world, prop, vec![effect]);
+        };
+        write(&mut sys, &mut world);
+        assert!(!sys.reported_driven_camera, "a free camera keeps its write");
+        world.push(crate::components::CameraTrack::default());
+        write(&mut sys, &mut world);
+        assert!(sys.reported_driven_camera);
+        write(&mut sys, &mut world);
+        assert!(sys.reported_driven_camera);
+    }
+
+    // Adding keeps the target's declared type: the delta is read through it
+    // rather than widening the slot.
+    #[test]
+    fn addition_keeps_the_declared_type() {
+        assert_eq!(add_vals(Val::Int(1), Val::Float(2.7)), Val::Int(3));
+        assert_eq!(add_vals(Val::Float(1.5), Val::Int(2)), Val::Float(3.5));
+        assert_eq!(
+            add_vals(Val::Vec3([1.0, 2.0, 3.0]), Val::Vec3([1.0; 3])),
+            Val::Vec3([2.0, 3.0, 4.0])
+        );
+    }
+
+    // A delta that has no numeric reading contributes nothing rather than
+    // corrupting the slot.
+    #[test]
+    fn a_non_numeric_delta_adds_nothing() {
+        assert_eq!(add_vals(Val::Int(5), Val::Bool(true)), Val::Int(5));
+        assert_eq!(add_vals(Val::Float(1.5), Val::Bool(true)), Val::Float(1.5));
+    }
+
+    // Booleans and entities have no addition at all, so the delta simply
+    // replaces them.
+    #[test]
+    fn a_type_without_addition_takes_the_delta_whole() {
+        assert_eq!(add_vals(Val::Bool(false), Val::Bool(true)), Val::Bool(true));
+        assert_eq!(
+            add_vals(Val::Vec3([1.0; 3]), Val::Int(2)),
+            Val::Int(2),
+            "a vector with a scalar delta has no component-wise reading"
+        );
+    }
+}

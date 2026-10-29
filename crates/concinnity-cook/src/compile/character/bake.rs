@@ -4,13 +4,13 @@
 // capsule follows, and the shape asset is consumed. The mesh that comes out
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
-use concinnity_core::animation::proportions::ProportionLayer;
-use concinnity_core::components::{
+use concinnity_core::math::vec3;
+use concinnity_engine::animation::proportions::ProportionLayer;
+use concinnity_engine::components::{
     CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
     build_skeleton_from_joint_defs,
 };
-use concinnity_core::math::vec3;
-use concinnity_core::transform::{self, Mat4, mat4_transform_point};
+use concinnity_engine::transform::{self, Mat4, mat4_transform_point};
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
@@ -75,7 +75,7 @@ pub(crate) fn morphed_positions(mesh: &SkinnedMesh, weights: &[f32]) -> Vec<[f32
             break;
         };
         for (p, d) in out.iter_mut().zip(block) {
-            vec3::vec3_add(p, vec3::scale(d.position, *w));
+            vec3::add_assign(p, vec3::scale(d.position, *w));
         }
     }
     out
@@ -151,7 +151,7 @@ pub(crate) fn bake(
                 let Some(m) = bind.skin.get(v.joints[k] as usize) else {
                     continue;
                 };
-                vec3::vec3_add(&mut out, vec3::scale(mat4_transform_point(m, p), w));
+                vec3::add_assign(&mut out, vec3::scale(mat4_transform_point(m, p), w));
             }
             out
         };
@@ -300,7 +300,7 @@ pub(crate) fn bake_shapes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::components::{
+    use concinnity_engine::components::{
         CharacterCapsule, JointProportion, ShapeSlider, SkinnedVertexData,
     };
 

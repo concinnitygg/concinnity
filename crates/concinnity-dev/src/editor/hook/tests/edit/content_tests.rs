@@ -3,8 +3,8 @@
 //! out into the world is `tests/drag/content_tests.rs`.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_core::components::TextInput;
-use concinnity_core::ecs::World;
+use concinnity_engine::components::TextInput;
+use concinnity_engine::ecs::World;
 
 use crate::editor::hook::edit::content::VISUAL_TYPES;
 use crate::editor::hook::tests::fixtures::{active, entry, hook};

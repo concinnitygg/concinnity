@@ -1,0 +1,95 @@
+//! repr(C) uniform / push-constant structs only the Vulkan frame encoders bind
+//! (std140 / std430 / push-constant layouts). Each is mirrored field-for-field
+//! in a `.glsl`/`.vert`/`.frag`/`.comp` shader under `vulkan/shaders/`, or in
+//! the one single-source block Vulkan alone declares.
+//!
+//! Blocks whose shader counterpart is a single-source declaration are
+//! declared once for every backend in the parent module; what is left here is
+//! what only this backend binds. Their layouts are checked by `shader_layout` in
+//! concinnity-device, which reads the expected offsets out of the compiled
+//! module per target. The hand-written asserts below are for the families
+//! whose shaders are still per backend -- the cull kernel, the skinning and
+//! morph kernels, the raymarch SDF templates, the velocity pass, and Metal's
+//! water.
+
+/// Byte size of the auto-exposure push-constant range. Pins the struct size to
+/// what the pipeline layout declares.
+pub const AUTO_EXPOSURE_PUSH_BYTES: u32 = 16;
+
+/// The GPU-cull push constant (cull.hlsl): six already-normalized frustum
+/// planes (xyz = normal, w = d), the camera position sharing its 16-byte slot with
+/// the build-time object count, then the shader-bucket routing and the records
+/// the view leaves out (128 B total, the push-constant floor every device
+/// guarantees).
+#[derive(Copy, Clone, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct CullParams {
+    /// Frustum planes, each `(normal.xyz, d)`.
+    pub planes: [[f32; 4]; 6],
+    /// World-space camera position.
+    pub cam_pos: [f32; 3],
+    /// Draw records the kernel iterates.
+    pub object_count: u32,
+    /// Shader buckets the kernel routes between; 1 sends every record to the
+    /// default's stream.
+    pub bucket_count: u32,
+    /// The first skinned record, whose draws take the skinned tail's stream.
+    pub skinned_base: u32,
+    /// First of the records `[exclude_first, exclude_end)` the view leaves
+    /// out: a prop's own capture leaves out the prop. Empty for every other
+    /// view.
+    pub exclude_first: u32,
+    /// End of the records the view leaves out.
+    pub exclude_end: u32,
+}
+
+/// Cull-side Hi-Z uniforms (cull.hlsl, 80 bytes): the previous frame's
+/// un-jittered view-projection, the Hi-Z mip-0 dimensions, the mip count, and an
+/// enable flag. Mirrors the Metal / DirectX `CullUniforms` tail.
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub struct CullHizParams {
+    /// Previous frame's un-jittered view-projection. Projects each AABB into the
+    /// depth space the Hi-Z pyramid was reduced from (`M * v`).
+    pub prev_view_proj: [[f32; 4]; 4],
+    /// Hi-Z mip-0 dimensions (in texels).
+    pub hiz_size: [f32; 2],
+    /// How many mip levels live in the bound texture.
+    pub hiz_mip_count: u32,
+    /// 0 skips the Hi-Z test entirely (first frame / after a resize, before a
+    /// valid pyramid exists).
+    pub hiz_enabled: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    // CullParams must match the `CullParams` push-constant block in cull.hlsl:
+    // six frustum planes, then cam_pos sharing its 16-byte slot with
+    // object_count. `shader_layout` in concinnity-device reflects the same
+    // source; this is the copy that runs without dxc.
+    #[test]
+    fn cull_params_layout_matches_the_shader() {
+        assert_eq!(size_of::<CullParams>(), 128);
+        assert_eq!(offset_of!(CullParams, planes), 0);
+        assert_eq!(offset_of!(CullParams, cam_pos), 96);
+        assert_eq!(offset_of!(CullParams, object_count), 108);
+        assert_eq!(offset_of!(CullParams, bucket_count), 112);
+        assert_eq!(offset_of!(CullParams, skinned_base), 116);
+        assert_eq!(offset_of!(CullParams, exclude_first), 120);
+        assert_eq!(offset_of!(CullParams, exclude_end), 124);
+    }
+
+    // CullHizParams in cull.hlsl: mat4 (64) + float2 (8) + two uints. Total 80
+    // bytes, tightly packed after the mat4.
+    #[test]
+    fn cull_hiz_params_layout_matches_the_shader() {
+        assert_eq!(size_of::<CullHizParams>(), 80);
+        assert_eq!(offset_of!(CullHizParams, prev_view_proj), 0);
+        assert_eq!(offset_of!(CullHizParams, hiz_size), 64);
+        assert_eq!(offset_of!(CullHizParams, hiz_mip_count), 72);
+        assert_eq!(offset_of!(CullHizParams, hiz_enabled), 76);
+    }
+}

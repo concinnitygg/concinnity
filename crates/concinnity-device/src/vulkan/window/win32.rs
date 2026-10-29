@@ -7,12 +7,12 @@
 //! created directly through `VK_KHR_win32_surface`.
 
 use ash::vk;
-use concinnity_core::components::WindowMode;
-use concinnity_core::input::keymap::KeyMap;
-use concinnity_core::input::snapshot::InputSnapshot;
-use concinnity_core::render::error::{RenderError, RenderResult};
-use concinnity_core::window::clipboard::Clipboard;
-use concinnity_core::window::display_mode::DisplayMode;
+use concinnity_engine::components::WindowMode;
+use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
 use crate::win32::window;
@@ -63,8 +63,8 @@ impl Win32Window {
         take_input_snapshot(&mut self.win_state)
     }
 
-    pub(crate) fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
-        Some(&mut *self.win_state)
+    pub(crate) fn clipboard(&mut self) -> &mut dyn Clipboard {
+        &mut *self.win_state
     }
 
     // Arm click-to-capture rather than grabbing the cursor immediately: a
@@ -145,6 +145,12 @@ impl Win32Window {
         display_mode::current(self.win_state.hwnd)
     }
 
+    // The current mode's rate; the mode list carries no variable-refresh range.
+    pub(crate) fn display_refresh(&self) -> Option<DisplayRefresh> {
+        self.current_display_mode()
+            .and_then(DisplayRefresh::from_mode)
+    }
+
     // Remember the display mode to hold while fullscreen. Applied by the
     // per-frame reconcile in `poll` (which also restores the desktop mode on
     // leaving fullscreen), so a choice made in any window mode takes effect
@@ -169,6 +175,10 @@ impl Win32Window {
 
     // Windows draws its caption above the client area, so nothing overlaps the
     // top of the frame.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn top_content_inset(&self) -> f32 {
         0.0
     }
@@ -199,6 +209,10 @@ impl Win32Window {
     }
 
     // Vulkan instance extensions required for surface creation on Windows.
+    #[expect(
+        clippy::unused_self,
+        reason = "every window backend answers through its window"
+    )]
     pub(crate) fn required_instance_extensions(&self) -> Vec<String> {
         [ash::khr::surface::NAME, ash::khr::win32_surface::NAME]
             .into_iter()

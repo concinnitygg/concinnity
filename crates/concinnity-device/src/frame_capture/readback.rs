@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Condvar, Mutex};
 
-use concinnity_core::render::error::RenderResult;
+use concinnity_engine::render::backend::error::RenderResult;
 
 // Whether a buffer's bytes are lent out, and the signal that they came back.
 #[derive(Default)]

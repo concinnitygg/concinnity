@@ -4,7 +4,7 @@
 
 A self-contained room (floor, ceiling, four walls), with optional texturing.
 
-Prefer `Room` over a [ProceduralMesh](ProceduralMesh.md) (generator `"room"`) +
+Prefer `Room` over a [`ProceduralMesh`](ProceduralMesh.md) (generator `"room"`) +
 [Prop](Prop.md) pair for a shorter declaration. The room is placed at the world
 origin.
 
