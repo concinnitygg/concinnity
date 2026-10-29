@@ -74,8 +74,11 @@ impl MtlContext {
         ssgi_params: &render_types::SsgiParams,
     ) -> RenderResult<u32> {
         // With no G-buffer there is nothing to trace against, so skip the pass.
-        let (Some(pass), Some(normal_depth)) = (&self.ssgi.pass, self.gbuffer_normal_depth())
-        else {
+        let (Some(pass), Some(normal_depth), Some(reflectance)) = (
+            &self.ssgi.pass,
+            self.gbuffer_normal_depth(),
+            self.gbuffer_roughness(),
+        ) else {
             return Ok(0);
         };
         pass.encode(
@@ -85,6 +88,7 @@ impl MtlContext {
                 scene: self.targets.hdr.hdr_resolve.as_ref(),
                 normal_depth,
                 velocity: self.ssgi_velocity()?,
+                reflectance,
             },
             ssgi_params,
         )?;

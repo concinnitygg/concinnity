@@ -145,6 +145,7 @@ impl DxContext {
                 scene: self.targets.hdr.srv_gpu,
                 normal_depth: gbuffer.normal_depth_srv_gpu,
                 velocity: gbuffer.velocity_srv_gpu,
+                reflectance: gbuffer.roughness_srv_gpu,
             },
             params,
         ) {

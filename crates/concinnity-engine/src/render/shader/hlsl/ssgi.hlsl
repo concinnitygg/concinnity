@@ -15,8 +15,9 @@
 //                    cannot, such as where an object meets the ground.
 //   SSGI_TRACE     - per trace pixel, cosine-weighted hemisphere rays traced
 //                    through the depth pyramid, returning the lit scene
-//                    color at each on-screen hit, blended into last frame's
-//                    short (fast) accumulation reprojected the same way. The
+//                    color at each on-screen hit less its mirrored share,
+//                    blended into last frame's short (fast) accumulation
+//                    reprojected the same way. The
 //                    cosine-weighted sampling folds the cos(theta) / pdf factor
 //                    away, so the mean hit radiance (rgb) estimates the
 //                    albedo-free indirect irradiance over pi from what the rays
@@ -199,20 +200,39 @@ static const float SSGI_NORMAL_TOLERANCE = 0.9;
 [[vk::binding(4, 0)]] Texture2D<float4> prev_age : register(t4);
 [[vk::binding(9, 0)]] SamplerState prev_age_samp : register(s4);
 
-#elif defined(SSGI_TRACE) || defined(SSGI_ACCUMULATE)
+#elif defined(SSGI_TRACE)
 
-// binding 0 = the trace's lit scene radiance (the bounce-radiance source), or
-// the accumulation's fast accumulation from this frame's trace; 1 = the
+// binding 0 = the lit scene radiance (the bounce-radiance source); 1 = the
 // G-buffer; 2 = the motion vectors; 3 = this frame's depth pyramid, every
-// level; 4 = last frame's pyramid; 5 = last frame's accumulation of the kind
-// this variant writes; 6 = this frame's age; 7 = last frame's age.
-#if defined(SSGI_TRACE)
+// level; 4 = last frame's pyramid; 5 = last frame's fast accumulation; 6 =
+// this frame's age; 7 = last frame's age; 8 = the G-buffer's roughness and
+// head-on reflectance.
 [[vk::binding(0, 0)]] Texture2D<float4> scene : register(t0);
-[[vk::binding(8, 0)]] SamplerState scene_samp : register(s0);
-#else
+[[vk::binding(9, 0)]] SamplerState scene_samp : register(s0);
+[[vk::binding(1, 0)]] Texture2D<float4> gbuffer : register(t1);
+[[vk::binding(10, 0)]] SamplerState gbuffer_samp : register(s1);
+[[vk::binding(2, 0)]] Texture2D<float4> velocity : register(t2);
+[[vk::binding(11, 0)]] SamplerState velocity_samp : register(s2);
+[[vk::binding(3, 0)]] Texture2D<float4> pyramid : register(t3);
+[[vk::binding(12, 0)]] SamplerState pyramid_samp : register(s3);
+[[vk::binding(4, 0)]] Texture2D<float4> prev_pyramid : register(t4);
+[[vk::binding(13, 0)]] SamplerState prev_pyramid_samp : register(s4);
+[[vk::binding(5, 0)]] Texture2D<float4> history : register(t5);
+[[vk::binding(14, 0)]] SamplerState history_samp : register(s5);
+[[vk::binding(6, 0)]] Texture2D<float4> age : register(t6);
+[[vk::binding(15, 0)]] SamplerState age_samp : register(s6);
+[[vk::binding(7, 0)]] Texture2D<float4> prev_age : register(t7);
+[[vk::binding(16, 0)]] SamplerState prev_age_samp : register(s7);
+[[vk::binding(8, 0)]] Texture2D<float4> reflectance : register(t8);
+[[vk::binding(17, 0)]] SamplerState reflectance_samp : register(s8);
+
+#elif defined(SSGI_ACCUMULATE)
+
+// binding 0 = this frame's fast accumulation; 1 = the G-buffer; 2 = the
+// motion vectors; 3 = this frame's depth pyramid; 4 = last frame's pyramid; 5
+// = last frame's long accumulation; 6 = this frame's age; 7 = last frame's age.
 [[vk::binding(0, 0)]] Texture2D<float4> fast : register(t0);
 [[vk::binding(8, 0)]] SamplerState fast_samp : register(s0);
-#endif
 [[vk::binding(1, 0)]] Texture2D<float4> gbuffer : register(t1);
 [[vk::binding(9, 0)]] SamplerState gbuffer_samp : register(s1);
 [[vk::binding(2, 0)]] Texture2D<float4> velocity : register(t2);
@@ -358,6 +378,22 @@ static const float SSGI_NORMAL_BIAS = 0.25;
 // few pixels can spread over a one-ray-per-pixel estimate: unclamped, the
 // pixels whose rays happen to strike it light up as sparks around it.
 static const float SSGI_HIT_LUMINANCE = 4.0;
+
+// Head-on reflectance of a dielectric, and the least a metal has: the span
+// over which a hit's reflectance reads as its metalness.
+static const float2 SSGI_METAL_F0 = float2(0.04, 0.5);
+
+// The share of the color seen at full-resolution texel `q` that its surface
+// gives off diffusely: none for a metal, whose color is all mirrored. What a
+// mirror shows is whatever faces the camera, not light it sends toward the
+// receiver; a chrome ball would bounce its glint of the sun onto everything
+// around it.
+float ssgi_diffuse_share(int2 q)
+{
+    float3 f0 = reflectance.Load(int3(q, 0)).gba;
+    float reflect = max(f0.r, max(f0.g, f0.b));
+    return 1.0 - saturate((reflect - SSGI_METAL_F0.x) / (SSGI_METAL_F0.y - SSGI_METAL_F0.x));
+}
 
 // `radiance` scaled down, hue kept, to at most `SSGI_HIT_LUMINANCE`.
 float3 ssgi_clamp_hit(float3 radiance)
@@ -554,7 +590,9 @@ float4 ssgi_trace_fragment(
         float2 hit_uv;
         if (ssgi_trace(origin, d, low, full, hit_uv))
         {
-            gathered += float4(ssgi_clamp_hit(scene.SampleLevel(scene_samp, hit_uv, 0.0).rgb), 1.0);
+            float3 radiance = scene.SampleLevel(scene_samp, hit_uv, 0.0).rgb;
+            int2 hit = min(int2(hit_uv * full), int2(full) - 1);
+            gathered += float4(ssgi_clamp_hit(radiance * ssgi_diffuse_share(hit)), 1.0);
         }
     }
     gathered /= float(rays);

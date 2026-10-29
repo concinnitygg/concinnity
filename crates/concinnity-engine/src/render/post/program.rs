@@ -200,9 +200,12 @@ impl PostProgram {
             // G-buffer, velocity, pyramid, previous pyramid, previous age;
             // `SsgiParams`.
             Self::SsgiAge => ssgi(5),
-            // scene (or fast accumulation), G-buffer, velocity, pyramid,
-            // previous pyramid, history, age, previous age; `SsgiParams`.
-            Self::SsgiTrace | Self::SsgiAccumulate => ssgi(8),
+            // scene, G-buffer, velocity, pyramid, previous pyramid, history,
+            // age, previous age, reflectance; `SsgiParams`.
+            Self::SsgiTrace => ssgi(9),
+            // fast accumulation, G-buffer, velocity, pyramid, previous
+            // pyramid, history, age, previous age; `SsgiParams`.
+            Self::SsgiAccumulate => ssgi(8),
             // previous accumulation, previous pyramid, previous age, G-buffer,
             // velocity, occlusion; `SsgiParams`.
             Self::SsgiResolve => ssgi(6),

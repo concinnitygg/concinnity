@@ -1272,7 +1272,7 @@ fn add_decorations(
         depth: mut depth_cur,
     } = head;
     let ssr_gbuffer_v1 = front.prepass.ssr_gbuffer();
-    let velocity_v1 = front.prepass.gbuffer.map(|g| g.velocity);
+    let gbuffer_v1 = front.prepass.gbuffer;
     if inputs.raymarch_enabled {
         let mut rm = b.add_pass(PassId::Raymarch, PassKind::Render);
         rm.read_texture(h);
@@ -1286,14 +1286,16 @@ fn add_decorations(
     if inputs.ssgi_enabled {
         let mut ssgi = b.add_pass(PassId::Ssgi, PassKind::Render);
         ssgi.read_texture(h);
-        // The trace is against the pre-pass view normal + linear depth, and the
-        // accumulation reprojects through its motion vectors; with no G-buffer
-        // there is nothing to trace against and the encoder skips.
+        // The trace is against the pre-pass view normal + linear depth, weighs
+        // each hit by its reflectance, and the accumulation reprojects through
+        // the motion vectors; with no G-buffer there is nothing to trace
+        // against and the encoder skips.
         if let Some(g) = ssr_gbuffer_v1 {
             ssgi.read_texture(g);
         }
-        if let Some(v) = velocity_v1 {
-            ssgi.read_texture(v);
+        if let Some(g) = gbuffer_v1 {
+            ssgi.read_texture(g.roughness);
+            ssgi.read_texture(g.velocity);
         }
     }
     if inputs.decals_enabled {
@@ -3191,10 +3193,10 @@ mod tests {
         let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
         let prepass = &g.passes[pos(PassId::GBufferPrepass)];
         let ssgi = &g.passes[pos(PassId::Ssgi)];
-        let [normal_depth, _roughness, velocity, _depth] = prepass.writes[..] else {
+        let [normal_depth, roughness, velocity, _depth] = prepass.writes[..] else {
             panic!("the pre-pass writes four channels");
         };
-        for channel in [normal_depth, velocity] {
+        for channel in [normal_depth, roughness, velocity] {
             assert!(
                 ssgi.reads
                     .iter()

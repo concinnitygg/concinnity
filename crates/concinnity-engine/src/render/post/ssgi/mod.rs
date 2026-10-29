@@ -63,6 +63,9 @@ pub struct SsgiTraceInputs<'t, D: PostPassDevice + ?Sized + 't> {
     pub normal_depth: D::TextureRef<'t>,
     /// The G-buffer's per-pixel motion vectors.
     pub velocity: D::TextureRef<'t>,
+    /// The G-buffer's roughness (`.r`) and head-on specular reflectance
+    /// (`.gba`), which tell how much of a hit's color is mirrored light.
+    pub reflectance: D::TextureRef<'t>,
 }
 
 /// What the resolve reads beyond the pass's own targets.
@@ -429,6 +432,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
                     screen::<D>(device.target_ref(targets.fast(read)?)),
                     screen::<D>(age),
                     screen::<D>(prev_age),
+                    screen::<D>(inputs.reflectance),
                 ],
                 bytemuck::bytes_of(params),
                 "SSGI trace",
@@ -521,6 +525,7 @@ mod tests {
     const NORMAL_DEPTH: MockTexture = MockTexture::External(2);
     const VELOCITY: MockTexture = MockTexture::External(3);
     const OCCLUSION: MockTexture = MockTexture::External(4);
+    const REFLECTANCE: MockTexture = MockTexture::External(5);
 
     // Draws after the main pass: the pyramid's levels, the age, the trace and
     // the accumulation.
@@ -550,6 +555,7 @@ mod tests {
                 scene: SCENE,
                 normal_depth: NORMAL_DEPTH,
                 velocity: VELOCITY,
+                reflectance: REFLECTANCE,
             },
             &params(pass),
         )
@@ -686,6 +692,7 @@ mod tests {
                 MockTexture::Target(fast(1)),
                 MockTexture::Target(age(0)),
                 MockTexture::Target(age(1)),
+                REFLECTANCE,
             ]
         );
         // The long accumulation reads the fast one this frame's trace wrote.

@@ -158,6 +158,7 @@ impl VkContext {
                 scene: self.hdr_scene_attachment(frame_idx).view,
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
+                reflectance: gbuffer.roughness,
             },
             params,
         ) {

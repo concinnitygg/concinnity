@@ -1808,6 +1808,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
             ("history", "texture(5)"),
             ("age", "texture(6)"),
             ("prev_age", "texture(7)"),
+            ("reflectance", "texture(8)"),
         ]],
         argument_ids: &[],
     },
