@@ -45,15 +45,6 @@ use super::draw::main::{ClusterGrid, FacePass, FaceTargets, GpuFrameBuffers, Mai
 use super::light_cull::build_cluster_light_buffer;
 use super::pass_timing::{PassId, PassTimer};
 
-// The engine capacity ceiling for distinct reflection planes (water + glass): the
-// count the mirror-target set + mirror ICB slots below are sized to. Single-sourced
-// from `gfx::planar_reflection` so the three backends stay in lockstep by
-// construction. The per-frame budget passed to `assign_planar_slots` at init can be
-// lower under a quality preset / GPU tier (fewer full-res mirror passes on weaker
-// hardware), never higher; reflectors past the active budget fall back to the
-// box-projected probe cube.
-pub(in crate::metal) const MAX_PLANAR_PLANES: usize = planar_reflection::MAX_PLANAR_PLANES;
-
 // Planar reflection render targets for one plane, at the mirror resolution.
 // MSAA color + depth (rendered into, then resolved) plus a single-sample resolve
 // the reflective shader samples. The mirror pass reuses the main pipelines, so it

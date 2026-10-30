@@ -8,7 +8,7 @@ use concinnity_engine::components::GlassPanel;
 use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_engine::gfx::render_types::DrawObject;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::init::{PlanarBudget, SdfVolumeSource};
+use concinnity_engine::render::backend::init::SdfVolumeSource;
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
 use concinnity_engine::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};
@@ -22,15 +22,15 @@ use objc2_metal::{
     MTLSamplerDescriptor, MTLSamplerMinMagFilter, MTLSamplerState,
 };
 
-use super::{Features, InitGpu};
 use crate::metal::context::{GlassState, RaymarchState, WaterState};
 use crate::metal::decal::{DecalState, build_decal_pipeline};
 use crate::metal::error::allocation_failed;
 use crate::metal::fog::{
     FogState, build_fog_froxel_pipeline, build_fog_froxel_volume, build_fog_pipeline,
 };
+use crate::metal::init::{Features, InitGpu};
 use crate::metal::particle::{ParticleState, build_emitter_gpu_state, build_particle_pipelines};
-use crate::metal::planar::{MAX_PLANAR_PLANES, PlanarReflectionSet};
+use crate::metal::planar::PlanarReflectionSet;
 use crate::metal::{glass, raymarch, raytrace, water};
 
 // Projected-decal pass. The pipeline and unit cube are built only when the
@@ -41,7 +41,7 @@ use crate::metal::{glass, raymarch, raytrace, water};
 // draws from: authored decals seed it in order, and a runtime add reuses
 // whatever `remove_decal` freed. Metal reserves no per-decal descriptors, so the
 // table is uncapped.
-pub(super) fn build_decals(
+pub(in crate::metal::init) fn build_decals(
     gpu: &InitGpu<'_>,
     decals: Vec<DecalRecord>,
 ) -> RenderResult<DecalState> {
@@ -128,7 +128,7 @@ pub(in crate::metal) fn build_decal_resources_for_runtime(
 // Volumetric-fog pipelines and froxel volume. Built only when the world
 // declares a `VolumetricFog`; with none, the pipeline stays `None` and the fog
 // pass is skipped by `draw_frame`.
-pub(super) fn build_fog(
+pub(in crate::metal::init) fn build_fog(
     gpu: &InitGpu<'_>,
     settings: Option<FogSettings>,
 ) -> RenderResult<FogState> {
@@ -152,7 +152,7 @@ pub(super) fn build_fog(
 // Particle compute + render pipelines, plus one persistent GPU pool per
 // emitter. Pools are zero-initialized so every slot starts dead; the
 // compute kernel spawns into them on its first dispatch.
-pub(super) fn build_particles(
+pub(in crate::metal::init) fn build_particles(
     gpu: &InitGpu<'_>,
     particles: Vec<ParticleEmitterRecord>,
 ) -> RenderResult<ParticleState> {
@@ -186,36 +186,12 @@ pub(super) fn build_particles(
     })
 }
 
-// Planar reflection slots: group every flat reflector (water surfaces + glass
-// panes) into a bounded number of distinct planes, one mirror render each.
-// Water planes are listed first so they take slots before glass when the budget
-// is tight. Each reflector records the slot it samples; planes past the budget
-// get no slot and keep the box-projected probe cube (warned here, not silently
-// dropped).
-pub(super) fn plan_planar(
-    water_surfaces: &[WaterBody],
-    glass_panels: &[GlassPanel],
-    budget: PlanarBudget,
-) -> PlanarReflectors {
-    let planar = PlanarReflectors::plan(water_surfaces, glass_panels, budget);
-    let overflow = planar.overflow();
-    if overflow > 0 {
-        tracing::warn!(
-            "planar reflection: {} reflector plane(s) exceed the budget of {} \
-             and fall back to the box-projected probe cube",
-            overflow,
-            budget.planes.min(MAX_PLANAR_PLANES)
-        );
-    }
-    planar
-}
-
 // Transparent water surfaces. Built only when the world declared
 // ≥1 `WaterSurface`; the transparent-pass executor stays a no-op
 // otherwise. Per-surface tessellated grids upload once at init, each recording
-// the planar slot `plan_planar` gave it, beside the simulated oceans `ocean`
+// the planar slot `PlanarReflectors::plan` gave it, beside the simulated oceans `ocean`
 // plans.
-pub(super) fn build_water(
+pub(in crate::metal::init) fn build_water(
     gpu: &InitGpu<'_>,
     water_surfaces: &[WaterBody],
     planar_slots: &[Option<usize>],
@@ -272,7 +248,7 @@ pub(super) fn build_water(
 }
 
 // Translucent glass: the `GlassPanel` producer and the see-through mesh path.
-pub(super) fn build_glass(
+pub(in crate::metal::init) fn build_glass(
     gpu: &InitGpu<'_>,
     glass_panels: &[GlassPanel],
     planar_slots: &[Option<usize>],
@@ -283,7 +259,7 @@ pub(super) fn build_glass(
 
     // Glass panels. Built only when the world declared ≥1 `GlassPanel`; rides
     // the same transparent pass as water. Per-panel world-space quads upload
-    // once at init, each recording the planar slot `plan_planar` gave it.
+    // once at init, each recording the planar slot `PlanarReflectors::plan` gave it.
     let (pipeline, pipeline_rt, pipeline_rt_textured, panels) = if glass_panels.is_empty() {
         (None, None, None, Vec::new())
     } else {
@@ -355,7 +331,7 @@ pub(super) fn build_glass(
 // The planar mirror targets, one set per assigned plane at the mirror
 // resolution. Built only when the world has >=1 reflector holding a slot; the
 // per-frame pass is additionally gated on what the transparent pass samples.
-pub(super) fn build_planar_reflection(
+pub(in crate::metal::init) fn build_planar_reflection(
     gpu: &InitGpu<'_>,
     planar: PlanarReflectors,
     features: &Features,
@@ -375,7 +351,7 @@ pub(super) fn build_planar_reflection(
 // field the build compiled into its payload; the proxy-cube buffers are
 // allocated once and shared across all volumes. Empty input list means
 // both stay None / empty and the raymarch executor short-circuits.
-pub(super) fn build_raymarch(
+pub(in crate::metal::init) fn build_raymarch(
     gpu: &InitGpu<'_>,
     sdf_volumes: &[SdfVolumeSource],
 ) -> RenderResult<RaymarchState> {

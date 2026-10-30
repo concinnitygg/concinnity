@@ -7,7 +7,7 @@ use concinnity_engine::components::GlassPanel;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types::DrawObject;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::init::{PlanarBudget, SdfVolumeSource, WorldFx};
+use concinnity_engine::render::backend::init::SdfVolumeSource;
 use concinnity_engine::render::decal::{self, DecalRecord};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
 use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleSystem};
@@ -627,27 +627,6 @@ pub(super) fn build_raymarch(
     Ok(raymarch)
 }
 
-// Planar reflections: group each transparent reflector's plane into a
-// bounded set of distinct planes (near-coplanar reflectors share one mirror
-// render; reflectors past the budget fall back to the probe cube). The
-// distinct count sizes the reserved planar-resolve SRV block; `slots[i]` is
-// reflector `i`'s resolve slot (or `None`). Planned before the descriptor
-// heap is created so the block is sized first.
-//
-// Water first, then glass, matching the Metal backend, so the two slot
-// ranges are `[..water_surfaces.len()]` and the rest.
-pub(super) fn plan_planar(fx: &WorldFx, budget: PlanarBudget) -> PlanarReflectors {
-    let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, budget);
-    if planar.overflow() > 0 {
-        tracing::warn!(
-            "planar reflection: {} reflector plane(s) exceed the budget and fall back \
-             to the box-projected probe cube",
-            planar.overflow()
-        );
-    }
-    planar
-}
-
 // One mirror-render resolve per distinct reflector plane (the
 // `assign_planar_slots` representatives), each SRV in a reserved heap slot the
 // transparent pass binds per record. `None` when no reflector was assigned a
@@ -714,7 +693,7 @@ pub(super) struct TransparentInputs<'a> {
 // cannot exist. Shares the main-depth SRV with the decal pass; the scene-copy
 // snapshot uses its own reserved heap slot. `planar_slots` gives each
 // reflector its planar resolve slot (or `None` -> probe-cube fallback),
-// numbered water first to match `plan_planar`.
+// numbered water first to match `PlanarReflectors::plan`.
 pub(super) fn build_transparent(
     gpu: &InitGpu<'_>,
     inputs: TransparentInputs<'_>,

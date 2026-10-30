@@ -82,7 +82,8 @@ pub struct PlanarReflectors {
 impl PlanarReflectors {
     /// Group every reflector's plane into at most `budget.planes` mirror slots
     /// (capped at [`MAX_PLANAR_PLANES`]). Water is listed first so it keeps a
-    /// slot when the budget is tight.
+    /// slot when the budget is tight. Planes past the budget keep the probe
+    /// cube, and are warned about.
     pub fn plan(water: &[WaterBody], glass: &[GlassPanel], budget: PlanarBudget) -> Self {
         // A planet sea is no plane: its degenerate plane takes no slot.
         let planes: Vec<[f32; 4]> = water
@@ -93,7 +94,16 @@ impl PlanarReflectors {
             })
             .chain(glass.iter().map(|g| pane_plane(g.normal, g.center)))
             .collect();
-        let assignment = assign_planar_slots(&planes, budget.planes.min(MAX_PLANAR_PLANES));
+        let max_slots = budget.planes.min(MAX_PLANAR_PLANES);
+        let assignment = assign_planar_slots(&planes, max_slots);
+        if assignment.overflow > 0 {
+            tracing::warn!(
+                "planar reflection: {} reflector plane(s) exceed the budget of {} \
+                 and fall back to the box-projected probe cube",
+                assignment.overflow,
+                max_slots
+            );
+        }
         let hulls = water
             .iter()
             .map(|w| (w.surface.visible, water_hull(w)))
@@ -121,11 +131,6 @@ impl PlanarReflectors {
     pub fn target_size(&self, width: u32, height: u32) -> (u32, u32) {
         let d = self.resolution.scale_divisor();
         ((width / d).max(1), (height / d).max(1))
-    }
-
-    /// Reflectors whose plane found no slot and keep the probe cube.
-    pub fn overflow(&self) -> usize {
-        self.assignment.slots.iter().filter(|s| s.is_none()).count()
     }
 
     /// This frame's mirror work under the (jittered) `view_proj` the
@@ -200,6 +205,7 @@ mod tests {
         water.push(pool([0.0, 2.0, 0.0]));
         let r = PlanarReflectors::plan(&water, &[], budget(2));
         assert_eq!(r.assignment.slots, vec![None, Some(0)]);
+        assert_eq!(r.assignment.overflow, 0, "the sea is not over budget");
         assert_eq!(r.reflectors.len(), 1);
     }
 
@@ -236,7 +242,7 @@ mod tests {
         assert_eq!(r.assignment.slots, vec![Some(0), Some(1), Some(2)]);
         let drawn: Vec<usize> = r.reflectors.iter().map(|p| p.slot).collect();
         assert_eq!(drawn, vec![0, 1], "the hidden pane renders no mirror");
-        assert_eq!(r.overflow(), 0);
+        assert_eq!(r.assignment.overflow, 0);
     }
 
     #[test]
@@ -260,7 +266,7 @@ mod tests {
             .collect();
         let r = PlanarReflectors::plan(&[], &glass, budget(99));
         assert_eq!(r.assignment.representatives.len(), MAX_PLANAR_PLANES);
-        assert_eq!(r.overflow(), 6 - MAX_PLANAR_PLANES);
+        assert_eq!(r.assignment.overflow, 6 - MAX_PLANAR_PLANES);
         assert_eq!(r.reflectors.len(), MAX_PLANAR_PLANES);
     }
 

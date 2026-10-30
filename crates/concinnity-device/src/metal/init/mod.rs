@@ -3,7 +3,8 @@
 //! whole and returns it, borrowing the finished states it depends on:
 //!
 //!   bootstrap.rs     window, `MTKView`, device, command queues, EDR negotiation.
-//!   effects.rs       upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure.
+//!   effects/         upscaler, TAA, SSAO, SSR, G-buffer pre-pass, SSGI, auto-exposure;
+//!                    `world.rs` decals, fog, particles, water, glass, planar reflections, raymarch.
 //!   `scene_assets.rs`  geometry, light tables, LTC, textures, samplers, IBL, color LUT.
 //!   targets.rs       depth states, HDR scene target, transient pool.
 //!   `scene_data.rs`    clustered light binning.
@@ -14,7 +15,6 @@
 //!   text.rs          text atlases and pipeline.
 //!   composite.rs     composite pipeline and sampler.
 //!   bloom.rs         the bloom chain.
-//!   `world_fx.rs`      decals, fog, particles, water, glass, planar reflections, raymarch.
 //!   `ray_tracing.rs`   RT reflection pipelines, acceleration structure.
 //!   commands.rs      frame rings, pass timing diagnostics.
 //!
@@ -27,6 +27,7 @@ use concinnity_engine::gfx::render_types::{ClusterParams, PostProcessParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::settings::ResolvedGraphics;
@@ -52,7 +53,6 @@ mod scene_data;
 mod shadow;
 pub(super) mod targets;
 mod text;
-pub(super) mod world_fx;
 
 pub(crate) use bootstrap::set_display_sync;
 
@@ -289,21 +289,22 @@ impl MtlContext {
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
-        let decal = world_fx::build_decals(&gpu, fx.decals)?;
-        let fog = world_fx::build_fog(&gpu, fx.fog)?;
-        let particle = world_fx::build_particles(&gpu, fx.particles)?;
-        let planar = world_fx::plan_planar(&fx.water_surfaces, &fx.glass_panels, planar);
+        let decal = effects::world::build_decals(&gpu, fx.decals)?;
+        let fog = effects::world::build_fog(&gpu, fx.fog)?;
+        let particle = effects::world::build_particles(&gpu, fx.particles)?;
+        let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
         let n_water = fx.water_surfaces.len();
         let slots = &planar.assignment.slots;
-        let water = world_fx::build_water(&gpu, &fx.water_surfaces, &slots[..n_water], &fx.ocean)?;
-        let glass = world_fx::build_glass(
+        let water =
+            effects::world::build_water(&gpu, &fx.water_surfaces, &slots[..n_water], &fx.ocean)?;
+        let glass = effects::world::build_glass(
             &gpu,
             &fx.glass_panels,
             &slots[n_water..],
             &world.draw_objects,
         )?;
-        let planar_reflection = world_fx::build_planar_reflection(&gpu, planar, &features)?;
-        let raymarch = world_fx::build_raymarch(&gpu, &fx.sdf_volumes)?;
+        let planar_reflection = effects::world::build_planar_reflection(&gpu, planar, &features)?;
+        let raymarch = effects::world::build_raymarch(&gpu, &fx.sdf_volumes)?;
         let grass = fx
             .grass
             .map(|field| {

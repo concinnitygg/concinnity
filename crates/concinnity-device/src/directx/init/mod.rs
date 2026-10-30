@@ -25,6 +25,7 @@ use concinnity_engine::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessPa
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_engine::render::backend::init::{self, BackendInit, PlanarBudget, WorldShader};
+use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::settings::ResolvedGraphics;
@@ -200,7 +201,11 @@ impl DxContext {
         };
 
         let plan = cull::plan_cull(&world);
-        let planar = effects::plan_planar(&fx, mirror_budget(planar, plan.n_cull));
+        let planar = PlanarReflectors::plan(
+            &fx.water_surfaces,
+            &fx.glass_panels,
+            mirror_budget(planar, plan.n_cull),
+        );
         let planar_slots = planar.assignment.slots.clone();
         let rtv = RtvHeapLayout::compute(Features::msaa_samples(&hw, hdr_samples));
         let swapchain = heaps::build_swapchain(&gpu, swapchain, &rtv, vsync)?;

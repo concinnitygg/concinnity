@@ -497,13 +497,6 @@ pub(super) fn build_world_effects(
     };
     let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
     let planar_slots = planar.assignment.slots.clone();
-    if planar.overflow() > 0 {
-        tracing::warn!(
-            "planar reflection: {} reflector plane(s) exceed the budget and fall back \
-             to the box-projected probe cube",
-            planar.overflow()
-        );
-    }
     // The reflected-frustum mirror cull is bindless-only (it needs the GPU cull
     // set layout + the per-frame object/draw-args SSBOs); a non-bindless world
     // has no `cull_kernels`, so planar is skipped and its panes keep the

@@ -1,8 +1,11 @@
 //! Screen-space effect construction: the `MetalFX` upscaler, TAA, SSAO, SSR, the
 //! unified G-buffer pre-pass, SSGI, and auto-exposure. Each is gated on its
 //! world setting so a world that disables an effect pays zero construction cost,
-//! and the runtime quality rebuild calls the same builders.
+//! and the runtime quality rebuild calls the same builders. [`world`] builds the
+//! world-content effects.
 #![deny(unsafe_op_in_unsafe_fn)]
+
+pub(in crate::metal) mod world;
 
 use crate::metal::post::upscale::UpscaleJitter;
 use concinnity_engine::gfx::auto_exposure;

@@ -17,6 +17,9 @@ pub struct PlanarAssignment {
     pub slots: Vec<Option<usize>>,
     /// One representative plane per assigned slot.
     pub representatives: Vec<Vec4>,
+    /// Reflectors the budget left without a slot. Degenerate planes are not
+    /// counted: they never wanted one.
+    pub overflow: usize,
 }
 
 /// Group near-coplanar reflection planes so each distinct plane renders one mirror
@@ -35,6 +38,7 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
 
     let mut representatives: Vec<Vec4> = Vec::new();
     let mut slots: Vec<Option<usize>> = Vec::with_capacity(planes.len());
+    let mut overflow = 0;
     for &raw in planes {
         let p = normalize_plane(raw);
         let nlen = length([p[0], p[1], p[2]]);
@@ -63,6 +67,7 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
                     representatives.push(p);
                     slots.push(Some(representatives.len() - 1));
                 } else {
+                    overflow += 1;
                     slots.push(None);
                 }
             }
@@ -71,6 +76,7 @@ pub fn assign_planar_slots(planes: &[Vec4], max_slots: usize) -> PlanarAssignmen
     PlanarAssignment {
         slots,
         representatives,
+        overflow,
     }
 }
 
@@ -118,6 +124,14 @@ mod tests {
             a.slots[3], None,
             "third distinct plane overflows the budget"
         );
+        assert_eq!(a.overflow, 1);
+    }
+
+    #[test]
+    fn a_degenerate_plane_takes_no_slot_and_is_no_overflow() {
+        let a = assign_planar_slots(&[[0.0; 4], [0.0, 1.0, 0.0, 0.0]], 4);
+        assert_eq!(a.slots, [None, Some(0)]);
+        assert_eq!(a.overflow, 0);
     }
 
     #[test]
@@ -130,6 +144,20 @@ mod tests {
         assert_eq!(a.representatives.len(), 1, "flip is the same surface");
         assert_eq!(a.slots[0], Some(0));
         assert_eq!(a.slots[1], Some(0));
+    }
+
+    #[test]
+    fn coplanar_reflectors_past_the_budget_each_overflow() {
+        let a = assign_planar_slots(
+            &[
+                [0.0, 1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ],
+            1,
+        );
+        assert_eq!(a.slots, [Some(0), None, None]);
+        assert_eq!(a.overflow, 2);
     }
 
     #[test]
@@ -148,6 +176,7 @@ mod tests {
         assert_eq!(a.slots[0], Some(0));
         assert_eq!(a.slots[1], None);
         assert_eq!(a.slots[2], Some(0));
+        assert_eq!(a.overflow, 1);
     }
 
     #[test]

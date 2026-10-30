@@ -1240,10 +1240,11 @@ impl MtlContext {
     // footprints) stays bounded.
     pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize> {
         if self.decal.pipeline.is_none() {
-            let (ps, vbuf, ibuf, samp) = super::init::world_fx::build_decal_resources_for_runtime(
-                &self.hw.device,
-                self.hot_reload.enabled,
-            )?;
+            let (ps, vbuf, ibuf, samp) =
+                super::init::effects::world::build_decal_resources_for_runtime(
+                    &self.hw.device,
+                    self.hot_reload.enabled,
+                )?;
             self.decal.pipeline = Some(ps);
             self.decal.cube_vertex_buffer = Some(vbuf);
             self.decal.cube_index_buffer = Some(ibuf);
