@@ -5,13 +5,14 @@
 // the daylight curves.
 
 use crate::components::{DirectionalLight, SkyRotation};
-use crate::ecs::PipelineContext;
+use crate::ecs::{PipelineContext, SimTiming};
 use crate::gfx::render_types::LightUniforms;
 use crate::planet::PlanetFrame;
 use crate::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, SeaLook, SurfaceBelow,
     SurfaceView, sun_light,
 };
+use crate::render::environment::clouds::{CloudFrame, CloudView};
 use crate::render::environment::night_sky::{NightFrame, shadowed_first, shadowed_pair};
 use crate::render::light::lights::DirectionalLightSet;
 use crate::render::uniforms::{DaylightBlock, DaylightBody, DaylightView};
@@ -48,8 +49,11 @@ const GROUND_HEIGHT_M: f32 = 5_000.0;
 pub(super) struct AtmosphereDrive {
     settings: AtmosphereSettings,
     pushed: Option<PushedLights>,
-    // The packed daylight curves, around a planet.
-    daylight: Option<[[f32; 4]; DAYLIGHT_KNOTS * 3]>,
+    // The packed daylight curves, around a planet or under clouds.
+    knots: Option<[[f32; 4]; DAYLIGHT_KNOTS * 3]>,
+    // Whether the air wraps the world's planet, whose ground and sea are lit
+    // by the curves.
+    planet: bool,
     // The ground around the camera last sampled, around a planet with a
     // surface palette.
     surface: Option<SurfaceBelow>,
@@ -61,13 +65,14 @@ impl AtmosphereDrive {
         reason = "stored, so a borrow would only add a copy"
     )]
     pub(super) fn new<S: FanOut>(settings: AtmosphereSettings, rows: &S) -> Self {
-        let daylight = settings
-            .planet_center
-            .map(|_| DaylightCurves::bake(&settings, rows).packed());
+        let planet = settings.planet_center.is_some();
+        let knots = (planet || settings.clouds.is_some())
+            .then(|| DaylightCurves::bake(&settings, rows).packed());
         Self {
             settings,
             pushed: None,
-            daylight,
+            knots,
+            planet,
             surface: None,
         }
     }
@@ -132,7 +137,7 @@ impl AtmosphereDrive {
             self.pushed = Some(key);
             let under_sky = super::lights::lights_under_sky(lights.iter(), &sky);
             let turned = under_sky.as_slice();
-            let place = if self.daylight.is_some() {
+            let place = if self.planet {
                 shadowed_pair
             } else {
                 shadowed_first
@@ -143,30 +148,48 @@ impl AtmosphereDrive {
             };
             place(sun, moon.map(|m| m.0), share, &turned[1..])
         });
-        let daylight = self.daylight.map_or(DaylightBlock::OFF, |knots| {
-            let sun_body = DaylightBody {
-                direction: sun.direction,
-                light: sun.color.map(|c| c * sun.intensity),
-            };
-            let moon_body = moon.map(|(m, _)| DaylightBody {
-                direction: m.direction,
-                light: moon_above_air(&self.settings, &frame, &lights[0]),
-            });
-            let bodies = if moon_first {
-                [moon_body, Some(sun_body)]
-            } else {
-                [Some(sun_body), moon_body]
-            };
-            let block = DaylightBlock::new(
+        let sun_body = DaylightBody {
+            direction: sun.direction,
+            light: sun.color.map(|c| c * sun.intensity),
+        };
+        let moon_body = moon.map(|(m, _)| DaylightBody {
+            direction: m.direction,
+            light: moon_above_air(&self.settings, &frame, &lights[0]),
+        });
+        let bodies = if moon_first {
+            [moon_body, Some(sun_body)]
+        } else {
+            [Some(sun_body), moon_body]
+        };
+        let lit = self.knots.map(|knots| {
+            DaylightBlock::new(
                 knots,
                 &daylight_view(&self.settings, &frame, center, bodies),
-            );
-            match self.sea() {
+            )
+        });
+        let daylight = match lit.filter(|_| self.planet) {
+            Some(block) => match self.sea() {
                 Some(sea) => block.with_sea(sea.deep_color, sea.level),
                 None => block,
-            }
-        });
-        (frame, set, daylight)
+            },
+            None => DaylightBlock::OFF,
+        };
+        let clouds = self
+            .settings
+            .clouds
+            .as_ref()
+            .zip(lit)
+            .map(|(clouds, light)| {
+                let view = cloud_view(ctx, camera, center, &self.settings);
+                CloudFrame::new(
+                    clouds,
+                    self.settings.bottom_radius,
+                    &view,
+                    &light,
+                    frame.sky_ground_radius,
+                )
+            });
+        (frame.with_clouds(clouds), set, daylight)
     }
 }
 
@@ -253,6 +276,33 @@ fn daylight_view(
     }
 }
 
+// Where a camera at `camera` in the simulated frame stands toward the clouds
+// of the planet centered at `center` (or, on a flat world, of the air's own
+// ground below the origin), and the clouds' clock.
+fn cloud_view(
+    ctx: &PipelineContext<'_>,
+    camera: [f64; 3],
+    center: Option<[f64; 3]>,
+    settings: &AtmosphereSettings,
+) -> CloudView {
+    let center = center.unwrap_or_else(|| [0.0, -f64::from(settings.bottom_radius) * 1000.0, 0.0]);
+    let to_fixed = match ctx.resource::<PlanetFrame>() {
+        Some(f) => {
+            let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+                .map(|a| f.frame.dir_to_world(a));
+            core::array::from_fn(|row| core::array::from_fn(|col| axes[col][row]))
+        }
+        None => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    };
+    let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+    CloudView {
+        to_fixed,
+        camera_m: core::array::from_fn(|i| camera[i] - center[i]),
+        camera_pos: camera.map(concinnity_core::math::narrow_f32),
+        time: timing.drawn_time(),
+    }
+}
+
 // The world's directional lights as authored, or the neutral sun a world with
 // none is lit by. Inline, so the per-frame drive allocates nothing.
 fn authored_lights(ctx: &PipelineContext<'_>) -> DirectionalLightSet {
@@ -302,7 +352,8 @@ mod tests {
         AtmosphereDrive {
             settings,
             pushed: None,
-            daylight: Some(*knots),
+            knots: Some(*knots),
+            planet: true,
             surface: None,
         }
     }

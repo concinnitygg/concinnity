@@ -401,6 +401,12 @@ fn atmosphere_layouts_match_the_shader() {
 }
 
 #[test]
+fn cloud_layouts_match_the_shader() {
+    check(&programs::CLOUD_MARCH, &mirrors::post::clouds());
+    check(&programs::CLOUD_COMPOSITE_FRAG, &mirrors::post::clouds());
+}
+
+#[test]
 fn raymarch_layouts_match_the_shader() {
     check(&programs::RAYMARCH_FRAG, &mirrors::raymarch::surface());
 }

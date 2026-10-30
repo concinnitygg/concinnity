@@ -135,6 +135,10 @@ impl VkContext {
             }
         }
 
+        if let Some(clouds) = self.atmosphere.as_mut().and_then(|a| a.clouds.as_mut()) {
+            clouds.rescene(&self.hw.device, frame, scene.0, extent)?;
+        }
+
         if let (Some(t), Some(depth)) = (
             self.transparent.as_mut(),
             self.targets.depth_images.get(frame),

@@ -18,11 +18,12 @@ use crate::directx::graph_exec::{FrameGpuBuffers, MainPassExtent};
 use crate::directx::texture::{HDR_FORMAT, transition_barrier};
 
 impl DxContext {
-    // Bind the per-scene local-light side tables on whichever root signature is
-    // current: the spot shadow projections + depth array, and the area-light
-    // table + its two LTC lookups. All are static for the world's lifetime, so
-    // every main-pass site binds the same four and only the parameter indices
-    // differ. Kept as one call so a new side table reaches every site at once.
+    // Bind the per-scene side tables on whichever root signature is current:
+    // the spot shadow projections + depth array, the area-light table + its two
+    // LTC lookups, and the clouds' shadow map. All are static slots for the
+    // world's lifetime, so every main-pass site binds the same five and only
+    // the parameter indices differ. Kept as one call so a new side table
+    // reaches every site at once.
     pub(in crate::directx) fn bind_local_light_tables(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -40,6 +41,8 @@ impl DxContext {
         let ltc = self.scene.area_light.ltc_table_gpu;
         // SAFETY: the LTC lookups' SRVs are static slots in the bound CBV/SRV/UAV heap.
         unsafe { cmd.set_graphics_srv_table(params.ltc_table, ltc) };
+        // SAFETY: the clouds' shadow map SRV (or its stand-in) is a static slot in the bound heap.
+        unsafe { cmd.set_graphics_srv_table(params.cloud_shadow_table, self.cloud_shadow_srv()) };
     }
 
     // Size the viewport and scissor to the full `width` x `height` target.

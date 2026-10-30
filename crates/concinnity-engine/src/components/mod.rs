@@ -92,6 +92,7 @@ pub use crate::physics::wake_request::WakeRequest;
 pub use crate::planet::{GroundCover, Planet, PlanetGround, PlanetSea};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
+pub use crate::render::environment::clouds::Cloud;
 pub use crate::render::environment::grass::Grass;
 pub use crate::render::environment::night_sky::NightSky;
 pub use crate::render::environment::volumetric_fog::VolumetricFog;

@@ -251,7 +251,7 @@ impl FrameDevice for MtlContext {
             scene_color,
         } = self.scene_textures()?;
 
-        self.prepare_atmosphere(frame_params.atmosphere.as_ref(), plan.atmosphere);
+        self.prepare_atmosphere(frame_params.atmosphere.as_ref(), plan.atmosphere)?;
         self.prepare_water_wake(cam_pos, water_time, water_stirs);
 
         // This frame's ribbon geometry, written into this slot's persistent
@@ -342,6 +342,7 @@ impl FrameDevice for MtlContext {
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
                 || plan.inputs.transparent_enabled
+                || plan.inputs.clouds_enabled
             {
                 Some(&scene_input)
             } else {

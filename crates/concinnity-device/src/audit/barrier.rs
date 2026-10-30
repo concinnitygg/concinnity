@@ -255,6 +255,12 @@ const AUDITS: &[BackendAudit] = &[
                 3,
                 Reason::IntraPass,
             ),
+            // The clouds: the noise volume's first build before its readers,
+            // the shadow map opened for its kernel and closed for the shaded
+            // passes inside the atmosphere's node, and around the march, last
+            // frame's composite before the target is rewritten and this
+            // frame's after. The shadow map rests sampled, the rest GENERAL.
+            ("clouds.rs", "rec.pipeline_barrier(", 5, Reason::IntraPass),
             // The haze pass's scene attachment, like the fog pass's.
             (
                 "atmosphere.rs",
@@ -320,6 +326,11 @@ const AUDITS: &[BackendAudit] = &[
             // the simulation node, each mip handed back to the resting state
             // once written so the next reduction reads it.
             ("water_sim.rs", ".ResourceBarrier(", 3, Reason::IntraPass),
+            // The clouds' noise volume, maps and target rest readable by every
+            // shader stage; each kernel opens its output for unordered access
+            // and closes it again inside its node (the atmosphere's for the
+            // volume and the maps, the march's for the target).
+            ("clouds.rs", ".ResourceBarrier(", 6, Reason::IntraPass),
             // The wake's field, opened for unordered access after the ocean's
             // arrays in the same node, each mip handed back the same way.
             ("water_wake.rs", ".ResourceBarrier(", 2, Reason::IntraPass),

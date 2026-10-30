@@ -44,6 +44,8 @@ pub struct ResidentFeatures {
     pub lines: bool,
     /// The atmosphere's tables and passes.
     pub atmosphere: bool,
+    /// The clouds' noise volume, target and passes.
+    pub clouds: bool,
     /// Every transparent producer's ray-traced pipeline.
     pub rt_transparent: bool,
     /// The TAA resolve.
@@ -105,6 +107,8 @@ pub struct FrameContent {
     pub visible_volumes: bool,
     /// The atmosphere has this frame's inputs.
     pub atmosphere: bool,
+    /// The atmosphere's clouds have this frame's inputs.
+    pub clouds: bool,
     /// A visible surface samples a simulated ocean.
     pub water_sim: bool,
     /// Grass is planted.
@@ -167,6 +171,7 @@ impl FrameFacts {
             lines: r.lines && c.lines,
             visible_volumes: c.visible_volumes,
             atmosphere: r.atmosphere && c.atmosphere,
+            clouds: r.clouds && c.clouds,
             water_sim: c.water_sim,
             grass: c.grass,
             grass_casts: c.grass && r.shadow && planned.cascade_mask & 1 != 0,
@@ -205,6 +210,7 @@ mod tests {
             decals: true,
             lines: true,
             atmosphere: true,
+            clouds: true,
             rt_transparent: true,
             taa: true,
             model_history: true,
@@ -227,6 +233,7 @@ mod tests {
             lines: true,
             visible_volumes: true,
             atmosphere: true,
+            clouds: true,
             water_sim: true,
             grass: true,
             ssgi_motion: true,

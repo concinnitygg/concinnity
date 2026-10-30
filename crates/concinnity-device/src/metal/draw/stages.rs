@@ -273,6 +273,7 @@ impl MtlContext {
             decals: self.decal.pipeline.is_some(),
             lines: self.lines.pipeline.is_some(),
             atmosphere: self.atmosphere.is_some(),
+            clouds: self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()),
             rt_transparent: self.transparent_rt_pipelines_ready(),
             taa: self.taa.enabled,
             model_history: self.gbuffer.targets.is_some() && self.cull.main_pipeline.is_some(),
@@ -309,6 +310,11 @@ impl MtlContext {
             lines: !lines.is_empty(),
             visible_volumes: self.raymarch.volumes.iter().any(|v| v.visible),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
+            clouds: self
+                .atmosphere
+                .as_ref()
+                .and_then(|a| a.clouds.as_ref())
+                .is_some_and(super::super::clouds::CloudState::live),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.pass.is_some()

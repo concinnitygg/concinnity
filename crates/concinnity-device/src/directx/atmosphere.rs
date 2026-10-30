@@ -35,6 +35,7 @@ use super::builtin_shaders::{
     ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram,
     FULLSCREEN_VERT, SKY_ATMOSPHERE_FRAG,
 };
+use super::clouds::{DxClouds, MarchInputs};
 use super::com;
 use super::context::{DxContext, align256};
 use super::descriptor_slot::{DescriptorTables, SrvSlot};
@@ -103,6 +104,8 @@ pub(in crate::directx) struct DxAtmosphere {
     // `None` on a device that cannot load the capture's format through a
     // UAV, which the prefilter needs; the surfaces then reflect no sky.
     sky_cube: Option<DxSkyCube>,
+    // The clouds, when the air has cloud layers.
+    pub(in crate::directx) clouds: Option<DxClouds>,
     // The ground the tables that depend on the air alone were built over.
     air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
@@ -339,12 +342,14 @@ fn write_cube_views(
 //   [0] root CBV b0   AtmosphereParams
 //   [1] table  t0..t2 transmittance, multiple scattering, sky view
 //   [2] table  u0     the table the kernel writes
+//   [3] table  t4     the clouds' panorama the cubes are drawn behind
 // Static linear-clamp sampler s0.
 fn kernel_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
         .cbv(0, Visibility::All)
         .srv_table(0, 3, Visibility::All)
         .uav_table(0, 1, Visibility::All)
+        .srv_table(4, 1, Visibility::All)
         .static_sampler(SamplerState::LinearClamp, 0, Visibility::All)
         .build(device, "atmosphere kernel root sig")
 }
@@ -438,6 +443,7 @@ impl DxAtmosphere {
         settings: AtmosphereSettings,
         slots: AtmosphereSlots,
         sky_cube: Option<DxSkyCube>,
+        clouds: Option<DxClouds>,
         msaa_samples: u32,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -543,6 +549,7 @@ impl DxAtmosphere {
             aerial_root_sig,
             aerial_pso,
             sky_cube,
+            clouds,
             air_tables: AirTables::default(),
             readiness: TableReadiness::default(),
         })
@@ -589,6 +596,9 @@ impl DxAtmosphere {
             true,
         )?;
         let aerial_pso = aerial_pso(device, &self.aerial_root_sig, msaa_samples, true)?;
+        if let Some(clouds) = self.clouds.as_mut() {
+            clouds.rebuild_pipelines(device, msaa_samples)?;
+        }
         self.kernels = kernels;
         self.sky_pso = sky_pso;
         self.aerial_pso = aerial_pso;
@@ -598,6 +608,17 @@ impl DxAtmosphere {
 
     fn params_gva(&self, frame_idx: usize) -> Option<u64> {
         self.params_buffers.get(frame_idx).map(|b| com::gpu_va(b))
+    }
+
+    // What the clouds' march reads of the atmosphere in frame slot
+    // `frame_idx`.
+    fn cloud_inputs(&self, frame_idx: usize) -> Option<MarchInputs> {
+        Some(MarchInputs {
+            atmo_params_gva: self.params_gva(frame_idx)?,
+            depth_srv: self.depth_srv_gpu,
+            aerial_srv: self.srv_gpu[3],
+            tables_srv: self.srv_gpu[0],
+        })
     }
 }
 
@@ -630,6 +651,43 @@ impl DxContext {
                     size_of::<AtmosphereParams>(),
                 );
             }
+        }
+        if let Some(clouds) = &atmo.clouds {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a pixel count"
+            )]
+            let scene = view.viewport.map(|v| v.max(1.0) as u32);
+            clouds.prepare(&atmo.settings, atmo.frame.as_ref(), scene, frame_idx);
+        }
+    }
+
+    // March the clouds into their target.
+    pub(in crate::directx) fn encode_atmosphere_clouds(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+    ) {
+        let Some(atmo) = self.atmosphere.as_ref() else {
+            return;
+        };
+        if let (Some(clouds), Some(inputs)) = (&atmo.clouds, atmo.cloud_inputs(frame_idx)) {
+            self.encode_clouds(cmd, clouds, inputs, frame_idx);
+        }
+    }
+
+    // Blend the clouds over the hazed scene.
+    pub(in crate::directx) fn encode_atmosphere_cloud_composite(
+        &self,
+        cmd: &ID3D12GraphicsCommandList,
+        frame_idx: usize,
+    ) {
+        let Some(atmo) = self.atmosphere.as_ref() else {
+            return;
+        };
+        if let Some(clouds) = &atmo.clouds {
+            self.encode_cloud_composite(cmd, clouds, atmo.depth_srv_gpu, frame_idx);
         }
     }
 
@@ -712,6 +770,25 @@ impl DxContext {
         );
         // SAFETY: sky view and aerial were opened above; the irradiance cube rests in `RESTING`.
         unsafe { cmd.ResourceBarrier(&[close(sky_view), close(aerial), open(&atmo.irradiance)]) };
+        // The clouds' maps, behind the aerial volume they read, under their own
+        // root signature; the kernels' is bound again after them. Without
+        // clouds the panorama is never read, and the sky view holds its table.
+        let panorama = match (&atmo.clouds, atmo.cloud_inputs(frame_idx)) {
+            (Some(clouds), Some(inputs)) => {
+                let capture = atmo.sky_cube.as_ref().is_some_and(|c| c.work.get().capture);
+                clouds.encode_maps(cmd, inputs, frame_idx, capture);
+                // SAFETY: the kernel root signature is owned by `atmo`.
+                unsafe { cmd.SetComputeRootSignature(&atmo.kernel_root_sig) };
+                // SAFETY: `params_gva` addresses this frame's live constant buffer at parameter 0.
+                unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
+                // SAFETY: table 1 takes the table inputs, which live in the bound heap.
+                unsafe { cmd.set_compute_srv_table(1, atmo.srv_gpu[0]) };
+                clouds.panorama_srv()
+            }
+            _ => atmo.srv_gpu[2],
+        };
+        // SAFETY: table 3 of the kernel root signature takes the panorama's slot in the bound heap.
+        unsafe { cmd.set_compute_srv_table(3, panorama) };
         dispatch(4, [1, 1, 1]);
         // SAFETY: the irradiance cube was opened for unordered access by the barrier above.
         unsafe { cmd.ResourceBarrier(&[close(&atmo.irradiance)]) };

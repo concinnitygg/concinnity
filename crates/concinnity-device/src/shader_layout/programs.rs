@@ -294,6 +294,16 @@ pub(super) static ATMOSPHERE_AERIAL: Program = Program {
     splices: &[],
 };
 
+pub(super) static CLOUD_MARCH: Program = Program {
+    row: &shared::CLOUD_MARCH,
+    splices: &[],
+};
+
+pub(super) static CLOUD_COMPOSITE_FRAG: Program = Program {
+    row: &shared::CLOUD_COMPOSITE_FRAG,
+    splices: &[],
+};
+
 pub(super) static AUTO_EXPOSURE_BUILD: Program = Program {
     row: &shared::AUTO_EXPOSURE_BUILD,
     splices: &[],

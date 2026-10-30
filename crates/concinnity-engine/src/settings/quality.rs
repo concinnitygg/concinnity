@@ -9,6 +9,7 @@
 //! top-tier look, so under `Auto` the ceiling is what picks a world's quality:
 //! every tier below Ultra is reached by clamping, not by opting in.
 
+use crate::render::environment::clouds::CloudMarch;
 use alloc::format;
 use alloc::string::{String, ToString};
 
@@ -125,6 +126,9 @@ pub struct QualityCeiling {
     /// The smallest a planet's finest terrain cells may be, in meters: the
     /// effective size is the coarser of the world's and this.
     pub min_planet_cell_size: u32,
+    /// How finely clouds are marched. No world authors this: a lower tier
+    /// takes fewer, longer steps and leaves the clouds' edges smoother.
+    pub clouds: CloudMarch,
 }
 
 // The engine maxima each cap takes where a tier imposes none.
@@ -166,6 +170,7 @@ impl QualityCeiling {
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 0,
+        clouds: CloudMarch::FULL,
     };
 
     /// The integrated / weakest tier.
@@ -196,6 +201,12 @@ impl QualityCeiling {
             wake: false,
         },
         min_planet_cell_size: 4,
+        clouds: CloudMarch {
+            steps: 48,
+            light_steps: 3,
+            max_distance_km: 60,
+            detail: false,
+        },
     };
 
     /// The entry discrete tier.
@@ -225,6 +236,12 @@ impl QualityCeiling {
             ..OceanQuality::FULL
         },
         min_planet_cell_size: 2,
+        clouds: CloudMarch {
+            steps: 64,
+            light_steps: 4,
+            max_distance_km: 80,
+            detail: true,
+        },
     };
 
     /// The mainstream discrete tier.
@@ -250,6 +267,11 @@ impl QualityCeiling {
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 1,
+        clouds: CloudMarch {
+            steps: 80,
+            light_steps: 5,
+            ..CloudMarch::FULL
+        },
     };
 
     /// The enthusiast tier: everything but a second SSGI ray past two.
@@ -275,6 +297,7 @@ impl QualityCeiling {
         planar_reflection_resolution: PassResolution::Full,
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 1,
+        clouds: CloudMarch::FULL,
     };
 
     /// Whether water traces its own per-pixel reflection in the transparent

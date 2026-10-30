@@ -68,9 +68,11 @@ Texture2DArray<float> shadow_map : register(t0, space1);
 // The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
 [[vk::binding(6, 1)]] Texture2D<float4> ltc_matrix : register(t6, space1);
 [[vk::binding(7, 1)]] Texture2D<float4> ltc_magnitude : register(t7, space1);
+// The clouds' shadow map (see `cloud_shadow_at`).
+[[vk::binding(8, 1)]] Texture2D<float4> cloud_shadow : register(t8, space1);
 // Bindless texture pool: [albedo textures..] ++ [normal maps..]. The object
 // record's albedo_index / normal_index address it directly.
-[[vk::binding(8, 1)]] Texture2D<float4> tex_pool[] : register(t8, space1);
+[[vk::binding(9, 1)]] Texture2D<float4> tex_pool[] : register(t9, space1);
 
 // The engine's static samplers at buffer(10), mirrored from the host
 // MTLSamplerDescriptors. Apart from the textures because indirect-command-buffer
@@ -146,6 +148,8 @@ StructuredBuffer<AreaLightData> area_lights_sb : register(t17);
 // The two LTC lookup tables, sampled at (roughness, sqrt(1 - NdV)).
 Texture2D<float4> ltc_matrix : register(t18);
 Texture2D<float4> ltc_magnitude : register(t19);
+// The clouds' shadow map (see `cloud_shadow_at`).
+Texture2D<float4> cloud_shadow : register(t25);
 // The material parameter table, indexed by GpuObjectData.params_index.
 StructuredBuffer<GpuMaterialParams> material_params_sb : register(t20);
 // The far field's canopy block, and its layers' view tables.
@@ -212,6 +216,8 @@ float mesh_float(uint i) { return mesh_vertices[i]; }
 // The far field's canopy block, and its layers' view tables.
 [[vk::binding(21, 0)]] ConstantBuffer<CanopyParams> canopy_cb : register(b21);
 [[vk::binding(22, 0)]] StructuredBuffer<float4> canopy_tables_sb : register(t22);
+// The clouds' shadow map (see `cloud_shadow_at`).
+[[vk::binding(23, 0)]] Texture2D<float4> cloud_shadow : register(t23);
 
 
 #endif // binding model
@@ -386,5 +392,8 @@ bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float ro
     radiance = (float3)(0.0);
     return false;
 }
+
+// The clouds' shadow map, read by the cascades' shadow.
+#define CLOUD_SHADOW_TAP(uv) cloud_shadow.SampleLevel(linear_sampler, (uv), 0.0).r
 
 {MAIN_SHADING}

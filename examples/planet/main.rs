@@ -1,12 +1,13 @@
 //! A planet to walk on: a 50 km sphere of continents and oceans, its rolling
 //! ground grown over with a windblown meadow that runs down gentle shores to
-//! the sea, under an atmosphere whose sky turns through a four-minute day.
-//! The morning climbs to noon and an afternoon, gives way to a sunset, then to
-//! a moonlit night of stars, the Milky Way and distant galaxies, and the sun
-//! comes back up in the east. You roll a chrome marble over it, watched from
-//! behind: WASD rolls it the way the camera looks, Shift sprints, Space jumps
-//! and the mouse turns the camera. It parts the grass as it goes, runs down
-//! the beach into the surf, and floats and paddles out at sea.
+//! the sea, under an atmosphere whose sky turns through a four-minute day,
+//! with fair-weather clouds drifting on the wind. The morning climbs to noon
+//! and an afternoon, gives way to a sunset, then to a moonlit night of stars,
+//! the Milky Way and distant galaxies, and the sun comes back up in the east.
+//! You roll a chrome marble over it, watched from behind: WASD rolls it the
+//! way the camera looks, Shift sprints, Space jumps and the mouse turns the
+//! camera. It parts the grass as it goes, runs down the beach into the surf,
+//! and floats and paddles out at sea.
 //!
 //! The whole world is `planet.jsonl`, beside this file. This program only
 //! compiles it into a blob next to the executable and plays that blob; its

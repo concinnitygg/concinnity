@@ -6,7 +6,7 @@
 //! world -- a baked record is already validated.
 
 use crate::components::{
-    Atmosphere, CameraTrackArgs, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
+    Atmosphere, CameraTrackArgs, Cloud, Decal, DirectionalLight, GlassPanel, Grass, InstancedProp,
     MAX_WATER_WAVES, Material, NightSky, ParticleEmitter, Planet, PlanetSea, PointLight, Prop,
     PropReflectionProbe, RectAreaLight, ReflectionProbe, RigidBody, SPOT_MAX_ANGLE_DEG, SdfVolume,
     SkyRotation, SpotLight, Terrain, VolumetricFog, VoxelChunk, WaterSurface, WaterWave, Wind,
@@ -322,6 +322,26 @@ pub fn atmosphere(mut args: Atmosphere) -> Atmosphere {
     let start = finite_at_least(start, 0.0, defaults.apparent_radius_fade_km[0]);
     let end = finite_at_least(end, start + 0.01, start + 0.01);
     args.apparent_radius_fade_km = [start, end];
+    args
+}
+
+/// Clamp a `Cloud`'s authored values into their valid ranges: a layer above
+/// the ground and some meters deep, shares in `[0, 1]`, a density that dims,
+/// weather cells wider than the wisps, and a drift and an evolution that run
+/// forward.
+pub fn cloud(mut args: Cloud) -> Cloud {
+    let defaults = Cloud::default();
+    args.base = finite_at_least(args.base, 0.0, defaults.base);
+    args.thickness = finite_at_least(args.thickness, 10.0, defaults.thickness);
+    args.coverage = finite_or(args.coverage, defaults.coverage).clamp(0.0, 1.0);
+    args.towering = finite_or(args.towering, defaults.towering).clamp(0.0, 1.0);
+    args.density = finite_at_least(args.density, 1e-5, defaults.density);
+    args.feature_size = finite_at_least(args.feature_size, 100.0, defaults.feature_size);
+    args.detail_size =
+        finite_at_least(args.detail_size, 1.0, defaults.detail_size).min(args.feature_size * 0.1);
+    args.wind_drift = finite_at_least(args.wind_drift, 0.0, defaults.wind_drift);
+    args.evolve_seconds = finite_at_least(args.evolve_seconds, 0.0, defaults.evolve_seconds);
+    args.stretch = finite_at_least(args.stretch, 1.0, defaults.stretch);
     args
 }
 
@@ -715,6 +735,33 @@ mod tests {
             (t.extent, t.resolution, t.amplitude, t.elevation_max),
             (d.extent, d.resolution, d.amplitude, d.elevation_max)
         );
+    }
+
+    #[test]
+    fn a_cloud_is_clamped_into_range() {
+        let c = cloud(Cloud {
+            base: -5.0,
+            thickness: 0.0,
+            coverage: 1.5,
+            towering: f32::NAN,
+            density: 0.0,
+            feature_size: 1000.0,
+            detail_size: 400.0,
+            wind_drift: -1.0,
+            evolve_seconds: -3.0,
+            seed: 4,
+            stretch: 0.5,
+        });
+        assert_eq!(c.base, 0.0);
+        assert_eq!(c.thickness, 10.0);
+        assert_eq!(c.coverage, 1.0);
+        assert_eq!(c.towering, Cloud::default().towering);
+        assert!(c.density > 0.0);
+        assert_eq!(c.detail_size, 100.0);
+        assert_eq!(c.wind_drift, 0.0);
+        assert_eq!(c.evolve_seconds, 0.0);
+        assert_eq!(c.stretch, 1.0);
+        assert_eq!(cloud(Cloud::default()), Cloud::default());
     }
 
     #[test]

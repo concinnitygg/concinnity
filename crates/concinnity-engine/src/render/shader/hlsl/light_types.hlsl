@@ -31,6 +31,20 @@ struct LightUniforms
     int num_local_lights;
 };
 
+// The clouds' shadow map over the ground around the camera, in the frame's
+// axes and meters (`CloudShadowLanes` in gfx::render_types).
+struct CloudShadowLanes
+{
+    // xyz: the square's center; w: the radius of the sphere it lies on.
+    float4 center;
+    // xyz: the square's east; w: one over its width.
+    float4 east;
+    // xyz: the square's north; w: 1 when the clouds cast shadows.
+    float4 north;
+    // xyz: toward the shadowed light.
+    float4 light;
+};
+
 struct ShadowUniforms
 {
     float4x4 light_vps[NUM_SHADOW_CASCADES];
@@ -40,6 +54,7 @@ struct ShadowUniforms
     uint _pad0;
     uint _pad1;
     uint _pad2;
+    CloudShadowLanes clouds;
 };
 
 // Each (vec3, scalar) pair is spelled as one float4: MSL sizes a float3 at 16

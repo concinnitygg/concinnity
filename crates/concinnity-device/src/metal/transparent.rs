@@ -116,6 +116,8 @@ const WATER_SHADOW_UNIFORMS_BUFFER_INDEX: usize = 14;
 const WATER_SHADOW_MAP_TEXTURE_INDEX: usize = 7;
 const WATER_IRRADIANCE_TEXTURE_INDEX: usize = 8;
 const WATER_SHADOW_SAMPLER_INDEX: usize = 5;
+// The clouds' shadow map, pinned by `register(t12)` in water.hlsl.
+const WATER_CLOUD_SHADOW_TEXTURE_INDEX: usize = 12;
 
 // What the transparent pass takes for the frame: the view and RT inputs its
 // encoders bind, and how it treats the reactive mask.
@@ -254,6 +256,10 @@ impl MtlContext {
             WATER_IRRADIANCE_TEXTURE_INDEX,
         );
         enc.set_fragment_sampler(self.shadow.sampler.as_ref(), WATER_SHADOW_SAMPLER_INDEX);
+        enc.set_fragment_texture(
+            self.cloud_shadow_texture(),
+            WATER_CLOUD_SHADOW_TEXTURE_INDEX,
+        );
         // The simulated oceans' cascades, which the water's vertex stage
         // displaces by and its fragment stage shades from; frame-constant too.
         if let Some(ocean) = &self.water.ocean {

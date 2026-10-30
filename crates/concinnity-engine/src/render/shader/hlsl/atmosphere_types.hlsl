@@ -4,7 +4,7 @@
 // kilometers. `render::atmosphere` mirrors the sizes, and its tests lock the
 // constants below to the Rust ones.
 //
-// AtmosphereParams (1168 B) mirrors `render::atmosphere::AtmosphereParams`;
+// AtmosphereParams (1184 B) mirrors `render::atmosphere::AtmosphereParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 {HDR_STORE}
@@ -72,6 +72,8 @@ struct AtmosphereParams
     // The share of water, band by band from the steepest, each band
     // SURFACE_AZIMUTHS directions from east toward north; four to a lane.
     float4 surface_share[8];
+    // x = 1 when the cloud panorama holds this frame's clouds.
+    float4 clouds;
 };
 
 static const uint NIGHT_MAX_GALAXIES = 16u;

@@ -1139,6 +1139,8 @@ impl VkContext {
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
             PassId::WaterSim => self.encode_water_sim(rec, params.frame_idx, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
+            PassId::Clouds => self.encode_clouds(rec, params.frame_idx),
+            PassId::CloudComposite => self.encode_cloud_composite(rec, params.frame_idx),
             PassId::AutoExposure => {
                 self.encode_auto_exposure(rec, params.frame_idx);
             }

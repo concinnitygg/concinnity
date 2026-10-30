@@ -477,6 +477,49 @@ pub static AERIAL_PERSPECTIVE_FRAG: ShaderProgram = ShaderProgram {
     gates: &["AERIAL_PERSPECTIVE"],
     msaa: true,
 };
+// The clouds: the noise volume built at load, the march (which shares the haze
+// pass's bindings) and the composite. The composite's vertex half is
+// `FULLSCREEN_VERT`.
+/// `cloud_noise_kernel` from `clouds.hlsl`.
+pub static CLOUD_NOISE: ShaderProgram = ShaderProgram {
+    file: "clouds.hlsl",
+    entry: "cloud_noise_kernel",
+    label: "cloud_noise.hlsl",
+    gates: &["CLOUD_NOISE"],
+    msaa: false,
+};
+/// `cloud_march_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_MARCH: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_march_kernel",
+    label: "cloud_march.hlsl",
+    gates: &["CLOUD_MARCH"],
+    msaa: true,
+};
+/// `cloud_panorama_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_PANORAMA: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_panorama_kernel",
+    label: "cloud_panorama.hlsl",
+    gates: &["CLOUD_PANORAMA"],
+    msaa: false,
+};
+/// `cloud_shadow_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_SHADOW: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_shadow_kernel",
+    label: "cloud_shadow.hlsl",
+    gates: &["CLOUD_SHADOW"],
+    msaa: false,
+};
+/// `cloud_composite_fragment` from `clouds.hlsl`.
+pub static CLOUD_COMPOSITE_FRAG: ShaderProgram = ShaderProgram {
+    file: "clouds.hlsl",
+    entry: "cloud_composite_fragment",
+    label: "cloud_composite_frag.hlsl",
+    gates: &["CLOUD_COMPOSITE"],
+    msaa: true,
+};
 /// `histogram_build` from `auto_exposure.hlsl`.
 pub static AUTO_EXPOSURE_BUILD: ShaderProgram = ShaderProgram {
     file: "auto_exposure.hlsl",
@@ -1018,6 +1061,11 @@ pub static ALL: &[&ShaderProgram] = &[
     &ATMOSPHERE_IRRADIANCE,
     &ATMOSPHERE_SKY_CUBE,
     &AERIAL_PERSPECTIVE_FRAG,
+    &CLOUD_NOISE,
+    &CLOUD_MARCH,
+    &CLOUD_PANORAMA,
+    &CLOUD_SHADOW,
+    &CLOUD_COMPOSITE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
     &PARTICLE_SIMULATE,
@@ -1101,6 +1149,8 @@ mod tests {
             sampled,
             [
                 "aerial_perspective_frag.hlsl",
+                "cloud_composite_frag.hlsl",
+                "cloud_march.hlsl",
                 "decal_frag.hlsl",
                 "fog_frag.hlsl",
                 "glass_frag.hlsl",

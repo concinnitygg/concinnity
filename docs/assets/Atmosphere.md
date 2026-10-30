@@ -42,6 +42,9 @@ lights the scene in place of an [`EnvironmentMap`](EnvironmentMap.md): its
 light fills the shadows, and shiny surfaces reflect it, following the sun
 through the day.
 
+Its `clouds` are drawn in the air: lit by the sun through it, hazed by
+it with distance, and over the sky and the scene behind them.
+
 One per world. The defaults are Earth's.
 
 ## Parameters
@@ -62,3 +65,4 @@ One per world. The defaults are Earth's.
 - `sun_disc_intensity`: A float. Brightness of the sun's disc, as a multiple of the sunlight it casts. 0 hides the disc. Defaults to `1000.0`.
 - `apparent_radius_km`: A float. Radius, in kilometers, of the planet the sky is drawn over while the camera is near the ground, in place of the true one. A small planet's own sky is a flat deep blue with a pale sun at sunset, since a ray along its horizon crosses little air; drawn over an Earth-sized radius it gets a pale horizon and red sunsets. The haze over the ground keeps its true distances, and the horizon still meets the ground where it really is. At least 1. `null` (the default) draws the sky over the true radius.
 - `apparent_radius_fade_km`: An array of 2 floats. Heights above the ground, in kilometers, between which the sky fades from `apparent_radius_km` to the true radius as the camera climbs, so the planet's limb seen from high up is its own. The air's heights describe it over the apparent ground and shrink in proportion with the radius, its coefficients growing to keep its optical depth. Defaults to `[1.0, 20.0]`.
+- `clouds`: An array of strings. The [`Cloud`](Cloud.md) layers in the air, at most two, no two sharing heights. Each is drawn at its own heights, whatever their order here. Defaults to `[]`.

@@ -9,6 +9,7 @@ mod backend;
 mod barrier_translate;
 pub(crate) mod builtin_shaders;
 mod canopy;
+mod clouds;
 mod com;
 mod compact;
 mod context;

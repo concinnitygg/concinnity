@@ -526,11 +526,12 @@ pub(super) fn build_atmosphere(
     descriptors: &DxDescriptors,
     scene: &DxSceneAssets,
     settings: Option<concinnity_engine::render::environment::atmosphere::AtmosphereSettings>,
-    msaa_samples: u32,
+    targets: &DxTargets,
 ) -> RenderResult<Option<crate::directx::atmosphere::DxAtmosphere>> {
     use crate::directx::atmosphere::{
         ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere, DxSkyCube,
     };
+    use crate::directx::clouds::{CLOUD_SLOTS, CloudSlots, DxClouds};
     use crate::directx::probe_prefilter::PrefilterSlots;
     use concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN;
     let Some(settings) = settings else {
@@ -558,11 +559,32 @@ pub(super) fn build_atmosphere(
         scene.env_map.prefilter.srv_cpu,
         gpu.hot_reload,
     )?;
+    let msaa_samples = targets.hdr.msaa_samples;
+    let cloud_slot = |i| layout.cloud_base_slot + i;
+    let clouds = settings
+        .clouds
+        .is_some()
+        .then(|| {
+            DxClouds::new(
+                &gpu.hw.alloc,
+                CloudSlots {
+                    cpu: core::array::from_fn::<_, CLOUD_SLOTS, _>(|i| {
+                        descriptors.slot_cpu(cloud_slot(i))
+                    }),
+                    gpu: core::array::from_fn(|i| descriptors.slot_gpu(cloud_slot(i))),
+                },
+                [targets.extent.render_width, targets.extent.render_height],
+                msaa_samples,
+                gpu.hot_reload,
+            )
+        })
+        .transpose()?;
     DxAtmosphere::new(
         &gpu.hw.alloc,
         settings,
         slots,
         sky_cube,
+        clouds,
         msaa_samples,
         gpu.hot_reload,
     )

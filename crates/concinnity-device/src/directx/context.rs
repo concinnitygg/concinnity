@@ -1506,6 +1506,16 @@ impl FrameDevice for DxContext {
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = params.atmosphere;
         }
+        self.state.planner.shadow.set_clouds(
+            params
+                .atmosphere
+                .as_ref()
+                .and_then(|f| f.clouds.as_ref())
+                .map_or(
+                    concinnity_engine::gfx::render_types::CloudShadowLanes::OFF,
+                    |c| c.shadow_lanes,
+                ),
+        );
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.

@@ -37,15 +37,20 @@ pub const SKY_CUBE_HEIGHT_KM: f32 = 0.02;
 /// See [`SKY_CUBE_HEIGHT_KM`].
 pub const SKY_CUBE_HEIGHT_FRACTION: f32 = 0.05;
 
+// How long the clouds may drift and change, in seconds, before the cube is
+// redrawn.
+const SKY_CUBE_CLOUD_SECONDS: f32 = 4.0;
+
 /// What the sky in the cube depends on: the sun and the ground's up, both in
-/// the cube's own frame (the sky rotation's), the camera's height, and the
-/// ground around the camera below the horizon.
+/// the cube's own frame (the sky rotation's), the camera's height, the
+/// ground around the camera below the horizon, and the clouds' clock.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkyCubeKey {
     sun: [f32; 3],
     up: [f32; 3],
     height: f32,
     surface: Option<SurfaceBelow>,
+    clouds: Option<f32>,
 }
 
 impl SkyCubeKey {
@@ -65,6 +70,7 @@ impl SkyCubeKey {
             up: into_cube(up),
             height: frame.camera_height(settings),
             surface: frame.surface,
+            clouds: frame.clouds.map(|c| c.time),
         }
     }
 
@@ -76,10 +82,15 @@ impl SkyCubeKey {
             (Some(s), Some(l)) => s.moved_from(l),
             (s, l) => s.is_some() != l.is_some(),
         };
+        let clouds = match (self.clouds, last.clouds) {
+            (Some(t), Some(l)) => (t - l).abs() > SKY_CUBE_CLOUD_SECONDS,
+            (c, l) => c.is_some() != l.is_some(),
+        };
         dot(self.sun, last.sun) < turn
             || dot(self.up, last.up) < turn
             || (self.height - last.height).abs() > tolerance
             || surface
+            || clouds
     }
 }
 
@@ -296,6 +307,20 @@ mod tests {
         assert!(land.moved_from(&base));
         assert!(flooded.moved_from(&land));
         assert!(!land.moved_from(&land));
+    }
+
+    // Clouds coming or going redraw the cube, and so does their drifting once
+    // a few seconds have passed.
+    #[test]
+    fn drifting_clouds_redraw_the_cube() {
+        let base = key(sun_at(30.0), GROUND, SkyOrientation::IDENTITY_ROWS);
+        let at = |t: f32| SkyCubeKey {
+            clouds: Some(t),
+            ..base
+        };
+        assert!(at(0.0).moved_from(&base));
+        assert!(!at(1.0).moved_from(&at(0.0)));
+        assert!(at(5.0).moved_from(&at(0.0)));
     }
 
     // A reset fills the cube whole again.

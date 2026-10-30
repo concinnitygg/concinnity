@@ -1276,6 +1276,10 @@ impl DxContext {
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
             PassId::WaterSim => self.encode_water_sim(cmd, params.frame_idx, params.water_time),
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
+            PassId::Clouds => self.encode_atmosphere_clouds(cmd, params.frame_idx),
+            PassId::CloudComposite => {
+                self.encode_atmosphere_cloud_composite(cmd, params.frame_idx);
+            }
             PassId::ParticlesSim => {
                 // Integrates each live emitter's persistent pool. The graph's only
                 // edge out of it is the draw's vertex-stage read of those pools, so

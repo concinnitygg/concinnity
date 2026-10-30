@@ -8,7 +8,7 @@ use super::context::{
     VkAreaLight, VkContext, VkSceneAssets, VkShadow, VkSpotShadow, VkTargets, VkUniforms,
 };
 use super::descriptor_layout::{
-    AREA_LIGHT_SSBO_BINDING, CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING,
+    AREA_LIGHT_SSBO_BINDING, CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING, CLOUD_SHADOW_BINDING,
     CLUSTER_LIST_SSBO_BINDING, CLUSTER_PARAMS_UBO_BINDING, CUBE_SAMPLER_BINDING,
     IRRADIANCE_CUBE_BINDING, LIGHT_UBO_BINDING, LINEAR_SAMPLER_BINDING, LOCAL_LIGHT_SSBO_BINDING,
     LTC_MAGNITUDE_BINDING, LTC_MATRIX_BINDING, PREFILTER_CUBE_BINDING, PROBE_CUBES_BINDING,
@@ -71,6 +71,8 @@ pub(in crate::vulkan) struct GlobalBindings<'a> {
     // Whether SSAO is built. The pool places `ao_output` whatever the
     // settings, so its presence there says nothing about whether SSAO wrote it.
     pub(in crate::vulkan) ssao_built: bool,
+    // The clouds' shadow map, once the atmosphere's clouds are built.
+    pub(in crate::vulkan) cloud_shadow: Option<vk::ImageView>,
 }
 
 impl GlobalBindings<'_> {
@@ -155,6 +157,9 @@ impl GlobalBindings<'_> {
             probe_records: self.probes.stand_in_records.buffer(),
             samplers: GlobalSamplers::of(self.shadow, self.scene),
             canopy: CanopyBuffers::NULL,
+            // Without clouds the shadow lanes are off and the binding is never
+            // read; any sampled 2D image holds it.
+            cloud_shadow: self.cloud_shadow.unwrap_or(self.area_light.ltc_matrix.view),
         }
     }
 }
@@ -196,6 +201,11 @@ impl VkContext {
                 .as_ref()
                 .map(super::post::ssgi::SsgiResources::indirect_view),
             ssao_built: self.ssao.is_some(),
+            cloud_shadow: self
+                .atmosphere
+                .as_ref()
+                .and_then(|a| a.clouds.as_ref())
+                .map(super::clouds::VkClouds::shadow_view),
         }
     }
 }
@@ -224,6 +234,7 @@ pub(in crate::vulkan) struct GlobalSetContents {
     probe_records: vk::Buffer,
     samplers: GlobalSamplers,
     canopy: CanopyBuffers,
+    cloud_shadow: vk::ImageView,
 }
 
 impl GlobalSetContents {
@@ -308,7 +319,7 @@ impl GlobalDescriptor {
 }
 
 impl GlobalSetContents {
-    fn descriptors(&self) -> [GlobalDescriptor; 23] {
+    fn descriptors(&self) -> [GlobalDescriptor; 24] {
         let ubo = |binding, buffer| {
             GlobalDescriptor::buffer(binding, vk::DescriptorType::UNIFORM_BUFFER, buffer)
         };
@@ -343,6 +354,7 @@ impl GlobalSetContents {
             sampler(LINEAR_SAMPLER_BINDING, self.samplers.linear),
             ubo(CANOPY_UBO_BINDING, self.canopy.block),
             ssbo(CANOPY_TABLES_SSBO_BINDING, self.canopy.tables),
+            image(CLOUD_SHADOW_BINDING, self.cloud_shadow),
         ]
     }
 
@@ -401,6 +413,7 @@ mod tests {
             area_lights: vk::Buffer::null(),
             ltc_matrix: vk::ImageView::null(),
             ltc_magnitude: vk::ImageView::null(),
+            cloud_shadow: vk::ImageView::null(),
             probe_records: vk::Buffer::null(),
             samplers: GlobalSamplers {
                 shadow: vk::Sampler::null(),
@@ -459,6 +472,7 @@ mod tests {
                 block: buffer(121),
                 tables: buffer(122),
             },
+            cloud_shadow: view(123),
         }
     }
 

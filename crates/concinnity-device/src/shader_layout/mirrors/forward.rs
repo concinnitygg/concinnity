@@ -3,8 +3,9 @@
 //! can drift apart, so each is checked against the same Rust mirror.
 
 use concinnity_engine::gfx::render_types::{
-    AreaLightData, ClusterParams, DirectionalLightData, GpuLight, GpuMaterialParams, GpuObjectData,
-    LightUniforms, PointLightData, ShadowUniforms, SpotShadowData, TileMorphView,
+    AreaLightData, CloudShadowLanes, ClusterParams, DirectionalLightData, GpuLight,
+    GpuMaterialParams, GpuObjectData, LightUniforms, PointLightData, ShadowUniforms,
+    SpotShadowData, TileMorphView,
 };
 use concinnity_engine::render::uniforms::canopy::{CanopyLayerGpu, CanopyParams, ShoreSwashGpu};
 use concinnity_engine::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
@@ -63,13 +64,19 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [position, range] => ["pos_r"],
             [color, intensity] => ["col_i"],
         })),
-        // The forward pass reads the cascade matrices and splits plus the live
-        // count; the trailing pad the CPU uploads is not declared here.
+        // The forward pass reads the cascades and the clouds' shadow map.
         everywhere(mirror!(ShadowUniforms => "ShadowUniforms" {
             light_vps,
             cascade_splits,
             active_cascades,
             [_pad] => ["_pad0", "_pad1", "_pad2"],
+            clouds,
+        })),
+        everywhere(mirror!(CloudShadowLanes => "CloudShadowLanes" {
+            center,
+            east,
+            north,
+            light,
         })),
         everywhere(mirror!(SpotShadowData => "SpotShadowData" {
             light_vp,

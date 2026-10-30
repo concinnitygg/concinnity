@@ -460,7 +460,18 @@ impl VkContext {
                 .iter()
                 .map(|img| img.view)
                 .collect();
-            atmosphere.rebuild(&self.hw.device, &hdr_views, &depth_views, render_ext)?;
+            atmosphere.rebuild(
+                &GpuUploadContext {
+                    alloc: &self.hw.alloc,
+                    device: &self.hw.device,
+                    command_pool: self.commands.command_pool,
+                    queue: self.hw.graphics_queue,
+                },
+                &hdr_views,
+                &depth_views,
+                render_ext,
+                self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1,
+            )?;
             self.atmosphere = Some(atmosphere);
         }
 

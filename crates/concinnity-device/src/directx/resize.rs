@@ -405,6 +405,12 @@ impl DxContext {
         if let Some(hiz) = self.cull.hiz.as_mut() {
             hiz.resize_to(&self.hw.device, render_w, render_h)?;
         }
+
+        // 7b') The clouds' target follows the render size; its SRV and UAV are
+        //      rewritten in place, so their slots stay valid.
+        if let Some(clouds) = self.atmosphere.as_mut().and_then(|a| a.clouds.as_mut()) {
+            clouds.resize_to(&self.hw.device, [render_w, render_h])?;
+        }
         self.state.planner.invalidate_occlusion();
 
         // 7c) The transparent pass: recreate the scene snapshot at the new dims

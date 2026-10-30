@@ -317,6 +317,9 @@ pub struct FrameGraphInputs {
     /// and an `AerialPerspective` render pass on the `hdr_resolve` chain ahead
     /// of `Fog`.
     pub atmosphere_enabled: bool,
+    /// The atmosphere has cloud layers: the march and the composite run after
+    /// its haze.
+    pub clouds_enabled: bool,
     /// `true` when a water surface takes its sea from a simulated ocean and
     /// the backend built the simulation. With `transparent_enabled` the graph
     /// adds a `WaterSim` compute pass whose cascade arrays `Transparent` reads
@@ -416,6 +419,7 @@ impl FrameGraphInputs {
             grass_enabled: false,
             grass_shadow_enabled: false,
             atmosphere_enabled: false,
+            clouds_enabled: false,
             water_sim_enabled: false,
         }
     }
@@ -489,6 +493,10 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
     }),
     ("grass", |i| i.grass_enabled = true),
     ("atmosphere", |i| i.atmosphere_enabled = true),
+    ("clouds", |i| {
+        i.atmosphere_enabled = true;
+        i.clouds_enabled = true;
+    }),
     ("grass_shadow", |i| {
         i.grass_enabled = true;
         i.shadow_enabled = true;
@@ -687,6 +695,15 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     let decorated = add_decorations(&mut b, inputs, scene_head, &front, &mut reactive_mask);
     let scene_pre_taa_cur =
         add_reflections_and_transparent(&mut b, inputs, decorated, &front, &mut reactive_mask);
+    let scene_pre_taa_cur = add_clouds(
+        &mut b,
+        inputs,
+        SceneVersions {
+            resolve: scene_pre_taa_cur,
+            depth: decorated.depth,
+        },
+        &front,
+    );
     let scene_pre_taa_cur = add_late_particles(
         &mut b,
         inputs,
@@ -1363,6 +1380,35 @@ fn add_decorations(
     }
 }
 
+// The clouds over the pre-TAA scene the see-through surfaces left, so they
+// stand in front of the sea as well as the ground: the march reads the
+// atmosphere's tables and the depth it stops at, and its target is
+// backend-owned, so the import only orders it ahead of the composite. Returns
+// the pre-TAA scene's next version.
+fn add_clouds(
+    b: &mut GraphBuilder,
+    inputs: &FrameGraphInputs,
+    scene: SceneVersions,
+    front: &FrontEnd,
+) -> TextureHandle {
+    let Some(luts) = front
+        .scene_inputs
+        .atmosphere_luts
+        .filter(|_| inputs.clouds_enabled)
+    else {
+        return scene.resolve;
+    };
+    let target = b.import_texture("cloud_target", cloud_target_desc(inputs));
+    let mut march = b.add_pass(PassId::Clouds, PassKind::Compute);
+    march.read_texture(luts);
+    march.read_texture(scene.depth);
+    let target = march.write_texture(target);
+    let mut composite = b.add_pass(PassId::CloudComposite, PassKind::Render);
+    composite.read_texture(target);
+    composite.read_texture(scene.depth);
+    composite.write_texture(scene.resolve)
+}
+
 // The emitters that draw over the see-through surfaces: from the pools
 // `ParticlesDraw` read, onto the pre-TAA scene Transparent left, testing the
 // same depth. Returns the pre-TAA scene's next version.
@@ -1607,6 +1653,19 @@ fn atmosphere_luts_desc() -> TextureDesc {
         TextureSize::Absolute(AERIAL_SIZE),
         TextureSize::Absolute(AERIAL_SIZE),
         AERIAL_SIZE,
+        PixelFormat::Rgba16Float,
+        TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
+    )
+}
+
+fn cloud_target_desc(inputs: &FrameGraphInputs) -> TextureDesc {
+    // RGBA16F hazed cloud light + transmittance at half the HDR dims;
+    // backend-owned, so the graph only tracks the dependency.
+    use crate::render::environment::clouds::cloud_target_size;
+    let [w, h] = cloud_target_size(inputs.hdr_width, inputs.hdr_height);
+    TextureDesc::texture_2d(
+        TextureSize::Absolute(w),
+        TextureSize::Absolute(h),
         PixelFormat::Rgba16Float,
         TextureUsage::STORAGE.union(TextureUsage::SHADER_READ),
     )

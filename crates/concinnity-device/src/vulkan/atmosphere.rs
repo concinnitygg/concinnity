@@ -32,6 +32,7 @@ use super::builtin_shaders::{
     ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram,
     FULLSCREEN_VERT, SKY_ATMOSPHERE_FRAG,
 };
+use super::clouds::{CloudInputs, VkClouds};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
@@ -109,7 +110,7 @@ pub(in crate::vulkan) struct VkAtmosphere {
     sky_cube: SkyCube,
     params_ubos: Vec<PooledBuffer>,
     _pool: OwnedDescriptorPool,
-    _sampler: OwnedSampler,
+    sampler: OwnedSampler,
     _kernel_set_layout: OwnedSetLayout,
     kernel_layout: OwnedPipelineLayout,
     kernels: [OwnedPipeline; KERNELS],
@@ -125,6 +126,8 @@ pub(in crate::vulkan) struct VkAtmosphere {
     aerial_pipeline: OwnedPipeline,
     aerial_sets: Vec<vk::DescriptorSet>,
     framebuffers: Vec<OwnedFramebuffer>,
+    // The clouds, when the air has cloud layers.
+    pub(in crate::vulkan) clouds: Option<VkClouds>,
     // The ground the tables that depend on the air alone were built over.
     air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
@@ -143,8 +146,9 @@ struct SkyCube {
 }
 
 // The kernels' shared set: the constants, the three tables they may read, the
-// sampler, and the table the kernel writes.
-fn kernel_bindings() -> [Binding; 6] {
+// sampler, the table the kernel writes, and the clouds' panorama the cubes are
+// drawn behind.
+fn kernel_bindings() -> [Binding; 7] {
     use vk::DescriptorType as T;
     let c = vk::ShaderStageFlags::COMPUTE;
     [
@@ -154,6 +158,7 @@ fn kernel_bindings() -> [Binding; 6] {
         (3, T::SAMPLED_IMAGE, c),
         (4, T::SAMPLER, c),
         (5, T::STORAGE_IMAGE, c),
+        (6, T::SAMPLED_IMAGE, c),
     ]
 }
 
@@ -704,6 +709,23 @@ impl VkAtmosphere {
             frames,
             targets.extent,
         )?;
+        let clouds = build_clouds(
+            gpu,
+            settings,
+            CloudInputs {
+                atmo_ubos: &params_ubos,
+                aerial: tables[AERIAL].view,
+                transmittance: tables[TRANSMITTANCE].view,
+                multiscatter: tables[MULTISCATTER].view,
+                table_sampler: sampler.handle(),
+                composite_pass: aerial_pass.handle(),
+                depth_views: targets.depth_views,
+                extent: targets.extent,
+                msaa: targets.msaa,
+            },
+            (&kernel_sets, tables[SKY_VIEW].view),
+            hot_reload,
+        )?;
 
         Ok(Self {
             settings: *settings,
@@ -720,7 +742,7 @@ impl VkAtmosphere {
             },
             params_ubos,
             _pool: pool,
-            _sampler: sampler,
+            sampler,
             _kernel_set_layout: kernel_set_layout,
             kernel_layout,
             kernels,
@@ -735,19 +757,23 @@ impl VkAtmosphere {
             aerial_pipeline,
             aerial_sets,
             framebuffers,
+            clouds,
             air_tables: AirTables::default(),
             readiness: TableReadiness::default(),
         })
     }
 
-    // Re-point the haze pass at the rebuilt scene targets after a resize.
+    // Re-point the haze pass and the clouds at the rebuilt scene targets after
+    // a resize.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
-        device: &VkDevice,
+        gpu: &GpuUploadContext<'_>,
         hdr_resolve_views: &[vk::ImageView],
         depth_views: &[vk::ImageView],
         extent: vk::Extent2D,
+        msaa: bool,
     ) -> RenderResult<()> {
+        let device = gpu.device;
         self.framebuffers = create_framebuffers(
             device,
             self.aerial_pass.handle(),
@@ -761,12 +787,31 @@ impl VkAtmosphere {
                 .sampled_image(1, depth_views[i.min(last_depth)])
                 .apply(device);
         }
+        if let Some(clouds) = self.clouds.as_mut() {
+            clouds.rebuild(
+                gpu,
+                &CloudInputs {
+                    atmo_ubos: &self.params_ubos,
+                    aerial: self.tables[AERIAL].view,
+                    transmittance: self.tables[TRANSMITTANCE].view,
+                    multiscatter: self.tables[MULTISCATTER].view,
+                    table_sampler: self.sampler.handle(),
+                    composite_pass: self.aerial_pass.handle(),
+                    depth_views,
+                    extent,
+                    msaa,
+                },
+            )?;
+        }
         Ok(())
     }
 
     // Release the framebuffers and the pooled resources ahead of the device.
     pub(in crate::vulkan) fn destroy(&mut self) {
         self.framebuffers.clear();
+        if let Some(clouds) = self.clouds.as_mut() {
+            clouds.destroy();
+        }
         self.params_ubos.clear();
         for table in &mut self.tables {
             table.image = PooledImage::null();
@@ -804,6 +849,9 @@ impl VkAtmosphere {
             msaa,
             true,
         )?;
+        if let Some(clouds) = self.clouds.as_mut() {
+            clouds.rebuild_pipelines(device, self.aerial_pass.handle(), msaa)?;
+        }
         self.kernels = kernels;
         self.sky_pipeline = sky_pipeline;
         self.aerial_pipeline = aerial_pipeline;
@@ -811,6 +859,30 @@ impl VkAtmosphere {
         self.sky_cube.schedule.reset();
         Ok(())
     }
+}
+
+// The clouds, when the air has cloud layers, and the panorama binding of every
+// kernel set: theirs, or without clouds the sky-view table `sky_view`, which
+// holds the binding while the panorama is never read.
+fn build_clouds(
+    gpu: &GpuUploadContext<'_>,
+    settings: &AtmosphereSettings,
+    inputs: CloudInputs<'_>,
+    (kernel_sets, sky_view): (&[[vk::DescriptorSet; KERNELS]], vk::ImageView),
+    hot_reload: bool,
+) -> RenderResult<Option<VkClouds>> {
+    let clouds = settings
+        .clouds
+        .is_some()
+        .then(|| VkClouds::new(gpu, inputs, hot_reload))
+        .transpose()?;
+    let panorama = clouds.as_ref().map_or(sky_view, VkClouds::panorama_view);
+    for &set in kernel_sets.iter().flatten() {
+        SetWrites::new(set)
+            .sampled_image_in(6, panorama, vk::ImageLayout::GENERAL)
+            .apply(gpu.device);
+    }
+    Ok(clouds)
 }
 
 // `(in-scatter, 1 - T)` over the resolved scene -> `scene * T + in-scatter`.
@@ -907,6 +979,15 @@ impl VkContext {
             if let (Some(params), Some(ubo)) = (atmo.params, atmo.params_ubos.get(frame_idx)) {
                 ubo.write_val(0, &params);
             }
+            if let Some(clouds) = atmo.clouds.as_mut() {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "a pixel count"
+                )]
+                let scene = view.viewport.map(|v| v.max(1.0) as u32);
+                clouds.prepare(&atmo.settings, atmo.frame.as_ref(), scene, frame_idx);
+            }
         }
     }
 
@@ -936,8 +1017,8 @@ impl VkContext {
             );
             rec.dispatch(groups[0], groups[1], groups[2]);
         };
-        // The last frame's sky, haze and ambient reads finish before the
-        // tables are rewritten.
+        // The last frame's sky, haze and ambient reads, and the shaded passes'
+        // reads of the clouds' maps, finish before they are rewritten.
         rec.pipeline_barrier(
             vk::PipelineStageFlags::FRAGMENT_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -972,6 +1053,12 @@ impl VkContext {
             AERIAL,
             [AERIAL_SIZE.div_ceil(GROUP), AERIAL_SIZE.div_ceil(GROUP), 1],
         );
+        // The clouds' maps read the aerial volume; last frame's readers of the
+        // maps finished with the barrier at the head of the pass.
+        if let Some(clouds) = &atmo.clouds {
+            kernel_step(rec);
+            clouds.encode_maps(rec, frame_idx, atmo.sky_cube.work.capture);
+        }
         // The irradiance kernel reads the sky view; the cube opens for writing.
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -1112,6 +1199,23 @@ impl VkContext {
         );
         rec.draw(3, 1, 0, 0);
         rec.end_render_pass();
+    }
+
+    // March the clouds into their target.
+    pub(in crate::vulkan) fn encode_clouds(&self, rec: &Recorder<'_>, frame_idx: usize) {
+        if let Some(clouds) = self.atmosphere.as_ref().and_then(|a| a.clouds.as_ref()) {
+            clouds.encode_march(rec, frame_idx);
+        }
+    }
+
+    // Blend the clouds over the pre-TAA scene, through the haze pass's render
+    // pass.
+    pub(in crate::vulkan) fn encode_cloud_composite(&self, rec: &Recorder<'_>, frame_idx: usize) {
+        if let Some(atmo) = self.atmosphere.as_ref()
+            && let Some(clouds) = atmo.clouds.as_ref()
+        {
+            clouds.encode_composite(rec, frame_idx, &atmo.aerial_pass);
+        }
     }
 
     // The atmosphere's sky pipeline, its layout and this frame slot's set, once

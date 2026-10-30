@@ -4,7 +4,9 @@
 // Not a standalone program. Nothing here may spell the marker itself.
 //
 // Needs `SHADOW_UNI`, `shadow_map_cmp` and `shadow_map_size()` from the
-// including shader, and its DEPTH_CONVENTION.
+// including shader, and its DEPTH_CONVENTION. An includer that binds the
+// clouds' shadow map defines `CLOUD_SHADOW_TAP(uv)` to read it, and the
+// clouds then shade what lies under them.
 
 float hash_rotation(float2 p)
 {
@@ -56,7 +58,7 @@ float sample_cascade_pcf(int cascade, float3 world_pos, float2 screen_xy)
 // cascade across a band at the far edge of that cascade's depth range: each
 // cascade places the shadow edge slightly differently, and a hard switch would
 // sweep across the world as the camera moves.
-float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_xy)
+float cascade_shadow(float3 world_pos, float view_depth, float2 screen_xy)
 {
     int cascade = 4;
     if      (view_depth < SHADOW_UNI.cascade_splits[0]) cascade = 0;
@@ -84,3 +86,57 @@ float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_x
     }
     return shade;
 }
+
+// The share of the shadowed light the clouds let through to `world_pos`: the
+// clouds' shadow map read where the light's path from the point crosses the
+// sphere the map lies on. All of it outside the map, which fades out toward
+// its edges, and with no clouds.
+float cloud_shadow_at(float3 world_pos)
+{
+#ifdef CLOUD_SHADOW_TAP
+    CloudShadowLanes c = SHADOW_UNI.clouds;
+    if (c.north.w < 0.5)
+    {
+        return 1.0;
+    }
+    // From the square's center: the sphere through it is |p + L t + D| = R,
+    // with D the center's offset from the planet's (its normal times R),
+    // solved in the stable form so a planet's radius loses no precision.
+    float3 n = cross(c.east.xyz, c.north.xyz);
+    float3 p = world_pos - c.center.xyz;
+    float3 l = c.light.xyz;
+    float b = dot(l, p) + c.center.w * dot(l, n);
+    float k = dot(p, p) + 2.0 * c.center.w * dot(p, n);
+    float disc = b * b - k;
+    if (b <= 0.0 || disc < 0.0)
+    {
+        return 1.0;
+    }
+    // A point above the sphere has the clouds below it, out of the light's way.
+    float t = -k / (b + sqrt(disc));
+    if (t < 0.0)
+    {
+        return 1.0;
+    }
+    // The map's texels lie on the square's plane and are pushed out along the
+    // radius onto the sphere, so the hit is read back through the center.
+    float3 q = p + l * t;
+    float reach = c.center.w + dot(q, n);
+    if (reach <= 0.0)
+    {
+        return 1.0;
+    }
+    float2 uv = float2(dot(q, c.east.xyz), dot(q, c.north.xyz)) * (c.east.w * c.center.w / reach);
+    float edge = 1.0 - smoothstep(0.35, 0.5, max(abs(uv.x), abs(uv.y)));
+    return lerp(1.0, CLOUD_SHADOW_TAP(uv + 0.5), edge);
+#else
+    return 1.0;
+#endif
+}
+
+// The cascades' shadow at a surface point, under the clouds'.
+float shadow_factor_cascaded(float3 world_pos, float view_depth, float2 screen_xy)
+{
+    return cascade_shadow(world_pos, view_depth, screen_xy) * cloud_shadow_at(world_pos);
+}
+

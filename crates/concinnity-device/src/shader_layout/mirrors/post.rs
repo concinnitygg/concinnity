@@ -6,8 +6,9 @@ use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
+use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
 use concinnity_engine::render::uniforms::{
-    AutoExposureParams, ExposureMeasurement, HizParams, TaaParams,
+    AutoExposureParams, DaylightBlock, ExposureMeasurement, HizParams, TaaParams,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};
@@ -41,7 +42,45 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
         surface_water,
         surface_east,
         surface_share,
+        clouds,
     }))]
+}
+
+pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
+    vec![
+        everywhere(mirror!(CloudParams => "CloudParams" {
+            layers,
+            to_fixed,
+            camera,
+            shell,
+            march,
+            target,
+            scene,
+            shadow_center,
+            shadow_east,
+            shadow_north,
+            horizon,
+            daylight,
+        })),
+        everywhere(mirror!(CloudLayerBlock => "CloudLayerBlock" {
+            shell,
+            scales,
+            weather,
+            weather_second,
+            shape,
+            detail,
+            stretch,
+        })),
+        everywhere(mirror!(DaylightBlock => "DaylightBlock" {
+            center,
+            camera_up,
+            reach,
+            body_dir,
+            body_light,
+            sea,
+            knots,
+        })),
+    ]
 }
 
 pub(in crate::shader_layout) fn taa() -> Vec<Case> {

@@ -24,7 +24,7 @@
 //! shadow sampling.
 
 use crate::gfx::projection::look_at;
-use crate::gfx::render_types::{NUM_SHADOW_CASCADES, ShadowUniforms};
+use crate::gfx::render_types::{CloudShadowLanes, NUM_SHADOW_CASCADES, ShadowUniforms};
 use crate::render::depth::shadow_ortho;
 use crate::transform::{IDENTITY, mat4_mul};
 use concinnity_core::math::SaturatingFrom;
@@ -42,6 +42,7 @@ pub fn empty_shadow_uniforms() -> ShadowUniforms {
         cascade_splits: [f32::INFINITY; NUM_SHADOW_CASCADES],
         active_cascades: u32::saturating_from(NUM_SHADOW_CASCADES),
         _pad: [0; 3],
+        clouds: CloudShadowLanes::OFF,
     }
 }
 
@@ -213,6 +214,7 @@ pub fn compute_shadow_uniforms(inputs: ShadowUniformInputs) -> ShadowUniforms {
         cascade_splits: splits,
         active_cascades: u32::saturating_from(active),
         _pad: [0; 3],
+        clouds: CloudShadowLanes::OFF,
     }
 }
 

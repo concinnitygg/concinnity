@@ -327,13 +327,8 @@ impl DxContext {
         let frame_sync = commands::build_frame_sync(&gpu)?;
         let timestamps = commands::build_timestamps(&gpu);
         let auto_exposure = effects::build_auto_exposure(&gpu, &graphics)?;
-        let atmosphere = effects::build_atmosphere(
-            &gpu,
-            &descriptors,
-            &scene,
-            fx.atmosphere,
-            features.msaa_samples,
-        )?;
+        let atmosphere =
+            effects::build_atmosphere(&gpu, &descriptors, &scene, fx.atmosphere, &targets)?;
         // The atmosphere's sky cube now holds the environment's reflections.
         if let Some((_, mips)) = atmosphere.as_ref().and_then(|a| a.prefilter()) {
             scene.env_map.prefilter_mip_count = mips;

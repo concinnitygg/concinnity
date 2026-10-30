@@ -157,6 +157,7 @@ macro_rules! for_each_component {
                 PlanetGround      => $crate::components::PlanetGround { gen, external, compiled, args: PlanetGround, consumed },
                 Atmosphere        => $crate::components::Atmosphere { gen, external, singleton, renders, validate: atmosphere, consumed },
                 NightSky          => $crate::components::NightSky { gen, external, singleton, renders, validate: night_sky, consumed },
+                Cloud             => $crate::components::Cloud { gen, external, useful_blank, renders, validate: cloud, consumed },
             },
 
             // Resource: declared in a world and compiled into the blob's

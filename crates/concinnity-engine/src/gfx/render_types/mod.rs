@@ -34,8 +34,8 @@ pub use post::{
     PostProcessTunables, RtGeomEntry, RtParams, SsaoParams, SsgiParams, SsrParams,
 };
 pub use shadow::{
-    MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, ShadowArrayExtent, ShadowPassPush, ShadowUniforms,
-    SpotShadowData, shadow_array_extent, spot_shadow_slice_size,
+    CloudShadowLanes, MAX_SHADOWED_SPOTS, NUM_SHADOW_CASCADES, ShadowArrayExtent, ShadowPassPush,
+    ShadowUniforms, SpotShadowData, shadow_array_extent, spot_shadow_slice_size,
 };
 pub use streams::{
     COUNT_SLOT_ALIGN, COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, DRAW_STREAMS, GpuCompactParams,

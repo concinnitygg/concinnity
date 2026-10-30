@@ -410,6 +410,7 @@ unsafe impl Sync for TransparentResources {}
 //   [12] root CBV b3  ShadowUniforms
 //   [13] table  t15..17 the simulated oceans' displacement and slope arrays,
 //                     and a planet sea's wake
+//   [14] table  t18    the clouds' shadow map
 //   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp ;
 //   s3 : shadow compare ; s4 : anisotropic wrap (every stage)
 //
@@ -437,6 +438,10 @@ const BODY_LIGHT_ROOT_RT: u32 = 20;
 // vertex stage displaces by it.
 const OCEAN_ROOT_BASE: u32 = 13;
 const OCEAN_ROOT_RT: u32 = 22;
+// Root parameter index of the clouds' shadow map (t18), last in both
+// signatures.
+const CLOUD_SHADOW_ROOT_BASE: u32 = 14;
+const CLOUD_SHADOW_ROOT_RT: u32 = 23;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
@@ -457,6 +462,7 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .srv_table(13, 2, Pixel) // [11] t13..t14 shadow map + irradiance cube
         .cbv(3, Pixel) // [12] b3 ShadowUniforms
         .srv_table(15, 3, All) // [13] t15..t17 ocean arrays + a sea's wake
+        .srv_table(18, 1, Pixel) // [14] t18 the clouds' shadow map
         // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
         // s3: the shadow compare. s4: the ocean arrays.
         .static_sampler(SamplerState::LinearClamp, 0, Pixel)
@@ -464,10 +470,11 @@ fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D
         .static_sampler(SamplerState::ShadowCompare, 3, Pixel)
         .static_sampler(SamplerState::AnisotropicWrap, 4, All)
         .input_layout();
-    debug_assert_eq!(sig.len() - 7, PLANAR_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 6, PROBE_RECORDS_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 3, BODY_LIGHT_ROOT_BASE);
-    debug_assert_eq!(sig.len() - 1, OCEAN_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 8, PLANAR_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 7, PROBE_RECORDS_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 4, BODY_LIGHT_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 2, OCEAN_ROOT_BASE);
+    debug_assert_eq!(sig.len() - 1, CLOUD_SHADOW_ROOT_BASE);
     sig.build(device, "transparent root sig")
 }
 
@@ -566,6 +573,7 @@ fn transparent_pso(
 //   [21] root CBV b3   ShadowUniforms
 //   [22] table  t15..17 the simulated oceans' displacement and slope arrays,
 //                     and a planet sea's wake
+//   [23] table  t18    the clouds' shadow map
 //   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp,
 //                   s3 shadow compare, s4 anisotropic wrap (every stage)
 //
@@ -601,17 +609,19 @@ fn create_transparent_rt_root_signature(
         .srv_table(13, 2, Pixel) // [20] t13..t14 shadow map + irradiance cube
         .cbv(3, Pixel) // [21] b3 ShadowUniforms
         .srv_table(15, 3, All) // [22] t15..t17 ocean arrays + a sea's wake
+        .srv_table(18, 1, Pixel) // [23] t18 the clouds' shadow map
         .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
         .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
         .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
         .static_sampler(SamplerState::ShadowCompare, 3, Pixel) // s3 shadow compare
         .static_sampler(SamplerState::AnisotropicWrap, 4, All) // s4 ocean arrays
         .input_layout();
-    debug_assert_eq!(sig.len() - 8, PLANAR_ROOT_RT);
-    debug_assert_eq!(sig.len() - 7, GLASS_REFLECTION_ROOT_RT);
-    debug_assert_eq!(sig.len() - 6, PROBE_RECORDS_ROOT_RT);
-    debug_assert_eq!(sig.len() - 3, BODY_LIGHT_ROOT_RT);
-    debug_assert_eq!(sig.len() - 1, OCEAN_ROOT_RT);
+    debug_assert_eq!(sig.len() - 9, PLANAR_ROOT_RT);
+    debug_assert_eq!(sig.len() - 8, GLASS_REFLECTION_ROOT_RT);
+    debug_assert_eq!(sig.len() - 7, PROBE_RECORDS_ROOT_RT);
+    debug_assert_eq!(sig.len() - 4, BODY_LIGHT_ROOT_RT);
+    debug_assert_eq!(sig.len() - 2, OCEAN_ROOT_RT);
+    debug_assert_eq!(sig.len() - 1, CLOUD_SHADOW_ROOT_RT);
     sig.build(device, "transparent rt root sig")
 }
 
@@ -1473,12 +1483,14 @@ impl DxContext {
 
         // The one per-record binding whose root parameter moves between the two
         // signatures (the RT one appends it past the trace's inputs).
-        let (planar_root, probe_records_root, body_light_root, ocean_root) = if rt_live {
+        let (planar_root, probe_records_root, body_light_root, ocean_root, cloud_root) = if rt_live
+        {
             (
                 PLANAR_ROOT_RT,
                 PROBE_RECORDS_ROOT_RT,
                 BODY_LIGHT_ROOT_RT,
                 OCEAN_ROOT_RT,
+                CLOUD_SHADOW_ROOT_RT,
             )
         } else {
             (
@@ -1486,6 +1498,7 @@ impl DxContext {
                 PROBE_RECORDS_ROOT_BASE,
                 BODY_LIGHT_ROOT_BASE,
                 OCEAN_ROOT_BASE,
+                CLOUD_SHADOW_ROOT_BASE,
             )
         };
         let shadow_gva = com::gpu_va(&self.uniforms.shadow_ubo_resources[frame_idx]);
@@ -1527,6 +1540,9 @@ impl DxContext {
         unsafe { cmd.set_graphics_srv_table(body_light_root, self.body_light_srvs_gpu()) };
         // SAFETY: the list is recording, and this frame's shadow constant buffer is live.
         unsafe { cmd.SetGraphicsRootConstantBufferView(body_light_root + 1, shadow_gva) };
+        // SAFETY: the SRV heap is set above, and the clouds' shadow map SRV (or its stand-in) is
+        // a static slot in it.
+        unsafe { cmd.set_graphics_srv_table(cloud_root, self.cloud_shadow_srv()) };
         // The oceans' arrays, which exist wherever water does.
         if let Some(ocean) = &self.water_sim {
             // SAFETY: the SRV heap is set above, and the ocean's array table is live.

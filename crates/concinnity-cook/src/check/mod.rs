@@ -12,6 +12,7 @@ pub(crate) mod animation_graph;
 pub(crate) mod asset_refs;
 pub(crate) mod audio;
 pub mod behavior;
+pub(crate) mod cloud;
 pub(crate) mod cross_reference;
 pub(crate) mod cubemap_texture;
 pub(crate) mod environment_map;
@@ -156,6 +157,7 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     shape::check_shape(assets, &mut errors);
     screenshot::check_unique_files(assets, &mut errors);
     water_surface::check_sea_swell(assets, &mut errors);
+    cloud::check_layers(assets, &mut errors);
     planet_ground::check_squares(assets, &mut errors);
 
     if errors.is_empty() {

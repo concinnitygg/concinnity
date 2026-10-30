@@ -7,6 +7,7 @@
 //! reflections from the environment takes the atmosphere's.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_engine::gfx::render_types::CloudShadowLanes;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
@@ -30,6 +31,7 @@ use super::builtin_shaders::{
     ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, SKY_ATMOSPHERE_FRAG,
     compute_pipeline,
 };
+use super::clouds::CloudState;
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::encode::{ComputeEncode, RenderEncode};
@@ -62,6 +64,8 @@ pub(super) struct AtmosphereState {
     multiscatter: Texture,
     pub(super) sky_view: Texture,
     aerial: Texture,
+    // The clouds, when the air has cloud layers.
+    pub(super) clouds: Option<CloudState>,
     // The environment's irradiance cube seen as six array slices, for the
     // kernel to write.
     irradiance_slices: Texture,
@@ -216,6 +220,11 @@ impl AtmosphereState {
             FullscreenBlend::PremultipliedOver,
             hot_reload,
         )?;
+        let clouds = settings
+            .clouds
+            .is_some()
+            .then(|| CloudState::build(device, hot_reload))
+            .transpose()?;
         let state = Self {
             settings: *settings,
             params: None,
@@ -223,6 +232,7 @@ impl AtmosphereState {
             multiscatter,
             sky_view,
             aerial,
+            clouds,
             irradiance_slices,
             kernels,
             sky_pipeline,
@@ -238,6 +248,21 @@ impl AtmosphereState {
                 prefilter,
             },
         ))
+    }
+}
+
+impl AtmosphereState {
+    // The tables the clouds' march hazes them with.
+    pub(super) fn aerial(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.aerial
+    }
+
+    pub(super) fn transmittance(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.transmittance
+    }
+
+    pub(super) fn multiscatter(&self) -> &ProtocolObject<dyn MTLTexture> {
+        &self.multiscatter
     }
 }
 
@@ -329,6 +354,23 @@ impl MtlContext {
         enc.set_pipeline(&atmo.kernels.aerial);
         enc.set_texture(&atmo.aerial, 3);
         dispatch_texels(&enc, AERIAL_SIZE, AERIAL_SIZE);
+        // The clouds' maps read the tables at the haze pass's indices; the
+        // irradiance and sky-cube kernels read their panorama.
+        let panorama = match atmo.clouds.as_ref() {
+            Some(clouds) => {
+                clouds.encode_maps(&enc, params, atmo.sky_cube.work.capture, |enc| {
+                    enc.set_texture(&atmo.aerial, 1);
+                    enc.set_texture(&atmo.transmittance, 2);
+                    enc.set_texture(&atmo.multiscatter, 3);
+                });
+                enc.set_value(params, 0);
+                enc.set_texture(&atmo.transmittance, 0);
+                enc.set_texture(&atmo.multiscatter, 1);
+                &clouds.panorama
+            }
+            None => &atmo.sky_view,
+        };
+        enc.set_texture(panorama, 4);
         enc.set_pipeline(&atmo.kernels.irradiance);
         enc.set_texture(&atmo.sky_view, 2);
         enc.set_texture(&atmo.irradiance_slices, 3);
@@ -407,8 +449,15 @@ impl MtlContext {
         &mut self,
         frame: Option<&AtmosphereFrame>,
         view: AtmosphereView,
-    ) {
+    ) -> RenderResult<()> {
         if let Some(atmo) = self.atmosphere.as_mut() {
+            if let Some(clouds) = atmo.clouds.as_mut() {
+                clouds.prepare(&self.hw.device, &atmo.settings, frame, view.viewport)?;
+            }
+            let lanes = frame
+                .and_then(|f| f.clouds.as_ref())
+                .map_or(CloudShadowLanes::OFF, |c| c.shadow_lanes);
+            self.state.planner.shadow.set_clouds(lanes);
             atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, f, &view));
             atmo.sky_cube.work = match frame {
                 Some(f) => {
@@ -419,6 +468,7 @@ impl MtlContext {
                 None => SkyCubeWork::default(),
             };
         }
+        Ok(())
     }
 }
 

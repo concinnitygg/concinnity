@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::components::{
-    Atmosphere, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
+    Atmosphere, Cloud, Decal, GlassPanel, Grass, NightSky, ParticleEmitter, Planet, SdfVolume,
     VolumetricFog, WaterSurface, Wind,
 };
 use crate::ecs::PipelineContext;
@@ -13,12 +13,13 @@ use crate::ecs::asset_id::AssetId;
 use crate::planet::PlanetShape;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
 use crate::render::environment::atmosphere::{AtmosphereSettings, SeaLook, SurfacePalette};
+use crate::render::environment::clouds::CloudSettings;
 use crate::render::environment::grass::{CanopyField, GrassField, GrassTerrain, PlanetGrass};
 use crate::render::environment::ground::GroundCovers;
 use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
 use crate::render::{decal, environment::volumetric_fog, particles};
-use crate::water::ocean::OceanQuality;
+use crate::settings::QualityCeiling;
 use crate::water::sea::shore::ShoreWaves;
 use crate::water::{WaterBody, split_water};
 use crate::wind::WindField;
@@ -46,7 +47,7 @@ pub fn drain_world_fx(
     texture_count: usize,
     terrains: &[LoadedTerrain],
     planet: Option<(&Planet, PlanetSurface)>,
-    ocean_quality: OceanQuality,
+    quality: &QualityCeiling,
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
@@ -79,7 +80,7 @@ pub fn drain_world_fx(
         SurfacePalette::new(s.tint, s.covers, s.grass.as_ref(), sea)
     });
     let (water_surfaces, ocean) =
-        WaterBody::resolve_all(rectangles, &wind_field, ocean_quality, sea);
+        WaterBody::resolve_all(rectangles, &wind_field, quality.ocean, sea);
     let grass: hashbrown::HashMap<AssetId, Grass> = ctx
         .drain_with_ids::<Grass>()
         .into_iter()
@@ -118,8 +119,13 @@ pub fn drain_world_fx(
         .into_iter()
         .next()
         .map(|n| NightSkySettings::resolve(&n));
+    let clouds = ctx.drain_with_ids::<Cloud>();
     let atmosphere = match ctx.drain::<Atmosphere>().into_iter().next() {
-        Some(a) => Some(AtmosphereSettings::resolve(&a, planet)),
+        Some(a) => {
+            let clouds =
+                CloudSettings::resolve(named_clouds(&a, &clouds), &wind_field, quality.clouds);
+            Some(AtmosphereSettings::resolve(&a, planet).with_clouds(clouds))
+        }
         None => night.map(|_| AtmosphereSettings::vacuum(planet)),
     }
     .map(|s| s.with_night(night).with_surface(palette));
@@ -135,6 +141,24 @@ pub fn drain_world_fx(
         canopy,
         atmosphere,
     }
+}
+
+// The `clouds` the atmosphere `a` names, in its order; a name with no layer
+// behind it is skipped.
+fn named_clouds<'a>(
+    a: &'a Atmosphere,
+    clouds: &'a [(Option<AssetId>, Cloud)],
+) -> impl Iterator<Item = &'a Cloud> + 'a {
+    a.clouds.iter().filter_map(move |r| {
+        let found = clouds
+            .iter()
+            .find(|(id, _)| *id == Some(r.id()))
+            .map(|(_, c)| c);
+        if found.is_none() {
+            tracing::warn!("the Atmosphere names a cloud layer that is not in the world");
+        }
+        found
+    })
 }
 
 // The scene's canopy block: the planet's ground (`planet`) when it grows
@@ -296,7 +320,7 @@ mod tests {
             1,
             &[grassy_terrain()],
             None,
-            OceanQuality::FULL,
+            &QualityCeiling::NONE,
         );
         assert!(
             fx.grass.is_some(),

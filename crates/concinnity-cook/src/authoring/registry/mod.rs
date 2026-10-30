@@ -1373,6 +1373,7 @@ mod tests {
                 "Planet",
                 "Atmosphere",
                 "NightSky",
+                "Cloud",
                 // The build-only group sorts after the stored one, and the
                 // resource group after that.
                 "MainMenu",

@@ -168,6 +168,8 @@ pub struct FrameFacts {
     pub visible_volumes: bool,
     /// The atmosphere has this frame's inputs.
     pub atmosphere: bool,
+    /// The atmosphere's clouds are built and have this frame's inputs.
+    pub clouds: bool,
     /// A visible surface samples a simulated ocean.
     pub water_sim: bool,
     /// Grass is planted.
@@ -218,6 +220,7 @@ pub fn frame_graph_inputs(gates: &FeatureGates, facts: &FrameFacts) -> FrameGrap
         two_pass_occlusion_enabled: facts.two_pass_ready && facts.cull_records > 0,
         hiz_build_enabled: facts.hiz,
         atmosphere_enabled: facts.atmosphere,
+        clouds_enabled: facts.atmosphere && facts.clouds,
         water_sim_enabled: facts.water_sim,
         reactive_mask_enabled: gates.traits.reactive_mask,
         upscale_reads_reactive: facts.upscaler && facts.upscaler_reads_reactive,

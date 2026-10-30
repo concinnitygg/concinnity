@@ -240,7 +240,7 @@ unsafe impl Send for GraphFrameParams<'_> {}
 // SAFETY: as for `Send` above.
 unsafe impl Sync for GraphFrameParams<'_> {}
 
-fn pass_input<T>(value: Option<T>, pass: PassId, input: &str) -> RenderResult<T> {
+pub(super) fn pass_input<T>(value: Option<T>, pass: PassId, input: &str) -> RenderResult<T> {
     value.ok_or_else(|| {
         RenderError::Other(format!(
             "graph executor: {pass:?} pass requires {input} but none was supplied"
@@ -756,6 +756,8 @@ impl MtlContext {
                 0
             }
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd_buf)?,
+            PassId::Clouds => self.encode_clouds(cmd_buf)?,
+            PassId::CloudComposite => self.encode_cloud_composite(cmd_buf, params.scene_pre_taa)?,
             PassId::Fog => {
                 let fog_params = pass_input(params.fog_params, PassId::Fog, "fog_params")?;
                 let fog_froxel_params =

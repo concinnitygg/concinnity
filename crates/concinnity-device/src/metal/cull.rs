@@ -1285,7 +1285,7 @@ impl MtlContext {
 
     // The `BindlessTextures` block's members ahead of the pool, with their ids:
     // the shadow maps, the two IBL cubes, the screen-space indirect light, the
-    // probe cube array and the LTC tables.
+    // probe cube array, the LTC tables and the clouds' shadow map.
     fn bindless_fixed_members(
         &self,
     ) -> [(usize, &ProtocolObject<dyn objc2_metal::MTLTexture>); bindless_textures::FIXED] {
@@ -1299,6 +1299,7 @@ impl MtlContext {
             (ids::SPOT_SHADOW_MAP, &*self.spot_shadow.map),
             (ids::LTC_MATRIX, &*self.scene.ltc_matrix_texture),
             (ids::LTC_MAGNITUDE, &*self.scene.ltc_magnitude_texture),
+            (ids::CLOUD_SHADOW, self.cloud_shadow_texture()),
         ]
     }
 

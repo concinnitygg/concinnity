@@ -16,6 +16,16 @@
 //   ATMOSPHERE_SKY_CUBE       the sky drawn into the faces of a cube, without
 //                             the sun's disc, for the reflection prefilter
 //
+// The cloud kernels (see `clouds_common.hlsl`) bind what the haze pass binds,
+// so they can haze the clouds by the air in front of them, beside the clouds'
+// own block, their noise volume and the target each writes:
+//
+//   CLOUD_MARCH     the clouds along each view ray, at half resolution
+//   CLOUD_PANORAMA  the clouds around the camera in every direction, which
+//                   the sky cube and the irradiance cube put over the sky
+//   CLOUD_SHADOW    the light surviving the clouds toward the shadowed body,
+//                   over the ground around the camera
+//
 // Over a planet, the last two see the ground around the camera below the
 // horizon (`surface_seen`) instead of the sky-view table's gray albedo.
 //
@@ -36,8 +46,13 @@
 
 {DEPTH_CONVENTION}
 {ATMOSPHERE_TYPES}
+{CLOUD_TYPES}
 
-#ifdef AERIAL_PERSPECTIVE
+#if defined(CLOUD_MARCH) || defined(CLOUD_PANORAMA) || defined(CLOUD_SHADOW)
+#define CLOUD_KERNEL
+#endif
+
+#if defined(AERIAL_PERSPECTIVE) || defined(CLOUD_KERNEL)
 
 [[vk::binding(0, 0)]] ConstantBuffer<AtmosphereParams> atmo_cb : register(b0);
 #if USE_MSAA
@@ -49,6 +64,16 @@
 [[vk::binding(3, 0)]] SamplerState lut_sampler : register(s0);
 [[vk::binding(4, 0)]] Texture2D<float4> transmittance_lut : register(t2);
 [[vk::binding(5, 0)]] Texture2D<float4> multiscatter_lut : register(t3);
+#ifdef CLOUD_KERNEL
+[[vk::binding(6, 0)]] ConstantBuffer<CloudParams> cloud_cb : register(b1);
+[[vk::binding(7, 0)]] Texture3D<float4> cloud_noise : register(t4);
+[[vk::binding(8, 0)]] SamplerState cloud_noise_sampler : register(s1);
+#ifdef CN_BACKEND_DIRECTX
+[[vk::binding(9, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> cloud_out : register(u0);
+#else
+[[vk::binding(9, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> cloud_out : register(u5);
+#endif
+#endif
 
 #else
 
@@ -62,6 +87,8 @@
 #endif
 #if defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE)
 [[vk::binding(3, 0)]] Texture2D<float4> sky_view_lut : register(t2);
+// The clouds around the camera, `(light, transmittance)`, absolute.
+[[vk::binding(6, 0)]] Texture2D<float4> cloud_panorama : register(t4);
 #endif
 [[vk::binding(4, 0)]] SamplerState lut_sampler : register(s0);
 
@@ -91,7 +118,8 @@
 {NIGHT_SKY}
 
 #if defined(ATMOSPHERE_MULTISCATTER) || defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) \
-    || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE) || defined(AERIAL_PERSPECTIVE)
+    || defined(ATMOSPHERE_IRRADIANCE) || defined(ATMOSPHERE_SKY_CUBE) || defined(AERIAL_PERSPECTIVE) \
+    || defined(CLOUD_KERNEL)
 // Light surviving the path from radius `r` with up-cosine `mu` to the top of
 // the air; none when the path runs into the ground.
 float3 atmo_transmittance(float r, float mu)
@@ -104,7 +132,8 @@ float3 atmo_transmittance(float r, float mu)
 }
 #endif
 
-#if defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) || defined(AERIAL_PERSPECTIVE)
+#if defined(ATMOSPHERE_SKY_VIEW) || defined(ATMOSPHERE_AERIAL) || defined(AERIAL_PERSPECTIVE) \
+    || defined(CLOUD_KERNEL)
 // Light scattered more than once, per unit sunlight and scattering, at radius
 // `r` with the sun at up-cosine `mu_s`.
 float3 atmo_multiscatter(float r, float mu_s)
@@ -508,6 +537,17 @@ float3 surface_seen(float3 dir, float3 sky_light)
     return in_air + air * lerp(land, sea, water);
 }
 
+// `light` seen along `dir` behind the clouds around the camera.
+float3 behind_clouds(float3 dir, float3 light)
+{
+    if (ATMO.clouds.x < 0.5)
+    {
+        return light;
+    }
+    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir), 0.0);
+    return light * c.a + c.rgb;
+}
+
 // Whether `dir` sees the ground around the camera rather than the sky-view
 // table's.
 bool surface_seen_along(float3 dir)
@@ -551,6 +591,7 @@ void atmosphere_sky_cube_kernel(uint3 id : SV_DispatchThreadID, uint lane : SV_G
             l += night_sky_reflected(n, view.a);
         }
     }
+    l = behind_clouds(n, l);
     atmo_out[id] = float4(hdr_store_cap(l * SKY_CUBE_STORAGE_SCALE), 1.0);
 }
 #endif
@@ -594,6 +635,7 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
                 l += night_sky_ambient(d, view.a);
             }
         }
+        l = behind_clouds(d, l);
         sh9_basis(d, basis);
         for (uint j = 0u; j < 9u; ++j)
         {
@@ -636,7 +678,7 @@ void atmosphere_irradiance_kernel(uint lane : SV_GroupIndex)
 }
 #endif
 
-#ifdef AERIAL_PERSPECTIVE
+#if defined(AERIAL_PERSPECTIVE) || defined(CLOUD_KERNEL)
 // Camera heights, in the air's thicknesses above the ground, over which the
 // haze hands over from the volume to each pixel's own ray.
 static const float2 AERIAL_OWN_RAY_HEIGHTS = float2(0.5, 2.0);
@@ -668,41 +710,17 @@ float4 aerial_march(float3 dir, float enter, float distance)
     return float4(radiance * ATMO.sun_illuminance.xyz * ATMO.cam_pos.w, 1.0 - t);
 }
 
-// The fragment takes the shared fullscreen varying but derives its own `uv`
-// from SV_Position, for the reason fog_fragment gives: the volume was filled
-// in screen tile order.
-[shader("pixel")]
-float4 aerial_perspective_fragment(
-    [[vk::location(0)]] float2 vertex_uv : TEXCOORD0,
-    float4 sv_pos : SV_Position) : SV_Target
+// `(in-scatter, 1 - T)` of the air between the camera and the point
+// `distance_km` along `dir`, seen at screen `uv`; nothing for a ray that
+// never enters the air.
+float4 aerial_haze(float2 uv, float3 dir, float distance_km)
 {
-    int2 pixel = int2(sv_pos.xy);
-    if (pixel.x < 0 || pixel.y < 0 ||
-        pixel.x >= int(ATMO.viewport.x) || pixel.y >= int(ATMO.viewport.y))
-    {
-        discard;
-    }
-#if USE_MSAA
-    float depth = scene_depth.Load(pixel, 0);
-#else
-    float depth = scene_depth.Load(int3(pixel, 0));
-#endif
-    float2 uv = sv_pos.xy * ATMO.viewport.zw;
-    float2 ndc_xy = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
-    float3 world;
-    // The sky already holds the air along its rays.
-    if (!depth_reconstruct(ATMO.depth_inv_vp, ndc_xy, depth, world))
-    {
-        discard;
-    }
-    float3 to_world = world - ATMO.cam_pos.xyz;
-    float3 dir = normalize(to_world);
     float2 span = atmo_aerial_span(dir);
     if (span.x < 0.0)
     {
-        discard;
+        return (float4)0.0;
     }
-    float distance = max(length(to_world) * ATMO.radii.w - span.x, 0.0);
+    float distance = max(distance_km - span.x, 0.0);
     float own = aerial_own_ray_share();
     float4 haze = (float4)0.0;
     if (own < 1.0)
@@ -723,5 +741,326 @@ float4 aerial_perspective_fragment(
         haze += aerial_march(dir, span.x, distance) * own;
     }
     return haze;
+}
+
+// The scene depth at `pixel`.
+float aerial_scene_depth(int2 pixel)
+{
+#if USE_MSAA
+    return scene_depth.Load(pixel, 0);
+#else
+    return scene_depth.Load(int3(pixel, 0));
+#endif
+}
+#endif
+
+#ifdef AERIAL_PERSPECTIVE
+// The fragment takes the shared fullscreen varying but derives its own `uv`
+// from SV_Position, for the reason fog_fragment gives: the volume was filled
+// in screen tile order.
+[shader("pixel")]
+float4 aerial_perspective_fragment(
+    [[vk::location(0)]] float2 vertex_uv : TEXCOORD0,
+    float4 sv_pos : SV_Position) : SV_Target
+{
+    int2 pixel = int2(sv_pos.xy);
+    if (pixel.x < 0 || pixel.y < 0 ||
+        pixel.x >= int(ATMO.viewport.x) || pixel.y >= int(ATMO.viewport.y))
+    {
+        discard;
+    }
+    float depth = aerial_scene_depth(pixel);
+    float2 uv = sv_pos.xy * ATMO.viewport.zw;
+    float2 ndc_xy = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    float3 world;
+    // The sky already holds the air along its rays.
+    if (!depth_reconstruct(ATMO.depth_inv_vp, ndc_xy, depth, world))
+    {
+        discard;
+    }
+    float3 to_world = world - ATMO.cam_pos.xyz;
+    float3 dir = normalize(to_world);
+    if (atmo_aerial_span(dir).x < 0.0)
+    {
+        discard;
+    }
+    return aerial_haze(uv, dir, length(to_world) * ATMO.radii.w);
+}
+#endif
+
+#ifdef CLOUD_KERNEL
+#define CLOUD cloud_cb
+#define DAYLIGHT cloud_cb.daylight
+{DAYLIGHT}
+{CLOUDS_COMMON}
+
+// A hash of a pixel, uniform in [0, 1) (interleaved gradient noise), turned
+// each frame by the golden ratio so the march's steps fall elsewhere.
+float cloud_step_offset(int2 pixel)
+{
+    float ign = frac(52.9829189 * frac(dot(float2(pixel), float2(0.06711056, 0.00583715))));
+    return frac(ign + CLOUD.shell.w * 0.61803399);
+}
+
+float3 cloud_to_fixed(float3 v)
+{
+    return float3(dot(CLOUD.to_fixed[0].xyz, v), dot(CLOUD.to_fixed[1].xyz, v),
+                  dot(CLOUD.to_fixed[2].xyz, v));
+}
+
+// What a march along one view ray found: the clouds' light (absolute), the
+// light surviving them, and the distance (km) their light comes from.
+struct CloudSight
+{
+    float3 light;
+    float transmittance;
+    float distance;
+};
+
+// The shortest step a layer is marched in, however thin it is.
+static const float CLOUD_MIN_STEP_KM = 0.04;
+// The thickness from which a layer is marched in the full count of steps.
+static const float CLOUD_FULL_STEPS_KM = 1.0;
+
+// What a march along one view ray has found so far: the clouds' light
+// (absolute), the light surviving them, and the weighted sum of the distances
+// (km) their light comes from.
+struct CloudMarchState
+{
+    float3 light;
+    float transmittance;
+    float front;
+    float front_weight;
+};
+
+// March layer `i` along `ray` over `span` (km along it) in at most
+// `max_steps` steps sized by the layer's thickness, starting `offset` of one
+// in, adding to `state`.
+void cloud_march_layer(uint i, CloudRay ray, float2 span, float max_steps, float offset,
+                       bool detail, inout CloudMarchState state)
+{
+    CloudLayerBlock L = CLOUD.layers[i];
+    float thickness = L.shell.y - L.shell.x;
+    float length_km = span.y - span.x;
+    float step_km = max(thickness / 32.0, CLOUD_MIN_STEP_KM);
+    // A thin layer holds little to resolve and gets a share of the steps.
+    float layer_steps = max_steps * clamp(thickness / CLOUD_FULL_STEPS_KM, 0.25, 1.0);
+    uint steps = uint(clamp(ceil(length_km / step_km), 16.0, max(layer_steps, 16.0)));
+    float dt = length_km / float(steps);
+    float3 albedo = ATMO.ground_albedo.xyz;
+    float t = span.x + dt * offset;
+    // Clear air is crossed in double steps; a cloud a double step lands in
+    // sends the march back half of it, to come in at the fine step.
+    bool coarse = false;
+    bool backed = false;
+    for (uint s = 0u; s < steps && t < span.y; ++s)
+    {
+        float3 rel = ray.dir * t;
+        float3 p = ray.camera + rel;
+        float r = length(p);
+        float extinction = cloud_layer_density(i, cloud_layer_weather(i, ray, p / r), r, rel, detail);
+        if (extinction <= 0.0)
+        {
+            t += coarse ? dt * 2.0 : dt;
+            coarse = !backed;
+            backed = false;
+            continue;
+        }
+        if (coarse)
+        {
+            coarse = false;
+            backed = true;
+            t -= dt;
+            continue;
+        }
+        backed = false;
+        CloudWeather w[CLOUD_MAX_LAYERS];
+        cloud_weathers(ray, p / r, w);
+        float height = (r - L.shell.x) / thickness;
+        float3 scattered = cloud_sample_light(ray, w, p, rel, height, albedo) * extinction;
+        float step_t = exp(-extinction * dt);
+        // In-scatter integrated over the step's own extinction.
+        state.light += state.transmittance * (scattered - scattered * step_t) / extinction;
+        float absorbed = state.transmittance * (1.0 - step_t);
+        state.front += t * absorbed;
+        state.front_weight += absorbed;
+        state.transmittance *= step_t;
+        if (state.transmittance < 0.01)
+        {
+            return;
+        }
+        t += dt;
+    }
+}
+
+// The clouds along the unit view ray `dir` (the frame's axes) up to `end_km`
+// from the camera: each layer marched over its own stretch of the ray, the
+// nearer first, in at most `max_steps` steps each starting `offset` of one in.
+CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offset, bool detail)
+{
+    CloudRay ray;
+    ray.camera = CLOUD.camera.xyz;
+    ray.camera_up = normalize(ray.camera);
+    ray.dir = cloud_to_fixed(dir);
+    uint count = uint(CLOUD.shell.z);
+    float2 spans[CLOUD_MAX_LAYERS];
+    bool crossed[CLOUD_MAX_LAYERS];
+    [unroll]
+    for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
+    {
+        float2 shell = CLOUD.layers[i].shell.xy;
+        spans[i] = (float2)0.0;
+        crossed[i] = i < count
+            && cloud_shell_span(ray.camera, ray.dir, CLOUD.camera.w, shell.x, shell.y, spans[i]);
+        spans[i].y = min(min(spans[i].y, end_km), spans[i].x + CLOUD.march.z);
+        crossed[i] = crossed[i] && spans[i].y > spans[i].x;
+    }
+    CloudMarchState state;
+    state.light = (float3)0.0;
+    state.transmittance = 1.0;
+    state.front = 0.0;
+    state.front_weight = 0.0;
+    uint first = crossed[1] && (!crossed[0] || spans[1].x < spans[0].x) ? 1u : 0u;
+    [unroll]
+    for (uint k = 0u; k < CLOUD_MAX_LAYERS; ++k)
+    {
+        uint i = k == 0u ? first : 1u - first;
+        if (crossed[i] && state.transmittance >= 0.01)
+        {
+            cloud_march_layer(i, ray, spans[i], max_steps, offset, detail, state);
+        }
+    }
+    CloudSight sight;
+    sight.light = state.light;
+    sight.transmittance = state.transmittance;
+    sight.distance = state.front_weight > 0.0 ? state.front / state.front_weight : 0.0;
+    return sight;
+}
+#endif
+
+#ifdef CLOUD_MARCH
+// The clouds along the view ray through `pixel`: their light, hazed and
+// pre-exposed, and their transmittance.
+float4 cloud_march_pixel(int2 pixel)
+{
+    float2 uv = (float2(pixel) + 0.5) / CLOUD.scene.xy;
+    float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    float3 dir = camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz);
+    float scene_km = 1e9;
+    float3 world;
+    if (depth_reconstruct(ATMO.depth_inv_vp, ndc, aerial_scene_depth(pixel), world))
+    {
+        scene_km = length(world - ATMO.cam_pos.xyz) * ATMO.radii.w;
+    }
+    CloudSight sight =
+        cloud_march_ray(dir, scene_km, CLOUD.march.x, cloud_step_offset(pixel), CLOUD.march.w > 0.5);
+    if (sight.transmittance >= 1.0)
+    {
+        return float4(0.0, 0.0, 0.0, 1.0);
+    }
+    // The air between the camera and the cloud hazes it like a surface there.
+    float4 haze = aerial_haze(uv, dir, sight.distance);
+    float3 seen = sight.light * ATMO.cam_pos.w * (1.0 - haze.a)
+                + haze.rgb * (1.0 - sight.transmittance);
+    return float4(seen, sight.transmittance);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_march_kernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= uint(CLOUD.target.x) || id.y >= uint(CLOUD.target.y))
+    {
+        return;
+    }
+    int2 pixel = min(int2(id.xy) * int(CLOUD_TARGET_DIVISOR) + int2(CLOUD.scene.zw),
+                     int2(CLOUD.scene.xy) - 1);
+    cloud_out[id.xy] = cloud_march_pixel(pixel);
+}
+#endif
+
+#ifdef CLOUD_PANORAMA
+// One thread per texel: the clouds along its direction from the camera, at
+// half the view march's steps and without the detail, hazed by the air in
+// front of them, absolute, as the cubes hold their light.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= CLOUD_PANORAMA_WIDTH || id.y >= CLOUD_PANORAMA_HEIGHT)
+    {
+        return;
+    }
+    float2 uv = (float2(id.xy) + 0.5) / float2(CLOUD_PANORAMA_WIDTH, CLOUD_PANORAMA_HEIGHT);
+    float3 dir = cloud_panorama_dir(uv);
+    CloudSight sight = cloud_march_ray(dir, 1e9, max(CLOUD.march.x * 0.5, 16.0), 0.5, false);
+    float3 seen = sight.light;
+    float2 air = atmo_aerial_span(dir);
+    if (sight.transmittance < 1.0 && air.x >= 0.0)
+    {
+        float4 haze = aerial_march(dir, air.x, max(sight.distance - air.x, 0.0));
+        seen = seen * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w * (1.0 - sight.transmittance);
+    }
+    cloud_out[id.xy] = float4(seen, sight.transmittance);
+}
+#endif
+
+#ifdef CLOUD_SHADOW
+static const uint CLOUD_SHADOW_STEPS = 16u;
+
+// One thread per texel of the square over the ground around the camera: the
+// light toward the shadowed body that survives the clouds above the texel's
+// point on the layers' middle, marched without the detail.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_shadow_kernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= CLOUD_SHADOW_SIZE || id.y >= CLOUD_SHADOW_SIZE)
+    {
+        return;
+    }
+    float2 xy = ((float2(id.xy) + 0.5) / float(CLOUD_SHADOW_SIZE) - 0.5) * CLOUD.shadow_center.w;
+    float3 q = CLOUD.shadow_center.xyz + CLOUD.shadow_east.xyz * xy.x
+             + CLOUD.shadow_north.xyz * xy.y;
+    q = normalize(q) * CLOUD.shadow_east.w;
+    float3 light = DAYLIGHT.body_dir[0].xyz;
+    float2 upper;
+    float2 lower;
+    float transmittance = 1.0;
+    if (DAYLIGHT.body_dir[0].w > 0.5 && cloud_sphere_hits(q, light, CLOUD.shell.y, upper))
+    {
+        // The stretch of the line through `q` toward the light that lies
+        // between the layers' bottom and top, on `q`'s side of the bottom.
+        float from = upper.x;
+        float to = upper.y;
+        if (cloud_sphere_hits(q, light, CLOUD.shell.x, lower))
+        {
+            if (lower.y < 0.0)
+            {
+                from = max(from, lower.y);
+            }
+            else
+            {
+                to = min(to, lower.x);
+            }
+        }
+        CloudRay ray;
+        ray.camera = CLOUD.camera.xyz;
+        ray.camera_up = normalize(ray.camera);
+        ray.dir = light;
+        float dt = (to - from) / float(CLOUD_SHADOW_STEPS);
+        float depth = 0.0;
+        for (uint i = 0u; i < CLOUD_SHADOW_STEPS; ++i)
+        {
+            float3 p = q + light * (from + (float(i) + 0.5) * dt);
+            float r = length(p);
+            CloudWeather w[CLOUD_MAX_LAYERS];
+            cloud_weathers(ray, p / r, w);
+            float height;
+            depth += cloud_density(w, r, p - ray.camera, false, height) * dt;
+        }
+        transmittance = exp(-depth);
+    }
+    cloud_out[id.xy] = float4(transmittance, 0.0, 0.0, 1.0);
 }
 #endif

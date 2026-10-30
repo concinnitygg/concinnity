@@ -83,6 +83,8 @@ pub struct AtmosphereParams {
     pub surface_east: [f32; 4],
     /// The share of water by direction, four to a lane.
     pub surface_share: [[f32; 4]; SURFACE_TABLE_LEN / 4],
+    /// x = 1 when the cloud panorama holds this frame's clouds.
+    pub clouds: [f32; 4],
 }
 
 /// The view the atmosphere is drawn for.
@@ -167,6 +169,16 @@ impl AtmosphereParams {
             surface_water,
             surface_east,
             surface_share,
+            clouds: [
+                if s.clouds.is_some() && frame.clouds.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -181,7 +193,7 @@ mod tests {
     // member a float4 lane, so MSL, SPIR-V and DXIL agree.
     #[test]
     fn atmosphere_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<AtmosphereParams>(), 1168);
+        assert_eq!(size_of::<AtmosphereParams>(), 1184);
         assert_eq!(offset_of!(AtmosphereParams, inv_vp), 0);
         assert_eq!(offset_of!(AtmosphereParams, rayleigh), 64);
         assert_eq!(offset_of!(AtmosphereParams, mie_scattering), 80);
@@ -209,6 +221,7 @@ mod tests {
         assert_eq!(offset_of!(AtmosphereParams, surface_water), 1008);
         assert_eq!(offset_of!(AtmosphereParams, surface_east), 1024);
         assert_eq!(offset_of!(AtmosphereParams, surface_share), 1040);
+        assert_eq!(offset_of!(AtmosphereParams, clouds), 1168);
     }
 
     #[test]

@@ -263,6 +263,9 @@ impl VkContext {
             // SSGI is built with the effects below, which rewrite this binding.
             ssgi_indirect: None,
             ssao_built: false,
+            // The atmosphere is built after these sets, which then rewrite this
+            // binding.
+            cloud_shadow: None,
         };
         let plan = cull::plan_cull(&gpu, &world, media.textures);
         let descriptors = descriptors::build_descriptors(
@@ -476,9 +479,13 @@ impl VkContext {
         self.sync_disocclusion(self.targets.render_extent)?;
         self.state.planner.shadow.cadence = cadence;
         self.refresh_gates(graphics);
-        // The global sets were written before SSAO and SSGI were built.
+        // The global sets were written before SSAO and SSGI were built...
         if self.ssgi.is_some() || self.ssao.is_some() {
             self.rewrite_global_binding(SCREEN_INDIRECT_BINDING);
+        }
+        // ...and before the atmosphere's clouds were.
+        if self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()) {
+            self.rewrite_global_binding(crate::vulkan::descriptor_layout::CLOUD_SHADOW_BINDING);
         }
         self.mark_features_wired();
         // Every init upload above was synchronous (its one-shot idled the

@@ -72,6 +72,34 @@ pub struct ShadowUniforms {
     /// the MSL `float4x4`-aligned struct and the GLSL std140 block both round up to
     /// 288, so the upload size must match for the bound buffer range to cover them.
     pub _pad: [u32; 3],
+    /// Where the clouds' shadow map lies over the ground around the camera.
+    pub clouds: CloudShadowLanes,
+}
+
+/// The clouds' shadow map as the shaded passes read it, in the frame's axes
+/// and meters: a square on the sphere through the middle of the cloud layers,
+/// reached from a point along the shadowed light. 64 bytes.
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::NoUninit)]
+#[repr(C)]
+pub struct CloudShadowLanes {
+    /// xyz: the square's center; w: the radius of the sphere it lies on.
+    pub center: [f32; 4],
+    /// xyz: the square's east; w: one over its width.
+    pub east: [f32; 4],
+    /// xyz: the square's north; w: 1 when the clouds cast shadows.
+    pub north: [f32; 4],
+    /// xyz: toward the shadowed light; w unused.
+    pub light: [f32; 4],
+}
+
+impl CloudShadowLanes {
+    /// No cloud shadows: the shaded passes skip the map.
+    pub const OFF: Self = Self {
+        center: [0.0; 4],
+        east: [0.0; 4],
+        north: [0.0; 4],
+        light: [0.0; 4],
+    };
 }
 
 /// Per-view constants of the scene shadow pass, pushed once per cascade or

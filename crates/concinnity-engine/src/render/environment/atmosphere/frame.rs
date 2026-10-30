@@ -8,6 +8,7 @@ use super::optics::{
 use super::settings::AtmosphereSettings;
 use super::surface::SurfaceBelow;
 use crate::components::DirectionalLight;
+use crate::render::environment::clouds::CloudFrame;
 use crate::render::environment::night_sky::{NightFrame, moon_share};
 use concinnity_core::math::vec3::{dot, length, normalize_or, scale};
 
@@ -36,6 +37,8 @@ pub struct AtmosphereFrame {
     /// The ground around the camera the sky's cubes show below the horizon;
     /// `None` leaves it the atmosphere's `ground_albedo`.
     pub surface: Option<SurfaceBelow>,
+    /// The clouds in the air, if it has any.
+    pub clouds: Option<CloudFrame>,
 }
 
 impl AtmosphereFrame {
@@ -65,7 +68,14 @@ impl AtmosphereFrame {
             sun_set_depth: disc_set_depth(settings, r, mu, settings.sun_cos_radius),
             night: None,
             surface: None,
+            clouds: None,
         }
+    }
+
+    /// This frame with `clouds` in the air.
+    #[must_use]
+    pub fn with_clouds(self, clouds: Option<CloudFrame>) -> Self {
+        Self { clouds, ..self }
     }
 
     /// This frame with `night` behind the air: its moon's light dimmed by

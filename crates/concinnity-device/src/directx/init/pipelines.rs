@@ -144,6 +144,8 @@ pub(super) fn create_main_bindless_root_signature(
         // [25] the shared vertex stream at t9, where a planet tile's morph
         // reads its neighbors.
         .srv(9, Vertex)
+        // [26] the clouds' shadow map at t25.
+        .srv_table(25, 1, Pixel)
         .input_layout()
         .build(device, "main bindless root sig")
 }

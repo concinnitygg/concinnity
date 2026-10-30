@@ -56,6 +56,7 @@ const MAIN_BINDLESS_REGISTERS: &[(&str, &str)] = &[
     ("ltc_matrix", "t18"),
     ("ltc_magnitude", "t19"),
     ("material_params_sb", "t20"),
+    ("cloud_shadow", "t25"),
     ("canopy_cb", "b8"),
     ("canopy_tables_sb", "t24"),
     ("mesh_vertices", "t9"),
@@ -816,6 +817,7 @@ const WATER_BODY_LIGHT_REGISTERS: &[(&str, &str)] = &[
     ("shadow_cb", "b3"),
     ("shadow_map", "t13"),
     ("irradiance_cube", "t14"),
+    ("cloud_shadow", "t18"),
     ("shadow_sampler", "s3"),
 ];
 
@@ -1097,6 +1099,7 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
     ("spot_shadow_map", bindless_textures::SPOT_SHADOW_MAP),
     ("ltc_matrix", bindless_textures::LTC_MATRIX),
     ("ltc_magnitude", bindless_textures::LTC_MAGNITUDE),
+    ("cloud_shadow", bindless_textures::CLOUD_SHADOW),
     ("tex_pool", bindless_textures::pool(0)),
     ("tex_sampler", 0),
     ("shadow_sampler", 1),
@@ -2182,6 +2185,7 @@ const WATER_BODY_LIGHT_SLOTS: &[(&str, &str)] = &[
     ("shadow_cb", "buffer(14)"),
     ("shadow_map", "texture(7)"),
     ("irradiance_cube", "texture(8)"),
+    ("cloud_shadow", "texture(12)"),
     ("shadow_sampler", "sampler(5)"),
 ];
 // The simulated oceans' cascades, whose slopes and foam every water fragment

@@ -442,7 +442,7 @@ impl GraphicsSystem {
             world.texture_count,
             &world.terrains,
             planet_surface,
-            quality_ceiling.ocean,
+            &quality_ceiling,
         );
         let planet_far_field = fx
             .canopy

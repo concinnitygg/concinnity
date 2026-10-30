@@ -18,6 +18,7 @@
 - [CharacterModel](CharacterModel.md) - A character body that conforms to a [`CharacterSchema`](CharacterSchema.md).
 - [CharacterSchema](CharacterSchema.md) - The contract between a character body and everything that uses it.
 - [CharacterShape](CharacterShape.md) - Shape sliders and joint proportions applied to one [`SkinnedMesh`](SkinnedMesh.md).
+- [Cloud](Cloud.md) - A layer of clouds in the sky: fair-weather cumulus, a gray stratus sheet, towering heaps or anything between, drawn as a volume that can be seen from below, flown through and seen from above.
 - [ColorLut](ColorLut.md) - A 3D color-grading lookup table applied as a final post-process step. The build bakes the source into a color cube; the graded result is blended over the image by `strength`.
 - [CubemapTexture](CubemapTexture.md) - A six-face HDR cubemap baked from an equirectangular Radiance HDR source.
 - [DebugHud](DebugHud.md) - Requests the developer debug HUD: a set of [`TextLabel`](TextLabel.md) chips with diagnostic readouts, anchored to the top-right of the window and toggled with F1 (hidden by default).
@@ -75,7 +76,7 @@
 - [Spawner](Spawner.md) - Periodically instantiates copies of an existing placement at this entity's position.
 - [SpotLight](SpotLight.md) - A cone-shaped local light: a point light restricted to the cone around `direction`, with a soft edge between `inner_angle` and `outer_angle`.
 - [Sprite](Sprite.md) - Screen-space 2D rectangle drawn as a UI overlay each frame.
-- [StatHud](StatHud.md) - Requests the default on-screen stats HUD. Drives a set of [`TextLabel`](TextLabel.md) chips with live engine stats, refreshed on a fixed interval.
+- [StatHud](StatHud.md) - Requests the default on-screen stats HUD: two rows of [`TextLabel`](TextLabel.md) chips with live engine stats, refreshed on a fixed interval and packed at the top-left of the window.
 - [Story](Story.md) - A compiled branching story graph, played at runtime by the story system.
 - [StoryImport](StoryImport.md) - Imports a Markdown story file as a single declaration.
 - [StreamingConfig](StreamingConfig.md) - Enables and tunes asset streaming.

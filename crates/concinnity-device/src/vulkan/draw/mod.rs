@@ -378,6 +378,7 @@ impl VkContext {
             decals: self.decal.resources.is_some(),
             lines: self.lines.resources.is_some(),
             atmosphere: self.atmosphere.is_some(),
+            clouds: self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()),
             rt_transparent: self
                 .transparent
                 .as_ref()
@@ -424,6 +425,11 @@ impl VkContext {
                 .as_ref()
                 .is_some_and(super::raymarch::RaymarchResources::any_visible),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
+            clouds: self
+                .atmosphere
+                .as_ref()
+                .and_then(|a| a.clouds.as_ref())
+                .is_some_and(super::clouds::VkClouds::live),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
@@ -523,6 +529,16 @@ impl FrameDevice for VkContext {
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = params.atmosphere;
         }
+        self.state.planner.shadow.set_clouds(
+            params
+                .atmosphere
+                .as_ref()
+                .and_then(|f| f.clouds.as_ref())
+                .map_or(
+                    concinnity_engine::gfx::render_types::CloudShadowLanes::OFF,
+                    |c| c.shadow_lanes,
+                ),
+        );
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.

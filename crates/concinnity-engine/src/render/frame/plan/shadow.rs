@@ -2,7 +2,7 @@
 //! they render through.
 
 use crate::components::ShadowUpdate;
-use crate::gfx::render_types::ShadowUniforms;
+use crate::gfx::render_types::{CloudShadowLanes, ShadowUniforms};
 use crate::render::backend::init::ShadowCadence;
 use crate::render::shadow::csm::empty_shadow_uniforms;
 use crate::render::shadow::schedule::{CascadeCamera, CascadeLight, ShadowCascadeScheduler};
@@ -35,6 +35,11 @@ impl ShadowPlan {
             cascades: ShadowCascadeScheduler::default(),
             spots: SpotShadowScheduler::default(),
         }
+    }
+
+    /// Where this frame's cloud shadows lie, or [`CloudShadowLanes::OFF`].
+    pub fn set_clouds(&mut self, clouds: CloudShadowLanes) {
+        self.uniforms.clouds = clouds;
     }
 
     /// Start the spot slices over, so each re-primes before it is sampled.

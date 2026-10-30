@@ -44,6 +44,10 @@ mod sh;
 mod sky_cube;
 mod surface;
 
+use crate::components::Cloud;
+use crate::ecs::Ref;
+use alloc::vec::Vec;
+
 pub use air::AirProfile;
 pub use air_tables::AirTables;
 pub use apparent::{ApparentGround, table_view_angle, zenith_horizon};
@@ -112,6 +116,9 @@ pub use surface::{
 /// lights the scene in place of an [`EnvironmentMap`](#environmentmap): its
 /// light fills the shadows, and shiny surfaces reflect it, following the sun
 /// through the day.
+///
+/// Its `clouds` are drawn in the air: lit by the sun through it, hazed by
+/// it with distance, and over the sky and the scene behind them.
 ///
 /// One per world. The defaults are Earth's.
 ///
@@ -203,4 +210,7 @@ pub struct Atmosphere {
     /// radius, its coefficients growing to keep its optical depth.
     #[asset(default = [1.0, 20.0])]
     pub apparent_radius_fade_km: [f32; 2],
+    /// The [`Cloud`](#cloud) layers in the air, at most two, no two sharing
+    /// heights. Each is drawn at its own heights, whatever their order here.
+    pub clouds: Vec<Ref<Cloud>>,
 }

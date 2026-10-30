@@ -512,6 +512,7 @@ impl DxContext {
             decals: self.decal.state.is_some(),
             lines: self.lines.resources.is_some(),
             atmosphere: self.atmosphere.is_some(),
+            clouds: self.atmosphere.as_ref().is_some_and(|a| a.clouds.is_some()),
             rt_transparent: self
                 .transparent
                 .as_ref()
@@ -554,6 +555,11 @@ impl DxContext {
             lines: !lines.is_empty(),
             visible_volumes: self.raymarch_enabled(),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
+            clouds: self
+                .atmosphere
+                .as_ref()
+                .and_then(|a| a.clouds.as_ref())
+                .is_some_and(super::super::clouds::DxClouds::live),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),

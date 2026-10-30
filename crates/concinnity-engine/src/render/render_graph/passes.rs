@@ -290,6 +290,17 @@ pass_ids! {
     /// the probe array. After the shadow maps and the cull, ahead of `Main`.
     /// Gated on `FrameGraphInputs::prop_probe_enabled`.
     PropProbe => "prop_probe",
+    /// The clouds marched at half resolution: a compute pass that walks each
+    /// view ray through the atmosphere's cloud layers up to the scene's depth
+    /// and writes their hazed light and transmittance to the cloud target.
+    /// After the atmosphere's tables and the main depth, ahead of
+    /// `CloudComposite`. Gated on `FrameGraphInputs::clouds_enabled`.
+    Clouds => "clouds",
+    /// The clouds blended over the scene: a fullscreen pass on the pre-TAA
+    /// scene after `Transparent`, so the haze on the surfaces behind a cloud
+    /// and the sea beneath it are dimmed by it, upsampling the cloud target by
+    /// depth. Gated on `FrameGraphInputs::clouds_enabled`.
+    CloudComposite => "cloud_composite",
 }
 
 impl PassId {

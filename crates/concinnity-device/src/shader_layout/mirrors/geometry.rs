@@ -50,6 +50,7 @@ pub(in crate::shader_layout) fn shadow() -> Vec<Case> {
             cascade_splits,
             active_cascades,
             [_pad] => ["_pad0", "_pad1", "_pad2"],
+            clouds,
         })),
         everywhere(mirror!(ShadowPassPush => "ShadowPassPush" {
             cascade_idx,

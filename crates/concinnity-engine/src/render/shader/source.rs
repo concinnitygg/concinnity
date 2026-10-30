@@ -75,6 +75,10 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     ("{RT_TRACE}", "rt_trace.hlsl"),
     ("{GLASS_REFLECTION}", "glass_reflection.hlsl"),
     ("{TRANSPARENT_TYPES}", "transparent_types.hlsl"),
+    // CLOUD_TYPES leads DAYLIGHT_TYPES, whose marker it carries.
+    ("{CLOUD_TYPES}", "cloud_types.hlsl"),
+    // CLOUDS_COMMON reads the daylight its includer splices ahead of it.
+    ("{CLOUDS_COMMON}", "clouds_common.hlsl"),
     // DAYLIGHT_TYPES trails VIEW_UNIFORMS and TRANSPARENT_TYPES, which carry
     // its marker, behind a guard; DAYLIGHT trails the passes that read it
     // (MAIN_SHADING, the water).
