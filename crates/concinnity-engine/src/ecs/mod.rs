@@ -128,10 +128,10 @@ pub use frame::{FrameContext, FrameVec};
 pub use protocol::{
     BlobMeshBounds, BlobSceneGroups, CursorShape, CursorState, DesiredCursor, DisabledSettingRows,
     DisplayModes, DropdownView, ExecutionTrace, FlyCam, FrameCaptureRequest, FrameRateCap,
-    FrameTime, GpuMemoryPressure, HiddenAssets, HudLayers, HudPrefs, InputSampledAt, MenuActive,
-    MenuOverride, OpenDropdown, OverlayImage, OverlayImages, PickEntry, PickIndex, ScheduleMode,
-    ScreenStack, ScreenshotRequest, SimTiming, TraceEvent, TracePath, TracePaths, TraceRequest,
-    TraceStep, TraceVal, TransientSaves, ViewOverrides, WindowMinimized, WorldLines,
+    FrameTime, GpuMemoryPressure, HiddenAssets, HudHidden, HudLayers, HudPrefs, InputSampledAt,
+    MenuActive, MenuOverride, OpenDropdown, OverlayImage, OverlayImages, PickEntry, PickIndex,
+    ScheduleMode, ScreenStack, ScreenshotRequest, SimTiming, TraceEvent, TracePath, TracePaths,
+    TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WindowMinimized, WorldLines,
     WorldPhysicsBudget, schedule_mode,
 };
 

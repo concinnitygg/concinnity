@@ -280,6 +280,14 @@ impl VkContext {
                 hdr::HdrOutputMode::Hdr { max_edr, .. } => Some(max_edr),
                 hdr::HdrOutputMode::Sdr => None,
             },
+            resolution: profile::RenderResolution {
+                render: [
+                    self.targets.render_extent.width,
+                    self.targets.render_extent.height,
+                ],
+                output: [self.swapchain.extent.width, self.swapchain.extent.height],
+                upscaler: self.upscale.as_ref().map(|u| u.vendor().label()),
+            },
             ..profile::RenderStats::default()
         });
     }

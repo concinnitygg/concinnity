@@ -67,8 +67,9 @@ const MARGIN: f32 = 10.0;
 enum ChipStrip {
     // Stack downward from the top-right corner, each chip right-anchored.
     DownFromRight { win_w: f32, gap: f32 },
-    // Pack rightward from the top-left corner into a tight row.
-    Rightward { gap: f32 },
+    // Pack rightward from the left margin into a tight row whose boxes' tops
+    // sit at `top`.
+    Rightward { top: f32, gap: f32 },
 }
 
 // Anchor the DebugHud chips to the top-right of the window, stacked downward in
@@ -94,20 +95,29 @@ pub(super) fn position_debug_hud(
     position_chip_strip(ctx, chip_ids, loaded_fonts, strip);
 }
 
-// Pack the StatHud chips (fps, gpu wait, vram, ram, ev, edr, track) into a
-// tight strip from the top-left of the window. Measured each frame (same timing rationale as the
-// DebugHud stack) so a chip that changes width re-packs its neighbors.
+// Pack the StatHud chips into tight rows from the top-left of the window, the
+// top row first and the benchmark row under it. Measured each frame (same
+// timing rationale as the DebugHud stack) so a chip that changes width re-packs
+// its neighbors. A row with no visible chip takes no height, so the next row
+// moves up into its place.
 pub(super) fn position_stat_hud(
     ctx: &mut PipelineContext<'_>,
-    chip_ids: &[AssetId],
+    rows: &[Vec<AssetId>],
     loaded_fonts: &text::FontSet,
 ) {
-    position_chip_strip(
-        ctx,
-        chip_ids,
-        loaded_fonts,
-        ChipStrip::Rightward { gap: 4.0 },
-    );
+    const GAP: f32 = 4.0;
+    let mut top = MARGIN;
+    for row in rows {
+        let height = position_chip_strip(
+            ctx,
+            row,
+            loaded_fonts,
+            ChipStrip::Rightward { top, gap: GAP },
+        );
+        if height > 0.0 {
+            top += height + GAP;
+        }
+    }
 }
 
 // Place one chip strip: each chip measured from its current (last-frame)
@@ -115,14 +125,16 @@ pub(super) fn position_stat_hud(
 // or a stat the backend cannot supply) reserves no space, so neighbors close
 // the gap. HUD labels are literal window pixels (no overlay scaling), so this
 // positions in window space directly. Measure and write share one lookup per
-// chip.
+// chip. Returns the strip's extent across its axis: the tallest box of a row,
+// the widest of a stack.
 fn position_chip_strip(
     ctx: &mut PipelineContext<'_>,
     chip_ids: &[AssetId],
     loaded_fonts: &text::FontSet,
     strip: ChipStrip,
-) {
+) -> f32 {
     let mut run = MARGIN;
+    let mut across: f32 = 0.0;
     for &id in chip_ids {
         let Some(l) = ctx.get_mut_by_id::<TextLabel>(id) else {
             continue;
@@ -140,14 +152,17 @@ fn position_chip_strip(
                 l.x = (win_w - MARGIN - b.w + b.pad).max(MARGIN);
                 l.y = run + b.top_inset;
                 run += b.h + gap;
+                across = across.max(b.w);
             }
-            ChipStrip::Rightward { gap } => {
+            ChipStrip::Rightward { top, gap } => {
                 l.x = run + b.pad;
-                l.y = MARGIN + b.top_inset;
+                l.y = top + b.top_inset;
                 run += b.w + gap;
+                across = across.max(b.h);
             }
         }
     }
+    across
 }
 
 #[cfg(test)]
@@ -413,7 +428,11 @@ mod tests {
         second.padding = 4.0;
         w.push_identified(AssetId(1), first);
         w.push_identified(AssetId(2), second);
-        position_stat_hud(&mut w.context(), &[AssetId(1), AssetId(2)], &loaded_fonts());
+        position_stat_hud(
+            &mut w.context(),
+            &[vec![AssetId(1), AssetId(2)]],
+            &loaded_fonts(),
+        );
         // Box 1 at the margin, its origin 4px in.
         assert_eq!(label_at(&w, AssetId(1)), (14.0, 12.0));
         // Box 2 clears box 1 (28px wide) plus the 4px gap.
@@ -429,7 +448,7 @@ mod tests {
         w.push_identified(AssetId(3), chip("aaaa"));
         position_stat_hud(
             &mut w.context(),
-            &[AssetId(1), AssetId(2), AssetId(3)],
+            &[vec![AssetId(1), AssetId(2), AssetId(3)]],
             &loaded_fonts(),
         );
         assert_eq!(label_at(&w, AssetId(1)), (10.0, 8.0));
@@ -445,5 +464,26 @@ mod tests {
         w.push_identified(AssetId(1), chip("aa"));
         position_stat_hud(&mut w.context(), &[], &loaded_fonts());
         assert_eq!(label_at(&w, AssetId(1)), (SENTINEL, SENTINEL));
+    }
+
+    // The second row sits under the first's tallest box, and takes the first
+    // row's place when that row is all blank.
+    #[test]
+    fn position_stat_hud_stacks_its_rows() {
+        let mut w = World::new();
+        w.push_identified(AssetId(1), chip("aa"));
+        w.push_identified(AssetId(2), chip("aa"));
+        let rows = [vec![AssetId(1)], vec![AssetId(2)]];
+        position_stat_hud(&mut w.context(), &rows, &loaded_fonts());
+        assert_eq!(label_at(&w, AssetId(1)), (10.0, 8.0));
+        // A 12px-tall box plus the 4px gap below the first row.
+        assert_eq!(label_at(&w, AssetId(2)), (10.0, 24.0));
+
+        w.get_mut_by_id::<TextLabel>(AssetId(1))
+            .unwrap()
+            .content
+            .clear();
+        position_stat_hud(&mut w.context(), &rows, &loaded_fonts());
+        assert_eq!(label_at(&w, AssetId(2)), (10.0, 8.0));
     }
 }

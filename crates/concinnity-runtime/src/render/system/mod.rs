@@ -59,7 +59,7 @@ pub(crate) struct GraphicsSystem {
     loaded_fonts: text::FontSet,
     sprite_texture_slots: maps::TextureSlots,
     debug_hud_chips: Vec<AssetId>,
-    stat_hud_chips: Vec<AssetId>,
+    stat_hud_chips: [Vec<AssetId>; 2],
     // Streaming pools built during init (shared albedo+normal texture pool,
     // mesh geometry, voxel-world chunks, planet tiles) and their load threads,
     // with the shader buckets whose pipeline init deferred, each present only
@@ -126,7 +126,7 @@ impl GraphicsSystem {
             loaded_fonts: text::FontSet::default(),
             sprite_texture_slots: maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
-            stat_hud_chips: Vec::new(),
+            stat_hud_chips: Default::default(),
             stream_pools: StreamingPools::default(),
             stream_workers: StreamWorkers::default(),
             shader_deferral: ShaderDeferral::default(),

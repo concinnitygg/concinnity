@@ -1218,6 +1218,19 @@ impl MtlContext {
         // world-opt-out case and the request-on-an-SDR-display fallback case
         // map to the same blank chip.
         stats.max_edr = self.hw.max_edr();
+        let render = [self.targets.hdr.width, self.targets.hdr.height];
+        stats.resolution = match &self.upscale.scaler {
+            Some(s) => profile::RenderResolution {
+                render,
+                output: [s.output_width, s.output_height],
+                upscaler: Some("MetalFX"),
+            },
+            None => profile::RenderResolution {
+                render,
+                output: render,
+                upscaler: None,
+            },
+        };
         stats
     }
 

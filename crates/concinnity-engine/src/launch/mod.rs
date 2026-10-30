@@ -67,6 +67,8 @@ pub struct LaunchArgs {
     pub rt_skinned_geometry: Option<bool>,
     /// Turn vertical sync on or off, over the world's settings and the saved ones.
     pub vsync: Option<bool>,
+    /// Start with the stats HUD shown or hidden. `None` shows it.
+    pub hud: Option<bool>,
     /// Force the DLSS render preset over the saved choice, unsaved.
     pub dlss_preset: Option<DlssPreset>,
     /// Step the frame clock by exactly `1 / rate` seconds per frame instead of
@@ -182,6 +184,7 @@ impl LaunchArgs {
         rt_reflections: None,
         rt_skinned_geometry: None,
         vsync: None,
+        hud: None,
         dlss_preset: None,
         fixed_frame_rate: None,
         screenshots_dir: None,

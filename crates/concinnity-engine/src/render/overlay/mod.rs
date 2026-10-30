@@ -57,8 +57,9 @@ pub struct OverlayAssets {
     pub sprite_texture_slots: maps::TextureSlots,
     /// The `DebugHud` chip label ids, top to bottom.
     pub debug_hud_chips: Vec<AssetId>,
-    /// The `StatHud` chip label ids, top to bottom.
-    pub stat_hud_chips: Vec<AssetId>,
+    /// The `StatHud` chip label ids: the top row, then the benchmark row, each
+    /// left to right.
+    pub stat_hud_chips: [Vec<AssetId>; 2],
     /// The scroll-panel clip bands.
     pub clip_rects: maps::ClipRects,
     /// The backend's logical size at init, the viewport used until the first
@@ -211,7 +212,7 @@ impl OverlaySystem {
         hud_layout::apply_label_layout(ctx, &assets.fonts, &mut self.hud_scratch);
         // Anchor the DebugHud chips to the top-right corner, stacked.
         hud_layout::position_debug_hud(ctx, &assets.debug_hud_chips, &assets.fonts, win_w);
-        // Pack the StatHud chips into a tight strip in the top-left corner.
+        // Pack the StatHud chips into tight rows in the top-left corner.
         hud_layout::position_stat_hud(ctx, &assets.stat_hud_chips, &assets.fonts);
         let default_atlas_slot = assets.fonts.any_atlas_slot();
         // The shapers take whole columns, each element at its placement; each
@@ -459,7 +460,7 @@ mod tests {
             fonts: loaded_fonts(),
             sprite_texture_slots: maps::TextureSlots::new(),
             debug_hud_chips: Vec::new(),
-            stat_hud_chips: Vec::new(),
+            stat_hud_chips: Default::default(),
             clip_rects: maps::ClipRects::new(),
             initial_viewport: (REF_W, REF_H),
         }

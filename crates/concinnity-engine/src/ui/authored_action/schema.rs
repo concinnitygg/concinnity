@@ -50,6 +50,10 @@ pub(super) static ACTION: TypeSchema = TypeSchema {
             || FieldType::Reference(&["Screen"]),
         ),
         bare("hide", "Close the top [Screen](#screen)."),
+        bare(
+            "toggle_hud",
+            "Hide the [StatHud](#stathud) chips if they are showing, show them otherwise.",
+        ),
         keyed(
             "screenshot",
             "Save this many consecutive presented frames, starting with the next, as lossless PNG images \

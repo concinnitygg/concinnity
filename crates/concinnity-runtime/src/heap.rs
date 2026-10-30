@@ -1,12 +1,11 @@
 //! The tracked heap the runtime reports on.
 //!
-//! `#[global_allocator]` is a per-program item, so it belongs to the binary
-//! rather than to a library in its dependency graph. Exactly one may exist per
+//! `#[global_allocator]` is a per-program item: exactly one may exist per
 //! program, so a library that declares one decides for every binary that links
-//! it, and forbids any of them from choosing another -- including the test and
-//! benchmark binaries that link the runtime to measure it. A Concinnity binary
-//! that wants heap figures therefore installs the tracking allocator itself, at
-//! its crate root:
+//! it. The `concinnity` facade does exactly that, behind its default-on
+//! `heap-tracking` feature, so an application gets heap figures without
+//! declaring anything; this crate and the others under it leave the choice
+//! open, so their own test and benchmark binaries each install it:
 //!
 //! ```text
 //! concinnity_core::install_global_allocator!();
@@ -18,9 +17,9 @@
 //! (`concinnity_engine::budget::drift`) reports nothing rather than guessing. A host embedding the
 //! engine is entitled to that trade, so nothing complains about it at startup.
 //!
-//! The binaries that do report heap figures each pin their own declaration with
-//! a unit test, which is what catches its removal -- see
-//! `the_shipped_player_tracks_its_own_heap` beside the player binary.
+//! The shipped binaries pin the allocator with a unit test, which is what
+//! catches its removal -- see `the_shipped_player_tracks_its_own_heap` beside
+//! the player binary.
 
 // The engine's own test binary is a binary too, and unit tests and in-crate
 // benchmarks read allocation counts, so it installs the allocator here.

@@ -95,6 +95,13 @@
 //! rather than for linking one: nothing in the library's own API depends on
 //! either.
 //!
+//! `heap-tracking`, on by default, installs the counting allocator as the
+//! program's `#[global_allocator]`, so every application gets heap figures (the
+//! stats HUD's allocation chip, memory drift reports, crash-report heap totals)
+//! without declaring anything. A program that wants an allocator of its own
+//! turns it off and declares one, wrapping it to keep the counts:
+//! `concinnity_core::install_global_allocator!(mimalloc::MiMalloc);`.
+//!
 //! `--no-default-features` leaves the core `no_std` runtime: the component
 //! vocabulary, a [`World`] to hold it, and the headless loop that steps it,
 //! with no operating system underneath. It is the same loop
@@ -111,6 +118,9 @@
 //! of them through one `?`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(feature = "heap-tracking")]
+concinnity_core::install_global_allocator!();
 
 pub use concinnity_engine::ecs::World;
 
@@ -161,6 +171,22 @@ pub mod launch {
     };
     #[cfg(feature = "std")]
     pub use concinnity_runtime::launch_args_from_env as from_env;
+}
+
+/// What a standalone player binary is made of: where an app keeps its state,
+/// the crash hooks, and the run over a compiled world on disk. Requires the
+/// `player` feature.
+#[cfg(feature = "player")]
+pub mod player {
+    pub use concinnity_host::store::paths::{StateTree, per_user_base, tree_for_exe};
+    pub use concinnity_runtime::crash::install as install_crash_hooks;
+    pub use concinnity_runtime::{BlobSource, run_from};
+}
+
+/// The heap figures the counting allocator keeps. `stats` is `None` in a
+/// program without it, which the `heap-tracking` feature installs.
+pub mod memory {
+    pub use concinnity_core::memory::{MemStats, stats};
 }
 
 /// Math an application lays its own geometry out with.

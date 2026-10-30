@@ -29,6 +29,7 @@ fn every_action_round_trips_through_its_authored_form() {
             AuthoredAction::Toggle("pause".into()),
         ),
         (json!("hide"), AuthoredAction::Hide),
+        (json!("toggle_hud"), AuthoredAction::ToggleHud),
         (json!({"screenshot": 8}), AuthoredAction::Screenshot(8)),
         (
             json!({"story": "advance"}),

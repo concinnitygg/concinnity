@@ -18,6 +18,18 @@ pub enum VendorUpscaler {
     Fsr,
 }
 
+impl VendorUpscaler {
+    /// The upscaler's display name.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Dlss => "DLSS",
+            Self::Xess => "XeSS",
+            Self::Fsr => "FSR 3",
+        }
+    }
+}
+
 /// Which vendor upscalers a build can try.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UpscalerAvailability {

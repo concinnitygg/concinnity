@@ -46,10 +46,10 @@ pub fn font_less_text(ctx: &PipelineContext<'_>) -> bool {
 }
 
 /// The `DebugHud` chip ids (cursor, camera, sys, passes: the top-right stack
-/// order) and the `StatHud` chip ids (fps, gpu wait, vram, ram, ev, edr, track:
-/// the top-left strip order) the frame step anchors. Passes is last because its
-/// height follows the frame's step count.
-pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, Vec<AssetId>) {
+/// order) and the `StatHud` chip ids, its top row then its benchmark row, each
+/// in left-to-right strip order, that the frame step anchors. Passes is last
+/// because its height follows the frame's step count.
+pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, [Vec<AssetId>; 2]) {
     let debug = ctx
         .query::<DebugHud>()
         .next()
@@ -61,24 +61,11 @@ pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, Vec<AssetI
                 .collect()
         })
         .unwrap_or_default();
+    let ids = |row: &[Option<Ref<TextLabel>>]| row.iter().flatten().map(|r| r.id()).collect();
     let stat = ctx
         .query::<StatHud>()
         .next()
-        .map(|s| {
-            [
-                s.fps_label,
-                s.gpu_wait_label,
-                s.vram_label,
-                s.ram_label,
-                s.ev_label,
-                s.edr_label,
-                s.track_label,
-            ]
-            .into_iter()
-            .flatten()
-            .map(Ref::id)
-            .collect()
-        })
+        .map(|s| [ids(&s.top_row()), ids(&s.bench_row())])
         .unwrap_or_default();
     (debug, stat)
 }
@@ -205,7 +192,7 @@ mod tests {
         let mut world = World::new();
         assert_eq!(
             capture_hud_chips(&world.context()),
-            (Vec::new(), Vec::new())
+            (Vec::new(), [Vec::new(), Vec::new()])
         );
     }
 

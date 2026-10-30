@@ -1,14 +1,12 @@
 //! concinnity: the dev CLI binary, built by the `editor` feature.
 //!
-//! One file, owning what a process owns -- the tracking allocator, where the
-//! project keeps its state, and the crash hooks. The command line it reads and
-//! every command's actual work live in concinnity-dev.
+//! One file, owning what a process owns -- where the project keeps its state,
+//! and the crash hooks. The command line it reads and every command's actual
+//! work live in concinnity-dev.
 
 use std::path::{Path, PathBuf};
 
-// A global allocator belongs to a final artifact, not to a library every
-// consumer would inherit it from.
-concinnity_core::install_global_allocator!();
+use concinnity::player;
 
 // The directory a dev project keeps its derived state in, hidden inside the
 // project so a checkout carries its build output without a stray visible
@@ -26,7 +24,7 @@ fn main() -> std::process::ExitCode {
     // report written from here on lands in the project rather than nowhere,
     // and handed to the dev library, which builds and runs against it.
     let tree = project_tree();
-    concinnity_runtime::crash::install(Some(&tree.crashes_dir()));
+    player::install_crash_hooks(Some(&tree.crashes_dir()));
     concinnity_dev::project::open(tree.clone());
 
     // Printed with Display rather than the Debug a returned error gets, so a
@@ -46,10 +44,10 @@ fn main() -> std::process::ExitCode {
 //
 // Falls back to the working directory as a relative path when it cannot be
 // read, which keeps the layout correct for the process already sitting in it.
-fn project_tree() -> concinnity_host::store::paths::StateTree {
+fn project_tree() -> player::StateTree {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let state = root.join(Path::new(STATE_DIR));
-    concinnity_host::store::paths::StateTree::at(root)
+    player::StateTree::at(root)
         .with_writable(&state)
         .with_build(state)
 }
@@ -57,18 +55,18 @@ fn project_tree() -> concinnity_host::store::paths::StateTree {
 #[cfg(test)]
 mod tests {
     // `cn run -f` and `cn edit` report heap figures through the editor's health
-    // output, which the probe harness reads. Nothing forces the declaration at
-    // the top of this file to exist, so this is what catches its removal:
-    // without it the CLI would run correctly while reporting no memory at all.
+    // output, which the probe harness reads. They come from the library's
+    // `heap-tracking` allocator; without it the CLI would run correctly while
+    // reporting no memory at all.
     #[test]
     fn the_dev_cli_tracks_its_own_heap() {
         const MIB: usize = 1 << 20;
 
-        let before = concinnity_core::memory::stats()
+        let before = concinnity::memory::stats()
             .expect("this binary declares the tracking allocator")
             .alloc_count;
         let held: Vec<u8> = core::hint::black_box(vec![0; MIB]);
-        let after = concinnity_core::memory::stats().expect("the allocator stays installed");
+        let after = concinnity::memory::stats().expect("the allocator stays installed");
 
         assert!(
             after.alloc_count > before,

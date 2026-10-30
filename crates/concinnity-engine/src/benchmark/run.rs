@@ -73,6 +73,18 @@ impl BenchmarkRun {
         Some(u32::saturating_from(at))
     }
 
+    /// Where phase `index` starts and ends on the run's clock, or `None` past
+    /// the last phase.
+    pub fn phase_span(&self, index: u32) -> Option<(f32, f32)> {
+        let i = index as usize;
+        let end = *self.ends.get(i)?;
+        let start = match i.checked_sub(1) {
+            Some(prev) => *self.ends.get(prev)?,
+            None => self.config.warmup_seconds.max(0.0),
+        };
+        Some((start, end))
+    }
+
     /// When the last phase ends and the run is complete.
     pub fn end_seconds(&self) -> f32 {
         self.ends
@@ -123,6 +135,14 @@ mod tests {
         assert_eq!(run.phase_at(4.99), Some(0));
         assert_eq!(run.phase_at(5.0), Some(1));
         assert_eq!(run.end_seconds(), 10.0);
+    }
+
+    #[test]
+    fn a_phase_spans_from_the_previous_end_to_its_own() {
+        let run = run(2.0, &[("ground", 3.0), ("orbit", 5.0)]);
+        assert_eq!(run.phase_span(0), Some((2.0, 5.0)));
+        assert_eq!(run.phase_span(1), Some((5.0, 10.0)));
+        assert_eq!(run.phase_span(2), None);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 //! `UpscaleSdk`) and resources bound as `NVSDK_NGX_Resource_VK` through
 //! `SetVoidPointer`.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
@@ -313,6 +314,10 @@ impl DlssUpscaler {
 }
 
 impl VkUpscaleBackend for DlssUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Dlss
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.extent
     }

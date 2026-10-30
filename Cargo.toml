@@ -111,12 +111,12 @@ categories.workspace = true
 
 [[bin]]
 name = "concinnity"
-required-features = ["editor"]
+required-features = ["editor", "heap-tracking"]
 doc = false
 
 [[bin]]
 name = "concinnity-run"
-required-features = ["player"]
+required-features = ["player", "heap-tracking"]
 
 [[test]]
 name = "cli"
@@ -133,9 +133,10 @@ default-target = "x86_64-apple-darwin"
 targets = ["x86_64-apple-darwin", "x86_64-pc-windows-msvc"]
 
 [features]
-default = ["std", "player", "cook"]
+default = ["std", "player", "cook", "heap-tracking"]
 std = ["dep:concinnity-runtime", "dep:concinnity-host", "dep:concinnity-toolchain"]
 player = ["std"]
+heap-tracking = ["std"]
 editor = ["player", "cook", "dep:concinnity-dev"]
 cook = ["std", "dep:concinnity-cook"]
 vulkan = ["std", "concinnity-runtime/vulkan", "concinnity-dev?/vulkan"]

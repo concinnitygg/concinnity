@@ -13,13 +13,13 @@
 //! argument overrides both with a blob file or a directory of blobs; it moves
 //! only what is read, never where the app writes.
 //!
-//! One file, owning what a process owns -- the tracking allocator and the
-//! backend stamp `cn export` reads back. Resolving the layout and loading the
-//! world live in concinnity-host and concinnity-runtime.
+//! One file, owning what a process owns: the backend stamp `cn export` reads
+//! back. Resolving the layout and loading the world come from
+//! `concinnity::player`.
 
 use std::path::{Path, PathBuf};
 
-concinnity_core::install_global_allocator!();
+use concinnity::player;
 
 // Backend stamp read back by `cn export`.
 //
@@ -43,12 +43,12 @@ fn main() -> std::io::Result<()> {
 
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
-    let base = concinnity_host::store::paths::per_user_base();
-    let tree = concinnity_host::store::paths::tree_for_exe(&exe, exe_dir, base.as_deref());
+    let base = player::per_user_base();
+    let tree = player::tree_for_exe(&exe, exe_dir, base.as_deref());
 
     // Before anything else can fault: a report written from here on lands
     // beside the app rather than nowhere.
-    concinnity_runtime::crash::install(Some(&tree.crashes_dir()));
+    player::install_crash_hooks(Some(&tree.crashes_dir()));
 
     // One positional argument names the world instead of the bundled `data`.
     // It moves only what is read: `saves/` and `settings` stay in the tree
@@ -57,31 +57,31 @@ fn main() -> std::io::Result<()> {
     let requested = std::env::args_os()
         .nth(1)
         .map_or_else(|| tree.data_dir(), PathBuf::from);
-    let blob = concinnity_runtime::BlobSource::classify(&requested).ok_or_else(|| {
+    let blob = player::BlobSource::classify(&requested).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("no world data at {}", requested.display()),
         )
     })?;
 
-    concinnity_runtime::run_from(&tree, &blob)
+    player::run_from(&tree, &blob)
 }
 
 #[cfg(test)]
 mod tests {
-    // The shipped player counts its own heap. Nothing forces the declaration
-    // at the top of this file to exist, so this is what catches its removal:
-    // without it the player would run correctly while reporting no memory at
-    // all, and crash reports would ship without heap figures.
+    // The shipped player counts its own heap through the library's
+    // `heap-tracking` allocator. Without it the player would run correctly
+    // while reporting no memory at all, and crash reports would ship without
+    // heap figures.
     #[test]
     fn the_shipped_player_tracks_its_own_heap() {
         const MIB: usize = 1 << 20;
 
-        let before = concinnity_core::memory::stats()
+        let before = concinnity::memory::stats()
             .expect("this binary declares the tracking allocator")
             .alloc_count;
         let held: Vec<u8> = core::hint::black_box(vec![0; MIB]);
-        let after = concinnity_core::memory::stats().expect("the allocator stays installed");
+        let after = concinnity::memory::stats().expect("the allocator stays installed");
 
         assert!(
             after.alloc_count > before,

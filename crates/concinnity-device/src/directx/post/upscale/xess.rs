@@ -4,6 +4,7 @@
 //! `build.rs` when the SDK is found or else taken from PATH; a missing DLL falls
 //! through to the next backend.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
@@ -179,6 +180,10 @@ impl XessUpscaler {
 }
 
 impl UpscaleBackend for XessUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Xess
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ctx.extent()
     }

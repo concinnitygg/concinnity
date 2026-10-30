@@ -149,6 +149,22 @@ pub struct StreamingStats {
     pub chunk_bytes: Option<(u64, u64)>,
 }
 
+impl StreamingStats {
+    /// Loads still in flight across every streaming pool, or `None` when
+    /// nothing streams.
+    pub fn pending(&self) -> Option<usize> {
+        [
+            self.texture.map(|(_, pending, _)| pending),
+            self.mesh.map(|(_, pending, _)| pending),
+            self.chunk.map(|(_, pending)| pending),
+            self.planet.map(|(_, pending)| pending),
+        ]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| a + b)
+    }
+}
+
 /// Live process-RAM pressure on streaming, published on each throttled sample
 /// when a `MemoryBudget` is present. `under_pressure` is true whenever the
 /// back-off valve is engaged (gating loads or evicting).

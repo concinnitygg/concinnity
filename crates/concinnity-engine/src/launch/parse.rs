@@ -147,6 +147,7 @@ impl LaunchArgs {
                 toggle(&mut self.rt_skinned_geometry, on, flag.name)?;
             }
             ("vsync", None) => toggle(&mut self.vsync, on, flag.name)?,
+            ("hud", None) => toggle(&mut self.hud, on, flag.name)?,
             ("graphics-quality", Some(value)) => {
                 self.graphics_quality = Some(
                     QualityPreset::ALL
@@ -270,6 +271,7 @@ mod tests {
             "bench",
             "-q",
             "--vsync",
+            "--no-hud",
             "--limit-fps",
             "144",
             "--graphics-quality=ultra",
@@ -316,6 +318,7 @@ mod tests {
                 rt_reflections: Some(true),
                 rt_skinned_geometry: Some(false),
                 vsync: Some(true),
+                hud: Some(false),
                 dlss_preset: Some(DlssPreset::M),
                 fixed_frame_rate: NonZeroU32::new(60),
                 screenshots_dir: Some("shots/vk".into()),
@@ -358,6 +361,7 @@ mod tests {
     #[test]
     fn a_switch_and_its_negation_exclude_each_other() {
         assert_eq!(parse(&["--no-vsync"]).unwrap().vsync, Some(false));
+        assert_eq!(parse(&["--no-hud"]).unwrap().hud, Some(false));
         assert_eq!(parse(&["--vsync", "--vsync"]).unwrap().vsync, Some(true));
         assert_eq!(
             parse(&["--vsync", "--no-vsync"]),

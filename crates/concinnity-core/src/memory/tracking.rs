@@ -90,23 +90,32 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for TrackingAlloc<A> {
     }
 }
 
-/// Install [`TrackingAlloc`] over the system allocator as this program's
-/// `#[global_allocator]`.
+/// Install [`TrackingAlloc`] as this program's `#[global_allocator]`, over the
+/// system allocator or over the unit-struct allocator named.
 ///
-/// `#[global_allocator]` is a per-program item, so every binary, test binary,
-/// and benchmark that should count its own heap invokes this once at its crate
-/// root. A program without it runs on Rust's default allocator and reports no
-/// memory at all, which is what [`crate::memory::stats`] returning `None` means.
+/// `#[global_allocator]` is a per-program item, so a program invokes this once
+/// at its crate root. A program without it runs on Rust's default allocator and
+/// reports no memory at all, which is what [`crate::memory::stats`] returning
+/// `None` means.
 ///
 /// ```
 /// concinnity_core::install_global_allocator!();
 /// ```
+///
+/// Naming an allocator keeps its behavior and counts through it:
+///
+/// ```
+/// concinnity_core::install_global_allocator!(std::alloc::System);
+/// ```
 #[macro_export]
 macro_rules! install_global_allocator {
     () => {
+        $crate::install_global_allocator!(std::alloc::System);
+    };
+    ($inner:path) => {
         #[global_allocator]
-        static CN_GLOBAL_ALLOC: $crate::memory::TrackingAlloc<std::alloc::System> =
-            $crate::memory::TrackingAlloc::new(std::alloc::System);
+        static CN_GLOBAL_ALLOC: $crate::memory::TrackingAlloc<$inner> =
+            $crate::memory::TrackingAlloc::new($inner);
     };
 }
 

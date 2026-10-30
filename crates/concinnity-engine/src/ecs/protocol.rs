@@ -414,6 +414,11 @@ pub struct CursorState {
     pub outside_window: bool,
 }
 
+/// Whether the stats HUD is hidden as a whole, flipped by a `toggle_hud`
+/// action. Absent reads as shown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HudHidden(pub bool);
+
 /// Per-frame stats-HUD visibility, published as a resource by the renderer
 /// (which runs first) and read by `StatHudSystem` the same tick. Each field is
 /// the effective on/off for that chip: the master "Display performance stats"

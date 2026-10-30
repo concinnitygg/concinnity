@@ -9,6 +9,7 @@
 //! `XessExtQuery` (held by `UpscaleSdk`); this module creates the upscale
 //! context once the device exists.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::cell::Cell;
 use std::ffi::{CString, c_char, c_void};
 use std::ptr;
@@ -309,6 +310,10 @@ impl XessUpscaler {
 }
 
 impl VkUpscaleBackend for XessUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Xess
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ctx.extent()
     }

@@ -25,7 +25,7 @@ use ash::vk;
 use concinnity_engine::components::UpscalerBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::output::dlss::DlssPreset;
-use concinnity_engine::render::output::upscaler::UpscalerAvailability;
+use concinnity_engine::render::output::upscaler::{UpscalerAvailability, VendorUpscaler};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use crate::upscale_sdk::{SdkLibrary, UpscaleCamera, UpscaleExtent, UpscaleRequest, preferred};
@@ -70,6 +70,8 @@ pub(in crate::vulkan) struct UpscaleInputs<'a> {
 // the output, then calls `dispatch`; each backend records its vendor upscale
 // onto the supplied command buffer.
 pub(in crate::vulkan) trait VkUpscaleBackend: Send {
+    // The vendor upscaler this is.
+    fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.
     fn extent(&self) -> UpscaleExtent;
     // The output image the bloom + composite stack samples as the scene.

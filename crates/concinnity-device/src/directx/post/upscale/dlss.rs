@@ -4,6 +4,7 @@
 //! library and bundles `nvngx_dlss.dll` beside the executable
 //! (`cfg(ngx_sdk_bundled)`).
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::c_void;
 use std::ptr;
 
@@ -218,6 +219,10 @@ impl DlssUpscaler {
 }
 
 impl UpscaleBackend for DlssUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Dlss
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.extent
     }

@@ -351,6 +351,7 @@ impl System for UiInputSystem {
                 SceneCommand,
                 StoryCommand,
                 crate::ecs::ScreenshotRequest,
+                crate::ecs::HudHidden,
             ])
     }
 
@@ -1395,6 +1396,10 @@ fn fire_action(
         UiAction::Story(cmd) => ctx.events_mut::<StoryCommand>().send(cmd.clone()),
         UiAction::Screenshot(frames) => {
             ctx.insert_resource(crate::ecs::ScreenshotRequest(*frames));
+        }
+        UiAction::ToggleHud => {
+            let hidden = ctx.resource::<crate::ecs::HudHidden>().is_some_and(|h| h.0);
+            ctx.insert_resource(crate::ecs::HudHidden(!hidden));
         }
         UiAction::Setting {
             key,
@@ -3547,6 +3552,28 @@ mod tests {
         world.add_component(FrameInput::default());
         world.step();
         assert!(world.resource::<crate::ecs::ScreenshotRequest>().is_none());
+    }
+
+    // Each press of a `toggle_hud` binding flips the stats HUD's visibility.
+    #[test]
+    fn a_toggle_hud_binding_flips_the_hud() {
+        let mut world = World::new();
+        world.add_component(KeyBinding {
+            key: "H".to_string(),
+            action: Some(act(serde_json::json!("toggle_hud"))),
+            ..Default::default()
+        });
+        start(&mut world);
+        let mut press = || {
+            world.add_component(FrameInput {
+                key_events: vec![KeyEvent::press(InputKey::H)],
+                ..Default::default()
+            });
+            world.step();
+            world.resource::<crate::ecs::HudHidden>().copied()
+        };
+        assert_eq!(press(), Some(crate::ecs::HudHidden(true)));
+        assert_eq!(press(), Some(crate::ecs::HudHidden(false)));
     }
 
     // A KeyBinding scoped to a screen fires only while that screen is on top.

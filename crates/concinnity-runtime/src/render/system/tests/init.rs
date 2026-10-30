@@ -111,7 +111,7 @@ fn init_parks_overlay_assets_with_the_hud_chips() {
         .expect("OverlayAssets parked at init");
     assert_eq!(
         overlay.stat_hud_chips,
-        vec![AssetId(10), AssetId(11)],
+        [vec![AssetId(10), AssetId(11)], vec![]],
         "StatHud chip ids survive to the parked OverlayAssets"
     );
     // DebugHud strip order is mouse, camera, sys, passes; only mouse + passes

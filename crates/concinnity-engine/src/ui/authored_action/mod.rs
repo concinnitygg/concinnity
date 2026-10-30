@@ -23,6 +23,7 @@ use crate::settings::SettingKey;
 /// - `{"push": "<name>"}`: open the named [Screen](#screen) on top of what is showing
 /// - `{"toggle": "<name>"}`: close the named [Screen](#screen) if it is on top, open it otherwise
 /// - `"hide"`: close the top [Screen](#screen)
+/// - `"toggle_hud"`: hide or show the [`StatHud`](#stathud) chips
 /// - `{"screenshot": <n>}`: save the next `n` presented frames, one after
 ///   another, as lossless PNG images
 /// - `{"story": "<verb>"}`: drive the story (`start`, `continue`, `advance`,
@@ -58,6 +59,8 @@ pub enum AuthoredAction<C, S> {
     Hide,
     /// Save this many consecutive presented frames, starting with the next, as PNG images.
     Screenshot(u32),
+    /// Hide the stats HUD if it is showing, show it otherwise.
+    ToggleHud,
     /// Drive the story system.
     Story(StoryCommand),
     /// Expand or collapse a settings-screen group by index.

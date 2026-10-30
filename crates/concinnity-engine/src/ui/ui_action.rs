@@ -43,6 +43,8 @@ pub enum UiAction {
     },
     /// Save this many consecutive presented frames, starting with the next, as PNG images.
     Screenshot(u32),
+    /// Hide the stats HUD if it is showing, show it otherwise.
+    ToggleHud,
 }
 
 /// What a settings-row region does to its setting.
@@ -95,6 +97,7 @@ enum Encoded {
     Story { verb: u8, index: u32 },
     Setting { key: u8, verb: u8 },
     Screenshot(u32),
+    ToggleHud,
 }
 
 impl Encoded {
@@ -119,6 +122,7 @@ impl Encoded {
                 verb: u8::saturating_from(SettingVerb::ALL.iter().position(|v| v == verb)?),
             },
             UiAction::Screenshot(frames) => Self::Screenshot(*frames),
+            UiAction::ToggleHud => Self::ToggleHud,
         })
     }
 
@@ -140,6 +144,7 @@ impl Encoded {
                 verb: *SettingVerb::ALL.get(verb as usize)?,
             },
             Self::Screenshot(frames) => UiAction::Screenshot(frames),
+            Self::ToggleHud => UiAction::ToggleHud,
         })
     }
 }
@@ -161,6 +166,7 @@ impl From<Resolved> for UiAction {
             AuthoredAction::GroupToggle(i) => Self::GroupToggle(i),
             AuthoredAction::Setting { key, verb } => Self::Setting { key, verb },
             AuthoredAction::Screenshot(frames) => Self::Screenshot(frames),
+            AuthoredAction::ToggleHud => Self::ToggleHud,
         }
     }
 }
@@ -184,6 +190,7 @@ impl UiAction {
                 verb: *verb,
             },
             Self::Screenshot(frames) => AuthoredAction::Screenshot(*frames),
+            Self::ToggleHud => AuthoredAction::ToggleHud,
         })
     }
 }
@@ -249,6 +256,7 @@ mod tests {
             UiAction::Screen(ScreenCommand::Hide),
             UiAction::GroupToggle(2),
             UiAction::Screenshot(8),
+            UiAction::ToggleHud,
         ];
         for verb in StoryCommand::VERBS {
             all.push(UiAction::Story(
@@ -300,7 +308,7 @@ mod tests {
 
     #[test]
     fn an_encoded_tag_past_the_last_variant_is_rejected() {
-        assert!(postcard::from_bytes::<UiAction>(&[10]).is_err());
+        assert!(postcard::from_bytes::<UiAction>(&[11]).is_err());
         assert!(postcard::from_bytes::<UiAction>(&[7, 13, 0]).is_err());
     }
 

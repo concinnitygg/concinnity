@@ -79,9 +79,12 @@ impl StreamingRuntime {
     /// Per-pool `(resident, pending, unloaded)` counts of the runtime
     /// published in `world`, or `None` before graphics init publishes it.
     pub fn stats_in(world: &World) -> Option<StreamingStats> {
-        world
-            .resource::<Self>()
-            .map(|runtime| runtime.state.streaming_stats())
+        world.resource::<Self>().map(Self::stats)
+    }
+
+    /// Per-pool counts of the pools this runtime drives.
+    pub fn stats(&self) -> StreamingStats {
+        self.state.streaming_stats()
     }
 
     /// One frame of every pool, a planet's tiles included: hand them the

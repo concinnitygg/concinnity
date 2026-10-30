@@ -57,7 +57,7 @@ impl Move {
 
 impl Move {
     /// The move `action` makes, or `None` when it makes none: a settings row,
-    /// group toggle, or screenshot, which change no place, or a target left empty, which the
+    /// group toggle, screenshot, or HUD toggle, which change no place, or a target left empty, which the
     /// build rejects and which would put a nameless place on a map.
     pub fn of(action: &NamedAction) -> Option<Self> {
         let named = |name: &str| (!name.is_empty()).then(|| name.to_string());
@@ -71,7 +71,8 @@ impl Move {
             AuthoredAction::Story(_) => Some(Self::Story),
             AuthoredAction::GroupToggle(_)
             | AuthoredAction::Setting { .. }
-            | AuthoredAction::Screenshot(_) => None,
+            | AuthoredAction::Screenshot(_)
+            | AuthoredAction::ToggleHud => None,
         }
     }
 }

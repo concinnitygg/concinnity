@@ -16,9 +16,14 @@ impl RateWindow {
         if self.secs < interval {
             return None;
         }
+        Some(self.close())
+    }
+
+    // Close the window now, returning its frame count and length so far.
+    pub(crate) fn close(&mut self) -> (u32, f32) {
         let window = (self.frames, self.secs);
         *self = Self::default();
-        Some(window)
+        window
     }
 }
 
@@ -41,6 +46,14 @@ mod tests {
         assert_eq!(window.tick(2.0, 1.0), Some((1, 2.0)));
         assert_eq!(window.tick(0.5, 1.0), None);
         assert_eq!(window.tick(0.5, 1.0), Some((2, 1.0)));
+    }
+
+    #[test]
+    fn closing_early_returns_the_window_so_far() {
+        let mut window = RateWindow::default();
+        assert_eq!(window.tick(0.25, 1.0), None);
+        assert_eq!(window.close(), (1, 0.25));
+        assert_eq!(window.tick(1.0, 1.0), Some((1, 1.0)));
     }
 
     #[test]

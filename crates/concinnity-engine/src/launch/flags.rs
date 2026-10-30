@@ -213,6 +213,10 @@ pub const LAUNCH_FLAGS: &[LaunchFlag] = &[
         "Put skinned meshes in the ray-tracing acceleration structure or leave them out",
     ),
     switch("vsync", "Turn vertical sync on or off"),
+    switch(
+        "hud",
+        "Start with the stats HUD shown or hidden (a toggle_hud key still flips it)",
+    ),
     valued(
         "dlss-preset",
         "PRESET",

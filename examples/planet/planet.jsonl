@@ -31,6 +31,7 @@
 ["StatHud",{"fps_label":"fps_chip"}]
 ["KeyBinding",{"key":"P","action":{"screenshot":1}}]
 ["KeyBinding",{"key":"P","mods":{"shift":true},"action":{"screenshot":8}}]
+["KeyBinding",{"key":"H","action":"toggle_hud"}]
 ["BenchmarkConfig",{"warmup_seconds":2.5,"subject":"marble"}]
 ["Scene",{"camera_shot":"cam"}]
 ["MainMenu",{}]

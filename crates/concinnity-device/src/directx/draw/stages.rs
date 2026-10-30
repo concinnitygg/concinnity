@@ -327,6 +327,17 @@ impl DxContext {
             // Captured from the resolved `HdrOutputMode` at init. `None` on
             // the SDR path (chip blanks). Mirrors `MtlContext::render_stats`.
             max_edr: self.hw.max_edr(),
+            resolution: profile::RenderResolution {
+                render: [
+                    self.targets.extent.render_width,
+                    self.targets.extent.render_height,
+                ],
+                output: [
+                    self.targets.extent.output_width,
+                    self.targets.extent.output_height,
+                ],
+                upscaler: self.upscale.backend.as_ref().map(|u| u.vendor().label()),
+            },
             ..profile::RenderStats::default()
         });
     }

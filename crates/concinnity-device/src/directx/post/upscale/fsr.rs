@@ -9,6 +9,7 @@
 //! while it runs; the projection is jittered by FFX's own sequence rather than
 //! the engine's Halton one.
 
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::ffi::{CStr, c_void};
 
 use concinnity_engine::render::backend::error::RenderResult;
@@ -79,6 +80,10 @@ impl FsrUpscaler {
 }
 
 impl UpscaleBackend for FsrUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Fsr
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ffx.extent()
     }

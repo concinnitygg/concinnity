@@ -888,3 +888,14 @@ fn a_failed_load_is_requested_once_and_its_scene_still_loads() {
     );
     assert_eq!(residency.progress(scene), Some(1.0));
 }
+
+#[test]
+fn pending_sums_every_streaming_pool_and_is_none_without_one() {
+    assert_eq!(StreamingStats::default().pending(), None);
+    let stats = StreamingStats {
+        texture: Some((4, 2, 1)),
+        planet: Some((30, 5)),
+        ..StreamingStats::default()
+    };
+    assert_eq!(stats.pending(), Some(7));
+}

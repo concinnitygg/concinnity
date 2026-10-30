@@ -18,7 +18,7 @@ use std::ffi::{CStr, c_void};
 use concinnity_engine::gfx::auto_exposure::UpscalerExposure;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::output::dlss::DlssPreset;
-use concinnity_engine::render::output::upscaler::UpscalerAvailability;
+use concinnity_engine::render::output::upscaler::{UpscalerAvailability, VendorUpscaler};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -59,6 +59,8 @@ pub(in crate::directx) struct UpscaleState {
 // depth / motion inputs and the output texture, then calls `dispatch`; each
 // backend records its vendor upscale onto the supplied command list.
 pub(in crate::directx) trait UpscaleBackend: Send {
+    // The vendor upscaler this is.
+    fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.
     fn extent(&self) -> UpscaleExtent;
     // The output texture the bloom + composite stack samples as the scene.

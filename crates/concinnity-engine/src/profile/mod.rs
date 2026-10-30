@@ -199,6 +199,22 @@ pub struct RenderStats {
     /// panel's peak brightness, so a color-grading consumer can interpret
     /// it directly.
     pub max_edr: Option<f32>,
+    /// The size the scene renders at against the size it is shown at.
+    pub resolution: RenderResolution,
+}
+
+/// The size a frame's 3D scene renders at, the size it is shown at, and the
+/// temporal upscaler that reconstructs one from the other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RenderResolution {
+    /// Width and height of the scene's render targets, in pixels.
+    pub render: [u32; 2],
+    /// Width and height of the upscaled output, in pixels: `render` when no
+    /// upscaler runs.
+    pub output: [u32; 2],
+    /// The upscaler's display name (`MetalFX`, `DLSS`, `XeSS`, `FSR 3`), or
+    /// `None` at native resolution.
+    pub upscaler: Option<&'static str>,
 }
 
 impl Default for RenderStats {
@@ -226,6 +242,7 @@ impl Default for RenderStats {
             async_pass_mask: 0,
             auto_exposure_ev: None,
             max_edr: None,
+            resolution: RenderResolution::default(),
         }
     }
 }
@@ -250,7 +267,7 @@ pub struct FrameProfile {
     last_allocs: Vec<(&'static str, u32)>,
     current_allocs: Vec<(&'static str, u32)>,
     // Heap allocations counted across the whole most recent frame. `None` in
-    // release builds and in binaries without the tracking allocator.
+    // binaries without the tracking allocator.
     frame_allocs: Option<u32>,
     // Render handoff recorded by the step in progress, claimed by that step's
     // `record_system`.
@@ -347,8 +364,8 @@ impl FrameProfile {
         &self.last_allocs
     }
 
-    /// Heap allocations counted across the most recent frame, under the same
-    /// conditions as `system_allocs`.
+    /// Heap allocations counted across the most recent frame, or `None` in a
+    /// binary without the tracking allocator.
     pub fn frame_allocs(&self) -> Option<u32> {
         self.frame_allocs
     }
@@ -358,6 +375,23 @@ impl FrameProfile {
     /// systems that recorded one appear.
     pub fn render_handoffs(&self) -> &[(&'static str, u32)] {
         &self.last_handoffs
+    }
+
+    /// CPU microseconds the last fully completed frame's work came to: every
+    /// system's step less its render handoff, plus the render side's own
+    /// submission work. The frame's wait on the GPU is in neither.
+    pub fn cpu_work_us(&self) -> u32 {
+        self.last
+            .iter()
+            .map(|&(name, us)| {
+                let handoff = self
+                    .last_handoffs
+                    .iter()
+                    .find(|(handed, _)| *handed == name)
+                    .map_or(0, |&(_, us)| us);
+                us.saturating_sub(handoff)
+            })
+            .fold(self.render.render_cpu_us, u32::saturating_add)
     }
 
     /// Per-system fan-out timing from the last fully completed frame, paired
@@ -502,5 +536,18 @@ mod tests {
         let p = FrameProfile::default();
         assert_eq!(p.render, RenderStats::default());
         assert_eq!(p.render.draw_calls, 0);
+    }
+
+    // A system's render handoff is the render side's, which `render_cpu_us`
+    // already carries, so it is taken out of that system's step.
+    #[test]
+    fn cpu_work_sums_systems_less_handoffs_plus_render_work() {
+        let mut p = FrameProfile::default();
+        p.record_system("Sim", 3_000);
+        p.record_render_handoff(1_500);
+        p.record_system("Graphics", 2_000);
+        p.begin_frame();
+        p.render.render_cpu_us = 4_000;
+        assert_eq!(p.cpu_work_us(), 3_000 + 500 + 4_000);
     }
 }

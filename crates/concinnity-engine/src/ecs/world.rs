@@ -658,12 +658,11 @@ impl World {
     /// Tick -- systems run in order, Done systems are removed.
     /// Returns Done when no systems remain, Stop on hard halt.
     pub fn step(&mut self) -> StepResult {
-        // Dev builds sample the tracked heap around the frame and each system
-        // step, so per-frame allocation churn is visible in the profile. The
-        // counters are process-wide: a delta includes concurrent threads
-        // (streaming workers, the pipelined render half), so per-system
+        // The tracked heap is sampled around the frame, and in dev builds around
+        // each system step too, so per-frame allocation churn is visible in the
+        // profile. The counters are process-wide: a delta includes concurrent
+        // threads (streaming workers, the pipelined render half), so per-system
         // attribution is approximate while the frame total is exact churn.
-        #[cfg(debug_assertions)]
         let frame_alloc_start = concinnity_core::memory::alloc_count();
         // Rotate the profiler's system-timing buffers so the frame that just
         // finished becomes the readable snapshot for this frame's readers.
@@ -715,7 +714,6 @@ impl World {
             self.schedule = Some(waves::build(&self.systems, self.entries));
         }
         self.take_scratch_overflows();
-        #[cfg(debug_assertions)]
         if let (Some(start), Some(end)) =
             (frame_alloc_start, concinnity_core::memory::alloc_count())
         {

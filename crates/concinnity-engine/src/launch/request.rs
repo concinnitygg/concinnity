@@ -58,6 +58,9 @@ impl LaunchRequest {
         if let Some(view) = self.view_overrides() {
             world.insert_resource(view);
         }
+        if self.args.hud == Some(false) {
+            world.insert_resource(crate::ecs::HudHidden(true));
+        }
     }
 
     /// The view state the run starts with, or `None` for the shipping frame.
@@ -178,6 +181,28 @@ mod tests {
             .resource::<crate::benchmark::BenchmarkRun>()
             .expect("armed");
         assert!(run.stop_seconds() <= 2.5);
+    }
+
+    // `--no-hud` starts the stats HUD hidden; without it nothing is published.
+    #[test]
+    fn publishing_no_hud_hides_the_stats_hud() {
+        let mut world = World::new();
+        LaunchRequest::default().publish(&mut world);
+        assert!(world.resource::<crate::ecs::HudHidden>().is_none());
+
+        let mut world = World::new();
+        let mut request = LaunchRequest {
+            args: LaunchArgs {
+                hud: Some(false),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        };
+        request.publish(&mut world);
+        assert_eq!(
+            world.resource::<crate::ecs::HudHidden>(),
+            Some(&crate::ecs::HudHidden(true))
+        );
     }
 
     #[test]

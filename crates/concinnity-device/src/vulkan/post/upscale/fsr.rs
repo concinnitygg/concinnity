@@ -8,6 +8,7 @@
 //! own sequence rather than the engine's Halton one.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::output::upscaler::VendorUpscaler;
 use std::cell::Cell;
 use std::ffi::c_void;
 
@@ -108,6 +109,10 @@ impl FsrUpscaler {
 }
 
 impl VkUpscaleBackend for FsrUpscaler {
+    fn vendor(&self) -> VendorUpscaler {
+        VendorUpscaler::Fsr
+    }
+
     fn extent(&self) -> UpscaleExtent {
         self.ffx.extent()
     }
