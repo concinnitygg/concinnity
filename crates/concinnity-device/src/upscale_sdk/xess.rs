@@ -360,6 +360,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "the exposure scale is passed through exactly"
+    )]
     fn a_frame_covers_the_render_extent_from_the_origin() {
         let extent = UpscaleExtent::resolve((1920, 1080), 0.5);
         let frame = XessExecuteFrame::new([0.25, -0.25], 4.0, true, extent);

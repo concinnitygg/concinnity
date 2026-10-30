@@ -347,6 +347,10 @@ fn value_text(v: &Value) -> String {
 // `0.05000000074505806`); a genuine f64 that does not round-trip through f32 keeps
 // full precision. Integers print as-is. Re-parsing the shortened text yields the
 // same f32, so the displayed value round-trips unchanged through cook.
+#[expect(
+    clippy::float_cmp,
+    reason = "an exact round trip shows the value is an f32"
+)]
 pub(crate) fn number_text(n: &serde_json::Number) -> String {
     if n.is_i64() || n.is_u64() {
         return n.to_string();
@@ -858,6 +862,10 @@ fn assemble_sparse(
 
 // Whether two values are equal as the engine reads them: a float is an `f32`
 // there, so its shortest display text (`0.6`) equals its widened default.
+#[expect(
+    clippy::float_cmp,
+    reason = "values compare exactly as the engine reads them"
+)]
 fn same_value(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {

@@ -63,6 +63,9 @@ fn farthest_corner(p: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close_rel;
+
+    const TOL: f32 = 1e-4;
 
     fn light(position: [f32; 3], range: f32) -> GpuLight {
         GpuLight {
@@ -81,10 +84,6 @@ mod tests {
         }
     }
 
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() <= 1e-4 * b.abs().max(1.0)
-    }
-
     // The farthest light sphere sets the range, whichever side of the camera
     // it is on.
     #[test]
@@ -94,9 +93,13 @@ mod tests {
             light([40.0, 0.0, 0.0], 2.0),
             light([0.0, 0.0, 10.0], 1.0),
         ]);
-        assert!(close(reach.range([0.0; 3], 0.05, &[], None), 42.0));
+        assert!(close_rel(reach.range([0.0; 3], 0.05, &[], None), 42.0, TOL));
         // From another position the same lights reach differently.
-        assert!(close(reach.range([0.0, 0.0, 20.0], 0.05, &[], None), 55.0));
+        assert!(close_rel(
+            reach.range([0.0, 0.0, 20.0], 0.05, &[], None),
+            55.0,
+            TOL
+        ));
     }
 
     #[test]
@@ -106,7 +109,11 @@ mod tests {
         let margin = p.blend_margin();
         let corner = [20.0 + margin[0], 4.0 + margin[1], 6.0 + margin[2]];
         let expected = length(corner);
-        assert!(close(reach.range([0.0; 3], 0.05, &[p], None), expected));
+        assert!(close_rel(
+            reach.range([0.0; 3], 0.05, &[p], None),
+            expected,
+            TOL
+        ));
 
         // Inside the box the range still covers the whole influence.
         let inside = [15.0, 0.0, 0.0];
@@ -114,7 +121,11 @@ mod tests {
             [10.0 - margin[0], 4.0 + margin[1], 6.0 + margin[2]],
             inside,
         ));
-        assert!(close(reach.range(inside, 0.05, &[p], None), expected));
+        assert!(close_rel(
+            reach.range(inside, 0.05, &[p], None),
+            expected,
+            TOL
+        ));
     }
 
     #[test]
@@ -124,18 +135,23 @@ mod tests {
         let range = reach.range([0.0; 3], 0.05, &[far_probe], None);
         assert!(range > 101.0, "{range}");
         let near_probe = probe([-1.0, -1.0, -3.0], [1.0, 1.0, -1.0]);
-        assert!(close(
+        assert!(close_rel(
             reach.range([0.0; 3], 0.05, &[near_probe], None),
-            12.0
+            12.0,
+            TOL,
         ));
     }
 
     #[test]
     fn a_view_distance_caps_the_range() {
         let reach = ClusterReach::new(&[light([0.0, 0.0, -900.0], 50.0)]);
-        assert!(close(reach.range([0.0; 3], 0.1, &[], None), 950.0));
+        assert!(close_rel(reach.range([0.0; 3], 0.1, &[], None), 950.0, TOL));
         assert_eq!(reach.range([0.0; 3], 0.1, &[], Some(300.0)), 300.0);
-        assert!(close(reach.range([0.0; 3], 0.1, &[], Some(5000.0)), 950.0));
+        assert!(close_rel(
+            reach.range([0.0; 3], 0.1, &[], Some(5000.0)),
+            950.0,
+            TOL
+        ));
     }
 
     // With nothing to bin, or nothing past the near plane, the slicing ratio
@@ -153,6 +169,6 @@ mod tests {
     #[test]
     fn a_negative_range_counts_as_none() {
         let reach = ClusterReach::new(&[light([0.0, 0.0, -20.0], -5.0)]);
-        assert!(close(reach.range([0.0; 3], 0.05, &[], None), 20.0));
+        assert!(close_rel(reach.range([0.0; 3], 0.05, &[], None), 20.0, TOL));
     }
 }

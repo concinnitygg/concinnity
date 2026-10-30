@@ -133,19 +133,23 @@ impl Mat3 {
 mod tests {
     use super::super::vec3::vec3;
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn close(a: Vec3, b: Vec3) -> bool {
-        (a - b).length() < 1.0e-5
-    }
+    const TOL: f32 = 1e-5;
 
     #[test]
     fn identity_and_diagonal_scale_their_axes() {
         assert!(close(
             Mat3::IDENTITY.mul_vec3(vec3(1.0, 2.0, 3.0)),
-            vec3(1.0, 2.0, 3.0)
+            vec3(1.0, 2.0, 3.0),
+            TOL,
         ));
         let d = Mat3::from_diagonal(vec3(2.0, 3.0, 4.0));
-        assert!(close(d.mul_vec3(vec3(1.0, 1.0, 1.0)), vec3(2.0, 3.0, 4.0)));
+        assert!(close(
+            d.mul_vec3(vec3(1.0, 1.0, 1.0)),
+            vec3(2.0, 3.0, 4.0),
+            TOL
+        ));
         assert_eq!(Mat3::ZERO.mul_vec3(vec3(1.0, 2.0, 3.0)), Vec3::ZERO);
     }
 
@@ -154,9 +158,9 @@ mod tests {
         let a = Mat3::from_diagonal(vec3(1.0, 2.0, 3.0));
         let b = Mat3::from_cols(Vec3::Y, Vec3::Z, Vec3::X);
         let sum = a.add(b);
-        assert!(close(sum.cols[0], vec3(1.0, 1.0, 0.0)));
-        assert!(close(sum.cols[1], vec3(0.0, 2.0, 1.0)));
-        assert!(close(sum.cols[2], vec3(1.0, 0.0, 3.0)));
+        assert!(close(sum.cols[0], vec3(1.0, 1.0, 0.0), TOL));
+        assert!(close(sum.cols[1], vec3(0.0, 2.0, 1.0), TOL));
+        assert!(close(sum.cols[2], vec3(1.0, 0.0, 3.0), TOL));
     }
 
     // The property the solver relies on: whatever the block, multiplying by
@@ -175,7 +179,10 @@ mod tests {
         ] {
             let inverse = m.inverse();
             for v in [Vec3::X, Vec3::Y, Vec3::Z, vec3(0.4, -1.2, 3.0)] {
-                assert!(close(inverse.mul_vec3(m.mul_vec3(v)), v), "{m:?} {v:?}");
+                assert!(
+                    close(inverse.mul_vec3(m.mul_vec3(v)), v, TOL),
+                    "{m:?} {v:?}"
+                );
             }
         }
     }
@@ -195,7 +202,7 @@ mod tests {
         let q = Quat::from_euler_deg([15.0, 40.0, -25.0]);
         let m = Mat3::from_quat(q);
         for v in [Vec3::X, Vec3::Y, Vec3::Z, vec3(1.0, -2.0, 0.5)] {
-            assert!(close(m.mul_vec3(v), q.rotate(v)), "{v:?}");
+            assert!(close(m.mul_vec3(v), q.rotate(v), TOL), "{v:?}");
         }
     }
 
@@ -207,7 +214,7 @@ mod tests {
         let m = Mat3::diagonal_conjugated(q, Vec3::splat(2.5));
         for v in [Vec3::X, Vec3::Y, Vec3::Z, vec3(0.3, 0.4, -0.5)] {
             assert!(
-                close(m.mul_vec3(v), v * 2.5),
+                close(m.mul_vec3(v), v * 2.5, TOL),
                 "{v:?} -> {:?}",
                 m.mul_vec3(v)
             );
@@ -223,7 +230,7 @@ mod tests {
         let m = Mat3::diagonal_conjugated(q, d);
         for v in [Vec3::X, Vec3::Y, Vec3::Z, vec3(-1.0, 2.0, 3.0)] {
             let expected = q.rotate(q.inverse_rotate(v) * d);
-            assert!(close(m.mul_vec3(v), expected), "{v:?}");
+            assert!(close(m.mul_vec3(v), expected, TOL), "{v:?}");
         }
     }
 
@@ -236,7 +243,7 @@ mod tests {
         );
         let t = m.transpose();
         for i in 0..3 {
-            assert!(close(m.cols[i], t.cols[i]), "column {i}");
+            assert!(close(m.cols[i], t.cols[i], TOL), "column {i}");
         }
     }
 
@@ -247,7 +254,8 @@ mod tests {
         assert_eq!(Mat3::default(), Mat3::ZERO);
         assert!(close(
             Mat3::default().mul_vec3(vec3(1.0, 2.0, 3.0)),
-            Vec3::ZERO
+            Vec3::ZERO,
+            TOL,
         ));
     }
 }

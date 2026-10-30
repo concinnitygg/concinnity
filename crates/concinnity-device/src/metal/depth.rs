@@ -102,6 +102,7 @@ mod tests {
     // Reversed depth: a sample is lit where its reference is at or nearer the
     // light than the stored caster, i.e. greater or equal.
     #[test]
+    #[expect(clippy::float_cmp, reason = "the clear depth is an exact constant")]
     fn the_shadow_sampler_passes_at_or_nearer_the_light() {
         assert_eq!(SHADOW_SAMPLE_COMPARE, MTLCompareFunction::GreaterEqual);
         assert_eq!(CLEAR_DEPTH, 0.0);

@@ -31,14 +31,7 @@ pub(crate) fn check_sea_swell(assets: &[WorldJsonlAsset], errors: &mut Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn asset(id: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: id.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     fn planet() -> WorldJsonlAsset {
         asset(

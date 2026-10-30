@@ -163,7 +163,7 @@ impl EditorHook {
         let Some(pos) = self.drop_point(world, vp, middle, false) else {
             return;
         };
-        let pos = pos.map(super::drag::gizmo::round3);
+        let pos = pos.map(crate::editor::round::round3);
         self.form
             .args
             .insert(key.to_string(), serde_json::json!(pos));

@@ -558,7 +558,8 @@ pub(crate) fn hide_all(world: &mut World, ids: ChartIds) {
 mod tests {
     use super::super::graph;
     use super::*;
-    use concinnity_engine::components::{Sprite, TextLabel};
+    use crate::test_support::{label, sprite};
+    use concinnity_engine::components::Sprite;
     use serde_json::json;
 
     // Any base will do here: what the tests check is what is drawn, not which
@@ -598,14 +599,6 @@ mod tests {
     }
 
     const BAND: [f32; 4] = [100.0, 200.0, 600.0, 300.0];
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
-    }
 
     #[test]
     fn cards_lay_out_left_to_right_at_the_pitch() {

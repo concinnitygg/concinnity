@@ -53,10 +53,7 @@ mod tests {
     use crate::components::cook::Camera3D as Camera3DArgs;
     use crate::ecs::World;
     use crate::planet::{LocalFrame, PlanetShape};
-
-    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
+    use concinnity_core::approx::close;
 
     const SHAPE: PlanetShape = PlanetShape {
         center: [0.0, -50_000.0, 0.0],

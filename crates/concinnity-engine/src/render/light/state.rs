@@ -69,6 +69,7 @@ impl LightState {
 
     /// Set the ambient (IBL) scale. Edge-triggered: an unchanged value
     /// re-arms nothing.
+    #[expect(clippy::float_cmp, reason = "change detection: any bit change re-arms")]
     pub fn set_ambient(&mut self, value: f32) {
         if self.uniforms.ambient_intensity != value {
             self.uniforms.ambient_intensity = value;

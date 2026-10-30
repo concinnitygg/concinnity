@@ -241,12 +241,11 @@ impl BendHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
+
+    const TOL: f32 = 1e-5;
 
     const N: i32 = GRASS_BEND_RESOLUTION.cast_signed();
-
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-5
-    }
 
     #[test]
     fn the_window_centers_on_the_camera_cell() {
@@ -257,8 +256,8 @@ mod tests {
         assert!(!w.contains([w.origin[0] + N, 0]));
         assert!(!w.contains([w.origin[0] - 1, 0]));
         let [x0, z0, x1, z1] = w.rect();
-        assert!(close(x1 - x0, N as f32 * GRASS_BEND_CELL_SIZE));
-        assert!(close(z1 - z0, N as f32 * GRASS_BEND_CELL_SIZE));
+        assert!(close(x1 - x0, N as f32 * GRASS_BEND_CELL_SIZE, TOL));
+        assert!(close(z1 - z0, N as f32 * GRASS_BEND_CELL_SIZE, TOL));
         assert!(x0 < 0.1 && 0.1 < x1 && z0 < -0.1 && -0.1 < z1);
     }
 
@@ -308,9 +307,9 @@ mod tests {
     fn the_field_relaxes_over_the_recovery_time() {
         assert_eq!(decay(0.0), 1.0);
         assert_eq!(decay(-1.0), 1.0);
-        assert!(close(decay(0.1), exp(-0.1 / GRASS_BEND_RECOVERY)));
+        assert!(close(decay(0.1), exp(-0.1 / GRASS_BEND_RECOVERY), TOL));
         // Halving the step twice is the same as one whole step.
-        assert!(close(decay(0.05) * decay(0.05), decay(0.1)));
+        assert!(close(decay(0.05) * decay(0.05), decay(0.1), TOL));
         // A stall relaxes the field one capped step, not all the way.
         assert_eq!(decay(5.0), decay(GRASS_BEND_MAX_STEP));
         // A few seconds of frames stands it all but upright.
@@ -330,7 +329,7 @@ mod tests {
         assert_eq!(first.write_half, 0);
         let second = h.advance([1.0, 0.0, 0.0], 2.1);
         assert_eq!(second.prev, Some(first.window));
-        assert!(close(second.decay, decay(0.1)));
+        assert!(close(second.decay, decay(0.1), TOL));
         assert_eq!(second.write_half, 1);
         assert_eq!(h.advance([1.0, 0.0, 0.0], 2.2).write_half, 0);
     }
@@ -339,14 +338,14 @@ mod tests {
     fn a_footprint_presses_outward_and_fades_at_its_reach() {
         let stamp = [2.0, -1.0, 0.5, 1.0];
         let inside = stamp_bend(stamp, [2.2, -1.0]);
-        assert!(close(inside[0], GRASS_TRAMPLE_BEND));
-        assert!(close(inside[1], 0.0));
+        assert!(close(inside[0], GRASS_TRAMPLE_BEND, TOL));
+        assert!(close(inside[1], 0.0, TOL));
         let edge = stamp_bend(stamp, [2.0, -1.0 - 0.5 * GRASS_STAMP_REACH]);
-        assert!(close(edge[0], 0.0) && close(edge[1], 0.0));
+        assert!(close(edge[0], 0.0, TOL) && close(edge[1], 0.0, TOL));
         let between = stamp_bend(stamp, [2.0, -1.0 + 0.5]);
         assert!(between[1] > 0.0 && between[1] < GRASS_TRAMPLE_BEND);
         let half = stamp_bend([2.0, -1.0, 0.5, 0.5], [2.2, -1.0]);
-        assert!(close(half[0], 0.5 * GRASS_TRAMPLE_BEND));
+        assert!(close(half[0], 0.5 * GRASS_TRAMPLE_BEND, TOL));
     }
 
     #[test]

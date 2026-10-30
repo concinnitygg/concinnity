@@ -228,7 +228,8 @@ pub(crate) fn hit_row(mx: f32, my: f32, o: [f32; 2], w: f32, rows: usize) -> Opt
 mod tests {
     use super::*;
     use crate::editor::hud_ids::hud_ids;
-    use concinnity_engine::components::{Sprite, TextLabel};
+    use crate::test_support::sprite;
+    use concinnity_engine::components::TextLabel;
 
     const ROWS: usize = 2;
 
@@ -251,10 +252,6 @@ mod tests {
 
     fn injected_world() -> World {
         ids().test_world()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     #[test]

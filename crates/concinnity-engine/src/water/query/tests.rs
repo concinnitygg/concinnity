@@ -1,6 +1,7 @@
 use super::*;
 use crate::components::{Planet, Wind};
 use crate::water::sea::shore::ShoreWaves;
+use concinnity_core::approx::close;
 use concinnity_core::math::{dvec3, narrow_f32};
 
 // The planet example's world: a coast east of the start, its sea in a
@@ -83,10 +84,6 @@ fn east_where(q: &WaterQuery, depth: f64) -> [f32; 3] {
             (shore(q).coast().depth(inland) - depth).abs() < 0.5
         })
         .expect("a coast to the east")
-}
-
-fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-    (0..3).all(|i| (a[i] - b[i]).abs() < tol)
 }
 
 // Still water lies at its rest: a point above it is out of the water by its

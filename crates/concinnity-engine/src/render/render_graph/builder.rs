@@ -370,30 +370,14 @@ impl PassBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::{BufferUsage, PixelFormat, TextureSize, TextureUsage};
     use super::*;
-
-    fn dummy_tex_desc() -> TextureDesc {
-        TextureDesc::texture_2d(
-            TextureSize::Drawable,
-            TextureSize::Drawable,
-            PixelFormat::Rgba16Float,
-            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        )
-    }
-
-    fn dummy_buf_desc() -> BufferDesc {
-        BufferDesc {
-            size_bytes: None,
-            usage: BufferUsage::STORAGE,
-        }
-    }
+    use crate::render::render_graph::test_fixtures::{buf, tex};
 
     #[test]
     fn create_texture_assigns_dense_ids() {
         let mut b = GraphBuilder::new();
-        let a = b.import_texture("a", dummy_tex_desc());
-        let c = b.create_texture("c", dummy_tex_desc());
+        let a = b.import_texture("a", tex());
+        let c = b.create_texture("c", tex());
         assert_eq!(a.resource.index(), 0);
         assert_eq!(c.resource.index(), 1);
         assert_eq!(a.version, 0);
@@ -403,7 +387,7 @@ mod tests {
     #[test]
     fn write_bumps_version_and_returns_new_handle() {
         let mut b = GraphBuilder::new();
-        let h0 = b.create_texture("t", dummy_tex_desc());
+        let h0 = b.create_texture("t", tex());
         let h1 = {
             let mut p = b.add_pass(PassId::Main, PassKind::Render);
             p.write_texture(h0)
@@ -416,8 +400,8 @@ mod tests {
     #[test]
     fn read_write_record_declarations() {
         let mut b = GraphBuilder::new();
-        let t = b.create_texture("t", dummy_tex_desc());
-        let buf = b.create_buffer("b", dummy_buf_desc());
+        let t = b.create_texture("t", tex());
+        let buf = b.create_buffer("b", buf());
         {
             let mut p = b.add_pass(PassId::Main, PassKind::Render);
             p.read_texture(t).read_buffer(buf);

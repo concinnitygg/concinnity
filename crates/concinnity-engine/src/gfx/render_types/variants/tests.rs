@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::mem::offset_of;
 
+use concinnity_core::math::vec3::{length, sub};
 use concinnity_core::math::{cos, sqrt};
 
 use super::*;
@@ -155,11 +156,6 @@ fn box_points(bb: ([f32; 3], [f32; 3])) -> Vec<[f32; 3]> {
     points
 }
 
-fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
-    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
-}
-
 // An eye walking away from a 40 m tile and back: the tile takes the ground
 // only while no point of it is past the hand-over, so the canopy's weight is 0
 // over every pixel the ground draws and the switch shows no seam; it switches
@@ -176,7 +172,7 @@ fn routing_follows_the_eye_across_the_hand_over_without_a_seam() {
         let bucket = b.bucket(&grass(), bb, eye);
         let farthest = points
             .iter()
-            .map(|p| distance(eye, *p))
+            .map(|p| length(sub(eye, *p)))
             .fold(0.0_f32, f32::max);
         match bucket {
             GROUND => assert!(farthest <= b.far[0], "x {x}: ground, a pixel at {farthest}"),

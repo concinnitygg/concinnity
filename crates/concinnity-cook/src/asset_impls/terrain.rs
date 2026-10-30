@@ -42,14 +42,7 @@ impl crate::asset::BuildAsset for Terrain {
 mod tests {
     use super::*;
     use crate::asset::{BuildAsset, BuildCtx};
-
-    fn asset(id: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: id.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     fn ctx(assets: &[WorldJsonlAsset]) -> BuildCtx<'_> {
         BuildCtx {

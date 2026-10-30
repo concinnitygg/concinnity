@@ -6,13 +6,21 @@
 //! ([`fanout`]), and the small primitives with no better owner ([`fnv`],
 //! [`utc`]). Nothing here knows about worlds, components or rendering; that
 //! is `concinnity-engine`, which builds on this crate.
-
+#![cfg_attr(
+    test,
+    expect(
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
+    )
+)]
 #![no_std]
 
 extern crate alloc;
 #[cfg(any(test, feature = "test-support"))]
 extern crate std;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod approx;
 #[cfg(any(test, feature = "test-support"))]
 pub mod bench;
 pub mod fanout;

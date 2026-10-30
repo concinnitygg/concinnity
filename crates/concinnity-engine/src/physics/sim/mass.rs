@@ -93,10 +93,9 @@ impl MassProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close_rel;
 
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() <= 1.0e-4 * b.abs().max(1.0)
-    }
+    const TOL: f32 = 1e-4;
 
     #[test]
     fn a_unit_cube_weighs_its_volume_and_matches_the_textbook_inertia() {
@@ -106,11 +105,11 @@ mod tests {
             },
             0.0,
         );
-        assert!(close(p.mass, 1.0), "{}", p.mass);
+        assert!(close_rel(p.mass, 1.0, TOL), "{}", p.mass);
         // m/12 * (w^2 + d^2) with w = d = 1.
-        assert!(close(p.inertia.x, 1.0 / 6.0), "{:?}", p.inertia);
-        assert!(close(p.inertia.y, 1.0 / 6.0));
-        assert!(close(p.inertia.z, 1.0 / 6.0));
+        assert!(close_rel(p.inertia.x, 1.0 / 6.0, TOL), "{:?}", p.inertia);
+        assert!(close_rel(p.inertia.y, 1.0 / 6.0, TOL));
+        assert!(close_rel(p.inertia.z, 1.0 / 6.0, TOL));
     }
 
     #[test]
@@ -126,16 +125,16 @@ mod tests {
             "{:?}",
             p.inertia
         );
-        assert!(close(p.inertia.y, p.inertia.z));
+        assert!(close_rel(p.inertia.y, p.inertia.z, TOL));
     }
 
     #[test]
     fn a_ball_is_isotropic_and_matches_two_fifths_m_r_squared() {
         let p = MassProperties::for_shape(&ColliderShape::Ball { radius: 2.0 }, 0.0);
         let expected_mass = (4.0 / 3.0) * core::f32::consts::PI * 8.0;
-        assert!(close(p.mass, expected_mass), "{}", p.mass);
+        assert!(close_rel(p.mass, expected_mass, TOL), "{}", p.mass);
         let expected = 0.4 * expected_mass * 4.0;
-        assert!(close(p.inertia.x, expected), "{:?}", p.inertia);
+        assert!(close_rel(p.inertia.x, expected, TOL), "{:?}", p.inertia);
         assert_eq!(p.inertia.x, p.inertia.y);
         assert_eq!(p.inertia.y, p.inertia.z);
     }
@@ -152,13 +151,13 @@ mod tests {
             0.0,
         );
         let ball = MassProperties::for_shape(&ColliderShape::Ball { radius: 0.7 }, 0.0);
-        assert!(close(capsule.mass, ball.mass));
+        assert!(close_rel(capsule.mass, ball.mass, TOL));
         assert!(
-            close(capsule.inertia.x, ball.inertia.x),
+            close_rel(capsule.inertia.x, ball.inertia.x, TOL),
             "{:?}",
             capsule.inertia
         );
-        assert!(close(capsule.inertia.y, ball.inertia.y));
+        assert!(close_rel(capsule.inertia.y, ball.inertia.y, TOL));
     }
 
     #[test]
@@ -171,7 +170,7 @@ mod tests {
             0.0,
         );
         assert!(p.inertia.y < p.inertia.x, "{:?}", p.inertia);
-        assert!(close(p.inertia.x, p.inertia.z));
+        assert!(close_rel(p.inertia.x, p.inertia.z, TOL));
     }
 
     // An explicit mass rescales the tensor rather than replacing it: the ratio
@@ -183,10 +182,14 @@ mod tests {
         };
         let derived = MassProperties::for_shape(&shape, 0.0);
         let heavy = MassProperties::for_shape(&shape, derived.mass * 4.0);
-        assert!(close(heavy.mass, derived.mass * 4.0));
+        assert!(close_rel(heavy.mass, derived.mass * 4.0, TOL));
         for axis in 0..3 {
             assert!(
-                close(heavy.inertia.get(axis), derived.inertia.get(axis) * 4.0),
+                close_rel(
+                    heavy.inertia.get(axis),
+                    derived.inertia.get(axis) * 4.0,
+                    TOL
+                ),
                 "axis {axis}: {:?} vs {:?}",
                 heavy.inertia,
                 derived.inertia

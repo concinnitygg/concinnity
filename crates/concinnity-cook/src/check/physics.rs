@@ -270,6 +270,7 @@ fn prop_body_warnings(name: &str, args: &serde_json::Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::asset;
 
     #[test]
     fn a_buoyant_body_without_mass_is_warned_about() {
@@ -279,14 +280,6 @@ mod tests {
         assert_eq!(warns(serde_json::json!({"buoyancy": {}, "mass": 40.0})), 0);
         assert_eq!(warns(serde_json::json!({"buoyancy": null})), 0);
         assert_eq!(warns(serde_json::json!({})), 0);
-    }
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
-        }
     }
 
     fn layer_errors(assets: &[WorldJsonlAsset]) -> Vec<String> {

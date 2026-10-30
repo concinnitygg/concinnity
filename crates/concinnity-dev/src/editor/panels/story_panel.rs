@@ -276,8 +276,8 @@ fn place_header(world: &mut World, view: &StoryView<'_>, o: [f32; 2], w: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextLabel};
-    use concinnity_engine::ecs::asset_id::AssetId;
+    use crate::test_support::label;
+    use concinnity_engine::components::Sprite;
 
     const M: Metrics = Metrics {
         line_h: 20.0,
@@ -305,10 +305,6 @@ mod tests {
     fn text(n: usize) -> TextArea {
         let lines: Vec<String> = (0..n).map(|i| format!("line {i}")).collect();
         TextArea::from_text(&lines.join("\n"))
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).unwrap().clone()
     }
 
     #[test]

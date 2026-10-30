@@ -131,10 +131,7 @@ impl LocalFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
+    use concinnity_core::approx::close;
 
     const CENTER: DVec3 = [0.0, -50_000.0, 0.0];
 

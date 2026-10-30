@@ -153,6 +153,7 @@ fn compile_nodes(
     out
 }
 
+#[expect(clippy::float_cmp, reason = "zero scale is an authored sentinel")]
 fn compile_node(
     node: &BehaviorNode,
     names: &mut Names<'_>,

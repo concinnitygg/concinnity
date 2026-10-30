@@ -201,11 +201,8 @@ impl RebaseCursor {
 mod tests {
     use super::*;
     use crate::transform::trs_matrix;
+    use concinnity_core::approx::close;
     use concinnity_core::math::quat_from_axis_angle;
-
-    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
 
     fn turn() -> Rebase {
         Rebase {

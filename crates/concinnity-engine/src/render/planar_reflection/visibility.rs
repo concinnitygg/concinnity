@@ -300,6 +300,9 @@ mod tests {
     use crate::render::depth::camera_projection;
     use crate::transform::mat4_mul;
     use alloc::vec::Vec;
+    use concinnity_core::approx::close;
+
+    const TOL: f32 = 1e-4;
 
     // A camera at `eye` looking down -z (identity rotation).
     fn camera_at(eye: [f32; 3]) -> Mat4 {
@@ -325,17 +328,13 @@ mod tests {
         )
     }
 
-    fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-4
-    }
-
     #[test]
     fn a_centered_pane_projects_to_a_centered_rect() {
         let r = pane(0.0, -5.0)
             .uv_rect(camera_at([0.0; 3]))
             .expect("visible");
-        assert!(approx(r.min[0], 1.0 - r.max[0]), "{r:?}");
-        assert!(approx(r.min[1], 1.0 - r.max[1]), "{r:?}");
+        assert!(close(r.min[0], 1.0 - r.max[0], TOL), "{r:?}");
+        assert!(close(r.min[1], 1.0 - r.max[1], TOL), "{r:?}");
         assert!(r.min[0] > 0.0 && r.max[0] < 1.0, "{r:?}");
     }
 
@@ -408,8 +407,8 @@ mod tests {
         let mut wide = pane(0.0, -5.0);
         wide.lookup_margin = 0.05;
         let wide = wide.uv_rect(vp).unwrap();
-        assert!(approx(wide.min[0], tight.min[0] - 0.05));
-        assert!(approx(wide.max[1], tight.max[1] + 0.05));
+        assert!(close(wide.min[0], tight.min[0] - 0.05, TOL));
+        assert!(close(wide.max[1], tight.max[1] + 0.05, TOL));
     }
 
     #[test]
@@ -474,7 +473,7 @@ mod tests {
         let same = full.crop_view_projection(vp, 100, 100);
         for c in 0..4 {
             for r in 0..4 {
-                assert!(approx(same[c][r], vp[c][r]), "[{c}][{r}]");
+                assert!(close(same[c][r], vp[c][r], TOL), "[{c}][{r}]");
             }
         }
     }
@@ -496,8 +495,8 @@ mod tests {
         let near = mat_vec(inv, [ndc[0], ndc[1], 0.5, 1.0]);
         let p = [near[0] / near[3], near[1] / near[3], near[2] / near[3], 1.0];
         let c = mat_vec(cropped, p);
-        assert!(approx(c[0] / c[3], -1.0), "{c:?}");
-        assert!(approx(c[1] / c[3], 1.0), "{c:?}");
+        assert!(close(c[0] / c[3], -1.0, TOL), "{c:?}");
+        assert!(close(c[1] / c[3], 1.0, TOL), "{c:?}");
     }
 
     #[test]

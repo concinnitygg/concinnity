@@ -1,5 +1,9 @@
 //! Wiring tests: worlds started against the runtime's public system table,
 //! checking what only the assembled schedule can show.
+#![expect(
+    clippy::float_cmp,
+    reason = "tests assert exact, deterministic float results"
+)]
 
 // The allocation pins read the heap counters, so this binary tracks its heap.
 concinnity_core::install_global_allocator!();

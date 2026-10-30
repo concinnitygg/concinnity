@@ -196,6 +196,7 @@ fn in_flight(tiles: &BTreeMap<TileId, Tile>) -> usize {
 
 // Whether tiles chosen for `planned` still serve `view`: the same ranges,
 // and a camera within the drift the choice left room for.
+#[expect(clippy::float_cmp, reason = "range widths change only with the plan")]
 fn still_serves(lod: &TileLod, planned: &TileView, view: &TileView) -> bool {
     let distance = dvec3::length(dvec3::sub(view.eye, planned.eye));
     planned.range_widths == view.range_widths && distance < lod.drift(planned)
@@ -474,6 +475,10 @@ impl PlanetTiles {
     /// One frame: take the finished meshes, re-place every tile if the frame
     /// moved, and show, hide, drop and request tiles for `camera`. The
     /// planet's edits last changed as `edited` says.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: any change must re-upload"
+    )]
     pub fn step(
         &mut self,
         planet: &PlanetView,

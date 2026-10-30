@@ -121,6 +121,7 @@ impl Drives {
     /// take, then the roll and the paddle for this tick's step, or the tow a
     /// script's pace asks for in their place. North lies along `north` before
     /// it is laid along the ground.
+    #[expect(clippy::float_cmp, reason = "zero push is no force to apply")]
     pub(super) fn tick(
         &mut self,
         world: &mut Simulation,

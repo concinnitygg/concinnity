@@ -16,7 +16,7 @@ include = [
 ]
 
 [features]
-# The timing harness and test fan-outs other crates' tests share.
+# The timing harness, tolerance compares and test fan-outs other crates' tests share.
 test-support = []
 # Per-size-class allocation histograms, for development binaries only. The
 # global counters and the tagged ledger ship unconditionally; this is the tier a

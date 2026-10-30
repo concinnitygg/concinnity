@@ -4,44 +4,24 @@
 //! planet when the simulated frame moves.
 
 use crate::render::uniforms::{WaterParams, WaterShoreGpu};
-use concinnity_core::math::narrow_f32;
+use concinnity_core::math::noise::lcg_hash;
+use concinnity_core::math::vec3::{dot, length, scale, sub};
+use concinnity_core::math::{narrow_f32, smoothstep};
 use core::f32::consts::TAU;
 
 use crate::planet::{CONTINENT_OCTAVES, octave_weight_sum};
 use crate::water::sea::shore::{FOAM_RIDE, PHASE_NOISE_OCTAVES, SHORE_TRAINS};
 const SHORE_NODES: u32 = 32;
 
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn scale(a: [f32; 3], k: f32) -> [f32; 3] {
-    a.map(|x| x * k)
-}
-
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn length(a: [f32; 3]) -> f32 {
-    dot(a, a).sqrt()
-}
-
-fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
-    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 // `ground_lcg` / `ground_lattice` / `ground_noise` in planet_noise.hlsl.
-fn lcg(v: u32) -> u32 {
-    let v = v.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-    v ^ (v >> 16)
-}
-
 fn lattice(c: [i32; 3], salt: u32) -> f32 {
-    let h = lcg(lcg(lcg(c[0].cast_unsigned() ^ salt)
-        .wrapping_add(c[1].cast_unsigned().wrapping_mul(0x85eb_ca6b)))
-    .wrapping_add(c[2].cast_unsigned().wrapping_mul(0xc2b2_ae35)));
+    let h = lcg_hash(
+        lcg_hash(
+            lcg_hash(c[0].cast_unsigned() ^ salt)
+                .wrapping_add(c[1].cast_unsigned().wrapping_mul(0x85eb_ca6b)),
+        )
+        .wrapping_add(c[2].cast_unsigned().wrapping_mul(0xc2b2_ae35)),
+    );
     (h & 0xffff) as f32 / 65535.0
 }
 

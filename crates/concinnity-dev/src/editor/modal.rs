@@ -255,8 +255,8 @@ pub(crate) fn hide(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{label, sprite};
     use concinnity_engine::components::{Sprite, TextAlign, TextInput, TextLabel};
-    use concinnity_engine::ecs::asset_id::AssetId;
 
     const VP: [f32; 2] = [1280.0, 720.0];
     const PLAIN: Controls = Controls {
@@ -295,14 +295,6 @@ mod tests {
             danger: true,
             action: Action::Dismiss,
         }
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

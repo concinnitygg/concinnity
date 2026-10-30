@@ -195,6 +195,10 @@ pub(crate) fn tick_rigs(
 
 // Write each rig's blended capsule position back to its component for the
 // render follow.
+#[expect(
+    clippy::float_cmp,
+    reason = "change detection: write only a moved position"
+)]
 pub(crate) fn publish_rigs(ctx: &mut PipelineContext<'_>, rigs: &mut [RigPhysics], alpha: f32) {
     for rig_body in rigs.iter_mut() {
         let Some(entity) = rig_body.resolve(ctx) else {

@@ -1150,7 +1150,8 @@ pub(crate) fn cursor_over_body(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use crate::test_support::{label, sprite};
+    use concinnity_engine::components::TextInput;
 
     // An upper bound on the body font's per-character advance (it measures
     // ~8.2px), for the geometry guards that keep a clipped caption clear of the
@@ -1256,20 +1257,6 @@ mod tests {
     // A world with every panel element injected (hidden), for driving `place`.
     fn injected_world() -> World {
         ids().test_world()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label present")
     }
 
     #[test]

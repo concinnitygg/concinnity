@@ -24,8 +24,8 @@ use concinnity_core::fanout::FanOut;
 
 use super::body::Body;
 use super::broadphase::Pair;
+use super::collide;
 use super::collide::heightfield::{self, FieldPair, Heightfields, Incoming};
-use super::collide::{self, Pose};
 use super::contact::Manifold;
 
 /// Candidate pairs below which the stage runs on the calling thread. A short
@@ -184,9 +184,9 @@ fn build_range(
                 scratch.b = b;
                 if !collide::collide(
                     shape_a,
-                    pose_of(body_a),
+                    body_a.pose(),
                     shape_b,
-                    pose_of(body_b),
+                    body_b.pose(),
                     margin,
                     &mut scratch,
                 ) {
@@ -218,18 +218,11 @@ fn collide_field(
         index,
         Incoming {
             shape,
-            pose: pose_of(body),
+            pose: body.pose(),
             bounds: body.tight_bounds().expanded(margin),
         },
         margin,
         pair,
         out,
     );
-}
-
-fn pose_of(body: &Body) -> Pose {
-    Pose {
-        position: body.position,
-        rotation: body.orientation,
-    }
 }

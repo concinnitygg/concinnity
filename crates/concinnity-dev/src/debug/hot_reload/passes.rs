@@ -4,7 +4,7 @@
 //! logs.
 
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::take_entry_id;
+use concinnity_cook::authoring::world::{entry_type, take_entry_id};
 use concinnity_engine::components::{ProceduralMesh, Story, VolumetricFog};
 use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::world_load::source_maps::ProceduralMeshSourceMap;
@@ -69,7 +69,8 @@ pub(super) fn reload_volumetric_fog(
     // `None`, which disables the pass.
     let mut resolved: Option<volumetric_fog::FogSettings> = None;
     for entry in &entries {
-        if entry_type(entry) != Some(RegisteredType::VolumetricFog) {
+        if entry_type(entry).and_then(RegisteredType::parse) != Some(RegisteredType::VolumetricFog)
+        {
             continue;
         }
         let args = entry
@@ -175,7 +176,8 @@ pub(super) fn reload_procedural_meshes(
         (ProceduralMesh, serde_json::Value),
     > = std::collections::HashMap::new();
     for entry in &entries {
-        if entry_type(entry) != Some(RegisteredType::ProceduralMesh) {
+        if entry_type(entry).and_then(RegisteredType::parse) != Some(RegisteredType::ProceduralMesh)
+        {
             continue;
         }
         let mut entry = entry.clone();
@@ -425,11 +427,4 @@ pub(super) fn reload_stories(
         }
     }
     out
-}
-
-fn entry_type(entry: &serde_json::Value) -> Option<RegisteredType> {
-    entry
-        .get("type")
-        .and_then(|v| v.as_str())
-        .and_then(RegisteredType::parse)
 }

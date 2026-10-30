@@ -356,8 +356,8 @@ fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [
 mod tests {
     use super::*;
     use crate::editor::panels::shader_source::SourceKey;
-    use concinnity_engine::components::{ShaderStage, TextLabel};
-    use concinnity_engine::ecs::asset_id::AssetId;
+    use crate::test_support::label;
+    use concinnity_engine::components::ShaderStage;
 
     fn injected_world() -> World {
         ids().test_world()
@@ -389,10 +389,6 @@ mod tests {
                 None,
             ),
         ]
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

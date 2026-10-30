@@ -237,6 +237,7 @@ fn untilt(up: [f32; 3], v: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
     use crate::planet::LocalFrame;
+    use concinnity_core::approx::close;
     use concinnity_core::math::quat_rotate;
 
     fn shape() -> PlanetShape {
@@ -250,10 +251,6 @@ mod tests {
             continents: crate::planet::Continents::NONE,
             edits: None,
         }
-    }
-
-    fn close(a: f64, b: f64, tol: f64) -> bool {
-        (a - b).abs() <= tol
     }
 
     // The angle between two longitudes, wrapped.

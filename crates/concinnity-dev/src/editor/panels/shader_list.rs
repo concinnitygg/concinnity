@@ -4,7 +4,7 @@
 //! them as, with the actions each row's menu offers. A file's status is its
 //! Shader's latest reload outcome as it bears on that file.
 
-use concinnity_cook::authoring::world::entry_handles;
+use concinnity_cook::authoring::world::{entry_handles, entry_type};
 use concinnity_engine::components::ShaderStage;
 use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 
@@ -101,11 +101,6 @@ pub(crate) fn can_add_shader(count: usize) -> bool {
 pub(crate) fn limit_reason() -> String {
     format!("a world draws with at most {MAX_SHADER_BUCKETS} shader buckets, one per Shader")
 }
-
-fn entry_type(e: &serde_json::Value) -> Option<&str> {
-    e.get("type").and_then(|v| v.as_str())
-}
-
 // What became of a file the last time its Shader reloaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileStatus {

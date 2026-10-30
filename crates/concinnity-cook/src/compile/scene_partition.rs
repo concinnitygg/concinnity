@@ -145,6 +145,7 @@ pub(crate) fn partition_scenes(assets: &[WorldJsonlAsset]) -> ScenePartition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::asset;
 
     // Every registered type, checked against the explicit set that only exists
     // to be referenced: the resources plus the mesh sources, Model and Shader.
@@ -174,14 +175,6 @@ mod tests {
                 "{}",
                 ty.as_str()
             );
-        }
-    }
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
         }
     }
 

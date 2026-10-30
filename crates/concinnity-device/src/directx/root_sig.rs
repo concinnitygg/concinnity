@@ -580,6 +580,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "the max LOD is an exact constant")]
     fn static_samplers_carry_their_state() {
         let sig = RootSig::new()
             .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)

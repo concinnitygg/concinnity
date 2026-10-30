@@ -13,6 +13,7 @@ use super::{DAYLIGHT_KNOTS, Daylight, knot_mu};
 use alloc::vec;
 use alloc::vec::Vec;
 use concinnity_core::fanout::FanOut;
+use concinnity_core::math::vec3::{self, dot};
 use concinnity_core::math::{SaturatingFrom, cos, exp, sin, sqrt};
 
 use core::f32::consts::PI;
@@ -120,7 +121,7 @@ impl<'a> Tables<'a> {
             let mut throughput = [1.0_f32; 3];
             for i in 0..MULTISCATTER_STEPS {
                 let pos = along([0.0, r, 0.0], dir, (i as f32 + 0.5) * dt);
-                let rp = len(pos);
+                let rp = vec3::length(pos);
                 let air = s.air.medium_at(rp - s.bottom_radius);
                 let to_sun = self.to_top(rp, dot(pos, sun) / rp);
                 for c in 0..3 {
@@ -135,7 +136,7 @@ impl<'a> Tables<'a> {
             }
             if ground >= 0.0 {
                 let hit = along([0.0, r, 0.0], dir, ground);
-                let mu_g = dot(hit, sun) / len(hit);
+                let mu_g = dot(hit, sun) / vec3::length(hit);
                 let lit = self.to_top(s.bottom_radius, mu_g);
                 for c in 0..3 {
                     second[c] += throughput[c] * lit[c] * mu_g.max(0.0) * s.ground_albedo[c] / PI;
@@ -174,7 +175,7 @@ impl<'a> Tables<'a> {
         let mut throughput = [1.0_f32; 3];
         for i in 0..SKY_STEPS {
             let pos = along([0.0, r, 0.0], dir, (i as f32 + 0.5) * dt);
-            let rp = len(pos);
+            let rp = vec3::length(pos);
             let mu_s = dot(pos, sun) / rp;
             let air = s.air.medium_at(rp - s.bottom_radius);
             let to_sun = self.to_top(rp, mu_s);
@@ -271,12 +272,4 @@ fn bilinear(table: &[[f32; 3]], w: u32, h: u32, uv: [f32; 2]) -> [f32; 3] {
 
 fn along(origin: [f32; 3], dir: [f32; 3], t: f32) -> [f32; 3] {
     core::array::from_fn(|i| origin[i] + dir[i] * t)
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn len(a: [f32; 3]) -> f32 {
-    sqrt(dot(a, a))
 }

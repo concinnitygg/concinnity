@@ -395,14 +395,9 @@ impl Default for GlobalTransform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-4
-    }
-
-    fn close3(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
+    const TOL: f32 = 1e-4;
 
     // Rotating by a quaternion agrees with the rotation matrix the transform
     // convention builds from the same Euler angles.
@@ -414,7 +409,7 @@ mod tests {
         let v = [0.3, -1.2, 0.7];
         let expected: [f32; 3] =
             core::array::from_fn(|i| m[0][i] * v[0] + m[1][i] * v[1] + m[2][i] * v[2]);
-        assert!(close3(
+        assert!(close(
             concinnity_core::math::quat_rotate(q, v),
             expected,
             1e-5
@@ -423,7 +418,7 @@ mod tests {
             [0.0, 1.0, 0.0],
             core::f32::consts::FRAC_PI_2,
         );
-        assert!(close3(
+        assert!(close(
             concinnity_core::math::quat_rotate(q90, [1.0, 0.0, 0.0]),
             [0.0, 0.0, -1.0],
             1e-6
@@ -435,7 +430,7 @@ mod tests {
         let m = trs_matrix([1.0, 2.0, 3.0], [0.0, 90.0, 0.0], [2.0, 2.0, 2.0]);
         let p = mat4_transform_point(&m, [1.0, 0.0, 0.0]);
         assert!(
-            approx(p[0], 1.0) && approx(p[1], 2.0) && approx(p[2], 1.0),
+            close(p[0], 1.0, TOL) && close(p[1], 2.0, TOL) && close(p[2], 1.0, TOL),
             "{p:?}"
         );
     }
@@ -446,7 +441,7 @@ mod tests {
         let id = mat4_mul(m, mat4_affine_inverse(m));
         for col in 0..4 {
             for row in 0..4 {
-                assert!(approx(id[col][row], IDENTITY[col][row]));
+                assert!(close(id[col][row], IDENTITY[col][row], TOL));
             }
         }
     }
@@ -522,7 +517,7 @@ mod tests {
             for c in 0..3 {
                 for row in 0..3 {
                     assert!(
-                        approx(r[c][row], r2[c][row]),
+                        close(r[c][row], r2[c][row], TOL),
                         "e={:?} [{}][{}]: {} vs {}",
                         e,
                         c,
@@ -542,7 +537,7 @@ mod tests {
             [0.0, 0.0, 0.0, 1.0]
         );
         let n = concinnity_core::math::quat_normalize([0.0, 0.0, 0.0, 4.0]);
-        assert!(approx(n[3], 1.0));
+        assert!(close(n[3], 1.0, TOL));
     }
 
     #[test]
@@ -560,7 +555,7 @@ mod tests {
             2.0 * acos(d)
         };
         assert!(
-            approx(angle(qa, qm), angle(qm, qb)),
+            close(angle(qa, qm), angle(qm, qb), TOL),
             "arcs {} vs {}",
             angle(qa, qm),
             angle(qm, qb)
@@ -577,7 +572,7 @@ mod tests {
         for c in 0..4 {
             for row in 0..4 {
                 assert!(
-                    approx(rebuilt[c][row], m[c][row]),
+                    close(rebuilt[c][row], m[c][row], TOL),
                     "[{}][{}]: {} vs {}",
                     c,
                     row,
@@ -596,7 +591,7 @@ mod tests {
             let got = blend_matrices(a, b, f);
             for c in 0..4 {
                 for row in 0..4 {
-                    assert!(approx(got[c][row], want[c][row]), "f={f} [{c}][{row}]");
+                    assert!(close(got[c][row], want[c][row], TOL), "f={f} [{c}][{row}]");
                 }
             }
         }
@@ -604,8 +599,12 @@ mod tests {
         // basis stays orthonormal, which an element-wise average would not.
         let mid = blend_matrices(a, b, 0.5);
         let (_, _, scale) = decompose(mid);
-        assert!(approx(scale[0], 1.5) && approx(scale[1], 1.25) && approx(scale[2], 1.25));
-        assert!(approx(mid[3][0], -1.5) && approx(mid[3][1], 1.0) && approx(mid[3][2], 4.0));
+        assert!(
+            close(scale[0], 1.5, TOL) && close(scale[1], 1.25, TOL) && close(scale[2], 1.25, TOL)
+        );
+        assert!(
+            close(mid[3][0], -1.5, TOL) && close(mid[3][1], 1.0, TOL) && close(mid[3][2], 4.0, TOL)
+        );
         // f outside [0, 1] clamps rather than extrapolating.
         assert_eq!(blend_matrices(a, b, -1.0), blend_matrices(a, b, 0.0));
         assert_eq!(blend_matrices(a, b, 2.0), blend_matrices(a, b, 1.0));
@@ -629,7 +628,7 @@ mod tests {
             for c in 0..3 {
                 for row in 0..3 {
                     assert!(
-                        approx(r[c][row], r2[c][row]),
+                        close(r[c][row], r2[c][row], TOL),
                         "e={:?} [{}][{}]: {} vs {}",
                         e,
                         c,
@@ -653,7 +652,7 @@ mod tests {
             let r2 = rotation_mat3(e2);
             for c in 0..3 {
                 for row in 0..3 {
-                    assert!(approx(r[c][row], r2[c][row]), "e={e:?} [{c}][{row}]");
+                    assert!(close(r[c][row], r2[c][row], TOL), "e={e:?} [{c}][{row}]");
                 }
             }
         }

@@ -334,6 +334,7 @@ impl System for AnimationSystem {
         );
     }
 
+    #[expect(clippy::float_cmp, reason = "zero delta is no root motion")]
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         // Freeze while a menu is open: skip all sampling so animation stops
         // consuming CPU/GPU behind the menu, and let none of the paused frames'

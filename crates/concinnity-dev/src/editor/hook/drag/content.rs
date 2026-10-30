@@ -105,6 +105,7 @@ impl EditorHook {
         });
     }
 
+    #[expect(clippy::float_cmp, reason = "zero rotation is the authored default")]
     pub(in crate::editor::hook) fn drive_content_drag(
         &mut self,
         input: &FrameInput,
@@ -147,7 +148,7 @@ impl EditorHook {
         let Some(mut args) = placement_args(
             drag.asset_type,
             &drag.name,
-            pose.position.map(super::gizmo::round3),
+            pose.position.map(crate::editor::round::round3),
         ) else {
             return;
         };

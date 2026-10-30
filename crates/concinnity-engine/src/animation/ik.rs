@@ -234,6 +234,7 @@ mod tests {
     use crate::animation::skeleton::{Joint, JointPose};
     use alloc::string::ToString;
     use alloc::vec;
+    use concinnity_core::approx::assert_close;
 
     // A three-joint leg hanging straight down: hip at y=2, knee at y=1,
     // foot at y=0, all along -Y.
@@ -276,12 +277,6 @@ mod tests {
         weight: f32,
     ) {
         apply_two_bone_ik(skeleton, locals, chain, target, weight, &mut Vec::new());
-    }
-
-    fn assert_close(a: [f32; 3], b: [f32; 3], tol: f32) {
-        for k in 0..3 {
-            assert!((a[k] - b[k]).abs() < tol, "{a:?} vs {b:?}");
-        }
     }
 
     const CHAIN: TwoBoneChain = TwoBoneChain {

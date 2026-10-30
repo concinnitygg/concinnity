@@ -128,13 +128,10 @@ impl SeaFace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
     fn all() -> impl Iterator<Item = SeaFace> {
         (0..6).map(|i| SeaFace::of_axis(i / 2, i % 2 == 0))
-    }
-
-    fn close(a: DVec3, b: DVec3, tol: f64) -> bool {
-        dvec3::length(dvec3::sub(a, b)) < tol
     }
 
     // Every face is a right-handed orthonormal basis whose normal points out

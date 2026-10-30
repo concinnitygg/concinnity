@@ -429,6 +429,7 @@ fn place_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::sprite;
     use concinnity_engine::components::{Sprite, TextLabel};
 
     fn state(dirty: bool, view: bool, visible: bool) -> HudState {
@@ -458,13 +459,6 @@ mod tests {
             ..Default::default()
         });
         world
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
     }
 
     // The chips pack right-to-left inside the bar without overlapping.

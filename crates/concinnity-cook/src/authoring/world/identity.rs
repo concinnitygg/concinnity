@@ -14,6 +14,11 @@ pub fn entry_id(entry: &Value) -> Option<&str> {
     entry.get("args")?.get(ID_KEY)?.as_str()
 }
 
+/// The asset type an entry names, or `None` when it names none.
+pub fn entry_type(entry: &Value) -> Option<&str> {
+    entry.get("type")?.as_str()
+}
+
 /// Declare `id` as the entry's identity, creating its args object when the
 /// entry has none. An entry whose args are not an object is left unchanged.
 pub fn set_entry_id(entry: &mut Value, id: &str) {
@@ -174,6 +179,16 @@ mod tests {
         assert_eq!(entry_id(&json!({"type": "Prop", "args": {}})), None);
         assert_eq!(entry_id(&json!({"type": "Prop"})), None);
         assert_eq!(entry_id(&json!({"type": "Prop", "args": {"$id": 3}})), None);
+    }
+
+    #[test]
+    fn entry_type_reads_the_named_type() {
+        assert_eq!(
+            entry_type(&json!({"type": "Prop", "args": {}})),
+            Some("Prop")
+        );
+        assert_eq!(entry_type(&json!({"args": {}})), None);
+        assert_eq!(entry_type(&json!({"type": 3})), None);
     }
 
     #[test]

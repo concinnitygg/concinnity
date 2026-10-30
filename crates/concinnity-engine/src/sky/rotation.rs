@@ -59,10 +59,9 @@ impl SkyRotation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5)
-    }
+    const TOL: f32 = 1e-5;
 
     // With the default pole a body rises from +Z, is overhead at a quarter
     // turn and sets toward -Z, and the start angle counts toward the turn.
@@ -72,20 +71,41 @@ mod tests {
             degrees_per_second: 9.0,
             ..Default::default()
         };
-        assert!(close(sky.turned([0.0, 0.0, 1.0], 0.0), [0.0, 0.0, 1.0]));
-        assert!(close(sky.turned([0.0, 0.0, 1.0], 10.0), [0.0, 1.0, 0.0]));
-        assert!(close(sky.turned([0.0, 0.0, 1.0], 20.0), [0.0, 0.0, -1.0]));
+        assert!(close(
+            sky.turned([0.0, 0.0, 1.0], 0.0),
+            [0.0, 0.0, 1.0],
+            TOL
+        ));
+        assert!(close(
+            sky.turned([0.0, 0.0, 1.0], 10.0),
+            [0.0, 1.0, 0.0],
+            TOL
+        ));
+        assert!(close(
+            sky.turned([0.0, 0.0, 1.0], 20.0),
+            [0.0, 0.0, -1.0],
+            TOL
+        ));
         let later = SkyRotation {
             angle_deg: 90.0,
             ..sky
         };
-        assert!(close(later.turned([0.0, 0.0, 1.0], 0.0), [0.0, 1.0, 0.0]));
+        assert!(close(
+            later.turned([0.0, 0.0, 1.0], 0.0),
+            [0.0, 1.0, 0.0],
+            TOL
+        ));
         // The pole itself never moves, and a long run lands where a short one
         // a whole number of turns earlier does.
-        assert!(close(sky.turned([1.0, 0.0, 0.0], 7.0), [1.0, 0.0, 0.0]));
+        assert!(close(
+            sky.turned([1.0, 0.0, 0.0], 7.0),
+            [1.0, 0.0, 0.0],
+            TOL
+        ));
         assert!(close(
             sky.turned([0.0, 0.6, 0.8], 4_000.0 + 3.0),
-            sky.turned([0.0, 0.6, 0.8], 3.0)
+            sky.turned([0.0, 0.6, 0.8], 3.0),
+            TOL,
         ));
     }
 }

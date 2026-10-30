@@ -103,7 +103,7 @@ pub(crate) fn scan(
         };
         if body.is_sensor() {
             if let Some(shape) = body.convex()
-                && swept::passed_through(&moving, probe.motion, &Support::new(shape, pose_of(body)))
+                && swept::passed_through(&moving, probe.motion, &Support::new(shape, body.pose()))
             {
                 on_region(slot);
             }
@@ -178,23 +178,20 @@ pub(crate) fn still_crossed(
             rotation: probe.rotation,
         },
     );
-    swept::passed_through(&moving, motion, &Support::new(shape, pose_of(body)))
+    swept::passed_through(&moving, motion, &Support::new(shape, body.pose()))
 }
 
 /// Whether a fresh impact beats the one held. Time decides; the body slot
 /// breaks a tie, so the answer does not depend on the order the window
 /// happened to arrive in.
+#[expect(
+    clippy::float_cmp,
+    reason = "exact tie-break keeps the result deterministic"
+)]
 fn nearer(best: Option<&Blocked>, slot: u32, toi: f32) -> bool {
     match best {
         None => true,
         Some(held) => toi < held.toi || (toi == held.toi && slot < held.target),
-    }
-}
-
-fn pose_of(body: &Body) -> Pose {
-    Pose {
-        position: body.position,
-        rotation: body.orientation,
     }
 }
 

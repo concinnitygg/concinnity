@@ -28,6 +28,7 @@ pub enum CmpOp {
 
 impl CmpOp {
     /// Evaluate `lhs <op> rhs`.
+    #[expect(clippy::float_cmp, reason = "authored comparison is exact by design")]
     pub fn eval(self, lhs: f32, rhs: f32) -> bool {
         match self {
             Self::Lt => lhs < rhs,

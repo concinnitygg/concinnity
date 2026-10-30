@@ -157,26 +157,9 @@ mod tests {
     use super::*;
     use crate::render::render_graph::builder::GraphBuilder;
     use crate::render::render_graph::passes::PassId;
-    use crate::render::render_graph::types::{
-        BufferDesc, BufferUsage, PassKind, PixelFormat, TextureDesc, TextureSize, TextureUsage,
-    };
+    use crate::render::render_graph::test_fixtures::{buf, tex};
+    use crate::render::render_graph::types::PassKind;
     use alloc::vec::Vec;
-
-    fn tex() -> TextureDesc {
-        TextureDesc::texture_2d(
-            TextureSize::Drawable,
-            TextureSize::Drawable,
-            PixelFormat::Rgba16Float,
-            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        )
-    }
-
-    fn buf() -> BufferDesc {
-        BufferDesc {
-            size_bytes: None,
-            usage: BufferUsage::STORAGE,
-        }
-    }
 
     // Shadow writes a map two passes read: Main first, then a compute pass that
     // taps it as a continuation reader. That is the shape the producer-side

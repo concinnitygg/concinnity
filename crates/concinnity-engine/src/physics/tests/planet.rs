@@ -6,6 +6,7 @@ use super::fixtures::{TICK, add_floor, awake, drop_ball, position, step_for};
 use crate::physics::SimConfig;
 use crate::physics::{BodyHandle, DynamicParams, GRAVITY, LayerMask, Simulation};
 use alloc::vec;
+use concinnity_core::approx::close;
 use concinnity_core::math::{quat_from_axis_angle, quat_rotate};
 
 fn ball() -> DynamicParams {
@@ -18,10 +19,6 @@ fn ball() -> DynamicParams {
         angular_damping: 0.0,
         rolling_resistance: 0.0,
     }
-}
-
-fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-    (0..3).all(|i| (a[i] - b[i]).abs() < tol)
 }
 
 // Free fall from either side of a point attractor heads at the point.

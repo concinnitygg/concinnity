@@ -6,6 +6,7 @@ use crate::components::{CameraBoom, CameraTrackArgs, CameraTravel, CameraTurn, E
 use crate::ecs::Ref;
 use crate::planet::Rebase;
 use alloc::vec;
+use concinnity_core::approx::assert_close;
 use concinnity_core::math::{SaturatingFrom, asin, atan2, quat_from_axis_angle};
 
 const SUBJECT: AssetId = AssetId(7);
@@ -129,13 +130,6 @@ fn assert_framing(world: &World, expected: [f32; 3]) {
     );
 }
 
-fn assert_near(got: [f32; 3], expected: [f32; 3], tolerance: f32) {
-    assert!(
-        (0..3).all(|i| (got[i] - expected[i]).abs() < tolerance),
-        "{got:?} vs {expected:?}"
-    );
-}
-
 #[test]
 fn travel_carries_the_subject_and_the_camera_frames_it_from_the_boom() {
     let (mut world, mut system) = world_with(
@@ -156,7 +150,7 @@ fn travel_carries_the_subject_and_the_camera_frames_it_from_the_boom() {
     assert_eq!(subject(&world), [0.0, 1.0, 0.0]);
     assert_framing(&world, [4.0, 3.0, -6.0]);
     seconds(&mut world, &mut system, 1);
-    assert_near(subject(&world), [5.0, 1.0, 0.0], 1e-4);
+    assert_close(subject(&world), [5.0, 1.0, 0.0], 1e-4);
     assert!((camera(&world).yaw.to_degrees() - 15.0).abs() < 1e-3);
     assert_framing(&world, [4.0, 3.0, -6.0]);
 }
@@ -169,9 +163,9 @@ fn without_boom_legs_the_camera_keeps_its_authored_distance_looking_straight_at_
         [0.0, 2.0, 0.0],
     );
     system.init(&mut world.context());
-    assert_near(camera(&world).position, [0.0, 2.0, 5.0], 1e-5);
+    assert_close(camera(&world).position, [0.0, 2.0, 5.0], 1e-5);
     seconds(&mut world, &mut system, 1);
-    assert_near(camera(&world).position, [0.0, 2.0, 2.0], 1e-4);
+    assert_close(camera(&world).position, [0.0, 2.0, 2.0], 1e-4);
     assert_framing(&world, [5.0, 0.0, 0.0]);
 }
 
@@ -288,7 +282,7 @@ fn a_missing_subject_leaves_the_track_driving_the_camera() {
     world.add_component(track);
     system.init(&mut world.context());
     seconds(&mut world, &mut system, 1);
-    assert_near(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
+    assert_close(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
 }
 
 #[test]
@@ -310,7 +304,7 @@ fn a_subject_removed_mid_track_hands_travel_to_the_camera_where_it_stands() {
     seconds(&mut world, &mut system, 1);
     // The camera carries on along the leg from where it stood, not from where
     // the subject was.
-    assert_near(
+    assert_close(
         camera(&world).position,
         vec3::add(before, [5.0, 0.0, 0.0]),
         1e-3,
@@ -395,7 +389,7 @@ fn a_tracked_subject_reaches_the_end_of_its_track_through_frame_moves() {
         };
     }
     let expected = to_current.apply_point([LEG * LEGS as f32, 50.0, 0.0]);
-    assert_near(subject(&world), expected, 0.05);
+    assert_close(subject(&world), expected, 0.05);
 }
 
 fn status(world: &World) -> CameraTrackStatus {
@@ -444,7 +438,7 @@ fn a_parented_subject_leaves_the_track_driving_the_camera() {
     world.insert(entity, Parent(parent));
     system.init(&mut world.context());
     seconds(&mut world, &mut system, 1);
-    assert_near(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
+    assert_close(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
     assert_eq!(subject(&world), [0.0, 1.0, -3.0], "left where it was");
 }
 
@@ -464,7 +458,7 @@ fn a_subject_with_a_body_is_carried() {
     world.insert(entity, crate::components::BodyDynamics::default());
     system.init(&mut world.context());
     seconds(&mut world, &mut system, 1);
-    assert_near(subject(&world), [2.0, 0.0, 0.0], 1e-4);
+    assert_close(subject(&world), [2.0, 0.0, 0.0], 1e-4);
     assert_framing(&world, [3.0, 0.0, 0.0]);
 }
 
@@ -487,7 +481,7 @@ fn boom_legs_without_a_subject_are_ignored() {
     system.init(&mut world.context());
     assert!((status_duration(&world) - 1.0).abs() < 1e-5);
     seconds(&mut world, &mut system, 1);
-    assert_near(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
+    assert_close(camera(&world).position, [2.0, 1.0, 0.0], 1e-4);
 }
 
 // A subject carried from a moment of the track is only filmed until then,

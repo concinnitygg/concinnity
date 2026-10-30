@@ -5,6 +5,7 @@
 //! The guard is the workspace's one process-global lock, shared with every
 //! other crate's tests rather than kept as a second, private lock.
 
+use concinnity_engine::components::{Sprite, TextLabel};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::store::paths::StateTree;
@@ -62,7 +63,7 @@ pub(crate) fn isolate_state_dir() {
 // sprite id, one blank `TextLabel` per label id, and one blank `TextInput` per
 // field id. Panels that declare no text fields pass an empty `fields` slice.
 pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[AssetId]) -> World {
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use concinnity_engine::components::TextInput;
     let mut world = World::new();
     for &id in sprites {
         world.push_identified(id, Sprite::default());
@@ -74,4 +75,20 @@ pub(crate) fn injected_world(sprites: &[AssetId], labels: &[AssetId], fields: &[
         world.push_identified(id, TextInput::default());
     }
     world
+}
+
+// The `Sprite` the world holds under `id`.
+pub(crate) fn sprite(world: &World, id: AssetId) -> Sprite {
+    world
+        .get_by_id::<Sprite>(id)
+        .cloned()
+        .expect("sprite present")
+}
+
+// The `TextLabel` the world holds under `id`.
+pub(crate) fn label(world: &World, id: AssetId) -> TextLabel {
+    world
+        .get_by_id::<TextLabel>(id)
+        .cloned()
+        .expect("label present")
 }

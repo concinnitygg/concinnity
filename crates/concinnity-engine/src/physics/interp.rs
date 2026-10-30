@@ -109,18 +109,15 @@ impl PoseInterp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::assert_close;
+
+    const TOL: f32 = 1e-4;
 
     const IDENTITY: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
     fn quat_y(deg: f32) -> [f32; 4] {
         let half = deg.to_radians() * 0.5;
         [0.0, half.sin(), 0.0, half.cos()]
-    }
-
-    fn assert_close3(a: [f32; 3], b: [f32; 3]) {
-        for axis in 0..3 {
-            assert!((a[axis] - b[axis]).abs() < 1.0e-4, "{a:?} != {b:?}");
-        }
     }
 
     // A rebased blend samples the rebased poses: the move is not motion.
@@ -134,17 +131,18 @@ mod tests {
         p.push([2.0, 0.0, 0.0]);
         let before = p.sample(0.5);
         p.rebase(&r);
-        assert_close3(p.sample(0.5), r.apply_point(before));
+        assert_close(p.sample(0.5), r.apply_point(before), TOL);
         let mut pose = PoseInterp::new([1.0, 0.0, 0.0], IDENTITY);
         pose.push([3.0, 0.0, 0.0], quat_y(20.0));
         let (pos, rot) = pose.sample(0.5);
         pose.rebase(&r);
         let (moved_pos, moved_rot) = pose.sample(0.5);
-        assert_close3(moved_pos, r.apply_point(pos));
+        assert_close(moved_pos, r.apply_point(pos), TOL);
         let probe = [0.0, 0.0, 1.0];
-        assert_close3(
+        assert_close(
             concinnity_core::math::quat_rotate(moved_rot, probe),
             r.apply_vector(concinnity_core::math::quat_rotate(rot, probe)),
+            TOL,
         );
     }
 
@@ -152,9 +150,9 @@ mod tests {
     fn point_blend_hits_the_endpoints_and_midpoint() {
         let mut p = PointInterp::new([0.0, 0.0, 0.0]);
         p.push([2.0, 4.0, -6.0]);
-        assert_close3(p.sample(0.0), [0.0, 0.0, 0.0]);
-        assert_close3(p.sample(0.5), [1.0, 2.0, -3.0]);
-        assert_close3(p.sample(1.0), [2.0, 4.0, -6.0]);
+        assert_close(p.sample(0.0), [0.0, 0.0, 0.0], TOL);
+        assert_close(p.sample(0.5), [1.0, 2.0, -3.0], TOL);
+        assert_close(p.sample(1.0), [2.0, 4.0, -6.0], TOL);
     }
 
     #[test]
@@ -162,8 +160,8 @@ mod tests {
         let mut p = PointInterp::new([0.0; 3]);
         p.push([1.0, 0.0, 0.0]);
         p.push([2.0, 0.0, 0.0]);
-        assert_close3(p.sample(0.0), [1.0, 0.0, 0.0]);
-        assert_close3(p.sample(1.0), [2.0, 0.0, 0.0]);
+        assert_close(p.sample(0.0), [1.0, 0.0, 0.0], TOL);
+        assert_close(p.sample(1.0), [2.0, 0.0, 0.0], TOL);
     }
 
     #[test]
@@ -171,7 +169,7 @@ mod tests {
         let mut p = PointInterp::new([0.0; 3]);
         p.push([1.0, 0.0, 0.0]);
         p.snap([50.0, 0.0, 0.0]);
-        assert_close3(p.sample(0.5), [50.0, 0.0, 0.0]);
+        assert_close(p.sample(0.5), [50.0, 0.0, 0.0], TOL);
     }
 
     // The pose blend is the shared `quat_slerp`, so what this covers is that a
@@ -201,7 +199,7 @@ mod tests {
         pose.push([1.0, 0.0, 0.0], quat_y(90.0));
         pose.snap([50.0, 0.0, 0.0], IDENTITY);
         let (position, rotation) = pose.sample(0.5);
-        assert_close3(position, [50.0, 0.0, 0.0]);
+        assert_close(position, [50.0, 0.0, 0.0], TOL);
         assert!((rotation[3] - 1.0).abs() < 1.0e-4, "{rotation:?}");
     }
 
@@ -210,10 +208,10 @@ mod tests {
         let mut pose = PoseInterp::new([0.0; 3], IDENTITY);
         pose.push([1.0, 2.0, 3.0], quat_y(90.0));
         let (p0, r0) = pose.sample(0.0);
-        assert_close3(p0, [0.0; 3]);
+        assert_close(p0, [0.0; 3], TOL);
         assert!((r0[3] - 1.0).abs() < 1.0e-4);
         let (p1, r1) = pose.sample(1.0);
-        assert_close3(p1, [1.0, 2.0, 3.0]);
+        assert_close(p1, [1.0, 2.0, 3.0], TOL);
         let expected = quat_y(90.0);
         for i in 0..4 {
             assert!((r1[i] - expected[i]).abs() < 1.0e-4);

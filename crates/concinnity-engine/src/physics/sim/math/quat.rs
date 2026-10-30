@@ -159,29 +159,26 @@ impl Quat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn close(a: Vec3, b: Vec3) -> bool {
-        (a - b).length() < 1.0e-5
-    }
+    const TOL: f32 = 1e-5;
 
     // A thousand first-order steps accumulate a little truncation error; this
     // is the tolerance a full turn integrated in pieces lands inside.
-    fn close_after_many_steps(a: Vec3, b: Vec3) -> bool {
-        (a - b).length() < 1.0e-4
-    }
+    const STEPS_TOL: f32 = 1e-4;
 
     #[test]
     fn identity_rotates_nothing() {
         let v = vec3(1.0, 2.0, 3.0);
-        assert!(close(Quat::IDENTITY.rotate(v), v));
+        assert!(close(Quat::IDENTITY.rotate(v), v, TOL));
         assert_eq!(Quat::IDENTITY.to_euler_deg(), [0.0, 0.0, 0.0]);
     }
 
     #[test]
     fn a_quarter_turn_about_y_maps_x_onto_negative_z() {
         let q = Quat::from_euler_deg([0.0, 90.0, 0.0]);
-        assert!(close(q.rotate(Vec3::X), vec3(0.0, 0.0, -1.0)));
-        assert!(close(q.inverse_rotate(vec3(0.0, 0.0, -1.0)), Vec3::X));
+        assert!(close(q.rotate(Vec3::X), vec3(0.0, 0.0, -1.0), TOL));
+        assert!(close(q.inverse_rotate(vec3(0.0, 0.0, -1.0)), Vec3::X, TOL));
     }
 
     #[test]
@@ -213,8 +210,12 @@ mod tests {
     fn multiplication_composes_rotations_in_order() {
         let yaw = Quat::from_euler_deg([0.0, 90.0, 0.0]);
         let combined = yaw.mul(yaw);
-        assert!(close(combined.rotate(Vec3::X), -Vec3::X));
-        assert!(close(yaw.mul(yaw.conjugate()).rotate(Vec3::X), Vec3::X));
+        assert!(close(combined.rotate(Vec3::X), -Vec3::X, TOL));
+        assert!(close(
+            yaw.mul(yaw.conjugate()).rotate(Vec3::X),
+            Vec3::X,
+            TOL
+        ));
     }
 
     // Integration must both turn the body and keep the quaternion normalized:
@@ -230,7 +231,7 @@ mod tests {
         assert!((len - 1.0).abs() < 1.0e-5, "len {len}");
         // A full turn about Y lands back where it started.
         assert!(
-            close_after_many_steps(q.rotate(Vec3::X), Vec3::X),
+            close(q.rotate(Vec3::X), Vec3::X, STEPS_TOL),
             "{:?}",
             q.rotate(Vec3::X)
         );
@@ -247,7 +248,7 @@ mod tests {
     #[test]
     fn a_default_rotation_is_the_identity() {
         assert_eq!(Quat::default(), Quat::IDENTITY);
-        assert!(close(Quat::default().rotate(Vec3::X), Vec3::X));
+        assert!(close(Quat::default().rotate(Vec3::X), Vec3::X, TOL));
     }
 
     // A quaternion that has decayed to zero length names no rotation and

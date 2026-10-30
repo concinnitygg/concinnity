@@ -233,6 +233,9 @@ fn first_mip(resolution: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
+
+    const TOL: f32 = 1e-5;
 
     fn frame(resolution: u32) -> PropProbeFrame {
         PropProbeFrame {
@@ -301,20 +304,19 @@ mod tests {
         ]
     }
 
-    fn close(a: [f32; 4], b: [f32; 4]) -> bool {
-        a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5)
-    }
-
     #[test]
     fn a_ball_rests_one_radius_below_its_center_however_it_turns() {
         let (lo, hi) = ([-0.6; 3], [0.6; 3]);
         let up = [0.0, 1.0, 0.0];
         for angle in [0.0, 0.3, core::f32::consts::FRAC_PI_4, 2.0] {
             let plane = ground_plane(lo, hi, model(angle, 1.0, [6.0, 7.3, 0.6]), up);
-            assert!(close(plane, [0.0, 1.0, 0.0, 6.7]), "{angle}: {plane:?}");
+            assert!(
+                close(plane, [0.0, 1.0, 0.0, 6.7], TOL),
+                "{angle}: {plane:?}"
+            );
         }
         let scaled = ground_plane(lo, hi, model(0.0, 2.0, [0.0; 3]), up);
-        assert!(close(scaled, [0.0, 1.0, 0.0, -1.2]), "{scaled:?}");
+        assert!(close(scaled, [0.0, 1.0, 0.0, -1.2], TOL), "{scaled:?}");
     }
 
     #[test]
@@ -323,7 +325,7 @@ mod tests {
         let at = [10.0, 10.0, 0.0];
         let ball = ground_plane([-0.5; 3], [0.5; 3], model(0.0, 1.0, at), up);
         assert!(
-            close(ball, [up[0], up[1], up[2], vec3::dot(up, at) - 0.5]),
+            close(ball, [up[0], up[1], up[2], vec3::dot(up, at) - 0.5], TOL),
             "{ball:?}"
         );
 
@@ -336,7 +338,7 @@ mod tests {
             up,
         );
         assert!(
-            close(slab, [up[0], up[1], up[2], vec3::dot(up, at) - 0.25]),
+            close(slab, [up[0], up[1], up[2], vec3::dot(up, at) - 0.25], TOL),
             "{slab:?}"
         );
     }
@@ -349,7 +351,7 @@ mod tests {
             model(0.0, 1.0, [0.0, 5.0, 0.0]),
             [0.0, 1.0, 0.0],
         );
-        assert!(close(plane, [0.0, 1.0, 0.0, 5.0]), "{plane:?}");
+        assert!(close(plane, [0.0, 1.0, 0.0, 5.0], TOL), "{plane:?}");
         assert_eq!(
             local_center([0.0; 3], [2.0, 1.0, 2.0], model(0.0, 1.0, [0.0, 5.0, 0.0])),
             [1.0, 5.5, 1.0]

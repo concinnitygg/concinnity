@@ -169,14 +169,14 @@ fn chart_view<'a>(view: &'a MapView<'a>) -> chart::ChartView<'a> {
 mod tests {
     use concinnity_cook::authoring::registry::RegisteredType;
     use concinnity_cook::authoring::world::WorldJsonlAsset;
-    use concinnity_engine::components::{Sprite, TextLabel};
+    use concinnity_engine::components::Sprite;
     use serde_json::{Value, json};
 
     use super::*;
     use crate::editor::behavior::chart::CARD_POOL;
     use crate::editor::entry_list::EntryList;
     use crate::editor::map::{self, Entries};
-    use concinnity_engine::ecs::asset_id::AssetId;
+    use crate::test_support::{label, sprite};
 
     const O: [f32; 2] = [40.0, 60.0];
 
@@ -208,14 +208,6 @@ mod tests {
             pan,
             mouse: [-1.0, -1.0],
         }
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
     }
 
     // The slot the card called `title` was drawn in, if it was drawn at all.

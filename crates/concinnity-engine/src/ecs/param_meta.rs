@@ -185,6 +185,10 @@ impl ParamNumber for f64 {
 
 /// Clamp `value` into `range`, returning the authored and clamped values when
 /// it moved.
+#[expect(
+    clippy::float_cmp,
+    reason = "change detection: report only a value the clamp moved"
+)]
 pub fn clamp_param<T: ParamNumber>(value: &mut T, range: ParamRange) -> Option<(f64, f64)> {
     let from = value.to_f64();
     let to = range.clamp(from);

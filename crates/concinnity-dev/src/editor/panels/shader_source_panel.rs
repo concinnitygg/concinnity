@@ -365,8 +365,7 @@ fn place_header(world: &mut World, view: &SourceView<'_>, o: [f32; 2], w: f32, d
 mod tests {
     use super::*;
     use crate::editor::panels::shader_reference::{RefRow, Reference};
-    use concinnity_engine::components::TextLabel;
-    use concinnity_engine::ecs::asset_id::AssetId;
+    use crate::test_support::label;
     use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 
     const M: Metrics = Metrics {
@@ -395,10 +394,6 @@ mod tests {
             mouse: [0.0, 0.0],
             reference: None,
         }
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

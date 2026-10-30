@@ -121,7 +121,7 @@ impl EditorHook {
     // by its label until the user gives it a `$id`.
     fn create_type_at(&mut self, ty: &str, pos: [f32; 3]) {
         let arg = create_menu::position_key(ty);
-        let args = serde_json::json!({ arg: pos.map(drag::gizmo::round3) });
+        let args = serde_json::json!({ arg: pos.map(crate::editor::round::round3) });
         let key = self
             .entries
             .push(serde_json::json!({ "type": ty, "args": args }));
@@ -135,7 +135,7 @@ impl EditorHook {
         let Some(args) = drag::content::placement_args(
             RegisteredType::Prefab,
             prefab,
-            pos.map(drag::gizmo::round3),
+            pos.map(crate::editor::round::round3),
         ) else {
             return;
         };

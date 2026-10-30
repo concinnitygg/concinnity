@@ -14,20 +14,11 @@ use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::{EntryId, EntryList};
 use crate::editor::hook::{EditorHook, declared_id, entry_type, pick};
 use crate::editor::panels::form;
+use crate::editor::round::{round1, round3};
 use crate::editor::viewport::gizmo::{self, GizmoMode};
 use crate::editor::viewport::{group_transform, snap};
 use concinnity_engine::components::{Camera3D, FrameInput, GlobalTransform, Parent, Transform};
 use concinnity_engine::ecs::{Entity, World};
-
-// Committed values are rounded so world.jsonl stays readable: positions and
-// scales to 3 decimals, angles to 1.
-pub(in crate::editor::hook) fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
-}
-
-fn round1(v: f32) -> f32 {
-    (v * 10.0).round() / 10.0
-}
 
 // A rotate grab needs a usable lever arm around the origin (the angle is
 // unstable at the center; a camera-facing axis projects its tip there).
@@ -380,6 +371,7 @@ impl EditorHook {
     // the whole edit as ONE change (a single history snapshot, so undo
     // restores all members together). A drag that ends where it started
     // leaves the entries (and the undo stack) untouched.
+    #[expect(clippy::float_cmp, reason = "change detection on rounded values")]
     fn commit_gizmo(&mut self, world: &mut World) {
         let Some(drag) = self.gizmo_drag.take() else {
             return;

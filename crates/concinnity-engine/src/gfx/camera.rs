@@ -107,11 +107,8 @@ pub fn tilt_to_up(up: [f32; 3], v: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
     use concinnity_core::math::vec3::dot;
-
-    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
 
     // Tilting onto +Y is no tilt at all, so a level world's view is unchanged.
     #[test]

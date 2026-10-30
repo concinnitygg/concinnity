@@ -185,6 +185,7 @@ fn arc_between(phases: &[&Phase], phase: usize, from: f64, to: f64, radius: f64)
 // `from` to `to` by `k`: by a constant ratio where both are positive, so a
 // climb from meters to kilometers spends as long on each tenfold, else
 // evenly.
+#[expect(clippy::float_cmp, reason = "fast path for equal endpoints")]
 fn blend(from: f64, to: f64, k: f64) -> f64 {
     if k >= 1.0 || from == to {
         to

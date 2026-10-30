@@ -381,14 +381,7 @@ fn check_follow_targets(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     // Joins every cross-reference error into one string so a test can assert
     // on a substring regardless of how many problems were reported.

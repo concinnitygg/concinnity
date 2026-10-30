@@ -47,6 +47,10 @@ impl AtmosphereFrame {
         let up = scale(camera_km, 1.0 / length(camera_km).max(1e-6));
         let mu = dot(up, sun_direction);
         let ground = settings.sky_ground_radius(length(camera_km) - settings.bottom_radius);
+        #[expect(
+            clippy::float_cmp,
+            reason = "the tables share the true ground only at an exact match"
+        )]
         let sun_transmittance = if ground == settings.bottom_radius {
             sun_transmittance(settings, r, mu)
         } else {
@@ -68,6 +72,10 @@ impl AtmosphereFrame {
     /// the air between it and the camera as the sun's is, and switched on
     /// by the handover once the sun has set.
     #[must_use]
+    #[expect(
+        clippy::float_cmp,
+        reason = "the tables share the true ground only at an exact match"
+    )]
     pub fn with_night(self, settings: &AtmosphereSettings, mut night: NightFrame) -> Self {
         if let (Some(moon), Some(resolved)) =
             (night.moon.as_mut(), settings.night.and_then(|n| n.moon))
@@ -98,6 +106,10 @@ impl AtmosphereFrame {
 
     /// The camera in the sky tables' space: as high above their ground as it
     /// is above the true ground, along the same up.
+    #[expect(
+        clippy::float_cmp,
+        reason = "the tables share the true ground only at an exact match"
+    )]
     pub fn table_camera_km(&self, settings: &AtmosphereSettings) -> [f32; 3] {
         if self.sky_ground_radius == settings.bottom_radius {
             return self.camera_km;

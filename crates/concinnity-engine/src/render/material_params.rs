@@ -71,6 +71,10 @@ impl MaterialParamTable {
     /// Replace row `row` with `values`. False when the row is the zero row or
     /// past the table, which leaves the table untouched. A change marks every
     /// frame's copy pending; writing the values a row already holds does not.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: any bit change must re-upload"
+    )]
     pub fn set(&mut self, row: u32, values: [f32; MATERIAL_PARAM_COUNT]) -> bool {
         if row == NO_MATERIAL_ROW {
             return false;

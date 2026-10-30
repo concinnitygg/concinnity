@@ -49,6 +49,10 @@ const PARALLEL: f32 = 1.0e-8;
 const BARY_SLACK: f32 = 1.0e-5;
 
 /// Where a ray first meets a grid, within `max_dist`.
+#[expect(
+    clippy::float_cmp,
+    reason = "exact tie-break keeps the result deterministic"
+)]
 pub(crate) fn raycast(
     fields: &Heightfields,
     index: u32,
@@ -96,6 +100,10 @@ pub(crate) fn raycast(
 }
 
 /// The nearest triangle a swept shape runs into.
+#[expect(
+    clippy::float_cmp,
+    reason = "exact tie-break keeps the result deterministic"
+)]
 pub(crate) fn sweep(
     fields: &Heightfields,
     index: u32,

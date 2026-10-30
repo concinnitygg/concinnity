@@ -2,8 +2,9 @@
 //! entry that produced them, including the inverse of the instance-transform
 //! composition the expansion applies. Pure: the hook owns the entry mutations.
 
+use crate::editor::round::{round1, round3};
 use concinnity_cook::authoring::registry::RegisteredType;
-use concinnity_cook::authoring::world::{entry_id, find_entry};
+use concinnity_cook::authoring::world::{entry_id, entry_type, find_entry};
 use concinnity_core::math::narrow_f32;
 use concinnity_core::math::vec3::add;
 use serde_json::Value;
@@ -52,7 +53,7 @@ pub(crate) fn resolve(
 ) -> Result<TemplateSlot, String> {
     let instance = find_entry(entries, generated_by)
         .map(|i| &entries[i])
-        .filter(|e| entry_type(e) == Some(RegisteredType::Prop))
+        .filter(|e| entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prop))
         .ok_or_else(|| format!("no Prop instance named '{generated_by}'"))?;
     let args = instance.get("args").cloned().unwrap_or(Value::Null);
     let prefab_ref = args
@@ -91,7 +92,10 @@ fn walk(
 ) -> Result<(), String> {
     let def_index = entries
         .iter()
-        .position(|e| entry_name(e) == def_name && entry_type(e) == Some(RegisteredType::Prefab))
+        .position(|e| {
+            entry_name(e) == def_name
+                && entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prefab)
+        })
         .ok_or_else(|| {
             format!(
                 "prefab '{def_name}' is a disk preset; materialize it as an authored Prefab first"
@@ -280,13 +284,6 @@ fn rotation_matrix(rotation_deg: [f32; 3]) -> [[f32; 3]; 3] {
 fn mul3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] * b[0], a[1] * b[1], a[2] * b[2]]
 }
-fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
-}
-fn round1(v: f32) -> f32 {
-    (v * 10.0).round() / 10.0
-}
-
 fn as_vec3(v: &Value) -> Option<[f32; 3]> {
     let arr = v.as_array()?;
     if arr.len() != 3 {
@@ -329,13 +326,6 @@ fn set_at_path(v: &mut Value, path: &str, value: Value) {
         }
     }
 }
-
-fn entry_type(v: &Value) -> Option<RegisteredType> {
-    v.get("type")
-        .and_then(Value::as_str)
-        .and_then(RegisteredType::parse)
-}
-
 fn entry_name(v: &Value) -> &str {
     entry_id(v).unwrap_or("")
 }

@@ -1,13 +1,6 @@
 use super::*;
+use crate::test_support::asset;
 use std::fmt::Write as _;
-
-fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-    WorldJsonlAsset {
-        id: name.to_string(),
-        asset_type,
-        args,
-    }
-}
 
 #[test]
 fn prop_typed_and_structured_refs_are_unioned() {

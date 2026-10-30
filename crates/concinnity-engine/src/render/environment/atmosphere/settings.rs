@@ -134,6 +134,7 @@ impl AtmosphereSettings {
     /// air keeps its proportion to the ground, exactly as authored over the
     /// apparent ground; without one it keeps its thickness.
     #[must_use]
+    #[expect(clippy::float_cmp, reason = "fast path for an unchanged radius")]
     pub fn with_ground_radius(&self, radius: f32) -> Self {
         if radius == self.bottom_radius {
             return *self;

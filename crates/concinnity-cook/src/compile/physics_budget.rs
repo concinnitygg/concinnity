@@ -236,14 +236,7 @@ pub(crate) fn report_spawn_reservation(assets: &[WorldJsonlAsset]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     fn prop(name: &str, collider: bool) -> WorldJsonlAsset {
         let args = if collider {

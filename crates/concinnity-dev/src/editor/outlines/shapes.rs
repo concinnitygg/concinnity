@@ -338,6 +338,7 @@ pub(crate) fn push_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::math::vec3::{length, sub};
     use concinnity_engine::components::Transform;
 
     const STROKE: Stroke = Stroke {
@@ -345,12 +346,8 @@ mod tests {
         width_px: 2.0,
     };
 
-    fn len3(v: [f32; 3]) -> f32 {
-        (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
-    }
-
     fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
-        len3([a[0] - b[0], a[1] - b[1], a[2] - b[2]])
+        length(sub(a, b))
     }
 
     fn identity() -> [[f32; 4]; 4] {

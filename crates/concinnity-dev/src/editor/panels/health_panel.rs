@@ -311,10 +311,10 @@ fn place_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{label, sprite};
     use concinnity_core::math::SaturatingFrom;
     use concinnity_core::memory::{Ledger, MemStats, MemTag, Realm};
     use concinnity_engine::budget::drift::{DriftVerdict, MemoryDrift};
-    use concinnity_engine::components::{Sprite, TextLabel};
     use std::num::NonZeroU64;
 
     const GB: u64 = 1024 * 1024 * 1024;
@@ -354,20 +354,6 @@ mod tests {
             tags: ledger.snapshot(),
             ..snapshot()
         }
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite is injected")
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label is injected")
     }
 
     #[test]

@@ -20,6 +20,13 @@
 //! The source importers parse artist-supplied files, so a panic here is a crash
 //! on a malformed asset rather than a bug. Invariants that genuinely cannot fail
 //! use `expect` with the invariant named; tests unwrap freely.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
+    )
+)]
 
 // Build-host API, re-exported deliberately: a host driving the pipeline (the
 // CLI, an example harness) works against cook alone, the way a runtime host
@@ -57,6 +64,8 @@ mod file_stamp;
 pub mod import;
 pub mod pipeline;
 pub mod resource_handles;
+#[cfg(test)]
+mod test_support;
 pub mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra

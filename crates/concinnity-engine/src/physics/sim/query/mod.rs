@@ -185,7 +185,7 @@ pub(crate) fn raycast(scene: Scene<'_>, ray_query: &RayQuery) -> Option<RayHit> 
             Some(index) => field::raycast(scene.fields, index, ray, reach),
             None => body
                 .convex()
-                .and_then(|shape| ray::cast(ray, shape, pose_of(body), reach)),
+                .and_then(|shape| ray::cast(ray, shape, body.pose(), reach)),
         };
         let Some(impact) = found else {
             continue;
@@ -245,9 +245,9 @@ pub(crate) fn shape_cast(scene: Scene<'_>, cast: &ShapeCast) -> Option<ShapeCast
         };
         let found = match body.terrain_index() {
             Some(index) => field::sweep(scene.fields, index, &cast.shape, start, motion, reach),
-            None => body.convex().and_then(|shape| {
-                sweep::sweep(&moving, motion, &Support::new(shape, pose_of(body)))
-            }),
+            None => body
+                .convex()
+                .and_then(|shape| sweep::sweep(&moving, motion, &Support::new(shape, body.pose()))),
         };
         let Some(impact) = found else {
             continue;
@@ -292,16 +292,13 @@ fn candidate(
 
 /// Whether a fresh hit beats the one held. Distance decides; the body slot
 /// breaks a tie, so the answer does not depend on traversal order.
+#[expect(
+    clippy::float_cmp,
+    reason = "exact tie-break keeps the result deterministic"
+)]
 fn nearer(best: Option<(u32, f32)>, slot: u32, measure: f32) -> bool {
     match best {
         None => true,
         Some((kept, held)) => measure < held || (measure == held && slot < kept),
-    }
-}
-
-fn pose_of(body: &Body) -> Pose {
-    Pose {
-        position: body.position,
-        rotation: body.orientation,
     }
 }

@@ -146,19 +146,14 @@ pub fn build_decal_records(decals: &[&Decal], texture_count: usize) -> Vec<Decal
 mod tests {
     use super::*;
     use crate::transform::{IDENTITY, mat4_mul};
+    use concinnity_core::approx::close;
 
-    fn near(a: [[f32; 4]; 4], b: [[f32; 4]; 4]) -> bool {
-        a.iter().zip(b.iter()).all(|(ac, bc)| {
-            ac.iter()
-                .zip(bc.iter())
-                .all(|(av, bv)| (av - bv).abs() < 1e-4)
-        })
-    }
+    const TOL: f32 = 1e-4;
 
     #[test]
     fn unit_decal_has_identity_model() {
         let m = decal_model_matrix([0.0; 3], [0.0; 3], [1.0; 3]);
-        assert!(near(m, IDENTITY));
+        assert!(close(m, IDENTITY, TOL));
     }
 
     #[test]
@@ -171,15 +166,15 @@ mod tests {
             [0.0, 0.0, 2.0, 0.0],
             [2.0, 3.0, -4.0, 1.0],
         ];
-        assert!(near(m, expected));
+        assert!(close(m, expected, TOL));
     }
 
     #[test]
     fn inverse_round_trips_through_model() {
         let m = decal_model_matrix([1.0, -2.0, 0.5], [30.0, -15.0, 45.0], [0.4, 1.2, 0.7]);
         let inv = invert_decal_model(m).expect("non-degenerate model is invertible");
-        assert!(near(mat4_mul(m, inv), IDENTITY));
-        assert!(near(mat4_mul(inv, m), IDENTITY));
+        assert!(close(mat4_mul(m, inv), IDENTITY, TOL));
+        assert!(close(mat4_mul(inv, m), IDENTITY, TOL));
     }
 
     #[test]

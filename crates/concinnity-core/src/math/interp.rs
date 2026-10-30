@@ -13,6 +13,7 @@ pub fn lerp_array<const N: usize>(a: [f32; N], b: [f32; N], t: f32) -> [f32; N] 
 /// Hermite smoothstep of `x` between `edge0` and `edge1`, clamped to `[0, 1]`.
 ///
 /// Equal edges step at the edge: `0` below it, `1` at or above it.
+#[expect(clippy::float_cmp, reason = "equal edges are the degenerate step")]
 pub fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     if edge0 == edge1 {
         return if x < edge0 { 0.0 } else { 1.0 };

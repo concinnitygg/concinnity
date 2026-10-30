@@ -53,15 +53,8 @@ pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::asset;
     use concinnity_engine::planet::PAGE_SAMPLES;
-
-    fn asset(id: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: id.to_string(),
-            asset_type,
-            args,
-        }
-    }
 
     fn ground(id: &str, tile: [u32; 4]) -> WorldJsonlAsset {
         asset(

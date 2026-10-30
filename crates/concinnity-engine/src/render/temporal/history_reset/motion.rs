@@ -13,7 +13,8 @@
 use super::tracker::HistoryView;
 use crate::ecs::SimTiming;
 use crate::transform::Mat4;
-use concinnity_core::math::{acos, half_life_decay, ln, sqrt};
+use concinnity_core::math::vec3::{length, scale, sub};
+use concinnity_core::math::{acos, half_life_decay, ln};
 
 /// How far a step may stray from its prediction, in meters (world units),
 /// before it is a cut whatever the camera's speed.
@@ -79,6 +80,7 @@ impl Default for ViewStep {
 impl ViewStep {
     /// The change from `prev` to `cur` over `dt` seconds, or `None` when the
     /// view is exactly the same.
+    #[expect(clippy::float_cmp, reason = "an exactly unchanged view has no step")]
     pub(super) fn between(prev: &HistoryView, cur: &HistoryView, dt: f32) -> Option<Self> {
         if prev.position == cur.position
             && prev.view == cur.view
@@ -294,18 +296,6 @@ fn rotation_angle(a: &Mat3, b: &Mat3) -> f32 {
         }
     }
     acos(((trace - 1.0) * 0.5).clamp(-1.0, 1.0))
-}
-
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-
-fn length(a: [f32; 3]) -> f32 {
-    sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2])
 }
 
 #[cfg(test)]

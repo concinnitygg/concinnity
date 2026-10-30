@@ -154,14 +154,11 @@ pub fn planar_matrices(
 mod tests {
     use super::*;
     use crate::render::depth::camera_projection;
+    use concinnity_core::approx::close;
 
     // Apply a column-major transform to a homogeneous point.
     fn xform(m: Mat4, p: [f32; 4]) -> [f32; 4] {
         mat_vec(m, p)
-    }
-
-    fn approx(a: f32, b: f32, eps: f32) -> bool {
-        (a - b).abs() <= eps
     }
 
     #[test]
@@ -171,9 +168,9 @@ mod tests {
         let p = [3.0, 5.0, -1.0];
         let once = reflect_point(p, plane);
         let twice = reflect_point(once, plane);
-        assert!(approx(twice[0], p[0], 1e-5));
-        assert!(approx(twice[1], p[1], 1e-5));
-        assert!(approx(twice[2], p[2], 1e-5));
+        assert!(close(twice[0], p[0], 1e-5));
+        assert!(close(twice[1], p[1], 1e-5));
+        assert!(close(twice[2], p[2], 1e-5));
     }
 
     #[test]
@@ -181,9 +178,9 @@ mod tests {
         // y = 2 plane: a point at y=5 reflects to y=-1 (mirror about 2).
         let plane = normalize_plane([0.0, 1.0, 0.0, -2.0]);
         let r = reflect_point([3.0, 5.0, -1.0], plane);
-        assert!(approx(r[0], 3.0, 1e-5));
-        assert!(approx(r[1], -1.0, 1e-5));
-        assert!(approx(r[2], -1.0, 1e-5));
+        assert!(close(r[0], 3.0, 1e-5));
+        assert!(close(r[1], -1.0, 1e-5));
+        assert!(close(r[2], -1.0, 1e-5));
     }
 
     #[test]
@@ -194,9 +191,9 @@ mod tests {
         let via_matrix = xform(m, [p[0], p[1], p[2], 1.0]);
         let via_point = reflect_point(p, plane);
         for i in 0..3 {
-            assert!(approx(via_matrix[i], via_point[i], 1e-4), "component {i}");
+            assert!(close(via_matrix[i], via_point[i], 1e-4), "component {i}");
         }
-        assert!(approx(via_matrix[3], 1.0, 1e-5));
+        assert!(close(via_matrix[3], 1.0, 1e-5));
     }
 
     #[test]
@@ -206,7 +203,7 @@ mod tests {
         for (c, col) in id.iter().enumerate() {
             for (r, &val) in col.iter().enumerate() {
                 let expect = if c == r { 1.0 } else { 0.0 };
-                assert!(approx(val, expect, 1e-4), "[{c}][{r}]");
+                assert!(close(val, expect, 1e-4), "[{c}][{r}]");
             }
         }
     }
@@ -229,7 +226,7 @@ mod tests {
             let clip = xform(pobl, [0.0, 0.0, z, 1.0]);
             clip[2] / clip[3]
         };
-        assert!(approx(ndc_z(-5.0), 1.0, 1e-3), "on-plane ndc.z");
+        assert!(close(ndc_z(-5.0), 1.0, 1e-3), "on-plane ndc.z");
         let front = ndc_z(-50.0);
         assert!(front > 0.0 && front < 1.0, "far side in [0,1]: {front}");
         assert!(ndc_z(-2.0) > 1.0, "near side clipped");
@@ -244,8 +241,8 @@ mod tests {
         let p = [2.0, 1.5, -20.0, 1.0];
         let a = xform(proj, p);
         let b = xform(pobl, p);
-        assert!(approx(a[0] / a[3], b[0] / b[3], 1e-5), "ndc.x");
-        assert!(approx(a[1] / a[3], b[1] / b[3], 1e-5), "ndc.y");
+        assert!(close(a[0] / a[3], b[0] / b[3], 1e-5), "ndc.x");
+        assert!(close(a[1] / a[3], b[1] / b[3], 1e-5), "ndc.y");
     }
 
     #[test]
@@ -279,7 +276,7 @@ mod tests {
         let below = ndc_z([0.0, -2.0, -4.0]);
         assert!(below > 1.0, "below-water clipped: {below}");
         // The reflected eye sits below the plane (mirror of y = 3).
-        assert!(approx(m.eye[1], -3.0, 1e-5), "reflected eye height");
+        assert!(close(m.eye[1], -3.0, 1e-5), "reflected eye height");
     }
 
     // The light-binning kernel places a cluster by unprojecting the tile's NDC
@@ -320,7 +317,7 @@ mod tests {
                 1e-12,
             );
             let along = concinnity_core::math::vec3::dot(ray, to_p);
-            assert!(approx(along, 1.0, 1e-4), "{p:?}: ray off by {along}");
+            assert!(close(along, 1.0, 1e-4), "{p:?}: ray off by {along}");
 
             let kernel_depth = concinnity_core::math::vec3::dot(
                 [p[0] - m.eye[0], p[1] - m.eye[1], p[2] - m.eye[2]],
@@ -328,7 +325,7 @@ mod tests {
             );
             let fragment_depth = -xform(m.view, [p[0], p[1], p[2], 1.0])[2];
             assert!(
-                approx(kernel_depth, fragment_depth, 1e-3),
+                close(kernel_depth, fragment_depth, 1e-3),
                 "{p:?}: kernel {kernel_depth} vs fragment {fragment_depth}"
             );
         }
@@ -346,7 +343,7 @@ mod tests {
             oriented[0] * cam[0] + oriented[1] * cam[1] + oriented[2] * cam[2] + oriented[3];
         assert!(signed > 0.0, "camera must be on the +normal (kept) side");
         // It flipped the original (which faced away from the camera).
-        assert!(approx(oriented[2], 1.0, 1e-5), "normal flipped toward +z");
+        assert!(close(oriented[2], 1.0, 1e-5), "normal flipped toward +z");
     }
 
     #[test]
@@ -358,7 +355,7 @@ mod tests {
         let oriented = orient_plane_toward(plane, cam);
         for i in 0..4 {
             assert!(
-                approx(oriented[i], plane[i], 1e-6),
+                close(oriented[i], plane[i], 1e-6),
                 "component {i} unchanged"
             );
         }

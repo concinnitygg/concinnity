@@ -399,6 +399,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "the line width is an exact constant")]
     fn raster_enables_bias_only_when_given() {
         let plain = Raster::default().raw();
         assert_eq!(plain.depth_bias_enable, vk::FALSE);

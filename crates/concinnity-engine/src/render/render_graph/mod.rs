@@ -27,6 +27,8 @@ mod graph_cache;
 mod passes;
 mod reach;
 mod schedule;
+#[cfg(test)]
+mod test_fixtures;
 mod transient;
 mod types;
 mod validate;

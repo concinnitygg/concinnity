@@ -9,6 +9,13 @@
 //! concinnity-host and concinnity-device (no concinnity-cook, no image
 //! decoders). A host that edits a running world (concinnity-dev) does it
 //! through [`live_edit`]; everything else it drives is the ordinary host API.
+#![cfg_attr(
+    test,
+    expect(
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
+    )
+)]
 
 // The run loop, its frame drivers and the `cn run` / shipped-player entry.
 mod app;

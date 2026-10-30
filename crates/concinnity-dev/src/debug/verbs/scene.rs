@@ -159,6 +159,7 @@ fn reparent(call: &Call<'_>, args: Args) -> Reply {
 
 // A non-null `lifetime` makes the instance despawn itself after that many
 // seconds, which is what exercises draw-slot recycling.
+#[expect(clippy::float_cmp, reason = "zero scale is an authored sentinel")]
 fn spawn(call: &Call<'_>, args: Args) -> Reply {
     let request: Spawn = args.parse()?;
     call.on_world(move |world, _| {

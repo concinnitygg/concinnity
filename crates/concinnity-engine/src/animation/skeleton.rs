@@ -356,11 +356,10 @@ mod tests {
     use super::*;
     use crate::transform::blend_matrices;
     use alloc::vec;
+    use concinnity_core::approx::close;
     use concinnity_core::math::atan2;
 
-    fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-4
-    }
+    const TOL: f32 = 1e-4;
 
     // A two-joint vertical chain: root at origin, child one unit up in y.
     fn chain() -> Skeleton {
@@ -397,11 +396,11 @@ mod tests {
         };
         assert!(morph(-1.0, false)[0].abs() < 1e-6);
         let mid = morph(0.5, false);
-        assert!(approx(mid[0], 0.5) && approx(mid[1], 0.5));
-        assert!(approx(morph(5.0, false)[0], 1.0), "clamps past the end");
+        assert!(close(mid[0], 0.5, TOL) && close(mid[1], 0.5, TOL));
+        assert!(close(morph(5.0, false)[0], 1.0, TOL), "clamps past the end");
         // Looping wraps: t = 1.25 samples like t = 0.25.
         let wrapped = morph(1.25, true);
-        assert!(approx(wrapped[0], 0.25));
+        assert!(close(wrapped[0], 0.25, TOL));
 
         let empty = AnimationClip {
             duration: 1.0,
@@ -421,7 +420,7 @@ mod tests {
         for m in sk.bind_skinning_matrices() {
             for col in 0..4 {
                 for row in 0..4 {
-                    assert!(approx(m[col][row], IDENTITY[col][row]));
+                    assert!(close(m[col][row], IDENTITY[col][row], TOL));
                 }
             }
         }
@@ -452,9 +451,9 @@ mod tests {
             m[0][2] * p[0] + m[1][2] * p[1] + m[2][2] * p[2] + m[3][2] * p[3],
         ];
         // +x swings to -z under a +90 deg yaw; y unchanged.
-        assert!(approx(out[0], 0.0), "x was {}", out[0]);
-        assert!(approx(out[1], 1.0), "y was {}", out[1]);
-        assert!(approx(out[2], -1.0), "z was {}", out[2]);
+        assert!(close(out[0], 0.0, TOL), "x was {}", out[0]);
+        assert!(close(out[1], 1.0, TOL), "y was {}", out[1]);
+        assert!(close(out[2], -1.0, TOL), "z was {}", out[2]);
     }
 
     #[test]
@@ -491,7 +490,7 @@ mod tests {
         clip.sample_into(1.0, &sk, &mut locals);
         // Recover yaw: for a pure yaw the first column is (cos, 0, -sin).
         let yaw = atan2(-locals[1][0][2], locals[1][0][0]).to_degrees();
-        assert!(approx(yaw, 45.0), "yaw was {yaw}");
+        assert!(close(yaw, 45.0, TOL), "yaw was {yaw}");
     }
 
     #[test]
@@ -513,10 +512,10 @@ mod tests {
             .collect();
         let track = JointTrack { joint: 0, keys };
         let x_at = |t: f32| track.sample(t)[3][0];
-        assert!(approx(x_at(-0.5), 0.0), "clamps at the first key");
-        assert!(approx(x_at(5.0), 2.0), "clamps at the last key");
-        assert!(approx(x_at(0.7), 0.7), "exact key hit");
-        assert!(approx(x_at(1.234), 1.234), "lerps inside a segment");
+        assert!(close(x_at(-0.5), 0.0, TOL), "clamps at the first key");
+        assert!(close(x_at(5.0), 2.0, TOL), "clamps at the last key");
+        assert!(close(x_at(0.7), 0.7, TOL), "exact key hit");
+        assert!(close(x_at(1.234), 1.234, TOL), "lerps inside a segment");
     }
 
     #[test]
@@ -604,8 +603,8 @@ mod tests {
         let mb = b.to_matrix();
         for c in 0..4 {
             for row in 0..4 {
-                assert!(approx(at0[c][row], ma[c][row]), "f=0 [{c}][{row}]");
-                assert!(approx(at1[c][row], mb[c][row]), "f=1 [{c}][{row}]");
+                assert!(close(at0[c][row], ma[c][row], TOL), "f=0 [{c}][{row}]");
+                assert!(close(at1[c][row], mb[c][row], TOL), "f=1 [{c}][{row}]");
             }
         }
     }
@@ -625,13 +624,13 @@ mod tests {
             scale: [3.0, 3.0, 3.0],
         };
         let m = a.blend_matrix(&b, 0.25);
-        assert!(approx(m[3][0], 1.0));
-        assert!(approx(m[3][1], 2.0));
-        assert!(approx(m[3][2], -0.5));
+        assert!(close(m[3][0], 1.0, TOL));
+        assert!(close(m[3][1], 2.0, TOL));
+        assert!(close(m[3][2], -0.5, TOL));
         // No rotation: the diagonal carries the lerped scale 1 + 0.25*2 = 1.5.
-        assert!(approx(m[0][0], 1.5));
-        assert!(approx(m[1][1], 1.5));
-        assert!(approx(m[2][2], 1.5));
+        assert!(close(m[0][0], 1.5, TOL));
+        assert!(close(m[1][1], 1.5, TOL));
+        assert!(close(m[2][2], 1.5, TOL));
     }
 
     // The pose-space blend and the matrix-space one are the same operation
@@ -654,7 +653,7 @@ mod tests {
             for c in 0..4 {
                 for row in 0..4 {
                     assert!(
-                        approx(pose_space[c][row], matrix_space[c][row]),
+                        close(pose_space[c][row], matrix_space[c][row], TOL),
                         "f={f} [{c}][{row}]"
                     );
                 }

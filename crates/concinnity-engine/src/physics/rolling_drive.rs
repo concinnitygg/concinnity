@@ -222,6 +222,9 @@ pub(crate) fn jump_impulse(control: &RollingControl, body: &RollingBody) -> [f32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
+
+    const TOL: f32 = 1e-4;
 
     fn control() -> RollingControl {
         RollingControl::new(&RollingDrive {
@@ -247,10 +250,6 @@ mod tests {
         }
     }
 
-    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
-    }
-
     // Heading along the ground turns the ball about up x heading by exactly
     // the torque that rolls it at the acceleration; the part of the heading
     // along up is ignored.
@@ -260,7 +259,7 @@ mod tests {
         c.heading = [0.7, 0.0, 1.0];
         let p = push(&c, &ball([0.0; 3], 0.0));
         // a (I / r + m r) = 8 (0.4 + 1.0) = 11.2, about +X x +Z = -Y.
-        assert!(close(p.torque, [0.0, -11.2, 0.0]), "{:?}", p.torque);
+        assert!(close(p.torque, [0.0, -11.2, 0.0], TOL), "{:?}", p.torque);
         assert_eq!(p.force, [0.0; 3]);
     }
 
@@ -293,12 +292,13 @@ mod tests {
     fn a_tow_pulls_along_the_ground_toward_its_pace() {
         let toward = [0.0, 0.0, 1.0];
         let f = tow(10.0, toward, &ball([0.0; 3], 0.6));
-        assert!(close(f, [0.0, 0.0, 2.0 * TOW_MAX_ACCEL]));
+        assert!(close(f, [0.0, 0.0, 2.0 * TOW_MAX_ACCEL], TOL));
         let near = tow(10.0, toward, &ball([3.0, 0.0, 9.9], 0.6));
-        assert!(close(near, [0.0, 0.0, 2.0 * 0.1 * TOW_GAIN]));
+        assert!(close(near, [0.0, 0.0, 2.0 * 0.1 * TOW_GAIN], TOL));
         assert!(close(
             tow(10.0, toward, &ball([-2.0, 0.0, 10.0], 0.6)),
-            [0.0; 3]
+            [0.0; 3],
+            TOL,
         ));
         // Sideways drift is pulled out too.
         let drift = tow(10.0, toward, &ball([0.0, 0.1, 10.0], 0.6));
@@ -312,19 +312,23 @@ mod tests {
         let b = ball([0.0; 3], 0.6);
         assert!(close(
             tow_hold(0.1, 0.0, &b),
-            [2.0 * 0.1 * TOW_HOLD, 0.0, 0.0]
+            [2.0 * 0.1 * TOW_HOLD, 0.0, 0.0],
+            TOL,
         ));
         assert!(close(
             tow_hold(-0.1, 0.0, &b),
-            [-2.0 * 0.1 * TOW_HOLD, 0.0, 0.0]
+            [-2.0 * 0.1 * TOW_HOLD, 0.0, 0.0],
+            TOL,
         ));
         assert!(close(
             tow_hold(0.0, 1.0, &b),
-            [2.0 * TOW_HOLD_DAMPING, 0.0, 0.0]
+            [2.0 * TOW_HOLD_DAMPING, 0.0, 0.0],
+            TOL,
         ));
         assert!(close(
             tow_hold(5.0, 5.0, &b),
-            [2.0 * TOW_HOLD_MAX, 0.0, 0.0]
+            [2.0 * TOW_HOLD_MAX, 0.0, 0.0],
+            TOL,
         ));
     }
 
@@ -333,9 +337,13 @@ mod tests {
         let mut c = control();
         c.heading = [0.0, 1.0, 0.0];
         let half = push(&c, &ball([0.0; 3], 0.5));
-        assert!(close(half.torque, [0.0, 0.0, 5.6]), "{:?}", half.torque);
+        assert!(
+            close(half.torque, [0.0, 0.0, 5.6], TOL),
+            "{:?}",
+            half.torque
+        );
         // m a paddle afloat = 2 x 8 x 0.5 x 0.5.
-        assert!(close(half.force, [0.0, 4.0, 0.0]), "{:?}", half.force);
+        assert!(close(half.force, [0.0, 4.0, 0.0], TOL), "{:?}", half.force);
         let floating = push(
             &c,
             &RollingBody {
@@ -343,8 +351,8 @@ mod tests {
                 ..ball([0.0; 3], 1.0)
             },
         );
-        assert!(close(floating.torque, [0.0; 3]));
-        assert!(close(floating.force, [0.0, 8.0, 0.0]));
+        assert!(close(floating.torque, [0.0; 3], TOL));
+        assert!(close(floating.force, [0.0, 8.0, 0.0], TOL));
     }
 
     // No heading or a heading straight up coasts; a jump leaves along up.
@@ -360,19 +368,22 @@ mod tests {
         assert_eq!(push(&c, &ball([0.0; 3], 0.0)), none);
         assert!(close(
             jump_impulse(&c, &ball([0.0; 3], 0.0)),
-            [10.0, 0.0, 0.0]
+            [10.0, 0.0, 0.0],
+            TOL,
         ));
         // A body already rising takes only what brings it to the jump speed,
         // so a second press on the way up adds nothing.
         assert!(close(
             jump_impulse(&c, &ball([2.0, 0.0, 0.0], 0.0)),
-            [6.0, 0.0, 0.0]
+            [6.0, 0.0, 0.0],
+            TOL,
         ));
         assert_eq!(jump_impulse(&c, &ball([7.0, 0.0, 0.0], 0.0)), [0.0; 3]);
         // Falling, it still leaves at the jump speed.
         assert!(close(
             jump_impulse(&c, &ball([-3.0, 0.0, 0.0], 0.0)),
-            [16.0, 0.0, 0.0]
+            [16.0, 0.0, 0.0],
+            TOL,
         ));
     }
 

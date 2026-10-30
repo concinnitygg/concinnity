@@ -38,23 +38,18 @@ pub fn shortest_turn(from: f32, to: f32, full_turn: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approx::assert_close;
     use core::f32::consts::{FRAC_PI_2, PI, TAU};
 
-    #[track_caller]
-    fn near(a: [f32; 3], b: [f32; 3]) {
-        assert!(
-            a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6),
-            "{a:?} vs {b:?}"
-        );
-    }
+    const TOL: f32 = 1e-6;
 
     #[test]
     fn yaw_zero_looks_down_negative_z_and_turns_toward_negative_x() {
-        near(forward(0.0, 0.0), [0.0, 0.0, -1.0]);
-        near(forward(FRAC_PI_2, 0.0), [-1.0, 0.0, 0.0]);
-        near(forward(0.0, FRAC_PI_2), [0.0, 1.0, 0.0]);
-        near(flat_forward(FRAC_PI_2), forward(FRAC_PI_2, 0.0));
-        near(flat_right(0.0), [1.0, 0.0, 0.0]);
+        assert_close(forward(0.0, 0.0), [0.0, 0.0, -1.0], TOL);
+        assert_close(forward(FRAC_PI_2, 0.0), [-1.0, 0.0, 0.0], TOL);
+        assert_close(forward(0.0, FRAC_PI_2), [0.0, 1.0, 0.0], TOL);
+        assert_close(flat_forward(FRAC_PI_2), forward(FRAC_PI_2, 0.0), TOL);
+        assert_close(flat_right(0.0), [1.0, 0.0, 0.0], TOL);
     }
 
     #[test]

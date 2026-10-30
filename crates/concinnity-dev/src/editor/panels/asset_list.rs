@@ -6,6 +6,7 @@
 //! in their extra chrome (the Assets panel adds hover / selection tints, a
 //! triple-dot menu, and delete); that stays in `assets_panel.rs`, layered over this base.
 
+use concinnity_cook::authoring::world::entry_type;
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -41,11 +42,6 @@ pub(crate) struct ListRow {
     pub text: String,
     // The `entries` index for a name row; `None` for a header.
     pub entry: Option<usize>,
-}
-
-// The `type` string of a world-line entry, if present.
-fn entry_type(e: &serde_json::Value) -> Option<&str> {
-    e.get("type").and_then(|v| v.as_str())
 }
 
 // The distinct asset types present in `entries`, alphabetical.

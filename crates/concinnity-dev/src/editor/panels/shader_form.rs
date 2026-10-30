@@ -3,7 +3,7 @@
 //! as form rows; why the form cannot confirm; and the edits a commit makes to
 //! other entries.
 
-use concinnity_cook::authoring::world::{entry_handles, find_entry};
+use concinnity_cook::authoring::world::{entry_handles, entry_type, find_entry};
 use concinnity_engine::components::ShaderStage;
 
 use super::form_extras::{ExtraControl, ExtraRow};
@@ -337,11 +337,6 @@ fn choice(id: usize, stage: ShaderStage, selected: usize) -> ExtraRow {
         detail: None,
     }
 }
-
-fn entry_type(e: &serde_json::Value) -> Option<&str> {
-    e.get("type").and_then(|v| v.as_str())
-}
-
 fn is_shader(e: &serde_json::Value) -> bool {
     entry_type(e) == Some(SHADER)
 }

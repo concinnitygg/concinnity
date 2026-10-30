@@ -12,7 +12,13 @@
 //! `concinnity-device` implements the `RenderBackend` seam in [`render`]. The
 //! build side, `concinnity-cook`, depends on this crate for the component
 //! vocabulary and this crate has no edge back into it.
-
+#![cfg_attr(
+    test,
+    expect(
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
+    )
+)]
 #![no_std]
 
 extern crate alloc;

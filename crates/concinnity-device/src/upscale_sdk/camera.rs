@@ -67,6 +67,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::float_cmp,
+        reason = "the near plane is clamped to an exact constant"
+    )]
     fn near_plane_is_kept_off_zero() {
         assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.0, 1.0, 1.0).near, 1e-3);
         assert_eq!(UpscaleCamera::new([0.0; 2], 0.0, 0.5, 1.0, 1.0).near, 0.5);

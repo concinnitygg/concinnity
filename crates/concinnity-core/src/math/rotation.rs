@@ -118,10 +118,7 @@ pub fn euler_yxz_deg_from_quat(q: Quat) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
+    use crate::approx::close;
 
     // The axis-angle quaternion agrees with the canonical single-axis one, and
     // a zero axis has no direction to turn about.

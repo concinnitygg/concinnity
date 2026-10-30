@@ -168,6 +168,10 @@ impl CameraTrackSystem {
     // Lay the boom legs out from the framing the camera starts in: each value
     // a leg leaves unset holds, and until the first leg that sets a value the
     // boom holds that value.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: an instant leg that moves is a cut"
+    )]
     fn resolve_boom(&mut self, authored_distance: f32) {
         let distance = self
             .boom_legs
@@ -473,7 +477,10 @@ mod tests {
     use crate::components::{CameraTravel, CameraTurn, Ease};
     use crate::ecs::World;
     use alloc::vec;
+    use concinnity_core::approx::assert_close;
     use concinnity_core::math::SaturatingFrom;
+
+    const TOL: f32 = 1e-4;
 
     const TICKS_PER_SECOND: usize = 60;
 
@@ -986,13 +993,6 @@ mod tests {
         system.step(&mut world.context());
     }
 
-    fn assert_near(got: [f32; 3], expected: [f32; 3]) {
-        assert!(
-            (0..3).all(|i| (got[i] - expected[i]).abs() < 1e-4),
-            "{got:?} {expected:?}"
-        );
-    }
-
     #[test]
     fn a_frame_poses_the_camera_between_its_last_two_steps() {
         let (mut world, mut system) = world_with(
@@ -1005,10 +1005,10 @@ mod tests {
         for _ in 0..60 {
             frame(&mut world, &mut system, 1, 1.0);
         }
-        assert_near(camera_position(&world), [2.0, 0.0, 0.0]);
+        assert_close(camera_position(&world), [2.0, 0.0, 0.0], TOL);
         frame(&mut world, &mut system, 1, 0.25);
         let pose = 60.25 / 60.0;
-        assert_near(camera_position(&world), [2.0 * pose, 0.0, 0.0]);
+        assert_close(camera_position(&world), [2.0 * pose, 0.0, 0.0], TOL);
         // The track's own clock still counts whole steps.
         let s = status(&world);
         assert_eq!(s.elapsed_seconds, 61.0 * SimTiming::TICK_DT);
@@ -1070,9 +1070,9 @@ mod tests {
         }
         // The steps have finished the first leg, the pose not quite.
         frame(&mut world, &mut system, 1, 0.0);
-        assert_near(camera_position(&world), [2.0 * 59.0 / 60.0, 0.0, 0.0]);
+        assert_close(camera_position(&world), [2.0 * 59.0 / 60.0, 0.0, 0.0], TOL);
         frame(&mut world, &mut system, 1, 0.5);
-        assert_near(camera_position(&world), [2.0, 0.0, 2.0 * 0.5 / 60.0]);
+        assert_close(camera_position(&world), [2.0, 0.0, 2.0 * 0.5 / 60.0], TOL);
     }
 
     #[test]

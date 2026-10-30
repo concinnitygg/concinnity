@@ -208,6 +208,20 @@ impl SubAssign for Vec3 {
     }
 }
 
+// Tests compare simulation vectors with the shared tolerance helpers.
+#[cfg(test)]
+impl concinnity_core::approx::Approx for Vec3 {
+    type Scalar = f32;
+
+    fn within(self, want: Self, tol: f32) -> bool {
+        self.to_array().within(want.to_array(), tol)
+    }
+
+    fn within_rel(self, want: Self, tol: f32) -> bool {
+        self.to_array().within_rel(want.to_array(), tol)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

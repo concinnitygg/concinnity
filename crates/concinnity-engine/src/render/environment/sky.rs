@@ -37,8 +37,8 @@ mod tests {
     use crate::gfx::projection::{look_at, view_from_basis};
     use crate::render::depth::{camera_oblique_projection, camera_projection};
     use crate::transform::{Mat4, mat4_inverse, mat4_mul};
-    use concinnity_core::math::sqrt;
-    use concinnity_core::math::vec3::{cross, dot, scale, sub};
+    use concinnity_core::approx::assert_close;
+    use concinnity_core::math::vec3::{cross, dot, normalize, scale, sub};
 
     // Row `r` of a column-major matrix, as the shader's `vp[r]` reads it.
     fn row(m: Mat4, r: usize) -> [f32; 4] {
@@ -55,10 +55,6 @@ mod tests {
 
     fn dot4(a: [f32; 4], b: [f32; 4]) -> f32 {
         a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
-    }
-
-    fn normalize(v: [f32; 3]) -> [f32; 3] {
-        scale(v, 1.0 / sqrt(dot(v, v)))
     }
 
     // `sky_corner` in sky_ray.hlsl.
@@ -130,16 +126,6 @@ mod tests {
     fn unprojected_ray(vp: Mat4, eye: [f32; 3], ndc: [f32; 2]) -> [f32; 3] {
         let h = transform(mat4_inverse(vp), [ndc[0], ndc[1], 0.5, 1.0]);
         normalize(sub(scale(xyz(h), 1.0 / h[3]), eye))
-    }
-
-    fn assert_close(a: [f32; 3], b: [f32; 3], tol: f32) {
-        let d = sub(a, b);
-        assert!(dot(d, d) <= tol * tol, "{a:?} vs {b:?}");
-    }
-
-    fn assert_close2(a: [f32; 2], b: [f32; 2], tol: f32) {
-        let (dx, dy) = (a[0] - b[0], a[1] - b[1]);
-        assert!(dx * dx + dy * dy <= tol * tol, "{a:?} vs {b:?}");
     }
 
     const EYE: [f32; 3] = [12.0, 3.0, -40.0];
@@ -271,7 +257,7 @@ mod tests {
             [TARGET[0] - 4.0, TARGET[1], TARGET[2] + 3.0],
         );
         for ndc in SAMPLES {
-            assert_close2(sky_motion(cur, cur, prev, ndc), [0.0, 0.0], 1e-5);
+            assert_close(sky_motion(cur, cur, prev, ndc), [0.0, 0.0], 1e-5);
         }
     }
 
@@ -282,7 +268,7 @@ mod tests {
         let cur = mat4_mul(proj, view);
         let shaky = mat4_mul(jittered(proj, 0.0013, -0.0007), view);
         for ndc in SAMPLES {
-            assert_close2(sky_motion(shaky, cur, cur, ndc), [0.0, 0.0], 1e-6);
+            assert_close(sky_motion(shaky, cur, cur, ndc), [0.0, 0.0], 1e-6);
         }
     }
 
@@ -302,7 +288,7 @@ mod tests {
         // The current center direction, seen by the previous camera.
         let seen = transform(prev, [turned[0], turned[1], turned[2], 0.0]);
         let prev_uv = [seen[0] / seen[3] * 0.5 + 0.5, 0.5 - seen[1] / seen[3] * 0.5];
-        assert_close2(m, [prev_uv[0] - 0.5, prev_uv[1] - 0.5], 1e-5);
+        assert_close(m, [prev_uv[0] - 0.5, prev_uv[1] - 0.5], 1e-5);
         assert!(
             m[0] < -0.01,
             "turning left moves the sky right on screen: {m:?}"
@@ -333,7 +319,7 @@ mod tests {
                 1.0,
             ];
             let carried = motion(transform(cur, cur_point), transform(prev, prev_point));
-            assert_close2(sky_motion(cur, cur, prev, ndc), carried, 1e-4);
+            assert_close(sky_motion(cur, cur, prev, ndc), carried, 1e-4);
         }
     }
 
@@ -353,7 +339,7 @@ mod tests {
             })
             .vp;
         for ndc in SAMPLES {
-            assert_close2(sky_motion(cur, cur, prev, ndc), [0.0, 0.0], 1e-6);
+            assert_close(sky_motion(cur, cur, prev, ndc), [0.0, 0.0], 1e-6);
             let placeholder = sky_motion(cur, cur, IDENTITY, ndc);
             assert!(placeholder.iter().all(|m| m.is_finite()), "{placeholder:?}");
             assert!(!has_history(ndc_uv(ndc), placeholder));

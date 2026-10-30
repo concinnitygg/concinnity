@@ -375,25 +375,7 @@ mod tests {
     use super::*;
     use crate::render::render_graph::builder::GraphBuilder;
     use crate::render::render_graph::passes::PassId;
-    use crate::render::render_graph::types::{
-        BufferDesc, BufferUsage, PixelFormat, TextureDesc, TextureSize, TextureUsage,
-    };
-
-    fn tex() -> TextureDesc {
-        TextureDesc::texture_2d(
-            TextureSize::Drawable,
-            TextureSize::Drawable,
-            PixelFormat::Rgba16Float,
-            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        )
-    }
-
-    fn buf() -> BufferDesc {
-        BufferDesc {
-            size_bytes: None,
-            usage: BufferUsage::STORAGE,
-        }
-    }
+    use crate::render::render_graph::test_fixtures::{buf, tex};
 
     #[test]
     fn queue_names_and_indices_are_dense_and_distinct() {

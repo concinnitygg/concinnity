@@ -610,14 +610,10 @@ mod tests {
     use crate::render::environment::grass::litter::litter_color;
     use crate::terrain::TerrainGrid;
     use alloc::vec;
-    use concinnity_core::math::vec3::{cross, dot, normalize_or, scale};
+    use concinnity_core::math::vec3::{add, cross, dot, normalize_or, scale};
 
     const PI: f32 = core::f32::consts::PI;
     const UP: [f32; 3] = [0.0, 1.0, 0.0];
-
-    fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-        [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-    }
 
     fn unit(v: [f32; 3]) -> [f32; 3] {
         normalize_or(v, 1e-9, UP)

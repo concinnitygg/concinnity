@@ -442,9 +442,8 @@ mod tests {
     use crate::render::render_graph::builder::GraphBuilder;
     use crate::render::render_graph::frame::{FrameGraphInputs, build_frame_graph};
     use crate::render::render_graph::schedule::CrossQueueWait;
-    use crate::render::render_graph::types::{
-        BufferDesc, BufferUsage, PassKind, PixelFormat, TextureDesc, TextureSize, TextureUsage,
-    };
+    use crate::render::render_graph::test_fixtures::{buf, tex};
+    use crate::render::render_graph::types::PassKind;
     use alloc::string::ToString;
     use alloc::vec;
 
@@ -698,15 +697,6 @@ mod tests {
         assert_covered(&all);
     }
 
-    fn tex() -> TextureDesc {
-        TextureDesc::texture_2d(
-            TextureSize::Drawable,
-            TextureSize::Drawable,
-            PixelFormat::Rgba16Float,
-            TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET,
-        )
-    }
-
     #[test]
     fn a_well_formed_graph_has_no_gaps() {
         let mut g = GraphBuilder::new();
@@ -811,13 +801,6 @@ mod tests {
                 && gap.resource_label == "t"),
             "{gaps:?}"
         );
-    }
-
-    fn buf() -> BufferDesc {
-        BufferDesc {
-            size_bytes: None,
-            usage: BufferUsage::STORAGE,
-        }
     }
 
     // A compute producer feeding a render consumer, with an independent render

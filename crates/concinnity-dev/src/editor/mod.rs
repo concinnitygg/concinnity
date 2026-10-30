@@ -86,6 +86,8 @@ mod planet_tools;
 // Every floating panel: its layout half, its data half, and the registry
 // each panel is one entry in.
 mod panels;
+// The precision authored values are written at.
+mod round;
 // Pure resolution for the /select console command.
 mod select_related;
 // The viewport selection, an ordered set of `AssetHandle`s.

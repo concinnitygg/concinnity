@@ -267,8 +267,7 @@ pub(crate) fn place(world: &mut World, view: &TemplateView<'_>, o: [f32; 2], s: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextLabel};
-    use concinnity_engine::ecs::asset_id::AssetId;
+    use crate::test_support::{label, sprite};
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
@@ -311,19 +310,6 @@ mod tests {
 
     fn injected_world() -> World {
         ids().test_world()
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
-    }
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label present")
     }
 
     // The header pins the description left of the Apply button, both under the

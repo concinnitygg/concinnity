@@ -98,10 +98,9 @@ impl SkyOrientation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-4)
-    }
+    const TOL: f32 = 1e-4;
 
     // The sign convention the whole feature hangs on: a positive angle about
     // the default pole runs a body from behind the viewer, overhead, and down
@@ -110,14 +109,20 @@ mod tests {
     fn a_positive_angle_carries_a_body_from_plus_z_over_plus_y_to_minus_z() {
         let axis = [1.0, 0.0, 0.0];
         let body = [0.0, 0.0, 1.0];
-        assert!(close(SkyOrientation::new(axis, 0.0).rotate(body), body));
+        assert!(close(
+            SkyOrientation::new(axis, 0.0).rotate(body),
+            body,
+            TOL
+        ));
         assert!(close(
             SkyOrientation::new(axis, 90.0).rotate(body),
-            [0.0, 1.0, 0.0]
+            [0.0, 1.0, 0.0],
+            TOL,
         ));
         assert!(close(
             SkyOrientation::new(axis, 180.0).rotate(body),
-            [0.0, 0.0, -1.0]
+            [0.0, 0.0, -1.0],
+            TOL,
         ));
         // Partway up on the first quarter turn, never below the horizon.
         let quarter = SkyOrientation::new(axis, 45.0).rotate(body);
@@ -133,7 +138,7 @@ mod tests {
         let frame = quat_to_mat3(q);
         let d = [0.2, 0.9, -0.3];
         let expected = concinnity_core::math::quat_rotate(q, sky.rotate(d));
-        assert!(close(sky.in_frame(&frame).rotate(d), expected));
+        assert!(close(sky.in_frame(&frame).rotate(d), expected, TOL));
         assert_eq!(sky.in_frame(&frame).angle_deg, 30.0);
     }
 
@@ -148,7 +153,7 @@ mod tests {
         let back: [f32; 3] = core::array::from_fn(|i| {
             rows[i][0] * world[0] + rows[i][1] * world[1] + rows[i][2] * world[2]
         });
-        assert!(close(back, baked), "{back:?}");
+        assert!(close(back, baked, TOL), "{back:?}");
         assert!(rows.iter().all(|r| r[3] == 0.0));
     }
 
@@ -162,7 +167,10 @@ mod tests {
         let m = crate::transform::trs_matrix([0.0; 3], sky.euler_deg(), [1.0; 3]);
         let by_euler: [f32; 3] =
             core::array::from_fn(|i| m[0][i] * dir[0] + m[1][i] * dir[1] + m[2][i] * dir[2]);
-        assert!(close(by_matrix, by_euler), "{by_matrix:?} {by_euler:?}");
+        assert!(
+            close(by_matrix, by_euler, TOL),
+            "{by_matrix:?} {by_euler:?}"
+        );
     }
 
     // No rotation is the identity, which is what a world with no SkyRotation
@@ -172,7 +180,7 @@ mod tests {
         let sky = SkyOrientation::default();
         assert_eq!(sky.angle_deg, 0.0);
         assert_eq!(sky.sample_rows(), SkyOrientation::IDENTITY_ROWS);
-        assert!(close(sky.rotate([0.3, -0.7, 0.2]), [0.3, -0.7, 0.2]));
-        assert!(close(sky.euler_deg(), [0.0; 3]));
+        assert!(close(sky.rotate([0.3, -0.7, 0.2]), [0.3, -0.7, 0.2], TOL));
+        assert!(close(sky.euler_deg(), [0.0; 3], TOL));
     }
 }

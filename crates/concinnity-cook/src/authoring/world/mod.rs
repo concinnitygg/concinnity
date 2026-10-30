@@ -16,7 +16,7 @@ pub use entry_check::entry_errors;
 pub use find::{WORLD_JSONL, find_world_jsonl};
 pub use identity::{
     ID_KEY, anonymous_label, args_with_id, args_without_id, entry_handle, entry_handles, entry_id,
-    find_entry, is_label_of, replace_args, set_entry_id, take_entry_id,
+    entry_type, find_entry, is_label_of, replace_args, set_entry_id, take_entry_id,
 };
 pub use io::{WorldJsonlAsset, known_names, patch_world_jsonl_to};
 pub use line::{

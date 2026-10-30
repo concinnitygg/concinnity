@@ -130,6 +130,7 @@ pub(crate) fn hide(world: &mut World, ids: CheckIds) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::label;
     use concinnity_engine::components::{Sprite, TextLabel};
 
     const IDS: CheckIds = CheckIds {
@@ -154,10 +155,6 @@ mod tests {
 
     fn tint(world: &World) -> [f32; 4] {
         world.get_by_id::<Sprite>(IDS.box_bg).unwrap().tint
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

@@ -256,14 +256,7 @@ fn check_material_shader_consumers(assets: &[WorldJsonlAsset], errors: &mut Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn asset(name: &str, asset_type: RegisteredType, args: serde_json::Value) -> WorldJsonlAsset {
-        WorldJsonlAsset {
-            id: name.to_string(),
-            asset_type,
-            args,
-        }
-    }
+    use crate::test_support::asset;
 
     fn errors_for(assets: &[WorldJsonlAsset]) -> Vec<String> {
         let mut errors = Vec::new();

@@ -84,6 +84,10 @@ fn shape_targeting(assets: &[WorldJsonlAsset], mesh: &str) -> Option<CharacterSh
 // skeleton, and the dense morph set. Uniform white vertex color (the
 // payload's fill-in default) is left out of the file.
 fn export_mesh_from_payload(name: &str, p: SkinnedPayload) -> ExportMesh {
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact white is the payload fill-in default"
+    )]
     let colors = if p.vertices.iter().all(|v| v.color == [1.0, 1.0, 1.0]) {
         Vec::new()
     } else {

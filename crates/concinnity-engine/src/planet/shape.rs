@@ -100,6 +100,7 @@ impl PlanetShape {
 
     /// Whether `other` generates the same ground, whatever edits either
     /// holds.
+    #[expect(clippy::float_cmp, reason = "generation inputs must match exactly")]
     pub fn same_generated(&self, other: &Self) -> bool {
         self.center == other.center
             && self.radius == other.radius
@@ -417,6 +418,7 @@ fn edit_from_hit(face: CubeFace, s: f64, t: f64, hit: &EditHit) -> EditAt {
 
 // The gradient over directions, lying along `tangents`, that rises `slope`
 // per unit along each.
+#[expect(clippy::float_cmp, reason = "fast path for zero slope")]
 fn gradient_along([a, b]: [DVec3; 2], slope: [f64; 2]) -> DVec3 {
     if slope == [0.0; 2] {
         return [0.0; 3];

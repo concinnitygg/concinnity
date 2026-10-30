@@ -321,6 +321,10 @@ impl SweepPrune {
 
     /// Insertion sort: last step's order is nearly this step's, so each
     /// element usually stays where it is.
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact tie-break keeps the result deterministic"
+    )]
     fn sort(&mut self) {
         let axis = self.axis;
         self.max_extent = self.order.iter().fold(0.0f32, |widest, &slot| {

@@ -38,6 +38,10 @@ impl ProportionLayer {
     /// change nothing are dropped.
     pub fn resolve(skeleton: &Skeleton, proportions: &[JointProportion]) -> Self {
         let joints = skeleton.joints();
+        #[expect(
+            clippy::float_cmp,
+            reason = "identity scale and zero length change nothing"
+        )]
         let entries = proportions
             .iter()
             .filter(|p| p.scale != 1.0 || p.length != 0.0)
@@ -131,6 +135,9 @@ mod tests {
     use crate::animation::skeleton::{Joint, JointPose};
     use alloc::string::String;
     use alloc::vec;
+    use concinnity_core::approx::close;
+
+    const TOL: f32 = 1e-5;
 
     // root -> mid -> tip, each 1 unit up the Y axis.
     fn chain() -> Skeleton {
@@ -165,10 +172,6 @@ mod tests {
         world.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect()
     }
 
-    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5)
-    }
-
     #[test]
     fn length_pushes_only_the_children_along_the_bone() {
         let s = chain();
@@ -176,8 +179,8 @@ mod tests {
         let p = positions(&s, &layer);
         // mid itself stays; tip moves 0.5 further up and nothing stretches
         // beyond that.
-        assert!(close(p[1], [0.0, 1.0, 0.0]), "{p:?}");
-        assert!(close(p[2], [0.0, 2.5, 0.0]), "{p:?}");
+        assert!(close(p[1], [0.0, 1.0, 0.0], TOL), "{p:?}");
+        assert!(close(p[2], [0.0, 2.5, 0.0], TOL), "{p:?}");
         assert!((layer.height_ratio(&s) - 1.25).abs() < 1e-5);
     }
 
@@ -188,11 +191,11 @@ mod tests {
         let p = positions(&s, &layer);
         // The mid joint's frame is doubled, so the tip's 1-unit offset
         // becomes 2 units.
-        assert!(close(p[2], [0.0, 3.0, 0.0]), "{p:?}");
+        assert!(close(p[2], [0.0, 3.0, 0.0], TOL), "{p:?}");
         // Scaling the root doubles the whole chain and reports as root scale.
         let layer = ProportionLayer::resolve(&s, &[proportion("root", 2.0, 0.0)]);
         let p = positions(&s, &layer);
-        assert!(close(p[2], [0.0, 4.0, 0.0]), "{p:?}");
+        assert!(close(p[2], [0.0, 4.0, 0.0], TOL), "{p:?}");
         assert_eq!(layer.root_scale(&s), 2.0);
         assert!((layer.height_ratio(&s) - 2.0).abs() < 1e-5);
     }

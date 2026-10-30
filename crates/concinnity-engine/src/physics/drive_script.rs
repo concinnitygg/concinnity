@@ -134,10 +134,9 @@ pub(crate) fn compass(heading_deg: f32, up: [f32; 3], north: [f32; 3]) -> [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
 
-    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5)
-    }
+    const TOL: f32 = 1e-5;
 
     // On level ground north is -Z and east +X; on a planet's side the same
     // bearing lies along that ground.
@@ -145,9 +144,9 @@ mod tests {
     fn a_bearing_is_clockwise_from_north_along_the_ground() {
         let up = [0.0, 1.0, 0.0];
         let north = [0.0, 0.0, -1.0];
-        assert!(close(compass(0.0, up, north), [0.0, 0.0, -1.0]));
-        assert!(close(compass(90.0, up, north), [1.0, 0.0, 0.0]));
-        assert!(close(compass(180.0, up, north), [0.0, 0.0, 1.0]));
+        assert!(close(compass(0.0, up, north), [0.0, 0.0, -1.0], TOL));
+        assert!(close(compass(90.0, up, north), [1.0, 0.0, 0.0], TOL));
+        assert!(close(compass(180.0, up, north), [0.0, 0.0, 1.0], TOL));
         let tilted = normalize_or([0.3, 1.0, 0.0], 1e-6, up);
         let east = compass(90.0, tilted, north);
         assert!(dot(east, tilted).abs() < 1e-6, "along the ground");
@@ -200,7 +199,7 @@ mod tests {
             ..DriveKey::default()
         };
         DriveScript::steer(&key, &mut control, [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]);
-        assert!(close(control.heading, [0.5, 0.0, 0.0]));
+        assert!(close(control.heading, [0.5, 0.0, 0.0], TOL));
         assert!(control.sprint);
     }
 }

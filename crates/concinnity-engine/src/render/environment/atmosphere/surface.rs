@@ -289,6 +289,10 @@ impl SurfaceBelow {
 
     /// Whether the ground has changed enough since `last` for the sky cube
     /// drawn over it to be redrawn.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: any water change must re-upload"
+    )]
     pub fn moved_from(&self, last: &Self) -> bool {
         let land = (0..3).any(|i| (self.land[i] - last.land[i]).abs() > LAND_TOLERANCE);
         let water = self

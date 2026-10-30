@@ -33,6 +33,7 @@
 //! re-serializes the entry list to world.jsonl and stops there: the compiled
 //! blobs are refreshed by an explicit build, not by editing.
 
+use concinnity_cook::authoring::world::entry_type;
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
@@ -385,9 +386,6 @@ fn short_status(e: &str) -> String {
 // the world knows it by is its handle (`EditorHook::handle_name`).
 fn declared_id(e: &serde_json::Value) -> Option<&str> {
     concinnity_cook::authoring::world::entry_id(e)
-}
-fn entry_type(e: &serde_json::Value) -> Option<&str> {
-    e.get("type").and_then(|v| v.as_str())
 }
 
 // The ids of the working entries whose type is one of `types`, or of every

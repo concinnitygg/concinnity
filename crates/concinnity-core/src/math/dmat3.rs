@@ -129,12 +129,9 @@ pub fn quat_from_mat(m: &DMat3) -> Quat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::approx::close;
     use crate::math::dvec3::{length, to_f32};
     use crate::math::quat_from_axis_angle;
-
-    fn close(a: DVec3, b: DVec3, tol: f64) -> bool {
-        (0..3).all(|i| (a[i] - b[i]).abs() < tol)
-    }
 
     #[test]
     fn the_arc_from_up_lands_on_its_target_and_stays_a_rotation() {

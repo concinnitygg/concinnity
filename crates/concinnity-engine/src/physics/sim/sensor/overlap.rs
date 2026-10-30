@@ -11,7 +11,6 @@
 
 use crate::physics::ColliderShape;
 use crate::physics::sim::body::Body;
-use crate::physics::sim::collide::Pose;
 use crate::physics::sim::math::Vec3;
 use crate::physics::sim::query::gjk::{self, Support};
 
@@ -26,8 +25,8 @@ pub(crate) fn overlapping(a: &Body, b: &Body) -> bool {
         return answer;
     }
     shapes_overlap(
-        &Support::new(shape_a, pose_of(a)),
-        &Support::new(shape_b, pose_of(b)),
+        &Support::new(shape_a, a.pose()),
+        &Support::new(shape_b, b.pose()),
     )
 }
 
@@ -68,13 +67,6 @@ pub(crate) fn shapes_overlap(a: &Support, b: &Support) -> bool {
     // A pair with no separating direction is inside itself; one with a
     // direction overlaps only while the surfaces have crossed.
     separation.is_entangled() || separation.gap < 0.0
-}
-
-fn pose_of(body: &Body) -> Pose {
-    Pose {
-        position: body.position,
-        rotation: body.orientation,
-    }
 }
 
 #[cfg(test)]
@@ -149,8 +141,8 @@ mod tests {
         for x in [0.0, 1.1, 1.3] {
             let probe = at(ball, vec3(x, 0.0, 0.0));
             let descended = shapes_overlap(
-                &Support::new(&probe_shape(&flipped), pose_of(&flipped)),
-                &Support::new(&ball, pose_of(&probe)),
+                &Support::new(&probe_shape(&flipped), flipped.pose()),
+                &Support::new(&ball, probe.pose()),
             );
             assert_eq!(overlapping(&flipped, &probe), descended, "at x = {x}");
         }

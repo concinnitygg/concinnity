@@ -8,6 +8,13 @@
 //!
 //! The binary declares the global allocator, resolves the project's state tree,
 //! installs the crash hooks, and hands the rest to [`cli::Invocation`].
+#![cfg_attr(
+    test,
+    expect(
+        clippy::float_cmp,
+        reason = "tests assert exact, deterministic float results"
+    )
+)]
 
 /// The shader platform `cn` cooks a world for when it plays in this process:
 /// the backend this process renders with, so a world built here plays here.

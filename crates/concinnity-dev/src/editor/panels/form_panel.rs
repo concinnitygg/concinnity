@@ -1194,7 +1194,8 @@ pub(crate) fn override_menu_ids() -> Vec<AssetId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::components::{Sprite, TextInput, TextLabel};
+    use crate::test_support::{label, sprite};
+    use concinnity_engine::components::TextInput;
 
     fn test_origin() -> [f32; 2] {
         default_origin(1280.0)
@@ -1261,20 +1262,8 @@ mod tests {
         ids().test_world()
     }
 
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world
-            .get_by_id::<Sprite>(id)
-            .cloned()
-            .expect("sprite present")
-    }
     fn sprite_visible(world: &World, id: AssetId) -> bool {
         sprite(world, id).visible
-    }
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world
-            .get_by_id::<TextLabel>(id)
-            .cloned()
-            .expect("label present")
     }
     fn input(world: &World, id: AssetId) -> TextInput {
         world

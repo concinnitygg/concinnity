@@ -5,6 +5,7 @@
 //! world-free; the hook owns the entries and `character_shape_panel.rs` the
 //! layout.
 
+use crate::editor::round::round3;
 use concinnity_cook::authoring::registry::build_only::{CharacterSchema, ShapePreset};
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::components::{JointProportion, ShapeSlider};
@@ -228,6 +229,10 @@ impl ShapeValues {
     // drives. A zero slider or identity proportion drops its entry, so a
     // reset shape serializes empty. `joints` limits a proportion row to the
     // joints the skeleton has.
+    #[expect(
+        clippy::float_cmp,
+        reason = "identity scale and zero length are the rounded neutral values"
+    )]
     pub(crate) fn set(&mut self, row: &SliderRow, value: f32, joints: &[String]) {
         let (lo, hi) = row.kind.range();
         let value = round2(value.clamp(lo, hi));
@@ -329,10 +334,6 @@ impl SplitMix64 {
 
 fn round2(v: f32) -> f32 {
     (v * 100.0).round() / 100.0
-}
-
-fn round3(v: f32) -> f32 {
-    (v * 1000.0).round() / 1000.0
 }
 
 // One panel row: a section heading (index into `Rows::sections`, or the

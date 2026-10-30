@@ -23,6 +23,10 @@ pub struct SettingsDiff {
 
 impl SettingsDiff {
     /// The changes from `before` to `after`.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: any change to a setting is reported"
+    )]
     pub fn between(before: &ResolvedSettings, after: &ResolvedSettings) -> Self {
         let mut changes = Vec::new();
         let (b, a) = (&before.graphics, &after.graphics);

@@ -78,10 +78,9 @@ mod tests {
     use crate::animation::skeleton::JointPose;
     use crate::transform::IDENTITY;
     use alloc::vec;
+    use concinnity_core::approx::close;
 
-    fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-4
-    }
+    const TOL: f32 = 1e-4;
 
     // The Vec-returning blend the in-place fold replaced, kept as the test
     // oracle: the fold must reproduce it bit for bit.
@@ -156,8 +155,8 @@ mod tests {
         let at1 = blend_locals(&a, &b, 1.0);
         for c in 0..4 {
             for row in 0..4 {
-                assert!(approx(at0[0][c][row], a[0][c][row]), "f=0 [{c}][{row}]");
-                assert!(approx(at1[0][c][row], b[0][c][row]), "f=1 [{c}][{row}]");
+                assert!(close(at0[0][c][row], a[0][c][row], TOL), "f=0 [{c}][{row}]");
+                assert!(close(at1[0][c][row], b[0][c][row], TOL), "f=1 [{c}][{row}]");
             }
         }
     }
@@ -171,7 +170,7 @@ mod tests {
         let mid = blend_locals(&a, &b, 0.5);
         // For a pure yaw the first column is (cos, 0, -sin).
         let yaw = (-mid[0][0][2]).atan2(mid[0][0][0]).to_degrees();
-        assert!(approx(yaw, 45.0), "yaw was {yaw}");
+        assert!(close(yaw, 45.0, TOL), "yaw was {yaw}");
     }
 
     #[test]
@@ -194,9 +193,9 @@ mod tests {
         let recover = |out: &[Mat4]| (-out[0][0][2]).atan2(out[0][0][0]).to_degrees();
         let a = blend_many(&poses, &[1.0, 1.0, 2.0]);
         let b = blend_many(&poses, &[5.0, 5.0, 10.0]);
-        assert!(approx(recover(&a), 52.5), "yaw was {}", recover(&a));
+        assert!(close(recover(&a), 52.5, TOL), "yaw was {}", recover(&a));
         assert!(
-            approx(recover(&a), recover(&b)),
+            close(recover(&a), recover(&b), TOL),
             "weight scaling moved blend"
         );
     }

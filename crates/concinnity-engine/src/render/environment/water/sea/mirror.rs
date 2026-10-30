@@ -5,6 +5,7 @@
 //! does not tear where two faces meet.
 
 use crate::render::uniforms::{WaterParams, WaterSeaFaceGpu};
+use concinnity_core::math::vec3::dot;
 
 /// Where a rest point falls on one face (`water_sea_point`).
 #[derive(Debug, Clone, Copy)]
@@ -13,10 +14,6 @@ pub(super) struct SeaPoint {
     pub(super) s: [f32; 2],
     /// The point's direction from the center, in the face's axes.
     pub(super) dir: [f32; 3],
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 /// Rest offset `rest` from the anchor, in the simulated frame, on `face`.

@@ -17,6 +17,7 @@
 use crate::physics::{ColliderShape, DynamicParams, LayerMask};
 
 use super::aabb::{Aabb, shape_bounds};
+use super::collide::Pose;
 use super::mass::MassProperties;
 use super::math::{Mat3, Quat, Vec3};
 
@@ -341,6 +342,13 @@ impl Body {
             .map_or(Vec3::ZERO, |turn| self.orientation.turn_rate_to(turn, dt));
     }
 
+    pub(crate) fn pose(&self) -> Pose {
+        Pose {
+            position: self.position,
+            rotation: self.orientation,
+        }
+    }
+
     pub(crate) fn inv_inertia_world(&self) -> Mat3 {
         if self.inv_inertia_local == Vec3::ZERO {
             return Mat3::ZERO;
@@ -437,6 +445,25 @@ mod tests {
         assert!(!b.is_dynamic());
         assert!(!b.is_simulated());
         assert!(!b.responds_to_contact());
+    }
+
+    #[test]
+    fn the_pose_is_the_body_position_and_orientation() {
+        let orientation = Quat::from_axis_angle(Vec3::from_array([0.0, 1.0, 0.0]), 0.5);
+        let b = Body::fixed(
+            ColliderShape::Ball { radius: 1.0 },
+            Vec3::from_array([1.0, 2.0, 3.0]),
+            orientation,
+            0.5,
+            LayerMask::ALL,
+        );
+        assert_eq!(
+            b.pose(),
+            Pose {
+                position: Vec3::from_array([1.0, 2.0, 3.0]),
+                rotation: orientation,
+            }
+        );
     }
 
     #[test]

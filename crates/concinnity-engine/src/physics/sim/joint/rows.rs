@@ -163,6 +163,9 @@ pub(crate) fn solve_motor(error: f32, mass: f32, total: &mut f32, budget: f32) -
 mod tests {
     use super::*;
     use crate::physics::sim::math::vec3;
+    use concinnity_core::approx::close;
+
+    const TOL: f32 = 1e-5;
 
     fn free_point(inv_mass: f32) -> Arm {
         Arm {
@@ -172,10 +175,6 @@ mod tests {
         }
     }
 
-    fn close(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1.0e-5
-    }
-
     // Two point masses with no lever arms see the reduced mass, whichever
     // direction the row is read along.
     #[test]
@@ -183,7 +182,7 @@ mod tests {
         let block = point_block(free_point(0.5), free_point(0.25));
         for axis in [Vec3::X, Vec3::Y, Vec3::Z, vec3(0.6, 0.8, 0.0)] {
             assert!(
-                close(axis_mass(&block, axis), 1.0 / 0.75),
+                close(axis_mass(&block, axis), 1.0 / 0.75, TOL),
                 "{axis:?} -> {}",
                 axis_mass(&block, axis)
             );
@@ -200,7 +199,7 @@ mod tests {
             lever: Vec3::X,
         };
         let block = point_block(arm, free_point(0.0));
-        assert!(close(axis_mass(&block, Vec3::X), 1.0), "along the arm");
+        assert!(close(axis_mass(&block, Vec3::X), 1.0, TOL), "along the arm");
         assert!(
             axis_mass(&block, Vec3::Y) < 1.0,
             "across it: {}",
@@ -253,11 +252,11 @@ mod tests {
         let impulse = solve_plane(&block, t1, t2, [spin.dot(t1), spin.dot(t2)]);
         let after = spin + block.mul_vec3(impulse);
         assert!(
-            close(after.dot(t1), 0.0) && close(after.dot(t2), 0.0),
+            close(after.dot(t1), 0.0, TOL) && close(after.dot(t2), 0.0, TOL),
             "{after:?}"
         );
         assert!(
-            close(after.z, 2.0),
+            close(after.z, 2.0, TOL),
             "the free axis kept its spin: {after:?}"
         );
     }
@@ -268,8 +267,8 @@ mod tests {
             Mat3::from_diagonal(vec3(1.0, 2.0, 4.0)),
             Mat3::from_diagonal(vec3(1.0, 2.0, 4.0)),
         );
-        assert!(close(axis_mass(&block, Vec3::X), 0.5));
-        assert!(close(axis_mass(&block, Vec3::Z), 0.125));
+        assert!(close(axis_mass(&block, Vec3::X), 0.5, TOL));
+        assert!(close(axis_mass(&block, Vec3::Z), 0.125, TOL));
     }
 
     fn push(use_bias: bool) -> Push {
@@ -324,7 +323,7 @@ mod tests {
         // substep, so it would overshoot by more than half of it.
         let applied = solve_limit(row, &mut total, &push(true));
         assert!(applied > 0.0, "the approach has to be slowed: {applied}");
-        assert!(close(-10.0 + applied, -0.01 * 240.0), "{applied}");
+        assert!(close(-10.0 + applied, -0.01 * 240.0, TOL), "{applied}");
     }
 
     // The relax pass takes the correction's velocity back out without letting

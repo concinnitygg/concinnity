@@ -130,6 +130,10 @@ impl Tree {
         best.map(|(_, rank)| rank)
     }
 
+    #[expect(
+        clippy::float_cmp,
+        reason = "exact tie-break keeps the result deterministic"
+    )]
     fn visit_nearest(
         &self,
         node: usize,

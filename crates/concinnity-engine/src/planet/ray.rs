@@ -116,6 +116,10 @@ impl PlanetFrame {
     /// first meets the ground within `max_distance` meters: the march runs in
     /// authored coordinates in double precision, so it holds anywhere on the
     /// planet. `None` when it misses or starts below the ground.
+    #[expect(
+        clippy::float_cmp,
+        reason = "zero vector is the degenerate-direction sentinel"
+    )]
     pub fn pick_ground(
         &self,
         origin: [f32; 3],

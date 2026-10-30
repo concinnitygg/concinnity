@@ -521,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::float_cmp, reason = "the depth clear is an exact constant")]
     fn depth_and_volume_shapes_translate() {
         // Nothing pooled needs these yet, but the descs the graph now carries
         // do, so the translator has to be right before they can be pooled. A

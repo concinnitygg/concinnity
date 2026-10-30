@@ -328,6 +328,7 @@ fn scale_label(world: &mut World, id: AssetId, scale: f32) {
 mod tests {
     use super::*;
     use crate::editor::worlds::{Layout, WorldRow};
+    use crate::test_support::{label, sprite};
     use concinnity_engine::components::{Sprite, TextLabel};
 
     const VP: [f32; 2] = [1280.0, 720.0];
@@ -363,14 +364,6 @@ mod tests {
             status: None,
             mouse,
         }
-    }
-
-    fn sprite(world: &World, id: AssetId) -> Sprite {
-        world.get_by_id::<Sprite>(id).cloned().unwrap()
-    }
-
-    fn label(world: &World, id: AssetId) -> TextLabel {
-        world.get_by_id::<TextLabel>(id).cloned().unwrap()
     }
 
     #[test]

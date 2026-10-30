@@ -175,6 +175,10 @@ impl ThirdPersonSystem {
 
     // Steer the followed rig along `dir` (unit, or zero when idle) at the
     // smoothed speed, and hand physics any jump.
+    #[expect(
+        clippy::float_cmp,
+        reason = "zero direction is no input; an unchanged yaw writes nothing"
+    )]
     fn steer_rig(
         &self,
         ctx: &mut PipelineContext<'_>,
@@ -657,6 +661,7 @@ mod tests {
         use crate::ecs::asset_id::AssetId;
         use crate::ecs::{Entity, Ref};
         use crate::planet::{Continents, LocalFrame, PlanetShape};
+        use concinnity_core::approx::close;
         use concinnity_core::math::vec3::{dot, normalize_or};
 
         const SHAPE: PlanetShape = PlanetShape {
@@ -723,10 +728,6 @@ mod tests {
             }
             *world.context().query_mut::<FrameInput>().next().unwrap() = input;
             system.step(&mut world.context());
-        }
-
-        fn close(a: [f32; 3], b: [f32; 3], tol: f32) -> bool {
-            (0..3).all(|i| (a[i] - b[i]).abs() < tol)
         }
 
         // The camera stands up its own way on the planet's side, orbits the

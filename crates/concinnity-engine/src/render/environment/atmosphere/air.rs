@@ -45,6 +45,7 @@ impl AirProfile {
     /// path across it scaled by `k` loses the same light. 1 returns it
     /// unchanged.
     #[must_use]
+    #[expect(clippy::float_cmp, reason = "fast path for the identity scale")]
     pub fn scaled(&self, k: f32) -> Self {
         if k == 1.0 {
             return *self;

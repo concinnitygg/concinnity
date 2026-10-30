@@ -336,6 +336,7 @@ fn arith(op: Arith, a: Val, b: Val) -> Option<Val> {
 }
 
 fn compare(op: Cmp, a: Val, b: Val) -> Option<Val> {
+    #[expect(clippy::float_cmp, reason = "authored comparison is exact by design")]
     let equal = match (a, b) {
         (Val::Entity(x), Val::Entity(y)) => x == y,
         (Val::Bool(x), Val::Bool(y)) => x == y,

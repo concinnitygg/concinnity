@@ -328,11 +328,10 @@ pub(crate) fn reduce_to_quad(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::approx::close;
     use concinnity_core::math::{cos, sin};
 
-    fn close(a: Vec3, b: Vec3) -> bool {
-        (a - b).length() < 1.0e-4
-    }
+    const TOL: f32 = 1e-4;
 
     #[test]
     fn a_pose_round_trips_a_point_through_its_frame() {
@@ -341,8 +340,8 @@ mod tests {
             rotation: Quat::from_euler_deg([20.0, -35.0, 10.0]),
         };
         let p = vec3(0.5, -1.0, 2.0);
-        assert!(close(pose.to_local(pose.to_world(p)), p));
-        assert!(close(pose.axis(1), pose.rotation.rotate(Vec3::Y)));
+        assert!(close(pose.to_local(pose.to_world(p)), p, TOL));
+        assert!(close(pose.axis(1), pose.rotation.rotate(Vec3::Y), TOL));
     }
 
     #[test]
@@ -351,20 +350,24 @@ mod tests {
         let b = vec3(2.0, 0.0, 0.0);
         assert!(close(
             closest_point_on_segment(vec3(1.0, 5.0, 0.0), a, b).0,
-            vec3(1.0, 0.0, 0.0)
+            vec3(1.0, 0.0, 0.0),
+            TOL,
         ));
         assert!(close(
             closest_point_on_segment(vec3(-3.0, 1.0, 0.0), a, b).0,
-            a
+            a,
+            TOL,
         ));
         assert!(close(
             closest_point_on_segment(vec3(9.0, 1.0, 0.0), a, b).0,
-            b
+            b,
+            TOL,
         ));
         // A degenerate segment is just its own endpoint.
         assert!(close(
             closest_point_on_segment(vec3(1.0, 1.0, 1.0), a, a).0,
-            a
+            a,
+            TOL,
         ));
     }
 
@@ -376,8 +379,8 @@ mod tests {
             vec3(0.0, 1.0, -1.0),
             vec3(0.0, 1.0, 1.0),
         );
-        assert!(close(c1, vec3(0.0, 0.0, 0.0)), "{c1:?}");
-        assert!(close(c2, vec3(0.0, 1.0, 0.0)), "{c2:?}");
+        assert!(close(c1, vec3(0.0, 0.0, 0.0), TOL), "{c1:?}");
+        assert!(close(c2, vec3(0.0, 1.0, 0.0), TOL), "{c2:?}");
     }
 
     #[test]
@@ -402,8 +405,8 @@ mod tests {
             vec3(3.0, 0.0, 0.0),
             vec3(4.0, 0.0, 0.0),
         );
-        assert!(close(c1, vec3(1.0, 0.0, 0.0)), "{c1:?}");
-        assert!(close(c2, vec3(3.0, 0.0, 0.0)), "{c2:?}");
+        assert!(close(c1, vec3(1.0, 0.0, 0.0), TOL), "{c1:?}");
+        assert!(close(c2, vec3(3.0, 0.0, 0.0), TOL), "{c2:?}");
     }
 
     #[test]
@@ -575,12 +578,12 @@ mod tests {
 
         // Only the first: the point against the second segment.
         let (c1, c2) = closest_points_between_segments(p, p, a, b);
-        assert!(close(c1, p), "{c1:?}");
-        assert!(close(c2, vec3(1.0, 0.0, 0.0)), "{c2:?}");
+        assert!(close(c1, p, TOL), "{c1:?}");
+        assert!(close(c2, vec3(1.0, 0.0, 0.0), TOL), "{c2:?}");
 
         // Only the second: the mirror of the case above.
         let (c1, c2) = closest_points_between_segments(a, b, p, p);
-        assert!(close(c1, vec3(1.0, 0.0, 0.0)), "{c1:?}");
-        assert!(close(c2, p), "{c2:?}");
+        assert!(close(c1, vec3(1.0, 0.0, 0.0), TOL), "{c1:?}");
+        assert!(close(c2, p, TOL), "{c2:?}");
     }
 }

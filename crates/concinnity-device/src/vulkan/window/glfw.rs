@@ -435,6 +435,10 @@ impl GlfwWindow {
     // input focus: GLFW's set_cursor_pos no-ops without focus anyway. A
     // single-display fullscreen is already OS-confined, so the clamp never
     // fires there.
+    #[expect(
+        clippy::float_cmp,
+        reason = "change detection: warp only a cursor the clamp moved"
+    )]
     fn confine_fullscreen(&mut self) {
         let (w, h) = self.window.get_size();
         if self.window.is_focused() && w > 0 && h > 0 {
