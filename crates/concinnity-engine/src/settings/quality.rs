@@ -10,6 +10,7 @@
 //! every tier below Ultra is reached by clamping, not by opting in.
 
 use crate::render::environment::clouds::CloudMarch;
+use crate::render::environment::grass::GrassThinning;
 use alloc::format;
 use alloc::string::{String, ToString};
 
@@ -129,6 +130,10 @@ pub struct QualityCeiling {
     /// How finely clouds are marched. No world authors this: a lower tier
     /// takes fewer, longer steps and leaves the clouds' edges smoother.
     pub clouds: CloudMarch,
+    /// How densely far grass may cover the screen. No world authors this: a
+    /// lower tier caps the blades each pixel shows, so far grass seen at a
+    /// glancing angle thins out.
+    pub grass: GrassThinning,
 }
 
 // The engine maxima each cap takes where a tier imposes none.
@@ -171,6 +176,7 @@ impl QualityCeiling {
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 0,
         clouds: CloudMarch::FULL,
+        grass: GrassThinning::Full,
     };
 
     /// The integrated / weakest tier.
@@ -207,6 +213,7 @@ impl QualityCeiling {
             max_distance_km: 60,
             detail: false,
         },
+        grass: GrassThinning::PerPixel(10),
     };
 
     /// The entry discrete tier.
@@ -242,6 +249,7 @@ impl QualityCeiling {
             max_distance_km: 80,
             detail: true,
         },
+        grass: GrassThinning::PerPixel(25),
     };
 
     /// The mainstream discrete tier.
@@ -272,6 +280,7 @@ impl QualityCeiling {
             light_steps: 5,
             ..CloudMarch::FULL
         },
+        grass: GrassThinning::Full,
     };
 
     /// The enthusiast tier: everything but a second SSGI ray past two.
@@ -298,6 +307,7 @@ impl QualityCeiling {
         ocean: OceanQuality::FULL,
         min_planet_cell_size: 1,
         clouds: CloudMarch::FULL,
+        grass: GrassThinning::Full,
     };
 
     /// Whether water traces its own per-pixel reflection in the transparent
@@ -350,15 +360,18 @@ pub fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> QualityCe
     }
 }
 
-/// The output size, in pixels, above which `Auto` upscales: 2560x1440.
+/// The output size, in pixels, above which a tier below the top upscales:
+/// 2560x1440.
 pub const AUTO_UPSCALE_PIXELS: u64 = 2560 * 1440;
 
 /// Whether the preset turns temporal upscaling on where neither the world nor
-/// the user chose: `Auto` below its top tier, on an output of more than
-/// [`AUTO_UPSCALE_PIXELS`]. The render scale is the tier's `min_upscale`.
+/// the user chose: every tier below Ultra, named or reached through `Auto`, on
+/// an output of more than [`AUTO_UPSCALE_PIXELS`]. The render scale is the
+/// tier's `min_upscale`. Ultra renders natively, and `Custom` keeps the world's
+/// choice.
 pub fn auto_upscaling(preset: QualityPreset, profile: &GpuProfile, output: [u32; 2]) -> bool {
-    preset == QualityPreset::Auto
-        && auto_tier(profile).1 != QualityCeiling::ULTRA
+    preset != QualityPreset::Custom
+        && resolve_ceiling(preset, profile) != QualityCeiling::ULTRA
         && u64::from(output[0]) * u64::from(output[1]) > AUTO_UPSCALE_PIXELS
 }
 

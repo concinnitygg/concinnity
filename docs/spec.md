@@ -1896,7 +1896,9 @@ At first launch the GPU is classified into a tier:
 The quality preset is `Auto`, `Low`, `Medium`, `High`, `Ultra`, or `Custom`.
 `Auto` maps Integrated to Low, Entry and Unknown to Medium, Mid to High, and High
 to Ultra, re-resolving each launch. A named preset is a fixed ceiling; `Custom`
-imposes none.
+imposes none. Every tier below Ultra, named or reached through `Auto`, turns
+temporal upscaling on for an output larger than 2560x1440 where neither the
+world nor the user chose, at the tier's minimum upscale quality.
 
 **The preset is a ceiling, never a floor.** It only lowers what the world
 authored. The settings assets default to the look capable hardware runs (TAA, ambient occlusion, reflections, SSGI, 4096-texel every-frame
@@ -1910,7 +1912,8 @@ reflections and shadows, SSGI and its resolution and ray count, auto-exposure,
 minimum upscale quality, reflection-blur and ray-tracing resolution, shadow map
 size (1024 / 2048 / 4096 / uncapped), every-frame shadow updates (Ultra only),
 anisotropy (4 / 8 / 16), shadow distance (40 / 80 / 160 / uncapped), cascade
-count (2 / 3 / 4 / 4), and the planar reflection budget.
+count (2 / 3 / 4 / 4), the planar reflection budget, and far grass density
+(0.1 / 0.25 blades per pixel on Low / Medium, uncapped above).
 
 ### 12.18 Text, sprites, and UI rendering
 

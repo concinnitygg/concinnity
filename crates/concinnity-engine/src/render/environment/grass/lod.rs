@@ -138,6 +138,29 @@ pub struct GrassLodView {
     pub extent: f32,
     /// Where each coarser strip starts, in meters from the camera.
     pub lod_distances: [f32; GRASS_LOD_COUNT - 1],
+    /// How densely the blades may cover the screen.
+    pub thinning: GrassThinning,
+}
+
+/// How densely far grass may cover the screen: a quality tier's cap on the
+/// blades each pixel shows, which thins the field where it lies far and
+/// seen at a glancing angle. The near field keeps its blades.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GrassThinning {
+    /// As many blades as their size on screen allows.
+    Full,
+    /// At most this many hundredths of a blade per pixel.
+    PerPixel(u32),
+}
+
+impl GrassThinning {
+    /// The blades a pixel may show, `None` without a cap.
+    pub fn blades_per_pixel(self) -> Option<f32> {
+        match self {
+            Self::Full => None,
+            Self::PerPixel(hundredths) => Some(hundredths as f32 / 100.0),
+        }
+    }
 }
 
 impl GrassLodView {
@@ -151,7 +174,22 @@ impl GrassLodView {
             focal,
             extent,
             lod_distances: GRASS_LOD_PIXELS.map(|px| (height * focal / px).min(extent)),
+            thinning: GrassThinning::Full,
         }
+    }
+
+    /// This view with the blades capped by `thinning`.
+    #[must_use]
+    pub fn with_thinning(self, thinning: GrassThinning) -> Self {
+        Self { thinning, ..self }
+    }
+
+    /// The screen cap's scale the kernel reads: blades per pixel times the
+    /// focal length squared, or 0 without a cap (see [`Self::keep`]).
+    pub fn pixel_blades(&self) -> f32 {
+        self.thinning
+            .blades_per_pixel()
+            .map_or(0.0, |p| p * self.focal * self.focal)
     }
 
     /// Thinning's scale: the field keeps `width * keep_scale / distance` of
@@ -166,20 +204,32 @@ impl GrassLodView {
         (width * self.keep_scale() / distance.max(1e-6)).min(1.0)
     }
 
-    /// The fraction of a layer's blades, `width` meters wide and `depth`
-    /// blade layers deep (width x density x height, see [`blade_depth`]),
-    /// kept at `distance` where the view ray meets the ground at an angle
-    /// whose sine is `facing`: thinning's, lowered where the ray would cross
-    /// more than `GRASS_DEPTH_LIMIT` layers. The survivors keep thinning's
-    /// widening, so the field stays opaque along the ray and only its deepest
-    /// layers go. Nearer than [`Self::depth_onset`] the limit grows with the
-    /// square of the shortfall, so the near field keeps its depth.
-    pub fn keep(&self, width: f32, depth: f32, distance: f32, facing: f32) -> f32 {
+    /// The fraction of a layer's blades, `width` meters wide and `height`
+    /// tall and `depth` blade layers deep (width x density x height, see
+    /// [`blade_depth`]), kept at `distance` where the view ray meets the
+    /// ground at an angle whose sine is `facing`: thinning's, lowered where
+    /// the ray would cross more than `GRASS_DEPTH_LIMIT` layers and, under a
+    /// [`GrassThinning`] cap, where a pixel would show more blades than it.
+    /// The survivors keep thinning's widening, so the field stays opaque along
+    /// the ray and only its deepest layers go. Nearer than
+    /// [`Self::depth_onset`] both limits grow with the square of the
+    /// shortfall, so the near field keeps its depth.
+    pub fn keep(&self, [width, height]: [f32; 2], depth: f32, distance: f32, facing: f32) -> f32 {
         let thin = self.thinning(width, distance);
         let onset = self.depth_onset() / distance.max(1e-6);
-        let limit = GRASS_DEPTH_LIMIT * (onset * onset).max(1.0);
+        let near = (onset * onset).max(1.0);
+        let limit = GRASS_DEPTH_LIMIT * near;
         let layers = depth / facing.abs().max(1e-4);
-        thin * (limit / layers.max(1e-6)).min(1.0)
+        let kept = thin * (limit / layers.max(1e-6)).min(1.0);
+        let scale = self.pixel_blades();
+        if scale <= 0.0 {
+            return kept;
+        }
+        // A pixel covers d^2 / (f^2 sin) square meters of the ground's
+        // `density` blades per square meter.
+        let density = depth / (width * height).max(1e-6);
+        let cap = scale * near * facing.abs() / (density * distance * distance).max(1e-6);
+        kept.min(cap)
     }
 
     /// Where the depth limit takes full effect: where the field's blades
@@ -1280,6 +1330,7 @@ mod tests {
 
     // The meadow's blade layers.
     const DEPTH: f32 = WIDTH * 100.0 * HEIGHT;
+    const SHAPE: [f32; 2] = [WIDTH, HEIGHT];
 
     // A ray seen from above keeps thinning's blades; a grazing one past the
     // onset keeps what crosses the limit's layers, at the same width.
@@ -1287,9 +1338,9 @@ mod tests {
     fn the_depth_limit_thins_only_grazing_far_rays() {
         let v = retina();
         let far = 2.0 * v.depth_onset();
-        assert_eq!(v.keep(WIDTH, DEPTH, far, 1.0), v.thinning(WIDTH, far));
+        assert_eq!(v.keep(SHAPE, DEPTH, far, 1.0), v.thinning(WIDTH, far));
         let grazing = 0.01;
-        let kept = v.keep(WIDTH, DEPTH, far, grazing);
+        let kept = v.keep(SHAPE, DEPTH, far, grazing);
         let layers = DEPTH / grazing;
         assert!((kept / v.thinning(WIDTH, far) - GRASS_DEPTH_LIMIT / layers).abs() < 1e-5);
         assert_eq!(
@@ -1297,7 +1348,7 @@ mod tests {
             1.0 / coverage(v.thinning(WIDTH, far))
         );
         // A sparser layer is crossed by fewer layers and keeps more.
-        assert!(v.keep(WIDTH, 0.25 * DEPTH, far, grazing) > kept);
+        assert!(v.keep(SHAPE, 0.25 * DEPTH, far, grazing) > kept);
     }
 
     // Nearer than the onset the limit grows, so a grazing ray from standing
@@ -1310,9 +1361,9 @@ mod tests {
         assert_eq!(onset, v.lod_distances[1]);
         for d in [2.0f32, 5.0, 10.0] {
             let facing = 2.5 / d;
-            assert_eq!(v.keep(WIDTH, DEPTH, d, facing), v.thinning(WIDTH, d), "{d}");
+            assert_eq!(v.keep(SHAPE, DEPTH, d, facing), v.thinning(WIDTH, d), "{d}");
         }
-        let at = |d: f32| v.keep(WIDTH, DEPTH, d, 2.5 / d);
+        let at = |d: f32| v.keep(SHAPE, DEPTH, d, 2.5 / d);
         let (inside, outside) = (at(onset * 0.9999), at(onset * 1.0001));
         assert!(
             (inside - outside).abs() < 1e-3 * inside,
@@ -1326,6 +1377,33 @@ mod tests {
             "{}",
             at(d) / v.thinning(WIDTH, d)
         );
+    }
+
+    // Under a cap, a far grazing pixel shows at most its share of blades; the
+    // near field and a view from above keep theirs.
+    #[test]
+    fn a_tier_cap_limits_the_blades_each_far_pixel_shows() {
+        let full = retina();
+        let capped = full.with_thinning(GrassThinning::PerPixel(10));
+        assert_eq!(full.pixel_blades(), 0.0);
+        assert!((capped.pixel_blades() - 0.1 * full.focal * full.focal).abs() < 1.0);
+        let d = 4.0 * full.depth_onset();
+        let grazing = 2.0 / d;
+        let kept = capped.keep(SHAPE, DEPTH, d, grazing);
+        assert!(kept < full.keep(SHAPE, DEPTH, d, grazing));
+        // Blades per pixel: the kept share of the ground a pixel covers.
+        let density = DEPTH / (WIDTH * HEIGHT);
+        let per_pixel = kept * density * d * d / (full.focal * full.focal * grazing);
+        assert!((per_pixel - 0.1).abs() < 1e-4, "{per_pixel}");
+        for near in [2.0f32, 5.0] {
+            let f = 2.5 / near;
+            assert_eq!(
+                capped.keep(SHAPE, DEPTH, near, f),
+                full.keep(SHAPE, DEPTH, near, f)
+            );
+        }
+        assert_eq!(GrassThinning::Full.blades_per_pixel(), None);
+        assert_eq!(GrassThinning::PerPixel(25).blades_per_pixel(), Some(0.25));
     }
 
     #[test]

@@ -207,6 +207,25 @@ fn the_ocean_simulation_scales_with_tier() {
     }
 }
 
+// High and Ultra keep every blade their size on screen allows; the lower tiers
+// cap far grass, Low the hardest.
+#[test]
+fn far_grass_thins_only_below_high() {
+    let blades = |preset| {
+        resolve_ceiling(preset, &GpuProfile::UNKNOWN)
+            .grass
+            .blades_per_pixel()
+    };
+    assert_eq!(blades(QualityPreset::Ultra), None);
+    assert_eq!(blades(QualityPreset::High), None);
+    assert_eq!(blades(QualityPreset::Custom), None);
+    let (medium, low) = (blades(QualityPreset::Medium), blades(QualityPreset::Low));
+    assert!(
+        low.zip(medium).is_some_and(|(l, m)| l < m),
+        "{low:?} {medium:?}"
+    );
+}
+
 // Callers clamp with `authored.min(ceiling.field)`, so what each tier
 // actually promises is the cap value itself.
 #[test]
@@ -431,7 +450,7 @@ fn only_full_resolution_tiers_trace_water() {
 }
 
 #[test]
-fn auto_upscales_a_high_resolution_output_below_its_top_tier() {
+fn every_tier_below_ultra_upscales_a_high_resolution_output() {
     let high = profile_with_tier(GpuTier::MidDiscrete);
     let retina = [3200, 1800];
     assert!(auto_upscaling(QualityPreset::Auto, &high, retina));
@@ -453,11 +472,17 @@ fn auto_upscales_a_high_resolution_output_below_its_top_tier() {
     assert!(!auto_upscaling(QualityPreset::Auto, &high, [2560, 1440]));
     assert!(!auto_upscaling(QualityPreset::Auto, &high, [1600, 900]));
     assert!(auto_upscaling(QualityPreset::Auto, &high, [2561, 1440]));
-    // A named preset leaves upscaling to the world and the user.
-    for preset in QualityPreset::ALL
-        .into_iter()
-        .filter(|p| *p != QualityPreset::Auto)
-    {
+    // A named tier below Ultra upscales the same way; Ultra renders natively
+    // and Custom keeps the world's choice.
+    for preset in [
+        QualityPreset::Low,
+        QualityPreset::Medium,
+        QualityPreset::High,
+    ] {
+        assert!(auto_upscaling(preset, &ultra, retina), "{preset:?}");
+        assert!(!auto_upscaling(preset, &ultra, [2560, 1440]), "{preset:?}");
+    }
+    for preset in [QualityPreset::Ultra, QualityPreset::Custom] {
         assert!(!auto_upscaling(preset, &high, retina), "{preset:?}");
     }
 }

@@ -166,7 +166,10 @@ struct GrassParams
     // This run's tile records (see GrassTile): the first and how many.
     uint tile_base;
     uint tile_count;
-    uint2 _pad_tiles;
+    // The tier's cap on blades per pixel times the focal length squared, 0
+    // without one (see grass_keep).
+    float pixel_blades;
+    uint _pad_tiles;
     uint layer_count;
     uint args_slot;
     float tile_size;
@@ -743,15 +746,23 @@ float grass_thinning(GrassLayer L, float dist)
 
 // The fraction of layer `L`'s blades kept at `dist` where the view ray meets
 // the ground at an angle whose sine is `facing`: thinning's, lowered where the
-// ray would cross more than GRASS_DEPTH_LIMIT blade layers, a limit that grows
-// with the square of the shortfall nearer than its onset. Mirrors
+// ray would cross more than GRASS_DEPTH_LIMIT blade layers and, under a tier's
+// cap, where a pixel would show more blades than it; both limits grow with the
+// square of the shortfall nearer than their onset. Mirrors
 // render::grass::lod::GrassLodView::keep.
 float grass_keep(GrassLayer L, float dist, float facing)
 {
     float onset = grass.thinning.w / max(dist, 1e-6);
-    float limit = GRASS_DEPTH_LIMIT * max(onset * onset, 1.0);
+    float near = max(onset * onset, 1.0);
+    float limit = GRASS_DEPTH_LIMIT * near;
     float layers = L.depth / max(abs(facing), 1e-4);
-    return grass_thinning(L, dist) * min(limit / max(layers, 1e-6), 1.0);
+    float kept = grass_thinning(L, dist) * min(limit / max(layers, 1e-6), 1.0);
+    if (grass.pixel_blades <= 0.0)
+    {
+        return kept;
+    }
+    float density = L.depth / max(L.width * L.height, 1e-6);
+    return min(kept, grass.pixel_blades * near * abs(facing) / max(density * dist * dist, 1e-6));
 }
 
 // The sine of the angle the ray from the camera to `root` meets ground of

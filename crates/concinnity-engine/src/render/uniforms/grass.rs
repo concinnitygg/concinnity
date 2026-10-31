@@ -145,8 +145,11 @@ pub struct GrassParams {
     /// Records this run reads from the tile buffer, one kernel group row
     /// (dispatch `y`) each.
     pub tile_count: u32,
+    /// The tier's cap on blades per pixel times the focal length squared, 0
+    /// without one ([`GrassLodView::pixel_blades`](crate::render::environment::grass::GrassLodView::pixel_blades)).
+    pub pixel_blades: f32,
     /// Keeps the next member on a 16-byte row.
-    pub _pad: [u32; 2],
+    pub _pad: u32,
     /// Entries of `layers` in use.
     pub layer_count: u32,
     /// The draw-argument slot this frame fills; the other one is reset.
@@ -376,7 +379,8 @@ mod tests {
         assert_eq!(offset_of!(GrassParams, thinning), 272);
         assert_eq!(offset_of!(GrassParams, tile_base), 288);
         assert_eq!(offset_of!(GrassParams, tile_count), 292);
-        assert_eq!(offset_of!(GrassParams, _pad), 296);
+        assert_eq!(offset_of!(GrassParams, pixel_blades), 296);
+        assert_eq!(offset_of!(GrassParams, _pad), 300);
         assert_eq!(offset_of!(GrassParams, layer_count), 304);
         assert_eq!(offset_of!(GrassParams, args_slot), 308);
         assert_eq!(offset_of!(GrassParams, tile_size), 312);

@@ -107,6 +107,7 @@ pub(in crate::shader_layout) fn grass() -> Vec<Case> {
             thinning,
             tile_base,
             tile_count,
+            pixel_blades,
             [_pad] => ["_pad_tiles"],
             layer_count,
             args_slot,

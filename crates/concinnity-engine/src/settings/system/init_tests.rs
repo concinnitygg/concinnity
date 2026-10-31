@@ -440,8 +440,9 @@ const RETINA: DisplayProbe = DisplayProbe {
     fullscreen_scale: 1.0,
 };
 
-// Under `Auto` a high-resolution output upscales at the tier's render scale,
-// while a 1x display, an explicit preset and the user's choice keep it native.
+// A high-resolution output upscales at the tier's render scale, under `Auto`
+// or a named tier below Ultra, while a 1x display, Ultra and the user's choice
+// keep it native.
 #[test]
 fn auto_upscales_a_high_resolution_output() {
     let mid = profile_at(GpuTier::MidDiscrete);
@@ -463,6 +464,8 @@ fn auto_upscales_a_high_resolution_output() {
 
     launch.display = Some(RETINA);
     launch.stored = stored_preset(QualityPreset::High);
+    assert!(launch.state().resolved().graphics.anti_aliasing.upscaling);
+    launch.stored = stored_preset(QualityPreset::Ultra);
     assert!(!launch.state().resolved().graphics.anti_aliasing.upscaling);
 
     let mut declined = StoredSettings::default();
@@ -498,21 +501,23 @@ fn a_stored_fullscreen_resolution_decides_the_output() {
     assert!(!upscales(&launch));
 }
 
-// `--graphics-quality` names a preset for this launch, which never upscales on
-// its own, over a stored Auto.
+// A launch preset decides upscaling over a stored Auto: High upscales the
+// Retina output as Auto did, Ultra keeps it native.
 #[test]
-fn a_launch_preset_over_a_stored_auto_keeps_native() {
+fn a_launch_preset_over_a_stored_auto_decides_upscaling() {
     let mut launch = retina_launch();
     launch.stored = stored_preset(QualityPreset::Auto);
     assert!(upscales(&launch));
-    launch.request = LaunchRequest {
-        args: LaunchArgs {
-            graphics_quality: Some(QualityPreset::High),
-            ..LaunchArgs::NONE
-        },
-        ..Default::default()
-    };
-    assert!(!upscales(&launch));
+    for (preset, upscaled) in [(QualityPreset::High, true), (QualityPreset::Ultra, false)] {
+        launch.request = LaunchRequest {
+            args: LaunchArgs {
+                graphics_quality: Some(preset),
+                ..LaunchArgs::NONE
+            },
+            ..Default::default()
+        };
+        assert_eq!(upscales(&launch), upscaled, "{preset:?}");
+    }
 }
 
 // Auto on a top-tier GPU resolves to Ultra, which renders natively.

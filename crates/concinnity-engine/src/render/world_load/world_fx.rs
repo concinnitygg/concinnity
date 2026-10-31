@@ -110,7 +110,8 @@ pub fn drain_world_fx(
             Some(GrassField::resolve_planet(planet, wind.as_ref()))
         }
         None => terrain_grass,
-    };
+    }
+    .map(|g| g.with_thinning(quality.grass));
     // One atmosphere per world, wrapped around the world's planet if it has
     // one. A night sky with no atmosphere is seen through a vacuum.
     let planet = planet.map(|p| (p.center.map(f64::from), p.radius));

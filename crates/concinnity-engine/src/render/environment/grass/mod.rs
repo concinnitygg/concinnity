@@ -36,7 +36,7 @@ pub use bend::{BendHistory, GrassBender};
 pub use canopy::{CanopyField, CanopyRange};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
-pub use lod::{GrassCapacity, GrassLodView, GrassSizing};
+pub use lod::{GrassCapacity, GrassLodView, GrassSizing, GrassThinning};
 
 /// Frames the hand-off's per-pixel choice between the blades and the canopy
 /// cycles through before it repeats.
@@ -469,6 +469,8 @@ pub struct GrassField {
     pub lod_height: f32,
     /// The planet the layers grow on instead of terrains.
     pub planet: Option<PlanetGrass>,
+    /// How densely the blades may cover the screen.
+    pub thinning: GrassThinning,
 }
 
 // The frame a planet's tiles are drawn in this frame, from any one of them.
@@ -527,6 +529,7 @@ impl GrassField {
             blade_height,
             lod_height,
             planet: None,
+            thinning: GrassThinning::Full,
         })
     }
 
@@ -551,6 +554,7 @@ impl GrassField {
             blade_height,
             lod_height,
             planet: Some(planet),
+            thinning: GrassThinning::Full,
         }
     }
 
@@ -559,7 +563,13 @@ impl GrassField {
     /// focal length longer than the buffers are sized for thins as that one.
     pub fn lod_view(&self, focal: f32) -> GrassLodView {
         let sized = self.sizing.map_or(focal, |s| s.views.focal);
-        GrassLodView::new(focal.min(sized), self.lod_height)
+        GrassLodView::new(focal.min(sized), self.lod_height).with_thinning(self.thinning)
+    }
+
+    /// This field with its blades capped by `thinning`.
+    #[must_use]
+    pub fn with_thinning(self, thinning: GrassThinning) -> Self {
+        Self { thinning, ..self }
     }
 
     /// The sizing of the visible-blade buffers for render targets `size`
@@ -790,7 +800,8 @@ impl GrassField {
             ],
             tile_base: 0,
             tile_count: 0,
-            _pad: [0; 2],
+            pixel_blades: lod.pixel_blades(),
+            _pad: 0,
             layer_count: 0,
             args_slot,
             tile_size: GRASS_TILE_SIZE,
