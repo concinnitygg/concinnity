@@ -82,7 +82,7 @@ pub(super) fn build_timestamp_resources(
         return (None, None, std::ptr::null(), 0);
     }
     // Heap holds one block of [whole_frame_start, whole_frame_end, then
-    // PASS_COUNT (start, end) pairs] per in-flight frame. See
+    // TIMING_COUNT (start, end) pairs] per in-flight frame. See
     // `concinnity_engine::render::backend::pass_timing` for the slot layout.
     //
     // Timing: `execute_graph` issues an EndQuery before and after each pass's

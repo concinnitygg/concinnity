@@ -61,7 +61,7 @@ const REGISTRIES: &[BackendRegistry] = &[
         root: VULKAN_ROOT,
         fields: &[
             ("draw_args", "cull.indirect_buffers"),
-            ("draw_args2", "cull.indirect_buffers2"),
+            ("draw_args_late", "cull.indirect_buffers_late"),
             ("cull_status", "cull.cull_status_buffers"),
             ("cluster_lists", "light_cull.cluster_buffer"),
             ("ao_output", "transient_pool.image_for"),
@@ -88,7 +88,7 @@ const REGISTRIES: &[BackendRegistry] = &[
         root: DIRECTX_ROOT,
         fields: &[
             ("draw_args", "cull.indirect_cmd_buffers"),
-            ("draw_args2", "cull.indirect_cmd_buffers_2"),
+            ("draw_args_late", "cull.indirect_cmd_buffers_late"),
             ("cull_status", "cull.cull_status_buffers"),
             ("cluster_lists", "light_cull.cluster_buffer"),
             ("ao_output", "transient_pool.resource_for"),

@@ -22,7 +22,7 @@
 //!
 //! The build is a graph node: `HizFinal` (terminal, reducing the frame's last
 //! depth version for the next frame's cull) and, under two-pass occlusion,
-//! `HizBuild` (mid-frame, reducing phase-1 depth for `Cull2`). Both dispatch this
+//! `HizEarly` (mid-frame, reducing phase-1 depth for `CullLate`). Both dispatch this
 //! encoder, so the graph owns the pyramid's lifetime and the main depth's layout
 //! chain reaches the end of the frame.
 //!
@@ -104,15 +104,15 @@ pub(super) struct HiZResources {
     pub(super) cull_ubos: Vec<PooledBuffer>,
 
     // Two-pass occlusion phase-2 cull-read sets + their own per-frame UBOs.
-    // Empty unless two-pass occlusion is active. The phase-2 `Cull2` dispatch
+    // Empty unless two-pass occlusion is active. The phase-2 `CullLate` dispatch
     // needs a separate UBO from phase 1 because both consume their UBO at
     // different GPU times within one frame (phase 1's `prev_view_proj`, phase
     // 2's current-frame VP); sharing one host-mapped buffer would clobber
     // phase 1's value before the GPU reads it. The image binding points at
     // the same pyramid `sampled_view`, re-pointed alongside `read_sets` on a
     // resize. Uses the shared `read_set_layout`.
-    pub(super) read_sets2: Vec<vk::DescriptorSet>,
-    pub(super) cull_ubos2: Vec<PooledBuffer>,
+    pub(super) read_sets_late: Vec<vk::DescriptorSet>,
+    pub(super) cull_ubos_late: Vec<PooledBuffer>,
 
     pub(super) width: u32,
     pub(super) height: u32,
@@ -237,7 +237,7 @@ impl HiZResources {
         sample_count: u32,
         frames: usize,
         // When set, allocate the phase-2 cull-read sets + UBOs for two-pass
-        // occlusion (`Cull2`). Gated on the world's `occlusion_two_pass`.
+        // occlusion (`CullLate`). Gated on the world's `occlusion_two_pass`.
         two_pass: bool,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -285,7 +285,7 @@ impl HiZResources {
         let descriptor_pool = create_pool(device, frames, two_pass)?;
 
         // Per-frame cull-read uniform buffers (host-mapped). The phase-2 set
-        // gets its own ring (`cull_ubos2`) when two-pass occlusion is active.
+        // gets its own ring (`cull_ubos_late`) when two-pass occlusion is active.
         let ubo_size = size_of::<CullHizParams>() as u64;
         let alloc_ubo_ring = |count: usize| -> RenderResult<Vec<PooledBuffer>> {
             (0..count)
@@ -300,7 +300,7 @@ impl HiZResources {
                 .collect()
         };
         let cull_ubos = alloc_ubo_ring(frames)?;
-        let cull_ubos2 = alloc_ubo_ring(if two_pass { frames } else { 0 })?;
+        let cull_ubos_late = alloc_ubo_ring(if two_pass { frames } else { 0 })?;
 
         let mut res = Self {
             spd_pipeline,
@@ -318,8 +318,8 @@ impl HiZResources {
             spd_tail_sets: Vec::new(),
             read_sets: Vec::new(),
             cull_ubos,
-            read_sets2: Vec::new(),
-            cull_ubos2,
+            read_sets_late: Vec::new(),
+            cull_ubos_late,
             width,
             height,
             mip_count: 0,
@@ -404,12 +404,12 @@ impl HiZResources {
             alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts)?;
         // Phase-2 cull-read sets (two-pass occlusion), one per frame, only when
         // the phase-2 UBO ring was allocated.
-        let two_pass = !self.cull_ubos2.is_empty();
-        let read_layouts2: Vec<_> = (0..if two_pass { frames } else { 0 })
+        let two_pass = !self.cull_ubos_late.is_empty();
+        let read_layouts_late: Vec<_> = (0..if two_pass { frames } else { 0 })
             .map(|_| self.read_set_layout.handle())
             .collect();
-        let read_sets2 =
-            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts2)?;
+        let read_sets_late =
+            alloc_descriptor_sets(device, self.descriptor_pool.handle(), &read_layouts_late)?;
 
         // The mip array each dispatch binds. Elements past the last live mip
         // repeat it so the array is fully populated even where the kernel's
@@ -445,7 +445,7 @@ impl HiZResources {
         for (&set, ubo) in read_sets.iter().zip(&self.cull_ubos) {
             write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
-        for (&set, ubo) in read_sets2.iter().zip(&self.cull_ubos2) {
+        for (&set, ubo) in read_sets_late.iter().zip(&self.cull_ubos_late) {
             write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
 
@@ -457,7 +457,7 @@ impl HiZResources {
         self.spd_sets = spd_sets;
         self.spd_tail_sets = spd_tail_sets;
         self.read_sets = read_sets;
-        self.read_sets2 = read_sets2;
+        self.read_sets_late = read_sets_late;
         self.width = width;
         self.height = height;
         self.mip_count = mip_count;
@@ -507,7 +507,7 @@ impl HiZResources {
         self.sampled_view = vk::ImageView::null();
         self.mip_views.clear();
         self.cull_ubos.clear();
-        self.cull_ubos2.clear();
+        self.cull_ubos_late.clear();
     }
 }
 
@@ -515,7 +515,7 @@ impl crate::vulkan::context::VkContext {
     // Encode the Hi-Z build into `cmd`. Reads this frame's main depth
     // (`depth_images[frame_idx]`) and writes the mip chain that *next* frame's
     // cull dispatch consults. A no-op when no Hi-Z resource was built (GPU-cull
-    // pipeline not active). Runs as the graph's `HizBuild` (mid-frame, phase-1
+    // pipeline not active). Runs as the graph's `HizEarly` (mid-frame, phase-1
     // depth) or `HizFinal` (terminal, the frame's last depth version) node, so
     // the executor has already put main depth in SHADER_READ_ONLY and the
     // pyramid in GENERAL; only the barrier between the two dispatches below is

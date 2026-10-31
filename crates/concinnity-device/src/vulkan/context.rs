@@ -291,11 +291,11 @@ impl VkInstanced {
     }
 }
 
-// The compute cull kernel and its layouts, plus two-pass occlusion's phase-2
+// The compute cull kernel and its layouts, plus two-pass occlusion's late
 // kernel over the same layout (`None` when two-pass is off).
 pub(super) struct VkCullKernels {
     pub(super) pipeline: OwnedPipeline,
-    pub(super) pipeline_phase2: Option<OwnedPipeline>,
+    pub(super) pipeline_late: Option<OwnedPipeline>,
     pub(super) pipeline_layout: OwnedPipelineLayout,
     pub(super) set_layout: OwnedSetLayout,
 }
@@ -381,30 +381,30 @@ pub(super) struct VkCull {
     // bucket region's, back to back.
     pub(super) indirect_commands: usize,
     // The scan and scatter that pack each cull's kept draws per stream, each
-    // frame's group-count scratch (phase 2 reusing phase 1's once its packing
-    // has read it), and each frame's phase-1 and phase-2 packing sets.
+    // frame's group-count scratch (the late pass reusing the early pass's once its packing
+    // has read it), and each frame's early and late packing sets.
     pub(super) compact: Option<super::compact::VkCompactKernels>,
     pub(super) group_count_buffers: Vec<PooledBuffer>,
     pub(super) compact_sets: Vec<vk::DescriptorSet>,
-    pub(super) compact_sets2: Vec<vk::DescriptorSet>,
-    // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
-    // phase-2 reads. Device-local storage.
+    pub(super) compact_sets_late: Vec<vk::DescriptorSet>,
+    // Per-frame per-object cull-status buffers (one u32 each): early writes,
+    // late reads. Device-local storage.
     pub(super) cull_status_buffers: Vec<PooledBuffer>,
-    // Two-pass Hi-Z occlusion (HizBuild -> Cull2 -> Main2). `occlusion_two_pass`
+    // Two-pass Hi-Z occlusion (HizEarly -> CullLate -> MainLate). `occlusion_two_pass`
     // records the world's request; the live resources below are `Some` /
     // non-empty only when it AND the bindless cull path are active.
     pub(super) occlusion_two_pass: bool,
-    // Phase-2 cull sets (the pipeline is `VkCullKernels::pipeline_phase2`),
+    // Late cull sets (the pipeline is `VkCullKernels::pipeline_late`),
     // allocated from `two_pass_pool`.
-    pub(super) cull_sets2: Vec<vk::DescriptorSet>,
+    pub(super) cull_sets_late: Vec<vk::DescriptorSet>,
     pub(super) _two_pass_pool: Option<OwnedDescriptorPool>,
-    // Per-frame second indirect draw-command buffers `Cull2` writes and `Main2`
+    // Per-frame second indirect draw-command buffers `CullLate` writes and `MainLate`
     // consumes. Device-local.
-    pub(super) indirect_buffers2: Vec<PooledBuffer>,
-    // Phase-1 / phase-2 main render passes (render-pass-compatible with the
+    pub(super) indirect_buffers_late: Vec<PooledBuffer>,
+    // Early / late main render passes (render-pass-compatible with the
     // main-pass `framebuffers`).
-    pub(super) main_render_pass_phase1: Option<OwnedRenderPass>,
-    pub(super) main_render_pass_phase2: Option<OwnedRenderPass>,
+    pub(super) main_render_pass_early: Option<OwnedRenderPass>,
+    pub(super) main_render_pass_late: Option<OwnedRenderPass>,
     // Hi-Z occlusion culling. The depth-mip pyramid (built at end of frame
     // from this frame's main depth) + its build pipelines + the cull pipeline's
     // set 1 (the Hi-Z image + per-frame `CullHizParams` UBO). `Some` exactly
@@ -456,7 +456,7 @@ pub(super) struct VkCull {
 
 impl VkCull {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
-    // `wait_idle`. The bindless / cull / phase-2 descriptor sets are freed with
+    // `wait_idle`. The bindless / cull / late descriptor sets are freed with
     // the shared descriptor pool + `two_pass_pool`, so they are not destroyed
     // here. `occlusion_two_pass` is plain CPU state. Takes `&mut self` because
     // `HiZResources::destroy` nulls out its handles as it frees them.
@@ -481,7 +481,7 @@ impl VkCull {
         self.variant_buffers.clear();
         self.group_count_buffers.clear();
         self.compact = None;
-        self.indirect_buffers2.clear();
+        self.indirect_buffers_late.clear();
         self.shadow_views.clear();
         self.spot_views.clear();
         self.prev_model_buffers.clear();
@@ -1774,7 +1774,7 @@ impl VkContext {
         self.text.pipeline = None;
 
         // GPU-driven cull + bindless static pass resources, including the Hi-Z
-        // pyramid (see `VkCull::destroy`). The bindless / cull / phase-2
+        // pyramid (see `VkCull::destroy`). The bindless / cull / late
         // descriptor sets are freed with the shared descriptor pool +
         // `two_pass_pool`.
         self.cull.destroy(device);

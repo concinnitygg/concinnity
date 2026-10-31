@@ -19,7 +19,7 @@
 use alloc::format;
 
 use crate::render::backend::error::{RenderError, RenderResult};
-use crate::render::render_graph::{PassId, PixelFormat, TextureDesc, TransientTexture};
+use crate::render::render_graph::{PixelFormat, TextureDesc, TimingId, TransientTexture};
 
 use super::program::{PostProgram, PostProgramBindings};
 
@@ -78,11 +78,11 @@ pub enum PostTiming {
     /// The draw records no timing sample.
     None,
     /// The effect's only draw: both its start and end samples land here.
-    Whole(PassId),
+    Whole(TimingId),
     /// The first draw of a multi-draw effect: the start sample.
-    First(PassId),
+    First(TimingId),
     /// The last draw of a multi-draw effect: the end sample.
-    Last(PassId),
+    Last(TimingId),
 }
 
 /// One sampled source of a post draw, at its slot in declaration order.

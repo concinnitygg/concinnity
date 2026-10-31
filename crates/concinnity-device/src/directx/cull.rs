@@ -42,11 +42,11 @@ use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::transition_barrier;
 
 // The compute cull kernel and its root signature, plus two-pass occlusion's
-// phase-2 kernel over the same signature (`None` when two-pass is off).
+// late kernel over the same signature (`None` when two-pass is off).
 pub(in crate::directx) struct CullKernels {
     pub root_sig: ID3D12RootSignature,
     pub pso: ID3D12PipelineState,
-    pub pso_phase2: Option<ID3D12PipelineState>,
+    pub pso_late: Option<ID3D12PipelineState>,
 }
 
 // GPU-driven cull + main pass. A compute kernel frustum/distance-tests every
@@ -120,21 +120,21 @@ pub(in crate::directx) struct CullState {
     pub indirect_cmd_buffers: Vec<ID3D12Resource>,
     pub indirect_commands: usize,
     // The scan and scatter that pack each cull's kept draws per stream, and
-    // each slot's group-count scratch (phase 2 reusing phase 1's once its
+    // each slot's group-count scratch (the late pass reusing the early pass's once its
     // packing has read it). Resting `UNORDERED_ACCESS`.
     pub compact: Option<super::compact::DxCompactKernels>,
     pub group_count_buffers: Vec<ID3D12Resource>,
-    // Per-frame per-object cull-status buffers (one u32 each): phase-1 writes,
-    // phase-2 reads. Resting `UNORDERED_ACCESS`.
+    // Per-frame per-object cull-status buffers (one u32 each): early writes,
+    // late reads. Resting `UNORDERED_ACCESS`.
     pub cull_status_buffers: Vec<ID3D12Resource>,
     // Per-frame second indirect-command buffers for two-pass occlusion.
-    pub indirect_cmd_buffers_2: Vec<ID3D12Resource>,
+    pub indirect_cmd_buffers_late: Vec<ID3D12Resource>,
     // GPU-driven shadow pass. A depth-only bindless pipeline whose VS
     // reads `model` from `GpuObjectData[object_id]` (root SRV) and projects
     // through `light_vps[cascade_idx]`; `shadow_bindless_cmd_sig` is the shared
     // cull command signature rebuilt against its root sig. `shadow_views` is
     // one per frame-in-flight with a packed region per cascade, kept apart from
-    // `cull_status_buffers`, which the phase-2 main cull consumes AFTER the
+    // `cull_status_buffers`, which the late main cull consumes AFTER the
     // shadow pass. All `Some`/non-empty only when the bindless cull path is
     // active AND shadows are enabled.
     pub shadow_bindless_root_sig: Option<ID3D12RootSignature>,
@@ -170,20 +170,20 @@ pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Pipeline + command signature builders
 
-// Compile the phase-1 GPU-cull compute kernel (`main`) to DXBC.
+// Compile the early GPU-cull compute kernel (`main`) to DXBC.
 pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::CULL_PHASE1.compile(hot_reload)
+    builtin_shaders::CULL_EARLY.compile(hot_reload)
 }
 
-// Compile the phase-2 GPU-cull compute kernel (`main_phase2`) for two-pass
-// occlusion. Same source / root signature as phase 1, different entry point.
-pub(in crate::directx) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::CULL_PHASE2.compile(hot_reload)
+// Compile the late GPU-cull compute kernel (`CULL_LATE`) for two-pass
+// occlusion. Same source / root signature as the early pass, different entry point.
+pub(in crate::directx) fn compile_cull_shader_late(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    builtin_shaders::CULL_LATE.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
 // (no Hi-Z, no distance cull, no status write). Same source / root signature as
-// phase 1, different entry point.
+// the early pass, different entry point.
 pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> RenderResult<Vec<u8>> {
     builtin_shaders::CULL_SHADOW.compile(hot_reload)
 }
@@ -194,9 +194,9 @@ pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> Render
 // indirect-command output as a root UAV (u0), and the per-object cull-status
 // output as a root UAV (u1). The Hi-Z table is the only reason this root
 // signature needs a descriptor table: root SRVs can only carry raw / structured
-// buffers, not Texture2D. Shared by the phase-1 (`main`) and phase-2
-// (`main_phase2`) cull kernels; phase 1 writes both `commands` + `cull_status`,
-// phase 2 reads `cull_status` and writes the phase-2 `commands`.
+// buffers, not Texture2D. Shared by the early pass (`main`) and late
+// (`CULL_LATE`) cull kernels; the early pass writes both `commands` + `cull_status`,
+// the late pass reads `cull_status` and writes the late pass `commands`.
 pub(in crate::directx) fn create_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
@@ -613,7 +613,7 @@ impl DxContext {
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[frame_idx]);
         let draw_args_gva = com::gpu_va(&self.cull.draw_args_buffer_resources[frame_idx]);
         // Per-object cull-status buffer (u1): always allocated alongside the
-        // indirect buffer, always written, read by phase 2 under two-pass
+        // indirect buffer, always written, read by the late pass under two-pass
         // occlusion (ignored under single-pass). Resting state is
         // `UNORDERED_ACCESS`, so it binds as a root UAV with no transition.
         let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
@@ -695,7 +695,7 @@ impl DxContext {
         }
     }
 
-    // The main view's lists in `buffer`, a slot's phase-1 or phase-2 indirect
+    // The main view's lists in `buffer`, a slot's early or late indirect
     // buffer.
     pub(in crate::directx) fn main_lists<'a>(&self, buffer: &'a ID3D12Resource) -> DrawLists<'a> {
         DrawLists {
@@ -1188,20 +1188,20 @@ impl DxContext {
         // SAFETY: the indirect buffer was moved to UNORDERED_ACCESS by the first barrier.
         unsafe { cmd.ResourceBarrier(&[to_indirect]) };
     }
-    // Dispatch the phase-2 cull compute pass for two-pass occlusion. Runs after
-    // the Hi-Z pyramid has been rebuilt mid-frame from phase-1 depth (the
-    // `HizBuild` graph node). One thread per build-time object re-tests the
-    // objects phase 1 marked `STATUS_HIZ_CANDIDATE` against the fresh pyramid,
+    // Dispatch the late cull compute pass for two-pass occlusion. Runs after
+    // the Hi-Z pyramid has been rebuilt mid-frame from early depth (the
+    // `HizEarly` graph node). One thread per build-time object re-tests the
+    // objects the early pass marked `STATUS_HIZ_CANDIDATE` against the fresh pyramid,
     // projecting through *this* frame's un-jittered view-projection (`cur_vp`),
     // and writes the surviving `ExecuteIndirect` commands into this frame's
-    // second indirect buffer; `Main2` then issues it. A no-op when the phase-2
-    // pipeline / buffers are not built (two-pass off). The phase-2 indirect
+    // second indirect buffer; `MainLate` then issues it. A no-op when the late pass
+    // pipeline / buffers are not built (two-pass off). The late indirect
     // buffer rests in `INDIRECT_ARGUMENT`; the graph drives the `UAV`
-    // transition here and back at `Main2`, and the UAV barrier ordering
-    // phase-1's `cull_status` writes before this dispatch's reads, off the
-    // `draw_args2` and `cull_status` edges. Mirrors
-    // `metal/cull.rs::encode_cull_phase2`.
-    pub(in crate::directx) fn encode_cull_phase2(
+    // transition here and back at `MainLate`, and the UAV barrier ordering
+    // early's `cull_status` writes before this dispatch's reads, off the
+    // `draw_args_late` and `cull_status` edges. Mirrors
+    // `metal/cull.rs::encode_cull_late`.
+    pub(in crate::directx) fn encode_cull_late(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
@@ -1211,11 +1211,11 @@ impl DxContext {
         let (Some(kernels), Some(hiz), Some(indirect)) = (
             self.cull.cull_kernels.as_ref(),
             self.cull.hiz.as_ref(),
-            self.cull.indirect_cmd_buffers_2.get(frame_idx),
+            self.cull.indirect_cmd_buffers_late.get(frame_idx),
         ) else {
             return;
         };
-        let Some(cull_pso2) = kernels.pso_phase2.as_ref() else {
+        let Some(cull_pso_late) = kernels.pso_late.as_ref() else {
             return;
         };
         let cull_root = &kernels.root_sig;
@@ -1228,11 +1228,11 @@ impl DxContext {
         let cull_status_gva = com::gpu_va(&self.cull.cull_status_buffers[frame_idx]);
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
-        // just rebuilt from this frame's depth. `hiz_enabled = 1`: HizBuild
+        // just rebuilt from this frame's depth. `hiz_enabled = 1`: HizEarly
         // always precedes this dispatch in the graph, so a valid pyramid is
         // guaranteed (the kernel still guards defensively). Frustum planes are
-        // unused by the phase-2 kernel (candidates already passed the frustum
-        // test in phase 1) but the cbuffer layout is shared, so pack them anyway.
+        // unused by the late kernel (candidates already passed the frustum
+        // test in the early pass) but the cbuffer layout is shared, so pack them anyway.
         let mut cull_params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos: [0.0; 3],
@@ -1251,9 +1251,9 @@ impl DxContext {
         // SAFETY: the command list is recording, and the cull root signature is owned by
         // `self.cull` for the context's lifetime.
         unsafe { cmd.SetComputeRootSignature(cull_root) };
-        // SAFETY: the phase-2 PSO is owned by `self.cull` and built against the root signature
+        // SAFETY: the late PSO is owned by `self.cull` and built against the root signature
         // above.
-        unsafe { cmd.SetPipelineState(cull_pso2) };
+        unsafe { cmd.SetPipelineState(cull_pso_late) };
         // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
         unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
         // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root constants.
@@ -1263,17 +1263,17 @@ impl DxContext {
         // SAFETY: `draw_args_gva` addresses this frame's live draw-args buffer.
         unsafe { cmd.SetComputeRootShaderResourceView(2, draw_args_gva) };
         // The rebuilt Hi-Z pyramid (same all-mips SRV phase 1 sampled; the
-        // HizBuild node rewrote the texels in place).
+        // HizEarly node rewrote the texels in place).
         // SAFETY: the Hi-Z SRV slot is a live descriptor in the heap set above.
         unsafe { cmd.set_compute_srv_table(3, hiz.srv_gpu) };
-        // SAFETY: phase 1's packing has read this slot's group counts (the graph orders Main and
+        // SAFETY: the early pass's packing has read this slot's group counts (the graph orders Main and
         // its pre-pass between), and they rest in UNORDERED_ACCESS.
         unsafe { cmd.SetComputeRootUnorderedAccessView(4, self.group_counts_gva(frame_idx)) };
-        // SAFETY: phase 1 wrote this frame's cull-status buffer, which rests in UNORDERED_ACCESS.
+        // SAFETY: the early pass wrote this frame's cull-status buffer, which rests in UNORDERED_ACCESS.
         unsafe { cmd.SetComputeRootUnorderedAccessView(5, cull_status_gva) };
         self.bind_cull_variants(cmd, frame_idx);
         let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
-        // SAFETY: the phase-2 pipeline and every root argument it reads are bound above.
+        // SAFETY: the late pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(groups, 1, 1) };
         if let Some(pass) = self.compact_pass(
             frame_idx,
@@ -1286,11 +1286,11 @@ impl DxContext {
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
-    // `occlusion_two_pass`, the phase-2 cull PSO + Hi-Z resource are built, and
+    // `occlusion_two_pass`, the late cull PSO + Hi-Z resource are built, and
     // the bindless GPU-cull path is active with build-time geometry. This is the
-    // exact condition under which the shared graph inserts the HizBuild / Cull2
-    // / Main2 chain, so `seed_inputs`, `encode_main_pass` (resolve skip), and
-    // the executor's phase-2 arms all gate on it identically. Mirrors Metal's
+    // exact condition under which the shared graph inserts the HizEarly / CullLate
+    // / MainLate chain, so `seed_inputs`, `encode_main_pass` (resolve skip), and
+    // the executor's late arms all gate on it identically. Mirrors Metal's
     // `CullState.two_pass_occlusion` gate.
     pub(in crate::directx) fn two_pass_occlusion_active(&self) -> bool {
         self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
@@ -1304,7 +1304,7 @@ impl DxContext {
                 .cull
                 .cull_kernels
                 .as_ref()
-                .is_some_and(|k| k.pso_phase2.is_some())
+                .is_some_and(|k| k.pso_late.is_some())
             && self.cull.hiz.is_some()
             && self.cull.main_bindless_pso.is_some()
     }

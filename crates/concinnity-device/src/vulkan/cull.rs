@@ -90,12 +90,12 @@ impl VkContext {
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
-    // `occlusion_two_pass`, the phase-2 cull pipeline + Hi-Z + second indirect
+    // `occlusion_two_pass`, the late cull pipeline + Hi-Z + second indirect
     // buffers are built, and the bindless GPU-cull path is active with
     // build-time geometry. This is the exact condition under which the shared
-    // graph inserts the HizBuild / Cull2 / Main2 chain, so the frame-graph seed
-    // (`record_frame`), the phase-1 render-pass selection (`encode_main_pass`),
-    // and the executor's phase-2 arms all gate on it identically. Mirrors
+    // graph inserts the HizEarly / CullLate / MainLate chain, so the frame-graph seed
+    // (`record_frame`), the early render-pass selection (`encode_main_pass`),
+    // and the executor's late arms all gate on it identically. Mirrors
     // `directx/cull.rs::two_pass_occlusion_active`.
     pub(in crate::vulkan) fn two_pass_occlusion_active(&self) -> bool {
         self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
@@ -109,9 +109,9 @@ impl VkContext {
                 .cull
                 .cull_kernels
                 .as_ref()
-                .is_some_and(|k| k.pipeline_phase2.is_some())
+                .is_some_and(|k| k.pipeline_late.is_some())
             && self.cull.hiz.is_some()
-            && !self.cull.indirect_buffers2.is_empty()
+            && !self.cull.indirect_buffers_late.is_empty()
     }
 
     // Dispatch the compute-driven cull pass for frame slot
@@ -221,7 +221,7 @@ impl VkContext {
         }
     }
 
-    // The main view's lists in `buffer`, a frame's phase-1 or phase-2
+    // The main view's lists in `buffer`, a frame's early or late
     // indirect buffer.
     pub(in crate::vulkan) fn main_lists(&self, buffer: vk::Buffer) -> DrawLists {
         DrawLists {
@@ -413,15 +413,15 @@ impl VkContext {
         }
     }
 
-    // Dispatch the phase-2 (two-pass occlusion) cull for frame slot
-    // `frame_idx`. Runs after `HizBuild` has rebuilt the Hi-Z pyramid from this
-    // frame's phase-1 depth; re-tests only the objects phase-1 cull marked
+    // Dispatch the late pass (two-pass occlusion) cull for frame slot
+    // `frame_idx`. Runs after `HizEarly` has rebuilt the Hi-Z pyramid from this
+    // frame's early depth; re-tests only the objects early cull marked
     // `STATUS_HIZ_CANDIDATE` against the fresh pyramid (projected through this
     // frame's un-jittered VP) and writes a draw for any that turn out visible
-    // into the phase-2 indirect buffer `Main2` consumes. A no-op unless the
-    // phase-2 pipeline + sets are built (two-pass occlusion active). Mirrors
-    // `directx/cull.rs::encode_cull_phase2`.
-    pub(in crate::vulkan) fn encode_cull_phase2(
+    // into the late indirect buffer `MainLate` consumes. A no-op unless the
+    // late pipeline + sets are built (two-pass occlusion active). Mirrors
+    // `directx/cull.rs::encode_cull_late`.
+    pub(in crate::vulkan) fn encode_cull_late(
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
@@ -433,18 +433,18 @@ impl VkContext {
         else {
             return;
         };
-        let Some(pipeline) = kernels.pipeline_phase2.as_ref() else {
+        let Some(pipeline) = kernels.pipeline_late.as_ref() else {
             return;
         };
         let layout = &kernels.pipeline_layout;
-        if self.cull.cull_sets2.is_empty() || self.state.draw.record_count() == 0 {
+        if self.cull.cull_sets_late.is_empty() || self.state.draw.record_count() == 0 {
             return;
         }
         let device = &self.hw.device;
 
-        // Frustum planes + camera position are unused by the phase-2 kernel
-        // (candidates already passed those in phase 1) but the push-constant
-        // block layout is shared with phase 1, so pack them anyway.
+        // Frustum planes + camera position are unused by the late kernel
+        // (candidates already passed those in the early pass) but the push-constant
+        // block layout is shared with the early pass, so pack them anyway.
         let mut params = CullParams {
             planes: [[0.0; 4]; 6],
             cam_pos,
@@ -457,8 +457,8 @@ impl VkContext {
         params.planes = frustum.packed_planes();
 
         // Project AABBs through this frame's un-jittered VP against the pyramid
-        // `HizBuild` just rebuilt from this frame's depth. `hiz_enabled = 1`:
-        // HizBuild always precedes this dispatch, so a valid pyramid is
+        // `HizEarly` just rebuilt from this frame's depth. `hiz_enabled = 1`:
+        // HizEarly always precedes this dispatch, so a valid pyramid is
         // guaranteed (the kernel still guards defensively).
         let hiz_params = CullHizParams {
             prev_view_proj: cur_vp,
@@ -466,7 +466,7 @@ impl VkContext {
             hiz_mip_count: hiz.mip_count,
             hiz_enabled: 1,
         };
-        hiz.cull_ubos2[frame_idx].write_val(0, &hiz_params);
+        hiz.cull_ubos_late[frame_idx].write_val(0, &hiz_params);
 
         // SAFETY: `cmd` is in the recording state, and the cull pipeline is owned by `self.cull`,
         // which outlives this recording.
@@ -479,7 +479,7 @@ impl VkContext {
                 vk::PipelineBindPoint::COMPUTE,
                 layout.handle(),
                 0,
-                std::slice::from_ref(&self.cull.cull_sets2[frame_idx]),
+                std::slice::from_ref(&self.cull.cull_sets_late[frame_idx]),
                 &[],
             );
         }
@@ -491,7 +491,7 @@ impl VkContext {
                 vk::PipelineBindPoint::COMPUTE,
                 layout.handle(),
                 1,
-                std::slice::from_ref(&hiz.read_sets2[frame_idx]),
+                std::slice::from_ref(&hiz.read_sets_late[frame_idx]),
                 &[],
             );
         }
@@ -511,8 +511,8 @@ impl VkContext {
         // command buffer.
         unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
         if let (Some(&set), Some(lists)) = (
-            self.cull.compact_sets2.get(frame_idx),
-            self.cull.indirect_buffers2.get(frame_idx),
+            self.cull.compact_sets_late.get(frame_idx),
+            self.cull.indirect_buffers_late.get(frame_idx),
         ) {
             self.encode_compaction(
                 cmd,

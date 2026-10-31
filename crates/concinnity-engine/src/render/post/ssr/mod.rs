@@ -133,7 +133,7 @@ impl<Pipeline> SsrPass<Pipeline> {
                 // composite, so the graph does not declare it.
                 state: PostTargetState::Pass,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::SsrResolve),
+                timing: PostTiming::Whole(PassId::SsrResolve.timing()),
                 pipeline: &self.pipeline,
                 binds: &binds,
                 constants: bytemuck::bytes_of(params),
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(d.target, MockTexture::External(9));
         assert_eq!(d.state, PostTargetState::Pass);
         assert_eq!(d.load, PostLoadOp::DontCare);
-        assert_eq!(d.timing, PostTiming::Whole(PassId::SsrResolve));
+        assert_eq!(d.timing, PostTiming::Whole(PassId::SsrResolve.timing()));
         assert_eq!(
             d.binds,
             [

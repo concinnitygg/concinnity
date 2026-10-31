@@ -19,22 +19,22 @@ use alloc::vec::Vec;
 pub struct CullStatus;
 
 impl CullStatus {
-    /// Visible in phase 1, drawn by the main pass.
+    /// Visible in the early pass, drawn by the main pass.
     pub const DRAWN: u32 = 0;
-    /// Hi-Z-occluded in phase 1; the only outcome phase 2 re-tests. Under
-    /// single-pass occlusion no phase 2 runs, so this is the settled outcome
+    /// Hi-Z-occluded in the early pass; the only outcome the late pass re-tests. Under
+    /// single-pass occlusion no late pass runs, so this is the settled outcome
     /// of a Hi-Z rejection.
     pub const HIZ_CANDIDATE: u32 = 1;
     /// Frustum-, distance- or disabled-culled; settled.
     pub const CULLED: u32 = 2;
-    /// A candidate phase 2 found visible, drawn by the disocclusion pass.
+    /// A candidate the late pass found visible, drawn by the disocclusion pass.
     pub const REDRAW: u32 = 3;
-    /// A candidate phase 2 found still occluded by this frame's own depth.
+    /// A candidate the late pass found still occluded by this frame's own depth.
     pub const HIZ_CULLED: u32 = 4;
 
     /// The bits of a status word holding the outcome.
     pub const OUTCOME_MASK: u32 = 0xFF;
-    /// Where the shader bucket phase 1 routed the record to starts in a
+    /// Where the shader bucket the early pass routed the record to starts in a
     /// status word.
     pub const BUCKET_SHIFT: u32 = 8;
 
@@ -53,20 +53,20 @@ impl CullStatus {
 /// outcome. Produced by [`tally`] from a raw readback.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CullStatusCounts {
-    /// Objects [`CullStatus::DRAWN`]: passed every phase-1 test.
+    /// Objects [`CullStatus::DRAWN`]: passed every early test.
     pub drawn: u32,
     /// Objects [`CullStatus::CULLED`]: rejected by the frustum, the per-object
     /// cull distance, or a clear enable bit. Never Hi-Z.
     pub frustum_culled: u32,
-    /// Objects left at [`CullStatus::HIZ_CANDIDATE`]: Hi-Z-occluded in phase 1
+    /// Objects left at [`CullStatus::HIZ_CANDIDATE`]: Hi-Z-occluded in the early pass
     /// and not re-tested. Under two-pass occlusion a non-zero count here means
-    /// phase 2 did not run over those objects.
+    /// the late pass did not run over those objects.
     pub hiz_candidate: u32,
-    /// Objects [`CullStatus::REDRAW`]: Hi-Z-occluded in phase 1, found visible
+    /// Objects [`CullStatus::REDRAW`]: Hi-Z-occluded in the early pass, found visible
     /// against the rebuilt pyramid, drawn by the disocclusion pass.
     pub redrawn: u32,
-    /// Objects [`CullStatus::HIZ_CULLED`]: Hi-Z-occluded in phase 1 and still
-    /// occluded in phase 2.
+    /// Objects [`CullStatus::HIZ_CULLED`]: Hi-Z-occluded in the early pass and still
+    /// occluded in the late pass.
     pub hiz_culled: u32,
     /// Entries carrying a value no `STATUS_*` constant names. Non-zero means
     /// the buffer was read past the live object count, or was never written.
@@ -79,7 +79,7 @@ impl CullStatusCounts {
         self.drawn + self.redrawn
     }
 
-    /// Objects the Hi-Z test rejected, whether or not phase 2 re-tested them.
+    /// Objects the Hi-Z test rejected, whether or not the late pass re-tested them.
     /// The number a Hi-Z A/B compares.
     pub fn hiz_rejected(self) -> u32 {
         self.hiz_candidate + self.hiz_culled

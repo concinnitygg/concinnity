@@ -14,7 +14,7 @@
 
 use crate::gfx::render_types::SsaoParams;
 use crate::render::backend::error::RenderResult;
-use crate::render::render_graph::PassId;
+use crate::render::render_graph::{GpuSpan, PassId};
 
 use super::device::{
     PostBind, PostBlend, PostDraw, PostExtent, PostLoadOp, PostPassDevice, PostSampler,
@@ -157,7 +157,7 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
                 target: device.target_attachment(&self.targets.depth),
                 state: PostTargetState::Pass,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::SsaoDepth),
+                timing: PostTiming::Whole(GpuSpan::SsaoDepth.timing()),
                 pipeline: &self.pipelines.depth,
                 binds: &[linear::<D>(inputs.normal_depth)],
                 constants: bytemuck::bytes_of(params),
@@ -170,7 +170,7 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
                 target: device.target_attachment(&self.targets.raw),
                 state: PostTargetState::Pass,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::SsaoKernel),
+                timing: PostTiming::Whole(GpuSpan::SsaoKernel.timing()),
                 pipeline: &self.pipelines.kernel,
                 binds: &[linear::<D>(inputs.normal_depth), linear::<D>(depth)],
                 constants: bytemuck::bytes_of(params),
@@ -184,7 +184,7 @@ impl<Pipeline, Target> SsaoPass<Pipeline, Target> {
                 // `ao_output` is the graph's, which this node writes.
                 state: PostTargetState::Graph,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::SsaoBlur),
+                timing: PostTiming::Whole(PassId::SsaoBlur.timing()),
                 pipeline: &self.pipelines.blur,
                 binds: &[
                     linear::<D>(device.target_ref(&self.targets.raw)),
@@ -298,9 +298,18 @@ mod tests {
         assert_eq!(draws[0].state, PostTargetState::Pass);
         assert_eq!(draws[1].state, PostTargetState::Pass);
         assert_eq!(draws[2].state, PostTargetState::Graph);
-        assert_eq!(draws[0].timing, PostTiming::Whole(PassId::SsaoDepth));
-        assert_eq!(draws[1].timing, PostTiming::Whole(PassId::SsaoKernel));
-        assert_eq!(draws[2].timing, PostTiming::Whole(PassId::SsaoBlur));
+        assert_eq!(
+            draws[0].timing,
+            PostTiming::Whole(GpuSpan::SsaoDepth.timing())
+        );
+        assert_eq!(
+            draws[1].timing,
+            PostTiming::Whole(GpuSpan::SsaoKernel.timing())
+        );
+        assert_eq!(
+            draws[2].timing,
+            PostTiming::Whole(PassId::SsaoBlur.timing())
+        );
         for d in &draws {
             assert_eq!(d.load, PostLoadOp::DontCare);
             assert!(d.binds.iter().all(|b| b.1 == PostSampler::LinearClamp));

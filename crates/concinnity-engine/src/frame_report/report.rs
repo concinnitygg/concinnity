@@ -248,7 +248,7 @@ fn write_slowest(out: &mut impl Write, frames: &[SlowFrame]) -> fmt::Result {
     for frame in frames {
         writeln!(
             out,
-            "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms (gaps {:.2}, overlap {:.2}), run step {:.2} ms{}",
+            "  {:.2} ms at {:.2} s in {}: cpu {:.2} ms, blocked on GPU {:.2} ms, gpu {:.2} ms (gaps {:.2}, {:.2} beside async work, overlap {:.2}), run step {:.2} ms{}",
             ms(frame.frame_us),
             frame.run_seconds,
             frame.phase,
@@ -256,6 +256,7 @@ fn write_slowest(out: &mut impl Write, frames: &[SlowFrame]) -> fmt::Result {
             ms(frame.gpu_wait_us),
             ms(frame.gpu_frame_us),
             ms(frame.gpu_gap_us),
+            ms(frame.gpu_gap_beside_async_us),
             ms(frame.gpu_overlap_us),
             ms(frame.run_step_us),
             if frame.rebased { ", frame moved" } else { "" },
@@ -345,6 +346,7 @@ mod tests {
             shown_us: frame_us,
             gpu_frame_us: frame_us / 2,
             gpu_overlap_us: 0,
+            gpu_gap_beside_async_us: 0,
             input_latency_us: 0,
             gpu_wait_us: 250,
             render_cpu_us: 0,

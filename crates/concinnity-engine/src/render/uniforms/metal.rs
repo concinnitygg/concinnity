@@ -67,7 +67,7 @@ pub struct ScatterParams {
     /// How many shader-bucket ICBs the argument buffer carries.
     pub bucket_count: u32,
     /// The `cull_status` value that encodes a draw (`CullStatus::DRAWN` for
-    /// every dispatch but phase 2, which encodes `CullStatus::REDRAW`).
+    /// every dispatch but the late pass, which encodes `CullStatus::REDRAW`).
     pub draw_status: u32,
     /// First index of the coarse planet-tile grid a capture draws its tiles
     /// through.

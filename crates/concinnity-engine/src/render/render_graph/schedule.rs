@@ -644,11 +644,11 @@ mod tests {
             let g = build_frame_graph(inputs).expect("frame graph compiles");
             g.passes[g.pass_index(id).expect("present")].queue
         };
-        for id in [PassId::HizBuild, PassId::Cull2, PassId::AutoExposure] {
+        for id in [PassId::HizEarly, PassId::CullLate, PassId::AutoExposure] {
             assert_eq!(queue(&inputs, id), PassQueue::Graphics, "{id:?}");
         }
         inputs.planar_reflection_enabled = true;
-        for id in [PassId::HizBuild, PassId::Cull2, PassId::AutoExposure] {
+        for id in [PassId::HizEarly, PassId::CullLate, PassId::AutoExposure] {
             assert_eq!(queue(&inputs, id), PassQueue::AsyncCompute, "{id:?}");
         }
     }
@@ -706,14 +706,14 @@ mod tests {
         // Every compute pass still on the graphics queue is there because the
         // graph orders it against every render pass, not because of where a
         // transition sits: every raster pass before Main draws from Cull's
-        // output, HizBuild and Cull2 are the two-phase occlusion cull's own
-        // chain between the pre-pass and Main2, AutoExposure reads the frame
+        // output, HizEarly and CullLate are the two-phase occlusion cull's own
+        // chain between the pre-pass and MainLate, AutoExposure reads the frame
         // Main just wrote and feeds the tonemap, and Upscale sits between the
         // last scene pass and Bloom.
         for id in [
             PassId::Cull,
-            PassId::HizBuild,
-            PassId::Cull2,
+            PassId::HizEarly,
+            PassId::CullLate,
             PassId::AutoExposure,
             PassId::Upscale,
         ] {

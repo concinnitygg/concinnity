@@ -28,7 +28,7 @@ use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
     GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
-use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::render_graph::GpuSpan;
 use concinnity_engine::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
     PlanetGrassTileGpu, grass_args_offset,
@@ -560,7 +560,7 @@ impl DxContext {
             return;
         };
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
-        self.timed(cmd, frame_idx, PassId::GrassShadowDraw, || {
+        self.timed(cmd, frame_idx, GpuSpan::GrassShadowDraw, || {
             // SAFETY: the command list is recording, and `dsv` names the nearest cascade's live
             // slice.
             unsafe { cmd.OMSetRenderTargets(0, None, false, Some(&raw const dsv)) };
@@ -681,7 +681,7 @@ impl DxContext {
             return;
         };
         let main_view_gva = com::gpu_va(&self.uniforms.view_ubo_resources[frame_idx]);
-        self.timed(cmd, frame_idx, PassId::GrassPrepass, || {
+        self.timed(cmd, frame_idx, GpuSpan::GrassPrepass, || {
             // SAFETY: the command list is recording, and the pre-pass root signature is owned by
             // `self.cull`.
             unsafe { cmd.SetGraphicsRootSignature(root_sig) };
@@ -714,7 +714,7 @@ impl DxContext {
         let Some(grass) = &self.grass else {
             return;
         };
-        self.timed(cmd, frame_idx, PassId::GrassDraw, || {
+        self.timed(cmd, frame_idx, GpuSpan::GrassDraw, || {
             let params_gva = frame.view.params_gva;
             // SAFETY: the main pass is recording on `cmd`, and its bound root signature declares
             // the grass params CBV.
@@ -775,7 +775,7 @@ impl DxContext {
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
-        pass: PassId,
+        pass: GpuSpan,
         record: impl FnOnce(),
     ) {
         let (start, end) = pass_timing::pass_pair(frame_idx, pass);

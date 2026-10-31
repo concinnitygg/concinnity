@@ -79,16 +79,16 @@ impl VkContext {
             &[clear_color, clear_depth, vk::ClearValue::default()]
         };
 
-        // Under two-pass occlusion, phase 1 renders into a variant render pass
-        // that STORE's the MSAA color (so `Main2` can load + composite onto
+        // Under two-pass occlusion, the early pass renders into a variant render pass
+        // that STORE's the MSAA color (so `MainLate` can load + composite onto
         // it) and leaves the color in COLOR_ATTACHMENT_OPTIMAL. The clears are
-        // identical (phase 1 still CLEAR's), so only the render pass differs.
+        // identical (the early pass still CLEAR's), so only the render pass differs.
         // The raymarch pass needs the same STORE-color treatment (it loads +
         // re-resolves the MSAA color after AutoExposure), so when raymarch is
         // active but two-pass occlusion is not, switch to its store-color pass.
         let render_pass = if self.two_pass_occlusion_active() {
             self.cull
-                .main_render_pass_phase1
+                .main_render_pass_early
                 .as_ref()
                 .unwrap_or(&self.targets.main_render_pass)
         } else if let Some(rp) = self
@@ -308,8 +308,8 @@ impl VkContext {
             self.encode_grass_main(cmd, frame_idx, frame);
         }
 
-        // The sky lands behind phase 1's geometry. Under two-pass occlusion
-        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // The sky lands behind the early pass's geometry. Under two-pass occlusion
+        // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
             self.encode_main_sky(cmd, frame_idx);
@@ -322,46 +322,46 @@ impl VkContext {
         unsafe { device.cmd_end_render_pass(cmd) };
     }
 
-    // Phase-2 main pass for two-pass occlusion. Loads (does not clear) the
-    // phase-1 HDR color + depth, re-runs the bindless indirect draw (static
+    // Late main pass for two-pass occlusion. Loads (does not clear) the
+    // early HDR color + depth, re-runs the bindless indirect draw (static
     // objects + merged instances, both Hi-Z-tested through the cull buffer) over
-    // the phase-2 indirect buffer `Cull2` wrote, and resolves the combined scene
+    // the late indirect buffer `CullLate` wrote, and resolves the combined scene
     // into `hdr_resolve` for the post stack. Skinned geometry is not Hi-Z-culled,
-    // so it was fully drawn in phase 1 and is not repeated here. A no-op unless
+    // so it was fully drawn in the early pass and is not repeated here. A no-op unless
     // the bindless path is active with build-time geometry. Mirrors
-    // `directx/draw/main.rs::encode_main_pass_phase2`.
+    // `directx/draw/main.rs::encode_main_pass_late`.
     //
     // `bindless_pipeline` was created against `main_render_pass` but is used
-    // here with `main_render_pass_phase2`; that is valid because the two passes
+    // here with `main_render_pass_late`; that is valid because the two passes
     // are render-pass-compatible (identical attachment count / formats / sample
     // counts, only load/store ops + layouts differ). Keep them so if the
-    // phase-2 attachment set ever diverges, build a phase-2-specific pipeline.
-    pub(in crate::vulkan) fn encode_main_pass_phase2(
+    // late attachment set ever diverges, build a late-specific pipeline.
+    pub(in crate::vulkan) fn encode_main_pass_late(
         &self,
         cmd: vk::CommandBuffer,
         frame_idx: usize,
     ) {
         let (Some(render_pass), Some(pipeline), Some(layout)) = (
-            self.cull.main_render_pass_phase2.as_ref(),
+            self.cull.main_render_pass_late.as_ref(),
             self.cull.bindless_pipeline.as_ref(),
             self.cull.bindless_pipeline_layout.as_ref(),
         ) else {
             return;
         };
         let pipeline = self.wireframe_or(pipeline, self.wireframe.bindless.as_ref());
-        if self.state.draw.n_objects == 0 || self.cull.indirect_buffers2.is_empty() {
+        if self.state.draw.n_objects == 0 || self.cull.indirect_buffers_late.is_empty() {
             return;
         }
         let device = self.hw.device.clone();
         let device = &device;
         let extent = self.targets.render_extent;
 
-        // The phase-2 render pass LOADs the phase-1 color + depth. Because it
+        // The late render pass LOADs the early color + depth. Because it
         // shares the main render pass's subpass dependency (so the shared
         // framebuffer + bindless pipeline stay render-pass-compatible), that
-        // dependency does not order the phase-1 writes before this LOAD. Emit
-        // the ordering explicitly here: phase-1 Main's color + depth writes
-        // (and HizBuild's depth restore) -> this pass's attachment load. Spans
+        // dependency does not order the early pass writes before this LOAD. Emit
+        // the ordering explicitly here: early Main's color + depth writes
+        // (and HizEarly's depth restore) -> this pass's attachment load. Spans
         // the command-buffer boundary via submission order under parallel
         // recording.
         let load_barrier = vk::MemoryBarrier::default()
@@ -401,7 +401,7 @@ impl VkContext {
         // these commands name is live for the call.
         unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
 
-        // Same negative-height viewport flip as the phase-1 main pass so the
+        // Same negative-height viewport flip as the early main pass so the
         // disoccluded geometry rasterizes into identical pixels.
         let vp = vk::Viewport {
             x: 0.0,
@@ -412,9 +412,9 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: the phase-2 LOAD pass is open on `cmd`; `vp` is borrowed for the call.
+        // SAFETY: the late LOAD pass is open on `cmd`; `vp` is borrowed for the call.
         unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
-        // SAFETY: same open phase-2 pass; `scissor` is borrowed for the call.
+        // SAFETY: same open late pass; `scissor` is borrowed for the call.
         unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
         // SAFETY: the shared vertex buffer is owned by `self.geometry`, which outlives the frame.
         unsafe {
@@ -431,7 +431,7 @@ impl VkContext {
         }
 
         // SAFETY: the bindless pipeline is owned by `self.cull` and is compatible with the
-        // phase-2 render pass it records into.
+        // late render pass it records into.
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
         }
@@ -452,11 +452,11 @@ impl VkContext {
         }
         // Indirect draw #1: the static + instance prefix against the static
         // VB/IB bound above, once per shader bucket.
-        self.draw_main_stream(cmd, self.cull.indirect_buffers2[frame_idx].buffer(), 0);
+        self.draw_main_stream(cmd, self.cull.indirect_buffers_late[frame_idx].buffer(), 0);
         self.inc_draw_calls(1);
         self.inc_draw_calls(self.draw_bucket_regions(
             cmd,
-            self.cull.indirect_buffers2[frame_idx].buffer(),
+            self.cull.indirect_buffers_late[frame_idx].buffer(),
             frame_idx,
         ));
 
@@ -467,7 +467,7 @@ impl VkContext {
         if self.state.draw.n_skinned > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
-            // SAFETY: the phase-2 pass is still open on `cmd`, and the bindless pipeline is owned
+            // SAFETY: the late pass is still open on `cmd`, and the bindless pipeline is owned
             // by `self.cull`.
             unsafe {
                 device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
@@ -493,14 +493,14 @@ impl VkContext {
             }
             self.draw_main_stream(
                 cmd,
-                self.cull.indirect_buffers2[frame_idx].buffer(),
+                self.cull.indirect_buffers_late[frame_idx].buffer(),
                 SKINNED_STREAM,
             );
             self.inc_draw_calls(1);
         }
 
-        // End the phase-2 pass. The render pass resolves the combined phase-1 +
-        // phase-2 MSAA color into `hdr_resolve` and leaves it
+        // End the late pass. The render pass resolves the combined early +
+        // late MSAA color into `hdr_resolve` and leaves it
         // SHADER_READ_ONLY_OPTIMAL, so the post stack reads the combined scene.
         // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
         // these commands name is live for the call.

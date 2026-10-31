@@ -1427,9 +1427,9 @@ flowchart TD
     end
     subgraph geo["Geometry"]
         MAIN["Main (+ sky)"]
-        HIZ["HizBuild"]
-        CULL2["Cull2"]
-        MAIN2["Main2"]
+        HIZ["HizEarly"]
+        CULLLATE["CullLate"]
+        MAINLATE["MainLate"]
     end
     subgraph dec["Scene decoration"]
         AE["AutoExposure (compute)"]
@@ -1460,8 +1460,8 @@ flowchart TD
     SPOT --> MAIN
     LC --> MAIN
     PSIM --> PART
-    MAIN --> HIZ --> CULL2 --> MAIN2
-    MAIN2 --> AE --> RAY --> SSGI --> DECAL --> FOG --> PART --> LINES
+    MAIN --> HIZ --> CULLLATE --> MAINLATE
+    MAINLATE --> AE --> RAY --> SSGI --> DECAL --> FOG --> PART --> LINES
     FOGF --> FOG
     LINES --> PLANAR
     PLANAR --> SSR
@@ -1481,14 +1481,14 @@ read-modify-written by each decoration pass in turn (raymarch, SSGI, decals, fog
 particles, lines). Auto-exposure is pinned before the first decoration by a
 write-after-read edge, so it always meters the undecorated scene.
 
-**Two-pass occlusion.** Phase 1 culls against the previous frame's Hi-Z pyramid
-and draws; a mid-frame compute pass rebuilds the pyramid from phase 1's depth;
-phase 2 re-tests the objects phase 1 marked occluded and draws the disoccluded
-survivors, depth-compositing with phase 1. Instanced and skinned geometry is not
-Hi-Z tested, so it draws fully in phase 1.
+**Two-pass occlusion.** The early pass culls against the previous frame's Hi-Z pyramid
+and draws; a mid-frame compute pass rebuilds the pyramid from the early pass's depth;
+the late pass re-tests the objects the early pass marked occluded and draws the disoccluded
+survivors, depth-compositing with the early pass. Instanced and skinned geometry is not
+Hi-Z tested, so it draws fully in the early pass.
 
 **Terminal Hi-Z build.** The last compute pass reduces the frame's final depth
-into the pyramid the next frame's phase-1 cull tests against. It is a graph node,
+into the pyramid the next frame's early cull tests against. It is a graph node,
 not an action after the graph, so main depth stays live to the end of the frame
 and cannot be aliased away while the reduction reads it.
 
@@ -1575,7 +1575,7 @@ through a structured record buffer, so the main pass binds nothing per draw.
 **GPU culling.** One compute thread per draw record tests the view frustum, the
 optional cull distance, and the previous frame's Hi-Z pyramid, then emits a real
 indirect draw or one with zero instances. Draws are routed into per-shader
-buckets, one per world shader plus the engine's own. Variants: phase 1, phase 2
+buckets, one per world shader plus the engine's own. Variants: early, late
 (re-tests only Hi-Z candidates), and shadow (frustum only, per cascade or spot
 slice, no Hi-Z).
 
@@ -1694,7 +1694,7 @@ The sky is drawn as one fullscreen triangle at the far plane, depth-tested
 inclusively without writing, so it lands only where no surface did. It samples
 the environment's prefiltered cube at mip 0 along each pixel's view ray. It is
 drawn last inside each pass that renders the opaque scene (main, reflection-probe
-faces, planar mirrors); under two-pass occlusion, phase 2 draws over it. The
+faces, planar mirrors); under two-pass occlusion, the late pass draws over it. The
 pre-pass draws the sky's camera-rotation motion and reports it to screen-space
 passes as depth 0, roughness 1.
 
@@ -2887,9 +2887,9 @@ _Timing-only_ identities time work recorded inside another graph node.
 | 17  | `upscale`              | compute     | Temporal upscaling from render to output resolution. Replaces TAA.                                         |
 | 18  | `transparent`          | render      | Back-to-front glass and water, after reflections and before temporal resolve.                              |
 | 19  | `raymarch`             | render      | Sphere-traced SDF volumes; writes color and depth.                                                          |
-| 20  | `hiz_build`            | compute     | Mid-frame Hi-Z rebuild from phase-1 depth.                                                                  |
-| 21  | `cull2`                | compute     | Phase-2 re-test of phase-1-occluded objects.                                                                |
-| 22  | `main2`                | render      | Phase-2 draw of the disoccluded survivors.                                                                  |
+| 20  | `hiz_early`            | compute     | Mid-frame Hi-Z rebuild from the early pass's depth.                                                         |
+| 21  | `cull_late`            | compute     | Late re-test of the objects the early cull found occluded.                                                  |
+| 22  | `main_late`            | render      | Late draw of the disoccluded survivors.                                                                     |
 | 23  | `ssgi`                 | render      | Screen-space GI: Hi-Z trace with in-trace temporal accumulation, then upsample and composite.               |
 | 24  | `rt_reflections`       | render      | Ray-traced reflections. Takes precedence over SSR.                                                          |
 | 25  | `gbuffer_prepass`      | render      | Normal, linear depth, roughness, and motion MRT plus depth; copies model history.                           |

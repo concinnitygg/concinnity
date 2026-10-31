@@ -11,7 +11,7 @@
 use ash::vk;
 use concinnity_engine::gfx::view_modes::ViewMode;
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::render_graph::GpuSpan;
 use concinnity_engine::render::{backend::pass_timing, environment::sky};
 
 use super::builtin_shaders::CompileProgram;
@@ -153,7 +153,7 @@ impl VkContext {
         let stamps = self
             .hw
             .timestamp_query_pool
-            .map(|pool| (pool, pass_timing::pass_pair(frame_idx, PassId::Sky)));
+            .map(|pool| (pool, pass_timing::pass_pair(frame_idx, GpuSpan::Sky)));
         if let Some((pool, (start, _))) = stamps {
             // SAFETY: `cmd` is a command buffer in the recording state and the query pool is live;
             // the frame's query block was reset at the frame's start.

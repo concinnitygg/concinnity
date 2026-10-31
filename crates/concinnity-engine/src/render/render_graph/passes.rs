@@ -1,37 +1,32 @@
-//! Stable identity for every render-graph pass. Used by:
+//! Stable identity for every render-graph pass, and for every GPU timing slot.
 //!
-//!   - The graph itself, as the dispatch key the executor matches on.
-//!   - The per-pass GPU timer (`crate::render::backend::pass_timing`), which keys its
-//!     sample-buffer slots off the same integer.
+//! [`PassId`] names a graph node: the key the compiled graph carries and each
+//! backend's executor dispatches on. [`GpuSpan`] names work the GPU timer
+//! measures on its own without being a graph node: a sub-pass bundled into
+//! one node's encode, or a draw timed inside another pass. [`TimingId`] is
+//! either one, and is what the per-pass GPU timer
+//! (`crate::render::backend::pass_timing`) keys its sample slots off.
 //!
-//! The `pass_ids!` invocation below is the single registration point: one line
-//! per pass names the variant and its stable timing name, and the macro derives
-//! the enum, [`PASS_NAMES`], [`PASS_COUNT`], and [`PassId::ALL`] from it. A pass
-//! therefore cannot exist without a timing name (which would otherwise report
-//! zero GPU time), and the name table cannot drift out of index order.
-//!
-//! Variants are `#[repr(u32)]` so a `PassId` round-trips through `as usize` into
-//! [`PASS_NAMES`] and any `[T; PASS_COUNT]` companion array. The list is
-//! append-only: inserting in the middle renumbers later variants and silently
-//! shifts every timing slot.
+//! The `pass_ids!` and `gpu_spans!` invocations below are the single
+//! registration points: one line per entry names the variant and its stable
+//! timing name, so nothing can be timed without a name and the name tables
+//! cannot drift out of index order.
 
 /// Declare the pass vocabulary. Each entry is `Variant => "timing_name"`.
 macro_rules! pass_ids {
     ($($(#[$doc:meta])* $variant:ident => $name:literal,)*) => {
-        /// One per-pass identity. Cast to `usize` to index [`PASS_NAMES`] or any
+        /// One render-graph pass. Cast to `usize` to index [`PASS_NAMES`] or any
         /// `[T; PASS_COUNT]` companion array.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        #[repr(u32)]
+        #[repr(u8)]
         pub enum PassId {
             $($(#[$doc])* $variant,)*
         }
 
-        /// Stable display name for each pass. Index = `PassId as usize`. Used by
-        /// the `profile` debug tool call's `passes` reply and the per-pass timing readback.
+        /// Stable display name for each pass. Index = `PassId as usize`.
         pub const PASS_NAMES: [&str; PASS_COUNT] = [$($name,)*];
 
-        /// Number of distinct passes the engine times. The per-pass timing array
-        /// in [`crate::profile::RenderStats`] is sized to at least this many slots.
+        /// Number of distinct graph passes.
         pub const PASS_COUNT: usize = [$(PassId::$variant,)*].len();
 
         impl PassId {
@@ -41,15 +36,46 @@ macro_rules! pass_ids {
     };
 }
 
+/// Declare the timing-only spans. Each entry is
+/// `Variant => "timing_name" in Enclosing` or `Variant => "timing_name"`.
+macro_rules! gpu_spans {
+    ($($(#[$doc:meta])* $variant:ident => $name:literal $(in $outer:ident)?,)*) => {
+        /// GPU work timed on its own that is not a graph node.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[repr(u8)]
+        pub enum GpuSpan {
+            $($(#[$doc])* $variant,)*
+        }
+
+        /// Stable display name for each span. Index = `GpuSpan as usize`.
+        pub const SPAN_NAMES: [&str; SPAN_COUNT] = [$($name,)*];
+
+        /// Number of distinct spans.
+        pub const SPAN_COUNT: usize = [$(GpuSpan::$variant,)*].len();
+
+        impl GpuSpan {
+            /// Every variant, in declaration (index) order.
+            pub const ALL: [GpuSpan; SPAN_COUNT] = [$(GpuSpan::$variant,)*];
+
+            /// The pass whose timing span contains this one's. Its time is then
+            /// already part of that pass's, so a breakdown of the frame lists it
+            /// under that pass rather than beside it.
+            pub const fn enclosing(self) -> Option<PassId> {
+                match self {
+                    $(Self::$variant => gpu_spans!(@outer $($outer)?),)*
+                }
+            }
+        }
+    };
+    (@outer $outer:ident) => { Some(PassId::$outer) };
+    (@outer) => { None };
+}
+
 pass_ids! {
     /// GPU visibility cull; produces the indirect draw arguments.
     Cull => "cull",
     /// Directional shadow cascades and spot shadow slices.
     Shadow => "shadow",
-    /// The single-channel depth copy ambient occlusion samples.
-    SsaoDepth => "ssao_depth",
-    /// The ambient-occlusion gather.
-    SsaoKernel => "ssao_kernel",
     /// Bilateral blur over the occlusion buffer.
     SsaoBlur => "ssao_blur",
     /// The lit forward pass.
@@ -114,30 +140,30 @@ pass_ids! {
     Raymarch => "raymarch",
     /// Mid-frame Hi-Z (depth-mip pyramid) rebuild for two-pass occlusion
     /// culling. Inserted only when `FrameGraphInputs::two_pass_occlusion_enabled`
-    /// is on: after `Main` (phase 1) has written this frame's depth, this
-    /// compute pass reduces it into the Hi-Z pyramid so `Cull2` can re-test
-    /// the objects phase 1 occluded against up-to-date depth. Distinct from
-    /// the end-of-frame Hi-Z build (which feeds the *next* frame's phase-1
+    /// is on: after `Main` (the early pass) has written this frame's depth, this
+    /// compute pass reduces it into the Hi-Z pyramid so `CullLate` can re-test
+    /// the objects the early pass occluded against up-to-date depth. Distinct from
+    /// the end-of-frame Hi-Z build (which feeds the *next* frame's early
     /// cull and stays an inline action, not a graph node). Every backend
     /// implements the node; whether it appears is `two_pass_occlusion_enabled`,
     /// which each seeds from its own two-pass state.
-    HizBuild => "hiz_build",
-    /// Phase-2 GPU cull for two-pass occlusion. Re-tests the objects `Cull`
-    /// (phase 1) marked Hi-Z-occluded against the freshly rebuilt pyramid
-    /// (`HizBuild`) and encodes a draw for any that turn out visible into a
-    /// second indirect command buffer `Main2` consumes. Reads the per-object
-    /// status buffer phase-1 cull wrote + the `draw_args2` buffer it writes.
+    HizEarly => "hiz_early",
+    /// Late GPU cull for two-pass occlusion. Re-tests the objects `Cull`
+    /// (the early pass) marked Hi-Z-occluded against the freshly rebuilt pyramid
+    /// (`HizEarly`) and encodes a draw for any that turn out visible into a
+    /// second indirect command buffer `MainLate` consumes. Reads the per-object
+    /// status buffer early cull wrote + the `draw_args_late` buffer it writes.
     /// Gated on `FrameGraphInputs::two_pass_occlusion_enabled`.
-    Cull2 => "cull2",
-    /// Phase-2 main pass for two-pass occlusion. Loads (does not clear) the
+    CullLate => "cull_late",
+    /// Late main pass for two-pass occlusion. Loads (does not clear) the
     /// HDR color + depth `Main` wrote and re-runs only the bindless-static
-    /// indirect draw through `Cull2`'s command buffer, depth-compositing the
-    /// disoccluded geometry with phase 1. Instanced + skinned geometry is not
-    /// Hi-Z-culled, so it is fully drawn in phase 1 and not repeated here.
+    /// indirect draw through `CullLate`'s command buffer, depth-compositing the
+    /// disoccluded geometry with the early pass. Instanced + skinned geometry is not
+    /// Hi-Z-culled, so it is fully drawn in the early pass and not repeated here.
     /// Becomes the new head of the `hdr_resolve` post-decoration chain (so
     /// `AutoExposure` / Decals / Fog / SSR see the combined result). Gated on
     /// `FrameGraphInputs::two_pass_occlusion_enabled`.
-    Main2 => "main2",
+    MainLate => "main_late",
     /// Screen-space global illumination. A refinement of SSR: it reuses the
     /// SSR depth + normal pre-pass G-buffer and screen-space ray-march, but
     /// integrates bounced radiance over a cosine-weighted hemisphere instead
@@ -170,15 +196,6 @@ pass_ids! {
     /// consumer (SSR, SSAO, SSGI, RT, TAA, upscaler) reads this one output.
     /// Gated on `FrameGraphInputs::gbuffer_prepass_enabled` plus any consumer.
     GBufferPrepass => "gbuffer_prepass",
-    /// Roughness-aware reflection composite. Not a standalone graph node: it is
-    /// encoded inline at the tail of the `SsrResolve` / `RtReflections` pass
-    /// (both write a reflection target, then blur it by roughness and composite
-    /// it over the scene). It carries its own timing slot so its cost is visible
-    /// separately from the trace/march that precedes it. Inline on every
-    /// backend, so no backend's graph executor ever dispatches this id: each
-    /// treats it as a programming error the way it treats the bundled SSAO
-    /// sub-passes.
-    ReflectionComposite => "reflection_composite",
     /// Clustered light-binning compute pass. Once per frame, before Main: bins the
     /// scene's local lights (the `GpuLight` buffer) into a per-cluster index list
     /// over a screen-tiled, exponential-depth froxel grid, which the forward pass
@@ -199,10 +216,10 @@ pass_ids! {
     /// draws none never pays for it.
     Lines => "lines",
     /// Terminal Hi-Z (depth-mip pyramid) build. Reduces the frame's final main
-    /// depth into the pyramid the *next* frame's phase-1 `Cull` tests against,
+    /// depth into the pyramid the *next* frame's early `Cull` tests against,
     /// so it is declared last and reads the depth every decoration pass has
-    /// finished with. Distinct from `HizBuild`, which rebuilds the same pyramid
-    /// mid-frame from phase-1 depth for `Cull2`; when two-pass occlusion is on
+    /// finished with. Distinct from `HizEarly`, which rebuilds the same pyramid
+    /// mid-frame from early depth for `CullLate`; when two-pass occlusion is on
     /// both run and this one supersedes it for the next frame. Present whenever
     /// the GPU-cull path built a pyramid (`FrameGraphInputs::hiz_build_enabled`).
     HizFinal => "hiz_final",
@@ -214,16 +231,6 @@ pass_ids! {
     /// nothing on a frame with no reflector in view. Gated on
     /// `FrameGraphInputs::planar_reflection_enabled`.
     PlanarReflection => "planar_reflection",
-    /// The environment drawn as the background. Not a standalone graph node: a
-    /// fullscreen draw at the tail of each pass that renders the opaque scene
-    /// from one viewpoint (`Main`, the reflection-probe faces, the planar
-    /// mirrors), in that pass's own color and depth, so it costs no extra
-    /// load or store of either. It carries its own timing slot so its cost is
-    /// visible inside `Main`'s (see [`PassId::enclosing`]): Vulkan and DirectX
-    /// time it with timestamps around the draw, while Metal samples only at
-    /// encoder boundaries and counts it in `Main` alone. No backend's graph
-    /// executor dispatches this id.
-    Sky => "sky",
     /// Grass blade generation. A compute pass that places the grass field's
     /// blades in the tiles around the camera, culls them against the view
     /// frustum and the draw distance, and appends the survivors to a
@@ -231,18 +238,6 @@ pass_ids! {
     /// `GBufferPrepass` and `Main` consume. Gated on
     /// `FrameGraphInputs::grass_enabled`.
     Grass => "grass",
-    /// The grass blades drawn into the lit scene. Not a standalone graph node:
-    /// one indirect draw at the tail of `Main`'s opaque geometry. It carries its
-    /// own timing slot so its cost is visible inside `Main`'s (see
-    /// [`PassId::enclosing`]): Vulkan and DirectX time it with timestamps around
-    /// the draw, while Metal samples only at encoder boundaries and counts it in
-    /// `Main` alone. No backend's graph executor dispatches this id.
-    GrassDraw => "grass_draw",
-    /// The grass blades drawn into the G-buffer pre-pass: normals, depth and
-    /// the motion of each blade's sway. Timed inside `GBufferPrepass` the way
-    /// [`PassId::GrassDraw`] is timed inside `Main`. No backend's graph executor
-    /// dispatches this id.
-    GrassPrepass => "grass_prepass",
     /// The grass bend field: a compute pass that relaxes the camera-centered
     /// field the blades are pressed down by and stamps every nearby
     /// character's and body's footprint into it, ahead of the passes that
@@ -253,10 +248,6 @@ pass_ids! {
     /// light frustum rather than the view, so blades off screen still cast.
     /// Gated on `FrameGraphInputs::grass_shadow_enabled`.
     GrassShadow => "grass_shadow",
-    /// The grass blades drawn into the nearest shadow cascade. Timed inside
-    /// `Shadow` the way [`PassId::GrassDraw`] is timed inside `Main`. No
-    /// backend's graph executor dispatches this id.
-    GrassShadowDraw => "grass_shadow_draw",
     /// The atmosphere's lookup tables: a compute pass that builds the sky-view
     /// table the sky draws from, the aerial-perspective volume the haze pass
     /// reads and the irradiance cube the surfaces take their ambient light
@@ -303,9 +294,102 @@ pass_ids! {
     CloudComposite => "cloud_composite",
 }
 
+gpu_spans! {
+    /// The single-channel depth copy ambient occlusion samples, inside the
+    /// `SsaoBlur` node's encode.
+    SsaoDepth => "ssao_depth",
+    /// The ambient-occlusion gather, inside the `SsaoBlur` node's encode.
+    SsaoKernel => "ssao_kernel",
+    /// The roughness-aware reflection blur and composite at the tail of the
+    /// `SsrResolve` / `RtReflections` node.
+    ReflectionComposite => "reflection_composite",
+    /// The environment drawn as the background at the tail of each pass that
+    /// renders the opaque scene. Metal samples only at encoder boundaries and
+    /// counts it in `Main` alone.
+    Sky => "sky" in Main,
+    /// The grass blades drawn at the tail of `Main`'s opaque geometry.
+    GrassDraw => "grass_draw" in Main,
+    /// The grass blades drawn into the G-buffer pre-pass.
+    GrassPrepass => "grass_prepass" in GBufferPrepass,
+    /// The grass blades drawn into the nearest shadow cascade.
+    GrassShadowDraw => "grass_shadow_draw" in Shadow,
+}
+
+/// Number of GPU timing slots: one per pass, then one per span.
+pub const TIMING_COUNT: usize = PASS_COUNT + SPAN_COUNT;
+
+/// Stable display name for each timing slot. Index = [`TimingId::index`].
+pub const TIMING_NAMES: [&str; TIMING_COUNT] = {
+    let mut out = [""; TIMING_COUNT];
+    let mut i = 0;
+    while i < PASS_COUNT {
+        out[i] = PASS_NAMES[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < SPAN_COUNT {
+        out[PASS_COUNT + j] = SPAN_NAMES[j];
+        j += 1;
+    }
+    out
+};
+
+/// One GPU timing slot: a graph pass, or a span timed apart from any node.
+/// Passes take the first [`PASS_COUNT`] slots and spans the rest.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimingId(u8);
+
+impl TimingId {
+    /// Dense index into [`TIMING_NAMES`] or any `[T; TIMING_COUNT]` array.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The slot at `index`, if there is one.
+    pub fn from_index(index: usize) -> Option<Self> {
+        (index < TIMING_COUNT).then(|| Self(u8::try_from(index).unwrap_or(u8::MAX)))
+    }
+
+    /// Stable display name.
+    pub fn name(self) -> &'static str {
+        TIMING_NAMES[self.index()]
+    }
+
+    /// The slot with this stable name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::all().find(|t| t.name() == name)
+    }
+
+    /// Every slot, in index order.
+    pub fn all() -> impl Iterator<Item = Self> {
+        PassId::ALL
+            .into_iter()
+            .map(PassId::timing)
+            .chain(GpuSpan::ALL.into_iter().map(GpuSpan::timing))
+    }
+
+    /// The graph pass this slot times, `None` for a span.
+    pub fn pass(self) -> Option<PassId> {
+        PassId::ALL.get(self.index()).copied()
+    }
+
+    /// The pass whose timing contains this slot's (see [`GpuSpan::enclosing`]).
+    pub fn enclosing(self) -> Option<PassId> {
+        let span = self.index().checked_sub(PASS_COUNT)?;
+        GpuSpan::ALL.get(span).and_then(|s| s.enclosing())
+    }
+}
+
+impl core::fmt::Debug for TimingId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+const _: () = assert!(TIMING_COUNT <= u8::MAX as usize);
+
 impl PassId {
-    /// Stable display name, looked up in [`PASS_NAMES`]. `'static` since
-    /// the table is `const`.
+    /// Stable display name, looked up in [`PASS_NAMES`].
     pub fn name(self) -> &'static str {
         PASS_NAMES[self as usize]
     }
@@ -315,16 +399,37 @@ impl PassId {
         Self::ALL.into_iter().find(|p| p.name() == name)
     }
 
-    /// The pass whose timing span contains this one's, for a pass timed inside
-    /// another: its time is already part of the enclosing pass's, so a
-    /// breakdown of the frame lists it under that pass rather than beside it.
-    pub const fn enclosing(self) -> Option<Self> {
-        match self {
-            Self::Sky | Self::GrassDraw => Some(Self::Main),
-            Self::GrassPrepass => Some(Self::GBufferPrepass),
-            Self::GrassShadowDraw => Some(Self::Shadow),
-            _ => None,
-        }
+    /// This pass's GPU timing slot.
+    pub const fn timing(self) -> TimingId {
+        TimingId(self as u8)
+    }
+}
+
+impl GpuSpan {
+    /// Stable display name, looked up in [`SPAN_NAMES`].
+    pub fn name(self) -> &'static str {
+        SPAN_NAMES[self as usize]
+    }
+
+    /// This span's GPU timing slot.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "TIMING_COUNT fits a u8, asserted above"
+    )]
+    pub const fn timing(self) -> TimingId {
+        TimingId((PASS_COUNT + self as usize) as u8)
+    }
+}
+
+impl From<PassId> for TimingId {
+    fn from(pass: PassId) -> Self {
+        pass.timing()
+    }
+}
+
+impl From<GpuSpan> for TimingId {
+    fn from(span: GpuSpan) -> Self {
+        span.timing()
     }
 }
 
@@ -334,9 +439,6 @@ mod tests {
 
     #[test]
     fn every_pass_id_indexes_its_own_name() {
-        // The macro pairs each variant with its name, so this asserts the
-        // derivation rather than a hand-maintained mirror: indices stay dense
-        // and in declaration order, and no pass ships nameless.
         for (i, &pass) in PassId::ALL.iter().enumerate() {
             assert_eq!(pass as usize, i, "{pass:?} index out of order");
             assert_eq!(pass.name(), PASS_NAMES[i], "{pass:?} name table mismatch");
@@ -353,34 +455,45 @@ mod tests {
         assert_eq!(PassId::from_name("not a pass"), None);
     }
 
-    // A nested pass is enclosed by a top-level one, never by another nested
-    // pass or itself, so one level of nesting is all a breakdown needs.
     #[test]
-    fn an_enclosing_pass_is_itself_top_level() {
-        for pass in PassId::ALL {
-            if let Some(outer) = pass.enclosing() {
-                assert_ne!(outer, pass);
-                assert_eq!(outer.enclosing(), None, "{pass:?} nests two deep");
-            }
+    fn timing_slots_put_passes_first_then_spans() {
+        let all: alloc::vec::Vec<TimingId> = TimingId::all().collect();
+        assert_eq!(all.len(), TIMING_COUNT);
+        for (i, t) in all.iter().enumerate() {
+            assert_eq!(t.index(), i);
+            assert_eq!(TimingId::from_index(i), Some(*t));
+            assert_eq!(TimingId::from_name(t.name()), Some(*t));
         }
-        assert_eq!(PassId::Sky.enclosing(), Some(PassId::Main));
-        assert_eq!(PassId::GrassDraw.enclosing(), Some(PassId::Main));
-        assert_eq!(
-            PassId::GrassPrepass.enclosing(),
-            Some(PassId::GBufferPrepass)
-        );
-        assert_eq!(PassId::GrassShadowDraw.enclosing(), Some(PassId::Shadow));
-        assert_eq!(PassId::Grass.enclosing(), None);
-        assert_eq!(PassId::GrassBend.enclosing(), None);
-        assert_eq!(PassId::GrassShadow.enclosing(), None);
+        assert_eq!(TimingId::from_index(TIMING_COUNT), None);
+        assert_eq!(PassId::Cull.timing().pass(), Some(PassId::Cull));
+        assert_eq!(GpuSpan::Sky.timing().pass(), None);
+        assert_eq!(GpuSpan::SsaoDepth.timing().index(), PASS_COUNT);
+        assert_eq!(GpuSpan::Sky.timing().name(), "sky");
     }
 
     #[test]
-    fn pass_names_are_unique() {
-        // A copy-pasted name would silently merge two passes in the profiler.
+    fn spans_nest_inside_a_pass_and_passes_nest_in_nothing() {
+        for pass in PassId::ALL {
+            assert_eq!(pass.timing().enclosing(), None, "{pass:?}");
+        }
+        assert_eq!(GpuSpan::Sky.enclosing(), Some(PassId::Main));
+        assert_eq!(GpuSpan::GrassDraw.enclosing(), Some(PassId::Main));
+        assert_eq!(
+            GpuSpan::GrassPrepass.enclosing(),
+            Some(PassId::GBufferPrepass)
+        );
+        assert_eq!(GpuSpan::GrassShadowDraw.enclosing(), Some(PassId::Shadow));
+        assert_eq!(GpuSpan::SsaoKernel.enclosing(), None);
+        assert_eq!(GpuSpan::GrassDraw.timing().enclosing(), Some(PassId::Main));
+    }
+
+    #[test]
+    fn timing_names_are_unique() {
+        // A copy-pasted name would silently merge two slots in the profiler.
         let mut seen = hashbrown::HashSet::new();
-        for &name in &PASS_NAMES {
-            assert!(seen.insert(name), "duplicate pass name {name:?}");
+        for &name in &TIMING_NAMES {
+            assert!(!name.is_empty());
+            assert!(seen.insert(name), "duplicate timing name {name:?}");
         }
     }
 }

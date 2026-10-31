@@ -46,7 +46,10 @@ pub(crate) use frame::bloom_top_desc;
 pub use frame::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z, FrameGraphInputs, build_frame_graph};
 pub use gates::{BackendTraits, BuildStatus, FeatureGates, FrameFacts, frame_graph_inputs};
 pub use graph_cache::GraphCache;
-pub use passes::{PASS_COUNT, PASS_NAMES, PassId};
+pub use passes::{
+    GpuSpan, PASS_COUNT, PASS_NAMES, PassId, SPAN_COUNT, SPAN_NAMES, TIMING_COUNT, TIMING_NAMES,
+    TimingId,
+};
 pub use schedule::{CrossQueueWait, PassQueue};
 pub use transient::{
     PoolGates, TransientSlot, TransientTexture, assert_slot_aliasing_sound, plan_pool_slots, pooled,

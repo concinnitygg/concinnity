@@ -279,7 +279,7 @@ impl<Pipeline, Target> TaaPass<Pipeline, Target> {
                 // The fullscreen triangle covers every pixel, so nothing the
                 // target already holds survives the draw.
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::TaaResolve),
+                timing: PostTiming::Whole(PassId::TaaResolve.timing()),
                 pipeline: &self.pipeline,
                 binds: &binds,
                 constants: bytemuck::bytes_of(&params),

@@ -706,7 +706,7 @@ mod tests {
             p.write_texture(u)
         };
         let v1 = {
-            let mut p = b.add_pass(PassId::SsaoKernel, PassKind::Render);
+            let mut p = b.add_pass(PassId::SsaoBlur, PassKind::Render);
             p.read_texture(t1);
             p.write_texture(v)
         };
@@ -717,16 +717,16 @@ mod tests {
 
         let g = b.compile().expect("graph compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
-        // Shadow must precede both Main and SsaoKernel (they read its
+        // Shadow must precede both Main and SsaoBlur (they read its
         // output); Composite must come last (it reads both their
-        // outputs). The stable tie-break picks Main over SsaoKernel
+        // outputs). The stable tie-break picks Main over SsaoBlur
         // because Main was declared first.
         assert_eq!(
             order,
             vec![
                 PassId::Shadow,
                 PassId::Main,
-                PassId::SsaoKernel,
+                PassId::SsaoBlur,
                 PassId::Composite,
             ]
         );

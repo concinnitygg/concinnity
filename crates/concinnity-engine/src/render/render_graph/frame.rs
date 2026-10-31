@@ -199,11 +199,11 @@ pub struct FrameGraphInputs {
     /// path is active this frame. Only meaningful alongside
     /// `bindless_cull_enabled`; the builder ANDs the two so a world that
     /// asks for two-pass without a bindless shader simply gets the
-    /// single-pass path. When on, the graph inserts `HizBuild` → `Cull2`
-    /// → `Main2` between `Main` and the post-decoration chain: `HizBuild`
-    /// rebuilds the Hi-Z pyramid from phase-1 depth, `Cull2` re-tests the
-    /// objects phase-1 cull marked occluded, and `Main2` redraws the
-    /// disoccluded survivors. `Main2`'s `hdr_resolve` write becomes the head
+    /// single-pass path. When on, the graph inserts `HizEarly` → `CullLate`
+    /// → `MainLate` between `Main` and the post-decoration chain: `HizEarly`
+    /// rebuilds the Hi-Z pyramid from early depth, `CullLate` re-tests the
+    /// objects early cull marked occluded, and `MainLate` redraws the
+    /// disoccluded survivors. `MainLate`'s `hdr_resolve` write becomes the head
     /// of the post chain so `AutoExposure` / Decals / Fog / SSR see the
     /// combined two-pass result.
     pub two_pass_occlusion_enabled: bool,
@@ -275,7 +275,7 @@ pub struct FrameGraphInputs {
     /// carries its real dimensions.
     pub spot_shadow_slice_size: u32,
     /// `true` when the GPU-cull path built a Hi-Z pyramid, so the frame ends by
-    /// reducing its final depth into that pyramid for the next frame's phase-1
+    /// reducing its final depth into that pyramid for the next frame's early
     /// cull. The graph adds a terminal `HizFinal` compute pass reading the last
     /// depth version and writing the pyramid, plus a `Cull` read of the pyramid
     /// the previous frame left there, which is what orders this frame's cull
@@ -523,7 +523,7 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
 // ```
 //
 // Main depth has a shorter chain over the same spine: Main writes it,
-// Main2 and Raymarch bump it, and Decals / Fog / Lines / Transparent /
+// MainLate and Raymarch bump it, and Decals / Fog / Lines / Transparent /
 // HizFinal all sample the last version. HizFinal is the frame's terminal
 // depth consumer, which is what keeps the depth live to the end of the
 // graph rather than only to the last decoration.
@@ -538,11 +538,11 @@ pub(crate) const GATED_FLAGS: &[(&str, FlagSetter)] = &[
 // resolve produced it, hdr_resolve itself otherwise -- so TaaResolve /
 // Upscale pick up translucent geometry as part of temporal accumulation.
 //
-// When `two_pass_occlusion_enabled` is on the spine gains a phase-2
-// prefix: `Cull → Main → HizBuild → Cull2 → Main2 → AutoExposure →
-// …`. `Main` writes hdr_resolve v1 / hdr_depth v1; `HizBuild` reads
-// the depth and writes the Hi-Z pyramid; `Cull2` reads the pyramid +
-// the phase-1 status buffer and writes `draw_args2`; `Main2` RMWs
+// When `two_pass_occlusion_enabled` is on the spine gains a late
+// prefix: `Cull → Main → HizEarly → CullLate → MainLate → AutoExposure →
+// …`. `Main` writes hdr_resolve v1 / hdr_depth v1; `HizEarly` reads
+// the depth and writes the Hi-Z pyramid; `CullLate` reads the pyramid +
+// the early status buffer and writes `draw_args_late`; `MainLate` RMWs
 // hdr_color / hdr_depth / hdr_resolve → v2, and that v2 (not v1)
 // becomes the head AutoExposure reads and the RMW chain extends.
 
@@ -641,12 +641,12 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     // Two-pass occlusion only applies when the bindless GPU-cull path is
     // active: Hi-Z occlusion rides that path. ANDing here means a world
     // that requests two-pass without a bindless shader falls back to the
-    // single-pass path with no orphaned phase-2 nodes.
+    // single-pass path with no orphaned late nodes.
     let two_pass = inputs.bindless_cull_enabled && inputs.two_pass_occlusion_enabled;
 
     // The Hi-Z depth pyramid, imported up front because `Cull` reads the version
     // the *previous* frame left there before `HizFinal` (and, under two-pass,
-    // the mid-frame `HizBuild`) overwrites it. Never a transient: its contents
+    // the mid-frame `HizEarly`) overwrites it. Never a transient: its contents
     // cross the frame boundary, so the aliasing planner must not place it.
     let hiz_pyramid = (inputs.hiz_build_enabled || two_pass)
         .then(|| b.import_texture("hiz_pyramid", hiz_pyramid_desc(inputs)));
@@ -662,23 +662,23 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
 
     let main_out = add_main(&mut b, hdr, &front);
 
-    // Two-pass occlusion phase 2: rebuild the Hi-Z pyramid from phase-1
-    // depth (HizBuild), re-test the objects phase-1 cull marked occluded
-    // (Cull2), and redraw the disoccluded survivors (Main2). Main2 RMWs
+    // Two-pass occlusion, late pass: rebuild the Hi-Z pyramid from early
+    // depth (HizEarly), re-test the objects early cull marked occluded
+    // (CullLate), and redraw the disoccluded survivors (MainLate). MainLate RMWs
     // hdr_color / hdr_depth / hdr_resolve, so its hdr_resolve write becomes
     // the head of the post-decoration chain: AutoExposure and every later
-    // RMW pass see the combined phase-1 + phase-2 scene. Without two-pass
+    // RMW pass see the combined early + late scene. Without two-pass
     // the head stays at Main's hdr_resolve_v1.
     let (hiz_cur, scene_head) = if let (true, Some(hiz)) = (two_pass, hiz_pyramid) {
         let (hiz_v1, scene) =
-            add_occlusion_phase2(&mut b, hiz, front.cull.cull_status, hdr.color, main_out);
+            add_late_occlusion(&mut b, hiz, front.cull.cull_status, hdr.color, main_out);
         (Some(hiz_v1), scene)
     } else {
         (hiz_pyramid, main_out)
     };
 
     // AutoExposure (compute) reads the post-main scene (hdr_resolve_head:
-    // Main2's output under two-pass, Main's otherwise). The compile pass's
+    // MainLate's output under two-pass, Main's otherwise). The compile pass's
     // WAR step pins it before the first hdr_resolve writer that bumps the
     // next version (Raymarch / Decals / Fog / ParticlesDraw), so
     // AutoExposure samples the un-decorated scene even though the GPU
@@ -734,7 +734,7 @@ pub fn build_frame_graph(inputs: &FrameGraphInputs) -> Result<CompiledGraph, Gra
     };
 
     // HizFinal (compute) reduces the frame's final depth into the Hi-Z pyramid
-    // the next frame's phase-1 Cull tests against. Declared last of the
+    // the next frame's early Cull tests against. Declared last of the
     // depth consumers so it reads the version every decoration pass has
     // finished with, which is also what keeps the depth's graph lifetime
     // honest: without this node the depth would look dead after the last
@@ -841,7 +841,7 @@ struct FrontEnd {
 // Cull (compute) writes the indirect-draw args buffer Main consumes
 // through executeCommandsInBuffer. Under two-pass occlusion it also
 // writes a per-object status buffer (drawn / hi-z-candidate / culled)
-// that `Cull2` reads to decide which phase-1-occluded objects to
+// that `CullLate` reads to decide which early-occluded objects to
 // re-test against the rebuilt pyramid.
 fn add_cull_and_grass(
     b: &mut GraphBuilder,
@@ -1177,7 +1177,7 @@ fn add_scene_inputs(
 // ao_output / cluster lists; writes the three HDR targets. Captures
 // hdr_resolve_v1 (head of the hdr_resolve RMW chain, the version
 // AutoExposure reads when two-pass is off) and hdr_depth_v1 (the depth
-// HizBuild reduces under two-pass).
+// HizEarly reduces under two-pass).
 fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVersions {
     let mut main = b.add_pass(PassId::Main, PassKind::Render);
     if let Some(h) = front.scene_inputs.shadow {
@@ -1224,43 +1224,43 @@ fn add_main(b: &mut GraphBuilder, hdr: HdrTargets, front: &FrontEnd) -> SceneVer
     }
 }
 
-// The two-pass occlusion phase 2 over Main's output, returning the rebuilt
-// pyramid and Main2's scene versions.
-fn add_occlusion_phase2(
+// The two-pass occlusion late pass over Main's output, returning the rebuilt
+// pyramid and MainLate's scene versions.
+fn add_late_occlusion(
     b: &mut GraphBuilder,
     hiz: TextureHandle,
     cull_status: Option<BufferHandle>,
     hdr_color: Option<TextureHandle>,
     main_out: SceneVersions,
 ) -> (TextureHandle, SceneVersions) {
-    // HizBuild (compute): read phase-1 depth, write the Hi-Z pyramid.
+    // HizEarly (compute): read early depth, write the Hi-Z pyramid.
     // The depth RAW edge pins it after Main; the pyramid write is a WAR
     // against Cull's read of the previous frame's contents.
-    let mut hizb = b.add_pass(PassId::HizBuild, PassKind::Compute);
+    let mut hizb = b.add_pass(PassId::HizEarly, PassKind::Compute);
     hizb.read_texture(main_out.depth);
     let hiz_v1 = hizb.write_texture(hiz);
 
-    // Cull2 (compute): read the rebuilt pyramid + the phase-1 status
-    // buffer, write a second indirect-draw-args buffer Main2 consumes.
-    let draw_args2 = b.import_buffer("draw_args2", draw_args_desc());
-    let mut cull2 = b.add_pass(PassId::Cull2, PassKind::Compute);
-    cull2.read_texture(hiz_v1);
+    // CullLate (compute): read the rebuilt pyramid + the early pass status
+    // buffer, write a second indirect-draw-args buffer MainLate consumes.
+    let draw_args_late = b.import_buffer("draw_args_late", draw_args_desc());
+    let mut cull_late = b.add_pass(PassId::CullLate, PassKind::Compute);
+    cull_late.read_texture(hiz_v1);
     if let Some(cs) = cull_status {
-        cull2.read_buffer(cs);
+        cull_late.read_buffer(cs);
     }
-    let draw_args2_v1 = cull2.write_buffer(draw_args2);
+    let draw_args_late_v1 = cull_late.write_buffer(draw_args_late);
 
-    // Main2 (render): read the phase-2 draw args; RMW hdr_color /
-    // hdr_depth / hdr_resolve. The draw_args2 RAW edge pins it after
-    // Cull2; the hdr_depth write (WAR vs HizBuild's read) pins it after
-    // HizBuild; the hdr_color / hdr_resolve WAW edges pin it after Main.
-    let mut main2 = b.add_pass(PassId::Main2, PassKind::Render);
-    main2.read_buffer(draw_args2_v1);
-    let depth = main2.write_texture(main_out.depth);
+    // MainLate (render): read the late draw args; RMW hdr_color /
+    // hdr_depth / hdr_resolve. The draw_args_late RAW edge pins it after
+    // CullLate; the hdr_depth write (WAR vs HizEarly's read) pins it after
+    // HizEarly; the hdr_color / hdr_resolve WAW edges pin it after Main.
+    let mut main_late = b.add_pass(PassId::MainLate, PassKind::Render);
+    main_late.read_buffer(draw_args_late_v1);
+    let depth = main_late.write_texture(main_out.depth);
     if let Some(h) = hdr_color {
-        let _ = main2.write_texture(h);
+        let _ = main_late.write_texture(h);
     }
-    let resolve = main2.write_texture(main_out.resolve);
+    let resolve = main_late.write_texture(main_out.resolve);
     (hiz_v1, SceneVersions { resolve, depth })
 }
 
@@ -1796,8 +1796,8 @@ fn grass_bend_desc() -> BufferDesc {
 }
 
 fn cull_status_desc() -> BufferDesc {
-    // One u32 per draw object: phase-1 cull writes drawn / hi-z-candidate /
-    // culled, Cull2 reads it. Both phases bind it the same read-write way, so it
+    // One u32 per draw object: early cull writes drawn / hi-z-candidate /
+    // culled, CullLate reads it. Both phases bind it the same read-write way, so it
     // never transitions to a read state and its ordering comes from an execution
     // barrier; `UNORDERED` is what says so. The executor owns the allocation
     // (sized to the live draw-object count).
@@ -2044,9 +2044,9 @@ mod tests {
     }
 
     #[test]
-    fn two_pass_inserts_phase2_chain_after_main() {
-        // With bindless cull + two-pass on, the graph gains the phase-2
-        // prefix Cull → Main → HizBuild → Cull2 → Main2, strictly ordered.
+    fn two_pass_inserts_late_chain_after_main() {
+        // With bindless cull + two-pass on, the graph gains the late pass
+        // prefix Cull → Main → HizEarly → CullLate → MainLate, strictly ordered.
         let mut i = all_off();
         i.bindless_cull_enabled = true;
         i.two_pass_occlusion_enabled = true;
@@ -2057,22 +2057,22 @@ mod tests {
             vec![
                 PassId::Cull,
                 PassId::Main,
-                PassId::HizBuild,
-                PassId::Cull2,
-                PassId::Main2,
+                PassId::HizEarly,
+                PassId::CullLate,
+                PassId::MainLate,
                 PassId::Composite,
             ]
         );
-        assert_eq!(g.passes[2].kind, PassKind::Compute); // HizBuild
-        assert_eq!(g.passes[3].kind, PassKind::Compute); // Cull2
-        assert_eq!(g.passes[4].kind, PassKind::Render); // Main2
+        assert_eq!(g.passes[2].kind, PassKind::Compute); // HizEarly
+        assert_eq!(g.passes[3].kind, PassKind::Compute); // CullLate
+        assert_eq!(g.passes[4].kind, PassKind::Render); // MainLate
     }
 
     // Each cull packs its draws through one group-count scratch per frame
-    // slot, which phase 2 reuses: phase 1 packs within `Cull`, and Main and
-    // its pre-pass draw phase 1's lists, all before `Cull2` writes it again.
+    // slot, which the late pass reuses: the early pass packs within `Cull`, and Main and
+    // its pre-pass draw the early pass's lists, all before `CullLate` writes it again.
     // Every feature that adds passes between them is on, so none may move a
-    // reader of phase 1's lists past `Cull2`.
+    // reader of the early pass's lists past `CullLate`.
     #[test]
     fn phase_ones_lists_are_drawn_before_phase_two_culls() {
         let mut i = all_off();
@@ -2087,9 +2087,9 @@ mod tests {
                 .position(|p| p.id == id)
                 .unwrap_or_else(|| panic!("{id:?} in the graph"))
         };
-        let cull2 = at(PassId::Cull2);
+        let cull_late = at(PassId::CullLate);
         for reader in [PassId::Cull, PassId::Main, PassId::GBufferPrepass] {
-            assert!(at(reader) < cull2, "{reader:?} runs before Cull2");
+            assert!(at(reader) < cull_late, "{reader:?} runs before CullLate");
         }
         assert!(at(PassId::Cull) < at(PassId::GBufferPrepass));
     }
@@ -2164,7 +2164,7 @@ mod tests {
 
     #[test]
     fn cull_reads_the_pyramid_the_terminal_build_overwrites() {
-        // Phase-1 cull tests against the pyramid the previous frame left. That
+        // Early cull tests against the pyramid the previous frame left. That
         // read is what gives the terminal rebuild a write-after-read edge; without
         // it the rebuild is unordered against the cull that is still sampling.
         let mut i = all_off();
@@ -2206,7 +2206,7 @@ mod tests {
             );
             assert!(pos(PassId::Grass) < pos(PassId::HizFinal));
             if two_pass {
-                assert!(pos(PassId::Grass) < pos(PassId::HizBuild));
+                assert!(pos(PassId::Grass) < pos(PassId::HizEarly));
             }
         }
     }
@@ -2329,7 +2329,7 @@ mod tests {
 
     #[test]
     fn dropping_the_msaa_attachment_keeps_the_phase_order() {
-        // The hdr_color write-after-write is one of three edges pinning Main2
+        // The hdr_color write-after-write is one of three edges pinning MainLate
         // after Main; the depth and hdr_resolve writes carry the order on their
         // own, so a single-sampled two-pass frame still runs in phase order.
         let mut i = all_off();
@@ -2343,9 +2343,9 @@ mod tests {
             vec![
                 PassId::Cull,
                 PassId::Main,
-                PassId::HizBuild,
-                PassId::Cull2,
-                PassId::Main2,
+                PassId::HizEarly,
+                PassId::CullLate,
+                PassId::MainLate,
                 PassId::Composite,
             ]
         );
@@ -2354,22 +2354,22 @@ mod tests {
     #[test]
     fn two_pass_without_bindless_cull_is_noop() {
         // Two-pass rides the bindless GPU-cull path; requesting it without
-        // a bindless shader must not insert any phase-2 nodes.
+        // a bindless shader must not insert any late nodes.
         let mut i = all_off();
         i.two_pass_occlusion_enabled = true; // bindless_cull_enabled left false
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
         assert_eq!(order, vec![PassId::Main, PassId::Composite]);
-        assert!(!order.contains(&PassId::HizBuild));
-        assert!(!order.contains(&PassId::Cull2));
-        assert!(!order.contains(&PassId::Main2));
+        assert!(!order.contains(&PassId::HizEarly));
+        assert!(!order.contains(&PassId::CullLate));
+        assert!(!order.contains(&PassId::MainLate));
     }
 
     #[test]
-    fn two_pass_shifts_post_chain_head_to_main2() {
-        // AutoExposure + the RMW chain must read Main2's hdr_resolve (v2),
+    fn two_pass_shifts_post_chain_head_to_main_late() {
+        // AutoExposure + the RMW chain must read MainLate's hdr_resolve (v2),
         // not Main's (v1), so the post stack sees the combined two-pass
-        // scene. Main writes v1, Main2 writes v2, AutoExposure reads v2,
+        // scene. Main writes v1, MainLate writes v2, AutoExposure reads v2,
         // Decals bumps to v3.
         let mut i = all_off();
         i.bindless_cull_enabled = true;
@@ -2379,12 +2379,12 @@ mod tests {
         let g = build_frame_graph(&i).expect("compiles");
         let order: Vec<PassId> = g.passes.iter().map(|p| p.id).collect();
         let pos = |p: PassId| order.iter().position(|x| *x == p).expect("present");
-        assert!(pos(PassId::Main2) < pos(PassId::AutoExposure));
+        assert!(pos(PassId::MainLate) < pos(PassId::AutoExposure));
         assert!(pos(PassId::AutoExposure) < pos(PassId::Decals));
-        // Version walk: Main2 RMWs hdr_resolve to v2, Decals to v3.
-        let main2 = &g.passes[pos(PassId::Main2)];
-        // hdr_resolve is the last write Main2 declares (depth, color, resolve).
-        assert_eq!(main2.writes.last().unwrap().version(), 2);
+        // Version walk: MainLate RMWs hdr_resolve to v2, Decals to v3.
+        let main_late = &g.passes[pos(PassId::MainLate)];
+        // hdr_resolve is the last write MainLate declares (depth, color, resolve).
+        assert_eq!(main_late.writes.last().unwrap().version(), 2);
         let decals = &g.passes[pos(PassId::Decals)];
         assert_eq!(decals.writes[0].version(), 3);
     }

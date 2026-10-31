@@ -198,7 +198,10 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
         let previous = if self.ring.valid() {
             self.snapshot(self.ring.history())?
         } else {
-            device.encode(rec, &snapshot(PostTiming::First(PassId::Disocclusion)))?;
+            device.encode(
+                rec,
+                &snapshot(PostTiming::First(PassId::Disocclusion.timing())),
+            )?;
             write
         };
         let mark_binds = [
@@ -214,9 +217,9 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
                 state: PostTargetState::Graph,
                 load: PostLoadOp::DontCare,
                 timing: if mark_first {
-                    PostTiming::First(PassId::Disocclusion)
+                    PostTiming::First(PassId::Disocclusion.timing())
                 } else {
-                    PostTiming::Last(PassId::Disocclusion)
+                    PostTiming::Last(PassId::Disocclusion.timing())
                 },
                 pipeline: &self.pipelines.mark,
                 binds: &mark_binds,
@@ -225,7 +228,10 @@ impl<Pipeline, Target> DisocclusionPass<Pipeline, Target> {
             },
         )?;
         if mark_first {
-            device.encode(rec, &snapshot(PostTiming::Last(PassId::Disocclusion)))?;
+            device.encode(
+                rec,
+                &snapshot(PostTiming::Last(PassId::Disocclusion.timing())),
+            )?;
         }
         self.snapshotted.store(true, Ordering::Relaxed);
         Ok(())
@@ -317,14 +323,20 @@ mod tests {
         let (mark, snapshot) = (&draws[0], &draws[1]);
         assert_eq!(mark.target, MASK);
         assert_eq!(mark.state, PostTargetState::Graph);
-        assert_eq!(mark.timing, PostTiming::First(PassId::Disocclusion));
+        assert_eq!(
+            mark.timing,
+            PostTiming::First(PassId::Disocclusion.timing())
+        );
         assert_eq!(
             binds(mark),
             [NORMAL_DEPTH, VELOCITY, MockTexture::Target(0)]
         );
         assert_eq!(snapshot.target, MockTexture::Target(1));
         assert_eq!(snapshot.state, PostTargetState::Pass);
-        assert_eq!(snapshot.timing, PostTiming::Last(PassId::Disocclusion));
+        assert_eq!(
+            snapshot.timing,
+            PostTiming::Last(PassId::Disocclusion.timing())
+        );
         assert_eq!(binds(snapshot), [NORMAL_DEPTH, VELOCITY]);
         for d in &draws {
             assert_eq!(d.load, PostLoadOp::DontCare, "{}", d.label);
@@ -346,9 +358,15 @@ mod tests {
             ]
         );
         assert_eq!(draws[0].target, MockTexture::Target(0));
-        assert_eq!(draws[0].timing, PostTiming::First(PassId::Disocclusion));
+        assert_eq!(
+            draws[0].timing,
+            PostTiming::First(PassId::Disocclusion.timing())
+        );
         assert_eq!(binds(&draws[1])[2], MockTexture::Target(0));
-        assert_eq!(draws[1].timing, PostTiming::Last(PassId::Disocclusion));
+        assert_eq!(
+            draws[1].timing,
+            PostTiming::Last(PassId::Disocclusion.timing())
+        );
     }
 
     #[test]

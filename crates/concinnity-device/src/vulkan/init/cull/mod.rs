@@ -208,7 +208,7 @@ pub(super) fn build_cull(
         occlusion_two_pass,
     )?;
     let cull_kernels = compute.kernels.map(|kernels| VkCullKernels {
-        pipeline_phase2: two_pass.pipeline,
+        pipeline_late: two_pass.pipeline,
         ..kernels
     });
     let cull = VkCull {
@@ -239,14 +239,14 @@ pub(super) fn build_cull(
         compact: compute.compact,
         group_count_buffers: compute.group_count_buffers,
         compact_sets: compute.compact_sets,
-        compact_sets2: two_pass.compact_sets,
+        compact_sets_late: two_pass.compact_sets,
         cull_status_buffers: compute.status_buffers,
         occlusion_two_pass,
-        cull_sets2: two_pass.sets,
+        cull_sets_late: two_pass.sets,
         _two_pass_pool: two_pass.pool,
-        indirect_buffers2: two_pass.indirect_buffers,
-        main_render_pass_phase1: two_pass.main_render_pass_phase1,
-        main_render_pass_phase2: two_pass.main_render_pass_phase2,
+        indirect_buffers_late: two_pass.indirect_buffers,
+        main_render_pass_early: two_pass.main_render_pass_early,
+        main_render_pass_late: two_pass.main_render_pass_late,
         hiz: compute.hiz,
         shadow_cull_pipeline: shadow_cull.cull_pipeline,
         shadow_cull_pipeline_layout: shadow_cull.cull_pipeline_layout,

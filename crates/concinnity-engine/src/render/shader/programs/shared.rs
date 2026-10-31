@@ -79,21 +79,21 @@ pub fn main_bindless_frag(variant: super::surface::SurfaceVariant) -> &'static S
 // The draw cull's decision. Metal runs it as the first half of the cull and
 // turns the `cull_status` it writes into the indirect command buffer with the
 // hand-written `cull_encode.metal`.
-/// `cull_kernel` from `cull.hlsl`: phase-1 draw cull.
-pub static CULL_PHASE1: ShaderProgram = ShaderProgram {
+/// `cull_kernel` from `cull.hlsl`: early draw cull.
+pub static CULL_EARLY: ShaderProgram = ShaderProgram {
     file: "cull.hlsl",
     entry: "cull_kernel",
-    label: "cull_phase1.hlsl",
+    label: "cull_early.hlsl",
     gates: &[],
     msaa: false,
 };
-/// `cull_kernel` from `cull.hlsl` under `CULL_PHASE2`: the two-pass occlusion
+/// `cull_kernel` from `cull.hlsl` under `CULL_LATE`: the two-pass occlusion
 /// re-test against the rebuilt Hi-Z pyramid.
-pub static CULL_PHASE2: ShaderProgram = ShaderProgram {
+pub static CULL_LATE: ShaderProgram = ShaderProgram {
     file: "cull.hlsl",
     entry: "cull_kernel",
-    label: "cull_phase2.hlsl",
-    gates: &["CULL_PHASE2"],
+    label: "cull_late.hlsl",
+    gates: &["CULL_LATE"],
     msaa: false,
 };
 /// `cull_kernel` from `cull.hlsl` under `SHADOW_CULL`: light-frustum only.
@@ -1016,8 +1016,8 @@ pub static ALL: &[&ShaderProgram] = &[
     &MAIN_BINDLESS_GROUND_DAYLIGHT_FRAG,
     &LIGHT_CULL,
     &MODEL_HISTORY,
-    &CULL_PHASE1,
-    &CULL_PHASE2,
+    &CULL_EARLY,
+    &CULL_LATE,
     &CULL_SHADOW,
     &CULL_SCAN,
     &RT_SKIN,

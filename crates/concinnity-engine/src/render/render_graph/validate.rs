@@ -628,7 +628,7 @@ mod tests {
 
         let expected = [
             ("draw_args", C::IndirectBuffer),
-            ("draw_args2", C::IndirectBuffer),
+            ("draw_args_late", C::IndirectBuffer),
             ("cull_status", C::UnorderedBuffer),
             ("cluster_lists", C::StorageBuffer),
             ("ao_output", C::ColorTarget),
@@ -947,7 +947,7 @@ mod tests {
             p.write_texture(scene)
         };
         // A second reader of the same version, so it coalesces into Main's run.
-        g.add_pass(PassId::Cull2, PassKind::Compute)
+        g.add_pass(PassId::CullLate, PassKind::Compute)
             .read_buffer(args1);
         g.add_pass(PassId::Composite, PassKind::Render)
             .read_texture(scene1)
@@ -959,9 +959,9 @@ mod tests {
         // leave the graphics queue, and the graph is clean as compiled.
         let cull = g.pass_index(PassId::Cull).expect("present");
         let main = g.pass_index(PassId::Main).expect("present");
-        let cull2 = g.pass_index(PassId::Cull2).expect("present");
-        assert_eq!(g.passes[cull2].queue, PassQueue::AsyncCompute);
-        assert!(g.passes[cull2].barriers_before.is_empty());
+        let cull_late = g.pass_index(PassId::CullLate).expect("present");
+        assert_eq!(g.passes[cull_late].queue, PassQueue::AsyncCompute);
+        assert!(g.passes[cull_late].barriers_before.is_empty());
         assert_eq!(g.passes[cull].barriers_after.len(), 1);
         assert_eq!(barrier_coverage_gaps(&g), vec![]);
 
@@ -974,7 +974,7 @@ mod tests {
         assert!(
             gaps.iter()
                 .any(|gap| gap.kind == GapKind::UnorderedTransition
-                    && gap.pass == PassId::Cull2
+                    && gap.pass == PassId::CullLate
                     && gap.resource_label == "draw_args"),
             "{gaps:?}"
         );

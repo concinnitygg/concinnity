@@ -22,7 +22,7 @@ use crate::directx::init::{HIZ_MAX_MIPS, InitGpu};
 use crate::directx::texture::create_uav_buffer;
 
 pub(super) struct ComputeCull {
-    // Phase 1 only; the two-pass build fills in `pso_phase2`.
+    // The early pass only; the two-pass build fills in `pso_late`.
     pub(super) kernels: Option<CullKernels>,
     pub(super) command_signature: Option<ID3D12CommandSignature>,
     pub(super) draw_args_buffers: Vec<PooledBuffer>,
@@ -169,7 +169,7 @@ pub(super) fn build_compute_cull(
         kernels: Some(CullKernels {
             root_sig: crs,
             pso: cps,
-            pso_phase2: None,
+            pso_late: None,
         }),
         command_signature: Some(csig),
         draw_args_buffers,

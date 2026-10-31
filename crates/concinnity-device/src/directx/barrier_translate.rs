@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn unordered_buffer_edges_fall_back_to_a_uav_barrier() {
-        // cull_status: written by phase 1 and read by phase 2 through the same
+        // cull_status: written by the early pass and read by the late pass through the same
         // root UAV, so no edge carries a state change and the UAV barrier is the
         // only thing ordering the phases. Every write-involving edge takes one.
         const UAV: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;

@@ -266,19 +266,19 @@ impl MtlContext {
             self.cull.main_pipeline = Some(p);
             self.arg_buffers.bindless_sampler_args = Some(sampler_args);
             self.cull.pipeline = Some(cull.decide);
-            self.cull.pipeline_phase2 = Some(cull.decide_phase2);
+            self.cull.pipeline_late = Some(cull.decide_late);
             self.cull.scan_pipeline = Some(cull.scan);
             self.cull.scatter_pipeline = Some(cull.scatter);
             self.cull.icb_arg_encoder = Some(cull.icb_arg_encoder);
             // Force the ICB rebuilds on the next frame so every argument buffer
             // is re-encoded with the arg encoder the new scatter produced.
-            // The status buffers and the phase-2 ICB are rebuilt by the same
+            // The status buffers and the late ICB are rebuilt by the same
             // `ensure_*_capacity` passes that rebuild the ICBs.
             self.cull.icbs = Vec::new();
             self.cull.icb_arg_buffer = None;
             self.cull.icb_capacity = 0;
-            self.cull.icbs_2 = Vec::new();
-            self.cull.icb_2_arg_buffer = None;
+            self.cull.icbs_late = Vec::new();
+            self.cull.icb_late_arg_buffer = None;
             self.cull.status_buffer = None;
             self.cull.shadow_views = ShadowViewIcb::default();
             self.cull.spot_views = ShadowViewIcb::default();

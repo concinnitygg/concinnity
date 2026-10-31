@@ -12,7 +12,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 
@@ -41,7 +41,7 @@ fn compile_auto_exposure_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
 // the auto-exposure histogram path. Built only when the world's
 // `Exposure` opts in; the encoder is a no-op otherwise.
 pub(in crate::vulkan) struct AutoExposureResources {
-    // Build kernel: one thread per HDR-resolve pixel; merges per-threadgroup
+    // Build kernel: one thread per metered pixel; merges per-threadgroup
     // local histograms into the global histogram SSBO.
     build_pipeline: OwnedPipeline,
     build_pipeline_layout: OwnedPipelineLayout,
@@ -334,7 +334,7 @@ impl VkContext {
     }
 
     // Encode the auto-exposure histogram passes against the current frame's
-    // resolved HDR scene. The build kernel runs one thread per HDR pixel;
+    // resolved HDR scene. The build kernel runs one thread per metered pixel;
     // the average kernel runs one threadgroup of `HISTOGRAM_BINS` threads
     // that reduces the histogram, clears it for the next frame, and writes
     // the average log-luminance to the device-local output buffer; a copy
@@ -370,7 +370,7 @@ impl VkContext {
             &[],
         );
 
-        // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
+        // Build dispatch: 16×16 threadgroups, one thread per metered pixel.
         let build_set = resources
             .build_sets
             .get(frame_idx)
@@ -390,7 +390,8 @@ impl VkContext {
             0,
             &params,
         );
-        rec.dispatch(extent.width.div_ceil(16), extent.height.div_ceil(16), 1);
+        let (threads_x, threads_y) = histogram_build_threads(extent.width, extent.height);
+        rec.dispatch(threads_x.div_ceil(16), threads_y.div_ceil(16), 1);
 
         // Order build histogram writes before the average read+clear.
         let hist_barrier = vk::MemoryBarrier::default()

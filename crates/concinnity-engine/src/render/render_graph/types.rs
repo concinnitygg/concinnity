@@ -194,7 +194,7 @@ pub enum GraphResourceClass {
     /// follows the consuming stage union, so it reads as a shader resource.
     StorageBuffer,
     /// Buffer both written and read through an unordered-access view (e.g. the
-    /// two-pass cull's `cull_status`, which phase 1 writes and phase 2 reads with
+    /// two-pass cull's `cull_status`, which the early pass writes and the late pass reads with
     /// the same binding). Distinct from `StorageBuffer` because its read is not a
     /// shader-resource read: on DirectX it never leaves `UNORDERED_ACCESS`, so its
     /// ordering comes from a UAV barrier rather than a state transition.

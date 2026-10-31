@@ -178,7 +178,7 @@ fn pool_sizes(c: &PoolCounts) -> PoolSizes {
         // One per cluster per frame (instance matrices) + three per frame for
         // the bindless set's GpuObjectData buffer, material parameter table and
         // vertex stream + the G-buffer's model-history slot and draw args per frame and object
-        // buffer and history slot per snapshot set. The phase-2 cull sets
+        // buffer and history slot per snapshot set. The late cull sets
         // (two-pass occlusion) draw from their own dedicated pool.
         .add(
             vk::DescriptorType::STORAGE_BUFFER,

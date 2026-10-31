@@ -66,6 +66,8 @@ pub(super) struct PhaseTally {
     pub pass_ran: [u32; MAX_PASS_TIMINGS],
     pub pass_async: [u32; MAX_PASS_TIMINGS],
     pub overlap: Histogram,
+    /// Graphics-queue gap time an async pass ran through per frame, microseconds.
+    pub gap_beside_async: Histogram,
     pub systems: [Mean; MAX_SYSTEM_TIMINGS],
     pub render_cpu: Mean,
     /// The render submission's parts, in [`FrameSample::render_parts`] order.
@@ -93,6 +95,7 @@ impl PhaseTally {
             pass_ran: [0; MAX_PASS_TIMINGS],
             pass_async: [0; MAX_PASS_TIMINGS],
             overlap: Histogram::new(),
+            gap_beside_async: Histogram::new(),
             systems: [Mean::default(); MAX_SYSTEM_TIMINGS],
             render_cpu: Mean::default(),
             render_parts: [Mean::default(); RENDER_PARTS],
@@ -136,6 +139,7 @@ impl PhaseTally {
             }
         }
         self.overlap.record(sample.gpu_overlap_us);
+        self.gap_beside_async.record(sample.gpu_gap_beside_async_us);
         for (mean, us) in self.systems.iter_mut().zip(sample.system_us) {
             mean.record(us);
         }

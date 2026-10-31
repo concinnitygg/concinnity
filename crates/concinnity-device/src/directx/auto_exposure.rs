@@ -8,7 +8,7 @@
 //! invisible at human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
 
 use concinnity_engine::gfx::auto_exposure;
-use concinnity_engine::gfx::auto_exposure::HISTOGRAM_BINS;
+use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -51,7 +51,7 @@ pub(in crate::directx) fn compile_auto_exposure_shaders(
 // auto-exposure histogram path. Built only when the world's
 // `Exposure` opts in; the encoder is a no-op otherwise.
 pub(super) struct AutoExposureResources {
-    // Build kernel: one thread per HDR-resolve pixel; produces the 256-bin
+    // Build kernel: one thread per metered pixel; produces the 256-bin
     // log-luminance histogram in the global UAV.
     build_pso: ID3D12PipelineState,
     build_root_sig: ID3D12RootSignature,
@@ -227,7 +227,7 @@ impl DxContext {
     }
 
     // Encode the auto-exposure histogram passes against the resolved HDR
-    // scene. The build kernel runs one thread per HDR pixel; the average
+    // scene. The build kernel runs one thread per metered pixel; the average
     // kernel runs one threadgroup of 256 threads that reduces the histogram,
     // clears it for the next frame, and writes the average log-luminance to
     // the output UAV. The end of the encoder copies the output to this slot's
@@ -248,7 +248,7 @@ impl DxContext {
         let histogram_gva = com::gpu_va(&resources.histogram);
         let output_gva = com::gpu_va(&resources.output_buf);
 
-        // Build dispatch: 16×16 threadgroups, one thread per HDR pixel.
+        // Build dispatch: 16×16 threadgroups, one thread per metered pixel.
         // SAFETY: the command list is recording, and the build root signature is owned by
         // `resources`.
         unsafe { cmd.SetComputeRootSignature(&resources.build_root_sig) };
@@ -264,8 +264,11 @@ impl DxContext {
         // SAFETY: `histogram_gva` addresses the live histogram buffer owned by `resources`.
         unsafe { cmd.SetComputeRootUnorderedAccessView(2, histogram_gva) };
 
-        let groups_x = self.targets.extent.render_width.div_ceil(16);
-        let groups_y = self.targets.extent.render_height.div_ceil(16);
+        let (threads_x, threads_y) = histogram_build_threads(
+            self.targets.extent.render_width,
+            self.targets.extent.render_height,
+        );
+        let (groups_x, groups_y) = (threads_x.div_ceil(16), threads_y.div_ceil(16));
         // SAFETY: the build pipeline and every root argument it reads are bound above.
         unsafe { cmd.Dispatch(groups_x, groups_y, 1) };
 

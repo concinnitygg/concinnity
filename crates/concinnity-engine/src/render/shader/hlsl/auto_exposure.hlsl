@@ -4,7 +4,8 @@
 // the resources it binds (Metal and DXIL assign slots in declaration order, so
 // an unused declaration would shift the live ones):
 //
-//   AE_BUILD   - histogram_build: one thread per HDR-resolve pixel. Each
+//   AE_BUILD   - histogram_build: one thread per HISTOGRAM_STRIDE squared
+//                block of the HDR resolve, metering its first pixel. Each
 //                threadgroup keeps a local 256-bin histogram in groupshared
 //                memory, atomically increments its own bin per pixel, and
 //                merges the local counts into the global histogram on exit.
@@ -24,11 +25,12 @@
 // concinnity-shader's `metal_bindings`), which is what puts the histogram on
 // buffer(0) and the output measurement on buffer(1) without a table.
 //
-// HISTOGRAM_BINS, HIGHLIGHT_FRACTION and METERED_RANGE_EV mirror
+// HISTOGRAM_BINS, HISTOGRAM_STRIDE, HIGHLIGHT_FRACTION and METERED_RANGE_EV mirror
 // gfx::auto_exposure; AutoExposureParams and ExposureMeasurement mirror
 // render::uniforms.
 
 static const uint HISTOGRAM_BINS = 256u;
+static const uint HISTOGRAM_STRIDE = 2u;
 static const float HIGHLIGHT_FRACTION = 0.001;
 static const float METERED_RANGE_EV = 10.0;
 
@@ -81,9 +83,10 @@ void histogram_build(uint3 gid : SV_DispatchThreadID, uint tid : SV_GroupIndex)
 
     uint w, h;
     hdr_texture.GetDimensions(w, h);
-    if (gid.x < w && gid.y < h)
+    uint2 pixel = gid.xy * HISTOGRAM_STRIDE;
+    if (pixel.x < w && pixel.y < h)
     {
-        float3 c = hdr_texture.Load(int3(int2(gid.xy), 0)).rgb;
+        float3 c = hdr_texture.Load(int3(int2(pixel), 0)).rgb;
         // Rec. 709 luminance. The floor keeps log2 finite on a fully black
         // pixel and sits far under any histogram floor, so black lands in the
         // sub-floor bin.

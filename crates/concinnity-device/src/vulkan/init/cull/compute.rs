@@ -20,7 +20,7 @@ use crate::vulkan::set_writes::SetWrites;
 
 // The compute cull; `None`/empty when the bindless path is inactive.
 pub(super) struct ComputeCull {
-    // Phase 1 only; the two-pass build fills in `pipeline_phase2`.
+    // The early pass only; the two-pass build fills in `pipeline_late`.
     pub(super) kernels: Option<VkCullKernels>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) draw_args_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
@@ -30,7 +30,7 @@ pub(super) struct ComputeCull {
     pub(super) variant_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) hiz: Option<crate::vulkan::hiz::HiZResources>,
     // The scan and scatter, each frame's group-count scratch (both phases),
-    // and each frame's phase-1 packing set.
+    // and each frame's early packing set.
     pub(super) compact: Option<crate::vulkan::compact::VkCompactKernels>,
     pub(super) group_count_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) compact_sets: Vec<vk::DescriptorSet>,
@@ -61,7 +61,7 @@ pub(in crate::vulkan) fn cull_set_bindings<const N: usize>() -> [Binding; N] {
     })
 }
 
-// Set 0 of the phase-1 and phase-2 kernels: object, draw-args, group-count,
+// Set 0 of the early pass and late kernels: object, draw-args, group-count,
 // cull-status and variant SSBOs.
 pub(in crate::vulkan) fn main_cull_set() -> [Binding; 5] {
     cull_set_bindings()
@@ -108,9 +108,9 @@ pub(super) fn build_compute_cull(
     } = *plan;
     let object_buffers = &bindless.object_buffers;
     // Per-object cull-status buffers (one u32 each), built unconditionally
-    // on the bindless cull path: phase-1 cull writes them (binding 3 of the
-    // cull set), and phase-2 cull (two-pass occlusion) reads them. Always
-    // present so the phase-1 kernel always has a valid binding; under
+    // on the bindless cull path: early cull writes them (binding 3 of the
+    // cull set), and late cull (two-pass occlusion) reads them. Always
+    // present so the early kernel always has a valid binding; under
     // single-pass occlusion the values are simply never read. Device-local,
     // with TRANSFER_SRC so `cull_readback` can copy one back to the host.
     // Mirrors `directx/cull.rs`.
@@ -146,8 +146,8 @@ pub(super) fn build_compute_cull(
     let (kernels, cull_sets, draw_args_buffers, indirect_buffers, variant_buffers, hiz): CullPipelineResources =
         if bindless_active {
             // Set 0: object SSBO + draw-args SSBO + group-count SSBO +
-            // cull-status SSBO (binding 3: phase-1 writes the per-object cull
-            // outcome for two-pass occlusion; the phase-2 kernel reads it).
+            // cull-status SSBO (binding 3: early writes the per-object cull
+            // outcome for two-pass occlusion; the late kernel reads it).
             let set_layout = create_descriptor_set_layout(device, &main_cull_set())?;
 
             // Hi-Z occlusion resources. Built under the same gating as the cull
@@ -253,7 +253,7 @@ pub(super) fn build_compute_cull(
                     .apply(device);
             }
 
-            // The phase-1 packing: one set per frame over the same buffers.
+            // The early packing: one set per frame over the same buffers.
             let compact = crate::vulkan::compact::build_compact_kernels(device, hot_reload)?;
             let compact_layouts: Vec<_> =
                 (0..frames).map(|_| compact.set_layout.handle()).collect();
@@ -282,7 +282,7 @@ pub(super) fn build_compute_cull(
 
             let kernels = VkCullKernels {
                 pipeline,
-                pipeline_phase2: None,
+                pipeline_late: None,
                 pipeline_layout,
                 set_layout,
             };

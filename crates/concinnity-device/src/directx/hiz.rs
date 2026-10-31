@@ -355,7 +355,7 @@ impl HiZResources {
 }
 
 impl crate::directx::context::DxContext {
-    // Encode the Hi-Z build pass on `cmd`. Runs as the graph's `HizBuild`
+    // Encode the Hi-Z build pass on `cmd`. Runs as the graph's `HizEarly`
     // (mid-frame, phase-1 depth) or `HizFinal` (terminal, the frame's last depth
     // version) node, so the executor has already put main depth in a
     // shader-resource state and the pyramid in `UNORDERED_ACCESS`; only the

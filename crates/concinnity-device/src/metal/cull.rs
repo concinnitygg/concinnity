@@ -42,7 +42,7 @@ pub(crate) struct ShadowViewIcb {
 
 // All GPU-driven main pass + cull state grouped into one feature unit: the
 // main and world-shader pipelines the indirect draws execute under, the
-// phase-1 + phase-2 cull pipelines, their indirect command buffers + argument
+// early + late cull pipelines, their indirect command buffers + argument
 // encoders/buffers, the per-object status buffer, the two-pass-occlusion
 // toggle, and the Hi-Z depth pyramid + the view-projection snapshots the
 // occlusion test reprojects through. All `Some`/active only when the world
@@ -78,7 +78,7 @@ pub(crate) struct CullState {
     // `None` bucket are skipped.
     pub world_pipelines:
         concinnity_engine::render::shader::world_pipelines::WorldPipelines<BucketPipelines>,
-    // The phase-1 decision kernel (`cull.hlsl`). `Some` only when `bindless`
+    // The early decision kernel (`cull.hlsl`). `Some` only when `bindless`
     // is set; every other pipeline here is `Some` exactly when it is.
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     // The kernels that pack every cull's kept draws into per-stream ICB lists
@@ -86,12 +86,12 @@ pub(crate) struct CullState {
     // (`cull_compact.hlsl`) and the scatter (`cull_encode.metal`).
     pub scan_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
     pub scatter_pipeline: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    // The main view's group-count scratch, both phases (phase 2 reusing it
-    // once phase 1's scatter has read it), and the execution range of each
-    // stream's list in `icbs` and in `icbs_2`. Grown with `icbs`.
+    // The main view's group-count scratch, both phases (the late pass reusing it
+    // once the early pass's scatter has read it), and the execution range of each
+    // stream's list in `icbs` and in `icbs_late`. Grown with `icbs`.
     pub group_counts: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub ranges: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    pub ranges_2: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    pub ranges_late: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // How many shader buckets this world routes between: the world Shader
     // count plus each Shader's grass variants. Fixed at init.
     pub bucket_count: usize,
@@ -103,12 +103,12 @@ pub(crate) struct CullState {
     // bucket's ICB. Empty until `ensure_icb_capacity` builds them.
     pub icbs: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
     // Encoder that writes an ICB array into the encode kernel's argument
-    // buffer. Every ICB argument buffer (main, phase 2, shadow, mirror) has the
+    // buffer. Every ICB argument buffer (main, the late pass, shadow, mirror) has the
     // same layout, so this one encoder serves them all.
     pub icb_arg_encoder: Option<Retained<ProtocolObject<dyn MTLArgumentEncoder>>>,
     // Argument buffer holding the encoded references to `icbs`.
     pub icb_arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // Command capacity of each of `icbs`; 0 until first built. `icbs_2` +
+    // Command capacity of each of `icbs`; 0 until first built. `icbs_late` +
     // `status_buffer` grow in lockstep with it.
     pub icb_capacity: usize,
     // Records every ICB is sized for when first built (`SceneData::cull_records`),
@@ -116,13 +116,13 @@ pub(crate) struct CullState {
     pub reserved_records: usize,
     // Second-pass decision kernel for two-pass occlusion. `Some` whenever
     // `pipeline` is; used only when `two_pass_occlusion` is on.
-    pub pipeline_phase2: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    // Per-bucket phase-2 (disocclusion) indirect command buffers.
-    pub icbs_2: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
-    // Argument buffer wiring `icbs_2` into the encode kernel.
-    pub icb_2_arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
-    // Per-object status buffer (one `u32` each): phase-1 cull writes it,
-    // phase-2 cull reads it. Private storage, never CPU-touched.
+    pub pipeline_late: Option<Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    // Per-bucket late (disocclusion) indirect command buffers.
+    pub icbs_late: Vec<Retained<ProtocolObject<dyn objc2_metal::MTLIndirectCommandBuffer>>>,
+    // Argument buffer wiring `icbs_late` into the encode kernel.
+    pub icb_late_arg_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
+    // Per-object status buffer (one `u32` each): early cull writes it,
+    // late cull reads it. Private storage, never CPU-touched.
     pub status_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     // Two-pass Hi-Z occlusion toggle, resolved from
     // `Culling.two_pass_occlusion`.
@@ -132,7 +132,7 @@ pub(crate) struct CullState {
     // dispatch (projected through `prev_view_proj`).
     pub hiz: Option<super::hiz::HiZResources>,
     // This frame's un-jittered view-projection, captured before `execute_graph`
-    // so the phase-2 cull can project AABBs against the freshly built pyramid.
+    // so the late cull can project AABBs against the freshly built pyramid.
     pub cur_view_proj: [[f32; 4]; 4],
     // GPU-driven shadow views. Both pipelines are `Some` only on the bindless
     // path with shadows enabled (`bindless && shadow.map_size > 0`). The
@@ -146,7 +146,7 @@ pub(crate) struct CullState {
     pub shadow_views: ShadowViewIcb,
     pub spot_views: ShadowViewIcb,
     // Per-planar-slot mirror cull ICBs. The planar reflection pass re-runs the
-    // phase-1 cull kernel with each plane's reflected-camera frustum into its own
+    // early cull kernel with each plane's reflected-camera frustum into its own
     // ICB, so geometry visible only in the reflection (outside the main frustum)
     // is captured. One slot per distinct planar plane (<= MAX_PLANAR_PLANES); each
     // holds an ICB + its argument buffer, grown in lockstep with the main ICB by
@@ -700,14 +700,16 @@ impl MtlContext {
             },
             CullDispatchOptions {
                 use_hiz: true,
-                timing: super::pass_timing::PassTimer::Whole(super::pass_timing::PassId::Cull),
-                label: ns_string!("cull phase1"),
+                timing: super::pass_timing::PassTimer::Whole(
+                    super::pass_timing::PassId::Cull.timing(),
+                ),
+                label: ns_string!("cull main"),
             },
         )?;
         Ok(())
     }
 
-    // Encode a phase-1 cull for one planar reflection slot: the same kernel as
+    // Encode an early cull for one planar reflection slot: the same kernel as
     // the main cull, but tested against the reflected-camera `frustum` (so
     // geometry visible only in the mirror, outside the main frustum, is captured)
     // and written into that slot's dedicated mirror ICB. Hi-Z occlusion is forced
@@ -794,7 +796,7 @@ impl MtlContext {
         }
     }
 
-    // The live frame's regions for the main view over phase 1's lists,
+    // The live frame's regions for the main view over the early pass's lists,
     // drawing only the buckets that view can pick.
     pub(in crate::metal) fn main_regions(&self) -> BucketRegions<'_> {
         let live = self.cull.variants.live_buckets(
@@ -808,7 +810,7 @@ impl MtlContext {
         }
     }
 
-    // Shared body of every phase-1 cull dispatch (main + per-planar mirror): one
+    // Shared body of every early cull dispatch (main + per-planar mirror): one
     // thread per `DrawObject` frustum/distance(/Hi-Z)-tests the record, then the
     // packing encodes the kept ones into their streams' lists. The caller
     // supplies the target ICBs + their argument buffer + a per-object status scratch,
@@ -907,7 +909,7 @@ impl MtlContext {
         enc.set_buffer(&self.scene.index_buffer, 0, 3);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         // Per-object cull status: the decision kernel writes it, the encode
-        // kernel reads it back. The main cull's status is read again by phase 2
+        // kernel reads it back. The main cull's status is read again by the late pass
         // under two-pass occlusion; the mirror cull's shared scratch is not.
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
         // Skinned index buffer at buffer(6): the encode kernel bakes it into
@@ -1008,16 +1010,16 @@ impl MtlContext {
         );
     }
 
-    // Encode the phase-2 GPU cull for two-pass occlusion. Runs after the Hi-Z
-    // pyramid has been rebuilt mid-frame from phase-1 depth (`encode_hiz_build`
-    // dispatched as the `HizBuild` graph pass). One thread per `DrawObject`
-    // re-tests the objects phase 1 marked `HIZ_CANDIDATE` against the fresh
+    // Encode the late GPU cull for two-pass occlusion. Runs after the Hi-Z
+    // pyramid has been rebuilt mid-frame from early depth (`encode_hiz_build`
+    // dispatched as the `HizEarly` graph pass). One thread per `DrawObject`
+    // re-tests the objects the early pass marked `HIZ_CANDIDATE` against the fresh
     // pyramid, projecting through *this* frame's view-projection
     // (`cull_cur_view_proj`), and marks the visible ones `REDRAW`; the encode
-    // dispatch then writes exactly those into `icbs_2`, which `Main2` issues. A
-    // no-op when the phase-2 pipeline / ICB are not set up (two-pass off, or
+    // dispatch then writes exactly those into `icbs_late`, which `MainLate` issues. A
+    // no-op when the late pipeline / ICB are not set up (two-pass off, or
     // non-bindless).
-    pub(in crate::metal) fn encode_cull_phase2(
+    pub(in crate::metal) fn encode_cull_late(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         object_buffer: &ProtocolObject<dyn objc2_metal::MTLBuffer>,
@@ -1027,34 +1029,34 @@ impl MtlContext {
     ) -> RenderResult<u32> {
         use objc2_metal::{MTLComputeCommandEncoder as _, MTLResourceUsage};
         let (Some(pipeline), Some(arg_buf), Some(status), Some(hiz)) = (
-            &self.cull.pipeline_phase2,
-            &self.cull.icb_2_arg_buffer,
+            &self.cull.pipeline_late,
+            &self.cull.icb_late_arg_buffer,
             &self.cull.status_buffer,
             self.cull.hiz.as_ref(),
         ) else {
             return Ok(0);
         };
-        let (Some(group_counts), Some(ranges)) = (&self.cull.group_counts, &self.cull.ranges_2)
+        let (Some(group_counts), Some(ranges)) = (&self.cull.group_counts, &self.cull.ranges_late)
         else {
             return Ok(0);
         };
-        if self.cull.icbs_2.is_empty() {
+        if self.cull.icbs_late.is_empty() {
             return Ok(0);
         }
         // Static objects + folded instances re-tested against the fresh Hi-Z
-        // pyramid; same record count as phase 1.
+        // pyramid; same record count as the early pass.
         let object_count = self.cull_count();
         if object_count == 0 {
             return Ok(0);
         }
 
-        // Frustum planes are unused by the phase-2 kernel (candidates already
-        // passed the frustum test in phase 1) but the uniform layout is shared,
+        // Frustum planes are unused by the late kernel (candidates already
+        // passed the frustum test in the early pass) but the uniform layout is shared,
         // so pack them anyway for a clean struct.
         let planes = frustum.packed_planes();
         // Project AABBs through this frame's un-jittered VP: it matches the
         // pyramid we just rebuilt from this frame's depth. `hiz_enabled = 1`:
-        // the `HizBuild` pass always precedes this dispatch in the graph, so a
+        // the `HizEarly` pass always precedes this dispatch in the graph, so a
         // valid pyramid is guaranteed (the kernel still guards defensively).
         let skinned_base = u32::saturating_from(self.skinned_record_base());
         let cull_uniforms = CullUniforms {
@@ -1067,20 +1069,20 @@ impl MtlContext {
             object_count: u32::saturating_from(object_count),
             skinned_base,
             exclude_first: 0,
-            bucket_count: u32::saturating_from(self.cull.icbs_2.len()),
+            bucket_count: u32::saturating_from(self.cull.icbs_late.len()),
             exclude_end: 0,
             _pad: [0; 3],
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
         if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_compute(&cull_pass_desc, super::pass_timing::PassId::Cull2);
+            t.attach_compute(&cull_pass_desc, super::pass_timing::PassId::CullLate);
         }
         let enc = ScopedEncoder::new(
             cmd_buf
                 .computeCommandEncoderWithDescriptor(&cull_pass_desc)
                 .ok_or_else(|| RenderError::Other("failed to get compute encoder".to_string()))?,
-            ns_string!("cull phase2"),
+            ns_string!("cull late"),
         );
         enc.set_pipeline(pipeline);
         enc.set_buffer(object_buffer, 0, 0);
@@ -1089,7 +1091,7 @@ impl MtlContext {
         enc.set_buffer(&self.scene.index_buffer, 0, 3);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
-        // Skinned index buffer at buffer(6); see encode_cull. Phase 2
+        // Skinned index buffer at buffer(6); see encode_cull. The late pass
         // of two-pass occlusion re-tests the same records, so the skinned
         // tail is handled here too.
         enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
@@ -1098,9 +1100,9 @@ impl MtlContext {
             CULL_VARIANTS_BUFFER_INDEX,
         );
         enc.set_texture(hiz.texture.as_ref(), 0);
-        // The encode kernel writes draw commands into the phase-2 ICBs through
+        // The encode kernel writes draw commands into the late ICBs through
         // the argument buffer, so each must be declared resident here too.
-        for icb in &self.cull.icbs_2 {
+        for icb in &self.cull.icbs_late {
             enc.useResource_usage(ProtocolObject::from_ref(&**icb), MTLResourceUsage::Write);
         }
 
@@ -1115,7 +1117,7 @@ impl MtlContext {
             Packing {
                 object_count,
                 skinned_base: self.skinned_record_base(),
-                bucket_count: self.cull.icbs_2.len(),
+                bucket_count: self.cull.icbs_late.len(),
                 drawn: CullStatus::REDRAW,
                 capture_tiles: None,
             },
@@ -1442,13 +1444,13 @@ impl MtlContext {
     }
 }
 
-// The GPU-driven cull's pipelines: the phase-1 and phase-2 decision kernels
+// The GPU-driven cull's pipelines: the early pass and late decision kernels
 // from `cull.hlsl`, the scan, the scatter from `cull_encode.metal`, and the
 // argument encoder every ICB argument buffer is written with (the scatter is
 // the one function that declares the `ICBContainer`).
 pub(super) struct CullPipeline {
     pub decide: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
-    pub decide_phase2: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    pub decide_late: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub scan: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub scatter: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     pub icb_arg_encoder: Retained<ProtocolObject<dyn MTLArgumentEncoder>>,
@@ -1480,12 +1482,12 @@ pub(super) fn build_cull_pipeline(
     hot_reload: bool,
 ) -> RenderResult<CullPipeline> {
     let decide = group_wide(
-        compute_pipeline(device, &super::builtin_shaders::CULL_PHASE1, hot_reload)?,
-        "cull phase 1",
+        compute_pipeline(device, &super::builtin_shaders::CULL_EARLY, hot_reload)?,
+        "cull main",
     )?;
-    let decide_phase2 = group_wide(
-        compute_pipeline(device, &super::builtin_shaders::CULL_PHASE2, hot_reload)?,
-        "cull phase 2",
+    let decide_late = group_wide(
+        compute_pipeline(device, &super::builtin_shaders::CULL_LATE, hot_reload)?,
+        "cull late",
     )?;
     let scan = group_wide(
         compute_pipeline(device, &super::builtin_shaders::CULL_SCAN, hot_reload)?,
@@ -1509,7 +1511,7 @@ pub(super) fn build_cull_pipeline(
         unsafe { scatter_fn.newArgumentEncoderWithBufferIndex(CULL_ICB_BUFFER_INDEX) };
     Ok(CullPipeline {
         decide,
-        decide_phase2,
+        decide_late,
         scan,
         scatter,
         icb_arg_encoder,

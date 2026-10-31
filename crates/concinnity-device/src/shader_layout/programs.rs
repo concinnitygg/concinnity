@@ -137,10 +137,10 @@ pub(super) static MAIN_BINDLESS_VERT_PARAMS_TRANSFORM: Program = Program {
     ],
 };
 
-// The phase-1 variant: the only one that declares every struct the family has.
+// The early variant: the only one that declares every struct the family has.
 // Metal runs it as the decision half.
 pub(super) static CULL_KERNEL: Program = Program {
-    row: &shared::CULL_PHASE1,
+    row: &shared::CULL_EARLY,
     splices: &[],
 };
 

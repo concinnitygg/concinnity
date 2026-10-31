@@ -126,18 +126,18 @@ pub(super) fn create_main_render_pass(
 // Main-pass render pass for two-pass occlusion culling. Two variants share
 // this builder, selected by `load`:
 //
-//   * `load = false` (phase 1, `Main`): same as `create_main_render_pass` but
-//     the MSAA color is STORE'd (not DONT_CARE) so the phase-2 pass can load
+//   * `load = false` (the early pass, `Main`): same as `create_main_render_pass` but
+//     the MSAA color is STORE'd (not DONT_CARE) so the late pass can load
 //     the samples back and composite onto them. Color ends
-//     COLOR_ATTACHMENT_OPTIMAL so `Main2` loads it directly.
-//   * `load = true` (phase 2, `Main2`): loads (does not clear) the phase-1
+//     COLOR_ATTACHMENT_OPTIMAL so `MainLate` loads it directly.
+//   * `load = true` (the late pass, `MainLate`): loads (does not clear) the early pass
 //     color + depth, redraws the disoccluded statics, and resolves the
 //     combined scene into `hdr_resolve` for the post stack.
 //
 // Both are render-pass-compatible with the existing main framebuffers (same
 // attachment count / formats / sample counts), so no extra framebuffers are
-// needed. `Main` (phase 1) still resolves into `hdr_resolve`; that resolve is
-// overwritten by `Main2`'s and nothing reads it in between (HizBuild / Cull2
+// needed. `Main` (the early pass) still resolves into `hdr_resolve`; that resolve is
+// overwritten by `MainLate`'s and nothing reads it in between (HizEarly / CullLate
 // are compute), so the combined result is what the post stack sees.
 pub(super) fn create_main_render_pass_two_pass(
     device: &VkDevice,
@@ -147,8 +147,8 @@ pub(super) fn create_main_render_pass_two_pass(
 ) -> RenderResult<OwnedRenderPass> {
     let multisampled = msaa != vk::SampleCountFlags::TYPE_1;
 
-    // Phase 1 leaves the color in COLOR_ATTACHMENT_OPTIMAL for phase 2 to
-    // load. Phase 2 ends shader-readable when single-sampled (the color image
+    // The early pass leaves the color in COLOR_ATTACHMENT_OPTIMAL for the late pass to
+    // load. The late pass ends shader-readable when single-sampled (the color image
     // is itself the resolve target the post stack samples); when multisampled
     // the resolve attachment carries that role and the MSAA color stays
     // transient in COLOR_ATTACHMENT_OPTIMAL.
@@ -180,7 +180,7 @@ pub(super) fn create_main_render_pass_two_pass(
 
     let mut attachments = vec![
         // [0] color (MSAA HDR, or the single-sample HDR resolve image). STORE
-        // unconditionally: phase 1 must keep the MSAA samples for phase 2's
+        // unconditionally: the early pass must keep the MSAA samples for the late pass's
         // load, and the single-sample image is the post-stack input.
         vk::AttachmentDescription::default()
             .format(format)
@@ -191,8 +191,8 @@ pub(super) fn create_main_render_pass_two_pass(
             .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
             .initial_layout(color_initial_layout)
             .final_layout(color_final_layout),
-        // [1] depth: STORE (HizBuild reduces it, the post decals/fog sample it,
-        // and phase 2 depth-tests against it).
+        // [1] depth: STORE (HizEarly reduces it, the post decals/fog sample it,
+        // and the late pass depth-tests against it).
         vk::AttachmentDescription::default()
             .format(vk::Format::D32_SFLOAT)
             .samples(msaa)
@@ -237,8 +237,8 @@ pub(super) fn create_main_render_pass_two_pass(
         subpass = subpass.resolve_attachments(std::slice::from_ref(&resolve_ref));
     }
 
-    // Phase 2's LOAD of the phase-1 color + depth is ordered by an explicit
-    // `vkCmdPipelineBarrier` in `encode_main_pass_phase2`.
+    // The late pass's LOAD of the early color + depth is ordered by an explicit
+    // `vkCmdPipelineBarrier` in `encode_main_pass_late`.
     let dependency = main_framebuffer_dependency();
 
     let rp_info = vk::RenderPassCreateInfo::default()

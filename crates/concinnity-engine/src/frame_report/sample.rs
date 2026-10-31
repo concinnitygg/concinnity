@@ -69,6 +69,8 @@ pub(super) struct FrameSample {
     pub gpu_frame_us: u32,
     /// Microseconds of that frame's span it shared with the frame before it.
     pub gpu_overlap_us: u32,
+    /// Microseconds of that frame's gaps an async-queue pass ran through.
+    pub gpu_gap_beside_async_us: u32,
     /// Microseconds from the newly finished frame's input sample to the end of
     /// its GPU work, or zero when no new completion could be placed on the host
     /// clock.
@@ -157,6 +159,7 @@ impl FrameSample {
             shown_us: timing.shown.interval_us,
             gpu_frame_us: render.gpu_frame_us,
             gpu_overlap_us: render.gpu_overlap_us,
+            gpu_gap_beside_async_us: render.gpu_gap_beside_async_us,
             input_latency_us: timing.shown.latency_us,
             gpu_wait_us: render.gpu_wait_us,
             render_cpu_us: render.render_cpu_us,
@@ -415,6 +418,7 @@ mod tests {
         let mut render = render_with(&[("main", 4_000)]);
         render.async_pass_mask = 0b10;
         render.gpu_overlap_us = 900;
+        render.gpu_gap_beside_async_us = 300;
         let s = FrameSample::new(
             FrameTiming {
                 run_seconds: 1.5,
@@ -441,6 +445,7 @@ mod tests {
         assert_eq!(s.input_latency_us, 45_000);
         assert_eq!(s.async_pass_mask, 0b10);
         assert_eq!(s.gpu_overlap_us, 900);
+        assert_eq!(s.gpu_gap_beside_async_us, 300);
         assert_eq!((s.gpu_frame_us, s.gpu_wait_us), (8_000, 500));
         assert_eq!(s.render_cpu_us, 1_200);
         assert_eq!((s.draw_calls, s.objects), (120, 900));

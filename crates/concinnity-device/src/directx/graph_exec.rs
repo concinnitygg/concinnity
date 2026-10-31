@@ -34,8 +34,8 @@
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (which
 //!     internally encodes the GTAO depth copy, kernel and depth-aware
-//!     blur). `PassId::SsaoDepth` / `PassId::SsaoKernel` stay timing-only and
-//!     the executor rejects them as graph nodes.
+//!     blur), timing its sub-passes as `GpuSpan::SsaoDepth` /
+//!     `GpuSpan::SsaoKernel`.
 //!
 //! `PassId::ParticlesSim` and `PassId::ParticlesDraw` are two nodes with their
 //! own command lists: the sim integrates every live emitter's pool and the draw
@@ -964,13 +964,13 @@ impl DxContext {
                 frame_idx,
                 D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
             ),
-            // Phase-2 counterpart, written by `Cull2` and consumed by `Main2`.
-            "draw_args2" => frame_slot(
-                &self.cull.indirect_cmd_buffers_2,
+            // Late counterpart, written by `CullLate` and consumed by `MainLate`.
+            "draw_args_late" => frame_slot(
+                &self.cull.indirect_cmd_buffers_late,
                 frame_idx,
                 D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
             ),
-            // Phase 1 writes it and phase 2 reads it through the same root UAV,
+            // The early pass writes it and the late pass reads it through the same root UAV,
             // so it never leaves `UNORDERED_ACCESS`.
             "cull_status" => frame_slot(
                 &self.cull.cull_status_buffers,
@@ -1160,14 +1160,6 @@ impl DxContext {
             PassId::SsaoBlur => {
                 self.encode_ssao(cmd, params.frame_idx, params.effects.ssao.as_ref())?;
             }
-            PassId::SsaoDepth | PassId::SsaoKernel => {
-                return Err(RenderError::Other(format!(
-                    "graph executor (directx): pass {} is bundled inside SsaoBlur \
-                     (encode_ssao encodes the SSAO depth copy, kernel and blur); it \
-                     should not appear as its own graph node",
-                    pass_id.name()
-                )));
-            }
             PassId::Grass => {
                 if let Some(frame) = grass_frame {
                     self.encode_grass(cmd, frame);
@@ -1182,26 +1174,6 @@ impl DxContext {
                 if let Some(frame) = grass_frame {
                     self.encode_grass_shadow(cmd, frame);
                 }
-            }
-            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass | PassId::GrassShadowDraw => {
-                // Drawn inline at the tail of the opaque scene passes (the sky
-                // in Main and every probe face and mirror render, the grass in
-                // Main, the G-buffer pre-pass and the nearest shadow cascade);
-                // each only names a timing slot.
-                return Err(RenderError::Other(format!(
-                    "graph executor (directx): pass {} is drawn inline by the opaque \
-                     scene passes and should not appear as a graph node",
-                    pass_id.name()
-                )));
-            }
-            PassId::ReflectionComposite => {
-                // Metal-only inline pass; never scheduled on DirectX. Handled
-                // here only to keep the dispatch match exhaustive.
-                return Err(RenderError::Other(format!(
-                    "graph executor (directx): pass {} is a Metal-only inline \
-                     reflection composite and should not appear as a graph node",
-                    pass_id.name()
-                )));
             }
             PassId::LightCull => {
                 // Bins the local lights and probes into per-cluster light lists
@@ -1378,19 +1350,19 @@ impl DxContext {
                     params.reactive.transparent,
                 )?;
             }
-            PassId::HizBuild | PassId::HizFinal => {
-                // Two Hi-Z builds share one encoder. `HizBuild` rebuilds the
-                // pyramid mid-frame from phase-1 depth so Cull2 re-tests the
-                // phase-1 occluded objects against up-to-date depth; `HizFinal`
-                // reduces the frame's final depth for the next frame's phase-1
+            PassId::HizEarly | PassId::HizFinal => {
+                // Two Hi-Z builds share one encoder. `HizEarly` rebuilds the
+                // pyramid mid-frame from early depth so CullLate re-tests the
+                // early occluded objects against up-to-date depth; `HizFinal`
+                // reduces the frame's final depth for the next frame's early
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(cmd);
             }
-            PassId::Cull2 => {
-                self.encode_cull_phase2(cmd, params.frame_idx, params.frustum, params.cur_vp);
+            PassId::CullLate => {
+                self.encode_cull_late(cmd, params.frame_idx, params.frustum, params.cur_vp);
             }
-            PassId::Main2 => {
-                self.encode_main_pass_phase2(
+            PassId::MainLate => {
+                self.encode_main_pass_late(
                     cmd,
                     params.frame_idx,
                     params.width,

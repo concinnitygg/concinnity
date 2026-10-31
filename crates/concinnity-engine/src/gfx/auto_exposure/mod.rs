@@ -13,7 +13,8 @@ pub use night_vision::{
 };
 pub use pre_exposure::PreExposure;
 pub use state::{
-    AutoExposureState, ExposureAdaptation, HISTOGRAM_BINS, LUM_LOG2_MAX, LUM_LOG2_MIN,
+    AutoExposureState, ExposureAdaptation, HISTOGRAM_BINS, HISTOGRAM_STRIDE, LUM_LOG2_MAX,
+    LUM_LOG2_MIN, histogram_build_threads,
 };
 pub use upscaler_exposure::UpscalerExposure;
 

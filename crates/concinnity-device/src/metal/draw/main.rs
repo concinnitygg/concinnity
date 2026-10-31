@@ -37,7 +37,7 @@ use crate::metal::pass_timing::PassTimer;
 use crate::metal::scoped_encoder::ScopedEncoder;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
-// `self.view_matrix` for the on-screen main pass (and its phase-2 sibling) but
+// `self.view_matrix` for the on-screen main pass (and its late sibling) but
 // the caller's face view matrix for a reflection-probe face capture, so it
 // travels with the rest of the camera state rather than being read off `self`.
 #[derive(Clone, Copy)]
@@ -188,16 +188,16 @@ impl MtlContext {
         // attachment and resolves into the single-sample target at end-of-pass;
         // depth lives entirely on the MSAA attachment and is discarded unless
         // a later pass (projected decals, volumetric fog) needs to sample it.
-        // Under two-pass occlusion the phase-2 main pass (`Main2`) loads this
+        // Under two-pass occlusion the late main pass (`MainLate`) loads this
         // pass's MSAA color to draw the disoccluded geometry on top, so the
-        // MSAA samples must be stored, not just resolved away. `Main2`
+        // MSAA samples must be stored, not just resolved away. `MainLate`
         // performs the final resolve. Without two-pass we resolve-and-discard
         // the MSAA samples as before. The decision mirrors the graph's two-pass
         // gating (`two_pass_occlusion` config AND the bindless cull path active
         // this frame, i.e. an `object_buffer` exists).
         let store_msaa_color = self.cull.two_pass_occlusion
             && object_buffer.is_some()
-            && self.cull.pipeline_phase2.is_some();
+            && self.cull.pipeline_late.is_some();
         let main_pass_desc = MTLRenderPassDescriptor::new();
         let [r, g, b, a] = self.pre_exposure.clear_color(self.state.view.clear_color);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
@@ -291,8 +291,8 @@ impl MtlContext {
         if let (Some(frame), true) = (grass, surfaces_bound) {
             draw_calls += self.encode_grass_main(&encoder, frame, &view_uniforms);
         }
-        // The sky lands behind phase 1's geometry. Under two-pass occlusion
-        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // The sky lands behind the early pass's geometry. Under two-pass occlusion
+        // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
             self.encode_sky(&encoder, &view_uniforms, false);
@@ -403,21 +403,21 @@ impl MtlContext {
         Ok(draw_calls)
     }
 
-    // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not
-    // clear) the HDR color + depth that `encode_main_pass` (phase 1) wrote
-    // and re-runs the bindless indirect draw through `cull_icb_2` (the phase-2
-    // cull's output), depth-compositing the disoccluded geometry with phase 1.
+    // Late main pass for two-pass occlusion (`MainLate`). Loads (does not
+    // clear) the HDR color + depth that `encode_main_pass` (the early pass) wrote
+    // and re-runs the bindless indirect draw through `cull_icb_late` (the late pass
+    // cull's output), depth-compositing the disoccluded geometry with the early pass.
     // Folded instances AND folded skinned objects ride the unified cull buffers
     // as cullable records, so both are Hi-Z-culled through both phases: drawn in
-    // phase 1 when visible, and redrawn here only when phase 1 Hi-Z-occluded
-    // them and the rebuilt pyramid (Cull2) disoccludes them. The shared
+    // the early pass when visible, and redrawn here only when the early pass Hi-Z-occluded
+    // them and the rebuilt pyramid (CullLate) disoccludes them. The shared
     // `execute_bindless_static_icb` issues the static+instance range then the
-    // skinned tail of `cull_icb_2` (the phase-2 cull resets every already-drawn
+    // skinned tail of `cull_icb_late` (the phase-2 cull resets every already-drawn
     // slot, so nothing double-draws). Resolves color + depth at end-of-pass so
     // the post-decoration stack reads the combined result. A no-op (returns 0)
     // when there is nothing to redraw: two-pass off, no bindless geometry, or
-    // the phase-2 ICB was not built.
-    pub(in crate::metal) fn encode_main_pass_phase2(
+    // the late ICB was not built.
+    pub(in crate::metal) fn encode_main_pass_late(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         camera: MainPassCamera,
@@ -431,12 +431,12 @@ impl MtlContext {
         let (Some(obj_buf), Some(tex_args), false) = (
             object_buffer,
             bindless_tex_args,
-            self.cull.icbs_2.is_empty(),
+            self.cull.icbs_late.is_empty(),
         ) else {
             return Ok(0);
         };
 
-        // Load the phase-1 MSAA color + depth (phase 1 stored them under
+        // Load the early MSAA color + depth (the early pass stored them under
         // two-pass), draw the disoccluded geometry on top, and resolve both at
         // end-of-pass: this resolve is the one the post stack consumes.
         let main_pass_desc = MTLRenderPassDescriptor::new();
@@ -466,13 +466,13 @@ impl MtlContext {
         }
 
         if let Some(t) = &self.diagnostics.pass_timing {
-            t.attach_render(&main_pass_desc, super::super::pass_timing::PassId::Main2);
+            t.attach_render(&main_pass_desc, super::super::pass_timing::PassId::MainLate);
         }
         let encoder = ScopedEncoder::new(
             cmd_buf
                 .renderCommandEncoderWithDescriptor(&main_pass_desc)
                 .ok_or_else(|| RenderError::Other("failed to get render encoder".to_string()))?,
-            ns_string!("main2 pass"),
+            ns_string!("main late pass"),
         );
         if self.state.view.mode == concinnity_engine::gfx::view_modes::ViewMode::Wireframe {
             encoder.setTriangleFillMode(objc2_metal::MTLTriangleFillMode::Lines);
@@ -480,18 +480,23 @@ impl MtlContext {
 
         let view_uniforms = self.main_view_uniforms(&camera);
         self.bind_main_pass_shared(&encoder, &view_uniforms);
-        // Main2 is the same main camera as phase 1, so it reads the clusters too.
+        // MainLate is the same main camera as the early pass, so it reads the clusters too.
         self.bind_clusters(&encoder, Some(self.main_cluster_grid()));
-        // Phase 2's lists, in its own ICBs.
+        // The late pass's lists, in its own ICBs.
         let gpu = GpuFrameBuffers {
             regions: crate::metal::cull::BucketRegions {
-                ranges: self.cull.ranges_2.as_deref(),
+                ranges: self.cull.ranges_late.as_deref(),
                 ..gpu.regions
             },
             ..gpu
         };
-        let draw_calls =
-            self.execute_bindless_static_icb(&encoder, obj_buf, tex_args, &self.cull.icbs_2, gpu);
+        let draw_calls = self.execute_bindless_static_icb(
+            &encoder,
+            obj_buf,
+            tex_args,
+            &self.cull.icbs_late,
+            gpu,
+        );
 
         Ok(draw_calls)
     }
@@ -500,8 +505,8 @@ impl MtlContext {
     // bindless-texture argument buffer, declare the index buffer + sampled
     // textures resident (they are reached only through indirect commands /
     // the argument buffer, never bound on the encoder), then execute the `icb`.
-    // Shared by the phase-1 main pass (`icb = cull_icb`) and the phase-2 main
-    // pass (`icb = cull_icb_2`) so both issue the bindless geometry identically.
+    // Shared by the early main pass (`icb = cull_icb`) and the late main
+    // pass (`icb = cull_icb_late`) so both issue the bindless geometry identically.
     //
     // The ICB is split into two `executeCommandsInBuffer` ranges because Metal
     // bakes the index buffer into each indirect command: the prefix records are
@@ -781,7 +786,7 @@ impl MtlContext {
         if let (Some(obj_buf), Some(tex_args), false) =
             (object_buffer, bindless_tex_args, bucket_icbs.is_empty())
         {
-            // Shared with the phase-2 main pass under two-pass occlusion: see
+            // Shared with the late main pass under two-pass occlusion: see
             // `execute_bindless_static_icb`.
             draw_calls +=
                 self.execute_bindless_static_icb(enc, obj_buf, tex_args, bucket_icbs, gpu);

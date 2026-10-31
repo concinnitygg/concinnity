@@ -27,6 +27,21 @@ pub const LUM_LOG2_MAX: f32 = 12.0;
 /// (1 KiB at u32) and big enough that the per-bin log-luminance step is fine.
 pub const HISTOGRAM_BINS: usize = 256;
 
+/// The build kernel meters one pixel of every `HISTOGRAM_STRIDE` squared
+/// block. The histogram's shares are what the exposure reads, and a quarter of
+/// the pixels hold the same shares while contending for a quarter as many
+/// threadgroup atomics, which is what the kernel's time goes to.
+pub const HISTOGRAM_STRIDE: u32 = 2;
+
+/// The threads the build kernel runs over a `width` x `height` scene, one per
+/// metered pixel.
+pub const fn histogram_build_threads(width: u32, height: u32) -> (u32, u32) {
+    (
+        width.div_ceil(HISTOGRAM_STRIDE),
+        height.div_ceil(HISTOGRAM_STRIDE),
+    )
+}
+
 /// Running auto-exposure state. The current adapted EV moves toward the target
 /// EV (derived from the GPU-measured average log-luminance) via an exponential
 /// moving average so a sudden brightness change ramps in over a fraction of a
@@ -236,11 +251,22 @@ mod tests {
     }
 
     #[test]
+    fn the_build_threads_cover_every_block_once() {
+        assert_eq!(histogram_build_threads(1920, 1080), (960, 540));
+        assert_eq!(histogram_build_threads(1921, 1), (961, 1));
+        assert_eq!(histogram_build_threads(0, 0), (0, 0));
+    }
+
+    #[test]
     fn histogram_constants_match_the_shader() {
         let src = crate::render::shader::embedded::AUTO_EXPOSURE;
         assert_eq!(
             crate::render::shader::consts::uint(src, "HISTOGRAM_BINS"),
             HISTOGRAM_BINS
+        );
+        assert_eq!(
+            crate::render::shader::consts::uint(src, "HISTOGRAM_STRIDE"),
+            HISTOGRAM_STRIDE as usize
         );
         assert_eq!(
             crate::render::shader::consts::float(src, "HIGHLIGHT_FRACTION"),

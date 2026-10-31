@@ -3,10 +3,10 @@
 //!
 //! The pool holds one block of [`SLOTS_PER_FRAME`] u64 slots per in-flight
 //! frame. Within a block the whole-frame timer owns slots [0, 1] and one
-//! (start, end) pair per [`PassId`] follows, so `pass` occupies
-//! `2 + 2 * pass` and `3 + 2 * pass`. Keeping the whole-frame pair at the front
+//! (start, end) pair per [`TimingId`] follows, so slot `t` occupies
+//! `2 + 2 * t` and `3 + 2 * t`. Keeping the whole-frame pair at the front
 //! lets a whole-frame readback stay the first pair of the block, independent of
-//! how many passes exist.
+//! how many slots exist.
 //!
 //! This is index arithmetic with no device type in it, so it lives here rather
 //! than in a backend and its layout tests run on every platform's CI. The
@@ -14,15 +14,15 @@
 //! [`decode_frame_block`].
 
 use crate::profile::{MAX_PASS_TIMINGS, PassTiming};
-use crate::render::render_graph::{PASS_COUNT, PASS_NAMES, PassId};
+use crate::render::render_graph::{TIMING_COUNT, TIMING_NAMES, TimingId};
 use concinnity_core::math::SaturatingFrom;
 
-// Every pass has a slot in the per-pass timing table.
-const _: () = assert!(PASS_COUNT <= MAX_PASS_TIMINGS);
+// Every timing slot has a row in the per-pass timing table.
+const _: () = assert!(TIMING_COUNT <= MAX_PASS_TIMINGS);
 
 /// Per-frame block: `[whole_frame_start, whole_frame_end, pass0_start,
-/// pass0_end, ..., pass(PASS_COUNT-1)_end]`.
-pub const SLOTS_PER_FRAME: usize = 2 * (PASS_COUNT + 1);
+/// slot0_end, ..., slot(TIMING_COUNT-1)_end]`.
+pub const SLOTS_PER_FRAME: usize = 2 * (TIMING_COUNT + 1);
 
 /// Bytes one frame's block occupies in a readback buffer of u64 timestamps.
 pub const FRAME_BLOCK_BYTES: u64 = (SLOTS_PER_FRAME * 8) as u64;
@@ -48,14 +48,18 @@ pub const fn whole_frame_pair(frame: usize) -> (u32, u32) {
     (base, base + 1)
 }
 
-/// (start, end) slots for `pass` within `frame`'s block.
-pub const fn pass_pair(frame: usize, pass: PassId) -> (u32, u32) {
-    let base = frame_block_base(frame) + 2 + 2 * (pass as u32);
+/// (start, end) slots for `timed` within `frame`'s block.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a timing index is below TIMING_COUNT, a few dozen"
+)]
+pub fn pass_pair(frame: usize, timed: impl Into<TimingId>) -> (u32, u32) {
+    let base = frame_block_base(frame) + 2 + 2 * (timed.into().index() as u32);
     (base, base + 1)
 }
 
 /// Decode one frame's block into the whole-frame micros and a per-pass table in
-/// [`PassId`] order. `pair_micros(start_slot, end_slot)` is the backend's reading
+/// [`TimingId`] order. `pair_micros(start_slot, end_slot)` is the backend's reading
 /// of one pair, with slots relative to the block; unused table entries keep the
 /// `("", 0)` sentinel.
 pub fn decode_frame_block(
@@ -63,7 +67,7 @@ pub fn decode_frame_block(
 ) -> (u32, [PassTiming; MAX_PASS_TIMINGS]) {
     let frame_us = pair_micros(0, 1);
     let mut passes = [("", 0u32); MAX_PASS_TIMINGS];
-    for (i, name) in PASS_NAMES.iter().enumerate() {
+    for (i, name) in TIMING_NAMES.iter().enumerate() {
         passes[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
     }
     (frame_us, passes)
@@ -192,23 +196,26 @@ mod tests {
 
     #[test]
     fn pass_pair_skips_the_whole_frame_pair() {
-        assert_eq!(pass_pair(0, PassId::Cull), (2, 3));
+        assert_eq!(
+            pass_pair(0, crate::render::render_graph::PassId::Cull),
+            (2, 3)
+        );
     }
 
     #[test]
     fn every_pass_owns_a_distinct_pair_inside_the_block() {
-        // Driven by `PassId::ALL`, so a new pass is covered here the moment it
+        // Driven by `TimingId::all`, so a new slot is covered here the moment it
         // is registered rather than when someone remembers to extend a list.
         let mut seen = hashbrown::HashSet::new();
         // The whole-frame pair owns slots 0, 1.
         assert!(seen.insert(0) && seen.insert(1));
-        for pass in PassId::ALL {
-            let (s, e) = pass_pair(0, pass);
-            assert!(seen.insert(s), "duplicate start slot for {pass:?}");
-            assert!(seen.insert(e), "duplicate end slot for {pass:?}");
+        for timed in TimingId::all() {
+            let (s, e) = pass_pair(0, timed);
+            assert!(seen.insert(s), "duplicate start slot for {timed:?}");
+            assert!(seen.insert(e), "duplicate end slot for {timed:?}");
             assert!((e as usize) < SLOTS_PER_FRAME);
         }
-        // The block is exactly the whole-frame pair plus one pair per pass.
+        // The block is exactly the whole-frame pair plus one pair per slot.
         assert_eq!(seen.len(), SLOTS_PER_FRAME);
     }
 
@@ -217,10 +224,10 @@ mod tests {
         // Encodes both slots into the reading so a swapped or shifted pair shows.
         let (frame_us, passes) = decode_frame_block(|s, e| u32::saturating_from(s * 1000 + e));
         assert_eq!(frame_us, 1);
-        for pass in PassId::ALL {
-            let (s, e) = pass_pair(0, pass);
-            assert_eq!(passes[pass as usize], (pass.name(), s * 1000 + e));
+        for timed in TimingId::all() {
+            let (s, e) = pass_pair(0, timed);
+            assert_eq!(passes[timed.index()], (timed.name(), s * 1000 + e));
         }
-        assert!(passes[PASS_COUNT..].iter().all(|&t| t == ("", 0)));
+        assert!(passes[TIMING_COUNT..].iter().all(|&t| t == ("", 0)));
     }
 }

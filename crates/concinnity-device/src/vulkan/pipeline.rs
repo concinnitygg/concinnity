@@ -97,15 +97,15 @@ pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 128;
 
 // Compile the Compute cull compute kernel to SPIR-V.
 pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_PHASE1.compile(hot_reload)
+    super::builtin_shaders::CULL_EARLY.compile(hot_reload)
 }
 
-// Compile the phase-2 (two-pass occlusion) variant of the cull kernel. Same
-// source as `compile_cull_shader`, with a `CULL_PHASE2` define selecting the
-// re-test of phase 1's Hi-Z-occluded objects against the rebuilt pyramid.
+// Compile the late pass (two-pass occlusion) variant of the cull kernel. Same
+// source as `compile_cull_shader`, with a `CULL_LATE` define selecting the
+// re-test of the early pass's Hi-Z-occluded objects against the rebuilt pyramid.
 // Mirrors the `#define` split the Hi-Z init kernel uses.
-pub(super) fn compile_cull_shader_phase2(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_PHASE2.compile(hot_reload)
+pub(super) fn compile_cull_shader_late(hot_reload: bool) -> RenderResult<Vec<u8>> {
+    super::builtin_shaders::CULL_LATE.compile(hot_reload)
 }
 
 // Compile the GPU-driven shadow cull kernel: the same cull source with a
@@ -592,8 +592,8 @@ pub(super) fn create_composite_pipeline(
 mod tests {
     use super::{
         CompileProgram, SHADOW_VERTEX_ATTRS, compile_bindless_shaders, compile_cull_shader,
-        compile_cull_shader_phase2, compile_shadow_bindless_vs, compile_shadow_cull_shader,
-        is_spirv, spirv_words, world_entry,
+        compile_cull_shader_late, compile_shadow_bindless_vs, compile_shadow_cull_shader, is_spirv,
+        spirv_words, world_entry,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -625,21 +625,21 @@ mod tests {
         }
     }
 
-    // The phase-1 cull kernel, its two-pass `CULL_PHASE2` variant, and the
+    // The early cull kernel, its two-pass `CULL_LATE` variant, and the
     // GPU-driven shadow `SHADOW_CULL` variant all compile to valid SPIR-V from
     // the embedded source. Guards the `#ifdef` split in `cull.hlsl`, which the
     // Vulkan-on-Windows runtime cannot currently exercise.
     #[test]
     fn cull_shaders_compile_both_phases() {
-        let phase1 = compile_cull_shader(false).expect("phase-1 cull compiles");
-        let phase2 = compile_cull_shader_phase2(false).expect("phase-2 cull compiles");
+        let early = compile_cull_shader(false).expect("early cull compiles");
+        let late = compile_cull_shader_late(false).expect("late cull compiles");
         let shadow = compile_shadow_cull_shader(false).expect("shadow cull compiles");
-        assert!(is_spirv(&phase1), "phase-1 cull is valid SPIR-V");
-        assert!(is_spirv(&phase2), "phase-2 cull is valid SPIR-V");
+        assert!(is_spirv(&early), "early cull is valid SPIR-V");
+        assert!(is_spirv(&late), "late cull is valid SPIR-V");
         assert!(is_spirv(&shadow), "shadow cull is valid SPIR-V");
         // Each define selects a different kernel body, so the modules differ.
-        assert_ne!(phase1, phase2);
-        assert_ne!(phase1, shadow);
+        assert_ne!(early, late);
+        assert_ne!(early, shadow);
     }
 
     // The GPU-driven shadow pass's depth-only bindless vertex shader compiles to

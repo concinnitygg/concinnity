@@ -159,11 +159,11 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // what `directx/cull.rs` binds; the shadow variant declares no Hi-Z or
     // variant block.
     DxilAbi {
-        program: &shared::CULL_PHASE1,
+        program: &shared::CULL_EARLY,
         registers: CULL_REGISTERS,
     },
     DxilAbi {
-        program: &shared::CULL_PHASE2,
+        program: &shared::CULL_LATE,
         registers: CULL_REGISTERS,
     },
     DxilAbi {
@@ -1112,7 +1112,7 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // what `metal/cull.rs` binds once for this dispatch and the scan and
     // scatter that follow it on the same encoder.
     MetalAbi {
-        program: &shared::CULL_PHASE1,
+        program: &shared::CULL_EARLY,
         slots: &[&[
             ("objects", "buffer(0)"),
             ("draw_args", "buffer(1)"),
@@ -1124,10 +1124,10 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[],
     },
-    // Phase 2 re-tests candidates only, so it never reads `draw_args`; the
+    // The late pass re-tests candidates only, so it never reads `draw_args`; the
     // encode dispatch after it does, from the same binding.
     MetalAbi {
-        program: &shared::CULL_PHASE2,
+        program: &shared::CULL_LATE,
         slots: &[&[
             ("objects", "buffer(0)"),
             ("cull", "buffer(2)"),

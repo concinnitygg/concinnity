@@ -44,9 +44,9 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         shadow::build_shadow_cull(gpu, &bindless, inputs.vert_desc, inputs.shadow_enabled)?;
 
     // Two-pass occlusion is only usable on the bindless cull path (the
-    // phase-2 pipeline exists exactly then). Gate the request here so the
+    // late pipeline exists exactly then). Gate the request here so the
     // runtime flag is true only when the feature can actually run.
-    let two_pass_occlusion = inputs.occlusion_two_pass && compute.pipeline_phase2.is_some();
+    let two_pass_occlusion = inputs.occlusion_two_pass && compute.pipeline_late.is_some();
 
     let variants = bindless
         .world_pipelines
@@ -65,7 +65,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         scatter_pipeline: compute.scatter_pipeline,
         group_counts: None,
         ranges: None,
-        ranges_2: None,
+        ranges_late: None,
         bucket_count: bindless.bucket_count,
         variants,
         icbs: Vec::new(),
@@ -73,9 +73,9 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         icb_arg_buffer: None,
         icb_capacity: 0,
         reserved_records: inputs.reserved_records,
-        pipeline_phase2: compute.pipeline_phase2,
-        icbs_2: Vec::new(),
-        icb_2_arg_buffer: None,
+        pipeline_late: compute.pipeline_late,
+        icbs_late: Vec::new(),
+        icb_late_arg_buffer: None,
         status_buffer: None,
         two_pass_occlusion,
         hiz: compute.hiz,

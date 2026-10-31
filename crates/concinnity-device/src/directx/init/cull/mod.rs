@@ -129,7 +129,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         material_params: bindless.material_params,
         bindless_pool_gpu,
         cull_kernels: compute.kernels.map(|kernels| CullKernels {
-            pso_phase2: two_pass.pso,
+            pso_late: two_pass.pso,
             ..kernels
         }),
         cull_command_signature: compute.command_signature,
@@ -140,7 +140,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
         compact: compute.compact,
         group_count_buffers: compute.group_count_buffers,
         cull_status_buffers: compute.status_buffers,
-        indirect_cmd_buffers_2: two_pass.indirect_buffers,
+        indirect_cmd_buffers_late: two_pass.indirect_buffers,
         shadow_bindless_root_sig: shadow_cull.bindless_root_sig,
         shadow_bindless_pso: shadow_cull.bindless_pso,
         shadow_bindless_cmd_sig: shadow_cull.cmd_sig,

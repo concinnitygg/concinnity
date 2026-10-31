@@ -361,18 +361,18 @@ impl DxContext {
             self.encode_grass_main(cmd, frame_idx, frame);
         }
 
-        // The sky lands behind phase 1's geometry. Under two-pass occlusion
-        // `Main2` then draws the disoccluded rest over it, which wins the depth
+        // The sky lands behind the early pass's geometry. Under two-pass occlusion
+        // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
             self.encode_main_sky(cmd, frame_idx, view_gva);
         }
 
         // Resolve the HDR scene target so the post stack can sample it. Under
-        // two-pass occlusion the resolve is deferred to `Main2` (which re-runs
+        // two-pass occlusion the resolve is deferred to `MainLate` (which re-runs
         // the disoccluded geometry on top of this pass's color + depth), so the
-        // post stack sees the combined phase-1 + phase-2 scene. Skipping it here
-        // leaves both targets in RENDER_TARGET, exactly as `Main2` expects to
+        // post stack sees the combined early + late scene. Skipping it here
+        // leaves both targets in RENDER_TARGET, exactly as `MainLate` expects to
         // load them.
         if !self.two_pass_occlusion_active() {
             self.finish_hdr_target(cmd);
@@ -382,7 +382,7 @@ impl DxContext {
     // Resolve the multisampled `hdr_color` into the single-sample `hdr_resolve`
     // that every later pass reads. A no-op with MSAA off, where there is no
     // separate resolve target and `hdr_color` *is* the spine. Shared by the
-    // phase-1 main pass and the phase-2 `Main2` pass.
+    // early main pass and the late pass `MainLate` pass.
     //
     // Both targets are graph resources sitting in RENDER_TARGET here -- their
     // writes are what this pass declares -- so the transitions below are the
@@ -422,21 +422,21 @@ impl DxContext {
         unsafe { cmd.ResourceBarrier(&[resolve_to_rt, color_to_rt]) };
     }
 
-    // Phase-2 main pass for two-pass occlusion (`Main2`). Loads (does not clear)
-    // the HDR color + depth `encode_main_pass` (phase 1) wrote and re-runs the
+    // Late main pass for two-pass occlusion (`MainLate`). Loads (does not clear)
+    // the HDR color + depth `encode_main_pass` (the early pass) wrote and re-runs the
     // bindless indirect draw through this frame's second indirect buffer (the
-    // phase-2 cull's output), depth-compositing the disoccluded geometry with
-    // phase 1. Static + instances + skinned all ride the shared cull buffers, so
-    // any of them that were occlusion candidates are re-tested by the phase-2 cull
-    // and redrawn here with the same two-`ExecuteIndirect` split as phase 1 (the
+    // late cull's output), depth-compositing the disoccluded geometry with
+    // the early pass. Static + instances + skinned all ride the shared cull buffers, so
+    // any of them that were occlusion candidates are re-tested by the late cull
+    // and redrawn here with the same two-`ExecuteIndirect` split as the early pass (the
     // static+instance prefix against the static VB/IB, the skinned tail against the
     // deformed VB + skinned IB). Finishes by resolving the HDR target (the resolve
-    // phase 1 deferred), so the post-decoration stack reads the combined result.
+    // the early pass deferred), so the post-decoration stack reads the combined result.
     // Only dispatched when `two_pass_occlusion_active`
-    // (the graph gates the Main2 node on it), so all phase-2 resources are
+    // (the graph gates the MainLate node on it), so all late resources are
     // present; the resolve still runs even if there is nothing to redraw.
-    // Mirrors `metal/draw/main.rs::encode_main_pass_phase2`.
-    pub(in crate::directx) fn encode_main_pass_phase2(
+    // Mirrors `metal/draw/main.rs::encode_main_pass_late`.
+    pub(in crate::directx) fn encode_main_pass_late(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         frame_idx: usize,
@@ -446,9 +446,9 @@ impl DxContext {
     ) {
         let depth_dsv = self.targets.depth.dsv;
 
-        // Load (do not clear) the phase-1 color + depth: Main2 composites the
+        // Load (do not clear) the early color + depth: MainLate composites the
         // disoccluded geometry on top.
-        // SAFETY: the command list is recording, and phase 1 left the HDR color and depth these
+        // SAFETY: the command list is recording, and the early pass left the HDR color and depth these
         // views name in their writable states.
         unsafe {
             cmd.OMSetRenderTargets(
@@ -461,14 +461,14 @@ impl DxContext {
         Self::set_full_viewport(cmd, width, height);
         self.bind_main_geometry(cmd);
 
-        // Re-issue the bindless pass over the phase-2 indirect buffer. Same
+        // Re-issue the bindless pass over the late indirect buffer. Same
         // bindings + the same static-prefix / skinned-tail split as the phase-1
         // bindless branch.
         if let (Some(bindless_pso), Some(bindless_root), Some(cull_sig), Some(indirect)) = (
             self.cull.main_bindless_pso.as_ref(),
             self.cull.main_bindless_root_sig.as_ref(),
             self.cull.cull_command_signature.as_ref(),
-            self.cull.indirect_cmd_buffers_2.get(frame_idx),
+            self.cull.indirect_cmd_buffers_late.get(frame_idx),
         ) && self.state.draw.record_count() > 0
         {
             let bindless_pso = self.wireframe_or(bindless_pso, self.wireframe.bindless.as_ref());
@@ -508,7 +508,7 @@ impl DxContext {
             }
         }
 
-        // Resolve the combined phase-1 + phase-2 scene (the resolve phase 1
+        // Resolve the combined early + late scene (the resolve the early pass
         // deferred). Always runs, even with nothing disoccluded, so the post
         // stack always reads a resolved target.
         self.finish_hdr_target(cmd);

@@ -11,7 +11,7 @@
 
 use concinnity_engine::gfx::view_modes::ViewMode;
 use concinnity_engine::render::backend::error::RenderResult;
-use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::render_graph::GpuSpan;
 use concinnity_engine::render::{backend::pass_timing, environment::sky};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::{
@@ -148,7 +148,7 @@ impl DxContext {
         frame_idx: usize,
         view_gva: u64,
     ) {
-        let (start, end) = pass_timing::pass_pair(frame_idx, PassId::Sky);
+        let (start, end) = pass_timing::pass_pair(frame_idx, GpuSpan::Sky);
         let heap = self.timestamps.query_heap.as_ref();
         if let Some(heap) = heap {
             // SAFETY: the command list is in the recording state and the query heap is live.

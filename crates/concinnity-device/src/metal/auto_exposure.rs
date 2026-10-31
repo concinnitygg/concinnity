@@ -18,6 +18,7 @@
 //! makes for the transient rings.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::auto_exposure::ExposureAdaptation;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -100,7 +101,7 @@ impl MtlContext {
     }
 
     // Encode the auto-exposure histogram passes against `hdr_resolve`. The
-    // build kernel runs one thread per HDR pixel; the average kernel runs
+    // build kernel runs one thread per metered pixel; the average kernel runs
     // one threadgroup of 256 threads that reduces the histogram, clears it
     // for the next frame, and writes the average log-luminance to the
     // `slot`'s readback buffer, which the CPU reads at the top of the frame
@@ -145,7 +146,7 @@ impl MtlContext {
             ns_string!("auto-exposure"),
         );
 
-        // Build kernel: 16x16 threadgroups, one thread per HDR pixel.
+        // Build kernel: 16x16 threadgroups, one thread per metered pixel.
         enc.set_pipeline(&pipelines.build);
         enc.set_texture(hdr_tex, 0);
         enc.set_buffer(histogram, 0, 0);
@@ -155,9 +156,13 @@ impl MtlContext {
             height: 16,
             depth: 1,
         };
+        let (threads_x, threads_y) = auto_exposure::histogram_build_threads(
+            u32::saturating_from(tex_w),
+            u32::saturating_from(tex_h),
+        );
         let grid = MTLSize {
-            width: tex_w,
-            height: tex_h,
+            width: threads_x as usize,
+            height: threads_y as usize,
             depth: 1,
         };
         enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
@@ -186,7 +191,7 @@ impl MtlContext {
 }
 
 // Pair of compute pipelines driving the auto-exposure histogram path: the
-// build kernel (one thread per HDR-resolve pixel) that accumulates a 256-bin
+// build kernel (one thread per metered pixel) that accumulates a 256-bin
 // log-luminance histogram, and the average kernel (one threadgroup of 256
 // threads) that reduces the histogram to a single average log-luminance value
 // and clears it for the next frame.

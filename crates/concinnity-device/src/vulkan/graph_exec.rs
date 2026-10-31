@@ -26,9 +26,8 @@
 //!
 //! Bundled passes:
 //!   * `PassId::SsaoBlur` dispatches the bundled `encode_ssao` (GTAO
-//!     kernel + depth-aware blur over the unified pre-pass normal+depth).
-//!     `PassId::SsaoDepth` / `PassId::SsaoKernel` stay timing-only and
-//!     the executor rejects them as graph nodes.
+//!     kernel + depth-aware blur over the unified pre-pass normal+depth),
+//!     timing its sub-passes as `GpuSpan::SsaoDepth` / `GpuSpan::SsaoKernel`.
 
 use ash::{Device, vk};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
@@ -601,8 +600,7 @@ impl VkContext {
     // the per-pass buffers in graph (toposort) order; the caller submits
     // `[start, ...returned, end]` in one `vkQueueSubmit`, so submission order =
     // GPU order and every encoder's inline barrier still synchronizes against
-    // the prior pass across the command-buffer boundary. A timing-only `PassId`
-    // (SsaoDepth, SsaoKernel, ReflectionComposite) returns an error.
+    // the prior pass across the command-buffer boundary.
     pub(in crate::vulkan) fn execute_graph(
         &mut self,
         graph: &CompiledGraph,
@@ -832,9 +830,9 @@ impl VkContext {
             // The indirect-draw commands the cull kernel writes and the main pass
             // consumes through `cmd_draw_indexed_indirect`.
             "draw_args" => buffer(&self.cull.indirect_buffers),
-            // Phase-2 counterpart, written by `Cull2` and consumed by `Main2`.
-            "draw_args2" => buffer(&self.cull.indirect_buffers2),
-            // Per-object cull status: phase 1 writes it, phase 2 reads it.
+            // Late counterpart, written by `CullLate` and consumed by `MainLate`.
+            "draw_args_late" => buffer(&self.cull.indirect_buffers_late),
+            // Per-object cull status: the early pass writes it, the late pass reads it.
             "cull_status" => buffer(&self.cull.cull_status_buffers),
             // Every live emitter's particle pool: `ParticlesSim` integrates them
             // and `ParticlesDraw` reads them in its vertex stage. One graph
@@ -1012,18 +1010,8 @@ impl VkContext {
             PassId::SsaoBlur => {
                 // The single graph node for the bundled `encode_ssao`
                 // dispatch: encodes the GTAO depth copy, kernel + depth-aware
-                // blur over the unified pre-pass's normal+depth. The SsaoDepth /
-                // SsaoKernel PassIds stay timing-only (rejected as graph nodes
-                // below) like Metal's same pattern.
+                // blur over the unified pre-pass's normal+depth.
                 self.encode_ssao(cmd, params.frame_idx, params.effects.ssao.as_ref())?;
-            }
-            PassId::SsaoDepth | PassId::SsaoKernel => {
-                return Err(RenderError::Other(format!(
-                    "graph executor (vulkan): pass {} is bundled inside SsaoBlur \
-                     (encode_ssao encodes the SSAO depth copy, kernel + blur \
-                     sub-passes); it should not appear as its own graph node",
-                    pass_id.name()
-                )));
             }
             PassId::Grass => {
                 if let Some(frame) = grass_frame {
@@ -1039,26 +1027,6 @@ impl VkContext {
                 if let Some(frame) = grass_frame {
                     self.encode_grass_shadow(cmd, params.frame_idx, frame);
                 }
-            }
-            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass | PassId::GrassShadowDraw => {
-                // Drawn inline at the tail of the opaque scene passes (the sky
-                // in Main and every probe face and mirror render, the grass in
-                // Main, the G-buffer pre-pass and the nearest shadow cascade);
-                // each only names a timing slot.
-                return Err(RenderError::Other(format!(
-                    "graph executor (vulkan): pass {} is drawn inline by the opaque \
-                     scene passes and should not appear as a graph node",
-                    pass_id.name()
-                )));
-            }
-            PassId::ReflectionComposite => {
-                // Metal-only inline pass; never scheduled on Vulkan. Handled here
-                // only to keep the dispatch match exhaustive.
-                return Err(RenderError::Other(format!(
-                    "graph executor (vulkan): pass {} is a Metal-only inline \
-                     reflection composite and should not appear as a graph node",
-                    pass_id.name()
-                )));
             }
             PassId::SsrResolve => {
                 self.encode_ssr_resolve(cmd, params.frame_idx, params.effects.ssr.as_ref());
@@ -1234,16 +1202,16 @@ impl VkContext {
                     self.clear_reactive_mask(cmd, params.frame_idx);
                 }
             }
-            PassId::HizBuild | PassId::HizFinal => {
-                // Two Hi-Z builds share one encoder. `HizBuild` rebuilds the
-                // pyramid mid-frame from phase-1 depth so `Cull2` re-tests the
-                // phase-1 occluded objects against up-to-date depth; `HizFinal`
-                // reduces the frame's final depth for the next frame's phase-1
+            PassId::HizEarly | PassId::HizFinal => {
+                // Two Hi-Z builds share one encoder. `HizEarly` rebuilds the
+                // pyramid mid-frame from early depth so `CullLate` re-tests the
+                // early occluded objects against up-to-date depth; `HizFinal`
+                // reduces the frame's final depth for the next frame's early
                 // cull. Both read the depth the graph has already transitioned.
                 self.encode_hiz_build(rec, params.frame_idx);
             }
-            PassId::Cull2 => {
-                self.encode_cull_phase2(
+            PassId::CullLate => {
+                self.encode_cull_late(
                     cmd,
                     params.frame_idx,
                     params.frustum,
@@ -1251,8 +1219,8 @@ impl VkContext {
                     params.cur_vp,
                 );
             }
-            PassId::Main2 => {
-                self.encode_main_pass_phase2(cmd, params.frame_idx);
+            PassId::MainLate => {
+                self.encode_main_pass_late(cmd, params.frame_idx);
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes

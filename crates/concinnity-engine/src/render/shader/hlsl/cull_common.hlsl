@@ -2,17 +2,17 @@
 // per-stream lists (cull_compact.hlsl) share: the status word, the variant
 // block's rows, the streams, and the indirect command record.
 
-// `cull_status` values. STATUS_HIZ_CANDIDATE is the only outcome phase 2
-// re-tests against the rebuilt pyramid; the others are settled by phase 1.
-static const uint STATUS_DRAWN         = 0u; // visible in phase 1 -> never re-tested
-static const uint STATUS_HIZ_CANDIDATE = 1u; // Hi-Z-occluded in phase 1 -> candidate
+// `cull_status` values. STATUS_HIZ_CANDIDATE is the only outcome the late pass
+// re-tests against the rebuilt pyramid; the others are settled by the early pass.
+static const uint STATUS_DRAWN         = 0u; // visible in the early pass -> never re-tested
+static const uint STATUS_HIZ_CANDIDATE = 1u; // Hi-Z-occluded in the early pass -> candidate
 static const uint STATUS_CULLED        = 2u; // frustum/distance/disabled -> settled
-static const uint STATUS_REDRAW        = 3u; // candidate found visible in phase 2
-static const uint STATUS_HIZ_CULLED    = 4u; // candidate still occluded in phase 2
+static const uint STATUS_REDRAW        = 3u; // candidate found visible in the late pass
+static const uint STATUS_HIZ_CULLED    = 4u; // candidate still occluded in the late pass
 
-// Phase 1 keeps the outcome in a status word's low byte and the record's
-// shader bucket in the byte above, so phase 2 and the packing kernels draw
-// the record where phase 1 routed it. Locked to gfx::cull_status.
+// The early pass keeps the outcome in a status word's low byte and the record's
+// shader bucket in the byte above, so the late pass and the packing kernels draw
+// the record where the early pass routed it. Locked to gfx::cull_status.
 static const uint CULL_OUTCOME_MASK = 0xFFu;
 static const uint CULL_BUCKET_SHIFT = 8u;
 

@@ -227,7 +227,7 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
                 // writes.
                 state: PostTargetState::Graph,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::First(PassId::Bloom),
+                timing: PostTiming::First(PassId::Bloom.timing()),
                 pipeline: &self.pipelines.prefilter,
                 binds: &[linear::<D>(scene)],
                 constants: prefilter_constants(post),
@@ -307,7 +307,7 @@ impl<Pipeline, Target> BloomPass<Pipeline, Target> {
                 target: top,
                 state: PostTargetState::Graph,
                 load: PostLoadOp::Load,
-                timing: PostTiming::Last(PassId::Bloom),
+                timing: PostTiming::Last(PassId::Bloom.timing()),
                 pipeline: &self.pipelines.upsample,
                 binds: &[linear::<D>(device.target_level_ref(&self.chain, 0)?)],
                 constants: &[],
@@ -539,8 +539,11 @@ mod tests {
         let pass = BloomPass::new(&device, EXTENT).expect("pass");
         let draws = encode_frame(&device, &pass);
         let timings: Vec<PostTiming> = draws.iter().map(|d| d.timing).collect();
-        assert_eq!(timings[0], PostTiming::First(PassId::Bloom));
-        assert_eq!(timings[timings.len() - 1], PostTiming::Last(PassId::Bloom));
+        assert_eq!(timings[0], PostTiming::First(PassId::Bloom.timing()));
+        assert_eq!(
+            timings[timings.len() - 1],
+            PostTiming::Last(PassId::Bloom.timing())
+        );
         assert!(
             timings[1..timings.len() - 1]
                 .iter()

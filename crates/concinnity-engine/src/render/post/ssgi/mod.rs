@@ -332,7 +332,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
                 // ordered after this write.
                 state: PostTargetState::Graph,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Whole(PassId::SsgiResolve),
+                timing: PostTiming::Whole(PassId::SsgiResolve.timing()),
                 pipeline: &self.pipelines.resolve,
                 binds: &[
                     screen::<D>(device.target_ref(targets.history(read)?)),
@@ -375,7 +375,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
             rec,
             &private_draw(
                 device.target_level_attachment(pyramid, 0)?,
-                PostTiming::First(PassId::Ssgi),
+                PostTiming::First(PassId::Ssgi.timing()),
                 &self.pipelines.depth,
                 &[screen::<D>(inputs.normal_depth)],
                 bytemuck::bytes_of(params),
@@ -442,7 +442,7 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
             rec,
             &private_draw(
                 device.target_attachment(targets.history(write)?),
-                PostTiming::Last(PassId::Ssgi),
+                PostTiming::Last(PassId::Ssgi.timing()),
                 &self.pipelines.accumulate,
                 &[
                     screen::<D>(device.target_ref(targets.fast(write)?)),
@@ -624,7 +624,10 @@ mod tests {
         assert_eq!(resolve.program, PostProgram::SsgiResolve);
         assert_eq!(resolve.target, MockTexture::Target(INDIRECT));
         assert_eq!(resolve.state, PostTargetState::Graph);
-        assert_eq!(resolve.timing, PostTiming::Whole(PassId::SsgiResolve));
+        assert_eq!(
+            resolve.timing,
+            PostTiming::Whole(PassId::SsgiResolve.timing())
+        );
         assert_eq!(
             binds(resolve),
             [
@@ -750,8 +753,11 @@ mod tests {
         let pass = SsgiPass::new(&device, 2, EXTENT).expect("pass");
         let draws = encode_frame(&device, &pass);
         let timings: Vec<PostTiming> = draws[1..].iter().map(|d| d.timing).collect();
-        assert_eq!(timings[0], PostTiming::First(PassId::Ssgi));
-        assert_eq!(timings[timings.len() - 1], PostTiming::Last(PassId::Ssgi));
+        assert_eq!(timings[0], PostTiming::First(PassId::Ssgi.timing()));
+        assert_eq!(
+            timings[timings.len() - 1],
+            PostTiming::Last(PassId::Ssgi.timing())
+        );
         assert!(
             timings[1..timings.len() - 1]
                 .iter()

@@ -658,7 +658,7 @@ impl MtlContext {
         // across the `&mut self` execute_graph call (every other GraphFrameParams
         // buffer is likewise a local). `Some` only when the fold is active
         // (draw.n_skinned > 0, set in upload_skinned under bindless + static geometry);
-        // the Cull pass writes it via encode_main_skin and the Main / Main2
+        // the Cull pass writes it via encode_main_skin and the Main / MainLate
         // skinned ICB tail binds it.
         let deformed_this_frame = if self.state.draw.n_skinned > 0 {
             self.skinned.deformed.get(ring_slot).cloned()

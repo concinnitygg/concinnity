@@ -29,7 +29,7 @@ use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBender, GrassCamera, GrassField,
     GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
-use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::render_graph::GpuSpan;
 use concinnity_engine::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassBendParams, GrassParams, GrassTileGpu,
     PlanetGrassTileGpu, grass_args_offset,
@@ -885,7 +885,7 @@ impl VkContext {
         };
         let device = &self.hw.device;
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
-        self.timed(cmd, frame_idx, PassId::GrassShadowDraw, || {
+        self.timed(cmd, frame_idx, GpuSpan::GrassShadowDraw, || {
             // SAFETY: `cmd` is recording inside the shadow render pass the pipeline was built
             // against, and the pipeline is owned by `grass`.
             unsafe {
@@ -991,7 +991,7 @@ impl VkContext {
         let Some(pipeline) = &grass.prepass else {
             return;
         };
-        self.timed(cmd, frame_idx, PassId::GrassPrepass, || {
+        self.timed(cmd, frame_idx, GpuSpan::GrassPrepass, || {
             self.draw_grass(
                 cmd,
                 grass,
@@ -1018,7 +1018,7 @@ impl VkContext {
         let Some(grass) = &self.grass else {
             return;
         };
-        self.timed(cmd, frame_idx, PassId::GrassDraw, || {
+        self.timed(cmd, frame_idx, GpuSpan::GrassDraw, || {
             self.draw_grass(
                 cmd,
                 grass,
@@ -1085,7 +1085,13 @@ impl VkContext {
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass.
-    fn timed(&self, cmd: vk::CommandBuffer, frame_idx: usize, pass: PassId, record: impl FnOnce()) {
+    fn timed(
+        &self,
+        cmd: vk::CommandBuffer,
+        frame_idx: usize,
+        pass: GpuSpan,
+        record: impl FnOnce(),
+    ) {
         let device = &self.hw.device;
         let stamps = self
             .hw

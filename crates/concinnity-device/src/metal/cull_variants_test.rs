@@ -1,4 +1,4 @@
-// The draw cull as the GPU runs it, against its CPU specs: the phase-1 kernel
+// The draw cull as the GPU runs it, against its CPU specs: the early kernel
 // routes synthetic records under several views, and every record's bucket in
 // its status word must be the one `GpuCullVariants::bucket` picks; the scan
 // then lays out each stream's list, and the group counts it leaves and the
@@ -21,7 +21,7 @@ use objc2_metal::{
     MTLTextureDescriptor,
 };
 
-use super::builtin_shaders::{CULL_PHASE1, CULL_SCAN, compute_pipeline};
+use super::builtin_shaders::{CULL_EARLY, CULL_SCAN, compute_pipeline};
 use super::encode::ComputeEncode;
 
 const BUCKETS: u32 = 8;
@@ -153,7 +153,7 @@ fn groups(enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>, width
     );
 }
 
-// Run the phase-1 kernel over `records` seen from `eye` under `variants`, then
+// Run the early kernel over `records` seen from `eye` under `variants`, then
 // the scan, and read back what they wrote.
 fn run(
     device: &ProtocolObject<dyn MTLDevice>,
@@ -161,7 +161,7 @@ fn run(
     variants: &GpuCullVariants,
     eye: [f32; 3],
 ) -> Culled {
-    let pipeline = compute_pipeline(device, &CULL_PHASE1, false).expect("cull kernel");
+    let pipeline = compute_pipeline(device, &CULL_EARLY, false).expect("cull kernel");
     let scan = compute_pipeline(device, &CULL_SCAN, false).expect("scan kernel");
     let objects: Vec<GpuObjectData> = records
         .iter()

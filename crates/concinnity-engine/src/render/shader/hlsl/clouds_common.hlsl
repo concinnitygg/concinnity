@@ -10,9 +10,6 @@ static const float CLOUD_PI = 3.14159265358979;
 static const float CLOUD_DETAIL_EROSION = 0.45;
 // How much the powder effect darkens a cloud's sunward skin.
 static const float CLOUD_POWDER = 0.6;
-// Octaves of light scattered on through a cloud, each fainter, reaching
-// farther and spreading wider (Wrenninge's approximation).
-static const uint CLOUD_SCATTER_OCTAVES = 4u;
 // The phase lobes: forward (the silver lining), backward (the glow away from
 // the sun), and the forward lobe's share.
 static const float CLOUD_FORWARD_G = 0.6;
@@ -207,6 +204,28 @@ void cloud_weathers(CloudRay ray, float3 up, out CloudWeather w[CLOUD_MAX_LAYERS
     }
 }
 
+// The layers' weather over the point `up`, where layer `known`'s is already
+// `weather`.
+void cloud_weathers_with(CloudRay ray, float3 up, uint known, CloudWeather weather,
+                         out CloudWeather w[CLOUD_MAX_LAYERS])
+{
+    uint count = uint(CLOUD.shell.z);
+    [unroll]
+    for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
+    {
+        w[i].cover = 0.0;
+        w[i].field = 0.0;
+        if (i == known)
+        {
+            w[i] = weather;
+        }
+        else if (i < count)
+        {
+            w[i] = cloud_layer_weather(i, ray, up);
+        }
+    }
+}
+
 // Extinction per kilometer of every layer at radius `r`, `rel` from the
 // camera, under the layers' weather `w`, and the height fraction through the
 // layer holding the most of it.
@@ -242,23 +261,41 @@ float cloud_phase(float nu, float k)
                 CLOUD_FORWARD_SHARE);
 }
 
-// The share of a light reaching a point `optical_depth` deep toward it that
-// scatters toward the viewer at cosine `nu` to the light, every octave of
-// scattering on through the cloud included.
-float cloud_scattered(float optical_depth, float nu)
+// How one view ray scatters each body's light toward the viewer, constant
+// along the ray. Light scatters on through a cloud in four octaves, each
+// fainter, reaching farther and spreading wider (Wrenninge's approximation);
+// `octaves` holds each octave's phase weighted by its share.
+struct CloudPhase
 {
-    float a = 1.0;
-    float b = 1.0;
-    float c = 1.0;
-    float s = 0.0;
-    for (uint o = 0u; o < CLOUD_SCATTER_OCTAVES; ++o)
+    float4 octaves[DAYLIGHT_BODIES];
+    // How far round toward the body the ray looks, 0 away to 1 into it.
+    float toward[DAYLIGHT_BODIES];
+};
+
+CloudPhase cloud_phase_along(float3 dir)
+{
+    CloudPhase phase;
+    [unroll]
+    for (uint i = 0u; i < DAYLIGHT_BODIES; i++)
     {
-        s += a * cloud_phase(nu, c) * exp(-optical_depth * b);
-        a *= 0.5;
-        b *= 0.5;
-        c *= 0.5;
+        float nu = dot(dir, DAYLIGHT.body_dir[i].xyz);
+        phase.octaves[i] = float4(cloud_phase(nu, 1.0), 0.5 * cloud_phase(nu, 0.5),
+                                  0.25 * cloud_phase(nu, 0.25), 0.125 * cloud_phase(nu, 0.125));
+        phase.toward[i] = saturate(nu * 0.5 + 0.5);
     }
-    return s;
+    return phase;
+}
+
+// The share of a light reaching a point `optical_depth` deep toward it that
+// scatters toward the viewer under `octaves`, every octave of scattering on
+// through the cloud included. Octave `o` reaches `2^o` times as deep, so its
+// extinction is the last octave's raised to the `2^(3 - o)`.
+float cloud_scattered(float optical_depth, float4 octaves)
+{
+    float e3 = exp(-optical_depth * 0.125);
+    float e2 = e3 * e3;
+    float e1 = e2 * e2;
+    return dot(octaves, float4(e1 * e1, e1, e2, e3));
 }
 
 // The daylight curves' cosine for a light at cosine `mu` over the horizon of
@@ -326,7 +363,7 @@ float cloud_light_depth(CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel, 
 // light from all round. `height` is its fraction through its layer. The
 // cloud is marched toward the brighter body only, and the other's light
 // takes the same path's depth: the two are seldom both bright.
-float3 cloud_sample_light(CloudRay ray, CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel,
+float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], float3 p, float3 rel,
                           float height, float3 ground_albedo)
 {
     float r = length(p);
@@ -370,9 +407,8 @@ float3 cloud_sample_light(CloudRay ray, CloudWeather w[CLOUD_MAX_LAYERS], float3
         [unroll]
         for (uint i = 0u; i < DAYLIGHT_BODIES; i++)
         {
-            float nu = dot(ray.dir, DAYLIGHT.body_dir[i].xyz);
-            float powder = lerp(skin, 1.0, saturate(nu * 0.5 + 0.5));
-            direct += reach[i] * cloud_scattered(depth, nu) * powder;
+            float powder = lerp(skin, 1.0, phase.toward[i]);
+            direct += reach[i] * cloud_scattered(depth, phase.octaves[i]) * powder;
         }
     }
     // The sky lights the tops, the ground the bases; both reach a cloud's

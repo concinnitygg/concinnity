@@ -5,10 +5,11 @@
 //
 // Three variants out of one entry point, selected by define:
 //
-//   (none)       phase 1: frustum + distance + Hi-Z, and records the outcome in
-//                `cull_status` so phase 2 knows what to reconsider
-//   CULL_PHASE2  re-tests only phase 1's Hi-Z candidates against the rebuilt
-//                pyramid, for two-pass occlusion
+//   (none)       the early pass: frustum + distance + Hi-Z, and records the
+//                outcome in `cull_status` so the late pass knows what to
+//                reconsider
+//   CULL_LATE    re-tests only the early pass's Hi-Z candidates against the
+//                rebuilt pyramid, for two-pass occlusion
 //   SHADOW_CULL  light-frustum only, one dispatch per shadow view
 //
 // Single source for all three hosts. Every variant writes the outcome into
@@ -152,7 +153,7 @@ struct CullHizParams
 #endif // !SHADOW_CULL
 
 // Per-object outcome of the cull, which the packing reads, at buffer(5) on
-// Metal. The phase-1 one is read again by phase 2; under single-pass
+// Metal. The early one is read again by the late pass; under single-pass
 // occlusion that is simply ignored.
 //
 // The GPU-driven shadow cull is frustum-only -- sun cascades have no
@@ -433,13 +434,13 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         {
             stream = i >= cull.skinned_base ? SKINNED_STREAM : 0u;
         }
-#elif defined(CULL_PHASE2)
-        // Runs after the pyramid was rebuilt from this frame's phase-1 depth.
-        // Re-tests only the objects phase 1 marked STATUS_HIZ_CANDIDATE against
+#elif defined(CULL_LATE)
+        // Runs after the pyramid was rebuilt from this frame's early depth.
+        // Re-tests only the objects the early pass marked STATUS_HIZ_CANDIDATE against
         // the fresh pyramid (projected through this frame's VP, carried in
-        // `prev_view_proj` exactly as phase 1 used the previous frame's). A
+        // `prev_view_proj` exactly as the early pass used the previous frame's). A
         // candidate still occluded by this frame's actual depth stays culled;
-        // one now visible is redrawn. Everything else phase 1 settled and is
+        // one now visible is redrawn. Everything else the early pass settled and is
         // left as it was.
         uint word = cull_status[i];
         if ((word & CULL_OUTCOME_MASK) == STATUS_HIZ_CANDIDATE)
@@ -455,8 +456,8 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
             }
         }
 #else
-        // Phase 1. Records the outcome in `cull_status` for two-pass
-        // occlusion: a Hi-Z cull is the only outcome phase 2 reconsiders
+        // The early pass. Records the outcome in `cull_status` for two-pass
+        // occlusion: a Hi-Z cull is the only outcome the late pass reconsiders
         // against the rebuilt pyramid; everything else is settled here.
         GpuDrawArgs a = draw_args[i];
         uint status = STATUS_DRAWN;

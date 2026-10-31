@@ -836,8 +836,8 @@ struct CloudMarchState
 // March layer `i` along `ray` over `span` (km along it) in at most
 // `max_steps` steps sized by the layer's thickness, starting `offset` of one
 // in, adding to `state`.
-void cloud_march_layer(uint i, CloudRay ray, float2 span, float max_steps, float offset,
-                       bool detail, inout CloudMarchState state)
+void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, float max_steps,
+                       float offset, bool detail, inout CloudMarchState state)
 {
     CloudLayerBlock L = CLOUD.layers[i];
     float thickness = L.shell.y - L.shell.x;
@@ -858,7 +858,8 @@ void cloud_march_layer(uint i, CloudRay ray, float2 span, float max_steps, float
         float3 rel = ray.dir * t;
         float3 p = ray.camera + rel;
         float r = length(p);
-        float extinction = cloud_layer_density(i, cloud_layer_weather(i, ray, p / r), r, rel, detail);
+        CloudWeather here = cloud_layer_weather(i, ray, p / r);
+        float extinction = cloud_layer_density(i, here, r, rel, detail);
         if (extinction <= 0.0)
         {
             t += coarse ? dt * 2.0 : dt;
@@ -875,9 +876,9 @@ void cloud_march_layer(uint i, CloudRay ray, float2 span, float max_steps, float
         }
         backed = false;
         CloudWeather w[CLOUD_MAX_LAYERS];
-        cloud_weathers(ray, p / r, w);
+        cloud_weathers_with(ray, p / r, i, here, w);
         float height = (r - L.shell.x) / thickness;
-        float3 scattered = cloud_sample_light(ray, w, p, rel, height, albedo) * extinction;
+        float3 scattered = cloud_sample_light(phase, w, p, rel, height, albedo) * extinction;
         float step_t = exp(-extinction * dt);
         // In-scatter integrated over the step's own extinction.
         state.light += state.transmittance * (scattered - scattered * step_t) / extinction;
@@ -915,6 +916,7 @@ CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offs
         spans[i].y = min(min(spans[i].y, end_km), spans[i].x + CLOUD.march.z);
         crossed[i] = crossed[i] && spans[i].y > spans[i].x;
     }
+    CloudPhase phase = cloud_phase_along(ray.dir);
     CloudMarchState state;
     state.light = (float3)0.0;
     state.transmittance = 1.0;
@@ -927,7 +929,7 @@ CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offs
         uint i = k == 0u ? first : 1u - first;
         if (crossed[i] && state.transmittance >= 0.01)
         {
-            cloud_march_layer(i, ray, spans[i], max_steps, offset, detail, state);
+            cloud_march_layer(i, ray, phase, spans[i], max_steps, offset, detail, state);
         }
     }
     CloudSight sight;

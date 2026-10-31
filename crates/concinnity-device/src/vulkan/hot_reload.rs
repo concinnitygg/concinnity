@@ -17,8 +17,8 @@ use concinnity_engine::render::shader::world_pipelines::{
 use super::context::VkContext;
 use super::pipeline::{
     BindlessSpv, BucketPipelines, build_bucket_pipeline, compile_bindless_shaders,
-    compile_composite_shaders, compile_cull_shader, compile_cull_shader_phase2,
-    compile_text_shaders, create_composite_pipeline, create_text_pipeline,
+    compile_composite_shaders, compile_cull_shader, compile_cull_shader_late, compile_text_shaders,
+    create_composite_pipeline, create_text_pipeline,
 };
 use super::pipeline_desc::compute_pipeline;
 
@@ -129,8 +129,8 @@ impl VkContext {
                     .rebuild_pipeline(device, gb.prepass_render_pass.handle())
             })
             .transpose()?;
-        // The cull kernel, and its phase-2 twin (two-pass occlusion) when built:
-        // the same source with the `CULL_PHASE2` define, over the shared layout.
+        // The cull kernel, and its late twin (two-pass occlusion) when built:
+        // the same source with the `CULL_LATE` define, over the shared layout.
         let cull_pipelines = self
             .cull
             .cull_kernels
@@ -138,14 +138,14 @@ impl VkContext {
             .map(|kernels| {
                 let layout = kernels.pipeline_layout.handle();
                 let pipeline = compute_pipeline(device, layout, &compile_cull_shader(hr)?, "cull")?;
-                let phase2 = kernels
-                    .pipeline_phase2
+                let late = kernels
+                    .pipeline_late
                     .as_ref()
                     .map(|_| {
-                        compute_pipeline(device, layout, &compile_cull_shader_phase2(hr)?, "cull")
+                        compute_pipeline(device, layout, &compile_cull_shader_late(hr)?, "cull")
                     })
                     .transpose()?;
-                Ok::<_, RenderError>((pipeline, phase2))
+                Ok::<_, RenderError>((pipeline, late))
             })
             .transpose()?;
         // Hi-Z build kernels (live alongside the cull pipeline).
@@ -291,11 +291,11 @@ impl VkContext {
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
-        if let (Some((pipeline, phase2)), Some(kernels)) =
+        if let (Some((pipeline, late)), Some(kernels)) =
             (cull_pipelines, self.cull.cull_kernels.as_mut())
         {
             kernels.pipeline = pipeline;
-            kernels.pipeline_phase2 = phase2;
+            kernels.pipeline_late = late;
         }
         if let (Some((init, downsample)), Some(hiz)) = (hiz_pipelines, self.cull.hiz.as_mut()) {
             hiz.swap_pipelines(init, downsample);

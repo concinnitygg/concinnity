@@ -125,7 +125,7 @@ impl DxContext {
                 Ok::<_, RenderError>((psos, world_buckets, engine))
             }
         );
-        // The cull PSO, and its phase-2 twin (two-pass occlusion) when built,
+        // The cull PSO, and its late twin (two-pass occlusion) when built,
         // both against the shared root signature.
         let cull_psos = self
             .cull
@@ -139,12 +139,12 @@ impl DxContext {
                     )
                 };
                 let pso = create(&super::cull::compile_cull_shader(hr)?)?;
-                let phase2 = kernels
-                    .pso_phase2
+                let late = kernels
+                    .pso_late
                     .as_ref()
-                    .map(|_| create(&super::cull::compile_cull_shader_phase2(hr)?))
+                    .map(|_| create(&super::cull::compile_cull_shader_late(hr)?))
                     .transpose()?;
-                Ok::<_, RenderError>((pso, phase2))
+                Ok::<_, RenderError>((pso, late))
             })
             .transpose()?;
 
@@ -340,9 +340,9 @@ impl DxContext {
         // The wireframe twins were built from the pre-reload shaders; drop them
         // so the next wireframe frame rebuilds against these.
         self.invalidate_wireframe_pipelines();
-        if let (Some((pso, phase2)), Some(kernels)) = (cull_psos, self.cull.cull_kernels.as_mut()) {
+        if let (Some((pso, late)), Some(kernels)) = (cull_psos, self.cull.cull_kernels.as_mut()) {
             kernels.pso = pso;
-            kernels.pso_phase2 = phase2;
+            kernels.pso_late = late;
         }
         if let (Some((single, msaa, tail)), Some(hiz)) = (hiz_rebuilt, self.cull.hiz.as_mut()) {
             hiz.swap_pipelines(single, msaa, tail);

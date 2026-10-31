@@ -15,7 +15,7 @@
 
 use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::{
-    ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage,
+    ClearValue, GpuSpan, PixelFormat, TextureDesc, TextureSize, TextureUsage,
 };
 
 use super::device::{
@@ -222,7 +222,7 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
                 // declare it.
                 state: PostTargetState::Pass,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::First(PassId::ReflectionComposite),
+                timing: PostTiming::First(GpuSpan::ReflectionComposite.timing()),
                 pipeline: &self.pipelines.blur,
                 binds: &[
                     linear::<D>(inputs.reflection),
@@ -247,7 +247,7 @@ impl<Pipeline, Target> ReflectionCompositePass<Pipeline, Target> {
                 // which this node writes.
                 state: PostTargetState::Graph,
                 load: PostLoadOp::DontCare,
-                timing: PostTiming::Last(PassId::ReflectionComposite),
+                timing: PostTiming::Last(GpuSpan::ReflectionComposite.timing()),
                 pipeline: &self.pipelines.composite,
                 binds: &binds,
                 constants: &[],
@@ -398,11 +398,11 @@ mod tests {
         let draws = encode_frame(&device, &pass);
         assert_eq!(
             draws[0].timing,
-            PostTiming::First(PassId::ReflectionComposite)
+            PostTiming::First(GpuSpan::ReflectionComposite.timing())
         );
         assert_eq!(
             draws[1].timing,
-            PostTiming::Last(PassId::ReflectionComposite)
+            PostTiming::Last(GpuSpan::ReflectionComposite.timing())
         );
     }
 

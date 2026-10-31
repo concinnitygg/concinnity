@@ -339,10 +339,12 @@ pub(super) struct Diagnostics {
     // atomic per pass slot, shared between the GPU completion handler that
     // writes it and `render_stats()` that reads it.
     pub pass_times_us:
-        std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::PASS_COUNT]>,
+        std::sync::Arc<[std::sync::atomic::AtomicU32; super::pass_timing::TIMING_COUNT]>,
     // The async-queue passes of the frame `pass_times_us` was resolved from,
     // one bit per pass, published beside it.
     pub pass_async_mask: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    // That frame's graphics-queue gaps an async pass ran through, in microseconds.
+    pub gpu_gap_beside_async_us: std::sync::Arc<std::sync::atomic::AtomicU32>,
     // The part of that frame's graphics-queue span shared with the frame before
     // it, in microseconds, and the latest span end seen, in GPU nanoseconds,
     // which the next frame's span is clipped against.
@@ -571,7 +573,7 @@ pub(crate) struct MtlContext {
     // writer they are handed to once their command buffer completes.
     pub(super) frame_capture: super::screenshot::MtlFrameCaptures,
     // GPU-driven main pass + cull feature state: the main and world-shader
-    // pipelines, the phase-1/phase-2 cull pipelines, their indirect command
+    // pipelines, the early and late cull pipelines, their indirect command
     // buffers + argument encoders/buffers, the per-object status buffer, the
     // two-pass-occlusion toggle, and the Hi-Z pyramid + view-projection
     // snapshots the occlusion test reprojects through. All `Some`/active only
@@ -874,9 +876,9 @@ impl MtlContext {
     // for the scene's record reserve; growth past that rounds up to the next
     // power of two so streamed chunks do not rebuild it every frame.
     //
-    // The per-object `cull_status_buffer` (always, for the phase-1 kernel's
-    // buffer(5) binding) and (under two-pass occlusion) the phase-2 ICB
-    // `cull_icb_2` + its argument buffer are grown in lockstep on the same
+    // The per-object `cull_status_buffer` (always, for the early kernel's
+    // buffer(5) binding) and (under two-pass occlusion) the late ICB
+    // `cull_icb_late` + its argument buffer are grown in lockstep on the same
     // trigger, so all three stay sized to the live draw-object count.
     pub(super) fn ensure_icb_capacity(&mut self, count: usize) -> error::RenderResult<()> {
         // Retained is reference-counted; cloning the handle lets the rest of
@@ -922,8 +924,8 @@ impl MtlContext {
         }
 
         // Per-object status buffer: one u32 per command slot, private storage
-        // (GPU-written by phase-1 cull, GPU-read by phase-2 cull). Always
-        // allocated so the phase-1 kernel's buffer(5) binding always resolves.
+        // (GPU-written by early cull, GPU-read by late cull). Always
+        // allocated so the early kernel's buffer(5) binding always resolves.
         let status = self
             .hw
             .device
@@ -941,37 +943,35 @@ impl MtlContext {
 
         // Second-pass ICB + argument buffer, only when two-pass occlusion is on.
         if self.cull.two_pass_occlusion {
-            let mut icbs_2 = Vec::with_capacity(bucket_count);
+            let mut icbs_late = Vec::with_capacity(bucket_count);
             for _ in 0..bucket_count {
-                icbs_2.push(self.build_cull_icb(new_cap)?);
+                icbs_late.push(self.build_cull_icb(new_cap)?);
             }
-            if self.cull.icb_2_arg_buffer.is_none() {
+            if self.cull.icb_late_arg_buffer.is_none() {
                 let len = arg_encoder.encodedLength().max(16);
                 let buf = self
                     .hw
                     .device
                     .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-                    .ok_or_else(|| {
-                        super::error::allocation_failed("phase-2 ICB argument buffer")
-                    })?;
-                self.cull.icb_2_arg_buffer = Some(buf);
+                    .ok_or_else(|| super::error::allocation_failed("late ICB argument buffer"))?;
+                self.cull.icb_late_arg_buffer = Some(buf);
             }
-            let arg_buf2 = self
+            let arg_buf_late = self
                 .cull
-                .icb_2_arg_buffer
+                .icb_late_arg_buffer
                 .as_ref()
-                .expect("phase-2 ICB argument buffer was just ensured");
-            // SAFETY: the phase-2 argument buffer was sized to `encodedLength()`,
-            // the same layout as the phase-1 set.
-            unsafe { arg_encoder.setArgumentBuffer_offset(Some(arg_buf2), 0) };
-            for (b, icb) in icbs_2.iter().enumerate() {
-                // SAFETY: as phase 1, each bucket's ICB at its index within the
+                .expect("late ICB argument buffer was just ensured");
+            // SAFETY: the late argument buffer was sized to `encodedLength()`,
+            // the same layout as the early set.
+            unsafe { arg_encoder.setArgumentBuffer_offset(Some(arg_buf_late), 0) };
+            for (b, icb) in icbs_late.iter().enumerate() {
+                // SAFETY: as the early pass, each bucket's ICB at its index within the
                 // `icbs` `[[id(0)]]` array of the buffer bound just above.
                 unsafe { arg_encoder.setIndirectCommandBuffer_atIndex(Some(icb), b) };
             }
-            self.cull.icbs_2 = icbs_2;
-            self.cull.ranges_2 =
-                Some(self.private_buffer(STREAM_RANGE_BYTES, "phase-2 cull list ranges")?);
+            self.cull.icbs_late = icbs_late;
+            self.cull.ranges_late =
+                Some(self.private_buffer(STREAM_RANGE_BYTES, "late cull list ranges")?);
         }
 
         self.cull.icbs = icbs;
@@ -1105,7 +1105,7 @@ impl MtlContext {
             self.cull.mirror_icb_capacity = 0;
             return Ok(());
         }
-        // Reuse the main phase-1 ICB argument encoder: a mirror ICB has the
+        // Reuse the main early ICB argument encoder: a mirror ICB has the
         // identical `ICBContainer` layout (one `[[id(0)]]` member). Absent on
         // non-bindless contexts, where there is no GPU cull to mirror.
         if self.cull.icb_arg_encoder.is_none() {
@@ -1120,7 +1120,7 @@ impl MtlContext {
             slots.push(self.build_cull_slot(new_cap, "mirror cull slot")?);
         }
         // Shared single-pass status scratch: the mirror cull writes per-object
-        // status the same as phase 1, but nothing reads it (no phase-2 over the
+        // status the same as the early pass, but nothing reads it (no late over the
         // mirror), so one buffer serves every slot. One u32 per command slot.
         let status = self
             .hw
@@ -1137,7 +1137,7 @@ impl MtlContext {
     }
 
     // Create one `DrawIndexed` indirect command buffer with `cap` command
-    // slots. Both the phase-1 (`cull_icb`) and phase-2 (`cull_icb_2`) ICBs
+    // slots. Both the early pass (`cull_icb`) and late (`cull_icb_late`) ICBs
     // share this shape: each command inherits the render encoder's buffer
     // bindings + pipeline state, so the cull kernels only encode the
     // indexed-draw arguments. Private storage keeps it GPU-resident
@@ -1189,10 +1189,10 @@ impl MtlContext {
             .gpu_time_us
             .load(std::sync::atomic::Ordering::Relaxed);
         // Per-pass timings are filled in pass-index order with their stable
-        // names, leaving slots past PASS_COUNT at the default ("", 0).
+        // names, leaving slots past TIMING_COUNT at the default ("", 0).
         // Reports zero for any pass that did not write its sample slot this
         // frame (e.g. SSR when disabled, or any pass not yet wired up).
-        for (i, name) in super::pass_timing::PASS_NAMES.iter().enumerate() {
+        for (i, name) in super::pass_timing::TIMING_NAMES.iter().enumerate() {
             let micros =
                 self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
             stats.pass_times_us[i] = (*name, micros);
@@ -1200,6 +1200,10 @@ impl MtlContext {
         stats.gpu_overlap_us = self
             .diagnostics
             .gpu_overlap_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stats.gpu_gap_beside_async_us = self
+            .diagnostics
+            .gpu_gap_beside_async_us
             .load(std::sync::atomic::Ordering::Relaxed);
         stats.gpu_done = self.diagnostics.gpu_done.lock().ok().and_then(|done| *done);
         stats.async_pass_mask = self

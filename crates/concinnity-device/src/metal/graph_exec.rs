@@ -1,13 +1,6 @@
 //! Metal-side executor for the render graph. `MtlContext::execute_graph`
-//! walks a `CompiledGraph` and dispatches each pass by `PassId` to the
-//! existing `encode_*` method. Every Metal pass that ever ran inline is
-//! now in the graph. Composite plus Shadow, Main, Cull, `AutoExposure`,
-//! Bloom, Velocity, `TaaResolve`, `SsrResolve`, `ParticlesSim`, `ParticlesDraw`,
-//! Fog, Decals, `GBufferPrepass`, and `SsaoBlur` are the dispatchable `PassIds`.
-//! `PassIds` `SsaoDepth` and `SsaoKernel` are timing-only: their per-pass
-//! timing slots fire from `diagnostics.pass_timing.attach_*` calls inside
-//! the bundled `encode_ssao` Rust function, but they must never appear as
-//! graph nodes (the executor rejects them with a clear error if mis-added).
+//! walks a `CompiledGraph` and dispatches each pass by `PassId` to its
+//! `encode_*` method.
 //!
 //! Per-pass command buffers, two queues. Each non-composite pass runs on its own
 //! freshly-minted `MTLCommandBuffer`, encoded on a rayon worker and committed by
@@ -171,7 +164,7 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     pub bindless_tex_args: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     // This frame's skinned deformed-vertex buffer. `Some` only when a
     // SkinnedMesh has uploaded. The Cull pass's `encode_main_skin` writes it; the Main /
-    // Main2 skinned ICB tail binds it as the vertex buffer for that draw range.
+    // MainLate skinned ICB tail binds it as the vertex buffer for that draw range.
     pub deformed_skinned: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
     // The previous-frame skinned deformed-vertex buffer: the slot one
     // frame behind `deformed_skinned` in the per-frame deformed ring. The
@@ -535,20 +528,23 @@ impl MtlContext {
                 self.encode_cull_stage(cmd_buf, params)?;
                 0
             }
-            PassId::HizBuild | PassId::HizFinal => {
-                // Two Hi-Z builds share one encoder. `HizBuild` rebuilds the
-                // pyramid mid-frame from phase-1 depth so Cull2 re-tests
+            PassId::HizEarly | PassId::HizFinal => {
+                // Two Hi-Z builds share one encoder. `HizEarly` rebuilds the
+                // pyramid mid-frame from early depth so CullLate re-tests
                 // against up-to-date occluders; `HizFinal` reduces the frame's
-                // final depth for the next frame's phase-1 cull.
+                // final depth for the next frame's early cull.
                 self.encode_hiz_build(cmd_buf);
                 0
             }
-            PassId::Cull2 => {
+            PassId::CullLate => {
                 let object_buffer =
-                    pass_input(params.object_buffer, PassId::Cull2, "object_buffer")?;
-                let draw_args_buffer =
-                    pass_input(params.draw_args_buffer, PassId::Cull2, "draw_args_buffer")?;
-                self.encode_cull_phase2(
+                    pass_input(params.object_buffer, PassId::CullLate, "object_buffer")?;
+                let draw_args_buffer = pass_input(
+                    params.draw_args_buffer,
+                    PassId::CullLate,
+                    "draw_args_buffer",
+                )?;
+                self.encode_cull_late(
                     cmd_buf,
                     object_buffer,
                     draw_args_buffer,
@@ -556,7 +552,7 @@ impl MtlContext {
                     params.cam_pos,
                 )?
             }
-            PassId::Main2 => self.encode_main_pass_phase2(
+            PassId::MainLate => self.encode_main_pass_late(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
                     elapsed: narrow_f32(params.elapsed),
@@ -710,42 +706,6 @@ impl MtlContext {
                 // inside `encode_ssao`.
                 let ssao_params = pass_input(params.ssao_params, PassId::SsaoBlur, "ssao_params")?;
                 self.encode_ssao(cmd_buf, ssao_params)?
-            }
-            PassId::SsaoDepth | PassId::SsaoKernel => {
-                // Bundled inside `encode_ssao` (dispatched via
-                // PassId::SsaoBlur). These PassIds keep their
-                // per-pass timing slots via inline
-                // `diagnostics.pass_timing.attach_render` calls inside
-                // encode_ssao, but they must not appear as their
-                // own graph nodes.
-                return Err(RenderError::Other(format!(
-                    "graph executor: pass {} is bundled inside SsaoBlur \
-                         (encode_ssao encodes all three SSAO sub-passes); it \
-                         should not appear as its own graph node",
-                    pass_id.name()
-                )));
-            }
-            PassId::Sky | PassId::GrassDraw | PassId::GrassPrepass | PassId::GrassShadowDraw => {
-                // Drawn inline at the tail of the opaque scene passes (the sky
-                // in Main and every probe face and mirror render, the grass in
-                // Main, the G-buffer pre-pass and the nearest shadow cascade);
-                // each only names a timing slot.
-                return Err(RenderError::Other(format!(
-                    "graph executor: pass {} is drawn inline by the opaque scene \
-                         passes; it should not appear as its own graph node",
-                    pass_id.name()
-                )));
-            }
-            PassId::ReflectionComposite => {
-                // Encoded inline at the tail of SsrResolve / RtReflections (it
-                // blurs + composites the reflection target they wrote). Keeps a
-                // timing slot via an inline `attach_render`, but is never a graph
-                // node of its own -- same pattern as the bundled SSAO sub-passes.
-                return Err(RenderError::Other(format!(
-                    "graph executor: pass {} is encoded inline by SsrResolve / \
-                         RtReflections; it should not appear as its own graph node",
-                    pass_id.name()
-                )));
             }
             PassId::Decals => {
                 self.encode_decals(cmd_buf, params.vp, params.inv_vp, params.frustum)?

@@ -342,13 +342,21 @@ impl MtlContext {
         // it. The reading is the scaler's span, including work that overlaps it.
         let timing = self.diagnostics.pass_timing.as_ref();
         if let Some(t) = timing {
-            t.mark(cmd_buf, PassTimer::First(PassId::Upscale), scene_pre_taa);
+            t.mark(
+                cmd_buf,
+                PassTimer::First(PassId::Upscale.timing()),
+                scene_pre_taa,
+            );
         }
         // SAFETY: the scaler's input, output, and parameter slots were all set above, and `cmd_buf`
         // is the live command buffer for this frame.
         unsafe { scaler.encodeToCommandBuffer(cmd_buf) };
         if let Some(t) = timing {
-            t.mark(cmd_buf, PassTimer::Last(PassId::Upscale), &upscaler.output);
+            t.mark(
+                cmd_buf,
+                PassTimer::Last(PassId::Upscale.timing()),
+                &upscaler.output,
+            );
         }
         Ok(0)
     }

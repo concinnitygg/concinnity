@@ -115,6 +115,11 @@ pub struct RenderStats {
     /// full, so they add up to `gpu_frame_us` plus this. Zero on a backend that
     /// does not split the span.
     pub gpu_overlap_us: u32,
+    /// Microseconds of the same frame's graphics-queue span in which no
+    /// sampled graphics pass ran while an async-queue pass did: the graphics
+    /// queue waiting on async work, or a render pass's vertex phase, which
+    /// Metal does not sample. Zero on a backend that does not report it.
+    pub gpu_gap_beside_async_us: u32,
     /// When the most recently completed frame's GPU work ended on the host
     /// clock, beside the input sample time that names that frame. Reported as
     /// late as `gpu_frame_us`; `None` on a backend that cannot place its GPU
@@ -226,6 +231,7 @@ impl Default for RenderStats {
             skinned_pool_free: 0,
             gpu_frame_us: 0,
             gpu_overlap_us: 0,
+            gpu_gap_beside_async_us: 0,
             gpu_done: None,
             gpu_wait_us: 0,
             render_cpu_us: 0,

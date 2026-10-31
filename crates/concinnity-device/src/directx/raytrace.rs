@@ -1925,7 +1925,7 @@ impl super::context::DxContext {
         }
         // Orders the skin writes before the main pass's vertex fetch and returns
         // the buffer to its resting VERTEX_AND_CONSTANT_BUFFER state (read by both
-        // Main and Main2's skinned ExecuteIndirect this frame).
+        // Main and MainLate's skinned ExecuteIndirect this frame).
         let to_vertex = transition_barrier(
             deformed,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
