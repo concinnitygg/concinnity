@@ -2,9 +2,10 @@
 //! walks a `CompiledGraph` and dispatches each pass by `PassId` to its
 //! `encode_*` method.
 //!
-//! Per-pass command buffers, two queues. Each non-composite pass runs on its own
-//! freshly-minted `MTLCommandBuffer`, encoded on a rayon worker and committed by
-//! the main thread onto the queue the graph's schedule assigned it
+//! Per-batch command buffers, two queues. Consecutive non-composite passes on
+//! one queue are batched (`render_graph::plan_batches`), and each batch runs on
+//! its own freshly-minted `MTLCommandBuffer`, encoded on a rayon worker and
+//! committed by the main thread onto the queue the graph's schedule assigned it
 //! (`CompiledPass::queue`). Each queue's buffers commit in ascending compiled
 //! index, so a queue's own commit order is that queue's graph order; the two
 //! queues are ordered against each other only by the `MTLEvent` signal / wait
@@ -27,7 +28,7 @@
 //! rather than out-of-order commits on one, and why events only ever cross
 //! between the two.
 //!
-//! Per-pass command buffers also sidestep the `MTLParallelRenderCommandEncoder`
+//! Per-batch command buffers also sidestep the `MTLParallelRenderCommandEncoder`
 //! abort that reliably trips G14X (M2/M3 Pro/Max-class GPUs) on macOS 26.4 after
 //! ~20-90 s of rendering, regardless of how few sub-encoders we minted.
 //!
@@ -72,6 +73,7 @@
 //! resources are ever introduced, the point-1 assumption breaks even within a
 //! queue, and explicit `MTLFence`s become necessary.)
 
+use concinnity_core::fanout::FanOut as _;
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{
@@ -84,8 +86,8 @@ use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
 use concinnity_engine::render::render_graph;
 use concinnity_engine::render::render_graph::{
-    CompiledGraph, CompiledPass, PassId, PassQueue, PassRecorder, PassScratch, execute_passes,
-    presenter_index,
+    BatchRecorder, CompiledGraph, CompiledPass, PassId, PassQueue, PassScratch, batch_budget,
+    execute_batches, plan_batches, presenter_index,
 };
 use concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan;
 use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
@@ -267,11 +269,12 @@ fn encode_signals(
 #[derive(Default)]
 pub(in crate::metal) struct MtlGraphScratch {
     events: graph_events::FramePlan,
+    batches: Vec<std::ops::Range<usize>>,
     passes: PassScratch<SendableCmdBuf>,
 }
 
-// Records one graph pass into a freshly-minted command buffer on its own queue,
-// on a job-pool worker.
+// Records a batch of graph passes on one queue into one freshly-minted command
+// buffer, on a job-pool worker.
 struct MtlPassRecorder<'a, 'p> {
     ctx: ParallelCtxRef<'a>,
     params: &'a GraphFrameParams<'p>,
@@ -280,39 +283,55 @@ struct MtlPassRecorder<'a, 'p> {
     events: Option<&'a graph_events::FramePlan>,
 }
 
-impl PassRecorder for MtlPassRecorder<'_, '_> {
+impl BatchRecorder for MtlPassRecorder<'_, '_> {
+    type Open = Retained<ProtocolObject<dyn MTLCommandBuffer>>;
     type Recorded = SendableCmdBuf;
 
-    fn record(&self, index: usize, pass: &CompiledPass) -> RenderResult<SendableCmdBuf> {
-        // A rayon worker drains no autorelease pool of its own, so without this
-        // one every autoreleased object the pass encode creates (the command
-        // buffer and its encoders among them) would be retained for the life of
-        // the process.
+    fn open(&self, _first: usize, pass: &CompiledPass) -> RenderResult<Self::Open> {
+        // Minted on a rayon worker, so under a pool of its own like `record`.
         objc2::rc::autoreleasepool(|_| {
             let ctx = self.ctx.as_ctx();
             let queue = match ctx.hw.graph_queues.as_ref() {
                 Some(queues) => queues.queue(pass.queue, &ctx.hw.command_queue),
                 None => &ctx.hw.command_queue,
             };
-            let cmd_buf = queue.commandBuffer().ok_or_else(|| {
-                RenderError::Other("graph executor: failed to mint per-pass cmd buf".into())
-            })?;
+            queue.commandBuffer().ok_or_else(|| {
+                RenderError::Other("graph executor: failed to mint a pass command buffer".into())
+            })
+        })
+    }
+
+    fn record(
+        &self,
+        cmd_buf: &mut Self::Open,
+        index: usize,
+        pass: &CompiledPass,
+    ) -> RenderResult<()> {
+        // A rayon worker drains no autorelease pool of its own, so without this
+        // one every autoreleased object the pass encode creates (its encoders
+        // among them) would be retained for the life of the process.
+        objc2::rc::autoreleasepool(|_| {
+            let ctx = self.ctx.as_ctx();
             // Waits before the pass's own encoders, signals after them: Metal
             // accepts an event command only while the command buffer has no open
-            // encoder.
+            // encoder, and orders one after the work encoded ahead of it.
             let sync = ctx.hw.graph_queues.as_ref().zip(self.events);
             if let Some((queues, plan)) = sync {
-                encode_waits(&cmd_buf, queues, plan.pass(index));
+                encode_waits(cmd_buf, queues, plan.pass(index));
             }
-            let count = ctx.encode_pass_into(pass.id, &cmd_buf, self.params, self.particle)?;
+            let count = ctx.encode_pass_into(pass.id, cmd_buf, self.params, self.particle)?;
             if let Some((queues, plan)) = sync {
-                encode_signals(&cmd_buf, queues, plan.pass(index), pass.queue);
+                encode_signals(cmd_buf, queues, plan.pass(index), pass.queue);
             }
             ctx.diagnostics
                 .draw_calls_accum
                 .fetch_add(count, Ordering::Relaxed);
-            Ok(SendableCmdBuf(cmd_buf))
+            Ok(())
         })
+    }
+
+    fn close(&self, cmd_buf: Self::Open) -> RenderResult<SendableCmdBuf> {
+        Ok(SendableCmdBuf(cmd_buf))
     }
 }
 
@@ -384,18 +403,32 @@ impl MtlContext {
             None => None,
         };
 
-        // Workers encode into their own freshly-minted `MTLCommandBuffer` in
-        // parallel and hand the encoded-but-uncommitted buffer back. The main
-        // thread then commits each onto its own queue in compiled order, so
-        // each queue's commit order is that queue's graph order, which is that
-        // queue's GPU execution order.
+        // Consecutive passes on one queue share a command buffer: each boundary
+        // between buffers idles the GPU. A batch takes passes while last frame's
+        // recording cost stays within an even share of the workers, so batching
+        // does not lengthen the recording fan-out.
+        let cost_us = &self.diagnostics.frame_stats.pass_record_us;
+        let budget = batch_budget(graph, cost_us, jobs::pool().workers());
+        plan_batches(graph, cost_us, budget, &mut scratch.batches);
+
+        // Workers encode each batch into its own freshly-minted
+        // `MTLCommandBuffer` in parallel and hand the encoded-but-uncommitted
+        // buffer back. The main thread then commits each onto its own queue in
+        // compiled order, so each queue's commit order is that queue's graph
+        // order, which is that queue's GPU execution order.
         let recorder = MtlPassRecorder {
             ctx: ParallelCtxRef::new(self),
             params,
             particle: particle_frame.as_ref(),
             events,
         };
-        let mut executed = execute_passes(graph, &recorder, jobs::pool(), &mut scratch.passes)?;
+        let mut executed = execute_batches(
+            graph,
+            &scratch.batches,
+            &recorder,
+            jobs::pool(),
+            &mut scratch.passes,
+        )?;
         self.diagnostics.frame_stats.recording_fan_out = executed.timing;
         self.diagnostics.frame_stats.pass_record_us = executed.record_us;
 
@@ -404,13 +437,14 @@ impl MtlContext {
         // has been committed before this point, so an encode failure leaves the
         // frame's event values unsignaled and unrecorded: the next frame reuses
         // the slice rather than waiting on a value nothing reaches.
-        for (idx, cb) in executed.take() {
-            // Each pass commits its own command buffer, so its handler names
-            // the pass when the GPU faults it. The same handler reports the
-            // buffer to the frame's completion join, so the frame-in-flight
-            // slot outlives every queue's work rather than just the
-            // presenting buffer's.
-            let pass_id = graph.passes[idx].id;
+        for (passes, cb) in executed.take() {
+            // Each batch commits its own command buffer, so its handler names
+            // the batch's passes when the GPU faults it. The same handler
+            // reports the buffer to the frame's completion join, so the
+            // frame-in-flight slot outlives every queue's work rather than just
+            // the presenting buffer's.
+            let first = graph.passes[passes.start].id;
+            let last = graph.passes[passes.end - 1].id;
             let part = std::sync::Arc::clone(join);
             join.add_part();
             let handler = block2::RcBlock::new(
@@ -420,7 +454,7 @@ impl MtlContext {
                     let cbh = unsafe { cbh.as_ref() };
                     super::fault_log::report_fault(
                         cbh,
-                        format_args!("render-graph pass {pass_id:?}"),
+                        format_args!("render-graph passes {first:?} to {last:?}"),
                     );
                     part.arrive();
                 },

@@ -358,6 +358,9 @@ impl PassTimingResources {
     // scaler). The read makes the hazard tracker hold the marker until every
     // earlier writer of `after` has finished, which places its sample against
     // that work; an encoder with nothing to do is dropped and samples nothing.
+    // Each marker samples at its own start: a blit's end-of-encoder sample is
+    // never written when its start one is not, so a closing marker's end
+    // stays zero.
     pub(super) fn mark(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -375,7 +378,7 @@ impl PassTimingResources {
                 self.mark_attached(id);
                 (slot_pair(id).0, NO_SAMPLE)
             }
-            PassTimer::Last(id) => (NO_SAMPLE, slot_pair(id).1),
+            PassTimer::Last(id) => (slot_pair(id).1, NO_SAMPLE),
         };
         let arr = desc.sampleBufferAttachments();
         // SAFETY: index 0 is within the descriptor's fixed sample-attachment array.
