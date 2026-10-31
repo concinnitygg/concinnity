@@ -1,13 +1,14 @@
 //! The prop reflection probe every backend runs the same way: which prop it
 //! rides on and which cull records that prop draws through, where it is this
-//! frame, and the record the shaders read it by. The backends render its six
-//! faces and convolve them every frame.
+//! frame, the record the shaders read it by, and the cycle that spreads its
+//! six faces over several frames.
 
 use crate::components::{GlobalTransform, PropReflectionProbe, RenderHandle};
 use crate::ecs::{Entity, PipelineContext};
 use crate::gfx::frustum::transform_aabb;
 use crate::planet::PlanetFrame;
 use crate::render::draw_list::DrawListData;
+use crate::render::probe::bake::CAPTURE_FACES;
 use crate::render::probe::capture::PrefilterPlan;
 use crate::render::probe::prop_reflection_probe::MAX_PROP_PROBE_RESOLUTION;
 use crate::render::uniforms::{ProbeUniforms, StandIns};
@@ -35,6 +36,7 @@ pub struct PropProbeTarget {
     records: [u32; 2],
     resolution: u32,
     capture_distance: Option<f32>,
+    faces_per_frame: u32,
 }
 
 impl PropProbeTarget {
@@ -71,6 +73,7 @@ impl PropProbeTarget {
             records: contiguous_records(draws.iter().map(|d| d.0)),
             resolution: probe.resolution.min(MAX_PROP_PROBE_RESOLUTION),
             capture_distance: probe.capture_distance,
+            faces_per_frame: probe.faces_per_frame,
         })
     }
 
@@ -92,6 +95,7 @@ impl PropProbeTarget {
             records: self.records,
             resolution: self.resolution,
             capture_distance: self.capture_distance,
+            faces_per_frame: self.faces_per_frame,
             sea: false,
         })
     }
@@ -162,6 +166,8 @@ pub struct PropProbeFrame {
     /// How far each face's capture reaches along its axis; `None` without
     /// limit.
     pub capture_distance: Option<f32>,
+    /// How many faces a frame renders.
+    pub faces_per_frame: u32,
     /// Whether the frame's daylight carries a planet sea for the faces to
     /// shade in place of its surface.
     pub sea: bool,
@@ -217,6 +223,60 @@ impl PropProbeFrame {
     }
 }
 
+/// The faces of the prop probe one frame renders, and whether it then
+/// convolves the capture into the probe's cube.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FaceSlice {
+    /// The first face rendered.
+    pub first: usize,
+    /// How many faces are rendered, from `first` on.
+    pub count: usize,
+    /// The slice renders the cycle's last face, so the capture is whole and
+    /// convolved after it.
+    pub convolve: bool,
+    /// An earlier frame convolved a whole capture, so the cube holds one the
+    /// shaders can read.
+    pub filled: bool,
+}
+
+impl FaceSlice {
+    /// The faces rendered.
+    pub fn faces(&self) -> core::ops::Range<usize> {
+        self.first..self.first + self.count
+    }
+}
+
+/// The prop probe's walk through its six faces, a slice a frame, which a
+/// backend keeps from frame to frame. A new or rebuilt capture starts it over.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FaceCycle {
+    next: usize,
+    filled: bool,
+}
+
+impl FaceCycle {
+    /// This frame's slice of `faces_per_frame` faces, moving the cycle past it.
+    pub fn advance(&mut self, faces_per_frame: u32) -> FaceSlice {
+        let per_frame = usize::try_from(faces_per_frame).unwrap_or(CAPTURE_FACES);
+        let first = self.next;
+        let count = per_frame.clamp(1, CAPTURE_FACES - first);
+        self.next = (first + count) % CAPTURE_FACES;
+        let slice = FaceSlice {
+            first,
+            count,
+            convolve: self.next == 0,
+            filled: self.filled,
+        };
+        self.filled |= slice.convolve;
+        slice
+    }
+
+    /// Start over from the first face with nothing convolved.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// The convolution of a prop probe's capture of `resolution`-texel faces into
 /// its cube of the probe array, whose chain starts at
 /// [`PrefilterPlan::RUNTIME`]'s face size.
@@ -245,8 +305,71 @@ mod tests {
             records: [4, 6],
             resolution,
             capture_distance: None,
+            faces_per_frame: 2,
             sea: false,
         }
+    }
+
+    fn slices(faces_per_frame: u32, frames: usize) -> alloc::vec::Vec<FaceSlice> {
+        let mut cycle = FaceCycle::default();
+        (0..frames)
+            .map(|_| cycle.advance(faces_per_frame))
+            .collect()
+    }
+
+    #[test]
+    fn two_faces_a_frame_renew_the_cube_every_third_frame() {
+        let s = slices(2, 4);
+        let faces: alloc::vec::Vec<_> = s.iter().map(FaceSlice::faces).collect();
+        assert_eq!(faces, [0..2, 2..4, 4..6, 0..2]);
+        let convolved: alloc::vec::Vec<_> = s.iter().map(|s| s.convolve).collect();
+        assert_eq!(convolved, [false, false, true, false]);
+        // The cube is readable from the frame after the first convolution.
+        let filled: alloc::vec::Vec<_> = s.iter().map(|s| s.filled).collect();
+        assert_eq!(filled, [false, false, false, true]);
+    }
+
+    #[test]
+    fn six_faces_a_frame_convolve_every_frame() {
+        for s in slices(6, 3) {
+            assert_eq!((s.faces(), s.convolve), (0..6, true));
+        }
+        assert!(!slices(6, 1)[0].filled);
+        assert!(slices(6, 2)[1].filled);
+    }
+
+    #[test]
+    fn every_face_renders_once_a_cycle_whatever_the_count() {
+        for per_frame in [0, 1, 2, 3, 4, 5, 6, 7] {
+            let mut rendered = [0; CAPTURE_FACES];
+            let mut cycle = FaceCycle::default();
+            loop {
+                let s = cycle.advance(per_frame);
+                s.faces().for_each(|f| rendered[f] += 1);
+                if s.convolve {
+                    break;
+                }
+            }
+            assert_eq!(rendered, [1; CAPTURE_FACES], "{per_frame}");
+        }
+    }
+
+    #[test]
+    fn a_reset_starts_over_unfilled() {
+        let mut cycle = FaceCycle::default();
+        for _ in 0..4 {
+            cycle.advance(3);
+        }
+        cycle.reset();
+        assert_eq!(
+            cycle.advance(3),
+            FaceSlice {
+                first: 0,
+                count: 3,
+                convolve: false,
+                filled: false
+            }
+        );
     }
 
     #[test]

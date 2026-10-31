@@ -442,11 +442,12 @@ const AUDITS: &[BackendAudit] = &[
             // flipping the per-plane cluster lists (not graph resources) into
             // and out of `UNORDERED_ACCESS` around their binning.
             ("planar.rs", ".ResourceBarrier(", 6, Reason::Ungraphed),
-            // The prop probe's capture into and out of its face targets' state,
-            // the shared multisampled color around each face's resolve, and its
-            // cube of the probe array back after the convolution. None is a graph
+            // The prop probe's capture into and out of its face targets' state
+            // (back to rest directly on a frame that does not convolve), the
+            // shared multisampled color around each face's resolve, and its cube
+            // of the probe array back after the convolution. None is a graph
             // resource.
-            ("prop_probe.rs", ".ResourceBarrier(", 4, Reason::Ungraphed),
+            ("prop_probe.rs", ".ResourceBarrier(", 5, Reason::Ungraphed),
             // The last `Inline` row on this backend. One of its two barriers is
             // really intra-pass (the G-buffer depth, which the graph does not
             // model, borrowed for the upscaler's read); the other transitions the

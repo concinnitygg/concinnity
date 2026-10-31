@@ -16,7 +16,9 @@ use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
-use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::prop::{
+    FaceCycle, FaceSlice, PropProbeFrame, prop_probe_plan,
+};
 use concinnity_engine::render::probe::radiance::FaceStorage;
 use concinnity_engine::render::uniforms::FaceCamera;
 
@@ -43,7 +45,9 @@ const FACE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::vulkan) struct PropProbe {
-    frame: Option<PropProbeFrame>,
+    // This frame's capture and the faces it renders.
+    frame: Option<(PropProbeFrame, FaceSlice)>,
+    cycle: FaceCycle,
     gpu: Option<PropProbeGpu>,
     // Set once building the capture failed, which is not retried.
     failed: bool,
@@ -182,6 +186,7 @@ impl VkContext {
     ) {
         let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
             self.probe.prop.frame = None;
+            self.probe.prop.cycle.reset();
             self.probe.book.set_prop_probe(None);
             return;
         };
@@ -194,8 +199,11 @@ impl VkContext {
             self.probe.book.set_prop_probe(None);
             return;
         }
-        let filled = self.probe.prop.frame.replace(frame).is_some();
-        self.probe.book.set_prop_probe(filled.then_some(&frame));
+        let slice = self.probe.prop.cycle.advance(frame.faces_per_frame);
+        self.probe.prop.frame = Some((frame, slice));
+        self.probe
+            .book
+            .set_prop_probe(slice.filled.then_some(&frame));
     }
 
     // What a capture of `resolution`-texel faces is built against this frame.
@@ -228,20 +236,23 @@ impl VkContext {
         }
         self.probe.prop.gpu = None;
         self.probe.prop.frame = None;
+        self.probe.prop.cycle.reset();
         self.probe.prop.gpu = Some(PropProbeGpu::new(self, key)?);
         Ok(())
     }
 
-    // The `PropProbe` node: each face of the prop probe, culled against the
-    // face's frustum with the prop left out and drawn from the frame's
-    // records into its layer of the capture, then the convolution of the
-    // capture into the probe's cube.
+    // The `PropProbe` node: this frame's faces of the prop probe, each culled
+    // against the face's frustum with the prop left out and drawn from the
+    // frame's records into its layer of the capture, then, once the cycle's
+    // last face is in, the convolution of the capture into the probe's cube.
     pub(in crate::vulkan) fn encode_prop_probe(
         &self,
         cmd: vk::CommandBuffer,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some(frame), Some(gpu)) = (self.probe.prop.frame, self.probe.prop.gpu.as_ref()) else {
+        let (Some((frame, slice)), Some(gpu)) =
+            (self.probe.prop.frame, self.probe.prop.gpu.as_ref())
+        else {
             return Ok(());
         };
         let Some(&bindless_set) = self.cull.bindless_sets.get(params.frame_idx) else {
@@ -274,7 +285,7 @@ impl VkContext {
             },
             records: gpu.key.records,
         };
-        for face in 0..CAPTURE_FACES {
+        for face in slice.faces() {
             let ring = face * gpu.frames + f;
             let view = ViewUniforms::face(FaceCamera {
                 vp: capture::face_view_projection(eye, face),
@@ -283,7 +294,7 @@ impl VkContext {
             })
             .with_stand_ins(frame.stand_ins());
             gpu.view_bufs[ring].write_val(0, &view);
-            if face > 0 {
+            if face > slice.first {
                 self.order_prop_face_cull(cmd);
             }
             self.encode_probe_cull(
@@ -311,6 +322,9 @@ impl VkContext {
                 bindless_set,
                 packing,
             );
+        }
+        if !slice.convolve {
+            return Ok(());
         }
         self.encode_probe_pyramid(cmd, &gpu.prefilter, &gpu.plan)?;
         for mip in 1..gpu.plan.mips() {
@@ -344,9 +358,9 @@ impl VkContext {
 
     // Order a face's render after the last writes to its attachments: the
     // shared depth and multisampled color the previous face rendered, and the
-    // capture layer the last frame's convolution read. `main_render_pass`
-    // takes both in `UNDEFINED` and its external dependency makes nothing
-    // available, so this barrier is what orders them.
+    // capture layer the last convolution read. `main_render_pass` takes both
+    // in `UNDEFINED` and its external dependency makes nothing available, so
+    // this barrier is what orders them.
     fn order_prop_face_render(&self, cmd: vk::CommandBuffer) {
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(

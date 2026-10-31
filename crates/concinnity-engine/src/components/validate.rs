@@ -411,12 +411,15 @@ pub fn reflection_probe(mut args: ReflectionProbe) -> ReflectionProbe {
     args
 }
 
-/// Round a `PropReflectionProbe`'s face size to one it captures at and keep
-/// its capture distance non-negative.
+/// Round a `PropReflectionProbe`'s face size and faces per frame to ones it
+/// captures at and keep its capture distance non-negative.
 pub fn prop_reflection_probe(mut args: PropReflectionProbe) -> PropReflectionProbe {
     args.resolution =
         crate::render::probe::prop_reflection_probe::prop_probe_resolution(args.resolution);
     args.capture_distance = args.capture_distance.map(|d| d.max(0.0));
+    args.faces_per_frame = crate::render::probe::prop_reflection_probe::prop_probe_faces_per_frame(
+        args.faces_per_frame,
+    );
     args
 }
 

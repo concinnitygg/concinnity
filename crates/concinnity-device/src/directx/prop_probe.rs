@@ -15,7 +15,9 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32, saturating_u32};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
-use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::prop::{
+    FaceCycle, FaceSlice, PropProbeFrame, prop_probe_plan,
+};
 use concinnity_engine::render::probe::radiance::FaceStorage;
 use concinnity_engine::render::uniforms::FaceCamera;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -47,7 +49,9 @@ const CAPTURE_REST: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_NON_PIXEL_SHADE
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::directx) struct PropProbe {
-    frame: Option<PropProbeFrame>,
+    // This frame's capture and the faces it renders.
+    frame: Option<(PropProbeFrame, FaceSlice)>,
+    cycle: FaceCycle,
     gpu: Option<PropProbeGpu>,
     // Set once building the capture failed, which is not retried.
     failed: bool,
@@ -148,6 +152,7 @@ impl DxContext {
     ) {
         let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
             self.probe.prop.frame = None;
+            self.probe.prop.cycle.reset();
             self.probe.book.set_prop_probe(None);
             return;
         };
@@ -160,8 +165,11 @@ impl DxContext {
             self.probe.book.set_prop_probe(None);
             return;
         }
-        let filled = self.probe.prop.frame.replace(frame).is_some();
-        self.probe.book.set_prop_probe(filled.then_some(&frame));
+        let slice = self.probe.prop.cycle.advance(frame.faces_per_frame);
+        self.probe.prop.frame = Some((frame, slice));
+        self.probe
+            .book
+            .set_prop_probe(slice.filled.then_some(&frame));
     }
 
     // Build the capture for faces of `resolution` texels, unless the one held
@@ -186,20 +194,24 @@ impl DxContext {
         }
         self.probe.prop.gpu = None;
         self.probe.prop.frame = None;
+        self.probe.prop.cycle.reset();
         self.probe.prop.gpu = Some(PropProbeGpu::new(self, key)?);
         Ok(())
     }
 
-    // The `PropProbe` node: the six faces' culls, each against its face's
-    // frustum with the prop left out, into the frame's six regions; then each
-    // face drawn from its region into its layer of the capture; then the
-    // convolution of the capture into the probe's cube.
+    // The `PropProbe` node: the culls of this frame's faces, each against its
+    // face's frustum with the prop left out, into the face's region; then each
+    // face drawn from its region into its layer of the capture; then, once the
+    // cycle's last face is in, the convolution of the capture into the
+    // probe's cube.
     pub(in crate::directx) fn encode_prop_probe(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some(frame), Some(gpu)) = (self.probe.prop.frame, self.probe.prop.gpu.as_ref()) else {
+        let (Some((frame, slice)), Some(gpu)) =
+            (self.probe.prop.frame, self.probe.prop.gpu.as_ref())
+        else {
             return Ok(());
         };
         let f = params.frame_idx % gpu.frames;
@@ -218,7 +230,8 @@ impl DxContext {
             tile_morph: self.state.tile_morph_view(),
         };
         let mut culls = [RegionCull::EMPTY; CAPTURE_FACES];
-        for (face, cull) in culls.iter_mut().enumerate() {
+        let culls = &mut culls[..slice.count];
+        for (face, cull) in slice.faces().zip(culls.iter_mut()) {
             let view = ViewUniforms::face(FaceCamera {
                 vp: capture::face_view_projection(eye, face),
                 view: capture::face_view_matrix(eye, face),
@@ -245,7 +258,7 @@ impl DxContext {
         self.encode_planar_culls(
             cmd,
             params.frame_idx,
-            &culls,
+            culls,
             &gpu.indirect[f],
             gpu.records,
             gpu.packing(f),
@@ -260,7 +273,7 @@ impl DxContext {
         // SAFETY: the command list is recording; the capture rests in `CAPTURE_REST`.
         unsafe { cmd.ResourceBarrier(&[transition_barrier(capture, CAPTURE_REST, arrival)]) };
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
-        for face in 0..CAPTURE_FACES {
+        for face in slice.faces() {
             let rtv = gpu
                 .msaa
                 .as_ref()
@@ -295,6 +308,12 @@ impl DxContext {
             }
         }
 
+        if !slice.convolve {
+            // SAFETY: the command list is recording; the faces left the capture in its arrival
+            // state.
+            unsafe { cmd.ResourceBarrier(&[transition_barrier(capture, arrival, CAPTURE_REST)]) };
+            return Ok(());
+        }
         self.encode_probe_pyramid(cmd, &gpu.prefilter, &gpu.plan)?;
         for mip in 1..gpu.plan.mips() {
             self.encode_probe_ggx_mip(cmd, &gpu.prefilter, &gpu.plan, mip)?;
