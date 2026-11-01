@@ -528,6 +528,7 @@ impl CanopyField {
             params.meadow_mean = planet.meadow_mean;
             params.covers = planet.covers.covers;
             params.cover_count = planet.covers.count;
+            params.surface_albedo_index = planet.covers.surface_albedo_index;
             [params.ground_origin, params.ground_up] = ground_reference(&planet.shape, tile);
             set_ground_noise(&mut params, &planet.shape);
             if let Some(shore) = &self.shore {

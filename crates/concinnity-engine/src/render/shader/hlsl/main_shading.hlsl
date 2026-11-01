@@ -347,8 +347,10 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float footprint = max(length(ddx(v.world_pos)), length(ddy(v.world_pos)));
     CanopyShade canopy = (CanopyShade)0;
     float3 ground_normal = v.normal;
-    // A planet's ground takes its covers' look where their rules hold.
-    GroundCoverMix covers = ground_no_covers();
+    // A planet's ground takes its covers' look where their rules hold: how
+    // much of the surface's own roughness and metallic they leave, and theirs.
+    float cover_keep = 1.0;
+    float2 cover_roughness_metallic = (float2)(0.0);
     // A planet's ground shades with its layers' blended normal map.
     bool ground_textured = false;
     float2 ground_xy = (float2)(0.0);
@@ -381,10 +383,9 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     {
         place = ground_place(v.world_pos, ground_normal, footprint, canopy_layers(od.far_canopy));
         GroundTaps taps = ground_taps(v.uv, uv_dx, uv_dy, detail_footprint);
-        GroundSurface surface = ground_surface_at(place, od.albedo_index, od.normal_index, tint,
-                                                  taps);
-        covers.keep = surface.keep;
-        covers.roughness_metallic = surface.roughness_metallic;
+        GroundSurface surface = ground_surface_at(place, od.normal_index, tint, taps);
+        cover_keep = surface.keep;
+        cover_roughness_metallic = surface.roughness_metallic;
         place.covered = 1.0 - surface.keep;
         ground_textured = true;
         ground_xy = surface.layer.normal_xy;
@@ -432,8 +433,8 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         emissive *= pool_sample(od.emissive_map_index, v.uv).rgb;
     }
 
-    float2 roughness_metallic = surface_roughness_metallic(od, v.uv) * covers.keep
-                              + covers.roughness_metallic;
+    float2 roughness_metallic = surface_roughness_metallic(od, v.uv) * cover_keep
+                              + cover_roughness_metallic;
     float roughness = roughness_metallic.x;
     float metallic  = roughness_metallic.y;
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)

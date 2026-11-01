@@ -293,9 +293,10 @@ bool rt_trace_reflection(float3 origin, float3 dir, bool ibl, float max_mip, boo
         if (canopy_on_planet(e.far_canopy))
         {
             place = ground_place(hit_p, hit_n, footprint, canopy_layers(e.far_canopy));
-            GroundCoverMix covers = ground_covers_at(place, huv);
-            place.covered = 1.0 - covers.keep;
-            albedo = albedo * covers.keep + covers.albedo;
+            GroundTaps taps = ground_taps(huv, (float2)(0.0), (float2)(0.0), GROUND_HEX_FAR);
+            GroundSurface surface = ground_surface_at(place, nidx, tint, taps);
+            place.covered = 1.0 - surface.keep;
+            albedo = surface.layer.albedo;
         }
         CanopyShade canopy = canopy_at(e.far_canopy, place, hit_p, hit_n, hcolor, albedo, -dir,
                                        footprint, (float2)(0.0), RT_CANOPY_PAST_BLADES, true);

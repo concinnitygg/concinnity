@@ -72,7 +72,8 @@ struct CanopyParams
     float shelf_length;
     float seabed_lift;
     uint cover_count;
-    float _pad0;
+    // The planet's own albedo texture, GROUND_COVER_UNTEXTURED where it has none.
+    uint surface_albedo_index;
     // xyz = where ground altitudes are measured from, w = its altitude.
     float4 ground_origin;
     // xyz = the up there, w = its distance from the planet's center.

@@ -669,47 +669,6 @@ GroundSwash ground_swash_at(GroundPlace place, float height, float footprint)
     return ground_swash(height, relief, noise, swell);
 }
 
-// The covers laid over a planet's ground at `place`: how much of the
-// surface's own look is left (`keep`), and the covers' albedo and roughness
-// and metallic, weighted in over it in order.
-struct GroundCoverMix
-{
-    float keep;
-    float3 albedo;
-    float2 roughness_metallic;
-};
-
-GroundCoverMix ground_no_covers()
-{
-    GroundCoverMix m;
-    m.keep = 1.0;
-    m.albedo = (float3)(0.0);
-    m.roughness_metallic = (float2)(0.0);
-    return m;
-}
-
-// The covers at `place`, their textures read at `uv`.
-GroundCoverMix ground_covers_at(GroundPlace place, float2 uv)
-{
-    GroundCoverMix m = ground_no_covers();
-    uint covers = min(CANOPY.cover_count, GROUND_MAX_COVERS);
-    for (uint i = 0u; i < covers; i++)
-    {
-        GroundCover c = CANOPY.covers[i];
-        float3 albedo = c.tint;
-        // Uniform across the draw, so the sample keeps its derivatives.
-        if (c.albedo_index != GROUND_COVER_UNTEXTURED)
-        {
-            albedo *= pool_sample(c.albedo_index, uv).rgb;
-        }
-        float w = ground_rule_weight(c.rule, place.altitude, place.steepness, place.noise);
-        m.keep *= 1.0 - w;
-        m.albedo = lerp(m.albedo, albedo, w);
-        m.roughness_metallic = lerp(m.roughness_metallic, float2(c.roughness, c.metallic), w);
-    }
-    return m;
-}
-
 // The ground and the canopy at `pos` on a surface of far-field word
 // `far_canopy` and albedo `albedo`, the vertex color `color` carrying a
 // terrain's layer densities and `normal` the ground's, seen along `V` from a

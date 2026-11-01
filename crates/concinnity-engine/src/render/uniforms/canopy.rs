@@ -113,8 +113,9 @@ pub struct CanopyParams {
     pub seabed_lift: f32,
     /// Covers in `covers`.
     pub cover_count: u32,
-    /// Keeps the record a whole number of rows.
-    pub _pad: f32,
+    /// The pool index of the planet's own albedo texture, or
+    /// `GROUND_COVER_UNTEXTURED` where its material has none.
+    pub surface_albedo_index: u32,
     /// The point ground altitudes are measured from, in the simulated frame
     /// (`xyz`), and its altitude above sea level (`w`).
     pub ground_origin: [f32; 4],
@@ -243,7 +244,7 @@ mod tests {
         assert_eq!(offset_of!(CanopyParams, shelf_length), 2048);
         assert_eq!(offset_of!(CanopyParams, seabed_lift), 2052);
         assert_eq!(offset_of!(CanopyParams, cover_count), 2056);
-        assert_eq!(offset_of!(CanopyParams, _pad), 2060);
+        assert_eq!(offset_of!(CanopyParams, surface_albedo_index), 2060);
         assert_eq!(offset_of!(CanopyParams, ground_origin), 2064);
         assert_eq!(offset_of!(CanopyParams, ground_up), 2080);
         assert_eq!(offset_of!(CanopyParams, covers), 2096);

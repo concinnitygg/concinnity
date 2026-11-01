@@ -136,7 +136,7 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             shelf_length,
             seabed_lift,
             cover_count,
-            [_pad] => ["_pad0"],
+            surface_albedo_index,
             ground_origin,
             ground_up,
             covers,

@@ -187,13 +187,19 @@ float3 fresnel_schlick(float cos_theta, float3 f0)
     return f0 + (1.0 - f0) * pow(saturate(1.0 - cos_theta), 5.0);
 }
 
-// The covers' albedo maps, read at the base mip as every other hit texture is.
+// The ground's maps, read at the base mip as every other hit texture is.
 float4 pool_sample(uint idx, float2 uv)
 {
     return tex_pool[NonUniformResourceIndex(idx)].SampleLevel(pool_sampler, uv, 0.0);
 }
+float4 pool_sample_grad(uint idx, float2 uv, float2 dx, float2 dy)
+{
+    return pool_sample(idx, uv);
+}
 
 {CANOPY}
+
+{GROUND_SURFACE}
 
 #define RT_CANOPY
 // How wide a reflected ray's footprint grows per meter it travels, which the

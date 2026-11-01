@@ -139,6 +139,16 @@ pub fn ground_altitude(
     reference_altitude + (2.0 * reference_radius * up_v + v_v) / (reference_radius + distance)
 }
 
+/// The pool index the ground reads `entry`'s albedo texture at against a pool
+/// of `texture_count` entries, or [`GROUND_COVER_UNTEXTURED`] where it has none.
+fn ground_albedo_index(entry: &MaterialEntry, texture_count: u32) -> u32 {
+    if entry.albedo_slot == NO_ALBEDO_SLOT {
+        GROUND_COVER_UNTEXTURED
+    } else {
+        albedo_pool_index(entry.albedo_slot, texture_count)
+    }
+}
+
 impl GroundCoverGpu {
     /// A cover lying where `rule` holds, looking like the material baked to
     /// `entry` (the default material for none) against a texture pool of
@@ -154,11 +164,7 @@ impl GroundCoverGpu {
         Self {
             rule: GroundRuleGpu::of(rule),
             tint,
-            albedo_index: if entry.albedo_slot == NO_ALBEDO_SLOT {
-                GROUND_COVER_UNTEXTURED
-            } else {
-                albedo_pool_index(entry.albedo_slot, texture_count)
-            },
+            albedo_index: ground_albedo_index(&entry, texture_count),
             roughness,
             metallic,
             normal_index: normal_pool_index(entry.normal_map_slot, texture_count),
@@ -175,17 +181,27 @@ pub struct GroundCovers {
     pub covers: [GroundCoverGpu; crate::planet::MAX_GROUND_COVERS],
     /// Covers laid.
     pub count: u32,
+    /// The pool index of the planet's own albedo texture, or
+    /// [`GROUND_COVER_UNTEXTURED`] where its material has none.
+    pub surface_albedo_index: u32,
 }
 
 impl GroundCovers {
-    /// The covers `planet` lays, each material looked up by `material` and
-    /// its albedo resolved against a texture pool of `texture_count` entries.
+    /// The covers `planet` lays and the albedo of the surface under them, each
+    /// material looked up by `material` and its textures resolved against a
+    /// texture pool of `texture_count` entries.
     pub fn of(
         planet: &crate::components::Planet,
         material: impl Fn(crate::ecs::MaterialHandle) -> Option<MaterialEntry>,
         texture_count: u32,
     ) -> Self {
-        let mut out = Self::default();
+        let surface = planet.material.and_then(&material);
+        let mut out = Self {
+            surface_albedo_index: surface.map_or(GROUND_COVER_UNTEXTURED, |e| {
+                ground_albedo_index(&e, texture_count)
+            }),
+            ..Self::default()
+        };
         for (slot, cover) in out.covers.iter_mut().zip(&planet.covers) {
             *slot = GroundCoverGpu::of(
                 &cover.rule,
@@ -486,6 +502,7 @@ mod tests {
         sand.albedo_slot = 2;
         sand.normal_map_slot = 4;
         let planet = Planet {
+            material: Some(MaterialHandle::new(3)),
             covers: alloc::vec![
                 GroundCover {
                     material: Some(MaterialHandle::new(3)),
@@ -503,6 +520,7 @@ mod tests {
         assert_eq!(c.albedo_index, 2);
         assert_eq!(c.normal_index, 4);
         assert_eq!(c.rule, GroundRuleGpu::of(&rule));
+        assert_eq!(covers.surface_albedo_index, 2);
         // No material: the default look, sampling no texture.
         let bare = GroundCovers::of(
             &Planet {
@@ -517,5 +535,7 @@ mod tests {
         // Its normal map is the pool's flat fallback.
         assert_eq!(bare.covers[0].normal_index, 5);
         assert_eq!(bare.covers[0].tint, [1.0; 3]);
+        // No surface material: the surface samples no texture either.
+        assert_eq!(bare.surface_albedo_index, GROUND_COVER_UNTEXTURED);
     }
 }

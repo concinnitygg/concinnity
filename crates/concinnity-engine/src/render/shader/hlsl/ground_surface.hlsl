@@ -181,14 +181,12 @@ struct GroundSurface
     float2 roughness_metallic;
 };
 
-// The ground at `place` on a surface whose own albedo and normal maps are pool
-// entries `albedo_index` and `normal_index`, tinted `tint`, each layer read
-// through `taps`.
-GroundSurface ground_surface_at(GroundPlace place, uint albedo_index, uint normal_index,
-                                float3 tint, GroundTaps taps)
+// The ground at `place` on the planet's surface, whose normal map is pool entry
+// `normal_index` and whose tint is `tint`, each layer read through `taps`.
+GroundSurface ground_surface_at(GroundPlace place, uint normal_index, float3 tint, GroundTaps taps)
 {
     GroundSurface g;
-    g.layer = ground_layer(albedo_index, normal_index, tint, taps);
+    g.layer = ground_layer(CANOPY.surface_albedo_index, normal_index, tint, taps);
     g.keep = 1.0;
     g.roughness_metallic = (float2)(0.0);
     uint covers = min(CANOPY.cover_count, GROUND_MAX_COVERS);
