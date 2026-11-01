@@ -830,6 +830,9 @@ struct CloudSight
 static const float CLOUD_MIN_STEP_KM = 0.04;
 // The thickness from which a layer is marched in the full count of steps.
 static const float CLOUD_FULL_STEPS_KM = 1.0;
+// The stretch through a layer, in its thicknesses, from which a ray takes
+// more steps.
+static const float CLOUD_GRAZING_THICKNESSES = 8.0;
 
 // What a march along one view ray has found so far: the clouds' light
 // (absolute), the light surviving them, and the weighted sum of the distances
@@ -853,7 +856,10 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
     float length_km = span.y - span.x;
     float step_km = max(thickness / 32.0, CLOUD_MIN_STEP_KM);
     // A thin layer holds little to resolve and gets a share of the steps.
-    float layer_steps = max_steps * clamp(thickness / CLOUD_FULL_STEPS_KM, 0.25, 1.0);
+    // A ray grazing along the layer, as at the limb from orbit, gets up to
+    // twice the steps for its long stretch.
+    float layer_steps = max_steps * clamp(thickness / CLOUD_FULL_STEPS_KM, 0.25, 1.0)
+                      * clamp(length_km / (thickness * CLOUD_GRAZING_THICKNESSES), 1.0, 2.0);
     uint steps = uint(clamp(ceil(length_km / step_km), 16.0, max(layer_steps, 16.0)));
     float dt = length_km / float(steps);
     float3 albedo = ATMO.ground_albedo.xyz;
@@ -1021,23 +1027,38 @@ float cloud_reproject_distance(float3 dir, float scene_km)
     return nearest;
 }
 
-// One thread per target texel: the march's where this frame marched it,
-// otherwise the previous frame's target where it saw the same clouds, and the
-// block's marched texel where it did not.
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
+// The share of a marched texel's new march in its target texel; the rest is
+// its history.
+static const float CLOUD_FRESH_SHARE = 0.35;
+
+// The marched texel at `m`, clamped into the marched texture.
+float4 cloud_marched_texel(int2 m)
 {
-    int2 texel = int2(id.xy);
-    if (any(texel >= int2(CLOUD.target.xy)))
+    int2 size = (int2(CLOUD.target.xy) + 1) / 2;
+    return cloud_marched.Load(int3(clamp(m, int2(0, 0), size - 1), 0));
+}
+
+// The marched texels blended at target texel `texel`, between the four this
+// frame marched around it.
+float4 cloud_marched_between(int2 texel)
+{
+    float2 p = float2(texel - int2(CLOUD.scene.zw)) * 0.5;
+    int2 m = int2(floor(p));
+    float2 f = p - float2(m);
+    float4 top = lerp(cloud_marched_texel(m), cloud_marched_texel(m + int2(1, 0)), f.x);
+    float4 bottom = lerp(cloud_marched_texel(m + int2(0, 1)), cloud_marched_texel(m + int2(1, 1)), f.x);
+    return lerp(top, bottom, f.y);
+}
+
+// The previous frame's target where texel `texel` saw the same clouds, held
+// within what this frame marched around it so parallax or a change cannot
+// smear it; false off the previous frame or without one.
+bool cloud_history(int2 texel, out float4 history)
+{
+    history = (float4)0.0;
+    if (CLOUD.prev_camera.w < 0.5)
     {
-        return;
-    }
-    float4 marched = cloud_marched.Load(int3(texel >> 1, 0));
-    if (all((texel & 1) == int2(CLOUD.scene.zw)) || CLOUD.prev_camera.w < 0.5)
-    {
-        cloud_out[texel] = marched;
-        return;
+        return false;
     }
     int2 pixel = min(texel * int(CLOUD_TARGET_DIVISOR), int2(CLOUD.scene.xy) - 1);
     float2 uv = (float2(pixel) + 0.5) / CLOUD.scene.xy;
@@ -1056,12 +1077,51 @@ void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
     float2 prev_pixel = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5) * CLOUD.scene.xy;
     if (clip.w <= 0.0 || any(prev_pixel < 0.0) || any(prev_pixel > CLOUD.scene.xy))
     {
-        cloud_out[texel] = marched;
-        return;
+        return false;
     }
     // A target texel holds the clouds through its top-left pixel's center.
     float2 at = ((prev_pixel - 0.5) / float(CLOUD_TARGET_DIVISOR) + 0.5) * CLOUD.target.zw;
-    cloud_out[texel] = cloud_previous.SampleLevel(lut_sampler, at, 0.0);
+    int2 m = texel >> 1;
+    float4 low = cloud_marched_texel(m);
+    float4 high = low;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float4 v = cloud_marched_texel(m + int2(x, y));
+            low = min(low, v);
+            high = max(high, v);
+        }
+    }
+    history = clamp(cloud_previous.SampleLevel(lut_sampler, at, 0.0), low, high);
+    return true;
+}
+
+// One thread per target texel: the history where it holds, with this frame's
+// march folded in where it marched the texel, so the march's dither averages
+// out over frames; the march, or the marched texels blended, where it does
+// not.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
+{
+    int2 texel = int2(id.xy);
+    if (any(texel >= int2(CLOUD.target.xy)))
+    {
+        return;
+    }
+    int2 marched_texel = min((texel >> 1) * 2 + int2(CLOUD.scene.zw), int2(CLOUD.target.xy) - 1);
+    bool marched_here = all(marched_texel == texel);
+    float4 fresh = marched_here ? cloud_marched.Load(int3(texel >> 1, 0)) : cloud_marched_between(texel);
+    float4 history;
+    if (!cloud_history(texel, history))
+    {
+        cloud_out[texel] = fresh;
+        return;
+    }
+    cloud_out[texel] = marched_here ? lerp(history, fresh, CLOUD_FRESH_SHARE) : history;
 }
 #endif
 

@@ -37,7 +37,9 @@ pub use noise::NOISE_SIZE;
 pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
 pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
-pub use shape::{CloudShell, coverage_density, height_profile, shell_span, weather_cover};
+pub use shape::{
+    CloudShell, coverage_density, height_profile, regional_coverage, shell_span, weather_cover,
+};
 
 /// The resolution the clouds are kept at, as a divisor of the scene's.
 pub const CLOUD_TARGET_DIVISOR: u32 = 2;
@@ -90,7 +92,10 @@ pub fn cloud_target_size(width: u32, height: u32) -> [u32; 2] {
 /// Clouds drift with the [`Wind`](#wind), at `wind_drift` times its speed,
 /// since winds blow faster aloft, and slowly change shape, each taking about
 /// `evolve_seconds` to become a different cloud. Without a wind they hold
-/// still. `stretch` draws them out along the wind: a thin, high layer
+/// still. `clustering` gathers them unevenly: higher draws regions several
+/// cells wide where the clouds merge into large ones, and clear regions
+/// between, while the layer still covers `coverage` of the sky overall.
+/// `stretch` draws them out along the wind: a thin, high layer
 /// stretched five times or more becomes streaks of cirrus. On a planet each
 /// cloud stays over the same ground, wherever on it the camera roams, so the
 /// clouds seen from orbit are the ones seen from the ground. `seed` places
@@ -159,6 +164,11 @@ pub struct Cloud {
     /// high layer into cirrus.
     #[asset(default = 1.0)]
     pub stretch: f32,
+    /// How unevenly the clouds gather, in `[0, 1]`: 0 spreads them evenly
+    /// over the sky, 1 gathers them into wide banks of merged clouds with
+    /// clear sky between.
+    #[asset(default = 0.6)]
+    pub clustering: f32,
 }
 
 #[cfg(test)]

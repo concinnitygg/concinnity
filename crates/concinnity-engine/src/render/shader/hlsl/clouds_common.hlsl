@@ -8,6 +8,8 @@
 static const float CLOUD_PI = 3.14159265358979;
 // How far the base shape erodes into the detail at full strength.
 static const float CLOUD_DETAIL_EROSION = 0.45;
+// How sharply the regions' smooth field splits into cloudy and clear.
+static const float CLOUD_REGION_CONTRAST = 3.5;
 // How much the powder effect darkens a cloud's sunward skin.
 static const float CLOUD_POWDER = 0.6;
 // The phase lobes: forward (the silver lining), backward (the glow away from
@@ -134,7 +136,8 @@ struct CloudRay
 // render::environment::clouds.
 float3 cloud_stretched(CloudLayerBlock L, float3 p)
 {
-    return p + L.stretch.xyz * (dot(p, L.stretch.xyz) * L.stretch.w);
+    float3 axis = float3(L.stretch.x, 0.0, L.stretch.z);
+    return p + axis * (dot(p, axis) * L.stretch.w);
 }
 
 // A layer's weather over one point of its bottom: how much of the cell is
@@ -145,6 +148,16 @@ struct CloudWeather
     float field;
 };
 
+// The coverage of a layer covering `coverage` of the sky where its regions'
+// field reads `region`, gathered by `clustering`. `regional_coverage` in
+// render::environment::clouds.
+float cloud_regional_coverage(float coverage, float region, float clustering)
+{
+    float lean = saturate((region - 0.5) * CLOUD_REGION_CONTRAST + 0.5) * 2.0 - 1.0;
+    float reach = clustering * min(coverage, 1.0 - coverage);
+    return saturate(coverage + lean * reach);
+}
+
 // The weather of layer `i` over the point `up` (unit, from the planet's
 // center); the weather reads the layer's bottom there, so a cloud's cell does
 // not lean with height.
@@ -154,9 +167,10 @@ CloudWeather cloud_layer_weather(uint i, CloudRay ray, float3 up)
     float3 below = cloud_stretched(L, (up - ray.camera_up) * L.shell.x);
     float4 w1 = cloud_noise_at(L.weather.xyz + below * L.scales.y);
     float w2 = cloud_noise_at(L.weather_second.xyz + below * L.weather.w).b;
+    float region = cloud_noise_at(L.region.xyz + below * L.region.w).b;
     CloudWeather w;
     w.field = saturate(lerp(w1.b, w2, 0.35) * 0.75 + w1.a * 0.4 - 0.1);
-    w.cover = cloud_weather_cover(w.field, L.shell.z);
+    w.cover = cloud_weather_cover(w.field, cloud_regional_coverage(L.shell.z, region, L.stretch.y));
     return w;
 }
 

@@ -342,6 +342,7 @@ pub fn cloud(mut args: Cloud) -> Cloud {
     args.wind_drift = finite_at_least(args.wind_drift, 0.0, defaults.wind_drift);
     args.evolve_seconds = finite_at_least(args.evolve_seconds, 0.0, defaults.evolve_seconds);
     args.stretch = finite_at_least(args.stretch, 1.0, defaults.stretch);
+    args.clustering = finite_or(args.clustering, defaults.clustering).clamp(0.0, 1.0);
     args
 }
 
@@ -754,6 +755,7 @@ mod tests {
             evolve_seconds: -3.0,
             seed: 4,
             stretch: 0.5,
+            clustering: -2.0,
         });
         assert_eq!(c.base, 0.0);
         assert_eq!(c.thickness, 10.0);
@@ -764,6 +766,7 @@ mod tests {
         assert_eq!(c.wind_drift, 0.0);
         assert_eq!(c.evolve_seconds, 0.0);
         assert_eq!(c.stretch, 1.0);
+        assert_eq!(c.clustering, 0.0);
         assert_eq!(cloud(Cloud::default()), Cloud::default());
     }
 

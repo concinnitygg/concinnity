@@ -83,6 +83,20 @@ pub fn weather_cover(weather: f32, coverage: f32) -> f32 {
     cover * (coverage * 8.0).clamp(0.0, 1.0)
 }
 
+// How sharply the regions' smooth field splits into cloudy and clear.
+// `CLOUD_REGION_CONTRAST`.
+const REGION_CONTRAST: f32 = 3.5;
+
+/// The coverage of a layer covering `coverage` of the sky where its regions'
+/// field reads `region` (centered on 0.5), gathered by `clustering`: cloudier
+/// regions toward overcast, clearer ones toward clear, as far as the coverage
+/// leaves room. `cloud_regional_coverage`.
+pub fn regional_coverage(coverage: f32, region: f32, clustering: f32) -> f32 {
+    let lean = ((region - 0.5) * REGION_CONTRAST + 0.5).clamp(0.0, 1.0) * 2.0 - 1.0;
+    let reach = clustering * coverage.min(1.0 - coverage);
+    (coverage + lean * reach).clamp(0.0, 1.0)
+}
+
 /// The density, in `[0, 1]`, of base-shape noise `shape` under height profile
 /// `profile` in a cell covered `cover`: the noise's peaks become the clouds
 /// and the rest clear air. `cloud_coverage_density`.
@@ -189,6 +203,42 @@ mod tests {
             assert!(close(weather_cover(w, 1.0), 1.0, 1e-6));
         }
         assert!(weather_cover(0.7, 0.45) > weather_cover(0.4, 0.45));
+    }
+
+    #[test]
+    fn no_clustering_keeps_the_coverage_everywhere() {
+        for region in [0.0, 0.3, 0.5, 0.9] {
+            assert!(close(regional_coverage(0.45, region, 0.0), 0.45, 1e-6));
+        }
+    }
+
+    // Full clustering clears the clearest regions and overcasts the cloudiest,
+    // and the field's middle keeps the layer's own coverage.
+    #[test]
+    fn clustering_spreads_the_regions_from_clear_to_overcast() {
+        assert!(close(regional_coverage(0.5, 0.0, 1.0), 0.0, 1e-6));
+        assert!(close(regional_coverage(0.5, 1.0, 1.0), 1.0, 1e-6));
+        assert!(close(regional_coverage(0.45, 0.5, 1.0), 0.45, 1e-6));
+        assert!(regional_coverage(0.45, 0.6, 0.5) > 0.45);
+        assert!(regional_coverage(0.45, 0.4, 0.5) < 0.45);
+    }
+
+    #[test]
+    fn the_region_contrast_matches_the_shader() {
+        let src = crate::render::shader::embedded::CLOUDS_COMMON;
+        assert_eq!(
+            crate::render::shader::consts::float(src, "CLOUD_REGION_CONTRAST"),
+            REGION_CONTRAST
+        );
+    }
+
+    // A clear or an overcast layer has no room to gather.
+    #[test]
+    fn clear_and_overcast_layers_stay_as_they_are() {
+        for region in [0.0, 1.0] {
+            assert!(close(regional_coverage(0.0, region, 1.0), 0.0, 1e-6));
+            assert!(close(regional_coverage(1.0, region, 1.0), 1.0, 1e-6));
+        }
     }
 
     #[test]

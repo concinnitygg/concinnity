@@ -3,7 +3,7 @@
 // program defines. Lengths are kilometers. `render::environment::clouds`
 // mirrors the sizes, and its tests lock the constants below to the Rust ones.
 //
-// CloudParams (2080 B) mirrors `render::environment::clouds::CloudParams`;
+// CloudParams (2192 B) mirrors `render::environment::clouds::CloudParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 #ifndef CLOUD_TYPES
@@ -33,9 +33,11 @@ struct CloudLayerBlock
     float4 shape;
     // xyz: the detail's origin in tiles.
     float4 detail;
-    // xyz: the axis the clouds are drawn out along, fixed axes; w: one over
-    // the stretch, less one.
+    // x, z: the axis the clouds are drawn out along, fixed axes; y: their
+    // clustering; w: one over the stretch, less one.
     float4 stretch;
+    // xyz: the regions' origin in tiles; w: their tiles per km.
+    float4 region;
 };
 
 struct CloudParams

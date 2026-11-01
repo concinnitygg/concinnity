@@ -72,6 +72,7 @@ pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
             shape,
             detail,
             stretch,
+            region,
         })),
         everywhere(mirror!(DaylightBlock => "DaylightBlock" {
             center,

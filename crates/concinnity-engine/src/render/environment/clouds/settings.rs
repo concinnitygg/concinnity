@@ -55,6 +55,8 @@ pub struct CloudLayer {
     pub stretch_axis: [f32; 2],
     /// How far they are drawn out along it, at least 1.
     pub stretch: f32,
+    /// How unevenly the clouds gather into regions, in `[0, 1]`.
+    pub clustering: f32,
 }
 
 impl Default for CloudLayer {
@@ -73,6 +75,7 @@ impl Default for CloudLayer {
             seed_offset: [0.0; 3],
             stretch_axis: [1.0, 0.0],
             stretch: 1.0,
+            clustering: 0.0,
         }
     }
 }
@@ -114,6 +117,7 @@ impl CloudLayer {
             seed_offset: hash_unit3(c.seed),
             stretch_axis: wind.direction,
             stretch: c.stretch,
+            clustering: c.clustering,
         }
     }
 }

@@ -18,6 +18,10 @@ const EVOLVE_DIR: DVec3 = [0.3, 0.9, 0.3];
 // the first: its scale against the first's and its share of the drift.
 pub(super) const WEATHER_SECOND_SCALE: f64 = 0.61;
 const WEATHER_SECOND_DRIFT: f64 = 0.8;
+// The regions the clouds gather in: their scale against the weather's first
+// field and their share of the drift.
+pub(super) const WEATHER_REGION_SCALE: f64 = 5.3;
+const WEATHER_REGION_DRIFT: f64 = 0.5;
 
 /// Where the camera stands toward the clouds this frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +54,8 @@ pub struct CloudLayerFrame {
     pub weather: [f32; 3],
     /// The weather's second field.
     pub weather_second: [f32; 3],
+    /// The regions the clouds gather in.
+    pub region: [f32; 3],
     /// The base shape.
     pub shape: [f32; 3],
     /// The detail.
@@ -128,6 +134,13 @@ impl CloudFrame {
                     layer.weather_tile_km * narrow_f32(WEATHER_SECOND_SCALE),
                 ),
                 dvec3::scale(seed, 1.7),
+            ));
+            frame.region = wrap3(dvec3::add(
+                tiles(
+                    dvec3::add(below, dvec3::scale(drift, WEATHER_REGION_DRIFT)),
+                    layer.weather_tile_km * narrow_f32(WEATHER_REGION_SCALE),
+                ),
+                dvec3::scale(seed, 2.3),
             ));
             let moved = dvec3::add(layer.stretched(camera), drift);
             frame.shape = wrap3(dvec3::add(

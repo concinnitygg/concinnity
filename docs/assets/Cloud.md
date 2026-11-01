@@ -36,7 +36,10 @@ higher draws harder, brighter edged clouds and darker cores.
 Clouds drift with the [`Wind`](Wind.md), at `wind_drift` times its speed,
 since winds blow faster aloft, and slowly change shape, each taking about
 `evolve_seconds` to become a different cloud. Without a wind they hold
-still. `stretch` draws them out along the wind: a thin, high layer
+still. `clustering` gathers them unevenly: higher draws regions several
+cells wide where the clouds merge into large ones, and clear regions
+between, while the layer still covers `coverage` of the sky overall.
+`stretch` draws them out along the wind: a thin, high layer
 stretched five times or more becomes streaks of cirrus. On a planet each
 cloud stays over the same ground, wherever on it the camera roams, so the
 clouds seen from orbit are the ones seen from the ground. `seed` places
@@ -58,3 +61,4 @@ two, one wholly above the other; a layer nothing names is not drawn.
 - `evolve_seconds`: A float. Seconds a cloud takes to change into a different one. 0 holds their shapes still. Defaults to `600.0`.
 - `seed`: An integer. Places the clouds: each seed is a different sky. Defaults to `0`.
 - `stretch`: A float. How far each cloud is drawn out along the wind, as a multiple of its width. At least 1: 1 keeps them round, and 5 or more streaks a thin, high layer into cirrus. Defaults to `1.0`.
+- `clustering`: A float. How unevenly the clouds gather, in `[0, 1]`: 0 spreads them evenly over the sky, 1 gathers them into wide banks of merged clouds with clear sky between. Defaults to `0.6`.
