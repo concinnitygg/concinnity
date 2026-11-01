@@ -452,7 +452,7 @@ impl MtlContext {
     ) -> RenderResult<()> {
         if let Some(atmo) = self.atmosphere.as_mut() {
             if let Some(clouds) = atmo.clouds.as_mut() {
-                clouds.prepare(&self.hw.device, &atmo.settings, frame, view.viewport)?;
+                clouds.prepare(&self.hw.device, &atmo.settings, frame, &view)?;
             }
             let lanes = frame
                 .and_then(|f| f.clouds.as_ref())

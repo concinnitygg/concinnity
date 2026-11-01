@@ -299,6 +299,11 @@ pub(super) static CLOUD_MARCH: Program = Program {
     splices: &[],
 };
 
+pub(super) static CLOUD_RECONSTRUCT: Program = Program {
+    row: &shared::CLOUD_RECONSTRUCT,
+    splices: &[],
+};
+
 pub(super) static CLOUD_COMPOSITE_FRAG: Program = Program {
     row: &shared::CLOUD_COMPOSITE_FRAG,
     splices: &[],

@@ -477,9 +477,9 @@ pub static AERIAL_PERSPECTIVE_FRAG: ShaderProgram = ShaderProgram {
     gates: &["AERIAL_PERSPECTIVE"],
     msaa: true,
 };
-// The clouds: the noise volume built at load, the march (which shares the haze
-// pass's bindings) and the composite. The composite's vertex half is
-// `FULLSCREEN_VERT`.
+// The clouds: the noise volume built at load, the march and the
+// reconstruction (which share the haze pass's bindings) and the composite.
+// The composite's vertex half is `FULLSCREEN_VERT`.
 /// `cloud_noise_kernel` from `clouds.hlsl`.
 pub static CLOUD_NOISE: ShaderProgram = ShaderProgram {
     file: "clouds.hlsl",
@@ -511,6 +511,14 @@ pub static CLOUD_SHADOW: ShaderProgram = ShaderProgram {
     label: "cloud_shadow.hlsl",
     gates: &["CLOUD_SHADOW"],
     msaa: false,
+};
+/// `cloud_reconstruct_kernel` from `atmosphere.hlsl`.
+pub static CLOUD_RECONSTRUCT: ShaderProgram = ShaderProgram {
+    file: "atmosphere.hlsl",
+    entry: "cloud_reconstruct_kernel",
+    label: "cloud_reconstruct.hlsl",
+    gates: &["CLOUD_RECONSTRUCT"],
+    msaa: true,
 };
 /// `cloud_composite_fragment` from `clouds.hlsl`.
 pub static CLOUD_COMPOSITE_FRAG: ShaderProgram = ShaderProgram {
@@ -1065,6 +1073,7 @@ pub static ALL: &[&ShaderProgram] = &[
     &CLOUD_MARCH,
     &CLOUD_PANORAMA,
     &CLOUD_SHADOW,
+    &CLOUD_RECONSTRUCT,
     &CLOUD_COMPOSITE_FRAG,
     &AUTO_EXPOSURE_BUILD,
     &AUTO_EXPOSURE_AVERAGE,
@@ -1151,6 +1160,7 @@ mod tests {
                 "aerial_perspective_frag.hlsl",
                 "cloud_composite_frag.hlsl",
                 "cloud_march.hlsl",
+                "cloud_reconstruct.hlsl",
                 "decal_frag.hlsl",
                 "fog_frag.hlsl",
                 "glass_frag.hlsl",

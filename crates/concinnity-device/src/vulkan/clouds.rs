@@ -2,11 +2,12 @@
 //! `concinnity_engine::render::environment::clouds`): the noise volume the layers are
 //! carved from, built by the first frame's atmosphere pass; the shadow map and
 //! the panorama that pass writes for the shaded passes and the sky's cubes; the
-//! half-resolution target the march writes; and the composite that blends it
-//! over the scene behind the haze, through the haze pass's render pass and
+//! half-resolution targets the march and the reconstruction fill, one frame's
+//! and the previous frame's in turn; and the composite that blends it over the
+//! scene behind the haze, through the haze pass's render pass and
 //! framebuffers.
 //!
-//! The volume, the panorama and the target rest in `GENERAL` for good: the
+//! The volume, the panorama and the targets rest in `GENERAL` for good: the
 //! kernels write them as storage images and every reader samples them there,
 //! so the steps between the passes are memory barriers that name no image.
 //! The shadow map rests sampled, as every global set binds it, and is opened
@@ -20,16 +21,17 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::environment::atmosphere::{
-    AtmosphereFrame, AtmosphereParams, AtmosphereSettings,
+    AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_target_size,
+    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
+    cloud_target_size,
 };
 
 use super::allocator::{PooledBuffer, PooledImage};
 use super::builtin_shaders::{
-    CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_SHADOW, CompileProgram,
-    FULLSCREEN_VERT,
+    CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
+    CLOUD_SHADOW, CompileProgram, FULLSCREEN_VERT,
 };
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
@@ -60,8 +62,9 @@ fn noise_bindings() -> [Binding; 1] {
 }
 
 // The march's set: the haze pass's six bindings, then the clouds' constants,
-// the noise volume and its sampler, and the target.
-fn march_bindings() -> [Binding; 10] {
+// the noise volume and its sampler, the target written, and the march and the
+// previous frame's target the reconstruction reads.
+fn march_bindings() -> [Binding; 12] {
     use vk::DescriptorType as T;
     let c = vk::ShaderStageFlags::COMPUTE;
     [
@@ -75,6 +78,8 @@ fn march_bindings() -> [Binding; 10] {
         (7, T::SAMPLED_IMAGE, c),
         (8, T::SAMPLER, c),
         (9, T::STORAGE_IMAGE, c),
+        (10, T::SAMPLED_IMAGE, c),
+        (11, T::SAMPLED_IMAGE, c),
     ]
 }
 
@@ -231,8 +236,14 @@ pub(in crate::vulkan) struct VkClouds {
     noise_built: Cell<bool>,
     shadow: Image,
     panorama: Image,
-    target: Image,
+    // The march's texels, one of each 2x2 block of the target's.
+    marched: Image,
+    // This frame's target and the previous frame's, swapping each frame.
+    targets: [Image; 2],
+    // Which of `targets` this frame writes.
+    write: usize,
     target_size: [u32; 2],
+    history: CloudHistory,
     ubos: Vec<PooledBuffer>,
     frames: u64,
     _pool: OwnedDescriptorPool,
@@ -245,6 +256,9 @@ pub(in crate::vulkan) struct VkClouds {
     march_layout: OwnedPipelineLayout,
     march_kernel: OwnedPipeline,
     march_sets: Vec<vk::DescriptorSet>,
+    reconstruct_kernel: OwnedPipeline,
+    // Per frame slot, the reconstruction's set writing each of `targets`.
+    reconstruct_sets: Vec<[vk::DescriptorSet; 2]>,
     shadow_kernel: OwnedPipeline,
     panorama_kernel: OwnedPipeline,
     // Per frame slot, the march's set writing the shadow map and the panorama.
@@ -252,7 +266,8 @@ pub(in crate::vulkan) struct VkClouds {
     _composite_set_layout: OwnedSetLayout,
     composite_layout: OwnedPipelineLayout,
     composite_pipeline: OwnedPipeline,
-    composite_sets: Vec<vk::DescriptorSet>,
+    // Per frame slot, the composite's set reading each of `targets`.
+    composite_sets: Vec<[vk::DescriptorSet; 2]>,
     // The haze pass's render pass, which the composite draws through.
     composite_pass: vk::RenderPass,
     // Per frame slot, the pre-TAA scene the composite draws into, its extent,
@@ -272,7 +287,11 @@ impl VkClouds {
         let frames = inputs.atmo_ubos.len();
         let noise = create_image(gpu, [NOISE_SIZE; 3], NOISE_FORMAT, "cloud noise volume")?;
         let target_size = cloud_target_size(inputs.extent.width, inputs.extent.height);
-        let target = create_target(gpu, target_size)?;
+        let marched = create_target(gpu, cloud_march_size(target_size))?;
+        let targets = [
+            create_target(gpu, target_size)?,
+            create_target(gpu, target_size)?,
+        ];
         let shadow = create_image_resting(
             gpu,
             [SHADOW_SIZE, SHADOW_SIZE, 1],
@@ -303,13 +322,13 @@ impl VkClouds {
         let f = u32::saturating_from(frames);
         let sizes = PoolSizes::default()
             .sets(&noise_bindings(), 1)
-            .sets(&march_bindings(), 3 * f)
-            .sets(&composite_bindings(), f)
+            .sets(&march_bindings(), 5 * f)
+            .sets(&composite_bindings(), 2 * f)
             .build();
         let pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(1 + 4 * f)
+                    .max_sets(1 + 7 * f)
                     .pool_sizes(&sizes),
             )
             .map_err(|e| super::error::map_vk_result(e, "cloud descriptor pool"))?;
@@ -336,13 +355,30 @@ impl VkClouds {
 
         let march_layout =
             pipeline_layout(device, march_set_layout.handle(), "cloud march layout")?;
-        let march_kernel =
-            build_march_kernel(device, march_layout.handle(), inputs.msaa, hot_reload)?;
+        let march_kernel = depth_kernel(
+            device,
+            march_layout.handle(),
+            &CLOUD_MARCH,
+            inputs.msaa,
+            hot_reload,
+        )?;
         let march_sets = alloc_descriptor_sets(
             device,
             pool.handle(),
             &vec![march_set_layout.handle(); frames],
         )?;
+        let reconstruct_kernel = depth_kernel(
+            device,
+            march_layout.handle(),
+            &CLOUD_RECONSTRUCT,
+            inputs.msaa,
+            hot_reload,
+        )?;
+        let reconstruct_sets = pairs(&alloc_descriptor_sets(
+            device,
+            pool.handle(),
+            &vec![march_set_layout.handle(); 2 * frames],
+        )?);
         let shadow_kernel = map_kernel(device, march_layout.handle(), &CLOUD_SHADOW, hot_reload)?;
         let panorama_kernel =
             map_kernel(device, march_layout.handle(), &CLOUD_PANORAMA, hot_reload)?;
@@ -367,11 +403,11 @@ impl VkClouds {
             inputs.msaa,
             hot_reload,
         )?;
-        let composite_sets = alloc_descriptor_sets(
+        let composite_sets = pairs(&alloc_descriptor_sets(
             device,
             pool.handle(),
-            &vec![composite_set_layout.handle(); frames],
-        )?;
+            &vec![composite_set_layout.handle(); 2 * frames],
+        )?);
 
         let clouds = Self {
             params: None,
@@ -379,8 +415,11 @@ impl VkClouds {
             noise_built: Cell::new(false),
             shadow,
             panorama,
-            target,
+            marched,
+            targets,
+            write: 0,
             target_size,
+            history: CloudHistory::default(),
             ubos,
             frames: 0,
             _pool: pool,
@@ -393,6 +432,8 @@ impl VkClouds {
             march_layout,
             march_kernel,
             march_sets,
+            reconstruct_kernel,
+            reconstruct_sets,
             shadow_kernel,
             panorama_kernel,
             map_sets,
@@ -407,25 +448,34 @@ impl VkClouds {
         Ok(clouds)
     }
 
-    // Point every set at the scene depth and the target, beside what does not
-    // move.
+    // Point every set at the scene depth and the targets, beside what does
+    // not move.
     fn write_sets(&self, device: &VkDevice, inputs: &CloudInputs<'_>) {
         let atmo_size = size_of::<AtmosphereParams>() as u64;
         let cloud_size = size_of::<CloudParams>() as u64;
         let last_depth = inputs.depth_views.len().saturating_sub(1);
-        for (i, ((ubo, atmo_ubo), (&march, maps))) in self
+        let [a, b] = [self.targets[0].view, self.targets[1].view];
+        for (i, ((ubo, atmo_ubo), ((&march, maps), rebuilt))) in self
             .ubos
             .iter()
             .zip(inputs.atmo_ubos)
-            .zip(self.march_sets.iter().zip(&self.map_sets))
+            .zip(
+                self.march_sets
+                    .iter()
+                    .zip(&self.map_sets)
+                    .zip(&self.reconstruct_sets),
+            )
             .enumerate()
         {
+            // The reconstruction writing each target reads the other.
             let outputs = [
-                (march, self.target.view),
-                (maps[0], self.shadow.view),
-                (maps[1], self.panorama.view),
+                (march, self.marched.view, a),
+                (maps[0], self.shadow.view, a),
+                (maps[1], self.panorama.view, a),
+                (rebuilt[0], a, b),
+                (rebuilt[1], b, a),
             ];
-            for (set, output) in outputs {
+            for (set, output, previous) in outputs {
                 SetWrites::new(set)
                     .uniform_buffer(0, atmo_ubo.buffer(), atmo_size)
                     .sampled_image(1, inputs.depth_views[i.min(last_depth)])
@@ -437,21 +487,25 @@ impl VkClouds {
                     .sampled_image_in(7, self.noise.view, vk::ImageLayout::GENERAL)
                     .sampler(8, self.sampler.handle())
                     .storage_image(9, output)
+                    .sampled_image_in(10, self.marched.view, vk::ImageLayout::GENERAL)
+                    .sampled_image_in(11, previous, vk::ImageLayout::GENERAL)
                     .apply(device);
             }
         }
-        for (i, (set, ubo)) in self.composite_sets.iter().zip(&self.ubos).enumerate() {
-            SetWrites::new(*set)
-                .uniform_buffer(0, ubo.buffer(), cloud_size)
-                .sampled_image(1, inputs.depth_views[i.min(last_depth)])
-                .sampled_image_in(2, self.target.view, vk::ImageLayout::GENERAL)
-                .apply(device);
+        for (i, (sets, ubo)) in self.composite_sets.iter().zip(&self.ubos).enumerate() {
+            for (&set, target) in sets.iter().zip([a, b]) {
+                SetWrites::new(set)
+                    .uniform_buffer(0, ubo.buffer(), cloud_size)
+                    .sampled_image(1, inputs.depth_views[i.min(last_depth)])
+                    .sampled_image_in(2, target, vk::ImageLayout::GENERAL)
+                    .apply(device);
+            }
         }
     }
 
-    // Size the target for the rebuilt scene and point the sets at it and the
-    // rebuilt depth. The device is idle across a resize, so the old target is
-    // free to go.
+    // Size the targets for the rebuilt scene and point the sets at them and
+    // the rebuilt depth. The device is idle across a resize, so the old
+    // targets are free to go.
     pub(in crate::vulkan) fn rebuild(
         &mut self,
         gpu: &GpuUploadContext<'_>,
@@ -459,7 +513,8 @@ impl VkClouds {
     ) -> RenderResult<()> {
         let size = cloud_target_size(inputs.extent.width, inputs.extent.height);
         if size != self.target_size {
-            self.target = create_target(gpu, size)?;
+            self.marched = create_target(gpu, cloud_march_size(size))?;
+            self.targets = [create_target(gpu, size)?, create_target(gpu, size)?];
             self.target_size = size;
         }
         self.write_sets(gpu.device, inputs);
@@ -479,7 +534,15 @@ impl VkClouds {
             &CLOUD_NOISE.compile(true)?,
             CLOUD_NOISE.label,
         )?;
-        let march_kernel = build_march_kernel(device, self.march_layout.handle(), msaa, true)?;
+        let march_kernel =
+            depth_kernel(device, self.march_layout.handle(), &CLOUD_MARCH, msaa, true)?;
+        let reconstruct_kernel = depth_kernel(
+            device,
+            self.march_layout.handle(),
+            &CLOUD_RECONSTRUCT,
+            msaa,
+            true,
+        )?;
         let shadow_kernel = map_kernel(device, self.march_layout.handle(), &CLOUD_SHADOW, true)?;
         let panorama_kernel =
             map_kernel(device, self.march_layout.handle(), &CLOUD_PANORAMA, true)?;
@@ -492,6 +555,7 @@ impl VkClouds {
         )?;
         self.noise_kernel = noise_kernel;
         self.march_kernel = march_kernel;
+        self.reconstruct_kernel = reconstruct_kernel;
         self.shadow_kernel = shadow_kernel;
         self.panorama_kernel = panorama_kernel;
         self.composite_pipeline = composite_pipeline;
@@ -502,38 +566,31 @@ impl VkClouds {
     // Release the pooled resources ahead of the device.
     pub(in crate::vulkan) fn destroy(&mut self) {
         self.ubos.clear();
+        let [a, b] = &mut self.targets;
         for image in [
             &mut self.noise,
             &mut self.shadow,
             &mut self.panorama,
-            &mut self.target,
+            &mut self.marched,
+            a,
+            b,
         ] {
             image.image = PooledImage::null();
         }
     }
 
-    // This frame's constants for `settings` and `frame` over a scene `scene`
-    // pixels across, written into frame slot `frame_idx`'s buffer.
+    // This frame's constants for `settings` and `frame` seen from `view`,
+    // written into frame slot `frame_idx`'s buffer, and this frame's target
+    // the other one.
     pub(in crate::vulkan) fn prepare(
         &mut self,
         settings: &AtmosphereSettings,
         frame: Option<&AtmosphereFrame>,
-        scene: [u32; 2],
+        view: &AtmosphereView,
         frame_idx: usize,
     ) {
-        self.params = match (
-            settings.clouds.as_ref(),
-            frame.and_then(|f| f.clouds.as_ref()),
-        ) {
-            (Some(clouds), Some(cloud_frame)) => Some(CloudParams::new(
-                clouds,
-                settings.bottom_radius,
-                cloud_frame,
-                scene,
-                self.frames,
-            )),
-            _ => None,
-        };
+        self.write = 1 - self.write;
+        self.params = self.history.params(settings, frame, view, self.frames);
         self.frames = self.frames.wrapping_add(1);
         if let (Some(params), Some(ubo)) = (self.params, self.ubos.get(frame_idx)) {
             ubo.write_val(0, &params);
@@ -670,16 +727,20 @@ impl VkClouds {
         self.panorama.view
     }
 
-    // March the clouds into the target.
+    // March one texel of each 2x2 block of the clouds' target, then fill this
+    // frame's target from the march and the previous frame's.
     pub(in crate::vulkan) fn encode_march(&self, rec: &Recorder<'_>, frame_idx: usize) {
-        let Some(set) = self.march_sets.get(frame_idx) else {
+        let (Some(set), Some(rebuilt)) = (
+            self.march_sets.get(frame_idx),
+            self.reconstruct_sets.get(frame_idx),
+        ) else {
             return;
         };
         if self.params.is_none() {
             return;
         }
-        // The last frame's composite has read the target before it is
-        // rewritten.
+        // The last frame's composite and reconstruction have read the targets
+        // before they are rewritten.
         rec.pipeline_barrier(
             vk::PipelineStageFlags::FRAGMENT_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -695,8 +756,23 @@ impl VkClouds {
             std::slice::from_ref(set),
             &[],
         );
-        let [w, h] = self.target_size;
-        rec.dispatch(w.div_ceil(MARCH_GROUP), h.div_ceil(MARCH_GROUP), 1);
+        let [mw, mh] = cloud_march_size(self.target_size);
+        rec.dispatch(mw.div_ceil(MARCH_GROUP), mh.div_ceil(MARCH_GROUP), 1);
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            &[vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)],
+            &[],
+            &[],
+        );
+        self.dispatch(
+            rec,
+            &self.reconstruct_kernel,
+            rebuilt[self.write],
+            self.target_size.map(|s| s.div_ceil(MARCH_GROUP)),
+        );
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::FRAGMENT_SHADER,
@@ -749,12 +825,13 @@ impl VkClouds {
         frame_idx: usize,
         pass: &OwnedRenderPass,
     ) {
-        let (Some(set), Some(Some((_, extent, framebuffer)))) = (
+        let (Some(sets), Some(Some((_, extent, framebuffer)))) = (
             self.composite_sets.get(frame_idx),
             self.scenes.get(frame_idx),
         ) else {
             return;
         };
+        let set = &sets[self.write];
         if self.params.is_none() {
             return;
         }
@@ -782,6 +859,11 @@ impl VkClouds {
     }
 }
 
+// Consecutive sets in pairs.
+fn pairs(sets: &[vk::DescriptorSet]) -> Vec<[vk::DescriptorSet; 2]> {
+    sets.chunks_exact(2).map(|p| [p[0], p[1]]).collect()
+}
+
 fn map_kernel(
     device: &VkDevice,
     layout: vk::PipelineLayout,
@@ -791,17 +873,19 @@ fn map_kernel(
     compute_pipeline(device, layout, &program.compile(hot_reload)?, program.label)
 }
 
-fn build_march_kernel(
+// A kernel reading the scene's depth, in the variant for its sample count.
+fn depth_kernel(
     device: &VkDevice,
     layout: vk::PipelineLayout,
+    program: &concinnity_engine::render::shader::programs::ShaderProgram,
     msaa: bool,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
     compute_pipeline(
         device,
         layout,
-        &CLOUD_MARCH.at(msaa).compile(hot_reload)?,
-        CLOUD_MARCH.label,
+        &program.at(msaa).compile(hot_reload)?,
+        program.label,
     )
 }
 

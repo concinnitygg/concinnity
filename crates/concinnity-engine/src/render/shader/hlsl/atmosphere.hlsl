@@ -20,7 +20,10 @@
 // so they can haze the clouds by the air in front of them, beside the clouds'
 // own block, their noise volume and the target each writes:
 //
-//   CLOUD_MARCH     the clouds along each view ray, at half resolution
+//   CLOUD_MARCH     the clouds along the view rays of one texel in each 2x2
+//                   block of the half-resolution target
+//   CLOUD_RECONSTRUCT  the half-resolution target: the march's texels, and the
+//                   rest from where the previous frame's target saw them
 //   CLOUD_PANORAMA  the clouds around the camera in every direction, which
 //                   the sky cube and the irradiance cube put over the sky
 //   CLOUD_SHADOW    the light surviving the clouds toward the shadowed body,
@@ -48,7 +51,8 @@
 {ATMOSPHERE_TYPES}
 {CLOUD_TYPES}
 
-#if defined(CLOUD_MARCH) || defined(CLOUD_PANORAMA) || defined(CLOUD_SHADOW)
+#if defined(CLOUD_MARCH) || defined(CLOUD_PANORAMA) || defined(CLOUD_SHADOW) \
+    || defined(CLOUD_RECONSTRUCT)
 #define CLOUD_KERNEL
 #endif
 
@@ -72,6 +76,11 @@
 [[vk::binding(9, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> cloud_out : register(u0);
 #else
 [[vk::binding(9, 0)]] [[vk::image_format("rgba16f")]] RWTexture2D<float4> cloud_out : register(u5);
+#endif
+#ifdef CLOUD_RECONSTRUCT
+// This frame's marched texels and the previous frame's target.
+[[vk::binding(10, 0)]] Texture2D<float4> cloud_marched : register(t6);
+[[vk::binding(11, 0)]] Texture2D<float4> cloud_previous : register(t7);
 #endif
 #endif
 
@@ -967,17 +976,92 @@ float4 cloud_march_pixel(int2 pixel)
     return float4(seen, sight.transmittance);
 }
 
+// One thread per 2x2 block of target texels: the clouds through the top-left
+// pixel of the block's texel this frame marches. A block cut by an odd edge
+// marches the texel it has instead.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void cloud_march_kernel(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= uint(CLOUD.target.x) || id.y >= uint(CLOUD.target.y))
+    int2 target = int2(CLOUD.target.xy);
+    if (any(int2(id.xy) * 2 >= target))
     {
         return;
     }
-    int2 pixel = min(int2(id.xy) * int(CLOUD_TARGET_DIVISOR) + int2(CLOUD.scene.zw),
-                     int2(CLOUD.scene.xy) - 1);
+    int2 texel = min(int2(id.xy) * 2 + int2(CLOUD.scene.zw), target - 1);
+    int2 pixel = min(texel * int(CLOUD_TARGET_DIVISOR), int2(CLOUD.scene.xy) - 1);
     cloud_out[id.xy] = cloud_march_pixel(pixel);
+}
+#endif
+
+#ifdef CLOUD_RECONSTRUCT
+// How far along the unit ray `dir` (fixed axes) what it sees first lies: the
+// middle of the nearest layer's stretch it crosses, the scene `scene_km` away
+// where that is nearer, or -1 past every layer with no scene in front.
+float cloud_reproject_distance(float3 dir, float scene_km)
+{
+    float3 camera = CLOUD.camera.xyz;
+    uint count = uint(CLOUD.shell.z);
+    float nearest = -1.0;
+    [unroll]
+    for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
+    {
+        float2 shell = CLOUD.layers[i].shell.xy;
+        float2 span = (float2)0.0;
+        if (i < count && cloud_shell_span(camera, dir, CLOUD.camera.w, shell.x, shell.y, span))
+        {
+            float mid = 0.5 * (span.x + min(span.y, span.x + CLOUD.march.z));
+            nearest = nearest < 0.0 ? mid : min(nearest, mid);
+        }
+    }
+    if (scene_km < 1e9 && (nearest < 0.0 || scene_km < nearest))
+    {
+        return scene_km;
+    }
+    return nearest;
+}
+
+// One thread per target texel: the march's where this frame marched it,
+// otherwise the previous frame's target where it saw the same clouds, and the
+// block's marched texel where it did not.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
+{
+    int2 texel = int2(id.xy);
+    if (any(texel >= int2(CLOUD.target.xy)))
+    {
+        return;
+    }
+    float4 marched = cloud_marched.Load(int3(texel >> 1, 0));
+    if (all((texel & 1) == int2(CLOUD.scene.zw)) || CLOUD.prev_camera.w < 0.5)
+    {
+        cloud_out[texel] = marched;
+        return;
+    }
+    int2 pixel = min(texel * int(CLOUD_TARGET_DIVISOR), int2(CLOUD.scene.xy) - 1);
+    float2 uv = (float2(pixel) + 0.5) / CLOUD.scene.xy;
+    float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
+    float3 dir = cloud_to_fixed(camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz));
+    float scene_km = 1e9;
+    float3 world;
+    if (depth_reconstruct(ATMO.depth_inv_vp, ndc, aerial_scene_depth(pixel), world))
+    {
+        scene_km = length(world - ATMO.cam_pos.xyz) * ATMO.radii.w;
+    }
+    float along = cloud_reproject_distance(dir, scene_km);
+    float3 seen = along > 0.0 ? CLOUD.camera.xyz + dir * along - CLOUD.prev_camera.xyz : dir;
+    float4 clip = mul(CLOUD.prev_view, float4(seen, 1.0));
+    float2 prev_ndc = clip.xy / max(clip.w, 1e-6);
+    float2 prev_pixel = float2(prev_ndc.x * 0.5 + 0.5, 0.5 - prev_ndc.y * 0.5) * CLOUD.scene.xy;
+    if (clip.w <= 0.0 || any(prev_pixel < 0.0) || any(prev_pixel > CLOUD.scene.xy))
+    {
+        cloud_out[texel] = marched;
+        return;
+    }
+    // A target texel holds the clouds through its top-left pixel's center.
+    float2 at = ((prev_pixel - 0.5) / float(CLOUD_TARGET_DIVISOR) + 0.5) * CLOUD.target.zw;
+    cloud_out[texel] = cloud_previous.SampleLevel(lut_sampler, at, 0.0);
 }
 #endif
 

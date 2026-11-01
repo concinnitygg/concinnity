@@ -980,13 +980,7 @@ impl VkContext {
                 ubo.write_val(0, &params);
             }
             if let Some(clouds) = atmo.clouds.as_mut() {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    reason = "a pixel count"
-                )]
-                let scene = view.viewport.map(|v| v.max(1.0) as u32);
-                clouds.prepare(&atmo.settings, atmo.frame.as_ref(), scene, frame_idx);
+                clouds.prepare(&atmo.settings, atmo.frame.as_ref(), &view, frame_idx);
             }
         }
     }

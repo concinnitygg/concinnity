@@ -52,8 +52,8 @@ struct CloudParams
     float4 march;
     // xy: the cloud target's size in texels; zw: its reciprocal.
     float4 target;
-    // xy: the scene's size in pixels; zw: the pixel of each 2x2 block this
-    // frame marches.
+    // xy: the scene's size in pixels; zw: the target texel of each 2x2 block
+    // of them this frame marches.
     float4 scene;
     // The shadow map's square on the layers' middle, fixed axes: xyz its
     // center from the planet's center (km), w its width (km).
@@ -64,6 +64,13 @@ struct CloudParams
     float4 shadow_north;
     // x: the radius of the ground the clouds' horizon is measured from (km).
     float4 horizon;
+    // A vector from the previous frame's camera in fixed axes (w = 1) to its
+    // clip space, which the texels this frame does not march reproject
+    // through.
+    float4x4 prev_view;
+    // xyz: the previous frame's camera, as `camera`; w: 1 when the previous
+    // frame's target holds its clouds.
+    float4 prev_camera;
     // The light the clouds are lit by, directions in the fixed axes.
     DaylightBlock daylight;
 };

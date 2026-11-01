@@ -6,8 +6,9 @@
 //! density at a point is a weather field (where clouds are, and how tall they
 //! grow) times a height profile, carved by a tiling volume of base-shape noise
 //! and eroded at its edges by a finer detail noise. The noise volume is built
-//! once on the GPU when the world loads. Each frame the clouds are marched at
-//! half resolution against the scene's depth, lit by the sun and the moon
+//! once on the GPU when the world loads. The clouds are kept at half
+//! resolution, a quarter of that marched each frame against the scene's depth
+//! and the rest reprojected from the previous frame, lit by the sun and the moon
 //! through the air with the planet's daylight curves, hazed by the air in
 //! front of them, and blended over the scene once its see-through surfaces
 //! are drawn. The atmosphere's pass also writes a shadow map of the light
@@ -18,10 +19,12 @@
 //! Positions are kilometers about the planet's center, in the planet's own
 //! fixed axes, so a cloud stays over the same ground through every frame
 //! move. The shader side is `shaders/clouds_common.hlsl` (density and
-//! lighting), the `CLOUD_MARCH` kernel in `shaders/atmosphere.hlsl` and
+//! lighting), the `CLOUD_MARCH` and `CLOUD_RECONSTRUCT` kernels in
+//! `shaders/atmosphere.hlsl` and
 //! `shaders/clouds.hlsl` (the noise kernel and the composite).
 
 mod frame;
+mod history;
 mod noise;
 mod params;
 mod settings;
@@ -29,13 +32,14 @@ mod shadow;
 mod shape;
 
 pub use frame::{CloudFrame, CloudLayerFrame, CloudView};
+pub use history::{CloudHistory, CloudProjection};
 pub use noise::NOISE_SIZE;
-pub use params::{CloudLayerBlock, CloudMarch, CloudParams, block_pixel};
+pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
 pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
 pub use shape::{CloudShell, coverage_density, height_profile, shell_span, weather_cover};
 
-/// The resolution the clouds are marched at, as a divisor of the scene's.
+/// The resolution the clouds are kept at, as a divisor of the scene's.
 pub const CLOUD_TARGET_DIVISOR: u32 = 2;
 
 /// Texels across and down the panorama of the clouds around the camera the

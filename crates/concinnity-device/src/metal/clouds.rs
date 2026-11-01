@@ -1,18 +1,21 @@
 //! The atmosphere's clouds (see `concinnity_engine::render::environment::clouds`): the
 //! noise volume the layers are carved from, built by the first frame's
 //! atmosphere pass; the shadow map and the panorama that pass writes each frame
-//! for the shaded passes and the sky's cubes; the half-resolution target the
-//! march writes; and the composite that blends it over the scene behind the
-//! haze.
+//! for the shaded passes and the sky's cubes; the half-resolution targets the
+//! march and the reconstruction fill, one frame's and the previous frame's in
+//! turn; and the composite that blends it over the scene behind the haze.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::cell::Cell;
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
-use concinnity_engine::render::environment::atmosphere::{AtmosphereFrame, AtmosphereSettings};
+use concinnity_engine::render::environment::atmosphere::{
+    AtmosphereFrame, AtmosphereSettings, AtmosphereView,
+};
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_target_size,
+    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
+    cloud_target_size,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -26,7 +29,8 @@ use objc2_metal::{
 };
 
 use super::builtin_shaders::{
-    CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_SHADOW, compute_pipeline,
+    CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
+    CLOUD_SHADOW, compute_pipeline,
 };
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
@@ -47,12 +51,19 @@ pub(super) struct CloudState {
     noise_built: Cell<bool>,
     pub(super) shadow: Texture,
     pub(super) panorama: Texture,
-    target: Texture,
+    // The march's texels, one of each 2x2 block of the target's.
+    marched: Texture,
+    // This frame's target and the previous frame's, swapping each frame.
+    targets: [Texture; 2],
+    // Which of `targets` this frame writes.
+    write: usize,
     target_size: [u32; 2],
+    history: CloudHistory,
     noise_kernel: Kernel,
     shadow_kernel: Kernel,
     panorama_kernel: Kernel,
     march_kernel: Kernel,
+    reconstruct_kernel: Kernel,
     composite: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     noise_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
     frames: u64,
@@ -98,54 +109,54 @@ impl CloudState {
                 [PANORAMA_SIZE[0], PANORAMA_SIZE[1], 1],
                 "the cloud panorama",
             )?,
-            target: target(device, [1, 1])?,
+            marched: target(device, [1, 1])?,
+            targets: [target(device, [1, 1])?, target(device, [1, 1])?],
+            write: 0,
             target_size: [1, 1],
+            history: CloudHistory::default(),
             noise_kernel: compute_pipeline(device, &CLOUD_NOISE, hot_reload)?,
             shadow_kernel: compute_pipeline(device, &CLOUD_SHADOW, hot_reload)?,
             panorama_kernel: compute_pipeline(device, &CLOUD_PANORAMA, hot_reload)?,
             march_kernel: compute_pipeline(device, &CLOUD_MARCH, hot_reload)?,
+            reconstruct_kernel: compute_pipeline(device, &CLOUD_RECONSTRUCT, hot_reload)?,
             composite,
             noise_sampler: repeat_sampler(device)?,
             frames: 0,
         })
     }
 
-    // This frame's constants for `settings` and `frame` over a scene
-    // `viewport` pixels across, the target made again when that size changes.
-    // A command buffer still in flight keeps the old target alive.
+    // This frame's constants for `settings` and `frame` seen from `view`,
+    // the targets made again when the scene's size changes, and this frame's
+    // target the other one. A command buffer still in flight keeps the old
+    // targets alive.
     pub(super) fn prepare(
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
         settings: &AtmosphereSettings,
         frame: Option<&AtmosphereFrame>,
-        viewport: [f32; 2],
+        view: &AtmosphereView,
     ) -> RenderResult<()> {
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             reason = "a pixel count"
         )]
-        let scene = viewport.map(|v| v.max(1.0) as u32);
+        let scene = view.viewport.map(|v| v.max(1.0) as u32);
         let size = cloud_target_size(scene[0], scene[1]);
         if size != self.target_size {
-            self.target = target(device, size)?;
+            self.marched = target(device, cloud_march_size(size))?;
+            self.targets = [target(device, size)?, target(device, size)?];
             self.target_size = size;
         }
-        self.params = match (
-            settings.clouds.as_ref(),
-            frame.and_then(|f| f.clouds.as_ref()),
-        ) {
-            (Some(clouds), Some(cloud_frame)) => Some(CloudParams::new(
-                clouds,
-                settings.bottom_radius,
-                cloud_frame,
-                scene,
-                self.frames,
-            )),
-            _ => None,
-        };
+        self.write = 1 - self.write;
+        self.params = self.history.params(settings, frame, view, self.frames);
         self.frames = self.frames.wrapping_add(1);
         Ok(())
+    }
+
+    // The target this frame's composite reads.
+    fn target(&self) -> &Texture {
+        &self.targets[self.write]
     }
 
     // Whether this frame has the clouds' constants.
@@ -251,7 +262,8 @@ fn dispatch(
 }
 
 impl MtlContext {
-    // March the clouds into their target.
+    // March one texel of each 2x2 block of the clouds' target, then fill this
+    // frame's target from the march and the previous frame's.
     pub(in crate::metal) fn encode_clouds(
         &self,
         cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
@@ -283,9 +295,15 @@ impl MtlContext {
         enc.set_texture(atmo.transmittance(), 2);
         enc.set_texture(atmo.multiscatter(), 3);
         enc.set_texture(&clouds.noise, 4);
-        enc.set_texture(&clouds.target, 5);
+        enc.set_texture(&clouds.marched, 5);
         enc.set_sampler(&self.composite.sampler, 0);
         enc.set_sampler(&clouds.noise_sampler, 1);
+        let [mw, mh] = cloud_march_size(clouds.target_size);
+        dispatch(&enc, [mw, mh, 1], [8, 8, 1]);
+        enc.set_pipeline(&clouds.reconstruct_kernel);
+        enc.set_texture(clouds.target(), 5);
+        enc.set_texture(&clouds.marched, 6);
+        enc.set_texture(&clouds.targets[1 - clouds.write], 7);
         let [w, h] = clouds.target_size;
         dispatch(&enc, [w, h, 1], [8, 8, 1]);
         Ok(0)
@@ -331,7 +349,7 @@ impl MtlContext {
         enc.set_pipeline(&clouds.composite);
         enc.set_fragment_value(params, 0);
         enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_texture(&clouds.target, 1);
+        enc.set_fragment_texture(clouds.target(), 1);
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
         unsafe {

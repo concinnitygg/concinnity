@@ -199,9 +199,9 @@ float4 cloud_composite_fragment(
         discard;
     }
     float depth = composite_depth(pixel);
-    // Target texel q marched pixel q * 2 + o; find the four whose marched
+    // Target texel q holds the clouds through pixel q * 2; find the four whose
     // pixels surround this one.
-    float2 at = (float2(pixel) - CLOUD.scene.zw) / float(CLOUD_TARGET_DIVISOR);
+    float2 at = float2(pixel) / float(CLOUD_TARGET_DIVISOR);
     int2 base = int2(floor(at));
     float2 f = at - float2(base);
     float4 sum = (float4)0.0;
@@ -213,7 +213,7 @@ float4 cloud_composite_fragment(
     {
         int2 o = int2(j & 1u, j >> 1u);
         int2 q = clamp(base + o, int2(0, 0), target_max);
-        int2 marched = min(q * int(CLOUD_TARGET_DIVISOR) + int2(CLOUD.scene.zw), scene_max);
+        int2 marched = min(q * int(CLOUD_TARGET_DIVISOR), scene_max);
         float match = composite_match(depth, composite_depth(marched));
         float2 bw = lerp(1.0 - f, f, float2(o));
         float w = bw.x * bw.y * match;

@@ -1,6 +1,7 @@
 //! The clouds' constant block, as the march kernel and the composite read it.
 
 use super::frame::{CloudFrame, WEATHER_SECOND_SCALE};
+use super::history::CloudProjection;
 use super::settings::{CloudSettings, MAX_CLOUD_LAYERS};
 use super::{CLOUD_TARGET_DIVISOR, cloud_target_size};
 use crate::render::uniforms::DaylightBlock;
@@ -74,8 +75,8 @@ pub struct CloudParams {
     pub march: [f32; 4],
     /// xy: the cloud target's size in texels; zw: its reciprocal.
     pub target: [f32; 4],
-    /// xy: the scene's size in pixels; zw: the pixel inside each block of
-    /// [`CLOUD_TARGET_DIVISOR`] squared pixels this frame's march reads.
+    /// xy: the scene's size in pixels; zw: the target texel inside each 2x2
+    /// block of them this frame marches (see [`march_texel`]).
     pub scene: [f32; 4],
     /// xyz: the shadow map's center (fixed axes, kilometers from the planet's
     /// center); w: its width in kilometers.
@@ -87,16 +88,29 @@ pub struct CloudParams {
     /// x: the radius, in kilometers, of the ground the clouds' horizon is
     /// measured from; yzw unused.
     pub horizon: [f32; 4],
+    /// The previous frame's [`CloudProjection::view`], which the texels this
+    /// frame does not march are reprojected through.
+    pub prev_view: [[f32; 4]; 4],
+    /// xyz: the previous frame's camera, as `camera`; w: 1 when the previous
+    /// frame's target holds its clouds.
+    pub prev_camera: [f32; 4],
     /// The light the clouds are lit by, in the planet's fixed axes.
     pub daylight: DaylightBlock,
 }
 
-/// The pixel inside each target texel's block of the scene that frame
-/// `frame` marches through, so four frames cover the block.
-pub fn block_pixel(frame: u64) -> [u32; 2] {
+/// The target texel inside each 2x2 block of them that frame `frame`
+/// marches, so four frames march every texel once; the rest are reprojected
+/// from the previous frame's target.
+pub fn march_texel(frame: u64) -> [u32; 2] {
     const ORDER: [[u32; 2]; 4] = [[0, 0], [1, 1], [1, 0], [0, 1]];
     let i = (frame % 4) as usize;
     ORDER[i]
+}
+
+/// The size of the grid a frame marches over a target `target` texels across
+/// and down: one texel of each 2x2 block.
+pub fn cloud_march_size(target: [u32; 2]) -> [u32; 2] {
+    target.map(|t| t.div_ceil(2).max(1))
 }
 
 impl CloudParams {
@@ -145,7 +159,7 @@ impl CloudParams {
         }
         let [lo, hi] = settings.span_km();
         let [tw, th] = cloud_target_size(scene[0], scene[1]);
-        let [px, py] = block_pixel(index);
+        let [px, py] = march_texel(index);
         let [cx, cy, cz] = frame.camera_km;
         let row = |r: [f32; 3]| [r[0], r[1], r[2], 0.0];
         let index_lane = (index % 4096) as f32;
@@ -176,12 +190,37 @@ impl CloudParams {
             shadow_east: v3(frame.shadow.east, frame.shadow.radius_km),
             shadow_north: v3(frame.shadow.north, 0.0),
             horizon: [frame.horizon_km, 0.0, 0.0, 0.0],
+            prev_view: crate::transform::IDENTITY,
+            prev_camera: [0.0; 4],
             daylight: frame.daylight,
+        }
+    }
+
+    /// This block reprojecting through the previous frame's `previous`, or
+    /// marching only when there is none.
+    #[must_use]
+    pub fn with_history(self, previous: Option<CloudProjection>) -> Self {
+        match previous {
+            Some(p) => {
+                let [x, y, z] = p.camera_km;
+                Self {
+                    prev_view: p.view,
+                    prev_camera: [x, y, z, 1.0],
+                    ..self
+                }
+            }
+            None => Self {
+                prev_camera: [0.0; 4],
+                ..self
+            },
         }
     }
 }
 
-const _: () = assert!(CLOUD_TARGET_DIVISOR == 2, "block_pixel walks a 2x2 block");
+const _: () = assert!(
+    CLOUD_TARGET_DIVISOR == 2,
+    "the composite reads each target texel's top-left pixel"
+);
 
 #[cfg(test)]
 mod tests {
@@ -203,7 +242,7 @@ mod tests {
 
     #[test]
     fn cloud_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<CloudParams>(), 2080);
+        assert_eq!(size_of::<CloudParams>(), 2160);
         assert_eq!(offset_of!(CloudParams, layers), 0);
         assert_eq!(offset_of!(CloudParams, to_fixed), 224);
         assert_eq!(offset_of!(CloudParams, camera), 272);
@@ -215,15 +254,24 @@ mod tests {
         assert_eq!(offset_of!(CloudParams, shadow_east), 368);
         assert_eq!(offset_of!(CloudParams, shadow_north), 384);
         assert_eq!(offset_of!(CloudParams, horizon), 400);
-        assert_eq!(offset_of!(CloudParams, daylight), 416);
+        assert_eq!(offset_of!(CloudParams, prev_view), 416);
+        assert_eq!(offset_of!(CloudParams, prev_camera), 480);
+        assert_eq!(offset_of!(CloudParams, daylight), 496);
     }
 
     #[test]
-    fn four_frames_cover_each_block() {
-        let mut seen: Vec<[u32; 2]> = (0..4).map(block_pixel).collect();
+    fn four_frames_march_each_texel_of_a_block() {
+        let mut seen: Vec<[u32; 2]> = (0..4).map(march_texel).collect();
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), 4);
-        assert_eq!(block_pixel(5), block_pixel(1));
+        assert_eq!(march_texel(5), march_texel(1));
+    }
+
+    #[test]
+    fn the_march_covers_one_texel_of_every_block() {
+        assert_eq!(cloud_march_size([960, 540]), [480, 270]);
+        assert_eq!(cloud_march_size([7, 1]), [4, 1]);
+        assert_eq!(cloud_march_size([0, 0]), [1, 1]);
     }
 }

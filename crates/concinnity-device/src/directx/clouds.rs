@@ -2,11 +2,12 @@
 //! `concinnity_engine::render::environment::clouds`): the noise volume the layers are
 //! carved from, built by the first frame's atmosphere pass; the shadow map and
 //! the panorama that pass writes for the shaded passes and the sky's cubes; the
-//! half-resolution target the march writes; and the composite that blends it
-//! over the scene behind the haze. Like every texture the GPU writes, they are
+//! half-resolution targets the march and the reconstruction fill, one frame's
+//! and the previous frame's in turn; and the composite that blends it over the
+//! scene behind the haze. Like every texture the GPU writes, they are
 //! committed resources.
 //!
-//! Both rest readable by any shader stage; each kernel opens its output for
+//! All rest readable by any shader stage; each kernel opens its output for
 //! unordered access and closes it again inside the pass, so nothing crosses
 //! the node boundary in a different state.
 //!
@@ -16,9 +17,12 @@ use std::cell::Cell;
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::environment::atmosphere::{AtmosphereFrame, AtmosphereSettings};
+use concinnity_engine::render::environment::atmosphere::{
+    AtmosphereFrame, AtmosphereSettings, AtmosphereView,
+};
 use concinnity_engine::render::environment::clouds::{
-    CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_target_size,
+    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
+    cloud_target_size,
 };
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -27,8 +31,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{
-    CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_SHADOW, CompileProgram,
-    FULLSCREEN_VERT,
+    CLOUD_COMPOSITE_FRAG, CLOUD_MARCH, CLOUD_NOISE, CLOUD_PANORAMA, CLOUD_RECONSTRUCT,
+    CLOUD_SHADOW, CompileProgram, FULLSCREEN_VERT,
 };
 use super::com;
 use super::context::{DxContext, align256};
@@ -44,17 +48,20 @@ const RESTING: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 const NOISE_GROUP: u32 = 4;
 const MARCH_GROUP: u32 = 8;
 
-/// The heap slots the clouds own: the UAVs of the noise volume, the target,
-/// the shadow map and the panorama, then their SRVs in the same order.
-pub(in crate::directx) const CLOUD_SLOTS: usize = 8;
+/// The heap slots the clouds own: the UAVs of the noise volume, the first
+/// target, the shadow map, the panorama, the march and the second target, then
+/// their SRVs in the same order.
+pub(in crate::directx) const CLOUD_SLOTS: usize = 12;
 const NOISE_UAV: usize = 0;
-const TARGET_UAV: usize = 1;
 const SHADOW_UAV: usize = 2;
 const PANORAMA_UAV: usize = 3;
-const NOISE_SRV: usize = 4;
-const TARGET_SRV: usize = 5;
-const SHADOW_SRV: usize = 6;
-const PANORAMA_SRV: usize = 7;
+const MARCHED_UAV: usize = 4;
+const TARGET_UAV: [usize; 2] = [1, 5];
+const NOISE_SRV: usize = 6;
+const SHADOW_SRV: usize = 8;
+const PANORAMA_SRV: usize = 9;
+const MARCHED_SRV: usize = 10;
+const TARGET_SRV: [usize; 2] = [7, 11];
 
 /// The CPU and GPU handles of the clouds' heap slots.
 #[derive(Clone, Copy)]
@@ -71,8 +78,14 @@ pub(in crate::directx) struct DxClouds {
     noise_built: Cell<bool>,
     shadow: ID3D12Resource,
     panorama: ID3D12Resource,
-    target: ID3D12Resource,
+    // The march's texels, one of each 2x2 block of the target's.
+    marched: ID3D12Resource,
+    // This frame's target and the previous frame's, swapping each frame.
+    targets: [ID3D12Resource; 2],
+    // Which of `targets` this frame writes.
+    write: Cell<usize>,
     target_size: [u32; 2],
+    history: Cell<CloudHistory>,
     slots: CloudSlots,
     params_buffers: Vec<PooledBuffer>,
     params_ptrs: Vec<*mut u8>,
@@ -81,6 +94,7 @@ pub(in crate::directx) struct DxClouds {
     noise_pso: ID3D12PipelineState,
     march_root_sig: ID3D12RootSignature,
     march_pso: ID3D12PipelineState,
+    reconstruct_pso: ID3D12PipelineState,
     shadow_pso: ID3D12PipelineState,
     panorama_pso: ID3D12PipelineState,
     composite_root_sig: ID3D12RootSignature,
@@ -204,11 +218,12 @@ fn write_views(
     unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const uav), uav_cpu) };
 }
 
-// The target for a scene `size` pixels across, its views in `slots`.
+// A target `size` texels across, its views in `slots` at `srv` and `uav`.
 fn create_target(
     device: &ID3D12Device,
     size: [u32; 2],
     slots: &CloudSlots,
+    [srv, uav]: [usize; 2],
 ) -> RenderResult<ID3D12Resource> {
     let target = create_texture(
         device,
@@ -220,10 +235,27 @@ fn create_target(
         &target,
         TARGET_FORMAT,
         1,
-        slots.cpu[TARGET_SRV],
-        slots.cpu[TARGET_UAV],
+        slots.cpu[srv],
+        slots.cpu[uav],
     );
     Ok(target)
+}
+
+// The march's texels and both targets for a target `size` texels across.
+fn create_targets(
+    device: &ID3D12Device,
+    size: [u32; 2],
+    slots: &CloudSlots,
+) -> RenderResult<(ID3D12Resource, [ID3D12Resource; 2])> {
+    let marched = create_target(
+        device,
+        cloud_march_size(size),
+        slots,
+        [MARCHED_SRV, MARCHED_UAV],
+    )?;
+    let a = create_target(device, size, slots, [TARGET_SRV[0], TARGET_UAV[0]])?;
+    let b = create_target(device, size, slots, [TARGET_SRV[1], TARGET_UAV[1]])?;
+    Ok((marched, [a, b]))
 }
 
 // The noise kernel's root signature:
@@ -241,7 +273,9 @@ fn noise_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
 //   [3] table  t1     aerial volume
 //   [4] table  t2-t3  transmittance and multiple scattering
 //   [5] table  t4     the noise volume
-//   [6] table  u0     the target
+//   [6] table  u0     the target written
+//   [7] table  t6     the march, which the reconstruction reads
+//   [8] table  t7     the previous frame's target
 // Static linear-clamp sampler s0, linear-wrap sampler s1.
 fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
@@ -252,6 +286,8 @@ fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
         .srv_table(2, 2, Visibility::All)
         .srv_table(4, 1, Visibility::All)
         .uav_table(0, 1, Visibility::All)
+        .srv_table(6, 1, Visibility::All)
+        .srv_table(7, 1, Visibility::All)
         .static_sampler(SamplerState::LinearClamp, 0, Visibility::All)
         .static_sampler(SamplerState::LinearWrap, 1, Visibility::All)
         .build(device, "cloud march root sig")
@@ -283,17 +319,19 @@ fn map_pso(
     )
 }
 
-fn march_pso(
+// A kernel reading the scene's depth, in the variant for its sample count.
+fn depth_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
+    program: &concinnity_engine::render::shader::programs::ShaderProgram,
     msaa_samples: u32,
     hot_reload: bool,
 ) -> RenderResult<ID3D12PipelineState> {
     compute_pso(
         device,
         root_sig,
-        &CLOUD_MARCH.at(msaa_samples > 1).compile(hot_reload)?,
-        CLOUD_MARCH.label,
+        &program.at(msaa_samples > 1).compile(hot_reload)?,
+        program.label,
     )
 }
 
@@ -341,7 +379,7 @@ impl DxClouds {
             slots.cpu[NOISE_UAV],
         );
         let target_size = cloud_target_size(scene[0], scene[1]);
-        let target = create_target(device, target_size, &slots)?;
+        let (marched, targets) = create_targets(device, target_size, &slots)?;
         let map = |size: [u32; 2], srv: usize, uav: usize, label: &str| {
             let map = create_texture(
                 device,
@@ -387,7 +425,20 @@ impl DxClouds {
             CLOUD_NOISE.label,
         )?;
         let march_root_sig = march_root_sig(device)?;
-        let march_pso = march_pso(device, &march_root_sig, msaa_samples, hot_reload)?;
+        let march_pso = depth_pso(
+            device,
+            &march_root_sig,
+            &CLOUD_MARCH,
+            msaa_samples,
+            hot_reload,
+        )?;
+        let reconstruct_pso = depth_pso(
+            device,
+            &march_root_sig,
+            &CLOUD_RECONSTRUCT,
+            msaa_samples,
+            hot_reload,
+        )?;
         let shadow_pso = map_pso(device, &march_root_sig, &CLOUD_SHADOW, hot_reload)?;
         let panorama_pso = map_pso(device, &march_root_sig, &CLOUD_PANORAMA, hot_reload)?;
         let composite_root_sig = composite_root_sig(device)?;
@@ -398,8 +449,11 @@ impl DxClouds {
             noise_built: Cell::new(false),
             shadow,
             panorama,
-            target,
+            marched,
+            targets,
+            write: Cell::new(0),
             target_size,
+            history: Cell::new(CloudHistory::default()),
             slots,
             params_buffers,
             params_ptrs,
@@ -408,6 +462,7 @@ impl DxClouds {
             noise_pso,
             march_root_sig,
             march_pso,
+            reconstruct_pso,
             shadow_pso,
             panorama_pso,
             composite_root_sig,
@@ -415,8 +470,8 @@ impl DxClouds {
         })
     }
 
-    // Size the target for a scene `scene` pixels across, its views rewritten
-    // in place. The device is idle across a resize.
+    // Size the targets for a scene `scene` pixels across, their views
+    // rewritten in place. The device is idle across a resize.
     pub(in crate::directx) fn resize_to(
         &mut self,
         device: &ID3D12Device,
@@ -424,7 +479,7 @@ impl DxClouds {
     ) -> RenderResult<()> {
         let size = cloud_target_size(scene[0], scene[1]);
         if size != self.target_size {
-            self.target = create_target(device, size, &self.slots)?;
+            (self.marched, self.targets) = create_targets(device, size, &self.slots)?;
             self.target_size = size;
         }
         Ok(())
@@ -442,12 +497,26 @@ impl DxClouds {
             &CLOUD_NOISE.compile(true)?,
             CLOUD_NOISE.label,
         )?;
-        let march_pso = march_pso(device, &self.march_root_sig, msaa_samples, true)?;
+        let march_pso = depth_pso(
+            device,
+            &self.march_root_sig,
+            &CLOUD_MARCH,
+            msaa_samples,
+            true,
+        )?;
+        let reconstruct_pso = depth_pso(
+            device,
+            &self.march_root_sig,
+            &CLOUD_RECONSTRUCT,
+            msaa_samples,
+            true,
+        )?;
         let shadow_pso = map_pso(device, &self.march_root_sig, &CLOUD_SHADOW, true)?;
         let panorama_pso = map_pso(device, &self.march_root_sig, &CLOUD_PANORAMA, true)?;
         let composite_pso = composite_pso(device, &self.composite_root_sig, msaa_samples, true)?;
         self.noise_pso = noise_pso;
         self.march_pso = march_pso;
+        self.reconstruct_pso = reconstruct_pso;
         self.shadow_pso = shadow_pso;
         self.panorama_pso = panorama_pso;
         self.composite_pso = composite_pso;
@@ -455,29 +524,21 @@ impl DxClouds {
         Ok(())
     }
 
-    // This frame's constants for `settings` and `frame` over a scene `scene`
-    // pixels across, written into frame slot `frame_idx`'s buffer.
+    // This frame's constants for `settings` and `frame` seen from `view`,
+    // written into frame slot `frame_idx`'s buffer, and this frame's target
+    // the other one.
     pub(in crate::directx) fn prepare(
         &self,
         settings: &AtmosphereSettings,
         frame: Option<&AtmosphereFrame>,
-        scene: [u32; 2],
+        view: &AtmosphereView,
         frame_idx: usize,
     ) {
         let index = self.frames.get();
-        let params = match (
-            settings.clouds.as_ref(),
-            frame.and_then(|f| f.clouds.as_ref()),
-        ) {
-            (Some(clouds), Some(cloud_frame)) => Some(CloudParams::new(
-                clouds,
-                settings.bottom_radius,
-                cloud_frame,
-                scene,
-                index,
-            )),
-            _ => None,
-        };
+        self.write.set(1 - self.write.get());
+        let mut history = self.history.get();
+        let params = history.params(settings, frame, view, index);
+        self.history.set(history);
         self.params.set(params);
         self.frames.set(index.wrapping_add(1));
         if let (Some(params), Some(&ptr)) = (params, self.params_ptrs.get(frame_idx)) {
@@ -595,7 +656,8 @@ pub(in crate::directx) struct MarchInputs {
 }
 
 impl DxContext {
-    // March the clouds into their target.
+    // March one texel of each 2x2 block of the clouds' target, then fill this
+    // frame's target from the march and the previous frame's.
     pub(in crate::directx) fn encode_clouds(
         &self,
         cmd: &ID3D12GraphicsCommandList,
@@ -617,18 +679,33 @@ impl DxContext {
         };
         // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
         unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
-        // SAFETY: the command list is recording and the target rests in `RESTING`.
-        unsafe { cmd.ResourceBarrier(&[open(&clouds.target)]) };
+        let write = clouds.write.get();
+        let target = &clouds.targets[write];
+        // SAFETY: the command list is recording and the march rests in `RESTING`.
+        unsafe { cmd.ResourceBarrier(&[open(&clouds.marched)]) };
         bind_march(cmd, clouds, inputs, params_gva);
         // SAFETY: the march PSO is owned by `clouds` and matches the root signature bound above.
         unsafe { cmd.SetPipelineState(&clouds.march_pso) };
-        // SAFETY: table 6 takes the target's UAV in the heap set above.
-        unsafe { cmd.set_compute_srv_table(6, clouds.slots.gpu[TARGET_UAV]) };
+        // SAFETY: table 6 takes the march's UAV in the heap set above.
+        unsafe { cmd.set_compute_srv_table(6, clouds.slots.gpu[MARCHED_UAV]) };
+        let [mw, mh] = cloud_march_size(clouds.target_size);
+        // SAFETY: the pipeline, root signature, constants and tables are bound above.
+        unsafe { cmd.Dispatch(mw.div_ceil(MARCH_GROUP), mh.div_ceil(MARCH_GROUP), 1) };
+        // SAFETY: the march was opened for unordered access above, and this frame's target rests
+        // in `RESTING`.
+        unsafe { cmd.ResourceBarrier(&[close(&clouds.marched), open(target)]) };
+        // SAFETY: the reconstruction PSO is owned by `clouds` and matches the bound root signature.
+        unsafe { cmd.SetPipelineState(&clouds.reconstruct_pso) };
+        // SAFETY: table 6 takes this frame's target's UAV in the bound heap.
+        unsafe { cmd.set_compute_srv_table(6, clouds.slots.gpu[TARGET_UAV[write]]) };
+        // SAFETY: table 8 takes the previous frame's target's SRV in the bound heap; it rests
+        // readable.
+        unsafe { cmd.set_compute_srv_table(8, clouds.slots.gpu[TARGET_SRV[1 - write]]) };
         let [w, h] = clouds.target_size;
         // SAFETY: the pipeline, root signature, constants and tables are bound above.
         unsafe { cmd.Dispatch(w.div_ceil(MARCH_GROUP), h.div_ceil(MARCH_GROUP), 1) };
-        // SAFETY: the target was opened for unordered access above.
-        unsafe { cmd.ResourceBarrier(&[close(&clouds.target)]) };
+        // SAFETY: this frame's target was opened for unordered access above.
+        unsafe { cmd.ResourceBarrier(&[close(target)]) };
     }
 
     // Blend the clouds over the hazed scene.
@@ -688,7 +765,7 @@ impl DxContext {
         unsafe { cmd.set_graphics_srv_table(1, depth_srv) };
         // SAFETY: table 2 takes the target's SRV in the heap set above; the march left the target
         // readable.
-        unsafe { cmd.set_graphics_srv_table(2, clouds.slots.gpu[TARGET_SRV]) };
+        unsafe { cmd.set_graphics_srv_table(2, clouds.slots.gpu[TARGET_SRV[clouds.write.get()]]) };
         // SAFETY: the target, pipeline, root signature and every table the draw reads are bound
         // above.
         unsafe { cmd.DrawInstanced(3, 1, 0, 0) };
@@ -732,4 +809,8 @@ fn bind_march(
     unsafe { cmd.set_compute_srv_table(4, inputs.tables_srv) };
     // SAFETY: table 5 takes the noise volume's SRV in the bound heap.
     unsafe { cmd.set_compute_srv_table(5, clouds.slots.gpu[NOISE_SRV]) };
+    // SAFETY: table 7 takes the march's SRV in the bound heap; it rests readable.
+    unsafe { cmd.set_compute_srv_table(7, clouds.slots.gpu[MARCHED_SRV]) };
+    // SAFETY: table 8 takes a target's SRV in the bound heap; both rest readable.
+    unsafe { cmd.set_compute_srv_table(8, clouds.slots.gpu[TARGET_SRV[0]]) };
 }
