@@ -7,6 +7,7 @@ use super::app_config::apply_app_config;
 use super::camera_shot::expand::expand_camera_shots;
 use super::character_model::expand::expand_character_models;
 use super::companion::inject_companions;
+use super::ground_look::expand::expand_ground_looks;
 use super::light_rig::expand::expand_light_rigs;
 use super::main_menu::expand_main_menus;
 use super::material_palette::expand::expand_material_palettes;
@@ -203,6 +204,7 @@ pub(crate) fn expand_world(
     expand_character_models(assets)?;
     expand_light_rigs(assets, assets_dir)?;
     expand_material_palettes(assets, assets_dir)?;
+    expand_ground_looks(assets)?;
     expand_prefabs(assets, &authored, &mut report, assets_dir)?;
     expand_room_textures(assets);
     // First companion round: materialize the Window implied by everything

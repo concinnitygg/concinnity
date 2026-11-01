@@ -537,10 +537,10 @@ pub mod cook {
     // compiled resources and the five diverging args schemas from the runtime
     // crate, the build-only assets from the authoring one.
     pub use concinnity_cook::authoring::registry::build_only::{
-        CameraShot, CharacterModel, CharacterSchema, Include, KeyPolarity, LightRig, MainMenu,
-        MainMenuItem, MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection, Prefab,
-        PrefabEntry, PrefabKind, ProportionGroup, SceneImport, SchemaJoint, SchemaKey,
-        SchemaRegion, SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams,
+        CameraShot, CharacterModel, CharacterSchema, Dirt, Include, KeyPolarity, LightRig,
+        MainMenu, MainMenuItem, MaterialPalette, OptionSelect, PaletteEntry, Panel, PanelSection,
+        Prefab, PrefabEntry, PrefabKind, ProportionGroup, Sand, SceneImport, SchemaJoint,
+        SchemaKey, SchemaRegion, SettingsProfile, ShapePreset, Slider, StoryImport, SynthParams,
         SynthesizedTarget,
     };
     pub use concinnity_engine::components::cook::*;

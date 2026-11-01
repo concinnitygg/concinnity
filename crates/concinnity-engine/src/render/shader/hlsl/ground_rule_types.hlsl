@@ -28,8 +28,8 @@ struct GroundCover
     uint albedo_index;
     float roughness;
     float metallic;
+    uint normal_index;
     float _pad0;
-    float _pad1;
 };
 
 #endif

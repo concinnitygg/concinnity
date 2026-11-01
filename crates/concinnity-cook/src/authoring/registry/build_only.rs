@@ -18,6 +18,7 @@ pub use crate::build_only::character_model::character_schema::{
     SchemaRegion, ShapePreset, SynthParams, SynthesizedTarget,
 };
 pub use crate::build_only::character_model::schema::CharacterModel;
+pub use crate::build_only::ground_look::schema::{Dirt, Sand};
 pub use crate::build_only::include::schema::Include;
 pub use crate::build_only::light_rig::schema::{LightRig, RigLight};
 pub use crate::build_only::main_menu::schema::{
@@ -57,6 +58,8 @@ macro_rules! for_each_build_only_type {
             build_only: {
                 LightRig          => $crate::authoring::registry::build_only::LightRig { },
                 MaterialPalette   => $crate::authoring::registry::build_only::MaterialPalette { },
+                Sand              => $crate::authoring::registry::build_only::Sand { },
+                Dirt              => $crate::authoring::registry::build_only::Dirt { },
                 CameraShot        => $crate::authoring::registry::build_only::CameraShot { },
                 Prefab            => $crate::authoring::registry::build_only::Prefab { },
                 SceneImport       => $crate::authoring::registry::build_only::SceneImport { },

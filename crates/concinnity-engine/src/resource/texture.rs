@@ -5,19 +5,24 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use super::TextureTable;
+use super::ground_look::{DirtLook, GroundMap, SandLook};
 use crate::blob::{FrameError, decode_exact};
 use crate::ecs::PayloadLocator;
 use alloc::string::String;
 
 /// The runtime fields a texture's resource record carries beside its compiled
 /// image, which the cook decides from how the world uses the texture.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TextureRecord {
     /// The world reads the texture only at cook time, decoded into another
     /// asset's payload (a terrain's heightmap or a grass layer's density
     /// mask), so nothing samples it on the GPU and the renderer keeps it out of
     /// its texture pool.
     pub cook_only: bool,
+    /// The mean of the image's RGB channels in [0, 1], where the cook could
+    /// read its texels: what the texture looks like from far enough away that
+    /// it covers a fraction of a pixel.
+    pub mean: Option<[f32; 3]>,
 }
 
 impl TextureRecord {
@@ -41,6 +46,13 @@ impl TextureRecord {
 }
 
 impl TextureTable {
+    /// The mean RGB of the texture at handle `slot`, where its record holds
+    /// one.
+    pub fn mean(&self, slot: usize) -> Option<[f32; 3]> {
+        let entry = self.0.get(slot)?;
+        TextureRecord::from_bytes(&entry.data_bytes).ok()?.mean
+    }
+
     /// The handles of every texture only the cook reads.
     pub(crate) fn cook_only_slots(&self) -> Result<BTreeSet<usize>, FrameError> {
         let mut slots = BTreeSet::new();
@@ -100,6 +112,14 @@ pub struct Texture {
     /// value. Useful to keep very large source maps (4K+) from bloating the
     /// compiled scene, which stores uncompressed pixels.
     pub max_size: u32,
+    /// A sand surface the cook draws `ground_map` of, in place of `generator`
+    /// and `source`. A [Sand](#sand) asset writes these for its material.
+    pub sand: Option<SandLook>,
+    /// A dirt surface the cook draws `ground_map` of, in place of `generator`
+    /// and `source`. A [Dirt](#dirt) asset writes these for its material.
+    pub dirt: Option<DirtLook>,
+    /// Which map of `sand` or `dirt` the texture holds. Ignored otherwise.
+    pub ground_map: GroundMap,
     /// Injected at load time from the compiled blob payload.
     #[serde(skip)]
     pub locator: Option<PayloadLocator>,
@@ -121,7 +141,10 @@ mod tests {
     #[test]
     fn a_record_round_trips_through_its_bytes() {
         for cook_only in [true, false] {
-            let record = TextureRecord { cook_only };
+            let record = TextureRecord {
+                cook_only,
+                mean: Some([0.25, 0.5, 1.0]),
+            };
             assert_eq!(TextureRecord::from_bytes(&record.to_bytes()), Ok(record));
         }
     }
@@ -136,7 +159,11 @@ mod tests {
 
     #[test]
     fn the_table_lists_its_cook_only_slots() {
-        let cook_only = TextureRecord { cook_only: true }.to_bytes();
+        let cook_only = TextureRecord {
+            cook_only: true,
+            mean: None,
+        }
+        .to_bytes();
         let table = TextureTable(vec![
             entry(Vec::new()),
             entry(cook_only.clone()),
@@ -144,6 +171,18 @@ mod tests {
             entry(cook_only),
         ]);
         assert_eq!(table.cook_only_slots(), Ok(BTreeSet::from([1, 3])));
+    }
+
+    #[test]
+    fn the_table_reads_a_textures_mean() {
+        let record = TextureRecord {
+            cook_only: false,
+            mean: Some([0.1, 0.2, 0.3]),
+        };
+        let table = TextureTable(vec![entry(Vec::new()), entry(record.to_bytes())]);
+        assert_eq!(table.mean(0), None);
+        assert_eq!(table.mean(1), Some([0.1, 0.2, 0.3]));
+        assert_eq!(table.mean(2), None);
     }
 
     #[test]

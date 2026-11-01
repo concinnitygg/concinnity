@@ -22,6 +22,8 @@ pub(crate) mod font;
 /// they share (tangents, the voxel mesher, chunk streaming) stay in
 /// `concinnity_engine::geometry`; this module re-exports what cook code names.
 pub(crate) mod geometry;
+/// Sand and dirt drawn into seamless ground textures.
+pub(crate) mod ground_surface;
 pub mod mesh;
 pub(crate) mod physics_budget;
 /// Compiling an assembled program with dxc, and why one did not compile.

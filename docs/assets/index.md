@@ -24,6 +24,7 @@
 - [DebugHud](DebugHud.md) - Requests the developer debug HUD: a set of [`TextLabel`](TextLabel.md) chips with diagnostic readouts, anchored to the top-right of the window and toggled with F1 (hidden by default).
 - [Decal](Decal.md) - A projected texture stamped onto whatever scene geometry sits inside the decal's oriented box.
 - [DirectionalLight](DirectionalLight.md) - An infinitely distant directional light (sun, moon, or sky fill).
+- [Dirt](Dirt.md) - A dirt surface, drawn by the cook into seamless one-meter textures.
 - [EngineDefaults](EngineDefaults.md) - Opts a world out of individual engine-injected defaults.
 - [EnvironmentMap](EnvironmentMap.md) - A baked lighting environment built from an equirectangular source (or a built-in generator). It provides the scene's ambient image-based lighting (soft diffuse fill plus glossy reflections that follow surface roughness) and the on-screen sky.
 - [File](File.md) - References a source file by path.
@@ -63,6 +64,7 @@
 - [RigidBody](RigidBody.md) - Gives a player [`Camera3D`](Camera3D.md) gravity, jumping, and a grounded character body.
 - [RollingDrive](RollingDrive.md) - Rolls a companion [Prop](Prop.md)'s body the way it is steered.
 - [Room](Room.md) - A self-contained room (floor, ceiling, four walls), with optional texturing.
+- [Sand](Sand.md) - A sand surface, drawn by the cook into seamless one-meter textures.
 - [Scene](Scene.md) - A named group of world content.
 - [SceneImport](SceneImport.md) - Imports a 3D scene file as a single declaration.
 - [Screen](Screen.md) - A named full-screen layer of UI drawn over the world: a pause menu, a settings page, a console, a score overlay.
@@ -122,6 +124,7 @@
 - [ColorRun](ColorRun.md) - A span of a [`TextLabel`](TextLabel.md)'s `content` drawn in a color of its own.
 - [CueKind](CueKind.md) - How an [`AudioCue`](AudioCue.md) plays its clip.
 - [Culling](Culling.md) - How the renderer culls objects the camera cannot see. The `culling` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
+- [DirtLook](DirtLook.md) - The look of a patch of bare earth, one meter across and repeating seamlessly: crumbs and clods of soil, stones lying in it, darker humus, and dried cracks.
 - [Display](Display.md) - How the finished frame is encoded for the display: standard dynamic range, extended-range HDR, or PQ (HDR10). The `display` section of [`GraphicsConfig`](GraphicsConfig.md); left unset, the output is standard dynamic range.
 - [DriveKey](DriveKey.md) - One stretch of a scripted [`RollingDrive`](RollingDrive.md): how the drive is steered from `seconds` until the next key.
 - [Ease](Ease.md) - How a [`CameraTrack`](CameraTrack.md) leg paces the run between its start and its end.
@@ -132,6 +135,7 @@
 - [FramePacing](FramePacing.md) - How the render loop paces its frames: how many may be in flight, whether presentation waits for the display refresh, and the frame-rate cap. The `frame_pacing` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [FramePriority](FramePriority.md) - Whether the threads every frame waits on run above normal priority, ahead of the other applications on the machine.
 - [GroundCover](GroundCover.md) - A look a [Planet](Planet.md)'s ground takes where its `rule` holds: sand on a beach, a duller seabed under deeper water, rock on steep slopes.
+- [GroundMap](GroundMap.md) - Which of a ground surface's maps a [Texture](Texture.md) holds.
 - [GroundRule](GroundRule.md) - Where on the ground something belongs: between two altitudes and between two slopes, fading in and out over soft edges.
 - [IndirectLighting](IndirectLighting.md) - Indirect (ambient) lighting: how strong the environment's ambient term is, and whether a screen-space bounce lets nearby lit surfaces bleed color onto one another. The `indirect_lighting` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [IndirectTechnique](IndirectTechnique.md) - Indirect-diffuse lighting technique for `GraphicsConfig.indirect_lighting.technique`. `Ibl` is the image-based-lighting-only ambient term; `Ssgi` layers a screen-space global-illumination bounce on top.
@@ -159,6 +163,7 @@
 - [ProportionGroup](ProportionGroup.md) - A proportion slider: one value in `[-1, 1]` written as a scale and / or length change on every listed joint.
 - [Reflections](Reflections.md) - Reflections on glossy surfaces (water, polished floors): screen-space, hardware ray-traced, or neither. The `reflections` section of [`GraphicsConfig`](GraphicsConfig.md); a field left unset takes the default below.
 - [Rolloff](Rolloff.md) - How an [`AudioEmitter`](AudioEmitter.md)'s volume falls with distance.
+- [SandLook](SandLook.md) - The look of a patch of sand, one meter across and repeating seamlessly: wind ripples over loose grains, dark mineral grains, and scattered shell fragments.
 - [SchemaJoint](SchemaJoint.md) - One joint the schema expects in a conforming skeleton.
 - [SchemaKey](SchemaKey.md) - One shape key the schema knows, authored on the source or synthesized.
 - [SchemaRegion](SchemaRegion.md) - A named group of joints. A vertex belongs to a region by the skin weight it gives the region's joints.

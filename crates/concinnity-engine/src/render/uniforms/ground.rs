@@ -31,8 +31,10 @@ pub struct GroundCoverGpu {
     pub roughness: f32,
     /// Metallic factor.
     pub metallic: f32,
+    /// Index of the tangent-space normal map in the bindless pool.
+    pub normal_index: u32,
     /// Keeps the record a whole number of rows.
-    pub _pad: [f32; 2],
+    pub _pad: f32,
 }
 
 #[cfg(test)]
@@ -57,6 +59,7 @@ mod tests {
         assert_eq!(offset_of!(GroundCoverGpu, albedo_index), 44);
         assert_eq!(offset_of!(GroundCoverGpu, roughness), 48);
         assert_eq!(offset_of!(GroundCoverGpu, metallic), 52);
-        assert_eq!(offset_of!(GroundCoverGpu, _pad), 56);
+        assert_eq!(offset_of!(GroundCoverGpu, normal_index), 56);
+        assert_eq!(offset_of!(GroundCoverGpu, _pad), 60);
     }
 }

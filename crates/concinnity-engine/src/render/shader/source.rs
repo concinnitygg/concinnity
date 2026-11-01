@@ -109,6 +109,9 @@ pub const FRAGMENTS: &[(&str, &str)] = &[
     // GRASS_FIELD, whose marker it carries; the grass kernel carries
     // GRASS_FIELD too.
     ("{CANOPY}", "canopy.hlsl"),
+    // GROUND_SURFACE trails MAIN_SHADING, which carries its marker after
+    // CANOPY's, whose functions it reads.
+    ("{GROUND_SURFACE}", "ground_surface.hlsl"),
     // PLANET_NOISE trails CANOPY, which carries its marker; the planet sea
     // carries it too.
     ("{PLANET_NOISE}", "planet_noise.hlsl"),

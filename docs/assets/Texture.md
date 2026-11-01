@@ -17,3 +17,6 @@ Use the `generator` field for built-in patterns or supply a `source` file path.
 - `image_index`: An integer. When `source` points to a `.glb` file, which embedded image to import. Ignored for regular image files. Defaults to `0`.
 - `resolution`: An integer. Resolution hint for procedural generators (width = height). Defaults to 512. Ignored for file-backed textures.
 - `max_size`: An integer. Optional ceiling on the longest edge of a file-backed image, in pixels. `0` (the default) keeps the source resolution. When set and the source is larger, the image is box-filtered down so its longest edge is at most this value. Useful to keep very large source maps (4K+) from bloating the compiled scene, which stores uncompressed pixels.
+- `sand`: A [SandLook](SandLook.md) object. A sand surface the cook draws `ground_map` of, in place of `generator` and `source`. A [Sand](Sand.md) asset writes these for its material. Optional.
+- `dirt`: A [DirtLook](DirtLook.md) object. A dirt surface the cook draws `ground_map` of, in place of `generator` and `source`. A [Dirt](Dirt.md) asset writes these for its material. Optional.
+- `ground_map`: A string (see [GroundMap](GroundMap.md)). Which map of `sand` or `dirt` the texture holds. Ignored otherwise. Defaults to `"albedo"`.

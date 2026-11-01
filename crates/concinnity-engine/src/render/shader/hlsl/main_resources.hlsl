@@ -277,6 +277,10 @@ float4 pool_sample(uint idx, float2 uv)
 {
     return tex_pool[NonUniformResourceIndex(idx)].Sample(linear_sampler, uv);
 }
+float4 pool_sample_grad(uint idx, float2 uv, float2 dx, float2 dy)
+{
+    return tex_pool[NonUniformResourceIndex(idx)].SampleGrad(linear_sampler, uv, dx, dy);
+}
 float shadow_map_cmp(float3 uv_layer, float ref)
 {
     return shadow_map.SampleCmp(shadow_sampler, uv_layer, ref);

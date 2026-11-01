@@ -37,6 +37,20 @@ impl MaterialEntry {
     };
 }
 
+impl MaterialEntry {
+    /// The material's mean albedo: its tint times the mean of its albedo
+    /// texture, as `texture_mean` reads it by texture slot. A texture of
+    /// unknown mean counts as white.
+    pub fn mean_albedo(&self, texture_mean: impl Fn(usize) -> Option<[f32; 3]>) -> [f32; 3] {
+        let tint = self.uniforms.tint;
+        if self.albedo_slot == NO_ALBEDO_SLOT {
+            return tint;
+        }
+        let mean = texture_mean(self.albedo_slot).unwrap_or([1.0; 3]);
+        core::array::from_fn(|c| tint[c] * mean[c])
+    }
+}
+
 /// The entry the `Material` at `handle` bakes to against a texture pool of
 /// `texture_count` entries. `Err` names the reference that points past the
 /// pool, which cook validated and so marks a corrupt build.
@@ -103,6 +117,17 @@ pub(crate) fn resolve_material_slots(
 mod tests {
     use super::*;
     use alloc::vec::Vec;
+
+    #[test]
+    fn the_mean_albedo_weighs_the_tint_by_the_textures_mean() {
+        let mut entry = MaterialEntry::UNTEXTURED;
+        entry.uniforms.tint = [0.5, 1.0, 2.0];
+        assert_eq!(entry.mean_albedo(|_| Some([0.0; 3])), [0.5, 1.0, 2.0]);
+        entry.albedo_slot = 3;
+        let mean = |slot: usize| (slot == 3).then_some([0.5, 0.25, 0.5]);
+        assert_eq!(entry.mean_albedo(mean), [0.25, 0.25, 1.0]);
+        assert_eq!(entry.mean_albedo(|_| None), [0.5, 1.0, 2.0]);
+    }
 
     fn material() -> Material {
         Material {

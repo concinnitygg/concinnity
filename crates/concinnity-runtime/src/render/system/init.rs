@@ -414,23 +414,29 @@ impl GraphicsSystem {
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
         let planet_surface = planet.as_ref().map(|p| {
+            use concinnity_engine::render::material_entry::MaterialEntry;
+            let textures = ctx.resource::<TextureTable>();
+            let mean = |slot: usize| textures.and_then(|t| t.mean(slot));
+            let entry = |h| world.materials.map.get(&h).copied();
+            let seen = |h: Option<concinnity_engine::ecs::MaterialHandle>| {
+                h.and_then(entry)
+                    .unwrap_or(MaterialEntry::UNTEXTURED)
+                    .mean_albedo(mean)
+            };
+            let mut cover_albedo = [[0.0; 3]; concinnity_engine::planet::MAX_GROUND_COVERS];
+            for (albedo, cover) in cover_albedo.iter_mut().zip(&p.covers) {
+                *albedo = seen(cover.material);
+            }
             let surface = concinnity_engine::render::world_load::world_fx::PlanetSurface {
-                tint: p
-                    .material
-                    .and_then(|h| world.materials.map.get(&h))
-                    .map_or(
-                        concinnity_engine::render::material_entry::MaterialEntry::UNTEXTURED,
-                        |e| *e,
-                    )
-                    .uniforms
-                    .tint,
+                albedo: seen(p.material),
+                cover_albedo,
                 grass: concinnity_engine::render::world_load::world_scan::planet_grass(
                     p,
                     &concinnity_engine::render::environment::terrain::grass_by_id(ctx),
                 ),
                 covers: concinnity_engine::render::environment::ground::GroundCovers::of(
                     p,
-                    |h| world.materials.map.get(&h).copied(),
+                    entry,
                     u32::saturating_from(world.texture_count),
                 ),
             };

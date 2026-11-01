@@ -21,6 +21,7 @@
 // `downscale_rgba` stay in concinnity-engine (no image-decode deps); the file ->
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
+use super::ground_surface;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
 use concinnity_engine::bake::texture::{
@@ -69,6 +70,20 @@ fn texture_image(
     let tex: Texture =
         Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {e}"))?;
 
+    if let Some(sand) = &tex.sand {
+        return Ok(rgba8_image(ground_surface::sand_texture(
+            sand,
+            tex.ground_map,
+            tex.resolution,
+        )));
+    }
+    if let Some(dirt) = &tex.dirt {
+        return Ok(rgba8_image(ground_surface::dirt_texture(
+            dirt,
+            tex.ground_map,
+            tex.resolution,
+        )));
+    }
     Ok(match tex.generator.as_str() {
         "checker" => rgba8_image(generate_checker(tex.resolution)),
         "brick" => rgba8_image(generate_brick(tex.resolution)),

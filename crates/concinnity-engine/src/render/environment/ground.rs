@@ -11,7 +11,9 @@
 //! `ground_rule_noise` line for line.
 
 use crate::components::GroundRule;
-use crate::gfx::render_types::{MaterialUniforms, NO_ALBEDO_SLOT, albedo_pool_index};
+use crate::gfx::render_types::{
+    MaterialUniforms, NO_ALBEDO_SLOT, albedo_pool_index, normal_pool_index,
+};
 use crate::render::material_entry::MaterialEntry;
 use crate::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
 use crate::terrain::GROUND_RULE_OPEN;
@@ -159,7 +161,8 @@ impl GroundCoverGpu {
             },
             roughness,
             metallic,
-            _pad: [0.0; 2],
+            normal_index: normal_pool_index(entry.normal_map_slot, texture_count),
+            _pad: 0.0,
         }
     }
 }
@@ -481,6 +484,7 @@ mod tests {
         sand.uniforms.tint = [0.7, 0.6, 0.4];
         sand.uniforms.roughness = 0.9;
         sand.albedo_slot = 2;
+        sand.normal_map_slot = 4;
         let planet = Planet {
             covers: alloc::vec![
                 GroundCover {
@@ -497,6 +501,7 @@ mod tests {
         assert_eq!(c.tint, [0.7, 0.6, 0.4]);
         assert_eq!(c.roughness, 0.9);
         assert_eq!(c.albedo_index, 2);
+        assert_eq!(c.normal_index, 4);
         assert_eq!(c.rule, GroundRuleGpu::of(&rule));
         // No material: the default look, sampling no texture.
         let bare = GroundCovers::of(
@@ -509,6 +514,8 @@ mod tests {
         );
         assert_eq!(bare.count, 1);
         assert_eq!(bare.covers[0].albedo_index, GROUND_COVER_UNTEXTURED);
+        // Its normal map is the pool's flat fallback.
+        assert_eq!(bare.covers[0].normal_index, 5);
         assert_eq!(bare.covers[0].tint, [1.0; 3]);
     }
 }

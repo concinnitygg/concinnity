@@ -506,7 +506,7 @@ fn compile_resource(
         all_assets: shared.assets,
     };
     let extra_data = if *rt == RegisteredType::Texture {
-        texture_record(shared.cook_only_textures.contains(&asset.id))
+        Vec::new()
     } else {
         rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default()
     };
@@ -543,6 +543,11 @@ fn compile_resource(
     if reused {
         shared.cache_hits.fetch_add(1, Ordering::Relaxed);
     }
+    let extra_data = if *rt == RegisteredType::Texture {
+        texture_record(shared.cook_only_textures.contains(&asset.id), &bytes)
+    } else {
+        extra_data
+    };
     shared.stage.end(&asset.id, reused);
     Ok(PendingResource {
         kind: job_resource_kind(*rt),
@@ -553,13 +558,18 @@ fn compile_resource(
     })
 }
 
-// A texture's runtime record: empty for one the GPU samples, so only a texture
-// the cook alone reads carries bytes.
-fn texture_record(cook_only: bool) -> Vec<u8> {
-    if cook_only {
-        concinnity_engine::resource::TextureRecord { cook_only }.to_bytes()
-    } else {
+// A texture's runtime record: whether only the cook reads it, and the mean
+// color of its compiled `payload` where its texels are readable. Empty when
+// it holds neither.
+fn texture_record(cook_only: bool, payload: &[u8]) -> Vec<u8> {
+    let mean = concinnity_engine::bake::texture::deserialize(payload)
+        .ok()
+        .and_then(|image| image.mean_rgb());
+    let record = concinnity_engine::resource::TextureRecord { cook_only, mean };
+    if record == concinnity_engine::resource::TextureRecord::default() {
         Vec::new()
+    } else {
+        record.to_bytes()
     }
 }
 
@@ -1034,12 +1044,25 @@ mod tests {
     }
 
     #[test]
-    fn only_a_cook_only_texture_carries_a_record() {
+    fn a_textures_record_carries_its_flag_and_mean() {
+        use concinnity_engine::bake::texture::{TextureImage, serialize};
         use concinnity_engine::resource::TextureRecord;
-        assert!(texture_record(false).is_empty());
+        assert!(texture_record(false, &[]).is_empty());
         assert_eq!(
-            TextureRecord::from_bytes(&texture_record(true)),
-            Ok(TextureRecord { cook_only: true })
+            TextureRecord::from_bytes(&texture_record(true, &[])),
+            Ok(TextureRecord {
+                cook_only: true,
+                mean: None
+            })
+        );
+        let image = TextureImage::rgba8(2, 1, vec![255, 0, 51, 255, 255, 0, 51, 255]);
+        let record = TextureRecord::from_bytes(&texture_record(false, &serialize(&image)));
+        assert_eq!(
+            record,
+            Ok(TextureRecord {
+                cook_only: false,
+                mean: Some([1.0, 0.0, 0.2])
+            })
         );
     }
 

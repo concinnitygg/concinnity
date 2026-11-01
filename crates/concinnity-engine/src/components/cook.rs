@@ -22,6 +22,7 @@ pub use crate::resource::cubemap_texture::CubemapTexture;
 pub use crate::resource::environment_map::EnvironmentMap;
 pub use crate::resource::file::FileArgs as File;
 pub use crate::resource::font::Font;
+pub use crate::resource::ground_look::{DirtLook, GroundMap, SandLook};
 pub use crate::resource::material::Material;
 pub use crate::resource::mesh::{Mesh, VertexData};
 pub use crate::resource::skinned_mesh::{

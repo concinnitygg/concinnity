@@ -174,7 +174,8 @@ pub(in crate::shader_layout) fn canopy() -> Vec<Case> {
             albedo_index,
             roughness,
             metallic,
-            [_pad] => ["_pad0", "_pad1"],
+            normal_index,
+            [_pad] => ["_pad0"],
         })),
     ]
 }

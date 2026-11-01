@@ -28,8 +28,10 @@ use crate::wind::WindField;
 /// its layers grow and the covers over it.
 #[derive(Debug, Clone, Default)]
 pub struct PlanetSurface {
-    /// The tint of the planet's material.
-    pub tint: [f32; 3],
+    /// The mean albedo of the planet's material.
+    pub albedo: [f32; 3],
+    /// The mean albedo of each cover's material, in the covers' order.
+    pub cover_albedo: [[f32; 3]; crate::planet::MAX_GROUND_COVERS],
     /// The grass, `None` when no layer grows any.
     pub grass: Option<PlanetGrass>,
     /// The covers.
@@ -77,7 +79,11 @@ pub fn drain_world_fx(
     // What the sky's cubes show below the horizon around the planet.
     let palette = surface.as_ref().map(|s| {
         let sea = sea.as_ref().map(|w| SeaLook::of(w.level, w.surface));
-        SurfacePalette::new(s.tint, s.covers, s.grass.as_ref(), sea)
+        let mut seen = s.covers;
+        for (cover, albedo) in seen.covers.iter_mut().zip(s.cover_albedo) {
+            cover.tint = albedo;
+        }
+        SurfacePalette::new(s.albedo, seen, s.grass.as_ref(), sea)
     });
     let (water_surfaces, ocean) =
         WaterBody::resolve_all(rectangles, &wind_field, quality.ocean, sea);

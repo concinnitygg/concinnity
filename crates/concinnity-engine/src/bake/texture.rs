@@ -212,6 +212,27 @@ impl TextureImage {
         self.mips.iter().map(|m| m.data.len()).sum()
     }
 
+    /// The mean of an RGBA8 image's RGB channels in [0, 1], read from its
+    /// smallest level; `None` for a block-compressed or empty image.
+    pub fn mean_rgb(&self) -> Option<[f32; 3]> {
+        if self.format != TextureFormat::Rgba8 {
+            return None;
+        }
+        let texels = &self.mips.last()?.data;
+        let count = texels.len() / 4;
+        if count == 0 {
+            return None;
+        }
+        let sum = texels.chunks_exact(4).fold([0.0_f32; 3], |acc, p| {
+            [
+                acc[0] + f32::from(p[0]),
+                acc[1] + f32::from(p[1]),
+                acc[2] + f32::from(p[2]),
+            ]
+        });
+        Some(sum.map(|c| c / (count as f32 * 255.0)))
+    }
+
     /// Recover the base RGBA8 pixels, or an error if the image is block
     /// compressed. Used by the sprite / glyph-atlas paths, which upload RGBA8
     /// only.

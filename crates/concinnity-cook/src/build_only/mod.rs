@@ -11,6 +11,7 @@ pub(crate) mod camera_shot;
 pub(crate) mod character_model;
 pub(crate) mod companion;
 pub(crate) mod companion_specs;
+pub(crate) mod ground_look;
 pub mod include;
 
 pub(crate) mod light_rig;

@@ -309,6 +309,8 @@ static const float CAPTURE_DETAIL_FOOTPRINT = 2.0;
 
 {CANOPY}
 
+{GROUND_SURFACE}
+
 // ---- The shading model ----
 
 // The forward shading model. `od` is the object record the GPU-driven pass
@@ -347,6 +349,11 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     float3 ground_normal = v.normal;
     // A planet's ground takes its covers' look where their rules hold.
     GroundCoverMix covers = ground_no_covers();
+    // A planet's ground shades with its layers' blended normal map.
+    bool ground_textured = false;
+    float2 ground_xy = (float2)(0.0);
+    float3 macro = float3(1.0, 0.0, 0.0);
+    float damp = 0.0;
     // A view that leaves out the blades and the sea (a capture) shades the
     // grassy ground as the canopy and the ground under the sea as its surface.
     // Its small faces cannot resolve the ground's per-pixel detail either: it
@@ -356,6 +363,9 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     bool capture = VIEW.stand_ins > 0.5;
     bool under_sea = false;
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
+    float2 uv_dx = ddx(v.uv);
+    float2 uv_dy = ddy(v.uv);
+    float detail_footprint = capture ? max(footprint, CAPTURE_DETAIL_FOOTPRINT) : footprint;
     float4 ground = capture ? float4(v.normal, GROUND_NO_HEIGHT)
                             : canopy_ground_normal(od.far_canopy, v.world_pos, v.normal, footprint,
                                                    v.color, v.tangent);
@@ -370,17 +380,28 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     if (canopy_on_planet(od.far_canopy))
     {
         place = ground_place(v.world_pos, ground_normal, footprint, canopy_layers(od.far_canopy));
-        covers = ground_covers_at(place, v.uv);
-        place.covered = 1.0 - covers.keep;
-        albedo = albedo * covers.keep + covers.albedo;
+        GroundTaps taps = ground_taps(v.uv, uv_dx, uv_dy, detail_footprint);
+        GroundSurface surface = ground_surface_at(place, od.albedo_index, od.normal_index, tint,
+                                                  taps);
+        covers.keep = surface.keep;
+        covers.roughness_metallic = surface.roughness_metallic;
+        place.covered = 1.0 - surface.keep;
+        ground_textured = true;
+        ground_xy = surface.layer.normal_xy;
+        macro = ground_macro(place.dir * CANOPY.planet_radius, detail_footprint);
+        albedo = ground_macro_albedo(surface.layer.albedo, macro);
         under_sea = VIEW.stand_ins > 1.5 && place.altitude < DAYLIGHT.sea.w;
         // Where the sea's waves wash up the beach, the sand is darker and wet
         // and a foam line runs at the wash's front.
         if (!capture)
         {
             swash = ground_swash_at(place, ground.w, footprint);
+            damp = ground_damp(ground.w) * place.covered;
+            albedo *= lerp(1.0, GROUND_DAMP_DARKEN, damp);
             albedo = lerp(albedo * lerp(1.0, GROUND_WET_DARKEN, swash.wet), GROUND_SWASH_FOAM,
                           swash.edge);
+            // The wash's film fills the sand's relief.
+            ground_xy *= 1.0 - swash.film;
         }
     }
 #ifdef SURFACE_CANOPY
@@ -389,7 +410,6 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // Past the blades' end the canopy takes every pixel: a view without blades
     // must not hand the near ones back to them.
     float handover_dist = capture ? max(far_dist, CANOPY.band.y) : far_dist;
-    float detail_footprint = capture ? max(footprint, CAPTURE_DETAIL_FOOTPRINT) : footprint;
     canopy = canopy_at(od.far_canopy, place, v.world_pos, ground_normal, v.color, albedo,
                        V_far / max(far_dist, 1e-4), detail_footprint, v.position.xy,
                        handover_dist, far_w > 0.0);
@@ -419,11 +439,14 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
     // Wet sand is smoother than dry, and the film the wash leaves smoother
     // still, but for its foam.
+    roughness = saturate(roughness + macro.z - GROUND_DAMP_ROUGHNESS * damp);
     roughness = lerp(roughness, min(roughness, GROUND_WET_ROUGHNESS), swash.wet);
     roughness = lerp(roughness, GROUND_FILM_ROUGHNESS, swash.film * (1.0 - swash.edge));
 #endif
 
-    float3 N = surface_normal(od, v.uv, ground_normal, v.tangent, v.bitangent);
+    float3 N = ground_textured
+                 ? ground_shading_normal(ground_xy, ground_normal, v.tangent, v.bitangent)
+                 : surface_normal(od, v.uv, ground_normal, v.tangent, v.bitangent);
 #if defined(SURFACE_CANOPY) || defined(SURFACE_GRASS_GROUND)
     if (under_sea)
     {

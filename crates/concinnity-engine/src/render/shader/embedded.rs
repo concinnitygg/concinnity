@@ -56,6 +56,7 @@ embed_shaders! {
     GRASS => "grass.hlsl",
     GRASS_FIELD => "grass_field.hlsl",
     GROUND_RULE_TYPES => "ground_rule_types.hlsl",
+    GROUND_SURFACE => "ground_surface.hlsl",
     HDR_STORE => "hdr_store.hlsl",
     HIZ_BUILD => "hiz_build.hlsl",
     HIZ_TEST => "hiz_test.hlsl",
