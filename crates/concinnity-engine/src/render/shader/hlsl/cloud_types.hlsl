@@ -1,7 +1,8 @@
-// The clouds' constant block and sizes, spliced ahead of a program's own
-// bindings; `clouds_common.hlsl` reads the block through the `CLOUD` name each
-// program defines. Lengths are kilometers. `render::environment::clouds`
-// mirrors the sizes, and its tests lock the constants below to the Rust ones.
+// The clouds' constant block, sizes and depth match, spliced ahead of a
+// program's own bindings behind DEPTH_CONVENTION; `clouds_common.hlsl` reads
+// the block through the `CLOUD` name each program defines. Lengths are
+// kilometers. `render::environment::clouds` mirrors the sizes, and its tests
+// lock the constants below to the Rust ones.
 //
 // CloudParams (2192 B) mirrors `render::environment::clouds::CloudParams`;
 // every member is a float4 lane so the three targets lay it out alike.
@@ -78,6 +79,21 @@ struct CloudParams
 };
 
 static const float CLOUD_TYPES_PI = 3.14159265358979;
+
+// How much two depths stand for the same surface. Reversed depth falls off as
+// the reciprocal of distance, so their ratio is the ratio of the distances;
+// the sky only matches the sky.
+float cloud_depth_match(float a, float b)
+{
+    bool sky_a = depth_is_cleared(a);
+    bool sky_b = depth_is_cleared(b);
+    if (sky_a || sky_b)
+    {
+        return sky_a && sky_b ? 1.0 : 0.0;
+    }
+    float ratio = min(a, b) / max(a, b);
+    return smoothstep(0.85, 1.0, ratio);
+}
 
 // Where direction `dir` falls in the cloud panorama: longitude about +y
 // across, from straight up at the top to straight down at the bottom.

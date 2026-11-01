@@ -1031,42 +1031,89 @@ float cloud_reproject_distance(float3 dir, float scene_km)
 // its history.
 static const float CLOUD_FRESH_SHARE = 0.35;
 
-// The marched texel at `m`, clamped into the marched texture.
-float4 cloud_marched_texel(int2 m)
+// The pixel whose clouds target texel `texel` holds.
+int2 cloud_target_pixel(int2 texel)
 {
+    return min(texel * int(CLOUD_TARGET_DIVISOR), int2(CLOUD.scene.xy) - 1);
+}
+
+// The target texel marched texel `m` marched this frame.
+int2 cloud_marched_target(int2 m)
+{
+    return min(m * 2 + int2(CLOUD.scene.zw), int2(CLOUD.target.xy) - 1);
+}
+
+// The 3x3 marched texels about a target texel's block, each with how much the
+// surface it marched to stands for the texel's own.
+struct CloudNeighbors
+{
+    float4 value[9];
+    float match[9];
+};
+
+// The neighbors of target texel `texel`, whose pixel's depth is `depth`.
+CloudNeighbors cloud_neighbors(int2 texel, float depth)
+{
+    CloudNeighbors n;
     int2 size = (int2(CLOUD.target.xy) + 1) / 2;
-    return cloud_marched.Load(int3(clamp(m, int2(0, 0), size - 1), 0));
+    int2 m = texel >> 1;
+    [unroll]
+    for (uint i = 0u; i < 9u; ++i)
+    {
+        int2 at = clamp(m + int2(int(i % 3u) - 1, int(i / 3u) - 1), int2(0, 0), size - 1);
+        float marched_depth = aerial_scene_depth(cloud_target_pixel(cloud_marched_target(at)));
+        n.value[i] = cloud_marched.Load(int3(at, 0));
+        n.match[i] = cloud_depth_match(depth, marched_depth);
+    }
+    return n;
 }
 
 // The marched texels blended at target texel `texel`, between the four this
-// frame marched around it.
-float4 cloud_marched_between(int2 texel)
+// frame marched around it that lie at its depth; the neighbor nearest its
+// depth where none does.
+float4 cloud_marched_between(int2 texel, CloudNeighbors n)
 {
     float2 p = float2(texel - int2(CLOUD.scene.zw)) * 0.5;
-    int2 m = int2(floor(p));
-    float2 f = p - float2(m);
-    float4 top = lerp(cloud_marched_texel(m), cloud_marched_texel(m + int2(1, 0)), f.x);
-    float4 bottom = lerp(cloud_marched_texel(m + int2(0, 1)), cloud_marched_texel(m + int2(1, 1)), f.x);
-    return lerp(top, bottom, f.y);
+    float2 m = float2(texel >> 1);
+    float4 sum = (float4)0.0;
+    float total = 0.0;
+    float4 best = n.value[4];
+    float best_match = n.match[4];
+    [unroll]
+    for (uint i = 0u; i < 9u; ++i)
+    {
+        float2 at = m + float2(int(i % 3u) - 1, int(i / 3u) - 1);
+        float2 bw = saturate(1.0 - abs(p - at));
+        float w = bw.x * bw.y * n.match[i];
+        sum += n.value[i] * w;
+        total += w;
+        if (n.match[i] > best_match)
+        {
+            best_match = n.match[i];
+            best = n.value[i];
+        }
+    }
+    return total > 1e-4 ? sum / total : best;
 }
 
 // The previous frame's target where texel `texel` saw the same clouds, held
-// within what this frame marched around it so parallax or a change cannot
-// smear it; false off the previous frame or without one.
-bool cloud_history(int2 texel, out float4 history)
+// within what this frame marched around it at its depth so parallax, a moving
+// surface or a change cannot smear it; false off the previous frame or
+// without one.
+bool cloud_history(int2 texel, float depth, CloudNeighbors n, out float4 history)
 {
     history = (float4)0.0;
     if (CLOUD.prev_camera.w < 0.5)
     {
         return false;
     }
-    int2 pixel = min(texel * int(CLOUD_TARGET_DIVISOR), int2(CLOUD.scene.xy) - 1);
+    int2 pixel = cloud_target_pixel(texel);
     float2 uv = (float2(pixel) + 0.5) / CLOUD.scene.xy;
     float2 ndc = float2(uv.x * 2.0 - 1.0, -(uv.y * 2.0 - 1.0));
     float3 dir = cloud_to_fixed(camera_view_ray(ATMO.inv_vp, ndc, ATMO.cam_pos.xyz));
     float scene_km = 1e9;
     float3 world;
-    if (depth_reconstruct(ATMO.depth_inv_vp, ndc, aerial_scene_depth(pixel), world))
+    if (depth_reconstruct(ATMO.depth_inv_vp, ndc, depth, world))
     {
         scene_km = length(world - ATMO.cam_pos.xyz) * ATMO.radii.w;
     }
@@ -1081,18 +1128,22 @@ bool cloud_history(int2 texel, out float4 history)
     }
     // A target texel holds the clouds through its top-left pixel's center.
     float2 at = ((prev_pixel - 0.5) / float(CLOUD_TARGET_DIVISOR) + 0.5) * CLOUD.target.zw;
-    int2 m = texel >> 1;
-    float4 low = cloud_marched_texel(m);
-    float4 high = low;
+    // Where no neighbor lies at the texel's depth, every neighbor bounds it.
+    bool any_match = false;
     [unroll]
-    for (int y = -1; y <= 1; ++y)
+    for (uint i = 0u; i < 9u; ++i)
     {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
+        any_match = any_match || n.match[i] > 0.0;
+    }
+    float4 low = (float4)1e30;
+    float4 high = (float4)-1e30;
+    [unroll]
+    for (uint j = 0u; j < 9u; ++j)
+    {
+        if (n.match[j] > 0.0 || !any_match)
         {
-            float4 v = cloud_marched_texel(m + int2(x, y));
-            low = min(low, v);
-            high = max(high, v);
+            low = min(low, n.value[j]);
+            high = max(high, n.value[j]);
         }
     }
     history = clamp(cloud_previous.SampleLevel(lut_sampler, at, 0.0), low, high);
@@ -1102,7 +1153,8 @@ bool cloud_history(int2 texel, out float4 history)
 // One thread per target texel: the history where it holds, with this frame's
 // march folded in where it marched the texel, so the march's dither averages
 // out over frames; the march, or the marched texels blended, where it does
-// not.
+// not. Every neighbor it reads is weighed by depth, so the clouds behind a
+// near surface and the clear air in front of it stay apart at its edge.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
@@ -1112,11 +1164,12 @@ void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
     {
         return;
     }
-    int2 marched_texel = min((texel >> 1) * 2 + int2(CLOUD.scene.zw), int2(CLOUD.target.xy) - 1);
-    bool marched_here = all(marched_texel == texel);
-    float4 fresh = marched_here ? cloud_marched.Load(int3(texel >> 1, 0)) : cloud_marched_between(texel);
+    float depth = aerial_scene_depth(cloud_target_pixel(texel));
+    CloudNeighbors n = cloud_neighbors(texel, depth);
+    bool marched_here = all(cloud_marched_target(texel >> 1) == texel);
+    float4 fresh = marched_here ? n.value[4] : cloud_marched_between(texel, n);
     float4 history;
-    if (!cloud_history(texel, history))
+    if (!cloud_history(texel, depth, n, history))
     {
         cloud_out[texel] = fresh;
         return;

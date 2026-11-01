@@ -169,21 +169,6 @@ float composite_depth(int2 pixel)
 #endif
 }
 
-// How much two depths stand for the same surface. Reversed depth falls off as
-// the reciprocal of distance, so their ratio is the ratio of the distances;
-// the sky only matches the sky.
-float composite_match(float a, float b)
-{
-    bool sky_a = depth_is_cleared(a);
-    bool sky_b = depth_is_cleared(b);
-    if (sky_a || sky_b)
-    {
-        return sky_a && sky_b ? 1.0 : 0.0;
-    }
-    float ratio = min(a, b) / max(a, b);
-    return smoothstep(0.85, 1.0, ratio);
-}
-
 // `(cloud light, 1 - transmittance)` over the scene with the premultiplied
 // `over` blend: `scene * T + light`.
 [shader("pixel")]
@@ -214,7 +199,7 @@ float4 cloud_composite_fragment(
         int2 o = int2(j & 1u, j >> 1u);
         int2 q = clamp(base + o, int2(0, 0), target_max);
         int2 marched = min(q * int(CLOUD_TARGET_DIVISOR), scene_max);
-        float match = composite_match(depth, composite_depth(marched));
+        float match = cloud_depth_match(depth, composite_depth(marched));
         float2 bw = lerp(1.0 - f, f, float2(o));
         float w = bw.x * bw.y * match;
         float4 c = cloud_target.Load(int3(q, 0));
