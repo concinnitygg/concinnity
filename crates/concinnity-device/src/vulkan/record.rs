@@ -238,6 +238,44 @@ impl<'a> Recorder<'a> {
         unsafe { self.device.cmd_dispatch(self.cmd, x, y, z) };
     }
 
+    // A dispatch whose three group counts sit at `offset` in `args`.
+    pub(in crate::vulkan) fn dispatch_indirect(&self, args: vk::Buffer, offset: vk::DeviceSize) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the arguments buffer
+        // is live for the call.
+        unsafe { self.device.cmd_dispatch_indirect(self.cmd, args, offset) };
+    }
+
+    // Write `words` into `buffer` at `offset`, in the command stream.
+    pub(in crate::vulkan) fn update_buffer(
+        &self,
+        buffer: vk::Buffer,
+        offset: vk::DeviceSize,
+        words: &[u32],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the buffer and the
+        // words are live for the call.
+        unsafe {
+            self.device
+                .cmd_update_buffer(self.cmd, buffer, offset, bytemuck::cast_slice(words));
+        };
+    }
+
+    // Clear `range` of `image`, which is in `layout`, to `color`.
+    pub(in crate::vulkan) fn clear_color_image(
+        &self,
+        image: vk::Image,
+        layout: vk::ImageLayout,
+        color: &vk::ClearColorValue,
+        range: vk::ImageSubresourceRange,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the image is live for
+        // the call.
+        unsafe {
+            self.device
+                .cmd_clear_color_image(self.cmd, image, layout, color, &[range]);
+        };
+    }
+
     // The full barrier form, for a pass that carries buffer or image barriers.
     pub(in crate::vulkan) fn pipeline_barrier(
         &self,

@@ -207,3 +207,35 @@ fn the_traced_reflection_block_waits_for_a_live_bvh() {
     frame.content.bvh_live = true;
     assert!(planner.plan(&view, &frame).unwrap().effects.rt.is_some());
 }
+
+#[test]
+fn the_traced_reflection_block_walks_the_pyramid_only_when_ssgi_builds_it() {
+    use crate::render::post::rt_reflections::RtReflectionSettings;
+    use crate::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
+    let lights = lights();
+    let mut planner = FramePlanner::default();
+    let view = SceneView::new([0.0; 4]);
+    let mut frame = inputs(&lights, resident());
+    frame.content.bvh_live = true;
+    frame.effects.rt = Some(RtReflectionSettings::resolve(1.0, 50.0));
+    frame.effects.ssgi = Some((
+        SsgiSettings::resolve(1.0, 8.0, 1, 1),
+        SsgiFrame {
+            frame: 0,
+            history_valid: false,
+            levels: 6,
+        },
+    ));
+    let levels = |planner: &mut FramePlanner| {
+        planner
+            .plan(&view, &frame)
+            .unwrap()
+            .effects
+            .rt
+            .unwrap()
+            .cam_pos[3]
+    };
+    assert_eq!(levels(&mut planner), 0.0);
+    planner.gates.ssgi = true;
+    assert_eq!(levels(&mut planner), 6.0);
+}

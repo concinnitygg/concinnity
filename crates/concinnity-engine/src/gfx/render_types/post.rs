@@ -312,7 +312,9 @@ pub struct RtParams {
     /// The scale the HDR chain is written at; the reflection pass shades in
     /// absolute radiance and multiplies what it writes by it.
     pub pre_exposure: f32,
-    /// World-space camera position (`xyz`); the reflection ray origin. `w` unused.
+    /// World-space camera position (`xyz`); the reflection ray origin. `w`
+    /// is the level count of the depth pyramid the reflection pass walks screen
+    /// rays through this frame, 0 when there is none to walk.
     pub cam_pos: [f32; 4],
     /// World-space unit direction *toward* the sun (`xyz`); the hit-shading N·L
     /// term uses it. `w` unused.

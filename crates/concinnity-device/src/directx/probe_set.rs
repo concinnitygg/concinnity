@@ -4,7 +4,8 @@
 // count's root CBV. Every pass that reads probes -- the bindless main pass, SSR,
 // the RT resolve and the transparent pass -- binds those three.
 //
-// Between bakes every subresource rests in PIXEL_SHADER_RESOURCE. A bake moves
+// Between bakes every subresource rests readable by every shader stage, which
+// the RT reflection kernels need as much as the draws. A bake moves
 // only its own cube's subresources to UNORDERED_ACCESS and back, so the frames
 // sampling the cubes installed before it are never reading a subresource in a
 // write state.
@@ -25,7 +26,7 @@ use super::probe_prefilter::PROBE_CUBE_FORMAT;
 
 // The state every subresource of the array rests in between bakes.
 pub(in crate::directx) const PROBE_CUBES_STATE: D3D12_RESOURCE_STATES =
-    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
 
 // The subresource index of `mip` of array slice `slice` in a resource with `mips`
 // levels, plane 0: D3D12CalcSubresource.

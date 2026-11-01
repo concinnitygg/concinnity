@@ -506,6 +506,17 @@ impl MtlContext {
         if self.rt.settings.is_none() {
             return;
         }
+        if let Some(reflection) = &self.ssr.reflection {
+            use concinnity_core::math::SaturatingFrom;
+            use objc2_metal::MTLTexture as _;
+            let extent = (
+                u32::saturating_from(reflection.width()),
+                u32::saturating_from(reflection.height()),
+            );
+            if let Err(e) = super::post::RtRays::fit(&mut self.rt.rays, &self.hw.device, extent) {
+                tracing::error!("ray-traced reflections: ray list allocation failed: {e}");
+            }
+        }
         let result = self.rt_dynamic_update_inner(frame, joint_buffers, topology_dirty);
         crate::rt_report::report_rt_update(&mut self.rt.update_streak, result);
     }

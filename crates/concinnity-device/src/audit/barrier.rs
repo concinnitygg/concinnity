@@ -262,6 +262,18 @@ const AUDITS: &[BackendAudit] = &[
             // before the reconstruction reads it, and this frame's composite
             // after. The shadow map rests sampled, the rest GENERAL.
             ("clouds.rs", "rec.pipeline_barrier(", 6, Reason::IntraPass),
+            // The RT reflection kernels: last frame's trace before the ray
+            // arguments reset, the reset and SSGI's pyramid before the
+            // classify, the classify's list before the indirect trace, and the
+            // trace before the composite samples its output (or, with no BVH,
+            // the output's clear between the composites). The output rests
+            // sampled on either side of the node.
+            (
+                "post/rt_reflections.rs",
+                "rec.pipeline_barrier(",
+                6,
+                Reason::IntraPass,
+            ),
             // The haze pass's scene attachment, like the fog pass's.
             (
                 "atmosphere.rs",
@@ -291,12 +303,6 @@ const AUDITS: &[BackendAudit] = &[
                 "post/gbuffer.rs",
                 ".final_layout(",
                 4,
-                Reason::AttachmentLayout,
-            ),
-            (
-                "post/rt_reflections.rs",
-                ".final_layout(",
-                1,
                 Reason::AttachmentLayout,
             ),
             (
@@ -376,13 +382,15 @@ const AUDITS: &[BackendAudit] = &[
             // buffer, which lives in COMMON and is promoted implicitly at each
             // use, so it claims no state and crosses no node boundary.
             ("post/gbuffer.rs", ".ResourceBarrier(", 1, Reason::IntraPass),
-            // The same bracket in one more bundled node, on a target the graph
-            // does not model because it never crosses a node boundary: the RT
-            // reflection radiance the roughness composite consumes.
+            // The RT reflection kernels' node, on resources the graph does not
+            // model because they never cross a node boundary: the output, the
+            // ray list and arguments, and SSGI's pyramid opened for the classify,
+            // each moved in before the classify, between it and the indirect
+            // trace, and back to rest after.
             (
                 "post/rt_reflections.rs",
                 ".ResourceBarrier(",
-                2,
+                3,
                 Reason::IntraPass,
             ),
             // The bloom chain's top octave. The graph drives `bloom_top` across

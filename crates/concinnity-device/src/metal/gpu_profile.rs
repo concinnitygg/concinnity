@@ -1,12 +1,14 @@
 //! Coarse GPU performance profile from the live `MTLDevice`, for default-quality
 //! selection. Every signal is read straight off the device (no extra GPU work):
-//! the unified-memory flag, the recommended working-set as the memory budget, and
-//! the highest supported Apple GPU family as the generation. The shared
+//! the unified-memory flag, the recommended working-set as the memory budget,
+//! the highest supported Apple GPU family as the generation, and the name's
+//! Pro / Max / Ultra suffix as the variant. The shared
 //! `classify_tier` (core's render/backend/probe.rs) maps these to a tier so every
 //! backend classifies the same way.
 
 use concinnity_engine::render::backend::{
-    DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor, classify_tier,
+    DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor,
+    apple_variant_from_device_name, classify_tier,
 };
 use concinnity_engine::render::output::upscaler::UpscalerAvailability;
 use objc2::runtime::ProtocolObject;
@@ -87,6 +89,7 @@ pub(crate) fn device_profile(device: &ProtocolObject<dyn MTLDevice>) -> GpuProfi
         memory_budget_bytes: budget,
         discrete,
         apple_family: family,
+        apple_variant: apple_variant_from_device_name(&device.name().to_string()),
     });
     GpuProfile {
         vendor,

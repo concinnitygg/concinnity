@@ -131,6 +131,8 @@ pub struct SettingsState {
     pub(crate) resolution: Option<display_mode::DisplayMode>,
     pub(crate) current_mode: Option<display_mode::DisplayMode>,
     pub(crate) resolution_row_labels: Vec<(AssetId, [f32; 3])>,
+    // The SSR row labels, grayed while ray-traced reflections replace it.
+    pub(crate) ssr_row_labels: Vec<(AssetId, [f32; 3])>,
     // The user's graphics overrides the resolver layers: the stored ones at
     // init, kept in step with every saved change.
     pub(crate) persisted_graphics: UserGraphicsSettings,
@@ -275,6 +277,7 @@ impl SettingsState {
             resolution: None,
             current_mode: None,
             resolution_row_labels: Vec::new(),
+            ssr_row_labels: Vec::new(),
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: false,

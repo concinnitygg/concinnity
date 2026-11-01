@@ -57,11 +57,11 @@ pub struct Reflections {
     /// distant reflections, more coarsely.
     #[asset(default = 40.0, min = 1.0, max = 1000.0, apply = live)]
     pub max_distance: f32,
-    /// Internal resolution the ray-traced reflection rays are cast at. `half`
-    /// (default) traces a quarter of the pixels and upsamples with a depth- and
-    /// normal-aware filter; `full` traces every pixel for the sharpest mirrors;
-    /// `quarter` is the cheapest. Only matters when `ray_traced` is on.
-    #[asset(apply = rebuild)]
+    /// Internal resolution the ray-traced reflection rays are cast at. `full`
+    /// (default) traces every pixel for the sharpest mirrors; `half` traces a
+    /// quarter of the pixels and upsamples with a depth- and normal-aware
+    /// filter; `quarter` is the cheapest. Only matters when `ray_traced` is on.
+    #[asset(default = PassResolution::Full, apply = rebuild)]
     pub ray_traced_resolution: PassResolution,
     /// Whether surfaces seen in a ray-traced reflection are shadowed from the
     /// sun. Each reflected hit then casts a second ray toward the sun, which
@@ -69,12 +69,12 @@ pub struct Reflections {
     /// the sun reached it. Only matters when `ray_traced` is on.
     #[asset(default = true, apply = rebuild)]
     pub ray_traced_shadows: bool,
-    /// Internal resolution of the roughness-aware reflection blur. `half`
-    /// (default) blurs at a quarter of the pixels for a large saving and
-    /// bilinearly upsamples; `full` blurs at native resolution; `quarter` is
-    /// the cheapest. Smooth mirror surfaces stay sharp at any setting (the
+    /// Internal resolution of the roughness-aware reflection blur. `full`
+    /// (default) blurs at native resolution; `half` blurs at a quarter of the
+    /// pixels for a large saving and bilinearly upsamples; `quarter` is the
+    /// cheapest. Smooth mirror surfaces stay sharp at any setting (the
     /// composite keeps the sharp reflection for low roughness).
-    #[asset(apply = rebuild)]
+    #[asset(default = PassResolution::Full, apply = rebuild)]
     pub blur_resolution: PassResolution,
 }
 

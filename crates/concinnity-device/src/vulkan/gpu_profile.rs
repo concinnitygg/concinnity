@@ -11,7 +11,7 @@
 use ash::vk;
 use concinnity_engine::render::backend::{
     DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuVendor,
-    apple_family_from_device_name, classify_tier,
+    apple_family_from_device_name, apple_variant_from_device_name, classify_tier,
 };
 
 // What a device that can (or cannot) trace ray queries supports. The built
@@ -146,11 +146,13 @@ pub(super) fn device_profile(instance: &ash::Instance, pd: vk::PhysicalDevice) -
         })
         .map(|i| mem.memory_heaps[i].size)
         .sum();
+    let name = device_name(&props);
     let tier = classify_tier(&GpuClassInput {
         vendor,
         memory_budget_bytes: budget,
         discrete,
-        apple_family: apple_family_from_device_name(&device_name(&props)),
+        apple_family: apple_family_from_device_name(&name),
+        apple_variant: apple_variant_from_device_name(&name),
     });
     GpuProfile {
         vendor,

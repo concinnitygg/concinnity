@@ -174,23 +174,32 @@ pub(in crate::shader_layout) fn water() -> Vec<Case> {
     ]
 }
 
+// The ray-traced reflection uniform, which the classify and the trace share.
+fn rt_params() -> Case {
+    everywhere(mirror!(RtParams => "RtParams" {
+        intensity,
+        max_distance,
+        tan_half_fov_y,
+        aspect,
+        prefilter_mip_count,
+        sun_shadows,
+        trace_divisor,
+        pre_exposure,
+        cam_pos,
+        sun_dir,
+        sun_color,
+        inv_view,
+        sky_rot,
+    }))
+}
+
+pub(in crate::shader_layout) fn rt_classify() -> Vec<Case> {
+    vec![rt_params()]
+}
+
 pub(in crate::shader_layout) fn rt_reflections() -> Vec<Case> {
     vec![
-        everywhere(mirror!(RtParams => "RtParams" {
-            intensity,
-            max_distance,
-            tan_half_fov_y,
-            aspect,
-            prefilter_mip_count,
-            sun_shadows,
-            trace_divisor,
-            pre_exposure,
-            cam_pos,
-            sun_dir,
-            sun_color,
-            inv_view,
-            sky_rot,
-        })),
+        rt_params(),
         everywhere(mirror!(RtGeomEntry => "RtGeomEntry" {
             index_offset,
             base_vertex,

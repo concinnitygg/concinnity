@@ -255,6 +255,17 @@ impl<Pipeline, Target> SsgiPass<Pipeline, Target> {
         &self.targets.indirect
     }
 
+    /// The depth pyramid this frame's trace builds, which a pass encoded after
+    /// it this frame may walk too. Holds an older frame's depths on a frame
+    /// that does not run the trace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a resize that failed part way left no pyramid.
+    pub fn pyramid(&self) -> RenderResult<&Target> {
+        self.targets.depth(self.ring.write())
+    }
+
     /// Step to the next frame: what this frame's trace wrote becomes next
     /// frame's history, and the trace draws fresh directions. Called once per
     /// frame from the backend's own end-of-frame temporal bookkeeping. A frame
@@ -639,6 +650,19 @@ mod tests {
                 OCCLUSION,
             ]
         );
+    }
+
+    #[test]
+    fn the_pyramid_is_the_one_this_frame_builds() {
+        let device = MockDevice::new();
+        let mut pass = SsgiPass::new(&device, 2, EXTENT).expect("pass");
+        let draws = encode_frame(&device, &pass);
+        assert_eq!(draws[1].target, MockTexture::Level(depth(0), 0));
+        assert_eq!(*pass.pyramid().expect("pyramid"), depth(0));
+        pass.advance();
+        let draws = encode_frame(&device, &pass);
+        assert_eq!(draws[1].target, MockTexture::Level(depth(1), 0));
+        assert_eq!(*pass.pyramid().expect("pyramid"), depth(1));
     }
 
     #[test]

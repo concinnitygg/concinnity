@@ -146,6 +146,7 @@ impl Fixture {
             resolution: None,
             current_mode: None,
             resolution_row_labels: vec![(RESOLUTION_LABEL, LIT)],
+            ssr_row_labels: Vec::new(),
             persisted_graphics: UserGraphicsSettings::default(),
             session: UserGraphicsSettings::default(),
             fog_built: true,

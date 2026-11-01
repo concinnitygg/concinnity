@@ -17,12 +17,13 @@ use concinnity_engine::render::uniforms::{ProbeSet, ProbeUniforms, grown_probe_c
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLDevice, MTLRenderCommandEncoder, MTLTexture, MTLTextureType, MTLTextureUsage,
+    MTLBuffer, MTLComputeCommandEncoder, MTLDevice, MTLRenderCommandEncoder, MTLTexture,
+    MTLTextureType, MTLTextureUsage,
 };
 
 use super::context::{MtlContext, write_buffer_region};
 use super::descriptors::TextureDesc;
-use super::encode::RenderEncode;
+use super::encode::{ComputeEncode, RenderEncode};
 use super::error::allocation_failed;
 use super::probe_prefilter::PROBE_CUBE_FORMAT;
 
@@ -141,6 +142,25 @@ impl ProbeBindings<'_> {
         if let Some((params, list)) = slots.cluster {
             enc.set_fragment_value(&self.cluster, params);
             enc.set_fragment_buffer(self.cluster_list, 0, list);
+        }
+    }
+
+    // [`Self::bind`] for a compute encoder.
+    pub(in crate::metal) fn bind_compute(
+        &self,
+        enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+        slots: ProbeSlots,
+    ) {
+        enc.set_value(&self.set, slots.set);
+        if let Some(records) = self.records {
+            enc.set_buffer(records, 0, slots.records);
+        }
+        if let Some(cubes) = slots.cubes {
+            enc.set_texture(self.cubes, cubes);
+        }
+        if let Some((params, list)) = slots.cluster {
+            enc.set_value(&self.cluster, params);
+            enc.set_buffer(self.cluster_list, 0, list);
         }
     }
 }

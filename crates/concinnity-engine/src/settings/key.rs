@@ -21,14 +21,14 @@ pub enum SettingKind {
 
 macro_rules! setting_keys {
     (
-        cycle { $($(#[$cycle_doc:meta])* $cycle:ident => $cycle_str:literal,)* }
-        slider { $($(#[$slider_doc:meta])* $slider:ident => $slider_str:literal,)* }
+        cycle { $(#[doc = $cycle_doc:literal] $cycle:ident => $cycle_str:literal,)* }
+        slider { $(#[doc = $slider_doc:literal] $slider:ident => $slider_str:literal,)* }
     ) => {
         /// A user-facing setting, keyed by the string a world authors (e.g. `vsync`).
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub enum SettingKey {
-            $($(#[$cycle_doc])* $cycle,)*
-            $($(#[$slider_doc])* $slider,)*
+            $(#[doc = $cycle_doc] $cycle,)*
+            $(#[doc = $slider_doc] $slider,)*
             /// The keyboard binding for a gameplay action.
             KeyRebind(Bindable),
             /// The gamepad binding for a gameplay action.
@@ -59,6 +59,16 @@ macro_rules! setting_keys {
                     $(SettingKey::$slider => $slider_str,)*
                     SettingKey::KeyRebind(action) => action.setting_key(),
                     SettingKey::PadRebind(action) => action.setting_key(),
+                }
+            }
+
+            /// What the setting does, in one line: its rustdoc. Empty for a
+            /// rebind row, whose action names it.
+            pub const fn summary(self) -> &'static str {
+                match self {
+                    $(SettingKey::$cycle => $cycle_doc.trim_ascii(),)*
+                    $(SettingKey::$slider => $slider_doc.trim_ascii(),)*
+                    SettingKey::KeyRebind(_) | SettingKey::PadRebind(_) => "",
                 }
             }
 
@@ -319,6 +329,15 @@ mod tests {
         for action in GamepadAction::ALL {
             assert!(SettingKey::ALL.contains(&SettingKey::PadRebind(action)));
         }
+    }
+
+    #[test]
+    fn every_row_but_a_rebind_has_a_summary() {
+        for key in SettingKey::ALL {
+            let rebind = matches!(key.kind(), SettingKind::KeyRebind | SettingKind::PadRebind);
+            assert_eq!(key.summary().is_empty(), rebind, "{key:?}");
+        }
+        assert_eq!(SettingKey::Vsync.summary(), "Vertical sync.");
     }
 
     #[test]

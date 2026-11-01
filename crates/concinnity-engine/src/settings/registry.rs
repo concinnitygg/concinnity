@@ -60,6 +60,29 @@ pub fn setting_available(
     }
 }
 
+/// When setting `key` can be changed, in one line, for a row that is not
+/// always available: the condition [`setting_available`] gates on, or the state
+/// the menu grays the row outside of. `None` for a row usable everywhere.
+pub fn availability(key: SettingKey) -> Option<&'static str> {
+    match key {
+        SettingKey::RayTracedReflections
+        | SettingKey::RtReflectionResolution
+        | SettingKey::RtReflectionShadows => Some("A GPU with hardware ray tracing."),
+        SettingKey::UpscaleBackend => {
+            Some("DirectX 12 or Vulkan. Metal always upscales through MetalFX.")
+        }
+        SettingKey::DlssPreset => Some("An NVIDIA GPU, on DirectX 12 or Vulkan."),
+        SettingKey::GraphicsApi => Some("A build with more than one graphics API."),
+        SettingKey::Resolution => Some("Fullscreen window mode."),
+        SettingKey::ShowFps | SettingKey::ShowVram => Some("Performance stats on."),
+        SettingKey::Ssr => Some(
+            "Runs only where ray-traced reflections are off or unsupported; \
+             the row is grayed while they run.",
+        ),
+        _ => None,
+    }
+}
+
 /// The Graphics API row's value at init: the API this launch renders with, and
 /// the one it gave up on when the last launch on that never drew a frame.
 pub fn graphics_api_label(running: Platform, reverted: Option<Platform>) -> String {

@@ -58,6 +58,7 @@ pub(super) fn adapter_profile(desc: &DXGI_ADAPTER_DESC1) -> GpuProfile {
         memory_budget_bytes: dedicated,
         discrete,
         apple_family: 0,
+        apple_variant: None,
     });
     GpuProfile {
         vendor,

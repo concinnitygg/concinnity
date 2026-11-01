@@ -186,6 +186,21 @@ impl DxPostProbes {
         // SAFETY: the list is recording, and the per-cluster lists are live for the frame.
         unsafe { cmd.SetGraphicsRootShaderResourceView(first + 4, self.cluster_list) };
     }
+
+    // [`Self::bind`] on the compute root signature.
+    pub(in crate::directx) fn bind_compute(&self, cmd: &ID3D12GraphicsCommandList, first: u32) {
+        // SAFETY: the list is recording with the SRV heap bound, and the cube array slot is live
+        // for the frame the list records.
+        unsafe { cmd.set_compute_srv_table(first, self.cube_table) };
+        // SAFETY: the list is recording, and this frame's ProbeSet constant buffer is live.
+        unsafe { cmd.SetComputeRootConstantBufferView(first + 1, self.set_cbv) };
+        // SAFETY: the list is recording, and this frame's probe records buffer is live.
+        unsafe { cmd.SetComputeRootShaderResourceView(first + 2, self.records) };
+        // SAFETY: the list is recording, and this frame's `ClusterParams` buffer is live.
+        unsafe { cmd.SetComputeRootConstantBufferView(first + 3, self.cluster_cbv) };
+        // SAFETY: the list is recording, and the per-cluster lists are live for the frame.
+        unsafe { cmd.SetComputeRootShaderResourceView(first + 4, self.cluster_list) };
+    }
 }
 
 // The D3D12 handles a shared post pass builds and encodes through.

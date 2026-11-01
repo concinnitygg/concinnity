@@ -21,8 +21,8 @@ use core::ptr::NonNull;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer, MTLRenderCommandEncoder, MTLRenderStages, MTLResource, MTLResourceID,
-    MTLResourceUsage, MTLTexture,
+    MTLBuffer, MTLComputeCommandEncoder, MTLRenderCommandEncoder, MTLRenderStages, MTLResource,
+    MTLResourceID, MTLResourceUsage, MTLTexture,
 };
 
 // Bytes one member of a tier-2 argument buffer occupies: its resource id.
@@ -207,6 +207,22 @@ impl ResidencySet {
                 MTLRenderStages::Fragment,
             );
         }
+    }
+}
+
+impl ResidencySet {
+    // [`Self::declare_fragment`] for a compute encoder.
+    pub(super) fn declare_compute(&self, enc: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        let Some(first) = NonNull::new(self.ptrs.as_ptr().cast_mut()) else {
+            return;
+        };
+        if self.ptrs.is_empty() {
+            return;
+        }
+        // SAFETY: `first` addresses a contiguous array of `self.ptrs.len()`
+        // live resource pointers, each kept alive by the matching entry in
+        // `self.owned`; the encoder reads the array for the call's duration only.
+        unsafe { enc.useResources_count_usage(first, self.ptrs.len(), MTLResourceUsage::Read) };
     }
 }
 

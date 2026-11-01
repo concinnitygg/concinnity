@@ -460,14 +460,6 @@ owned_handle!(OwnedRenderPass, vk::RenderPass, RenderPass);
 owned_handle!(OwnedFramebuffer, vk::Framebuffer, Framebuffer);
 owned_handle!(OwnedSampler, vk::Sampler, Sampler);
 
-impl OwnedFramebuffer {
-    // Whether the slot is still the inert placeholder. Only the families a pass
-    // rebuilds in place ask this, so it is not part of the shared surface.
-    pub(in crate::vulkan) fn is_null(&self) -> bool {
-        self.device.is_none()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ash::vk::Handle as _;
@@ -547,6 +539,5 @@ mod tests {
         // placeholder: a pass struct can hold one before its device exists and
         // before its pipeline is built.
         drop(p);
-        assert!(OwnedFramebuffer::default().is_null());
     }
 }

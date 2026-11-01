@@ -251,9 +251,13 @@ pub(super) struct UploadInFlight {
     pub cmd: ID3D12GraphicsCommandList,
 }
 
+// Where an uploaded texture rests once its copy lands: readable by pixel and
+// non-pixel shaders alike, so a compute kernel samples it as a draw does.
+pub(super) const SAMPLED_STATE: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+
 // Upload RGBA pixel data to a GPU-local RGBA8_UNORM texture without waiting
 // for the copy: the command list is submitted and left executing. The final
-// transition to PIXEL_SHADER_RESOURCE orders every later submission on the
+// transition to `SAMPLED_STATE` orders every later submission on the
 // same in-order queue after the copy, so the texture is safe to sample from
 // any subsequently submitted frame; only releasing the returned in-flight
 // resources needs GPU retirement.
@@ -475,11 +479,7 @@ fn upload_texture_levels_deferred(
             // and slice these commands name is live for the call.
             unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
         }
-        let barrier = transition_barrier(
-            &texture,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
+        let barrier = transition_barrier(&texture, D3D12_RESOURCE_STATE_COPY_DEST, SAMPLED_STATE);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };
@@ -1131,6 +1131,49 @@ pub(super) fn create_rt_sink(
     )
 }
 
+// A single-level texture compute kernels write through a UAV and later passes
+// sample, created in PIXEL_SHADER_RESOURCE, where it rests between frames.
+pub(super) fn create_storage_target(
+    device: &ID3D12Device,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> RenderResult<ID3D12Resource> {
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        ..Default::default()
+    };
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: u64::from(width.max(1)),
+        Height: height.max(1),
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        ..Default::default()
+    };
+    let mut res_opt: Option<ID3D12Resource> = None;
+    // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the new
+    // COM object lands in a binding that owns it.
+    unsafe {
+        device.CreateCommittedResource(
+            &raw const heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &raw const desc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            None,
+            &raw mut res_opt,
+        )
+    }
+    .map_err(|e| map_hresult(e.code(), "create storage target"))?;
+    res_opt.ok_or_else(|| RenderError::Other("create storage target returned None".into()))
+}
+
 // As `create_rt_target`, with `levels` mip levels, each of which a draw can
 // render to through its own RTV.
 pub(super) fn create_rt_chain(
@@ -1238,6 +1281,28 @@ pub(super) fn write_format_srv(
     format: DXGI_FORMAT,
 ) {
     write_levels_srv(device, resource, srv_cpu, format, (0, 1));
+}
+
+// Write a single-level Texture2D unordered-access view of the given format.
+pub(super) fn write_format_uav(
+    device: &ID3D12Device,
+    resource: &ID3D12Resource,
+    uav_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
+    format: DXGI_FORMAT,
+) {
+    let uav_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+        Format: format,
+        ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_UAV {
+                MipSlice: 0,
+                PlaneSlice: 0,
+            },
+        },
+    };
+    // SAFETY: the view descriptor and the resource it names are live for the call, and the
+    // destination handle addresses a slot this context reserved for the view in a heap it owns.
+    unsafe { device.CreateUnorderedAccessView(resource, None, Some(&raw const uav_desc), uav_cpu) };
 }
 
 // Write a Texture2D shader-resource view of `count` mip levels from `first`.
@@ -1513,7 +1578,7 @@ pub(super) fn upload_environment_map(
 }
 
 // Create a single-mip RGBA32F TextureCube resource and upload `bytes` (six
-// faces in +X,-X,+Y,-Y,+Z,-Z order). Transitions to PIXEL_SHADER_RESOURCE.
+// faces in +X,-X,+Y,-Y,+Z,-Z order). Transitions to `SAMPLED_STATE`.
 fn upload_cube_resource(
     alloc: &DeviceAllocator,
     face_size: u32,
@@ -1588,7 +1653,7 @@ fn upload_prefilter_cube_resource(
 // Copy face-major RGBA32F bytes into a 6-slice cube `texture`. For each mip
 // `m` (0..mip_count), `mip_bytes[m]` is expected to be
 // `6 * (face_size >> m)² * 16` bytes in face order +X,-X,+Y,-Y,+Z,-Z.
-// Transitions the resource to PIXEL_SHADER_RESOURCE at the end.
+// Transitions the resource to `SAMPLED_STATE` at the end.
 fn upload_face_major_into_cube(
     alloc: &DeviceAllocator,
     texture: &ID3D12Resource,
@@ -1698,11 +1763,7 @@ fn upload_face_major_into_cube(
             // and slice these commands name is live for the call.
             unsafe { cmd.CopyTextureRegion(&raw const dst, 0, 0, 0, &raw const src, None) };
         }
-        let barrier = transition_barrier(
-            texture,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        );
+        let barrier = transition_barrier(texture, D3D12_RESOURCE_STATE_COPY_DEST, SAMPLED_STATE);
         // SAFETY: the command list is in the recording state, and every resource, descriptor and
         // slice these commands name is live for the call.
         unsafe { cmd.ResourceBarrier(&[barrier]) };

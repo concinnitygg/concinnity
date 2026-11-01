@@ -66,6 +66,12 @@ impl SsgiResources {
     pub(in crate::directx) fn reset_history(&mut self) {
         self.pass.reset_history();
     }
+
+    // This frame's depth pyramid, every level, which the RT reflection classify
+    // walks screen rays through.
+    pub(in crate::directx) fn pyramid(&self) -> RenderResult<&PostTarget> {
+        self.pass.pyramid()
+    }
 }
 
 impl DxContext {

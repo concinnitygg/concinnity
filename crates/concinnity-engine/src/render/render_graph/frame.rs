@@ -1502,17 +1502,20 @@ fn add_reflections_and_transparent(
         // one: roughness has no other consumer, so without this it would look
         // dead the moment the pre-pass finished.
         let mut current = if inputs.rt_reflections_enabled {
+            // The classify and trace kernels read the scene and the G-buffer in
+            // compute, the composite after them in its fragment.
+            let screen = ReadStages::COMPUTE | ReadStages::FRAGMENT;
             let mut rt = b.add_pass(PassId::RtReflections, PassKind::Render);
-            rt.read_texture(hdr_resolve_cur);
+            rt.read_texture_in_stage(hdr_resolve_cur, screen);
             if let Some(g) = ssr_gbuffer_v1 {
-                rt.read_texture(g);
+                rt.read_texture_in_stage(g, screen);
             }
             if let Some(g) = gbuffer_v1 {
-                rt.read_texture(g.roughness);
+                rt.read_texture_in_stage(g.roughness, screen);
             }
             // A missed ray's probe fallback reads its cluster's probe mask.
             if let Some(h) = cluster_lists {
-                rt.read_buffer(h);
+                rt.read_buffer_in_stage(h, ReadStages::COMPUTE);
             }
             rt.write_texture(scene_pre_taa)
         } else {
@@ -3080,6 +3083,24 @@ mod tests {
                 .map(|p| p.id)
                 .any(|x| x == PassId::RtReflections)
         );
+    }
+
+    #[test]
+    fn rt_reflections_read_the_scene_in_compute_and_fragment() {
+        // The classify and trace kernels read the scene in compute, the
+        // composite in the same pass in its fragment.
+        let mut i = all_off();
+        i.rt_reflections_enabled = true;
+        let g = build_frame_graph(&i).expect("compiles");
+        let rt = g
+            .passes
+            .iter()
+            .find(|p| p.id == PassId::RtReflections)
+            .expect("present");
+        assert!(!rt.reads.is_empty());
+        for read in &rt.reads {
+            assert!(read.stage().contains(ReadStages::COMPUTE));
+        }
     }
 
     #[test]

@@ -1442,6 +1442,14 @@ impl MtlContext {
             .bindless_residency
             .declare_fragment(encoder);
     }
+
+    // [`Self::use_bindless_textures`] for a compute encoder.
+    pub(super) fn use_bindless_textures_compute(
+        &self,
+        encoder: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    ) {
+        self.arg_buffers.bindless_residency.declare_compute(encoder);
+    }
 }
 
 // The GPU-driven cull's pipelines: the early pass and late decision kernels

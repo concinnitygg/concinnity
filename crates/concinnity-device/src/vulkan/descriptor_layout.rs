@@ -73,30 +73,33 @@ pub(in crate::vulkan) fn global_set() -> [Binding; 24] {
     use vk::DescriptorType as T;
     let fs = vk::ShaderStageFlags::FRAGMENT;
     let vs_fs = vk::ShaderStageFlags::VERTEX | fs;
+    // What the ray-traced reflection kernels read from the set as well: the
+    // prefilter cube, the probe fallback and the canopy a traced hit shades.
+    let cs_fs = vk::ShaderStageFlags::COMPUTE | fs;
     [
         (VIEW_UBO_BINDING, T::UNIFORM_BUFFER, vs_fs),
         (LIGHT_UBO_BINDING, T::UNIFORM_BUFFER, fs),
         (SHADOW_UBO_BINDING, T::UNIFORM_BUFFER, vs_fs),
         (SHADOW_MAP_BINDING, T::SAMPLED_IMAGE, fs),
         (IRRADIANCE_CUBE_BINDING, T::SAMPLED_IMAGE, fs),
-        (PREFILTER_CUBE_BINDING, T::SAMPLED_IMAGE, fs),
+        (PREFILTER_CUBE_BINDING, T::SAMPLED_IMAGE, cs_fs),
         (SCREEN_INDIRECT_BINDING, T::SAMPLED_IMAGE, fs),
-        (PROBE_SET_UBO_BINDING, T::UNIFORM_BUFFER, fs),
-        (PROBE_CUBES_BINDING, T::SAMPLED_IMAGE, fs),
+        (PROBE_SET_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
+        (PROBE_CUBES_BINDING, T::SAMPLED_IMAGE, cs_fs),
         (LOCAL_LIGHT_SSBO_BINDING, T::STORAGE_BUFFER, fs),
-        (CLUSTER_PARAMS_UBO_BINDING, T::UNIFORM_BUFFER, fs),
-        (CLUSTER_LIST_SSBO_BINDING, T::STORAGE_BUFFER, fs),
+        (CLUSTER_PARAMS_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
+        (CLUSTER_LIST_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
         (SPOT_SHADOW_MAP_BINDING, T::SAMPLED_IMAGE, fs),
         (SPOT_SHADOW_DATA_SSBO_BINDING, T::STORAGE_BUFFER, fs),
         (AREA_LIGHT_SSBO_BINDING, T::STORAGE_BUFFER, fs),
         (LTC_MATRIX_BINDING, T::SAMPLED_IMAGE, fs),
         (LTC_MAGNITUDE_BINDING, T::SAMPLED_IMAGE, fs),
-        (PROBE_RECORDS_SSBO_BINDING, T::STORAGE_BUFFER, fs),
+        (PROBE_RECORDS_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
         (SHADOW_SAMPLER_BINDING, T::SAMPLER, fs),
-        (CUBE_SAMPLER_BINDING, T::SAMPLER, fs),
-        (LINEAR_SAMPLER_BINDING, T::SAMPLER, fs),
-        (CANOPY_UBO_BINDING, T::UNIFORM_BUFFER, fs),
-        (CANOPY_TABLES_SSBO_BINDING, T::STORAGE_BUFFER, fs),
+        (CUBE_SAMPLER_BINDING, T::SAMPLER, cs_fs),
+        (LINEAR_SAMPLER_BINDING, T::SAMPLER, cs_fs),
+        (CANOPY_UBO_BINDING, T::UNIFORM_BUFFER, cs_fs),
+        (CANOPY_TABLES_SSBO_BINDING, T::STORAGE_BUFFER, cs_fs),
         (CLOUD_SHADOW_BINDING, T::SAMPLED_IMAGE, fs),
     ]
 }
@@ -310,6 +313,7 @@ mod tests {
         use vk::{DescriptorType as T, ShaderStageFlags as S};
         let fs = S::FRAGMENT;
         let vs_fs = S::VERTEX | S::FRAGMENT;
+        let cs_fs = S::COMPUTE | S::FRAGMENT;
         let table = global_set();
         assert_gap_free_and_unique(&table);
         assert_eq!(
@@ -320,24 +324,24 @@ mod tests {
                 (2, T::UNIFORM_BUFFER, vs_fs),
                 (3, T::SAMPLED_IMAGE, fs),
                 (4, T::SAMPLED_IMAGE, fs),
-                (5, T::SAMPLED_IMAGE, fs),
+                (5, T::SAMPLED_IMAGE, cs_fs),
                 (6, T::SAMPLED_IMAGE, fs),
-                (7, T::UNIFORM_BUFFER, fs),
-                (8, T::SAMPLED_IMAGE, fs),
+                (7, T::UNIFORM_BUFFER, cs_fs),
+                (8, T::SAMPLED_IMAGE, cs_fs),
                 (9, T::STORAGE_BUFFER, fs),
-                (10, T::UNIFORM_BUFFER, fs),
-                (11, T::STORAGE_BUFFER, fs),
+                (10, T::UNIFORM_BUFFER, cs_fs),
+                (11, T::STORAGE_BUFFER, cs_fs),
                 (12, T::SAMPLED_IMAGE, fs),
                 (13, T::STORAGE_BUFFER, fs),
                 (14, T::STORAGE_BUFFER, fs),
                 (15, T::SAMPLED_IMAGE, fs),
                 (16, T::SAMPLED_IMAGE, fs),
-                (17, T::STORAGE_BUFFER, fs),
+                (17, T::STORAGE_BUFFER, cs_fs),
                 (18, T::SAMPLER, fs),
-                (19, T::SAMPLER, fs),
-                (20, T::SAMPLER, fs),
-                (21, T::UNIFORM_BUFFER, fs),
-                (22, T::STORAGE_BUFFER, fs),
+                (19, T::SAMPLER, cs_fs),
+                (20, T::SAMPLER, cs_fs),
+                (21, T::UNIFORM_BUFFER, cs_fs),
+                (22, T::STORAGE_BUFFER, cs_fs),
                 (23, T::SAMPLED_IMAGE, fs),
             ]
         );

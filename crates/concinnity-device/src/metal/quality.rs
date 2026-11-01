@@ -412,7 +412,7 @@ impl MtlContext {
             self.rt.retire_accel(self.frame_ring_index);
             return Ok(());
         }
-        if self.rt.pipelines.resolve.is_none() {
+        if self.rt.pipelines.reflections.is_none() {
             self.rt.pipelines = build_rt_pipelines(
                 &self.hw.device,
                 settings.rt_reflection.as_ref(),

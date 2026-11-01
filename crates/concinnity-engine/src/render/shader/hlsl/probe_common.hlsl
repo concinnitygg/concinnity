@@ -8,7 +8,7 @@
 // probe cube array and its sampler. A shader that sees the camera's cluster
 // grid also defines `CLUSTER` (the bound ClusterParams) and `CLUSTER_LIST` (the
 // per-cluster lists), which lets it read only the probes binned into a
-// fragment's cluster.
+// fragment's cluster. A compute kernel defines `PROBE_COMPUTE`.
 // Nothing here may spell either marker -- the splice would reintroduce it.
 
 // The probe cube mip a surface of `roughness` reflects at: the cubes carry
@@ -21,13 +21,18 @@ float probe_lod(float roughness)
 // The probe cube mip a reflection ray `R` reads at: `lod`, widened by how many
 // cube texels the ray sweeps across one pixel, which grows at grazing or
 // distant angles. It follows the ray itself rather than the box-projected
-// direction, which kinks across a box face.
+// direction, which kinks across a box face. A compute kernel (PROBE_COMPUTE)
+// has no pixel derivatives, so it reads at `lod`.
 float probe_footprint_lod(float3 R, float lod)
 {
+#ifdef PROBE_COMPUTE
+    return lod;
+#else
     uint size, height, slices;
     probe_cubes.GetDimensions(size, height, slices);
     float sweep = max(length(ddx(R)), length(ddy(R)));
     return lod + max(log2(sweep * 0.5 * float(size)), 0.0);
+#endif
 }
 
 // Slice `i` of the probe cube array at mip `lod`.

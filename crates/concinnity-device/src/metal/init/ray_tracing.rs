@@ -8,9 +8,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::InitGpu;
-use crate::metal::builtin_shaders::{RT_REFLECTIONS_FRAG, RT_REFLECTIONS_FRAG_TEXTURED};
 use crate::metal::context::{GlassState, MtlSceneAssets};
-use crate::metal::post::build_rt_reflection_pipeline;
+use crate::metal::post::RtReflectionPipelines;
 use crate::metal::raytrace::{
     RtGpu, RtPipelines, RtSceneGeometry, RtState, RtStaticGeometry, RtTextureCounts,
     build_rt_accel, build_rt_skin_pipeline, raytracing_supported,
@@ -109,14 +108,15 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> Rend
         skinned_geometry: launch.rt_skinned_geometry,
         update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),
         pipelines,
+        rays: None,
         retired: concinnity_engine::render::buffers::retire_pool::RetirePool::new(),
     })
 }
 
-// RT reflections: the inline ray-trace resolve pipelines, built only when RT
+// RT reflections: the classify and inline ray-trace kernels, built only when RT
 // reflections are on. They write into `ssr.reflection`, reusing the SSR
-// pre-pass G-buffer. The flat variant is the non-bindless fallback; the textured
-// variant samples the bindless albedo pool. The compute-skinning pipeline
+// pre-pass G-buffer. The flat trace is the non-bindless fallback; the textured
+// trace samples the bindless albedo pool. The compute-skinning pipeline
 // deforms skinned vertices into a buffer the BVH can trace; built under the
 // same gate on a ray-tracing device, unused when the world has no SkinnedMesh.
 pub(in crate::metal) fn build_rt_pipelines(
@@ -124,30 +124,13 @@ pub(in crate::metal) fn build_rt_pipelines(
     settings: Option<&RtReflectionSettings>,
     hot_reload: bool,
 ) -> RenderResult<RtPipelines> {
-    let (resolve, resolve_textured) = if settings.is_some() {
-        (
-            Some(build_rt_reflection_pipeline(
-                device,
-                &RT_REFLECTIONS_FRAG,
-                hot_reload,
-            )?),
-            Some(build_rt_reflection_pipeline(
-                device,
-                &RT_REFLECTIONS_FRAG_TEXTURED,
-                hot_reload,
-            )?),
-        )
-    } else {
-        (None, None)
-    };
+    let reflections = settings
+        .map(|_| RtReflectionPipelines::new(device, hot_reload))
+        .transpose()?;
     let skin = if settings.is_some() && raytracing_supported(device) {
         Some(build_rt_skin_pipeline(device, hot_reload)?)
     } else {
         None
     };
-    Ok(RtPipelines {
-        resolve,
-        resolve_textured,
-        skin,
-    })
+    Ok(RtPipelines { reflections, skin })
 }

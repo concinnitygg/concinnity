@@ -604,11 +604,11 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
         assert_eq!(fx.reflections.ray_traced_shadows, cap.rt_reflection_shadows);
         assert_eq!(
             fx.reflections.ray_traced_resolution,
-            PassResolution::Half.max(cap.rt_reflection_resolution)
+            PassResolution::Full.max(cap.rt_reflection_resolution)
         );
         assert_eq!(
             fx.reflections.blur_resolution,
-            PassResolution::Half.max(cap.reflection_blur_resolution)
+            PassResolution::Full.max(cap.reflection_blur_resolution)
         );
         let technique = if cap.ssgi {
             IndirectTechnique::Ssgi
@@ -618,7 +618,7 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
         assert_eq!(fx.indirect_lighting.technique, technique);
         assert_eq!(
             fx.indirect_lighting.ssgi_resolution,
-            PassResolution::Half.max(cap.ssgi_resolution)
+            PassResolution::Full.max(cap.ssgi_resolution)
         );
         assert_eq!(
             fx.indirect_lighting.ssgi_rays,
@@ -644,6 +644,38 @@ fn an_unset_world_resolves_to_the_tier_capped_defaults() {
         assert_eq!(fx.ambient_occlusion.radius, 0.5);
         assert!(!fx.exposure.auto);
     }
+}
+
+// A ceiling only reduces, so an unset world reaches every Ultra cap only if the
+// section defaults are at least as fine as Ultra.
+#[test]
+fn an_unset_world_reaches_every_ultra_cap() {
+    let cap = QualityCeiling::ULTRA;
+    let r = resolve_settings(
+        &WorldSettings::default(),
+        &UserGraphicsSettings::default(),
+        &cap,
+        false,
+    );
+    let g = &r.graphics;
+    assert!(g.reflections.screen_space && g.reflections.ray_traced);
+    assert!(g.reflections.ray_traced_shadows);
+    assert_eq!(
+        g.reflections.ray_traced_resolution,
+        cap.rt_reflection_resolution
+    );
+    assert_eq!(
+        g.reflections.blur_resolution,
+        cap.reflection_blur_resolution
+    );
+    assert_eq!(g.indirect_lighting.technique, IndirectTechnique::Ssgi);
+    assert_eq!(g.indirect_lighting.ssgi_resolution, cap.ssgi_resolution);
+    assert_eq!(g.indirect_lighting.ssgi_rays, cap.ssgi_rays);
+    assert!(g.ambient_occlusion.enabled);
+    assert_eq!(g.anti_aliasing.mode, cap.aa_mode);
+    assert_eq!(g.shadows.update, ShadowUpdate::EveryFrame);
+    assert_eq!(g.shadows.cascades, cap.shadow_cascades);
+    assert_eq!(g.texture_filtering.anisotropy, cap.anisotropy);
 }
 
 // The device clamps after every layer: an explicit user choice cannot turn on

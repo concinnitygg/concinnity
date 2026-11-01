@@ -385,8 +385,16 @@ fn water_layouts_match_the_shader() {
 #[test]
 fn rt_reflections_layouts_match_the_shader() {
     check(
-        &programs::RT_REFLECTIONS_FRAG,
+        &programs::RT_REFLECTIONS_TRACE,
         &mirrors::transparent::rt_reflections(),
+    );
+}
+
+#[test]
+fn rt_reflections_classify_layouts_match_the_shader() {
+    check(
+        &programs::RT_REFLECTIONS_CLASSIFY,
+        &mirrors::transparent::rt_classify(),
     );
 }
 

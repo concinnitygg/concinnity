@@ -56,7 +56,12 @@ pub(crate) fn create_reflection_target(
         format: MTLPixelFormat::RGBA16Float,
         width: (width / s).max(1) as usize,
         height: (height / s).max(1) as usize,
-        usage: MTLTextureUsage(MTLTextureUsage::ShaderRead.0 | MTLTextureUsage::RenderTarget.0),
+        // Rendered by the SSR resolve, written and read back by the RT kernels.
+        usage: MTLTextureUsage(
+            MTLTextureUsage::ShaderRead.0
+                | MTLTextureUsage::ShaderWrite.0
+                | MTLTextureUsage::RenderTarget.0,
+        ),
         ..Default::default()
     }
     .build();

@@ -39,7 +39,8 @@ use super::prose::{
     collapse_doc, entry_examples_as_lines, first_paragraph, strip_rust_blocks, strip_table_lines,
 };
 use super::render::{
-    EnumValue, FieldEntry, FieldType, render_parameters, render_values, rewrite_doc_links, slug,
+    EnumValue, FieldEntry, FieldType, render_field_bullet, render_parameters, render_values,
+    rewrite_doc_links, slug,
 };
 
 /// One documented type: an authorable asset, or a reference type (a nested
@@ -51,6 +52,9 @@ pub(super) struct AssetDoc {
     pub(super) summary: String,
     /// The type's full rustdoc body.
     pub(super) full_doc: String,
+    /// Each field's key and its description: the text of its parameter bullet
+    /// after the key.
+    pub(super) fields: Vec<(String, String)>,
     /// True for a nested value type or enum rather than an asset.
     pub(super) is_reference_type: bool,
 }
@@ -88,11 +92,12 @@ pub(super) fn build(assets: &[AssetEntry]) -> Vec<AssetDoc> {
     let mut asset_docs: Vec<Entry> = assets
         .iter()
         .map(|a| {
-            let (summary, full_doc) = render_struct(a.schema, &mut ctx);
+            let (summary, full_doc, fields) = render_struct(a.schema, &mut ctx);
             Entry {
                 name: a.name.to_string(),
                 summary,
                 full_doc,
+                fields,
             }
         })
         .collect();
@@ -113,11 +118,12 @@ pub(super) fn build(assets: &[AssetEntry]) -> Vec<AssetDoc> {
         }
         for s in pending {
             done.push(s.name);
-            let (summary, full_doc) = render_struct(s, &mut ctx);
+            let (summary, full_doc, fields) = render_struct(s, &mut ctx);
             ref_types.push(Entry {
                 name: s.name.to_string(),
                 summary: or_fallback(summary, "Nested object embedded by other assets."),
                 full_doc,
+                fields,
             });
         }
     }
@@ -127,6 +133,7 @@ pub(super) fn build(assets: &[AssetEntry]) -> Vec<AssetDoc> {
             name: s.name.to_string(),
             summary: or_fallback(summary, "A set of named string values."),
             full_doc,
+            fields: Vec::new(),
         });
     }
 
@@ -141,6 +148,9 @@ pub(super) fn build(assets: &[AssetEntry]) -> Vec<AssetDoc> {
     for e in asset_docs.iter_mut().chain(ref_types.iter_mut()) {
         e.summary = rewrite_doc_links(&e.summary, &name_for_slug);
         e.full_doc = rewrite_doc_links(&e.full_doc, &name_for_slug);
+        for (_, text) in &mut e.fields {
+            *text = rewrite_doc_links(text, &name_for_slug);
+        }
     }
 
     asset_docs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -150,6 +160,7 @@ pub(super) fn build(assets: &[AssetEntry]) -> Vec<AssetDoc> {
             type_name: e.name,
             summary: e.summary,
             full_doc: e.full_doc,
+            fields: e.fields,
             is_reference_type,
         })
     };
@@ -169,12 +180,14 @@ struct Ctx {
     enums: BTreeMap<&'static str, &'static TypeSchema>,
 }
 
-// One rendered type: its name, one-line summary, and full doc body (the
-// description followed by the generated Parameters/Values section).
+// One rendered type: its name, one-line summary, full doc body (the
+// description followed by the generated Parameters/Values section), and its
+// fields' descriptions.
 struct Entry {
     name: String,
     summary: String,
     full_doc: String,
+    fields: Vec<(String, String)>,
 }
 
 fn or_fallback(summary: String, fallback: &str) -> String {
@@ -186,12 +199,22 @@ fn or_fallback(summary: String, fallback: &str) -> String {
 }
 
 // A struct's page body: its rustdoc, then its fields as parameter bullets.
-fn render_struct(s: &'static TypeSchema, ctx: &mut Ctx) -> (String, String) {
+// Also each field's bullet text after its key.
+fn render_struct(s: &'static TypeSchema, ctx: &mut Ctx) -> (String, String, Vec<(String, String)>) {
     let doc = entry_examples_as_lines(&strip_rust_blocks(s.doc));
     let mut fields = Vec::new();
     collect_fields(s, ctx, &mut fields);
     let full_doc = combine(&strip_table_lines(&doc), &render_parameters(&fields));
-    (first_paragraph(&doc), full_doc)
+    let described = fields
+        .iter()
+        .map(|f| {
+            let bullet = render_field_bullet(f);
+            let prefix = format!("- `{}`: ", f.key);
+            let text = bullet.strip_prefix(&prefix).unwrap_or(&bullet).to_string();
+            (f.key.clone(), text)
+        })
+        .collect();
+    (first_paragraph(&doc), full_doc, described)
 }
 
 // Render a documented enum's page body: its enum-level rustdoc followed by a

@@ -88,7 +88,7 @@ mod tests {
         assert_eq!(key.entry, "vertex_main_bindless");
         assert_eq!(key.target, "dxil");
         let target = |v| DIRECTX.cache_key(v, &src).target;
-        assert_eq!(target(RT_REFLECTIONS_FRAG.variant()), "dxil-6.5");
+        assert_eq!(target(RT_REFLECTIONS_TRACE.variant()), "dxil-6.5");
         assert_eq!(target(GLASS_FRAG_RT.at(true)), "dxil-6.5");
     }
 

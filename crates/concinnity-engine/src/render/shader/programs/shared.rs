@@ -643,19 +643,29 @@ pub static TEXT_FRAG: ShaderProgram = ShaderProgram {
 // supports ray queries, once an acceleration structure exists. The textured
 // variants shade a hit with the bindless pool; the flat ones do not declare it
 // at all, which keeps a non-bindless world from binding one.
-/// `rt_reflections_fragment` from `rt_reflections.hlsl`.
-pub static RT_REFLECTIONS_FRAG: ShaderProgram = ShaderProgram {
+/// `rt_reflections_classify_kernel` from `rt_reflections.hlsl`: the screen
+/// trace that settles what it can and lists the pixels still owed a ray.
+pub static RT_REFLECTIONS_CLASSIFY: ShaderProgram = ShaderProgram {
     file: "rt_reflections.hlsl",
-    entry: "rt_reflections_fragment",
-    label: "rt_reflections_frag.hlsl",
+    entry: "rt_reflections_classify_kernel",
+    label: "rt_reflections_classify.hlsl",
+    gates: &["RT_CLASSIFY"],
+    msaa: false,
+};
+/// `rt_reflections_kernel` from `rt_reflections.hlsl`: the trace over the
+/// classify's ray list.
+pub static RT_REFLECTIONS_TRACE: ShaderProgram = ShaderProgram {
+    file: "rt_reflections.hlsl",
+    entry: "rt_reflections_kernel",
+    label: "rt_reflections_trace.hlsl",
     gates: &[],
     msaa: false,
 };
-/// `rt_reflections_fragment` from `rt_reflections.hlsl`.
-pub static RT_REFLECTIONS_FRAG_TEXTURED: ShaderProgram = ShaderProgram {
+/// [`RT_REFLECTIONS_TRACE`] shading hits from the bindless pool.
+pub static RT_REFLECTIONS_TRACE_TEXTURED: ShaderProgram = ShaderProgram {
     file: "rt_reflections.hlsl",
-    entry: "rt_reflections_fragment",
-    label: "rt_reflections_frag_textured.hlsl",
+    entry: "rt_reflections_kernel",
+    label: "rt_reflections_trace_textured.hlsl",
     gates: &["RT_TEXTURED"],
     msaa: false,
 };
@@ -1088,8 +1098,9 @@ pub static ALL: &[&ShaderProgram] = &[
     &LINE_FRAG,
     &TEXT_VERT,
     &TEXT_FRAG,
-    &RT_REFLECTIONS_FRAG,
-    &RT_REFLECTIONS_FRAG_TEXTURED,
+    &RT_REFLECTIONS_CLASSIFY,
+    &RT_REFLECTIONS_TRACE,
+    &RT_REFLECTIONS_TRACE_TEXTURED,
     &GLASS_VERT,
     &GLASS_FRAG,
     &GLASS_FRAG_RT,

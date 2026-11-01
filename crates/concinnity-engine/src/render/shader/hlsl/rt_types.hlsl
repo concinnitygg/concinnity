@@ -24,7 +24,7 @@ struct RtParams
     float pre_exposure;
     // float4 rather than float3 + scalar: MSL sizes a constant-buffer float3 at
     // 16 bytes, so only the padded form matches the CPU layout on every target.
-    float4 cam_pos;    // xyz: world camera position
+    float4 cam_pos;    // xyz: world camera position; w: screen-trace pyramid levels
     float4 sun_dir;    // xyz: world unit direction toward the sun (= L)
     float4 sun_color;  // xyz: sun radiance
     float4x4 inv_view; // camera-to-world

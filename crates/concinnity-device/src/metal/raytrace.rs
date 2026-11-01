@@ -60,12 +60,12 @@ use objc2_metal::{
     MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureInstanceDescriptorType,
     MTLAccelerationStructureInstanceOptions, MTLAccelerationStructureTriangleGeometryDescriptor,
     MTLAccelerationStructureUsage, MTLAttributeFormat, MTLBuffer, MTLCommandBuffer as _,
-    MTLCommandEncoder as _, MTLCommandQueue as _, MTLComputeCommandEncoder as _,
+    MTLCommandEncoder as _, MTLCommandQueue as _, MTLComputeCommandEncoder,
     MTLComputePipelineState, MTLDevice as _, MTLIndexType,
     MTLIndirectAccelerationStructureInstanceDescriptor, MTLInstanceAccelerationStructureDescriptor,
     MTLPackedFloat3, MTLPackedFloat4x3, MTLPrimitiveAccelerationStructureDescriptor,
-    MTLRenderCommandEncoder, MTLRenderPipelineState, MTLRenderStages, MTLResource, MTLResourceID,
-    MTLResourceOptions, MTLResourceUsage, MTLSize,
+    MTLRenderCommandEncoder, MTLRenderStages, MTLResource, MTLResourceID, MTLResourceOptions,
+    MTLResourceUsage, MTLSize,
 };
 use std::ptr::NonNull;
 // Shared with the Vulkan and DirectX hosts: one `.hlsl` declares it.
@@ -115,6 +115,9 @@ pub(crate) struct RtState {
     // than every frame.
     pub update_streak: FailureStreak,
     pub pipelines: RtPipelines,
+    // The ray list and indirect arguments between the classify and the trace,
+    // fit to the reflection target each frame RT runs.
+    pub rays: Option<super::post::RtRays>,
     // Dropped BVHs, held until no frame still in flight can reach them.
     pub retired: RetirePool<RtAccelData>,
 }
@@ -141,13 +144,8 @@ impl RtState {
 // The ray-traced reflection pipelines, `Some` only when RT reflections are on.
 // The quality rebuild swaps them as a unit.
 pub(crate) struct RtPipelines {
-    // Resolve pipeline, flat-tint hit shading. Used for non-bindless worlds
-    // (no albedo pool).
-    pub resolve: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
-    // Resolve pipeline, textured hit shading (samples the bindless albedo pool
-    // at buffer(7)). Preferred over `resolve` when the bindless texture
-    // argument buffer is available this frame.
-    pub resolve_textured: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+    // The classify and the flat-tint and textured traces.
+    pub reflections: Option<super::post::RtReflectionPipelines>,
     // Compute-skinning pipeline that deforms skinned vertices into a buffer the
     // BVH can trace. Consumed each frame by `rebuild_rt_accel` to pose skinned
     // geometry before the skinned BLAS build.
@@ -532,6 +530,26 @@ pub(in crate::metal) fn use_blas_resident_fragment<'a>(
     }
 }
 
+// [`use_blas_resident_fragment`] for a compute-kernel trace.
+pub(in crate::metal) fn use_blas_resident_compute<'a>(
+    enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+    blas: impl IntoIterator<Item = &'a Structure>,
+) {
+    let res: Vec<NonNull<ProtocolObject<dyn MTLResource>>> = blas
+        .into_iter()
+        .map(|b| NonNull::from(ProtocolObject::from_ref(&**b)))
+        .collect();
+    let Some(first) = NonNull::new(res.as_ptr().cast_mut()) else {
+        return;
+    };
+    if res.is_empty() {
+        return;
+    }
+    // SAFETY: `res` is a non-empty, contiguous array of `res.len()` live resource
+    // pointers; the encoder reads it for the duration of the call only.
+    unsafe { enc.useResources_count_usage(first, res.len(), MTLResourceUsage::Read) };
+}
+
 // Identity matrix used as a one-joint fallback palette so a skinned object with
 // no pose yet still has a valid (undeformed) palette to dispatch against.
 const IDENTITY4: [[f32; 4]; 4] = [
@@ -601,7 +619,7 @@ enum SkinPalettes<'a> {
 // palettes are owned by the frame. The caller owns command-buffer lifetime
 // (commit + wait, or commit + a completion handler).
 fn encode_skin_dispatch(
-    cenc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    cenc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
     skinned: &SkinnedRtInputs<'_>,
     skinned_objects: &[usize],
     deformed_verts: &ProtocolObject<dyn MTLBuffer>,
@@ -666,7 +684,7 @@ struct SkinDispatchBuffers<'a> {
 // Encode one skinned object's `rt_skin` dispatch: one thread per vertex, writing
 // its posed model-space `Vertex` into the deformed buffer.
 fn encode_skin_object(
-    cenc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
+    cenc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
     bufs: SkinDispatchBuffers<'_>,
     obj: &SkinnedDrawObject,
     joint_count: usize,

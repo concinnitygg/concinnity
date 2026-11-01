@@ -30,8 +30,8 @@ pub static TABLE: Table = Table {
 /// fragments. Only the ray-query entries are raised, so the glass and water
 /// vertex stages and the base fragments stay at 6.0.
 static SHADER_MODEL_6_5: &[&ShaderProgram] = &[
-    &shared::RT_REFLECTIONS_FRAG,
-    &shared::RT_REFLECTIONS_FRAG_TEXTURED,
+    &shared::RT_REFLECTIONS_TRACE,
+    &shared::RT_REFLECTIONS_TRACE_TEXTURED,
     &shared::GLASS_FRAG_RT,
     &shared::GLASS_FRAG_RT_TEXTURED,
     &shared::GLASS_REFLECTION_FRAG,

@@ -189,8 +189,13 @@ pub(super) static WATER_VERT: Program = Program {
     splices: &[],
 };
 
-pub(super) static RT_REFLECTIONS_FRAG: Program = Program {
-    row: &shared::RT_REFLECTIONS_FRAG,
+pub(super) static RT_REFLECTIONS_CLASSIFY: Program = Program {
+    row: &shared::RT_REFLECTIONS_CLASSIFY,
+    splices: &[],
+};
+
+pub(super) static RT_REFLECTIONS_TRACE: Program = Program {
+    row: &shared::RT_REFLECTIONS_TRACE,
     splices: &[],
 };
 

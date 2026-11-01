@@ -136,7 +136,8 @@ pub enum GpuTier {
     EntryDiscrete,
     /// Mainstream discrete GPU, or an Apple Pro: mid quality.
     MidDiscrete,
-    /// Enthusiast discrete GPU, or an Apple Max / Ultra: high quality.
+    /// Enthusiast discrete GPU, or an Apple Max from M3 on / Ultra from M2 on:
+    /// high quality.
     HighDiscrete,
 }
 
@@ -195,8 +196,43 @@ pub struct GpuClassInput {
     /// Whether the GPU is a discrete card.
     pub discrete: bool,
     /// Apple GPU family generation rank (7 = M1 .. 10 = M4), or 0 for a non-Apple
-    /// GPU. Apple silicon classifies by generation; everything else by VRAM.
+    /// GPU. Apple silicon classifies by generation and variant; everything else
+    /// by VRAM.
     pub apple_family: u8,
+    /// The Apple silicon variant the device name reports, or `None` when the
+    /// name is not an M-series chip.
+    pub apple_variant: Option<AppleVariant>,
+}
+
+/// An Apple silicon chip's variant within its generation, ordered by GPU size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AppleVariant {
+    /// The base chip ("Apple M3").
+    Base,
+    /// "Pro".
+    Pro,
+    /// "Max".
+    Max,
+    /// "Ultra", two Max dies.
+    Ultra,
+}
+
+/// The Apple silicon variant a device name reports ("Apple M3 Max" is
+/// [`AppleVariant::Max`]), or `None` when the name is not an M-series chip.
+/// Metal and MoltenVK report the same names.
+pub fn apple_variant_from_device_name(name: &str) -> Option<AppleVariant> {
+    let rest = name.strip_prefix("Apple M")?;
+    let suffix = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+    if suffix.len() == rest.len() {
+        return None;
+    }
+    match suffix.trim() {
+        "" => Some(AppleVariant::Base),
+        "Pro" => Some(AppleVariant::Pro),
+        "Max" => Some(AppleVariant::Max),
+        "Ultra" => Some(AppleVariant::Ultra),
+        _ => None,
+    }
 }
 
 /// The Apple GPU family generation rank a device name implies, or 0 when the name
@@ -218,19 +254,25 @@ pub fn apple_family_from_device_name(name: &str) -> u8 {
 }
 
 /// Map the gathered GPU signals to a coarse performance tier. Apple silicon is
-/// classified by GPU family generation (family alone cannot separate base from
-/// Pro / Max / Ultra within a generation -- a working-set refinement can split
-/// them later); a non-Apple integrated / low-power GPU is the lowest tier; a
-/// discrete GPU is bucketed by dedicated VRAM. An unreporting device (no memory,
-/// not discrete) stays `Unknown` so the resolver uses the conservative baseline.
+/// classified by its variant (a base chip is entry, a Pro mid, a Max from M3 on
+/// and an Ultra from M2 on high), or by generation alone when the name reports
+/// no variant;
+/// a non-Apple integrated / low-power GPU is the lowest tier; a discrete GPU is
+/// bucketed by dedicated VRAM. An unreporting device (no memory, not discrete)
+/// stays `Unknown` so the resolver uses the conservative baseline.
 pub fn classify_tier(input: &GpuClassInput) -> GpuTier {
     const GB: u64 = 1 << 30;
-    // Apple silicon: classify by GPU family generation.
     if input.vendor == GpuVendor::Apple && input.apple_family >= 7 {
-        return match input.apple_family {
-            7 => GpuTier::EntryDiscrete, // M1 class
-            8 => GpuTier::MidDiscrete,   // M2 class
-            _ => GpuTier::HighDiscrete,  // M3 / M4 and newer
+        return match input.apple_variant {
+            Some(AppleVariant::Base) => GpuTier::EntryDiscrete,
+            Some(AppleVariant::Ultra) if input.apple_family >= 8 => GpuTier::HighDiscrete,
+            Some(AppleVariant::Max) if input.apple_family >= 9 => GpuTier::HighDiscrete,
+            Some(_) => GpuTier::MidDiscrete,
+            None => match input.apple_family {
+                7 => GpuTier::EntryDiscrete,
+                8 => GpuTier::MidDiscrete,
+                _ => GpuTier::HighDiscrete,
+            },
         };
     }
     // Any non-Apple integrated / low-power GPU is the lowest tier (Apple silicon
@@ -338,6 +380,14 @@ mod tests {
             memory_budget_bytes,
             discrete,
             apple_family,
+            apple_variant: None,
+        }
+    }
+
+    fn apple(family: u8, variant: AppleVariant) -> GpuClassInput {
+        GpuClassInput {
+            apple_variant: Some(variant),
+            ..input(GpuVendor::Apple, 32 * GB, false, family)
         }
     }
 
@@ -401,7 +451,72 @@ mod tests {
     }
 
     #[test]
-    fn apple_silicon_classifies_by_generation() {
+    fn apple_variant_reads_the_suffix_out_of_the_device_name() {
+        assert_eq!(
+            apple_variant_from_device_name("Apple M3"),
+            Some(AppleVariant::Base)
+        );
+        assert_eq!(
+            apple_variant_from_device_name("Apple M2 Pro"),
+            Some(AppleVariant::Pro)
+        );
+        assert_eq!(
+            apple_variant_from_device_name("Apple M4 Max"),
+            Some(AppleVariant::Max)
+        );
+        assert_eq!(
+            apple_variant_from_device_name("Apple M1 Ultra"),
+            Some(AppleVariant::Ultra)
+        );
+        for name in [
+            "Apple M",
+            "Apple M3 Turbo",
+            "Apple A17 Pro",
+            "NVIDIA GeForce RTX 5090",
+        ] {
+            assert_eq!(apple_variant_from_device_name(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn apple_silicon_classifies_by_variant() {
+        for family in 7..=10 {
+            assert_eq!(
+                classify_tier(&apple(family, AppleVariant::Base)),
+                GpuTier::EntryDiscrete
+            );
+            assert_eq!(
+                classify_tier(&apple(family, AppleVariant::Pro)),
+                GpuTier::MidDiscrete
+            );
+        }
+        // An M1 or M2 Max cannot hold the top tier at its Retina resolution.
+        for family in [7, 8] {
+            assert_eq!(
+                classify_tier(&apple(family, AppleVariant::Max)),
+                GpuTier::MidDiscrete
+            );
+        }
+        assert_eq!(
+            classify_tier(&apple(7, AppleVariant::Ultra)),
+            GpuTier::MidDiscrete
+        );
+        for family in 9..=10 {
+            assert_eq!(
+                classify_tier(&apple(family, AppleVariant::Max)),
+                GpuTier::HighDiscrete
+            );
+        }
+        for family in 8..=10 {
+            assert_eq!(
+                classify_tier(&apple(family, AppleVariant::Ultra)),
+                GpuTier::HighDiscrete
+            );
+        }
+    }
+
+    #[test]
+    fn apple_silicon_without_a_variant_classifies_by_generation() {
         // Unified memory is large on Apple silicon, but the family generation
         // (not the working-set) decides the tier, so the huge shared budget does
         // not read as a high-VRAM discrete card.
@@ -419,7 +534,7 @@ mod tests {
         );
         assert_eq!(
             classify_tier(&input(GpuVendor::Apple, 64 * GB, false, 10)),
-            GpuTier::HighDiscrete // M4 and newer cap at high
+            GpuTier::HighDiscrete // M4 and newer
         );
     }
 

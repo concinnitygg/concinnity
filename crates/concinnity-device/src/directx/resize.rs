@@ -368,7 +368,7 @@ impl DxContext {
         //     acceleration structure is resolution-independent and is left
         //     untouched.
         if let Some(rt) = self.rt_reflections.as_mut() {
-            rt.resize_to(&self.hw.device, render_w, render_h)?;
+            rt.resize_to(&self.hw.device, &self.post, render_w, render_h)?;
         }
 
         // 7-refl) Reflection composite: the full-res composited output + the

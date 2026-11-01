@@ -14,6 +14,7 @@ use concinnity_engine::render::post::ssgi::{
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::texture::GpuImage;
 
 // SSGI resources held by `VkContext` when `IndirectLighting.technique`
 // is `ssgi`.
@@ -27,6 +28,12 @@ impl SsgiResources {
     // Where the accumulation stands this frame.
     pub(in crate::vulkan) fn frame(&self) -> SsgiFrame {
         self.pass.frame()
+    }
+
+    // This frame's depth pyramid, every level, which the RT reflection classify
+    // walks screen rays through.
+    pub(in crate::vulkan) fn pyramid(&self) -> RenderResult<&GpuImage> {
+        self.pass.pyramid().map(PostTarget::image)
     }
 
     // Build every pipeline and target for a render resolution of `extent`.

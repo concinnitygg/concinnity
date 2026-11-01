@@ -52,6 +52,7 @@ impl SettingsState {
             .set_quality(&self.resolve_quality(&cfg.graphics, &ceiling));
 
         self.relabel_preset_dependents(ctx);
+        self.gray_superseded_ssr_row(ctx);
         // The master row's own label carries the Auto(tier) suffix.
         let label = preset_label(preset, &self.gpu_profile);
         if let Some(id) = cmd.value_label {
@@ -131,6 +132,9 @@ impl SettingsState {
         let on = next == 1;
         (row.set)(&mut self.resolved.graphics, on);
         *(row.persisted.get_mut)(&mut cfg.graphics) = Some(on);
+        if row.key == SettingKey::RayTracedReflections {
+            self.gray_superseded_ssr_row(ctx);
+        }
         self.opt_out_of_preset(ctx, cfg);
         opts[next]
     }

@@ -317,11 +317,15 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         ],
     },
     DxilAbi {
-        program: &shared::RT_REFLECTIONS_FRAG,
+        program: &shared::RT_REFLECTIONS_CLASSIFY,
+        registers: RT_CLASSIFY_REGISTERS,
+    },
+    DxilAbi {
+        program: &shared::RT_REFLECTIONS_TRACE,
         registers: RT_REFLECTIONS_REGISTERS,
     },
     DxilAbi {
-        program: &shared::RT_REFLECTIONS_FRAG_TEXTURED,
+        program: &shared::RT_REFLECTIONS_TRACE_TEXTURED,
         registers: RT_REFLECTIONS_TEXTURED_REGISTERS,
     },
     DxilAbi {
@@ -680,6 +684,9 @@ const DXIL_ENTRY_ABI: &[DxilAbi] = &[
 // the cluster lists binning them sit clear of the screen-space SRVs.
 const RT_REFLECTIONS_REGISTERS: &[(&str, &str)] = &[
     ("rt_params", "b0"),
+    ("output", "u0"),
+    ("ray_list", "t15"),
+    ("ray_args", "t16"),
     ("probe_set", "b4"),
     ("cluster", "b5"),
     ("scene_tlas", "t0"),
@@ -695,6 +702,29 @@ const RT_REFLECTIONS_REGISTERS: &[(&str, &str)] = &[
     ("probe_cubes", "t10"),
     ("probe_records", "t11"),
     ("cluster_list", "t12"),
+    ("screen_sampler", "s0"),
+    ("cube_sampler", "s1"),
+    ("probe_cube_sampler", "s3"),
+];
+
+// The classify shares the trace's root signature: the screen sources, the probe
+// fallback and the output at the trace's registers, plus SSGI's pyramid and the
+// ray list and arguments it writes.
+const RT_CLASSIFY_REGISTERS: &[(&str, &str)] = &[
+    ("rt_params", "b0"),
+    ("probe_set", "b4"),
+    ("cluster", "b5"),
+    ("output", "u0"),
+    ("ray_list", "u1"),
+    ("ray_args", "u2"),
+    ("scene_tex", "t4"),
+    ("gbuffer", "t5"),
+    ("rough_tex", "t6"),
+    ("prefilter", "t7"),
+    ("probe_cubes", "t10"),
+    ("probe_records", "t11"),
+    ("cluster_list", "t12"),
+    ("pyramid", "t14"),
     ("screen_sampler", "s0"),
     ("cube_sampler", "s1"),
     ("probe_cube_sampler", "s3"),
@@ -1504,13 +1534,22 @@ const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // pool's offset, so the unsized array's id 0 is the pool's first texture.
     // Everything else, the probe set included, is pinned by its register().
     MetalAbi {
-        program: &shared::RT_REFLECTIONS_FRAG,
-        slots: &[RT_REFLECTIONS_SLOTS],
+        program: &shared::RT_REFLECTIONS_CLASSIFY,
+        slots: &[RT_SCREEN_SLOTS, RT_CLASSIFY_SLOTS],
         argument_ids: &[],
     },
     MetalAbi {
-        program: &shared::RT_REFLECTIONS_FRAG_TEXTURED,
-        slots: &[RT_REFLECTIONS_SLOTS, RT_REFLECTIONS_POOL_SLOTS],
+        program: &shared::RT_REFLECTIONS_TRACE,
+        slots: &[RT_SCREEN_SLOTS, RT_REFLECTIONS_SLOTS],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::RT_REFLECTIONS_TRACE_TEXTURED,
+        slots: &[
+            RT_SCREEN_SLOTS,
+            RT_REFLECTIONS_SLOTS,
+            RT_REFLECTIONS_POOL_SLOTS,
+        ],
         argument_ids: &[("tex_pool", 0)],
     },
     MetalAbi {
@@ -2110,16 +2149,11 @@ const TRANSPARENT_POOL_SLOTS: &[(&str, &str)] = &[
     ("pool_sampler", "sampler(4)"),
 ];
 
-// Every slot the RT resolve binds, the probe set included, pinned by its
-// register().
-const RT_REFLECTIONS_SLOTS: &[(&str, &str)] = &[
+// Every slot both RT reflection kernels bind, the probe set included, pinned
+// by its register(): the screen sources, the probe fallback, the output and the
+// ray list and arguments.
+const RT_SCREEN_SLOTS: &[(&str, &str)] = &[
     ("rt_params", "buffer(0)"),
-    ("verts", "buffer(1)"),
-    ("indices", "buffer(2)"),
-    ("geom", "buffer(3)"),
-    ("scene_tlas", "buffer(4)"),
-    ("sverts", "buffer(5)"),
-    ("sidx", "buffer(6)"),
     ("probe_set", "buffer(8)"),
     ("scene_tex", "texture(0)"),
     ("scene_tex_sampler", "sampler(0)"),
@@ -2134,6 +2168,23 @@ const RT_REFLECTIONS_SLOTS: &[(&str, &str)] = &[
     ("probe_cube_sampler", "sampler(4)"),
     ("cluster", "buffer(9)"),
     ("cluster_list", "buffer(10)"),
+    ("_output", "texture(6)"),
+    ("ray_list", "buffer(14)"),
+    ("ray_args", "buffer(15)"),
+];
+
+// The classify's own: SSGI's pyramid.
+const RT_CLASSIFY_SLOTS: &[(&str, &str)] = &[("pyramid", "texture(5)")];
+
+// The trace's own: the acceleration structure and the geometry it fetches hits
+// from.
+const RT_REFLECTIONS_SLOTS: &[(&str, &str)] = &[
+    ("verts", "buffer(1)"),
+    ("indices", "buffer(2)"),
+    ("geom", "buffer(3)"),
+    ("scene_tlas", "buffer(4)"),
+    ("sverts", "buffer(5)"),
+    ("sidx", "buffer(6)"),
 ];
 
 // The textured RT resolve's bindless pool (the main pass's texture block, bound

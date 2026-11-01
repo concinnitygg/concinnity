@@ -1,4 +1,5 @@
-// `cn docs`: write the asset reference pages under docs/assets/.
+// `cn docs`: write the asset reference pages under docs/assets/ and the
+// graphics settings page under docs/settings/.
 //
 // The prose, keys, types and defaults all come from the schema the derives
 // compile into the engine (`concinnity_engine::ecs::schema`, behind the `schema`
@@ -17,6 +18,7 @@ mod page;
 mod prose;
 mod reference;
 mod render;
+mod settings;
 mod summary;
 
 pub(crate) use summary::type_summaries;
@@ -57,15 +59,17 @@ fn pages(docs: &[AssetDoc]) -> BTreeMap<String, String> {
     out
 }
 
-/// Regenerate the asset reference pages under `docs/assets/` from the
-/// authored schema compiled into this build.
+/// Regenerate the asset reference pages under `docs/assets/` and the graphics
+/// settings page from the authored schema compiled into this build.
 ///
 /// `root` is the directory the pages go under; `None` uses the working
 /// directory. Unchanged pages are left alone, so running this on an
 /// up-to-date tree touches nothing.
 pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
-    let pages = pages(&reference::build(&reference::registry_assets()));
-    let dir = PathBuf::from(root.unwrap_or(".")).join(PAGES_DIR);
+    let docs = reference::build(&reference::registry_assets());
+    let pages = pages(&docs);
+    let root = PathBuf::from(root.unwrap_or("."));
+    let dir = root.join(PAGES_DIR);
     let (written, removed) = write_pages(&dir, &pages)?;
 
     println!(
@@ -73,6 +77,16 @@ pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
         pages.len(),
         dir.display()
     );
+
+    let path = root.join(settings::PAGE);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let page = settings::render(&docs);
+    if fs::read_to_string(&path).ok().as_deref() != Some(page.as_str()) {
+        fs::write(&path, page)?;
+        println!("wrote {}", path.display());
+    }
     Ok(())
 }
 

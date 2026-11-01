@@ -66,8 +66,9 @@ pub use live_edit::{
 pub use null::NullBackend;
 pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
 pub use probe::{
-    BackendProbe, DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile, GpuTier, GpuVendor,
-    apple_family_from_device_name, classify_tier,
+    AppleVariant, BackendProbe, DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile,
+    GpuTier, GpuVendor, apple_family_from_device_name, apple_variant_from_device_name,
+    classify_tier,
 };
 pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::{SkinnedDraws, SkinnedFrame};

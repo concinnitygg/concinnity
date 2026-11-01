@@ -254,6 +254,22 @@ impl SettingsState {
         );
     }
 
+    // Capture the SSR row's labels and apply the initial gray. Screen-space
+    // reflections stay a live choice, the fallback where ray tracing is off,
+    // but no frame runs them while ray-traced reflections do.
+    pub(crate) fn capture_ssr_row(&mut self, ctx: &mut PipelineContext<'_>) {
+        self.ssr_row_labels = capture_row_labels(ctx, &[SettingKey::Ssr]);
+        self.gray_superseded_ssr_row(ctx);
+    }
+
+    // Gray the SSR row while ray-traced reflections are on and the device runs
+    // them; restore it otherwise.
+    pub(crate) fn gray_superseded_ssr_row(&self, ctx: &mut PipelineContext<'_>) {
+        let superseded =
+            self.resolved.graphics.reflections.ray_traced && self.capabilities.ray_tracing;
+        set_rows_grayed(ctx, &self.ssr_row_labels, superseded);
+    }
+
     // The mode the Resolution row displays and cycles from: the user's choice,
     // else the display's own mode, else the authored window size (a backend
     // that cannot read the display; snaps to the nearest listed mode).
@@ -518,6 +534,37 @@ mod tests {
                 ctx.query::<TextLabel>().next().unwrap().color,
                 expected,
                 "{mode:?}"
+            );
+        }
+    }
+
+    // The SSR row grays only while ray-traced reflections are on and the device
+    // can run them.
+    #[test]
+    fn capture_ssr_row_grays_while_rt_reflections_run() {
+        let authored = [0.8, 0.8, 0.8];
+        for (rt, capable, expected) in [
+            (true, true, DISABLED_ROW_COLOR),
+            (true, false, authored),
+            (false, true, authored),
+        ] {
+            let mut world = World::new();
+            world.push_identified(AssetId(1), label(authored));
+            world.push(region(
+                serde_json::json!({"setting": {"key": "ssr", "verb": "next"}}),
+                Some(1),
+            ));
+            let mut state = SettingsState::for_tests();
+            state.resolved.graphics.reflections.ray_traced = rt;
+            state.capabilities.ray_tracing = capable;
+            let mut ctx = world.context();
+
+            state.capture_ssr_row(&mut ctx);
+            assert_eq!(state.ssr_row_labels, [(AssetId(1), authored)]);
+            assert_eq!(
+                ctx.query::<TextLabel>().next().unwrap().color,
+                expected,
+                "rt {rt}, capable {capable}"
             );
         }
     }

@@ -117,7 +117,9 @@ pub(super) fn build_bindless_pass(
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
                 .descriptor_count(u32::saturating_from(bindless_pool_size))
-                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                // The ray-traced reflection trace shades its hits from the
+                // pool in compute.
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT | vk::ShaderStageFlags::COMPUTE),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(MATERIAL_PARAMS_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)

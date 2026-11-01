@@ -13,6 +13,7 @@
 
 pub mod api_trial;
 pub mod apply;
+mod binding;
 pub(crate) mod command;
 #[cfg(test)]
 mod equivalence_tests;
@@ -27,6 +28,7 @@ pub mod stored;
 pub mod system;
 pub mod user;
 
+pub use binding::{SettingField, SettingGroup};
 pub use key::{SettingKey, SettingKind};
 pub use quality::{QualityCeiling, QualityPreset};
 pub use resolve::{

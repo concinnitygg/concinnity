@@ -622,7 +622,7 @@ impl DxContext {
                 ctx.encode_probe_pyramid(cmd, &bake.gpu, &PLAN)
             });
         }
-        // The last mip's list also carries the cube back to PIXEL_SHADER_RESOURCE.
+        // The last mip's list also carries the cube back to its resting state.
         // The install has no list of its own to submit that transition on: it would
         // have to drop that list immediately, and D3D12 does not keep a command
         // allocator alive for the GPU.

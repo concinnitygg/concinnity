@@ -23,7 +23,7 @@ pub enum IndirectTechnique {
 /// `ssgi_rays` field. Defined here (the schema default) and read by
 /// `render::post::ssgi::settings` for its runtime clamp path, so the authored
 /// default and the runtime code stay a single source of truth.
-pub const DEFAULT_SSGI_RAYS: u32 = 1;
+pub const DEFAULT_SSGI_RAYS: u32 = 2;
 
 /// Indirect (ambient) lighting: how strong the environment's ambient term is,
 /// and whether a screen-space bounce lets nearby lit surfaces bleed color onto
@@ -85,10 +85,10 @@ pub struct IndirectLighting {
     /// when `technique` is `ssgi`.
     #[asset(default = 8.0, min = 0.5, max = 100.0, apply = live)]
     pub ssgi_max_distance: f32,
-    /// Internal resolution of the SSGI trace. `half` (default) trades a little
-    /// sharpness for a large performance saving; `full` is native; `quarter` is
-    /// the cheapest. Only matters when `technique` is `ssgi`.
-    #[asset(apply = rebuild)]
+    /// Internal resolution of the SSGI trace. `full` (default) is native;
+    /// `half` trades a little sharpness for a large performance saving;
+    /// `quarter` is the cheapest. Only matters when `technique` is `ssgi`.
+    #[asset(default = PassResolution::Full, apply = rebuild)]
     pub ssgi_resolution: PassResolution,
     /// Hemisphere rays traced per pixel each frame. The indirect light is
     /// accumulated over frames, so more rays settle it faster after the camera

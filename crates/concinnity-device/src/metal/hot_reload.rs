@@ -26,7 +26,7 @@ use super::init::pipelines::{
     replacement,
 };
 use super::pipeline::{build_post_pipeline, build_text_pipeline};
-use super::post::build_rt_reflection_pipeline;
+use super::post::RtReflectionPipelines;
 use super::post::post_device::MtlPostDevice;
 
 // Rebuild a built-in pipeline only when it is currently live. Expands to
@@ -220,20 +220,8 @@ impl MtlContext {
             concinnity_engine::render::post::disocclusion::build_pipelines(&post_device)
         );
         let rt_reflections = rebuild_if_live!(
-            self.rt.pipelines.resolve.is_some(),
-            build_rt_reflection_pipeline(
-                device,
-                &crate::metal::builtin_shaders::RT_REFLECTIONS_FRAG,
-                hr
-            )
-        );
-        let rt_reflections_textured = rebuild_if_live!(
-            self.rt.pipelines.resolve_textured.is_some(),
-            build_rt_reflection_pipeline(
-                device,
-                &crate::metal::builtin_shaders::RT_REFLECTIONS_FRAG_TEXTURED,
-                hr
-            )
+            self.rt.pipelines.reflections.is_some(),
+            RtReflectionPipelines::new(device, hr)
         );
 
         // GPU-driven shadow pipelines: the frustum-only shadow
@@ -318,10 +306,7 @@ impl MtlContext {
             pass.swap_pipelines(p);
         }
         if let Some(p) = rt_reflections {
-            self.rt.pipelines.resolve = Some(p);
-        }
-        if let Some(p) = rt_reflections_textured {
-            self.rt.pipelines.resolve_textured = Some(p);
+            self.rt.pipelines.reflections = Some(p);
         }
         if let Some(p) = shadow_cull {
             self.cull.shadow_pipeline = Some(p);

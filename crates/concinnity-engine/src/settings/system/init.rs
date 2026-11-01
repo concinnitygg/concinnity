@@ -172,6 +172,7 @@ impl SettingsState {
         self.init_cycle_value_labels(ctx);
         self.capture_perf_sub_rows(ctx);
         self.capture_resolution_row(ctx);
+        self.capture_ssr_row(ctx);
     }
 
     /// Adopt what the built backend reports about the display, when there is a

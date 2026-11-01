@@ -96,7 +96,7 @@ fn each_feature_toggle_rebuilds_its_own_feature() {
         ),
         (
             "rt resolution",
-            |g| g.reflections.ray_traced_resolution = PassResolution::Full,
+            |g| g.reflections.ray_traced_resolution = PassResolution::Half,
             &[RtReflections],
         ),
         ("water trace", |g| g.water_trace = false, &[RtReflections]),

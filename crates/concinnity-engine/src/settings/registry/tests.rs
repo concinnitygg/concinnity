@@ -513,3 +513,20 @@ fn strength_sliders_format_as_percent() {
     assert_eq!(format(SettingKey::BloomIntensity, 0.6), "0.60");
     assert_eq!(format(SettingKey::AmbientIntensity, 1.25), "1.25");
 }
+
+// A row the weakest device grays out says what it needs.
+#[test]
+fn every_gated_row_states_its_availability() {
+    let none = DeviceCapabilities {
+        ray_tracing: false,
+        ray_tracing_with_xess: false,
+        selectable_upscaler: false,
+        ..DeviceCapabilities::ALL
+    };
+    for key in SettingKey::ALL {
+        if !setting_available(key, &none, GpuVendor::Other, &[Platform::Metal]) {
+            assert!(availability(key).is_some(), "{key:?}");
+        }
+    }
+    assert_eq!(availability(SettingKey::Vsync), None);
+}

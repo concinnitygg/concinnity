@@ -111,7 +111,7 @@ pub struct UserGraphicsSettings {
     #[serde(default)]
     pub lut_strength: Option<f32>,
     /// Ambient (IBL) light scale. `None` uses the world's
-    /// `IndirectLighting.ambient_intensity`. Applied live on Metal (it rides
+    /// `IndirectLighting.ambient_intensity`. Applied live (it rides
     /// `LightUniforms`, not `PostProcessParams`); re-applied at init.
     #[serde(default)]
     pub ambient_intensity: Option<f32>,
@@ -122,7 +122,7 @@ pub struct UserGraphicsSettings {
     #[serde(default)]
     pub fov: Option<f32>,
     /// Anti-aliasing mode (`AntiAliasing.mode`: off / FXAA / TAA). `None`
-    /// uses the world's value. Applied live on Metal (the TAA pass rebuilds and
+    /// uses the world's value. Applied live (the TAA pass rebuilds and
     /// the composite FXAA flag updates in place) and governed by the quality
     /// preset ceiling like the toggles below.
     #[serde(default, deserialize_with = "lenient")]
@@ -130,9 +130,7 @@ pub struct UserGraphicsSettings {
     /// Quality-feature toggles. Each `None` uses the world's authored
     /// value. They gate render passes whose GPU resources
     /// (pipelines, targets, acceleration structures) are built at init, so a
-    /// change rebuilds those resources: applied live on Metal (the backend
-    /// rebuilds the affected effects in place); on backends without a live path
-    /// the choice persists and applies at the next launch.
+    /// change rebuilds those resources in place.
     #[serde(default)]
     pub ssao: Option<bool>,
     /// Screen-space reflections (`Reflections.screen_space`).
@@ -154,10 +152,9 @@ pub struct UserGraphicsSettings {
     pub auto_exposure: Option<bool>,
     /// SSGI sub-quality: trace resolution and hemisphere rays per pixel per frame
     /// (`IndirectLighting.ssgi_resolution` / `ssgi_rays`). Each `None` uses the
-    /// world's value. Applied live on Metal (the
-    /// backend rebuilds the SSGI pass in place); persisted + applied at the next
-    /// launch on backends without a live path. Governed by the quality preset
-    /// ceiling like the toggles above.
+    /// world's value. Applied live (the backend rebuilds the SSGI pass in
+    /// place) and governed by the quality preset ceiling like the toggles
+    /// above.
     #[serde(default, deserialize_with = "lenient")]
     pub ssgi_resolution: Option<PassResolution>,
     /// SSGI rays per pixel per frame (`IndirectLighting.ssgi_rays`).
@@ -165,7 +162,7 @@ pub struct UserGraphicsSettings {
     pub ssgi_rays: Option<u32>,
     /// Roughness-aware reflection blur resolution
     /// (`Reflections.blur_resolution`). `None` uses the world's
-    /// value. Applied live on Metal; governed by the quality preset ceiling like
+    /// value. Applied live; governed by the quality preset ceiling like
     /// the SSGI sub-quality above (only bites when a reflection feature is on).
     #[serde(default, deserialize_with = "lenient")]
     pub reflection_blur_resolution: Option<PassResolution>,
@@ -208,7 +205,7 @@ pub struct UserGraphicsSettings {
     /// Shadow quality: cascade map resolution in texels (0 disables shadows) and
     /// re-render cadence (`Shadows.map_size` / `shadow_update`).
     /// `None` uses the world's value. Resolution is restart-required (the shadow
-    /// map array is sized once at backend init); cadence is applied live on Metal.
+    /// map array is sized once at backend init); cadence is applied live.
     /// Both are governed by the quality preset ceiling like the toggles above.
     #[serde(default)]
     pub shadow_map_size: Option<u32>,
@@ -216,13 +213,13 @@ pub struct UserGraphicsSettings {
     #[serde(default, deserialize_with = "lenient")]
     pub shadow_update: Option<ShadowUpdate>,
     /// Shadow distance in world units (`Shadows.distance`). `None`
-    /// uses the world's value. Applied live on Metal (the cascade-split math reads
+    /// uses the world's value. Applied live (the cascade-split math reads
     /// it each frame) and governed by the quality preset ceiling like the shadow
     /// knobs above.
     #[serde(default)]
     pub shadow_distance: Option<u32>,
     /// Shadow cascade count, 1..4 (`Shadows.cascades`). `None` uses
-    /// the world's value. Applied live on Metal (the per-frame split + schedule
+    /// the world's value. Applied live (the per-frame split + schedule
     /// read it) and governed by the quality preset ceiling like the shadow knobs
     /// above.
     #[serde(default)]

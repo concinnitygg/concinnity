@@ -215,6 +215,11 @@ pub(super) trait ComputeEncode {
     fn set_value<T: NoUninit>(&self, value: &T, index: usize);
     fn set_texture(&self, texture: &ProtocolObject<dyn MTLTexture>, index: usize);
     fn set_sampler(&self, sampler: &ProtocolObject<dyn MTLSamplerState>, index: usize);
+    fn set_acceleration_structure(
+        &self,
+        structure: &ProtocolObject<dyn MTLAccelerationStructure>,
+        index: usize,
+    );
 }
 
 impl ComputeEncode for ProtocolObject<dyn MTLComputeCommandEncoder> {
@@ -253,6 +258,17 @@ impl ComputeEncode for ProtocolObject<dyn MTLComputeCommandEncoder> {
         // SAFETY: `sampler` outlives the call through its borrow, and the index
         // is within the sampler argument table.
         unsafe { self.setSamplerState_atIndex(Some(sampler), index) };
+    }
+
+    fn set_acceleration_structure(
+        &self,
+        structure: &ProtocolObject<dyn MTLAccelerationStructure>,
+        index: usize,
+    ) {
+        check_buffer_index(index);
+        // SAFETY: `structure` outlives the call through its borrow, and the
+        // index is within the buffer argument table it shares.
+        unsafe { self.setAccelerationStructure_atBufferIndex(Some(structure), index) };
     }
 }
 

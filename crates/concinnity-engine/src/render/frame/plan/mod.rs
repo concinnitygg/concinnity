@@ -353,7 +353,15 @@ impl FramePlanner {
             },
             records,
             reactive: ReactiveMaskPlan::of(&graph_inputs),
-            effects: effect_blocks(inputs, &camera, view.sky_rot, c.bvh_live),
+            effects: effect_blocks(
+                inputs,
+                &camera,
+                view.sky_rot,
+                &EffectFrame {
+                    bvh_live: c.bvh_live,
+                    ssgi_traced: graph_inputs.ssgi_enabled,
+                },
+            ),
             graph,
             inputs: graph_inputs,
             camera,
@@ -377,15 +385,27 @@ impl FramePlanner {
     }
 }
 
+// What this frame's graph runs that the effects' blocks depend on.
+struct EffectFrame {
+    // An acceleration structure is live to trace.
+    bvh_live: bool,
+    // SSGI builds this frame's depth pyramid.
+    ssgi_traced: bool,
+}
+
 // The effects' blocks for `camera`, the ray-traced one only over a live BVH.
 fn effect_blocks(
     inputs: &PlanInputs<'_>,
     camera: &FrameCamera,
     sky_rot: [[f32; 4]; 3],
-    bvh_live: bool,
+    frame: &EffectFrame,
 ) -> EffectBlocks {
     let cam = &inputs.camera;
     let fx = &inputs.effects;
+    let screen_levels = fx
+        .ssgi
+        .filter(|_| frame.ssgi_traced)
+        .map_or(0, |(_, ssgi)| ssgi.levels);
     let sun = inputs.lights.sun();
     let prefilter_mip_count = inputs.surface.prefilter_mip_count;
     EffectBlocks {
@@ -406,7 +426,7 @@ fn effect_blocks(
         ssgi: fx
             .ssgi
             .map(|(s, frame)| s.params(cam.fov_y_radians, camera.aspect, frame, fx.history_scale)),
-        rt: fx.rt.filter(|_| bvh_live).map(|s| {
+        rt: fx.rt.filter(|_| frame.bvh_live).map(|s| {
             s.params(RtParamsInputs {
                 fov_y_radians: cam.fov_y_radians,
                 aspect: camera.aspect,
@@ -417,6 +437,7 @@ fn effect_blocks(
                 prefilter_mip_count,
                 sky_rot,
                 pre_exposure: inputs.pre_exposure,
+                screen_levels,
             })
         }),
     }
