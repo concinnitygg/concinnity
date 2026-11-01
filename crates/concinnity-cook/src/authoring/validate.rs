@@ -251,6 +251,8 @@ mod tests {
                 max_particles: 0,
                 size_start: -0.5,
                 size_end: -0.1,
+                size_variance: 3.0,
+                stretch: -1.0,
                 ..Default::default()
             };
             let n = super::super::particle_emitter(a);
@@ -263,6 +265,8 @@ mod tests {
             assert_eq!(n.max_particles, 1);
             assert_eq!(n.size_start, 0.0);
             assert_eq!(n.size_end, 0.0);
+            assert_eq!(n.size_variance, 1.0);
+            assert_eq!(n.stretch, 0.0);
         }
 
         #[test]

@@ -9,7 +9,11 @@ use crate::ecs::TextureHandle;
 /// lifetime from `[lifetime_min, lifetime_max]`. Over each particle's life its
 /// size interpolates from `size_start` to `size_end` and its color from
 /// `color_start` to `color_end`. Each particle is drawn as a camera-facing quad
-/// textured by `texture`.
+/// textured by `texture`, scaled by its own factor within `size_variance` of
+/// the emitter's size, and drawn out along its motion by `stretch`, as a
+/// fast droplet or spark is seen as a streak. A particle too thin to cover a
+/// pixel is drawn a pixel wide and fainter, so fine droplets thin out with
+/// distance rather than flicker.
 ///
 /// The pool holds `max_particles` particles; new ones spawn at `spawn_rate` per
 /// second, taking the pool's slots in turn. A slot is reused only once the
@@ -89,6 +93,16 @@ pub struct ParticleEmitter {
     /// Billboard side length at death, in world units.
     #[asset(default = 0.05)]
     pub size_end: f32,
+    /// How far each particle's size strays from `size_start` and `size_end`,
+    /// as a share of them either way: `0.5` draws particles from half to one
+    /// and a half times the size. Clamped to `[0, 1]`.
+    pub size_variance: f32,
+    /// Seconds of its motion each particle is drawn stretched along, trailing
+    /// back from where it is, so a particle moving at 10 m/s with a `stretch`
+    /// of `0.02` is drawn 0.2 m longer. The longer it is drawn, the fainter,
+    /// so a streak shows as much light as the particle it is made from. `0`
+    /// draws square billboards. Floored at 0.
+    pub stretch: f32,
     /// Linear-space RGBA multiplier applied to the texture at spawn.
     #[asset(default = [1.0, 1.0, 1.0, 1.0])]
     pub color_start: [f32; 4],

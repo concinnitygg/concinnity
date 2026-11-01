@@ -47,10 +47,13 @@ struct ParticleParams
     uint spawn_first;
     uint random_seed;
     uint max_particles;
-    // The emitter's bursts this frame: `burst_count` of the frame's rows'
-    // bursts from `burst_first`, which spawn the last `burst_spawns` of the
-    // run.
-    uint burst_first;
-    uint burst_count;
-    uint burst_spawns;
+    // The emitter's bursts this frame: its first burst in the frame's rows in
+    // the low 16 bits, how many it has in the high 16. Their spawns are the
+    // last of the run.
+    uint bursts;
+    // Seconds of its motion each particle is drawn stretched along.
+    float stretch;
+    // How far each particle's size strays from the emitter's, as a share of it
+    // either way.
+    float size_variance;
 };

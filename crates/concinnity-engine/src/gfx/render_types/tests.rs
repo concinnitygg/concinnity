@@ -101,7 +101,8 @@ fn an_out_of_range_albedo_clamps_into_the_real_textures() {
 }
 
 // Three (vec3, scalar) lanes, the two colors, then twelve scalars, the last
-// three the emitter's bursts; 128 bytes, Vulkan's whole push range.
+// three the emitter's bursts and its sprites' shape; 128 bytes, Vulkan's
+// whole push range.
 #[test]
 fn particle_params_layout_matches_the_shader() {
     assert_eq!(size_of::<ParticleParams>(), 128);
@@ -122,9 +123,9 @@ fn particle_params_layout_matches_the_shader() {
     assert_eq!(offset_of!(ParticleParams, spawn_first), 104);
     assert_eq!(offset_of!(ParticleParams, random_seed), 108);
     assert_eq!(offset_of!(ParticleParams, max_particles), 112);
-    assert_eq!(offset_of!(ParticleParams, burst_first), 116);
-    assert_eq!(offset_of!(ParticleParams, burst_count), 120);
-    assert_eq!(offset_of!(ParticleParams, burst_spawns), 124);
+    assert_eq!(offset_of!(ParticleParams, bursts), 116);
+    assert_eq!(offset_of!(ParticleParams, stretch), 120);
+    assert_eq!(offset_of!(ParticleParams, size_variance), 124);
 }
 
 // Three float4 lanes of scalars after the four vector lanes; the

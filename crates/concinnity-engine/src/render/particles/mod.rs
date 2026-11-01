@@ -72,6 +72,11 @@ pub struct ParticleEmitterRecord {
     pub size_start: f32,
     /// World-space billboard side length at `age = lifetime` (m).
     pub size_end: f32,
+    /// How far each particle's size strays from the emitter's, as a share of
+    /// it either way, in `[0, 1]`.
+    pub size_variance: f32,
+    /// Seconds of its motion each particle is drawn stretched along.
+    pub stretch: f32,
     /// Linear-space RGBA at `age = 0`.
     pub color_start: [f32; 4],
     /// Linear-space RGBA at `age = lifetime`.
@@ -107,6 +112,8 @@ impl ParticleEmitterRecord {
             max_particles: emitter.max_particles.clamp(1, MAX_PARTICLES_PER_EMITTER),
             size_start: emitter.size_start.max(0.0),
             size_end: emitter.size_end.max(0.0),
+            size_variance: emitter.size_variance.clamp(0.0, 1.0),
+            stretch: emitter.stretch.max(0.0),
             color_start: sanitized_color(emitter.color_start),
             color_end: sanitized_color(emitter.color_end),
             lit: emitter.lit,
@@ -124,19 +131,21 @@ impl ParticleEmitterRecord {
     /// loose: it ignores the cone-spread restriction (`spread_cos`) so the
     /// same AABB also covers full-sphere emitters, and it sums the worst-case
     /// ballistic terms: `speed_max * lifetime_max` (straight-line reach),
-    /// `0.5 * |gravity| * lifetime_max²` (gravity drift), and a
-    /// `max(size_start, size_end) * sqrt(2) / 2` half-diagonal for the
-    /// camera-facing billboard quad. A tighter cone-aware bound is a future
+    /// `0.5 * |gravity| * lifetime_max²` (gravity drift), the streak
+    /// `stretch` draws behind the fastest particle, and a
+    /// `max(size_start, size_end) * (1 + size_variance) * sqrt(2) / 2`
+    /// half-diagonal for the camera-facing billboard quad. A tighter cone-aware bound is a future
     /// refinement; this version is correct (never false-cull) and cheap.
     pub fn aabb(&self) -> ([f32; 3], [f32; 3]) {
         let speed_reach = self.speed_max * self.lifetime_max;
         let g_mag = length(self.gravity);
         let g_drift = 0.5 * g_mag * self.lifetime_max * self.lifetime_max;
-        let max_size = self.size_start.max(self.size_end);
+        let streak = self.stretch * (self.speed_max + g_mag * self.lifetime_max);
+        let max_size = self.size_start.max(self.size_end) * (1.0 + self.size_variance);
         // The billboard quad is a square of side `size`, viewed any way; the
         // bounding sphere of a unit square has radius sqrt(2)/2.
         let billboard_radius = 0.5 * max_size * core::f32::consts::SQRT_2;
-        let r = speed_reach + g_drift + billboard_radius;
+        let r = speed_reach + g_drift + streak + billboard_radius;
         let c = self.position;
         (
             [c[0] - r, c[1] - r, c[2] - r],
@@ -149,8 +158,8 @@ impl ParticleEmitterRecord {
     ///
     /// `dt` is the elapsed seconds since the previous compute dispatch (the
     /// integration step); `spawns` is the run of pool slots the kernel fills
-    /// with fresh particles this frame, the last `bursts.spawns` of them from
-    /// the emitter's `bursts`; and `random_seed` is the emitter's frame seed
+    /// with fresh particles this frame, the last of them from the emitter's
+    /// `bursts`; and `random_seed` is the emitter's frame seed
     /// ([`spawn_seed`]), which the kernel mixes with each spawn's ordinal to
     /// drive its cheap on-GPU RNG.
     pub fn params(
@@ -178,9 +187,9 @@ impl ParticleEmitterRecord {
             spawn_first: spawns.first,
             random_seed,
             max_particles: self.max_particles,
-            burst_first: bursts.first,
-            burst_count: bursts.count,
-            burst_spawns: bursts.spawns,
+            bursts: bursts.first | (bursts.count << 16),
+            stretch: self.stretch,
+            size_variance: self.size_variance,
         }
     }
 }
@@ -486,6 +495,8 @@ mod tests {
             max_particles: 0,
             size_start: -1.0,
             size_end: -1.0,
+            size_variance: 2.0,
+            stretch: -0.1,
             color_start: [f32::NAN, 1.0, 1.0, 1.0],
             ..Default::default()
         };
@@ -501,6 +512,7 @@ mod tests {
         assert_eq!(r.spawn_rate, 0.0);
         assert_eq!(r.max_particles, 1);
         assert_eq!((r.size_start, r.size_end), (0.0, 0.0));
+        assert_eq!((r.size_variance, r.stretch), (1.0, 0.0));
         assert_eq!(r.color_start, [0.0, 1.0, 1.0, 1.0]);
     }
 
@@ -707,6 +719,8 @@ mod tests {
             max_particles: 64,
             size_start: 0.1,
             size_end: 0.1,
+            size_variance: 0.0,
+            stretch: 0.0,
             color_start: [1.0; 4],
             color_end: [1.0; 4],
             lit: false,
@@ -771,6 +785,23 @@ mod tests {
         assert!((radius - expected).abs() < 1e-5);
     }
 
+    #[test]
+    fn aabb_includes_streaks_and_the_largest_size() {
+        // A particle at 2 m/s for 2 s, stretched over half a second of its
+        // motion, draws a 1 m streak behind it; sizes reach twice the
+        // emitter's.
+        let mut r = make_record([0.0; 3]);
+        r.gravity = [0.0; 3];
+        r.size_start = 1.0;
+        r.size_end = 0.5;
+        r.size_variance = 1.0;
+        r.stretch = 0.5;
+        let (mn, mx) = r.aabb();
+        let radius = 0.5 * (mx[0] - mn[0]);
+        let expected = 4.0 + 1.0 + core::f32::consts::SQRT_2;
+        assert!((radius - expected).abs() < 1e-5, "{radius}");
+    }
+
     fn one_record(emitter: &ParticleEmitter) -> ParticleEmitterRecord {
         *build_particle_records(&[(None, emitter)], 4)
             .first()
@@ -783,11 +814,7 @@ mod tests {
     #[test]
     fn the_per_frame_uniform_carries_the_records_fields() {
         let record = one_record(&ParticleEmitter::default());
-        let bursts = EmitterBursts {
-            first: 3,
-            count: 2,
-            spawns: 4,
-        };
+        let bursts = EmitterBursts { first: 3, count: 2 };
         let params = record.params(0.016, ParticleSpawns { first: 7, count: 5 }, bursts, 42);
 
         assert_eq!(params.position, record.position);
@@ -803,15 +830,14 @@ mod tests {
         assert_eq!(params.size_start, record.size_start);
         assert_eq!(params.size_end, record.size_end);
         assert_eq!(params.max_particles, record.max_particles);
+        assert_eq!(params.stretch, record.stretch);
+        assert_eq!(params.size_variance, record.size_variance);
 
         assert_eq!(params.dt, 0.016);
         assert_eq!(params.spawn_first, 7);
         assert_eq!(params.spawn_count, 5);
         assert_eq!(params.random_seed, 42);
-        assert_eq!(
-            [params.burst_first, params.burst_count, params.burst_spawns],
-            [3, 2, 4]
-        );
+        assert_eq!(params.bursts, 3 | (2 << 16));
     }
 
     // Spawns asked for on top of the rate land even on a paused emitter, as

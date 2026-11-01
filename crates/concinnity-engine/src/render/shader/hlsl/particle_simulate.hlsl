@@ -17,9 +17,9 @@
 // Every emitter also reads the frame's rows (core::render::particles::burst):
 // the frame's move, which carries every live particle into the frame the
 // world moved to, then the bursts systems asked for this frame. An emitter's
-// bursts spawn the last `burst_spawns` of its run, each from its own point
-// along its own axis, and a burst with a floor kills its particles as they
-// fall back through it.
+// bursts spawn the last of its run, each from its own point or ring along its
+// own axis, and a burst with a floor kills its particles as they fall back
+// through it.
 //
 // The pool takes its Metal index from the number on its `register()` (see
 // concinnity-shader's `metal_bindings`), which is buffer(0), the slot
@@ -30,9 +30,10 @@
 [[vk::binding(0, 0)]] RWStructuredBuffer<Particle> pool : register(u0);
 
 // Rows of `[R | t]` for the frame's move, then `[moved, _, _, _]`, then per
-// burst `[position, count]`, `[direction, speed scale]`, `[carry, _]`, the
-// velocity every particle of the burst starts with on top of its own, and
-// `[floor up, has floor]`.
+// burst `[position, count]`, `[direction, speed scale]`, `[carry, ring]`, the
+// velocity every particle of the burst starts with on top of its own and the
+// radius of the ring they start around, and `[floor up, flare]`, the floor
+// zero for none and the flare how far each leans out through the ring.
 #ifdef CN_BACKEND_DIRECTX
 StructuredBuffer<float4> frame_rows : register(t1);
 #else
@@ -64,6 +65,15 @@ float prng(inout uint state)
     return float(state >> 8) * (1.0 / 16777216.0);
 }
 
+// Any orthonormal pair `t`, `b` across unit `axis`. Picking the world axis
+// least parallel to it keeps the cross product well conditioned.
+void basis_around(float3 axis, out float3 t, out float3 b)
+{
+    float3 up = abs(axis.y) < 0.9 ? float3(0, 1, 0) : float3(1, 0, 0);
+    t = normalize(cross(up, axis));
+    b = cross(axis, t);
+}
+
 // Sample a unit vector inside a cone of half-angle acos(cone_cos) centered on
 // `axis`. The cap is uniformly sampled in solid angle, so the spawn cloud has
 // no axial bunching.
@@ -75,11 +85,9 @@ float3 sample_cone(inout uint rng, float3 axis, float cone_cos)
     float phi = prng(rng) * 6.2831853;
     float3 local = float3(r * cos(phi), r * sin(phi), u);
 
-    // Any orthonormal basis around `axis`. Picking the world axis least
-    // parallel to it keeps the cross product well conditioned.
-    float3 up = abs(axis.y) < 0.9 ? float3(0, 1, 0) : float3(1, 0, 0);
-    float3 t = normalize(cross(up, axis));
-    float3 b = cross(axis, t);
+    float3 t;
+    float3 b;
+    basis_around(axis, t, b);
     return normalize(local.x * t + local.y * b + local.z * axis);
 }
 
@@ -141,14 +149,23 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
         float scale = 1.0;
         float3 carry = (float3)0.0;
         float3 floor_up = (float3)0.0;
+        float ring = 0.0;
+        float flare = 0.0;
         // The run's last spawns are the bursts', each burst's in turn.
-        uint rate_spawns = params.spawn_count - params.burst_spawns;
+        uint burst_first = params.bursts & 0xffffu;
+        uint burst_count = min(params.bursts >> 16u, PARTICLE_MAX_EMITTER_BURSTS);
+        uint burst_spawns = 0u;
+        for (uint c = 0u; c < burst_count; c++)
+        {
+            burst_spawns += uint(frame_rows[PARTICLE_FRAME_HEADER + PARTICLE_BURST_ROWS * (burst_first + c)].w);
+        }
+        uint rate_spawns = params.spawn_count - min(burst_spawns, params.spawn_count);
         if (spawn >= rate_spawns)
         {
             uint left = spawn - rate_spawns;
-            for (uint b = 0u; b < min(params.burst_count, PARTICLE_MAX_EMITTER_BURSTS); b++)
+            for (uint b = 0u; b < burst_count; b++)
             {
-                uint row = PARTICLE_FRAME_HEADER + PARTICLE_BURST_ROWS * (params.burst_first + b);
+                uint row = PARTICLE_FRAME_HEADER + PARTICLE_BURST_ROWS * (burst_first + b);
                 float4 at = frame_rows[row];
                 uint count = uint(at.w);
                 if (left < count)
@@ -157,15 +174,31 @@ void particle_simulate(uint3 gid : SV_DispatchThreadID)
                     origin = at.xyz;
                     axis = along.xyz;
                     scale = along.w;
-                    carry = frame_rows[row + 2u].xyz;
+                    float4 thrown = frame_rows[row + 2u];
+                    carry = thrown.xyz;
+                    ring = thrown.w;
                     float4 below = frame_rows[row + 3u];
-                    floor_up = below.w > 0.0 ? normalize(below.xyz) : (float3)0.0;
+                    floor_up = dot(below.xyz, below.xyz) > 0.0 ? normalize(below.xyz) : (float3)0.0;
+                    flare = below.w;
                     break;
                 }
                 left -= count;
             }
         }
-        float3 dir = sample_cone(rng, normalize(axis), params.position_spread.w);
+        axis = normalize(axis);
+        if (ring > 0.0)
+        {
+            // A point of the ring across the axis, and the axis leaned out
+            // through it.
+            float3 t;
+            float3 b;
+            basis_around(axis, t, b);
+            float around = prng(rng) * 6.2831853;
+            float3 out_dir = cos(around) * t + sin(around) * b;
+            origin += ring * out_dir;
+            axis = normalize(axis + flare * out_dir);
+        }
+        float3 dir = sample_cone(rng, axis, params.position_spread.w);
         float speed = scale * lerp(
             params.direction_speed_min.w, params.gravity_speed_max.w, prng(rng));
         float life = lerp(params.lifetime_min, params.lifetime_max, prng(rng));

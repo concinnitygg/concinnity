@@ -8,6 +8,13 @@
 // and emits one corner of the quad. Dead particles emit a degenerate quad
 // behind the near plane so they cost nothing past the vertex stage.
 //
+// A stretched emitter draws each quad out along the particle's motion across
+// the view, trailing back from it, and fainter in proportion, so a streak
+// carries the light of the one particle it is made from. A quad narrower or
+// shorter than a pixel is drawn a pixel across and fainter by what it misses,
+// so fine particles thin out with distance rather than flicker in and out
+// between pixels.
+//
 // The composited color is alpha-blended into the resolved HDR target by the
 // pipeline's blend state (Src.A * Src + (1 - Src.A) * Dst), the same envelope
 // the projected-decal pass uses. A sprite carries no motion of its own, so it
@@ -52,7 +59,8 @@ struct ParticleView
     // xyz = world-space camera right, the first billboard axis; w = the scale
     // the HDR chain is written at.
     float4 cam_right;
-    // xyz = world-space camera up, the second billboard axis.
+    // xyz = world-space camera up, the second billboard axis; w = the render
+    // target's height in pixels.
     float4 cam_up;
     // xyz = unit direction toward the sun.
     float4 sun_dir;
@@ -119,6 +127,15 @@ struct ParticleVertexOut
     float4 position : SV_Position;
 };
 
+// A unit float in [0, 1) fixed for pool slot `slot`.
+float slot_random(uint slot)
+{
+    uint h = slot * 747796405u + 2891336453u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    h = (h >> 22u) ^ h;
+    return float(h >> 8) * (1.0 / 16777216.0);
+}
+
 [shader("vertex")]
 ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID)
 {
@@ -143,6 +160,7 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
 
     float t = clamp(pt.position_age.w / pt.velocity_lifetime.w, 0.0, 1.0);
     float size = lerp(params.size_start, params.size_end, t);
+    size *= 1.0 + params.size_variance * (2.0 * slot_random(iid) - 1.0);
     float4 color = lerp(params.color_start, params.color_end, t);
 
     // 0..3 -> (-1,-1), (+1,-1), (-1,+1), (+1,+1) for a triangle strip.
@@ -150,20 +168,34 @@ ParticleVertexOut particle_vertex(uint vid : SV_VertexID, uint iid : SV_Instance
         (vid & 1u) == 0u ? -1.0 : 1.0,
         (vid & 2u) == 0u ? -1.0 : 1.0);
 
-    float3 right = view.cam_right.xyz * (corner.x * 0.5 * size);
-    float3 up = view.cam_up.xyz * (corner.y * 0.5 * size);
-    float3 world = pt.position_age.xyz + right + up;
+    // The streak: the motion across the view over `stretch` seconds.
+    float3 forward = cross(view.cam_up.xyz, view.cam_right.xyz);
+    float3 velocity = pt.velocity_lifetime.xyz;
+    float3 trail = (velocity - forward * dot(velocity, forward)) * params.stretch;
+    float drift = length(trail);
+    float3 along = drift > 1e-6 ? trail / drift : view.cam_up.xyz;
+    float3 across = drift > 1e-6 ? normalize(cross(forward, along)) : view.cam_right.xyz;
+    float3 center = pt.position_age.xyz - 0.5 * trail;
+
+    // One pixel's width in world units at the particle: the projection's
+    // vertical scale is the length of the clip-y row.
+    float w = max(mul(view.vp, float4(center, 1.0)).w, 1e-4);
+    float pixel = 2.0 * w / max(length(view.vp[1].xyz) * view.cam_up.w, 1e-6);
+    float wide = max(size, pixel);
+    float tall = max(size + drift, pixel);
+    color.a *= size * size / max(wide * tall, 1e-12);
+
+    float3 world = center + across * (corner.x * 0.5 * wide) + along * (corner.y * 0.5 * tall);
     o.position = mul(view.vp, float4(world, 1.0));
 
     // 0..1 in each axis; V is flipped at sample time to match the rest of the
     // engine's textures (V = 0 at the top of the image).
     o.uv = corner * 0.5 + 0.5;
 #ifdef PARTICLE_LIT
-    float3 forward = cross(view.cam_up.xyz, view.cam_right.xyz);
     float toward = pow(saturate(dot(forward, view.sun_dir.xyz)), PARTICLE_FORWARD_POWER);
     float3 light = view.sun_light.rgb * (PARTICLE_SIDE_LIGHT + PARTICLE_FORWARD_GLOW * toward) + view.sky_light.rgb;
     color.rgb *= light;
-    o.soft = float2(o.position.w, 0.5 * size);
+    o.soft = float2(o.position.w, 0.5 * wide);
 #endif
     o.color = color;
     o.discard_flag = 0.0;

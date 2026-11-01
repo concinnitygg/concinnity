@@ -199,6 +199,7 @@ impl MtlContext {
         let view = ParticleView::new(
             vp,
             &self.state.view.matrix,
+            self.targets.hdr.height as f32,
             self.pre_exposure.value(),
             self.lights.uniforms(),
             &self.state.view.daylight,

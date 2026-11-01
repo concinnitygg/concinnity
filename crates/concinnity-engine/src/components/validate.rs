@@ -457,6 +457,8 @@ pub fn particle_emitter(mut args: ParticleEmitter) -> ParticleEmitter {
     args.max_particles = args.max_particles.clamp(1, 65_536);
     args.size_start = args.size_start.max(0.0);
     args.size_end = args.size_end.max(0.0);
+    args.size_variance = args.size_variance.clamp(0.0, 1.0);
+    args.stretch = args.stretch.max(0.0);
     for c in args.color_start.iter_mut().chain(args.color_end.iter_mut()) {
         if !c.is_finite() {
             *c = 0.0;

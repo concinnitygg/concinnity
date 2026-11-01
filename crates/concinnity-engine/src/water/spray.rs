@@ -18,16 +18,22 @@ use concinnity_core::math::{SaturatingFrom, floor};
 /// under it, one plunging in or leaping out passes it.
 const SPRAY_PLUNGE: f32 = 2.5;
 
-/// Particles per share of its volume per second a body plunges at, and the
-/// most one splash throws.
-const SPRAY_PER_PLUNGE: f32 = 24.0;
-const SPRAY_MAX_SPLASH: u32 = 240;
+/// Particles per cubic meter of water a plunging body pushes aside, and the
+/// most one frame's splash throws: enough for a spray of fine droplets.
+const SPRAY_PER_CUBIC_METER: f32 = 4000.0;
+const SPRAY_MAX_SPLASH: u32 = 1200;
+
+/// A splash rises in a crown from the rim of the hole the body opens in the
+/// water: around a ring this share of its radius, leaning out by this share
+/// of up.
+const SPRAY_SPLASH_RING: f32 = 0.8;
+const SPRAY_SPLASH_FLARE: f32 = 0.5;
 
 /// The speed through the water past which a body throws spray from its bow,
 /// in meters per second, and the particles it throws per second for each
 /// meter per second past it.
 const SPRAY_BOW_SPEED: f32 = 4.0;
-const SPRAY_BOW_RATE: f32 = 80.0;
+const SPRAY_BOW_RATE: f32 = 1500.0;
 
 /// How far a bow's spray leans up and out to each side, as shares of up,
 /// and the share of the body's own speed it keeps: it peels off the bow in a
@@ -173,7 +179,8 @@ fn spray_of(
     if let Some(last) = last {
         let plunge = (volume - last.volume) / (dt * whole);
         if plunge.abs() > SPRAY_PLUNGE {
-            let count = u32::saturating_from(floor(plunge.abs() * SPRAY_PER_PLUNGE))
+            let pushed = (volume - last.volume).abs();
+            let count = u32::saturating_from(floor(pushed * SPRAY_PER_CUBIC_METER))
                 .clamp(4, SPRAY_MAX_SPLASH);
             let taken = out.push(ParticleBurst {
                 emitter,
@@ -181,6 +188,8 @@ fn spray_of(
                 direction: up,
                 speed: (plunge.abs() / (3.0 * SPRAY_PLUNGE)).clamp(0.6, 1.5),
                 carry: [0.0; 3],
+                ring: SPRAY_SPLASH_RING * radius,
+                flare: SPRAY_SPLASH_FLARE,
                 floor: Some(up),
                 count,
             });
@@ -229,6 +238,8 @@ fn spray_of(
                 direction: normalize_or(throw, 1e-6, up),
                 speed: (speed / (2.0 * SPRAY_BOW_SPEED)).clamp(0.6, 1.4),
                 carry: scale(ahead, SPRAY_BOW_CARRY * speed),
+                ring: 0.0,
+                flare: 0.0,
                 floor: Some(up),
                 count,
             }) {
@@ -285,10 +296,11 @@ mod tests {
         assert_eq!(b.emitter, AssetId(3));
         assert!((b.position[1] - 0.2).abs() < 1e-6, "{:?}", b.position);
         assert_eq!(b.direction, [0.0, 1.0, 0.0]);
-        // A tenth of a cubic meter in a fiftieth of a second, of a 0.9 cubic
-        // meter ball.
-        let whole = 4.0 / 3.0 * core::f32::consts::PI * 0.6f32.powi(3);
-        let want = floor(0.1 / (0.02 * whole) * SPRAY_PER_PLUNGE).min(SPRAY_MAX_SPLASH as f32);
+        // It rises from around the rim of the hole the ball opens.
+        assert!((b.ring - SPRAY_SPLASH_RING * 0.6).abs() < 1e-6);
+        assert_eq!(b.flare, SPRAY_SPLASH_FLARE);
+        // A tenth of a cubic meter pushed aside.
+        let want = floor(0.1 * SPRAY_PER_CUBIC_METER).min(SPRAY_MAX_SPLASH as f32);
         assert_eq!(b.count as f32, want);
         assert!(run(&mut s, &ball(0.105, [0.0; 3]), 0.02).is_empty());
         // Bobbing a tenth of its volume over a second throws nothing.

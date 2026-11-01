@@ -227,7 +227,7 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
         everywhere(mirror!(ParticleView => "ParticleView" {
             vp,
             [cam_right, pre_exposure] => ["cam_right"],
-            [cam_up, _pad1] => ["cam_up"],
+            [cam_up, render_height] => ["cam_up"],
             sun_dir,
             sun_light,
             sky_light,
@@ -252,9 +252,9 @@ pub(in crate::shader_layout) fn particle() -> Vec<Case> {
             spawn_first,
             random_seed,
             max_particles,
-            burst_first,
-            burst_count,
-            burst_spawns,
+            bursts,
+            stretch,
+            size_variance,
         })),
     ]
 }

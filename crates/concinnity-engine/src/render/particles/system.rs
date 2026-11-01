@@ -208,7 +208,6 @@ impl<G> ParticleSystem<G> {
             e.bursts = EmitterBursts {
                 first: u32::saturating_from(first),
                 count: u32::saturating_from(count),
-                spawns: e.spawns.count - room,
             };
             let dead = e.spawns.count == 0 && e.spawn_state.all_dead();
             e.idle = dead && e.dead;
@@ -474,6 +473,8 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
             speed: 1.0,
             carry: [0.0; 3],
+            ring: 0.0,
+            flare: 0.0,
             floor: None,
             count,
         }
@@ -502,10 +503,10 @@ mod tests {
         let frame = s.prepare(0.5, &bursts).unwrap();
         let params: Vec<_> = s.emitters(&frame).map(|e| (e.id, e.params)).collect();
         let p = params.iter().find(|(id, _)| *id == spray).unwrap().1;
-        assert_eq!([p.burst_first, p.burst_count, p.burst_spawns], [0, 2, 5]);
+        assert_eq!(p.bursts, 2 << 16);
         assert_eq!(p.spawn_count, 5);
         let q = params.iter().find(|(id, _)| *id == other).unwrap().1;
-        assert_eq!([q.burst_count, q.burst_spawns], [0, 0]);
+        assert_eq!(q.bursts >> 16, 0);
         assert_eq!(q.spawn_count, 5);
         let rows = s.rows();
         assert_eq!(rows.len(), PARTICLE_FRAME_HEADER + 2 * PARTICLE_BURST_ROWS);
@@ -516,7 +517,7 @@ mod tests {
         );
         // The next frame without bursts has none.
         let frame = s.prepare(1.0, &[]).unwrap();
-        assert!(s.emitters(&frame).all(|e| e.params.burst_count == 0));
+        assert!(s.emitters(&frame).all(|e| e.params.bursts >> 16 == 0));
         assert_eq!(s.rows().len(), PARTICLE_FRAME_HEADER);
     }
 
@@ -533,12 +534,11 @@ mod tests {
             .collect();
         let frame = s.prepare(0.5, &many).unwrap();
         let p = s.emitters(&frame).next().unwrap().params;
-        assert_eq!(p.burst_count as usize, MAX_EMITTER_BURSTS);
-        assert_eq!(p.burst_spawns as usize, 2 * MAX_EMITTER_BURSTS);
+        assert_eq!((p.bursts >> 16) as usize, MAX_EMITTER_BURSTS);
+        assert_eq!(p.spawn_count as usize, 2 * MAX_EMITTER_BURSTS);
         // Only 8 slots stay dead for the next frame: the last bursts lose out.
         let frame = s.prepare(0.6, &many).unwrap();
         let p = s.emitters(&frame).next().unwrap().params;
-        assert_eq!(p.burst_spawns, 8);
         assert_eq!(p.spawn_count, 8);
         let counts: Vec<f32> = s.rows()[PARTICLE_FRAME_HEADER..]
             .iter()

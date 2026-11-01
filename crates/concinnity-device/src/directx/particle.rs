@@ -463,6 +463,7 @@ impl DxContext {
         let view_uni = ParticleView::new(
             vp,
             &self.state.view.matrix,
+            self.targets.extent.render_height as f32,
             self.pre_exposure.value(),
             self.uniforms.lights.uniforms(),
             &self.state.view.daylight,

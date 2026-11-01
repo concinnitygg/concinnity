@@ -77,8 +77,9 @@ pub struct ParticleView {
     pub pre_exposure: f32,
     /// World-space camera up vector: drives the second billboard axis.
     pub cam_up: [f32; 3],
-    /// Padding so the field layout matches the shader-side struct.
-    pub _pad1: f32,
+    /// The render target's height in pixels, which sets the narrowest a
+    /// sprite is drawn.
+    pub render_height: f32,
     /// `[x, y, z, _]`: unit direction toward the sun, zero without one.
     pub sun_dir: [f32; 4],
     /// `[r, g, b, _]`: the light a white surface facing the sun reflects
@@ -94,12 +95,14 @@ pub struct ParticleView {
 const PARTICLE_FLAT_SKY: f32 = 0.03;
 
 impl ParticleView {
-    /// The view block for camera `view` (column-major) seen through `vp`,
-    /// written at `pre_exposure`, lit by the sun `lights` glints with and,
+    /// The view block for camera `view` (column-major) seen through `vp`
+    /// onto a target `render_height` pixels tall, written at `pre_exposure`,
+    /// lit by the sun `lights` glints with and,
     /// on a planet, the sky its `daylight` curves give where the camera is.
     pub fn new(
         vp: [[f32; 4]; 4],
         view: &[[f32; 4]; 4],
+        render_height: f32,
         pre_exposure: f32,
         lights: &LightUniforms,
         daylight: &DaylightBlock,
@@ -117,7 +120,7 @@ impl ParticleView {
             cam_right: [view[0][0], view[1][0], view[2][0]],
             pre_exposure,
             cam_up: [view[0][1], view[1][1], view[2][1]],
-            _pad1: 0.0,
+            render_height,
             sun_dir,
             sun_light: [
                 sun_color[0] * inv_pi,
@@ -219,7 +222,7 @@ mod view_layout_tests {
         assert_eq!(offset_of!(ParticleView, cam_right), 64);
         assert_eq!(offset_of!(ParticleView, pre_exposure), 76);
         assert_eq!(offset_of!(ParticleView, cam_up), 80);
-        assert_eq!(offset_of!(ParticleView, _pad1), 92);
+        assert_eq!(offset_of!(ParticleView, render_height), 92);
         assert_eq!(offset_of!(ParticleView, sun_dir), 96);
         assert_eq!(offset_of!(ParticleView, sun_light), 112);
         assert_eq!(offset_of!(ParticleView, sky_light), 128);
@@ -248,10 +251,18 @@ mod view_layout_tests {
         let mut lights = LightUniforms::DEFAULT;
         lights.ambient_intensity = 2.0;
         lights.num_directional = 0;
-        let unlit = ParticleView::new([[0.0; 4]; 4], &view, 0.5, &lights, &DaylightBlock::OFF);
+        let unlit = ParticleView::new(
+            [[0.0; 4]; 4],
+            &view,
+            720.0,
+            0.5,
+            &lights,
+            &DaylightBlock::OFF,
+        );
         assert_eq!(unlit.cam_right, [1.0, 4.0, 7.0]);
         assert_eq!(unlit.cam_up, [2.0, 5.0, 8.0]);
         assert_eq!(unlit.pre_exposure, 0.5);
+        assert_eq!(unlit.render_height, 720.0);
         assert_eq!(unlit.sun_light, [0.0; 4]);
         assert_eq!(unlit.sky_light, [0.06, 0.06, 0.06, 0.0]);
         lights.num_directional = 1;
@@ -261,7 +272,14 @@ mod view_layout_tests {
             color: [1.0, 0.5, 0.25],
             sin_radius: 0.0,
         };
-        let lit = ParticleView::new([[0.0; 4]; 4], &view, 1.0, &lights, &DaylightBlock::OFF);
+        let lit = ParticleView::new(
+            [[0.0; 4]; 4],
+            &view,
+            720.0,
+            1.0,
+            &lights,
+            &DaylightBlock::OFF,
+        );
         assert_eq!(lit.sun_dir, [0.0, 1.0, 0.0, 0.0]);
         for (got, want) in lit.sun_light.iter().zip([1.0, 0.5, 0.25, 0.0]) {
             assert!((got - want).abs() < 1e-6, "{:?}", lit.sun_light);

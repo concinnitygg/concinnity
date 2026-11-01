@@ -553,6 +553,8 @@ mod tests {
             max_particles: 1,
             size_start: 1.0,
             size_end: 1.0,
+            size_variance: 0.0,
+            stretch: 0.0,
             color_start: [1.0; 4],
             color_end: [1.0; 4],
             lit: false,

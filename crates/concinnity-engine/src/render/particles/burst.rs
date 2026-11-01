@@ -33,7 +33,10 @@ pub const PARTICLE_FRAME_ROWS: usize =
 /// A burst of particles one emitter spawns this frame, at `position`, sent
 /// along `direction` within the emitter's cone at its speeds times `speed`,
 /// on top of the velocity `carry` every one of them starts with, and dying
-/// as it falls back through its `floor`, if any.
+/// as it falls back through its `floor`, if any. With a `ring`, they start
+/// around a circle of that radius across `direction` instead, each sent
+/// along `direction` leaned out through its own point of the ring by
+/// `flare`, as the crown of a splash rises from the rim of what made it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParticleBurst {
     /// The emitter, by its asset id.
@@ -47,6 +50,12 @@ pub struct ParticleBurst {
     /// The velocity every particle starts with on top of its own, in meters
     /// per second: what it keeps of the motion of whatever threw it.
     pub carry: [f32; 3],
+    /// The radius of the ring the particles start around, in meters; `0`
+    /// starts them all at `position`.
+    pub ring: f32,
+    /// How far each particle's axis leans out through its point of the ring,
+    /// as a share of `direction`: `1` sends it out at 45 degrees.
+    pub flare: f32,
     /// An up direction: when set, each particle dies as it falls back through
     /// the plane through `position` across it, as droplets do landing on
     /// water.
@@ -127,25 +136,25 @@ impl ParticleBurst {
         self.direction = mix(self.direction, other.direction);
         self.carry = mix(self.carry, other.carry);
         self.speed += (other.speed - self.speed) * w;
+        self.ring += (other.ring - self.ring) * w;
+        self.flare += (other.flare - self.flare) * w;
         self.count = total;
     }
 }
 
 /// One emitter's share of the frame's bursts: `count` bursts from burst
-/// `first` of the frame's rows, which spawn `spawns` particles.
+/// `first` of the frame's rows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EmitterBursts {
     /// The emitter's first burst.
     pub first: u32,
     /// How many bursts it has.
     pub count: u32,
-    /// The particles they spawn together.
-    pub spawns: u32,
 }
 
 /// The frame's rows: the header with the frame's move, then each burst's
-/// `[position, count]`, `[direction, speed]`, `[carry, _]` and
-/// `[floor, has floor]`.
+/// `[position, count]`, `[direction, speed]`, `[carry, ring]` and
+/// `[floor, flare]`, the floor zero for none.
 #[derive(Debug, Clone)]
 pub(super) struct FrameRows {
     rows: Vec<[f32; 4]>,
@@ -203,10 +212,9 @@ impl FrameRows {
         self.rows.push([x, y, z, count as f32]);
         self.rows.push([dx, dy, dz, burst.speed]);
         let [cx, cy, cz] = burst.carry;
-        self.rows.push([cx, cy, cz, 0.0]);
+        self.rows.push([cx, cy, cz, burst.ring]);
         let [fx, fy, fz] = burst.floor.unwrap_or_default();
-        self.rows
-            .push([fx, fy, fz, if burst.floor.is_some() { 1.0 } else { 0.0 }]);
+        self.rows.push([fx, fy, fz, burst.flare]);
         true
     }
 
@@ -244,6 +252,8 @@ mod tests {
             direction: [0.0, 1.0, 0.0],
             speed: 1.5,
             carry: [0.5, 0.0, -0.5],
+            ring: 0.25,
+            flare: 0.5,
             floor: Some([0.0, 1.0, 0.0]),
             count,
         }
@@ -311,11 +321,13 @@ mod tests {
         assert!(bursts.push(burst(2)));
         let mut near = burst(6);
         near.position[0] += 0.4;
+        near.ring = 0.65;
         assert!(bursts.push(near));
         assert_eq!(bursts.as_slice().len(), 1);
         let joined = bursts.as_slice()[0];
         assert_eq!(joined.count, 8);
         assert!((joined.position[0] - 1.3).abs() < 1e-5);
+        assert!((joined.ring - 0.55).abs() < 1e-5);
         let mut far = burst(1);
         far.position[0] += 1.0;
         let mut turned = burst(1);
@@ -344,9 +356,9 @@ mod tests {
         assert_eq!(rows.rows()[PARTICLE_FRAME_HEADER + 1], [0.0, 1.0, 0.0, 1.5]);
         assert_eq!(
             rows.rows()[PARTICLE_FRAME_HEADER + 2],
-            [0.5, 0.0, -0.5, 0.0]
+            [0.5, 0.0, -0.5, 0.25]
         );
-        assert_eq!(rows.rows()[PARTICLE_FRAME_HEADER + 3], [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(rows.rows()[PARTICLE_FRAME_HEADER + 3], [0.0, 1.0, 0.0, 0.5]);
         assert_eq!(
             rows.rows()[PARTICLE_FRAME_HEADER + PARTICLE_BURST_ROWS][3],
             3.0
