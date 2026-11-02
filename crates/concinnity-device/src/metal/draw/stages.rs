@@ -360,6 +360,10 @@ impl MtlContext {
             probes: self.probe.book.records(),
             fog: self.fog.settings,
             pre_exposure: self.pre_exposure.value(),
+            eye_gain: self.auto_exposure.adaptation.as_ref().map_or(
+                1.0,
+                concinnity_engine::gfx::auto_exposure::ExposureAdaptation::eye_gain,
+            ),
             surface,
             effects: EffectInputs {
                 ssao: self.ssao.settings,

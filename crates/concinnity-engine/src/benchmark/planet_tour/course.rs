@@ -10,7 +10,7 @@ use concinnity_core::math::narrow_f32;
 use super::framing::Framing;
 use super::timetable::Phase;
 use super::timetable::{self, Fix};
-use concinnity_core::math::dvec3::{DVec3, add, length, scale, sub};
+use concinnity_core::math::dvec3::{DVec3, add, cross, dot, length, normalize_or, scale, sub};
 
 /// How often the path is pinned to the flight: often enough that a leg over
 /// the meadow strays from the ground under it by centimeters.
@@ -37,6 +37,11 @@ impl Course {
         }
     }
 
+    /// The axis the course turns about as it runs forward.
+    fn axis(&self) -> DVec3 {
+        cross(START_UP, self.forward)
+    }
+
     /// The unit direction from the center `arc` radians along the course.
     fn up(&self, arc: f64) -> DVec3 {
         add(
@@ -54,6 +59,9 @@ pub(super) struct Route<'a> {
     pub(super) start_back: f64,
     /// The least height the path keeps over dry ground.
     pub(super) clearance: f64,
+    /// The planet's turn against the stars: the axis it turns about and its
+    /// rate in radians a second.
+    pub(super) spin: (DVec3, f64),
     pub(super) phases: &'a [&'static Phase],
     pub(super) framing: &'a Framing,
 }
@@ -77,7 +85,9 @@ impl Path {
         let heading_deg = route.heading_deg;
         let course = Course::new(heading_deg);
         let arc = -route.start_back / shape.radius;
-        let fixes = timetable::fixes(route.phases, shape.radius, STEP_SECONDS, arc);
+        let (spin_axis, spin_rate) = route.spin;
+        let spin = spin_rate * dot(normalize_or(spin_axis, [0.0; 3]), course.axis());
+        let fixes = timetable::fixes(route.phases, shape.radius, spin, STEP_SECONDS, arc);
         let floor = sea_level.unwrap_or(f64::NEG_INFINITY);
         let surface = |up: DVec3| shape.radius + shape.height(up).max(floor);
         let points: Vec<DVec3> = fixes

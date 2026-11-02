@@ -78,6 +78,9 @@ pub struct ExposureMeasurement {
     /// [`HIGHLIGHT_FRACTION`](crate::gfx::auto_exposure::HIGHLIGHT_FRACTION)
     /// of all pixels starts at.
     pub highlight_log_lum: f32,
+    /// Mean log2 luminance of every pixel, those under the histogram floor
+    /// read at the floor: what an eye taking in the whole view adapts to.
+    pub view_log_lum: f32,
 }
 
 /// Per-dispatch params for the Hi-Z build kernels: four tightly-packed uints.
@@ -155,9 +158,10 @@ mod tests {
 
     #[test]
     fn exposure_measurement_layout_matches_shader() {
-        assert_eq!(size_of::<ExposureMeasurement>(), 8);
+        assert_eq!(size_of::<ExposureMeasurement>(), 12);
         assert_eq!(offset_of!(ExposureMeasurement, mean_log_lum), 0);
         assert_eq!(offset_of!(ExposureMeasurement, highlight_log_lum), 4);
+        assert_eq!(offset_of!(ExposureMeasurement, view_log_lum), 8);
     }
 
     // The scale maps the whole log-luminance span onto exactly the bin count.

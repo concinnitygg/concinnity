@@ -18,8 +18,9 @@
 //! The world also declares a benchmark, which the `bench` command runs: the
 //! engine's tour of the planet. The marble rolls through the meadow, down the
 //! beach and into the surf, then lifts off, and the camera follows it out over
-//! the sea, up toward the sun and out of the air to see the planet from orbit,
-//! down into the night and on to a sunrise over the next continent. The run
+//! the sea, up toward the sun and out of the air, hovers still against the
+//! stars as the planet turns below, sees the planet from orbit, and goes down
+//! into the night and on to a sunrise over the next continent. The run
 //! times every frame, saves the world's screenshots as it reaches them, and
 //! closes when the tour ends, printing what the frames cost, phase by phase.
 //!

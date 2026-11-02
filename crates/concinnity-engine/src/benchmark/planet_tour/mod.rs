@@ -17,10 +17,10 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use crate::components::{
-    BenchmarkPhase, CameraBoom, CameraPose, CameraTravel, CameraTurn, DriveKey, Planet,
+    BenchmarkPhase, CameraBoom, CameraPose, CameraTravel, CameraTurn, DriveKey, Planet, SkyRotation,
 };
 use crate::ecs::World;
-use concinnity_core::math::narrow_f32;
+use concinnity_core::math::{dvec3, narrow_f32};
 
 use course::{Path, Route};
 use framing::Framing;
@@ -29,9 +29,11 @@ use framing::Framing;
 ///
 /// The tour follows one great circle round the planet through where the world
 /// starts. It sets out over the ground, crosses the shore and the sea, climbs
-/// toward the sun until it leaves the air, shows the whole planet from orbit,
-/// drops into the night and skims it, and comes down on the far side as the
-/// sun rises. The camera films the benchmark's `subject` from behind, framed
+/// toward the sun until it leaves the air, hovers in orbit held still against
+/// the stars while the planet turns beneath it under a
+/// [`SkyRotation`](#skyrotation), shows the whole planet from orbit, drops
+/// into the night and skims it, and comes down on the far side as the sun
+/// rises. The camera films the benchmark's `subject` from behind, framed
 /// by where it is on the tour: looking ever further down on it as it climbs,
 /// so the planet lies below it from orbit.
 ///
@@ -88,10 +90,20 @@ pub(crate) fn plan(world: &World, tour: PlanetTour, rolls: bool) -> Option<TourP
     let sea_level = planet.sea.map(|s| f64::from(s.level));
     let phases = timetable::phases(rolls, sea_level.is_some());
     let framing = Framing::new(&phases, rolls);
+    let spin = world
+        .query::<SkyRotation>()
+        .next()
+        .map_or(([0.0; 3], 0.0), |sky| {
+            (
+                dvec3::from_f32(sky.axis),
+                f64::from(sky.degrees_per_second).to_radians(),
+            )
+        });
     let route = Route {
         heading_deg: f64::from(tour.heading_deg),
         start_back: f64::from(tour.start_back),
         clearance: timetable::ground_clearance(rolls),
+        spin,
         phases: &phases,
         framing: &framing,
     };

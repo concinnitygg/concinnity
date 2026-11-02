@@ -111,6 +111,10 @@ pub struct PlanInputs<'a> {
     pub fog: Option<FogSettings>,
     /// The scale the HDR chain is written at this frame.
     pub pre_exposure: f32,
+    /// How many times brighter than the exposure shows them the eye sees
+    /// faint sources against the dark (`ExposureAdaptation::eye_gain`), 1
+    /// without auto-exposure.
+    pub eye_gain: f32,
     /// What the surfaces sample.
     pub surface: SurfaceInputs,
     /// The screen-space effects' settings.
@@ -350,6 +354,7 @@ impl FramePlanner {
                 viewport,
                 sky_rot: view.sky_rot,
                 pre_exposure: inputs.pre_exposure,
+                eye_gain: inputs.eye_gain,
             },
             records,
             reactive: ReactiveMaskPlan::of(&graph_inputs),

@@ -218,6 +218,7 @@ mod tests {
                 probes: &[],
                 fog: None,
                 pre_exposure: 1.0,
+                eye_gain: 1.0,
                 surface: SurfaceInputs::default(),
                 effects: EffectInputs::default(),
             };

@@ -11,8 +11,13 @@ pub(super) struct Phase {
     pub(super) seconds: f64,
     /// Height of the subject over the ground the phase reaches, in meters.
     pub(super) height: f64,
-    /// Speed along the course the phase reaches, in meters per second.
+    /// Speed along the course the phase reaches, in meters per second: over
+    /// the ground, or against the stars for a phase `against_stars`.
     pub(super) speed: f64,
+    /// Whether `speed` is measured against the stars rather than over the
+    /// turning planet: 0 holds the subject still against them while the
+    /// planet turns beneath it.
+    pub(super) against_stars: bool,
     /// How long, from the phase's start, the subject takes to get from the
     /// previous phase's height and speed to this one's. 0 holds them.
     pub(super) change_seconds: f64,
@@ -27,6 +32,7 @@ const ROLL_HEIGHT: f64 = 1.0;
 const FLOAT_HEIGHT: f64 = 0.0;
 const ORBIT_HEIGHT: f64 = 150_000.0;
 const ORBIT_SPEED: f64 = 6_000.0;
+const ORBIT_STAR_SPEED: f64 = 15_000.0;
 const NIGHT_HEIGHT: f64 = 200.0;
 const NIGHT_SPEED: f64 = 2_000.0;
 const SKIM_SPEED: f64 = 18.0;
@@ -48,7 +54,22 @@ const fn phase(
         seconds,
         height,
         speed,
+        against_stars: false,
         change_seconds,
+    }
+}
+
+// A phase whose speed is measured against the stars.
+const fn star_phase(
+    name: &'static str,
+    seconds: f64,
+    height: f64,
+    speed: f64,
+    change_seconds: f64,
+) -> Phase {
+    Phase {
+        against_stars: true,
+        ..phase(name, seconds, height, speed, change_seconds)
     }
 }
 
@@ -71,15 +92,17 @@ const ROLL: [Phase; 4] = [
 ];
 
 // Out over the sea, a climb toward the sun that speeds up out of the air, a
-// pass in orbit over the day side and across the terminator, a descent into
-// the night, a fast skim through it, and a landing on the meadow of the next
+// hover in orbit held still against the stars while the planet turns beneath,
+// a pass over the day side and across the terminator, a descent into the
+// night, a fast skim through it, and a landing on the meadow of the next
 // continent as the sun comes up. The climb and the descent change height and
 // speed by a constant ratio at their fastest, the way a lift-off or a landing
 // feels even.
-const FLIGHT: [Phase; 6] = [
+const FLIGHT: [Phase; 7] = [
     phase("sea", 8.0, SEA_HEIGHT, 30.0, 4.0),
     phase("climb", 18.0, ORBIT_HEIGHT, ORBIT_SPEED, 18.0),
-    phase("orbit", 28.0, ORBIT_HEIGHT, ORBIT_SPEED, 0.0),
+    star_phase("hover", 10.0, ORBIT_HEIGHT, 0.0, 3.0),
+    star_phase("orbit", 18.0, ORBIT_HEIGHT, ORBIT_STAR_SPEED, 3.0),
     phase("descent", 14.0, NIGHT_HEIGHT, NIGHT_SPEED, 14.0),
     phase("night", 18.0, NIGHT_HEIGHT, NIGHT_SPEED, 0.0),
     phase("sunrise", 16.0, MEADOW_HEIGHT, SKIM_SPEED, 10.0),
@@ -121,9 +144,10 @@ pub(super) struct Fix {
 }
 
 /// The tour's moments every `step` seconds from the start to the end of
-/// `phases`, over a planet of `radius`, phase boundaries among them, starting
-/// `arc` radians along the course.
-pub(super) fn fixes(phases: &[&Phase], radius: f64, step: f64, arc: f64) -> Vec<Fix> {
+/// `phases`, over a planet of `radius` turning `spin` radians a second along
+/// the course against the stars, phase boundaries among them, starting `arc`
+/// radians along the course.
+pub(super) fn fixes(phases: &[&Phase], radius: f64, spin: f64, step: f64, arc: f64) -> Vec<Fix> {
     let mut prev = Fix {
         seconds: 0.0,
         arc,
@@ -136,10 +160,10 @@ pub(super) fn fixes(phases: &[&Phase], radius: f64, step: f64, arc: f64) -> Vec<
         let dt = at.seconds / steps as f64;
         for i in 1..=steps {
             let (from, to) = ((i - 1) as f64 * dt, i as f64 * dt);
-            let (height, _) = state(phases, phase, to);
+            let (height, _, _) = state(phases, phase, to);
             prev = Fix {
                 seconds: start + to,
-                arc: prev.arc + arc_between(phases, phase, from, to, radius),
+                arc: prev.arc + arc_between(phases, phase, from, to, radius, spin),
                 height,
             };
             fixes.push(prev);
@@ -149,11 +173,13 @@ pub(super) fn fixes(phases: &[&Phase], radius: f64, step: f64, arc: f64) -> Vec<
     fixes
 }
 
-// Height and speed `local` seconds into `phase`.
-fn state(phases: &[&Phase], phase: usize, local: f64) -> (f64, f64) {
+// Height, speed and how far the speed is measured against the stars `local`
+// seconds into `phase`.
+fn state(phases: &[&Phase], phase: usize, local: f64) -> (f64, f64, f64) {
     let to = phases[phase];
+    let share = |p: &Phase| f64::from(u8::from(p.against_stars));
     let Some(from) = phase.checked_sub(1).map(|p| phases[p]) else {
-        return (to.height, to.speed);
+        return (to.height, to.speed, share(to));
     };
     let k = if to.change_seconds > 0.0 {
         smoothstep(local / to.change_seconds)
@@ -163,17 +189,19 @@ fn state(phases: &[&Phase], phase: usize, local: f64) -> (f64, f64) {
     (
         blend(from.height, to.height, k),
         blend(from.speed, to.speed, k),
+        share(from) + (share(to) - share(from)) * k,
     )
 }
 
 // The angle around the center the course covers `from` to `to` seconds into
 // `phase`, by Simpson's rule: the speed is along the course at the camera's
-// height, so its rate of turn about the center falls as it climbs.
-fn arc_between(phases: &[&Phase], phase: usize, from: f64, to: f64, radius: f64) -> f64 {
+// height, so its rate of turn about the center falls as it climbs. A speed
+// against the stars is taken back over the ground by the planet's `spin`.
+fn arc_between(phases: &[&Phase], phase: usize, from: f64, to: f64, radius: f64, spin: f64) -> f64 {
     const PARTS: usize = 8;
     let rate = |t: f64| {
-        let (height, speed) = state(phases, phase, t);
-        speed / (radius + height)
+        let (height, speed, against_stars) = state(phases, phase, t);
+        speed / (radius + height) - against_stars * spin
     };
     let h = (to - from) / PARTS as f64;
     let inner: f64 = (1..PARTS)

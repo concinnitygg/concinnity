@@ -15,7 +15,8 @@
 //                histogram to the log-luminance the brightest
 //                HIGHLIGHT_FRACTION of the frame starts at and the
 //                count-weighted average log-luminance of the bins no more than
-//                METERED_RANGE_EV under it, then clears it for the next frame.
+//                METERED_RANGE_EV under it and of every bin, then clears it for
+//                the next frame.
 //
 // The HDR resolve is only ever fetched by integer coordinate, on every backend,
 // so it is declared as a plain texture and no backend binds a sampler for this
@@ -124,6 +125,9 @@ struct ExposureMeasurement
     // Log2 luminance the brightest HIGHLIGHT_FRACTION of all pixels starts at,
     // the sub-floor bin counted in.
     float highlight_log_lum;
+    // Count-weighted mean log2 luminance of every bin, the sub-floor bin read
+    // at the floor.
+    float view_log_lum;
 };
 
 [[vk::binding(0, 0)]] RWStructuredBuffer<uint> histogram : register(u0);
@@ -131,6 +135,7 @@ struct ExposureMeasurement
 
 groupshared uint reduce_counts[HISTOGRAM_BINS];
 groupshared float reduce_weighted[HISTOGRAM_BINS];
+groupshared float reduce_view_weighted[HISTOGRAM_BINS];
 // Inclusive suffix sums: at[i] is the count of bins i and above.
 groupshared uint counts_at_or_above[HISTOGRAM_BINS];
 groupshared float highlight;
@@ -183,6 +188,7 @@ void histogram_average(uint tid : SV_GroupIndex)
     uint effective_count = metered ? count : 0u;
     reduce_counts[tid] = effective_count;
     reduce_weighted[tid] = center * float(effective_count);
+    reduce_view_weighted[tid] = (tid > 0u ? center : params.lum_log2_min) * float(count);
     GroupMemoryBarrierWithGroupSync();
 
     for (uint stride = HISTOGRAM_BINS / 2u; stride > 0u; stride >>= 1u)
@@ -191,6 +197,7 @@ void histogram_average(uint tid : SV_GroupIndex)
         {
             reduce_counts[tid] += reduce_counts[tid + stride];
             reduce_weighted[tid] += reduce_weighted[tid + stride];
+            reduce_view_weighted[tid] += reduce_view_weighted[tid + stride];
         }
         GroupMemoryBarrierWithGroupSync();
     }
@@ -200,6 +207,9 @@ void histogram_average(uint tid : SV_GroupIndex)
         measurement[0].highlight_log_lum = highlight;
         measurement[0].mean_log_lum = (reduce_counts[0] > 0u)
             ? (reduce_weighted[0] / float(reduce_counts[0]))
+            : params.lum_log2_min;
+        measurement[0].view_log_lum = (total > 0u)
+            ? (reduce_view_weighted[0] / float(total))
             : params.lum_log2_min;
     }
 }

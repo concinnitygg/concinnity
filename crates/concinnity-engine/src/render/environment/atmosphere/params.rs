@@ -85,6 +85,9 @@ pub struct AtmosphereParams {
     pub surface_share: [[f32; 4]; SURFACE_TABLE_LEN / 4],
     /// x = 1 when the cloud panorama holds this frame's clouds.
     pub clouds: [f32; 4],
+    /// x = how many times brighter than the exposure shows it the eye sees
+    /// the night sky behind the air (`AtmosphereView::eye_gain`).
+    pub eye: [f32; 4],
 }
 
 /// The view the atmosphere is drawn for.
@@ -103,6 +106,9 @@ pub struct AtmosphereView {
     pub sky_rot: [[f32; 4]; 3],
     /// The scale the HDR chain is written at.
     pub pre_exposure: f32,
+    /// How many times brighter than the exposure shows them the eye, adapted
+    /// to the whole view, sees faint sources against the dark.
+    pub eye_gain: f32,
 }
 
 impl AtmosphereParams {
@@ -179,6 +185,7 @@ impl AtmosphereParams {
                 0.0,
                 0.0,
             ],
+            eye: [view.eye_gain.max(1.0), 0.0, 0.0, 0.0],
         }
     }
 }
@@ -193,7 +200,7 @@ mod tests {
     // member a float4 lane, so MSL, SPIR-V and DXIL agree.
     #[test]
     fn atmosphere_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<AtmosphereParams>(), 1184);
+        assert_eq!(size_of::<AtmosphereParams>(), 1200);
         assert_eq!(offset_of!(AtmosphereParams, inv_vp), 0);
         assert_eq!(offset_of!(AtmosphereParams, rayleigh), 64);
         assert_eq!(offset_of!(AtmosphereParams, mie_scattering), 80);
@@ -222,6 +229,7 @@ mod tests {
         assert_eq!(offset_of!(AtmosphereParams, surface_east), 1024);
         assert_eq!(offset_of!(AtmosphereParams, surface_share), 1040);
         assert_eq!(offset_of!(AtmosphereParams, clouds), 1168);
+        assert_eq!(offset_of!(AtmosphereParams, eye), 1184);
     }
 
     #[test]
@@ -244,6 +252,7 @@ mod tests {
                 viewport: [1600.0, 900.0],
                 sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
                 pre_exposure: 4.0,
+                eye_gain: 8.0,
             },
         );
         assert_eq!(p.radii[0], 6360.0);
@@ -254,6 +263,7 @@ mod tests {
 
         assert_eq!(p.viewport[2], 1.0 / 1600.0);
         assert_eq!(p.cam_pos, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(p.eye[0], 8.0);
         // No surface table: the sky-view table's ground stays.
         assert_eq!(p.surface_land[3], 0.0);
         // No night sky: its lanes are off and no direction reaches the moon.
@@ -289,9 +299,12 @@ mod tests {
                 viewport: [1.0, 1.0],
                 sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
                 pre_exposure: 1.0,
+                eye_gain: 0.5,
             },
         );
         assert_eq!([p.radii[0], p.radii[1]], [6360.0, 6460.0]);
+        // The eye never sees the night sky dimmer than the exposure shows it.
+        assert_eq!(p.eye[0], 1.0);
         assert!((p.camera[3] - 6360.1).abs() < 1e-2, "{:?}", p.camera);
         assert_eq!(p.view_ground[0], 50.0);
         assert_eq!(p.view_ground[1], s.top_radius);

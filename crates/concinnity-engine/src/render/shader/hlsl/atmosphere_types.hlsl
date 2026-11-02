@@ -74,6 +74,9 @@ struct AtmosphereParams
     float4 surface_share[8];
     // x = 1 when the cloud panorama holds this frame's clouds.
     float4 clouds;
+    // x = how many times brighter than the exposure shows it the eye sees the
+    // night sky behind the air.
+    float4 eye;
 };
 
 static const uint NIGHT_MAX_GALAXIES = 16u;

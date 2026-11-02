@@ -392,15 +392,20 @@ float night_moon(float3 d, float pixel, out float3 radiance)
 // The night sky along view direction `d` whose screen derivatives are `dx`
 // and `dy`, behind air that lets `transmittance` of it through: the stars,
 // the Milky Way and the galaxies dimmed by the air, the moon in front of them
-// (its light is already dimmed by the air toward it).
+// (its light is already dimmed by the air toward it). What lies behind the
+// moon is shown as the eye, adapted to the whole view, sees it, but for the
+// even glow across the whole sky: the eye adapts to that, so lifting it would
+// dim what it lifts.
 float3 night_sky_radiance(float3 d, float3 dx, float3 dy, float transmittance)
 {
     float pixel = sqrt(length(dx) * length(dy));
     float3 moon;
     float cover = night_moon(d, pixel, moon);
     float3 c = night_celestial(d);
-    float3 behind = milky_way(c, true) + night_galaxies(c)
-                  + night_stars(c, night_celestial(dx), night_celestial(dy));
+    float glow = 0.03 * ATMO.night.z;
+    float3 behind = (milky_way(c, true) - glow + night_galaxies(c)
+                     + night_stars(c, night_celestial(dx), night_celestial(dy))) * ATMO.eye.x
+                  + glow;
     return transmittance * behind * (1.0 - cover) + moon * cover;
 }
 

@@ -43,6 +43,7 @@ pub(in crate::shader_layout) fn atmosphere() -> Vec<Case> {
         surface_east,
         surface_share,
         clouds,
+        eye,
     }))]
 }
 
@@ -195,6 +196,7 @@ pub(in crate::shader_layout) fn exposure_measurement() -> Vec<Case> {
         mirror!(ExposureMeasurement => "ExposureMeasurement" {
             mean_log_lum,
             highlight_log_lum,
+            view_log_lum,
         }),
     )]
 }

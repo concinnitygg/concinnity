@@ -162,6 +162,12 @@ impl AutoExposureSettings {
         }
     }
 
+    /// The EV that maps a scene whose mean log2 luminance is `log_lum` onto
+    /// the target, with `ev_bias` and the night bias added, before any clamp.
+    fn target_ev(&self, log_lum: f32, ev_bias: f32) -> f32 {
+        self.target_log_lum - log_lum + ev_bias + self.night_bias(log_lum)
+    }
+
     /// The night bias for a scene whose measured mean log2 luminance is
     /// `avg_log_lum`: none down to [`NIGHT_BIAS_START`] stops under 1, all
     /// of it from [`NIGHT_BIAS_FULL`] on, a smoothstep between.

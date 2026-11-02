@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::SkyRotation;
 use crate::test_support::from_json;
 use alloc::string::String;
 use concinnity_core::math::{dvec3, vec3};
@@ -188,4 +189,86 @@ fn the_camera_looks_down_on_the_planet_from_orbit() {
         assert!((-89.0..-80.0).contains(&pitch), "{pitch} at {seconds} s");
         seconds += 1.0;
     }
+}
+
+// Where the subject is at the end of the last leg by `seconds` into the
+// tour, and when that is.
+fn subject_at(plan: &TourPlan, seconds: f32) -> ([f32; 3], f32) {
+    let mut at = plan.start.position;
+    let mut t = 0.0;
+    for leg in &plan.travel {
+        if t + leg.seconds > seconds + 1e-3 {
+            break;
+        }
+        t += leg.seconds;
+        at = vec3::add(
+            at,
+            vec3::scale(
+                vec3::normalize_or(leg.direction, 1e-9, [0.0; 3]),
+                leg.distance,
+            ),
+        );
+    }
+    (at, t)
+}
+
+// Through the hover the subject holds still against the stars: under a
+// turning sky it runs back along the course as fast as the planet turns
+// beneath it, and the camera holds its look, so the stars stand still in
+// view. Without a turning sky it holds still over the ground.
+#[test]
+fn the_hover_holds_still_against_the_stars() {
+    let tour = PlanetTour {
+        heading_deg: 90.0,
+        ..PlanetTour::default()
+    };
+    let mut turning = world(true);
+    turning.push(from_json::<SkyRotation>(
+        r#"{"axis":[0.0,0.0,-1.0],"degrees_per_second":1.5}"#,
+    ));
+    let held = plan(&turning, tour, true).unwrap();
+    let start = |plan: &TourPlan, name: &str| -> f32 {
+        plan.phases
+            .iter()
+            .take_while(|p| p.name != name)
+            .map(|p| p.seconds)
+            .sum()
+    };
+    let (from, to) = (start(&held, "hover") + 4.0, start(&held, "orbit"));
+    let center = [0.0, -50_000.0, 0.0];
+    let against_stars = |seconds: f32| {
+        let (p, t) = subject_at(&held, seconds);
+        crate::sky::SkyOrientation::new([0.0, 0.0, -1.0], -1.5 * t).rotate(vec3::sub(p, center))
+    };
+    let drift = vec3::length(vec3::sub(against_stars(to), against_stars(from)));
+    let over_ground = vec3::length(vec3::sub(
+        subject_at(&held, to).0,
+        subject_at(&held, from).0,
+    ));
+    assert!(drift < 50.0, "{drift} m against the stars");
+    assert!(over_ground > 10_000.0, "{over_ground} m over the ground");
+
+    let mut at = 0.0;
+    let mut looks = Vec::new();
+    for turn in &held.turn {
+        at += turn.seconds;
+        if (from..to).contains(&at) {
+            looks.push((turn.yaw_deg.unwrap(), turn.pitch_deg.unwrap()));
+        }
+    }
+    assert!(looks.len() > 10);
+    let (yaw, pitch) = looks[0];
+    assert!(
+        looks
+            .iter()
+            .all(|l| (l.0 - yaw).abs() < 0.05 && (l.1 - pitch).abs() < 0.05),
+        "{looks:?}"
+    );
+
+    let still = plan(&world(true), tour, true).unwrap();
+    let moved = vec3::length(vec3::sub(
+        subject_at(&still, to).0,
+        subject_at(&still, from).0,
+    ));
+    assert!(moved < 1.0, "{moved} m over the ground");
 }

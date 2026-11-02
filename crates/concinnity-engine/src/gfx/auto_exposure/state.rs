@@ -98,28 +98,32 @@ impl AutoExposureState {
         // ACES then compresses), perceptual middle-gray on the HDR path
         // (target_log_lum=log2(0.18), no ACES). `exposure = 2^target_ev`
         // then satisfies `avg_lum * exposure = 2^target_log_lum` modulo bias.
-        let target =
-            (settings.target_log_lum - avg_log_lum + ev_bias + settings.night_bias(avg_log_lum))
-                .min(cap)
-                .clamp(settings.min_ev, settings.max_ev);
+        let target = settings
+            .target_ev(avg_log_lum, ev_bias)
+            .min(cap)
+            .clamp(settings.min_ev, settings.max_ev);
         if !dt.is_finite() || dt <= 0.0 || !target.is_finite() {
             self.current_ev = self.current_ev.clamp(settings.min_ev, settings.max_ev);
             return self.current_ev;
         }
-        // The eye takes in more light faster than it opens up to less: a
-        // bright view swung into frame is not left glaring while the
-        // exposure catches up.
-        let speed = if target < self.current_ev {
-            settings.speed * LIGHT_ADAPTATION
-        } else {
-            settings.speed
-        };
-        let blend = 1.0 - exp(-speed * dt);
+        let blend = adaptation_blend(settings, self.current_ev, target, dt);
         self.adapted_log_lum += (avg_log_lum - self.adapted_log_lum) * blend;
         self.current_ev = (self.current_ev + (target - self.current_ev) * blend)
             .clamp(settings.min_ev, settings.max_ev);
         self.current_ev
     }
+}
+
+// How far an EV at `current` moves toward `target` over `dt` seconds. The eye
+// takes in more light faster than it opens up to less: a bright view swung
+// into frame is not left glaring while the exposure catches up.
+fn adaptation_blend(settings: &AutoExposureSettings, current: f32, target: f32, dt: f32) -> f32 {
+    let speed = if target < current {
+        settings.speed * LIGHT_ADAPTATION
+    } else {
+        settings.speed
+    };
+    1.0 - exp(-speed * dt)
 }
 
 /// A renderer's auto-exposure on the CPU: the tunables, the authored bias, and
@@ -131,6 +135,9 @@ pub struct ExposureAdaptation {
     /// Authored EV bias, in stops, added to the adapted target.
     pub bias_ev: f32,
     state: AutoExposureState,
+    // The EV an eye taking in the whole view is adapted to: the exposure's
+    // target for the view's mean, black included, held under no highlight.
+    eye_ev: f32,
 }
 
 impl ExposureAdaptation {
@@ -140,6 +147,7 @@ impl ExposureAdaptation {
             settings,
             bias_ev,
             state: AutoExposureState::new(&settings),
+            eye_ev: (settings.min_ev + settings.max_ev) * 0.5,
         }
     }
 
@@ -165,6 +173,14 @@ impl ExposureAdaptation {
         )
     }
 
+    /// How many times brighter the eye sees a faint source against the dark
+    /// than the exposure shows it: the eye adapts to the whole view, while
+    /// the exposure is held down for a small bright subject in it, such as a
+    /// lit planet against black space. 1 when the two agree.
+    pub fn eye_gain(&self) -> f32 {
+        exp2((self.eye_ev - self.state.current_ev).max(0.0))
+    }
+
     /// Step one frame of `dt` seconds from the GPU's measurement, returning
     /// the linear exposure multiplier the post passes apply. A non-finite
     /// mean reads as the histogram's floor.
@@ -172,9 +188,21 @@ impl ExposureAdaptation {
         if !measured.mean_log_lum.is_finite() {
             measured.mean_log_lum = LUM_LOG2_MIN;
         }
+        let view = if measured.view_log_lum.is_finite() {
+            measured.view_log_lum
+        } else {
+            LUM_LOG2_MIN
+        };
         let ev = self
             .state
             .update(measured, self.bias_ev, &self.settings, dt);
+        let s = &self.settings;
+        let eye_target = s.target_ev(view, self.bias_ev).clamp(s.min_ev, s.max_ev);
+        if dt.is_finite() && dt > 0.0 {
+            self.eye_ev +=
+                (eye_target - self.eye_ev) * adaptation_blend(s, self.eye_ev, eye_target, dt);
+        }
+        self.eye_ev = self.eye_ev.clamp(s.min_ev, s.max_ev);
         exp2(ev)
     }
 }
@@ -236,6 +264,29 @@ pub(crate) fn highlight_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 
     LUM_LOG2_MIN
 }
 
+// The mean log-luminance of every pixel, bin 0 read at the floor. Mirrors the
+// average kernel's view mean; an empty histogram reads as the floor.
+#[cfg(test)]
+pub(crate) fn view_log_luminance(histogram: &[u32; HISTOGRAM_BINS]) -> f32 {
+    let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+    let mut weighted_sum = 0.0f64;
+    let mut count = 0u64;
+    for (i, &n) in histogram.iter().enumerate() {
+        let log_lum = if i == 0 {
+            LUM_LOG2_MIN
+        } else {
+            LUM_LOG2_MIN + (i as f32 + 0.5) * step
+        };
+        weighted_sum += f64::from(log_lum) * f64::from(n);
+        count += u64::from(n);
+    }
+    if count == 0 {
+        LUM_LOG2_MIN
+    } else {
+        concinnity_core::math::narrow_f32(weighted_sum / count as f64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +298,7 @@ mod tests {
         ExposureMeasurement {
             mean_log_lum: log_lum,
             highlight_log_lum: log_lum,
+            view_log_lum: log_lum,
         }
     }
 
@@ -508,11 +560,13 @@ mod tests {
         let orbit = ExposureMeasurement {
             mean_log_lum: -19.0,
             highlight_log_lum: 1.5,
+            view_log_lum: -19.0,
         };
         assert!((settle(orbit, -4.0) - (2.0 - 1.5)).abs() < 1e-3);
         let day = ExposureMeasurement {
             mean_log_lum: -1.0,
             highlight_log_lum: 1.5,
+            view_log_lum: -1.0,
         };
         assert!((settle(day, -4.0) - (1.0 - 4.0)).abs() < 1e-3);
         // The EV clamp still has the last word, and an unmeasured highlight
@@ -520,6 +574,7 @@ mod tests {
         let blinding = ExposureMeasurement {
             mean_log_lum: 0.0,
             highlight_log_lum: 40.0,
+            view_log_lum: 0.0,
         };
         assert!((settle(blinding, 0.0) + 8.0).abs() < 1e-3);
         let unmeasured = ExposureMeasurement {
@@ -599,6 +654,95 @@ mod tests {
         let avg = average_log_luminance(&histogram);
         let want = 0.5 * (center(lit) + center(shadow));
         assert!((avg - want).abs() < 1.0e-3, "{avg}");
+    }
+
+    // The view mean keeps what the metered mean leaves out: the black of
+    // space counts, at the floor.
+    #[test]
+    fn view_log_luminance_counts_the_black_at_the_floor() {
+        let step = (LUM_LOG2_MAX - LUM_LOG2_MIN) / HISTOGRAM_BINS as f32;
+        let center = |bin: usize| LUM_LOG2_MIN + (bin as f32 + 0.5) * step;
+        assert_eq!(view_log_luminance(&[0; HISTOGRAM_BINS]), LUM_LOG2_MIN);
+        let mut histogram = [0u32; HISTOGRAM_BINS];
+        histogram[0] = 750_000;
+        histogram[200] = 250_000;
+        let view = view_log_luminance(&histogram);
+        let want = 0.75 * LUM_LOG2_MIN + 0.25 * center(200);
+        assert!((view - want).abs() < 1.0e-3, "{view}");
+        assert!((average_log_luminance(&histogram) - center(200)).abs() < 1.0e-3);
+    }
+
+    // A lit planet against black space: the exposure is held down for the
+    // planet, while the eye, taking in the black around it, adapts far
+    // brighter, and sees faint light that much brighter. A view the exposure
+    // meters whole leaves the two agreeing.
+    #[test]
+    fn the_eye_adapts_to_the_whole_view() {
+        let settings = AutoExposureSettings::resolve(-8.0, 24.0, 10.0, false);
+        let settle = |measured: ExposureMeasurement| {
+            let mut adaptation = ExposureAdaptation::new(settings, -4.0);
+            for _ in 0..600 {
+                adaptation.step(measured, 1.0 / 60.0);
+            }
+            adaptation
+        };
+        let orbit = settle(ExposureMeasurement {
+            mean_log_lum: -19.0,
+            highlight_log_lum: 1.5,
+            view_log_lum: -22.0,
+        });
+        assert!((orbit.current_ev() - 0.5).abs() < 1e-3);
+        let gain = orbit.eye_gain();
+        assert!(
+            (gain - exp2(22.0 - 4.0 - 0.5)).abs() / gain < 1e-3,
+            "{gain}"
+        );
+        assert!((settle(even(-1.0)).eye_gain() - 1.0).abs() < 1e-3);
+        // The eye never sees less than the exposure shows.
+        let glare = settle(ExposureMeasurement {
+            view_log_lum: 3.0,
+            ..even(-1.0)
+        });
+        assert_eq!(glare.eye_gain(), 1.0);
+    }
+
+    // The eye eases toward a new view as the exposure does, and a broken
+    // view measurement reads as the floor.
+    #[test]
+    fn the_eye_gain_eases_in() {
+        let settings = AutoExposureSettings::resolve(-8.0, 24.0, 2.0, false);
+        let mut adaptation = ExposureAdaptation::new(settings, 0.0);
+        for _ in 0..600 {
+            adaptation.step(even(0.0), 1.0 / 60.0);
+        }
+        let dark = ExposureMeasurement {
+            view_log_lum: -12.0,
+            ..even(0.0)
+        };
+        let mut last = adaptation.eye_gain();
+        for _ in 0..60 {
+            adaptation.step(dark, 1.0 / 60.0);
+            let gain = adaptation.eye_gain();
+            assert!(gain >= last && gain < last * 1.5, "{gain} after {last}");
+            last = gain;
+        }
+        let mut broken = adaptation;
+        let mut floor = adaptation;
+        broken.step(
+            ExposureMeasurement {
+                view_log_lum: f32::NAN,
+                ..even(0.0)
+            },
+            1.0 / 60.0,
+        );
+        floor.step(
+            ExposureMeasurement {
+                view_log_lum: LUM_LOG2_MIN,
+                ..even(0.0)
+            },
+            1.0 / 60.0,
+        );
+        assert_eq!(broken.eye_gain(), floor.eye_gain());
     }
 
     #[test]
