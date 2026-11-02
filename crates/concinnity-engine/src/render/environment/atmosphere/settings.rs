@@ -4,7 +4,7 @@ use super::air::AirProfile;
 use super::apparent::ApparentGround;
 use super::surface::SurfacePalette;
 use crate::components::Atmosphere;
-use crate::render::environment::clouds::CloudSettings;
+use crate::render::environment::clouds::{CloudHorizon, CloudSettings};
 use crate::render::environment::night_sky::NightSkySettings;
 use concinnity_core::math::{cos, narrow_f32};
 
@@ -140,6 +140,16 @@ impl AtmosphereSettings {
         }
     }
 
+    /// The ground the clouds catch the light over when the sky is drawn over
+    /// ground of radius `sky_ground`: that ground, with heights scaled as
+    /// its air is.
+    pub fn cloud_horizon(&self, sky_ground: f32) -> CloudHorizon {
+        CloudHorizon {
+            ground_km: sky_ground,
+            height_scale: self.apparent.map_or(1.0, |ap| sky_ground / ap.radius),
+        }
+    }
+
     /// These settings over ground of `radius`. With an apparent radius the
     /// air keeps its proportion to the ground, exactly as authored over the
     /// apparent ground; without one it keeps its thickness.
@@ -223,6 +233,26 @@ mod tests {
             "{thickness}"
         );
         assert!((s.air.rayleigh_scale_height - 8.0 * 50.0 / 6360.0).abs() < 1e-5);
+    }
+
+    // The clouds catch the light over the sky's ground, their heights
+    // scaled as its air is: as they stand near the ground, shrunk with the
+    // air high above it, and as they are without an apparent radius.
+    #[test]
+    fn the_clouds_horizon_scales_heights_as_the_air() {
+        let s = small_planet();
+        let near = s.cloud_horizon(s.sky_ground_radius(0.1));
+        assert_eq!(near.ground_km, 6360.0);
+        assert_eq!(near.height_scale, 1.0);
+        let high = s.cloud_horizon(s.sky_ground_radius(30.0));
+        assert_eq!(high.ground_km, 50.0);
+        let air = s.top_radius - s.bottom_radius;
+        assert!((high.height_scale * 100.0 - air).abs() < 1e-4, "{high:?}");
+        let earth = AtmosphereSettings::resolve(&Atmosphere::default(), None);
+        assert_eq!(
+            earth.cloud_horizon(earth.sky_ground_radius(30.0)),
+            CloudHorizon::true_ground(6360.0)
+        );
     }
 
     // Up to the fade's start the tables' air is the authored air, bit for

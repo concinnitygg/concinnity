@@ -31,7 +31,7 @@ mod settings;
 mod shadow;
 mod shape;
 
-pub use frame::{CloudFrame, CloudLayerFrame, CloudView};
+pub use frame::{CloudFrame, CloudHorizon, CloudLayerFrame, CloudView};
 pub use history::{CloudHistory, CloudProjection};
 pub use noise::NOISE_SIZE;
 pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};

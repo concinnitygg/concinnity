@@ -62,6 +62,27 @@ pub struct CloudLayerFrame {
     pub detail: [f32; 3],
 }
 
+/// The ground the clouds catch the light over: the one the sky is drawn over,
+/// so they are lit as the sky around them is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CloudHorizon {
+    /// Its radius, in kilometers.
+    pub ground_km: f32,
+    /// How far over it a kilometer over the true ground stands, in
+    /// kilometers: the scale the sky's air is drawn at.
+    pub height_scale: f32,
+}
+
+impl CloudHorizon {
+    /// The true ground of radius `ground_km`, with heights as they are.
+    pub const fn true_ground(ground_km: f32) -> Self {
+        Self {
+            ground_km,
+            height_scale: 1.0,
+        }
+    }
+}
+
 /// This frame's cloud inputs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CloudFrame {
@@ -81,10 +102,8 @@ pub struct CloudFrame {
     pub shadow_lanes: CloudShadowLanes,
     /// The clouds' clock, in seconds.
     pub time: f32,
-    /// The radius, in kilometers, of the ground the clouds' horizon is
-    /// measured from: the one the sky is drawn over, so they catch the light
-    /// as long after sunset as the sky does.
-    pub horizon_km: f32,
+    /// The ground the clouds catch the light over.
+    pub horizon: CloudHorizon,
 }
 
 // `x` wrapped into [0, 1).
@@ -101,13 +120,13 @@ fn wrap3(v: DVec3) -> [f32; 3] {
 impl CloudFrame {
     /// The inputs for `settings` over a ground `ground_km` from the planet's
     /// center, seen from `view`, lit by `daylight` (in the frame's axes) under
-    /// a sky drawn over a ground `horizon_km` in radius.
+    /// a sky drawn over `horizon`.
     pub fn new(
         settings: &CloudSettings,
         ground_km: f32,
         view: &CloudView,
         daylight: &DaylightBlock,
-        horizon_km: f32,
+        horizon: CloudHorizon,
     ) -> Self {
         let camera = view.fixed(view.camera_m);
         let up = dvec3::normalize_or(camera, [0.0, 1.0, 0.0]);
@@ -180,7 +199,7 @@ impl CloudFrame {
             shadow,
             shadow_lanes,
             time: narrow_f32(view.time),
-            horizon_km,
+            horizon,
         }
     }
 }
@@ -247,14 +266,14 @@ mod tests {
             50.0,
             &view(IDENTITY, [0.0, 51_000.0, 0.0], 3.0),
             &lit(),
-            50.0,
+            CloudHorizon::true_ground(50.0),
         );
         let b = CloudFrame::new(
             &s,
             50.0,
             &view(TURNED, [51_000.0, 0.0, 0.0], 3.0),
             &lit(),
-            50.0,
+            CloudHorizon::true_ground(50.0),
         );
         assert!(close(a.layers[0].shape, b.layers[0].shape, 1e-6));
         assert!(close(a.layers[0].weather, b.layers[0].weather, 1e-6));
@@ -276,14 +295,14 @@ mod tests {
             50.0,
             &view(IDENTITY, [0.0, 51_000.0, 0.0], 0.0),
             &lit(),
-            50.0,
+            CloudHorizon::true_ground(50.0),
         );
         let b = CloudFrame::new(
             &s,
             50.0,
             &view(IDENTITY, [step, 51_000.0, 0.0], 0.0),
             &lit(),
-            50.0,
+            CloudHorizon::true_ground(50.0),
         );
         let moved = wrap(f64::from(b.layers[0].shape[0] - a.layers[0].shape[0]));
         assert!(close(moved, 0.1, 1e-5), "{moved}");
@@ -300,14 +319,14 @@ mod tests {
             6360.0,
             &view(IDENTITY, [0.0, far, 0.0], 0.0),
             &lit(),
-            50.0,
+            CloudHorizon::true_ground(50.0),
         );
         let b = CloudFrame::new(
             &s,
             6360.0,
             &view(IDENTITY, [0.01 * tile, far, 0.0], 0.0),
             &lit(),
-            50.0,
+            CloudHorizon::true_ground(50.0),
         );
         let moved = wrap(f64::from(b.layers[0].detail[0] - a.layers[0].detail[0]));
         assert!(close(moved, 0.01, 1e-4), "{moved}");
@@ -322,7 +341,7 @@ mod tests {
                 50.0,
                 &view(IDENTITY, [0.0, 51_000.0, 0.0], t),
                 &lit(),
-                50.0,
+                CloudHorizon::true_ground(50.0),
             )
         };
         let tile = f64::from(s.layers()[0].weather_tile_km) * 1000.0;

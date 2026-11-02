@@ -65,7 +65,8 @@ struct CloudParams
     float4 shadow_east;
     // xyz: the square's north.
     float4 shadow_north;
-    // x: the radius of the ground the clouds' horizon is measured from (km).
+    // x: the radius of the ground the clouds' horizon is measured from (km);
+    // y: how far over it a kilometer over the true ground stands.
     float4 horizon;
     // A vector from the previous frame's camera in fixed axes (w = 1) to its
     // clip space, which the texels this frame does not march reproject

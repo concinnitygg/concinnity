@@ -324,6 +324,22 @@ float cloud_light_cosine(float mu, float height, float ground)
     return (mu - sink) / (1.0 - sink);
 }
 
+// The up of a point whose true up is `up`, set where the ground the sky is
+// drawn over would put it: as far from the camera, so its angle from the
+// camera's up shrinks by the true ground's share of that ground's radius.
+float3 cloud_sky_up(float3 up)
+{
+    float3 camera_up = normalize(CLOUD.camera.xyz);
+    float angle = acos(clamp(dot(camera_up, up), -1.0, 1.0));
+    float s = sin(angle);
+    if (s < 1e-6)
+    {
+        return up;
+    }
+    float t = CLOUD.camera.w / CLOUD.horizon.x;
+    return (sin((1.0 - t) * angle) * camera_up + sin(t * angle) * up) / s;
+}
+
 // The thickness of the layer holding radius `r`, or of the thinnest layer
 // when none does.
 float cloud_layer_thickness(float r)
@@ -381,8 +397,8 @@ float3 cloud_sample_light(CloudPhase phase, CloudWeather w[CLOUD_MAX_LAYERS], fl
                           float height, float3 ground_albedo)
 {
     float r = length(p);
-    float3 up = p / r;
-    float above = r - CLOUD.camera.w;
+    float3 up = cloud_sky_up(p / r);
+    float above = (r - CLOUD.camera.w) * CLOUD.horizon.y;
     float3 sky = (float3)0.0;
     float3 lit_ground = (float3)0.0;
     float3 reach[DAYLIGHT_BODIES];

@@ -186,7 +186,7 @@ impl AtmosphereDrive {
                     self.settings.bottom_radius,
                     &view,
                     &light,
-                    frame.sky_ground_radius,
+                    self.settings.cloud_horizon(frame.sky_ground_radius),
                 )
             });
         (frame.with_clouds(clouds), set, daylight)

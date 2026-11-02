@@ -88,7 +88,7 @@ pub struct CloudParams {
     /// xyz: the shadow map's north.
     pub shadow_north: [f32; 4],
     /// x: the radius, in kilometers, of the ground the clouds' horizon is
-    /// measured from; yzw unused.
+    /// measured from; y: its [`CloudHorizon::height_scale`]; zw unused.
     pub horizon: [f32; 4],
     /// The previous frame's [`CloudProjection::view`], which the texels this
     /// frame does not march are reprojected through.
@@ -195,7 +195,12 @@ impl CloudParams {
             shadow_center: v3(frame.shadow.center_km, frame.shadow.width_km),
             shadow_east: v3(frame.shadow.east, frame.shadow.radius_km),
             shadow_north: v3(frame.shadow.north, 0.0),
-            horizon: [frame.horizon_km, 0.0, 0.0, 0.0],
+            horizon: [
+                frame.horizon.ground_km,
+                frame.horizon.height_scale,
+                0.0,
+                0.0,
+            ],
             prev_view: crate::transform::IDENTITY,
             prev_camera: [0.0; 4],
             daylight: frame.daylight,
