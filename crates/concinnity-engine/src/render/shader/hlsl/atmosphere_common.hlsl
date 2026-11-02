@@ -349,8 +349,8 @@ float4 atmo_sky_view(Texture2D<float4> lut, SamplerState lut_s, float3 dir)
 // `aerial_span` in render::atmosphere for a ray from the camera along `dir`:
 // x = where it enters the tables' air, y = how far past that the aerial
 // volume's slices reach, both km; x is -1 when the ray misses the air. The
-// reach ends a Rayleigh scale height under the ground the ray strikes, or at
-// its closest approach to the center if it passes over.
+// reach ends a Rayleigh scale height under the ground the ray strikes, or as
+// far out as that sphere's horizon if it passes over.
 float2 atmo_aerial_span(float3 dir)
 {
     float r = atmo_camera_radius();
@@ -361,10 +361,11 @@ float2 atmo_aerial_span(float3 dir)
         return float2(-1.0, 0.0);
     }
     float scale_height = -1.0 / ATMO.rayleigh.w;
-    float end = ray_enter(r, mu, max(atmo_bottom() - scale_height, 0.0));
+    float floor_radius = max(atmo_bottom() - scale_height, 0.0);
+    float end = ray_enter(r, mu, floor_radius);
     if (end < 0.0)
     {
-        end = -r * mu > enter ? -r * mu : 1e30;
+        end = sqrt(max(r * r - floor_radius * floor_radius, 0.0));
     }
     return float2(enter, clamp(end - enter, 0.0, AERIAL_MAX_DISTANCE_KM));
 }

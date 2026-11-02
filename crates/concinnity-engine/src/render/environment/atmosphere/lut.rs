@@ -179,23 +179,20 @@ pub fn sky_view_row_taps(v: f32) -> ([f32; 2], [f32; 2]) {
 /// to the local up is `mu`, as kilometers from the camera: where the ray
 /// enters the air (0 from inside it) and how far past that its slices reach,
 /// or `None` when it misses the air. The reach ends where the ray would meet
-/// a sphere `depth` under the ground, or at its closest approach to the
-/// center if it passes over that sphere, so a ray that strikes the ground
-/// keeps its last slices about the ground whatever its length; and never
-/// past [`AERIAL_MAX_DISTANCE_KM`]. Mirrors `atmo_aerial_span` in
-/// `atmosphere_common.hlsl`.
+/// a sphere `depth` under the ground, or as far out as that sphere's horizon
+/// if it passes over it, so a ray that strikes the ground keeps its last
+/// slices about the ground whatever its length and the reach runs on without
+/// a jump across any view angle; and never past [`AERIAL_MAX_DISTANCE_KM`].
+/// Mirrors `atmo_aerial_span` in `atmosphere_common.hlsl`.
 pub fn aerial_span(bottom: f32, top: f32, depth: f32, r: f32, mu: f32) -> Option<[f32; 2]> {
     let enter = ray_enter(r, mu, top);
     if enter < 0.0 {
         return None;
     }
-    let mut end = ray_enter(r, mu, (bottom - depth).max(0.0));
+    let floor_radius = (bottom - depth).max(0.0);
+    let mut end = ray_enter(r, mu, floor_radius);
     if end < 0.0 {
-        end = if -r * mu > enter {
-            -r * mu
-        } else {
-            f32::INFINITY
-        };
+        end = sqrt((r * r - floor_radius * floor_radius).max(0.0));
     }
     Some([enter, (end - enter).clamp(0.0, AERIAL_MAX_DISTANCE_KM)])
 }
@@ -445,9 +442,9 @@ mod tests {
     // ends no nearer than a scale height under the ground.
     #[test]
     fn near_the_ground_the_aerial_reach_is_the_full_reach() {
+        let level = [-1e-3, -1e-5, 0.0, 1e-5];
         for h in [0.002, 0.1, 1.0] {
-            for i in 0..=40 {
-                let mu = -1.0 + i as f32 / 20.0;
+            for mu in (0..=40).map(|i| -1.0 + i as f32 / 20.0).chain(level) {
                 let [enter, reach] = aerial_span(BOTTOM, TOP, 8.0, BOTTOM + h, mu).expect("inside");
                 assert_eq!(enter, 0.0);
                 assert!(reach >= 8.0, "{h} {mu}: {reach}");
@@ -459,9 +456,9 @@ mod tests {
     }
 
     // From above a thin air a ray starts where it enters the air and ends
-    // just under the ground it strikes; past the limb it ends at its closest
-    // approach, so the reach runs on without a jump across the limb, and a
-    // ray over the air has none.
+    // just under the ground it strikes; past the limb it ends as far out as
+    // the limb, so the reach runs on without a jump across it, and a ray over
+    // the air has none.
     #[test]
     fn from_above_the_air_the_reach_ends_at_the_ground() {
         let (bottom, top, depth, r) = (50.0, 50.786, 0.063, 200.0);
@@ -478,5 +475,22 @@ mod tests {
         assert!(gap(1e-4) < 5.0, "{}", gap(1e-4));
         assert!(gap(1e-6) < 0.6, "{}", gap(1e-6));
         assert!(gap(1e-6) < gap(1e-4));
+    }
+
+    // Inside a thin air over a small planet the reach is shorter than the
+    // volume's, and it runs on without a jump across the limb and across the
+    // level, where rays turn from passing over the ground to climbing away.
+    #[test]
+    fn inside_a_thin_air_the_reach_runs_on_across_the_level() {
+        let (bottom, top, depth, r) = (50.0, 50.786, 0.063, 50.2);
+        let floor = bottom - depth;
+        let horizon = sqrt(r * r - floor * floor);
+        assert!(horizon < AERIAL_MAX_DISTANCE_KM);
+        let reach = |mu: f32| aerial_span(bottom, top, depth, r, mu).expect("inside")[1];
+        let tangent = -horizon / r;
+        assert!((reach(tangent - 1e-6) - reach(tangent + 1e-6)).abs() < 0.1);
+        for mu in [tangent + 1e-3, -1e-4, 0.0, 1e-4, 0.5, 1.0] {
+            assert!((reach(mu) - horizon).abs() < 1e-3, "{mu}: {}", reach(mu));
+        }
     }
 }
