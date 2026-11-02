@@ -20,7 +20,7 @@ use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::PixelRect;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera, StandIns, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -115,8 +115,8 @@ pub(in crate::metal) struct FacePass<'a> {
     pub daylight: &'a DaylightBlock,
     // What the face's ground stands in for that the face does not draw.
     pub stand_ins: StandIns,
-    // Whether the sky behind the face is read from the environment's cube.
-    pub sky_from_cube: bool,
+    // What the face shows behind its geometry.
+    pub background: FaceBackground,
 }
 
 impl FacePass<'_> {
@@ -130,7 +130,7 @@ impl FacePass<'_> {
         storage: FaceStorage::PROBE,
         daylight: &DaylightBlock::OFF,
         stand_ins: StandIns::None,
-        sky_from_cube: false,
+        background: FaceBackground::Sky,
     };
 }
 
@@ -295,7 +295,7 @@ impl MtlContext {
         // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
-            self.encode_sky(&encoder, &view_uniforms, false);
+            self.encode_sky(&encoder, &view_uniforms);
         }
         Ok(draw_calls)
     }
@@ -329,7 +329,9 @@ impl MtlContext {
             cam_pos,
         } = camera;
         let desc = MTLRenderPassDescriptor::new();
-        let [r, g, b, a] = pass.storage.clear_color(self.state.view.clear_color);
+        let [r, g, b, a] = pass
+            .background
+            .clear_color(pass.storage, self.state.view.clear_color);
         // SAFETY: plain descriptor property setters; the subscripted slots are ones this descriptor
         // declares.
         unsafe {
@@ -397,8 +399,10 @@ impl MtlContext {
         let draw_calls =
             self.encode_main_geometry_into(&encoder, &view_uniforms, gpu, pass.icb_override);
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(&encoder, &view_uniforms, pass.sky_from_cube);
+        if pass.background.draws_sky()
+            && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
+        {
+            self.encode_sky(&encoder, &view_uniforms);
         }
         Ok(draw_calls)
     }

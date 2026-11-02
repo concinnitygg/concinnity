@@ -365,9 +365,10 @@ float prefilter_footprint_level(float3 R, float lod)
 }
 
 // The reflection tap `shade_surface` reads for a surface of `roughness`, into
-// `radiance`: the fragment's `probes` where any probe is baked, fading to the
-// imported environment prefilter cube (or to nothing without one) far outside
-// every probe box, else that cube alone. False when there is neither.
+// `radiance`: the fragment's `probes` where any probe is baked, with the
+// environment prefilter cube (or nothing without one) behind what their
+// captures leave uncovered and fading in far outside every probe box, else
+// that cube alone. False when there is neither.
 bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float roughness,
                           out float3 radiance)
 {
@@ -384,7 +385,7 @@ bool environment_specular(ProbeMask probes, float3 world_pos, float3 R, float ro
             float3 sky_radiance = sky
                 ? prefilter_cube.SampleLevel(cube_sampler, SKY_DIR(R), sky_level).rgb * SKY_CUBE_READ
                 : (float3)(0.0);
-            radiance = lerp(radiance, sky_radiance, sky_share);
+            radiance += sky_radiance * sky_share;
         }
         return true;
     }

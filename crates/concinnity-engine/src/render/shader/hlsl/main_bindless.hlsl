@@ -84,7 +84,8 @@ float4 fragment_main_bindless(VertexOut v) : SV_Target
     GpuObjectData od = OBJECTS[v.object_id];
     surface_params_row = od.params_index;
     float4 color = shade(v, od);
-    return float4(hdr_store_cap(color.rgb * VIEW.pre_exposure), color.a);
+    // Opaque: a probe face reads the alpha as the geometry's coverage.
+    return float4(hdr_store_cap(color.rgb * VIEW.pre_exposure), 1.0);
 }
 
 #else // SURFACE_PREPASS

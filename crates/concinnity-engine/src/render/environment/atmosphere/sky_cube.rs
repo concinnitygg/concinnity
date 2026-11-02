@@ -16,6 +16,7 @@ use super::settings::AtmosphereSettings;
 use super::surface::SurfaceBelow;
 use crate::render::probe::capture::PrefilterPlan;
 use crate::render::probe::radiance::SKY_CUBE_STORAGE_SCALE;
+use concinnity_core::math::asin;
 use concinnity_core::math::vec3::{dot, length, scale};
 
 /// What the sky cube is prefiltered with: the probes' faces and firefly
@@ -31,6 +32,18 @@ pub const SKY_CUBE_PLAN: PrefilterPlan =
 /// degrees, before the cube is redrawn: about two minutes of an Earth day,
 /// and under a sun's width.
 pub const SKY_CUBE_TURN_DEG: f32 = 0.5;
+
+/// How far the sun may rise or sink against the ground's up, in degrees,
+/// before the cube is redrawn while the sun is between the heights of
+/// [`SKY_CUBE_LOW_SUN_DEG`]. A low sun brightens or dims the whole sky by
+/// about a percent for each tenth of a degree it moves, which a redraw at
+/// [`SKY_CUBE_TURN_DEG`] would show as a step.
+pub const SKY_CUBE_LOW_SUN_TURN_DEG: f32 = 0.1;
+
+/// The sun's heights above the horizon, in degrees, between which the cube
+/// follows [`SKY_CUBE_LOW_SUN_TURN_DEG`]: from the end of twilight up through
+/// the low sun after sunrise and before sunset.
+pub const SKY_CUBE_LOW_SUN_DEG: [f32; 2] = [-18.0, 10.0];
 
 /// How far the camera may climb or sink before the cube is redrawn: this
 /// many kilometers plus [`SKY_CUBE_HEIGHT_FRACTION`] of its height.
@@ -90,9 +103,24 @@ impl SkyCubeKey {
         };
         dot(self.sun, last.sun) < turn
             || dot(self.up, last.up) < turn
+            || self.sun_moved_low(last)
             || (self.height - last.height).abs() > tolerance
             || surface
             || clouds
+    }
+
+    // The sun's height above the horizon, in degrees.
+    fn sun_height_deg(&self) -> f32 {
+        asin(dot(self.sun, self.up).clamp(-1.0, 1.0)).to_degrees()
+    }
+
+    // Whether the sun, low now or at `last`, has risen or sunk past the low
+    // sun's tolerance since.
+    fn sun_moved_low(&self, last: &Self) -> bool {
+        let [lowest, highest] = SKY_CUBE_LOW_SUN_DEG;
+        let (now, then) = (self.sun_height_deg(), last.sun_height_deg());
+        let low = |h: f32| (lowest..=highest).contains(&h);
+        (low(now) || low(then)) && (now - then).abs() > SKY_CUBE_LOW_SUN_TURN_DEG
     }
 }
 
@@ -316,6 +344,18 @@ mod tests {
         let high = key(sun_at(30.0), up(10_000.0), rows(0.0));
         assert!(!key(sun_at(30.0), up(10_400.0), rows(0.0)).moved_from(&high));
         assert!(key(sun_at(30.0), up(10_600.0), rows(0.0)).moved_from(&high));
+    }
+
+    // A low sun redraws the cube on a smaller rise than a high one, and a
+    // sun deep below the horizon on none.
+    #[test]
+    fn a_low_sun_redraws_on_a_smaller_rise() {
+        let at = |deg| key(sun_at(deg), GROUND, SkyOrientation::IDENTITY_ROWS);
+        assert!(at(2.2).moved_from(&at(2.0)));
+        assert!(at(-5.0).moved_from(&at(-5.2)));
+        assert!(!at(2.05).moved_from(&at(2.0)));
+        assert!(!at(30.2).moved_from(&at(30.0)));
+        assert!(!at(-30.2).moved_from(&at(-30.0)));
     }
 
     // The ground below the horizon turning from land to sea redraws; the same

@@ -1,9 +1,10 @@
 //! The prop reflection probe on DirectX: the six cube faces of the scene seen
 //! from the prop, rendered every frame on the frame's command list from the
 //! frame's own records like a planar mirror, and their convolution into the
-//! probe's cube of the probe array. The record and the plan are the shared
-//! `probe::prop`; this module owns the capture and encodes the `PropProbe`
-//! graph node. Mirrors `metal::prop_probe`.
+//! probe's cube of the probe array. The faces leave the sky out, which the
+//! probe's readers add behind what the faces cover. The record and the plan
+//! are the shared `probe::prop`; this module owns the capture and encodes the
+//! `PropProbe` graph node. Mirrors `metal::prop_probe`.
 //!
 //! Each face culls into its own region of the frame's indirect buffer, all six
 //! before the first face draws, so no face's cull rewrites a list another face
@@ -15,10 +16,8 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32, saturating_u32};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
-use concinnity_engine::render::probe::prop::{
-    FaceCycle, FaceSlice, PropProbeFrame, prop_probe_plan,
-};
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::uniforms::FaceCamera;
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -49,9 +48,8 @@ const CAPTURE_REST: D3D12_RESOURCE_STATES = D3D12_RESOURCE_STATE_NON_PIXEL_SHADE
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::directx) struct PropProbe {
-    // This frame's capture and the faces it renders.
-    frame: Option<(PropProbeFrame, FaceSlice)>,
-    cycle: FaceCycle,
+    // Where this frame captures.
+    frame: Option<PropProbeFrame>,
     gpu: Option<PropProbeGpu>,
     // Set once building the capture failed, which is not retried.
     failed: bool,
@@ -143,8 +141,8 @@ impl DxContext {
 
     // This frame's prop probe, ahead of the probe records and the graph: where
     // the `PropProbe` node captures, and the probe's record, which the shaders
-    // read once a frame before has filled the cube. A frame whose graph does
-    // not run the node withdraws the record.
+    // read after the node has filled the cube. A frame whose graph does not
+    // run the node withdraws the record.
     pub(in crate::directx) fn prepare_prop_probe(
         &mut self,
         frame: Option<PropProbeFrame>,
@@ -152,7 +150,6 @@ impl DxContext {
     ) {
         let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
             self.probe.prop.frame = None;
-            self.probe.prop.cycle.reset();
             self.probe.book.set_prop_probe(None);
             return;
         };
@@ -165,16 +162,12 @@ impl DxContext {
             self.probe.book.set_prop_probe(None);
             return;
         }
-        let slice = self.probe.prop.cycle.advance(frame.faces_per_frame);
-        self.probe.prop.frame = Some((frame, slice));
-        self.probe
-            .book
-            .set_prop_probe(slice.filled.then_some(&frame));
+        self.probe.prop.frame = Some(frame);
+        self.probe.book.set_prop_probe(Some(&frame));
     }
 
     // Build the capture for faces of `resolution` texels, unless the one held
-    // already matches. A new capture has not filled the cube yet. Replacing
-    // one idles the GPU first, since a command list does not keep the
+    // already matches. Replacing one idles the GPU first, since a command list does not keep the
     // resources it recorded alive.
     fn ensure_prop_capture(&mut self, resolution: u32) -> RenderResult<()> {
         let cubes =
@@ -194,24 +187,20 @@ impl DxContext {
         }
         self.probe.prop.gpu = None;
         self.probe.prop.frame = None;
-        self.probe.prop.cycle.reset();
         self.probe.prop.gpu = Some(PropProbeGpu::new(self, key)?);
         Ok(())
     }
 
-    // The `PropProbe` node: the culls of this frame's faces, each against its
+    // The `PropProbe` node: the culls of the six faces, each against its
     // face's frustum with the prop left out, into the face's region; then each
-    // face drawn from its region into its layer of the capture; then, once the
-    // cycle's last face is in, the convolution of the capture into the
-    // probe's cube.
+    // face drawn from its region into its layer of the capture; then the
+    // convolution of the capture into the probe's cube.
     pub(in crate::directx) fn encode_prop_probe(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some((frame, slice)), Some(gpu)) =
-            (self.probe.prop.frame, self.probe.prop.gpu.as_ref())
-        else {
+        let (Some(frame), Some(gpu)) = (self.probe.prop.frame, self.probe.prop.gpu.as_ref()) else {
             return Ok(());
         };
         let f = params.frame_idx % gpu.frames;
@@ -230,8 +219,7 @@ impl DxContext {
             tile_morph: self.state.tile_morph_view(),
         };
         let mut culls = [RegionCull::EMPTY; CAPTURE_FACES];
-        let culls = &mut culls[..slice.count];
-        for (face, cull) in slice.faces().zip(culls.iter_mut()) {
+        for (face, cull) in culls.iter_mut().enumerate() {
             let view = ViewUniforms::face(FaceCamera {
                 vp: capture::face_view_projection(eye, face),
                 view: capture::face_view_matrix(eye, face),
@@ -258,7 +246,7 @@ impl DxContext {
         self.encode_planar_culls(
             cmd,
             params.frame_idx,
-            culls,
+            &culls,
             &gpu.indirect[f],
             gpu.records,
             gpu.packing(f),
@@ -273,7 +261,7 @@ impl DxContext {
         // SAFETY: the command list is recording; the capture rests in `CAPTURE_REST`.
         unsafe { cmd.ResourceBarrier(&[transition_barrier(capture, CAPTURE_REST, arrival)]) };
         let object_gva = com::gpu_va(&self.cull.object_buffer_resources[params.frame_idx]);
-        for face in slice.faces() {
+        for face in 0..CAPTURE_FACES {
             let rtv = gpu
                 .msaa
                 .as_ref()
@@ -290,7 +278,7 @@ impl DxContext {
                     clusters: None,
                     storage: FaceStorage::PROBE,
                     probes: Some(params.frame_idx),
-                    sky_from_cube: true,
+                    background: FaceBackground::Empty,
                 },
                 IndirectDraw {
                     lists: gpu.lists(face, f),
@@ -308,12 +296,6 @@ impl DxContext {
             }
         }
 
-        if !slice.convolve {
-            // SAFETY: the command list is recording; the faces left the capture in its arrival
-            // state.
-            unsafe { cmd.ResourceBarrier(&[transition_barrier(capture, arrival, CAPTURE_REST)]) };
-            return Ok(());
-        }
         self.encode_probe_pyramid(cmd, &gpu.prefilter, &gpu.plan)?;
         for mip in 1..gpu.plan.mips() {
             self.encode_probe_ggx_mip(cmd, &gpu.prefilter, &gpu.plan, mip)?;
@@ -439,7 +421,8 @@ impl PropProbeGpu {
         for (face, &rtv) in face_rtvs.iter().enumerate() {
             write_face_rtv(device, prefilter.capture(), face, rtv);
         }
-        let clear = FaceStorage::PROBE.clear_color(ctx.state.view.clear_color);
+        let clear =
+            FaceBackground::Empty.clear_color(FaceStorage::PROBE, ctx.state.view.clear_color);
         let msaa = multisampled
             .then(|| {
                 let rtv = rtv_at(CAPTURE_FACES);

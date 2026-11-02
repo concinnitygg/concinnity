@@ -28,6 +28,10 @@
 //
 // Source and destination are always different mips, bound as single-level views,
 // so no dispatch reads the texels it writes.
+//
+// Alpha is the capture's coverage, filtered alongside the radiance: 1 where a
+// face drew its geometry or its sky, 0 where it left the sky for its reader to
+// add.
 
 static const float PI = 3.14159265358979323846;
 
@@ -98,6 +102,13 @@ float3 probe_clamp_radiance(float3 rgb, float clamp_lum)
     return lum > clamp_lum ? rgb * (clamp_lum / lum) : rgb;
 }
 
+// `c` with its radiance clamped as `probe_clamp_radiance` does, its coverage
+// kept.
+float4 probe_clamp_texel(float4 c, float clamp_lum)
+{
+    return float4(probe_clamp_radiance(c.rgb, clamp_lum), c.a);
+}
+
 #if defined(PROBE_MIP0)
 
 [[vk::binding(0, 0)]] [[vk::image_format("rgba16f")]]
@@ -106,7 +117,8 @@ RWTexture2DArray<float4> src_mip : register(u0);
 [[vk::binding(1, 0)]] [[vk::image_format("rgba16f")]]
 RWTexture2DArray<float4> dst_mip : register(u1);
 
-// Mip 0 of the probe cube: the capture copied through, firefly-clamped.
+// Mip 0 of the probe cube: the capture copied through, firefly-clamped, its
+// coverage kept.
 //
 // A probe cube is sampled only by the specular term (never drawn as a background),
 // so the mirror mip is capped too: it suppresses a lone blown highlight aliasing
@@ -120,8 +132,7 @@ void probe_mip0(uint3 tid : SV_DispatchThreadID)
     {
         return;
     }
-    float3 rgb = src_mip[uint3(tid.xy, tid.z)].rgb;
-    dst_mip[uint3(tid.xy, tid.z)] = float4(probe_clamp_radiance(rgb, params.clamp_lum), 1.0);
+    dst_mip[uint3(tid.xy, tid.z)] = probe_clamp_texel(src_mip[uint3(tid.xy, tid.z)], params.clamp_lum);
 }
 
 #elif defined(PROBE_DOWNSAMPLE)
@@ -146,11 +157,11 @@ void probe_downsample(uint3 tid : SV_DispatchThreadID)
         return;
     }
     uint2 s = tid.xy * 2u;
-    float3 sum = probe_clamp_radiance(src_mip[uint3(s, tid.z)].rgb, params.clamp_lum)
-               + probe_clamp_radiance(src_mip[uint3(s + uint2(1u, 0u), tid.z)].rgb, params.clamp_lum)
-               + probe_clamp_radiance(src_mip[uint3(s + uint2(0u, 1u), tid.z)].rgb, params.clamp_lum)
-               + probe_clamp_radiance(src_mip[uint3(s + uint2(1u, 1u), tid.z)].rgb, params.clamp_lum);
-    dst_mip[uint3(tid.xy, tid.z)] = float4(sum * 0.25, 1.0);
+    float4 sum = probe_clamp_texel(src_mip[uint3(s, tid.z)], params.clamp_lum)
+               + probe_clamp_texel(src_mip[uint3(s + uint2(1u, 0u), tid.z)], params.clamp_lum)
+               + probe_clamp_texel(src_mip[uint3(s + uint2(0u, 1u), tid.z)], params.clamp_lum)
+               + probe_clamp_texel(src_mip[uint3(s + uint2(1u, 1u), tid.z)], params.clamp_lum);
+    dst_mip[uint3(tid.xy, tid.z)] = sum * 0.25;
 }
 
 #elif defined(PROBE_GGX)
@@ -235,7 +246,7 @@ void probe_ggx(uint3 tid : SV_DispatchThreadID)
     float sa_texel = 4.0 * PI / (6.0 * float(params.src_size) * float(params.src_size));
     float max_lod = max(params.src_mip_count - 1.0, 0.0);
 
-    float3 accum = (float3)(0.0);
+    float4 accum = (float4)(0.0);
     float total_weight = 0.0;
     for (uint i = 0u; i < params.sample_count; ++i)
     {
@@ -259,18 +270,16 @@ void probe_ggx(uint3 tid : SV_DispatchThreadID)
         float pdf = a2 / (PI * d * d * 4.0);
         float sa_sample = 1.0 / (float(params.sample_count) * pdf + 1e-4);
         float lod = clamp(0.5 * log2(sa_sample / sa_texel) + PROBE_GGX_LOD_BIAS, 0.0, max_lod);
-        float3 env = probe_clamp_radiance(src_cube.SampleLevel(src_sampler, l, lod).rgb,
-                                          params.clamp_lum);
+        float4 env = probe_clamp_texel(src_cube.SampleLevel(src_sampler, l, lod), params.clamp_lum);
         accum += env * ndl;
         total_weight += ndl;
     }
 
     // No sample landed in the hemisphere (possible only at a tiny sample count):
     // fall back to the mirror direction, as the CPU kernel does.
-    float3 rgb = total_weight > 0.0
-                     ? accum / total_weight
-                     : src_cube.SampleLevel(src_sampler, n, 0.0).rgb;
-    dst_mip[uint3(tid.xy, tid.z)] = float4(rgb, 1.0);
+    dst_mip[uint3(tid.xy, tid.z)] = total_weight > 0.0
+                                        ? accum / total_weight
+                                        : src_cube.SampleLevel(src_sampler, n, 0.0);
 }
 
 #else

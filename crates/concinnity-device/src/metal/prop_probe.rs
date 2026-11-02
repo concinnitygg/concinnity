@@ -1,7 +1,8 @@
 //! The prop reflection probe on Metal: the six cube faces of the scene seen
 //! from the prop, rendered every frame from the frame's own records like a
 //! planar mirror, and their convolution into the probe's cube of the probe
-//! array. The record and the plan are the shared `probe::prop`; this module
+//! array. The faces leave the sky out, which the probe's readers add behind
+//! what the faces cover. The record and the plan are the shared `probe::prop`; this module
 //! owns the capture targets and encodes the `PropProbe` graph node.
 //!
 //! Each face culls into one more mirror slot with the prop's own records left
@@ -14,11 +15,10 @@
 
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
-use concinnity_engine::render::probe::prop::{
-    FaceCycle, FaceSlice, PropProbeFrame, prop_probe_plan,
-};
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::render_graph::PassId;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -32,19 +32,16 @@ use super::pass_timing::PassTimer;
 use super::probe::{make_face_color, make_face_depth};
 use super::probe_prefilter::{PrefilterGpu, create_capture_cube, encode_ggx_mip, encode_pyramid};
 
-// Encoders the node records for `slice`: a cull and a face per face it
-// renders, then the convolution when it closes the cycle.
-fn prop_probe_encoders(slice: &FaceSlice) -> usize {
-    2 * slice.count + usize::from(slice.convolve)
-}
+// Encoders the node records: a cull and a render per face, then the
+// convolution.
+const PROP_PROBE_ENCODERS: usize = 2 * CAPTURE_FACES + 1;
 
 // The world's prop probe: where it captures this frame, and the capture it
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::metal) struct PropProbe {
-    // This frame's capture and the faces it renders.
-    frame: Option<(PropProbeFrame, FaceSlice)>,
-    cycle: FaceCycle,
+    // Where this frame captures.
+    frame: Option<PropProbeFrame>,
     capture: Option<PropCapture>,
     // Set once building the capture failed, which is not retried.
     failed: bool,
@@ -90,8 +87,8 @@ impl MtlContext {
 
     // This frame's prop probe, ahead of the probe records and the graph: where
     // the `PropProbe` node captures, and the probe's record, which the shaders
-    // read once a frame before has filled the cube. A frame whose graph does
-    // not run the node withdraws the record.
+    // read after the node has filled the cube. A frame whose graph does not
+    // run the node withdraws the record.
     pub(in crate::metal) fn prepare_prop_probe(
         &mut self,
         frame: Option<PropProbeFrame>,
@@ -99,7 +96,6 @@ impl MtlContext {
     ) {
         let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
             self.probe.prop.frame = None;
-            self.probe.prop.cycle.reset();
             self.probe.book.set_prop_probe(None);
             return;
         };
@@ -112,16 +108,12 @@ impl MtlContext {
             self.probe.book.set_prop_probe(None);
             return;
         }
-        let slice = self.probe.prop.cycle.advance(frame.faces_per_frame);
-        self.probe.prop.frame = Some((frame, slice));
-        self.probe
-            .book
-            .set_prop_probe(slice.filled.then_some(&frame));
+        self.probe.prop.frame = Some(frame);
+        self.probe.book.set_prop_probe(Some(&frame));
     }
 
     // Build the capture for faces of `resolution` texels into the current
-    // cube array, unless the one held already is. A new capture has not
-    // filled the cube yet.
+    // cube array, unless the one held already is.
     fn ensure_prop_capture(&mut self, resolution: u32) -> RenderResult<()> {
         let cubes = self.probe.cubes.texture();
         let current = self.probe.prop.capture.as_ref().is_some_and(|c| {
@@ -153,21 +145,20 @@ impl MtlContext {
             cubes: objc2::Message::retain(cubes),
         });
         self.probe.prop.frame = None;
-        self.probe.prop.cycle.reset();
         Ok(())
     }
 
-    // The `PropProbe` node: this frame's faces of the prop probe, each culled
-    // against the face's frustum with the prop left out and drawn from the
-    // frame's records, then, once the cycle's last face is in, the
-    // convolution of the capture into the probe's cube. The pass's timing
-    // span opens on the first cull and closes on the last encoder.
+    // The `PropProbe` node: the prop probe's six faces, each culled against
+    // the face's frustum with the prop left out and drawn from the frame's
+    // records, then the convolution of the capture into the probe's cube. The
+    // pass's timing span opens on the first cull and closes on the last
+    // encoder.
     pub(in crate::metal) fn encode_prop_probe(
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &super::graph_exec::GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some((frame, slice)), Some(capture)) =
+        let (Some(frame), Some(capture)) =
             (self.probe.prop.frame, self.probe.prop.capture.as_ref())
         else {
             return Ok(());
@@ -179,8 +170,7 @@ impl MtlContext {
         };
         let eye = frame.eye();
         let slot = self.prop_probe_cull_slot();
-        let encoders = prop_probe_encoders(&slice);
-        for (i, face) in slice.faces().enumerate() {
+        for face in 0..CAPTURE_FACES {
             self.encode_mirror_cull(
                 cmd_buf,
                 MirrorCull {
@@ -189,7 +179,7 @@ impl MtlContext {
                     frustum: &capture::face_frustum(eye, face, frame.capture_distance),
                     eye,
                     slot,
-                    timer: PassTimer::span(PassId::PropProbe, 2 * i, encoders),
+                    timer: PassTimer::span(PassId::PropProbe, 2 * face, PROP_PROBE_ENCODERS),
                     exclude: frame.records,
                     capture_tiles: self.state.placement.capture_tiles,
                 },
@@ -221,21 +211,22 @@ impl MtlContext {
                     icb_override: culled.map(|s| s.icb.as_ref()),
                     scissor: None,
                     clusters: None,
-                    timer: PassTimer::span(PassId::PropProbe, 2 * i + 1, encoders),
+                    timer: PassTimer::span(PassId::PropProbe, 2 * face + 1, PROP_PROBE_ENCODERS),
                     storage: FaceStorage::PROBE,
                     daylight: &self.state.view.daylight,
                     stand_ins: frame.stand_ins(),
-                    sky_from_cube: true,
+                    background: FaceBackground::Empty,
                 },
             )?;
-        }
-        if !slice.convolve {
-            return Ok(());
         }
         self.encode_prop_convolution(
             cmd_buf,
             capture,
-            PassTimer::span(PassId::PropProbe, encoders - 1, encoders),
+            PassTimer::span(
+                PassId::PropProbe,
+                PROP_PROBE_ENCODERS - 1,
+                PROP_PROBE_ENCODERS,
+            ),
         )
     }
 

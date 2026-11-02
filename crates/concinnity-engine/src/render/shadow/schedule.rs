@@ -67,6 +67,11 @@ impl ShadowCascadeScheduler {
         mask
     }
 
+    /// Render every cascade on the next frame, as before any had been.
+    pub(crate) fn reprime(&mut self) {
+        self.primed_mask = 0;
+    }
+
     /// Advance the schedule one frame and refresh `uniforms` for it: the splits
     /// and cascade count always, and the light view-projection of each cascade
     /// that re-renders this frame. A skipped cascade keeps the projection its
@@ -119,8 +124,9 @@ fn shadow_distance(authored: u32, view_distance: Option<f32>) -> f32 {
 //     the near cascade plus one round-robin far cascade).
 //   - any cascade not yet primed is force-rendered this frame so its slice is
 //     never sampled before it holds valid depth. Because a cascade's bit is set
-//     in `primed` the first frame it renders and never cleared, priming renders
-//     each cascade exactly once on first access; it is never re-primed.
+//     in `primed` the first frame it renders and cleared only by `reprime`,
+//     priming renders each cascade once on first access and once after each
+//     `reprime`.
 fn select_cascade_mask(
     update: ShadowUpdate,
     clock: u32,

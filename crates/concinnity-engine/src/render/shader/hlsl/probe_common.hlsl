@@ -35,11 +35,13 @@ float probe_footprint_lod(float3 R, float lod)
 #endif
 }
 
-// Slice `i` of the probe cube array at mip `lod`.
-float3 probe_cube_sample(uint i, float3 dir, float lod)
+// Slice `i` of the probe cube array at mip `lod`: the radiance its capture
+// drew, and in alpha how much of the direction the capture covers. Where it
+// covers less, its reader adds the sky behind it.
+float4 probe_cube_sample(uint i, float3 dir, float lod)
 {
-    return probe_cubes.SampleLevel(probe_cube_sampler, float4(dir, float(i)), lod).rgb
-        * (1.0 / PROBE_STORAGE_SCALE);
+    float4 c = probe_cubes.SampleLevel(probe_cube_sampler, float4(dir, float(i)), lod);
+    return float4(c.rgb * (1.0 / PROBE_STORAGE_SCALE), c.a);
 }
 
 // The probes a lookup may read: a cluster's two masks at CLUSTER_LIST[`base`],
@@ -143,8 +145,8 @@ float3 prop_ground_dir(float3 eye, float3 world_pos, float3 R)
 // the raw ray, its scene lying far past its box, except that a prop probe
 // (blend_margin.w) re-aims a ray at the ground its prop rests on. Never reads
 // finer than the probe's finest mip (probe_pos.w), the one its capture starts
-// at.
-float3 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, float3 R, float lod)
+// at. Alpha is the capture's coverage, as `probe_cube_sample` gives it.
+float4 sample_probe_radiance(uint i, ProbeUniforms probe, float3 world_pos, float3 R, float lod)
 {
     float3 sample_dir = R;
     if (probe.blend_margin.w > 0.5)
@@ -180,12 +182,12 @@ float probe_weight(uint i, float3 world_pos)
 // The influence-weighted blend of `probes` at `world_pos` along world-space ray
 // `R` (partition of unity): the weight-normalized sum of each covering probe's
 // box-projected sample at mip `level`, the footprint already applied, in index
-// order, into `radiance`. False, with `radiance` zero, when no probe's influence
-// reaches the point.
+// order, into `radiance`, its alpha the blended coverage. False, with
+// `radiance` zero, when no probe's influence reaches the point.
 bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float level,
-                      out float3 radiance)
+                      out float4 radiance)
 {
-    float3 acc = (float3)(0.0);
+    float4 acc = (float4)(0.0);
     float wsum = 0.0;
     for (uint w = 0u; w * 32u < PROBE_SET.count; w++)
     {
@@ -202,7 +204,7 @@ bool probe_mask_blend(ProbeMask probes, float3 world_pos, float3 R, float level,
             }
         }
     }
-    radiance = wsum > 0.0 ? acc / wsum : (float3)(0.0);
+    radiance = wsum > 0.0 ? acc / wsum : (float4)(0.0);
     return wsum > 0.0;
 }
 
@@ -249,20 +251,21 @@ float probe_sky_share(ProbeUniforms probe, float3 world_pos)
 
 // Probe radiance for `world_pos` along world-space ray `R` at the roughness mip
 // `lod`: the blend of every probe covering the point, else the nearest probe by
-// capture distance from the mask's nearest set. `sky_share` is how much of the
-// result the caller replaces with what a world without probes reflects there
-// (the environment cube, or nothing): 0 on the blend, `probe_sky_share` of the
-// nearest probe off it, so a surface far outside every box reflects the sky
-// rather than one capture of somewhere else.
+// capture distance from the mask's nearest set, already weighted by its share.
+// `sky_share` is how much of what a world without probes reflects there (the
+// environment cube, or nothing) the caller adds to it: what the captures leave
+// uncovered on the blend, and off it also `probe_sky_share` of the nearest
+// probe, so a surface far outside every box reflects the sky rather than one
+// capture of somewhere else.
 float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float lod,
                            out float sky_share)
 {
-    sky_share = 0.0;
     float level = probe_footprint_lod(R, lod);
-    float3 blended;
+    float4 blended;
     if (probe_mask_blend(probes, world_pos, R, level, blended))
     {
-        return blended;
+        sky_share = 1.0 - blended.a;
+        return blended.rgb;
     }
     float near_d = 1e30;
     uint near_i = 0u;
@@ -281,10 +284,13 @@ float3 probe_mask_specular(ProbeMask probes, float3 world_pos, float3 R, float l
             }
         }
     }
-    sky_share = probe_sky_share(PROBE_RECORDS[near_i], world_pos);
-    if (sky_share >= 1.0)
+    float far = probe_sky_share(PROBE_RECORDS[near_i], world_pos);
+    if (far >= 1.0)
     {
+        sky_share = 1.0;
         return (float3)(0.0);
     }
-    return sample_probe_radiance(near_i, PROBE_RECORDS[near_i], world_pos, R, level);
+    float4 nearest = sample_probe_radiance(near_i, PROBE_RECORDS[near_i], world_pos, R, level);
+    sky_share = far + (1.0 - far) * (1.0 - nearest.a);
+    return nearest.rgb * (1.0 - far);
 }

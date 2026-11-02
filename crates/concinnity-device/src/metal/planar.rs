@@ -31,7 +31,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
@@ -318,7 +318,7 @@ impl MtlContext {
                     storage: FaceStorage::mirror(&self.pre_exposure),
                     daylight: &self.state.view.daylight,
                     stand_ins: concinnity_engine::render::uniforms::StandIns::None,
-                    sky_from_cube: false,
+                    background: FaceBackground::Sky,
                 },
             )?;
         }

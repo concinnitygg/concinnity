@@ -66,5 +66,5 @@ float3 transparent_environment(float3 world_pos, float3 r, float roughness, floa
     {
         sky = prefilter_level(r, roughness * (view.prefilter_mip_count - 1.0));
     }
-    return lerp(probe, sky, sky_share);
+    return probe + sky * sky_share;
 }

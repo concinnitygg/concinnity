@@ -1,9 +1,10 @@
 //! The prop reflection probe on Vulkan: the six cube faces of the scene seen
 //! from the prop, rendered every frame on the frame's command buffer from the
 //! frame's own records like a planar mirror, and their convolution into the
-//! probe's cube of the probe array. The record and the plan are the shared
-//! `probe::prop`; this module owns the capture and encodes the `PropProbe`
-//! graph node. Mirrors `metal::prop_probe`.
+//! probe's cube of the probe array. The faces leave the sky out, which the
+//! probe's readers add behind what the faces cover. The record and the plan
+//! are the shared `probe::prop`; this module owns the capture and encodes the
+//! `PropProbe` graph node. Mirrors `metal::prop_probe`.
 //!
 //! The faces share one cull slot per frame in flight: each face's cull and
 //! packing rewrite the slot's lists after the previous face's indirect draw has
@@ -16,10 +17,8 @@ use concinnity_engine::gfx::render_types::{GpuDrawArgs, GpuObjectData};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
-use concinnity_engine::render::probe::prop::{
-    FaceCycle, FaceSlice, PropProbeFrame, prop_probe_plan,
-};
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::uniforms::FaceCamera;
 
 use super::allocator::PooledBuffer;
@@ -45,9 +44,8 @@ const FACE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::vulkan) struct PropProbe {
-    // This frame's capture and the faces it renders.
-    frame: Option<(PropProbeFrame, FaceSlice)>,
-    cycle: FaceCycle,
+    // Where this frame captures.
+    frame: Option<PropProbeFrame>,
     gpu: Option<PropProbeGpu>,
     // Set once building the capture failed, which is not retried.
     failed: bool,
@@ -177,8 +175,8 @@ impl VkContext {
 
     // This frame's prop probe, ahead of the probe records and the graph: where
     // the `PropProbe` node captures, and the probe's record, which the shaders
-    // read once a frame before has filled the cube. A frame whose graph does
-    // not run the node withdraws the record.
+    // read after the node has filled the cube. A frame whose graph does not
+    // run the node withdraws the record.
     pub(in crate::vulkan) fn prepare_prop_probe(
         &mut self,
         frame: Option<PropProbeFrame>,
@@ -186,7 +184,6 @@ impl VkContext {
     ) {
         let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
             self.probe.prop.frame = None;
-            self.probe.prop.cycle.reset();
             self.probe.book.set_prop_probe(None);
             return;
         };
@@ -199,11 +196,8 @@ impl VkContext {
             self.probe.book.set_prop_probe(None);
             return;
         }
-        let slice = self.probe.prop.cycle.advance(frame.faces_per_frame);
-        self.probe.prop.frame = Some((frame, slice));
-        self.probe
-            .book
-            .set_prop_probe(slice.filled.then_some(&frame));
+        self.probe.prop.frame = Some(frame);
+        self.probe.book.set_prop_probe(Some(&frame));
     }
 
     // What a capture of `resolution`-texel faces is built against this frame.
@@ -224,7 +218,7 @@ impl VkContext {
     }
 
     // Build the capture for faces of `resolution` texels, unless the one held
-    // already matches. A new capture has not filled the cube yet. The replaced
+    // already matches. The replaced
     // capture's resources retire through the allocator and the device's
     // retire queue, after the frames still reading them.
     fn ensure_prop_capture(&mut self, resolution: u32) -> RenderResult<()> {
@@ -236,23 +230,20 @@ impl VkContext {
         }
         self.probe.prop.gpu = None;
         self.probe.prop.frame = None;
-        self.probe.prop.cycle.reset();
         self.probe.prop.gpu = Some(PropProbeGpu::new(self, key)?);
         Ok(())
     }
 
-    // The `PropProbe` node: this frame's faces of the prop probe, each culled
-    // against the face's frustum with the prop left out and drawn from the
-    // frame's records into its layer of the capture, then, once the cycle's
-    // last face is in, the convolution of the capture into the probe's cube.
+    // The `PropProbe` node: the prop probe's six faces, each culled against
+    // the face's frustum with the prop left out and drawn from the frame's
+    // records into its layer of the capture, then the convolution of the
+    // capture into the probe's cube.
     pub(in crate::vulkan) fn encode_prop_probe(
         &self,
         cmd: vk::CommandBuffer,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some((frame, slice)), Some(gpu)) =
-            (self.probe.prop.frame, self.probe.prop.gpu.as_ref())
-        else {
+        let (Some(frame), Some(gpu)) = (self.probe.prop.frame, self.probe.prop.gpu.as_ref()) else {
             return Ok(());
         };
         let Some(&bindless_set) = self.cull.bindless_sets.get(params.frame_idx) else {
@@ -285,7 +276,7 @@ impl VkContext {
             },
             records: gpu.key.records,
         };
-        for face in slice.faces() {
+        for face in 0..CAPTURE_FACES {
             let ring = face * gpu.frames + f;
             let view = ViewUniforms::face(FaceCamera {
                 vp: capture::face_view_projection(eye, face),
@@ -294,7 +285,7 @@ impl VkContext {
             })
             .with_stand_ins(frame.stand_ins());
             gpu.view_bufs[ring].write_val(0, &view);
-            if face > slice.first {
+            if face > 0 {
                 self.order_prop_face_cull(cmd);
             }
             self.encode_probe_cull(
@@ -317,14 +308,11 @@ impl VkContext {
                 FaceView {
                     global_set: gpu.global_sets[ring],
                     storage: FaceStorage::PROBE,
-                    sky_from_cube: true,
+                    background: FaceBackground::Empty,
                 },
                 bindless_set,
                 packing,
             );
-        }
-        if !slice.convolve {
-            return Ok(());
         }
         self.encode_probe_pyramid(cmd, &gpu.prefilter, &gpu.plan)?;
         for mip in 1..gpu.plan.mips() {

@@ -283,7 +283,7 @@ float3 rt_environment(float2 uv, float3 pw, float3 dir, float roughness, float3 
     float3 sky = rt_params.prefilter_mip_count > 0.5
         ? prefilter_level(dir, roughness * (rt_params.prefilter_mip_count - 1.0))
         : base / rt_params.pre_exposure;
-    return lerp(probe, sky, sky_share);
+    return probe + sky * sky_share;
 }
 
 // One glossy G-buffer pixel, as both passes rebuild it.

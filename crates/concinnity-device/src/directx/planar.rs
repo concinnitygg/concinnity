@@ -33,7 +33,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PixelRect, PlanarReflectors,
 };
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 
@@ -643,7 +643,7 @@ impl DxContext {
                     clusters: clustered[slot].then(|| set.cluster_grid(slot, params.frame_idx)),
                     storage,
                     probes: None,
-                    sky_from_cube: false,
+                    background: FaceBackground::Sky,
                 },
                 crate::directx::probe::IndirectDraw {
                     lists: set.lists(slot, params.frame_idx),

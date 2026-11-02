@@ -68,6 +68,33 @@ impl FaceStorage {
     }
 }
 
+/// What an off-camera face shows where its geometry leaves the background.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceBackground {
+    /// The environment's sky, drawn behind the geometry.
+    Sky,
+    /// Nothing: the face clears to transparent black, so its alpha is the
+    /// geometry's coverage and its readers add the sky behind it as it is
+    /// when they read.
+    Empty,
+}
+
+impl FaceBackground {
+    /// Whether the face draws the sky behind its geometry.
+    pub fn draws_sky(self) -> bool {
+        self == Self::Sky
+    }
+
+    /// The face's clear at `storage`'s scale: the world's `clear` behind a
+    /// sky, else transparent black.
+    pub fn clear_color(self, storage: FaceStorage, clear: [f32; 4]) -> [f32; 4] {
+        match self {
+            Self::Sky => storage.clear_color(clear),
+            Self::Empty => [0.0; 4],
+        }
+    }
+}
+
 /// `rgb` capped to [`HDR_STORE_MAX`] in its brightest channel, its hue kept.
 /// An infinite channel is capped alone. Mirrors `hdr_store_cap`.
 #[cfg(test)]
@@ -195,6 +222,21 @@ mod tests {
             FaceStorage::PROBE.clear_color([0.5, 0.25, 0.0, 1.0]),
             [0.5 * s, 0.25 * s, 0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn an_empty_face_clears_to_no_coverage() {
+        let clear = [0.5, 0.25, 0.0, 1.0];
+        assert_eq!(
+            FaceBackground::Sky.clear_color(FaceStorage::PROBE, clear),
+            FaceStorage::PROBE.clear_color(clear)
+        );
+        assert_eq!(
+            FaceBackground::Empty.clear_color(FaceStorage::PROBE, clear),
+            [0.0; 4]
+        );
+        assert!(FaceBackground::Sky.draws_sky());
+        assert!(!FaceBackground::Empty.draws_sky());
     }
 
     // A mirror follows the frame's pre-exposure, including its fallback for a

@@ -48,7 +48,7 @@ use concinnity_engine::render::probe::bake::{
 };
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -156,9 +156,8 @@ pub(in crate::directx) struct FaceUniforms<'a> {
     pub storage: FaceStorage,
     // The frame whose probes the face reflects, or `None` for the sky alone.
     pub probes: Option<usize>,
-    // Whether the sky behind the face is read from the environment's cube
-    // rather than an atmosphere's sky-view table.
-    pub sky_from_cube: bool,
+    // What the face shows behind its geometry.
+    pub background: FaceBackground,
 }
 
 // The indirect draw for one capture region: the command buffer, its byte offset,
@@ -472,7 +471,7 @@ impl DxContext {
                 clusters: None,
                 storage: FaceStorage::PROBE,
                 probes: None,
-                sky_from_cube: false,
+                background: FaceBackground::Sky,
             },
             IndirectDraw {
                 lists: self.main_lists(indirect),
@@ -725,7 +724,7 @@ impl DxContext {
             clusters,
             storage,
             probes,
-            sky_from_cube,
+            background,
         } = uniforms;
         let (cluster_params_gva, cluster_list_gva) = match clusters {
             Some(grid) => (grid.params_gva, com::gpu_va(grid.lists)),
@@ -773,7 +772,7 @@ impl DxContext {
 
         // SAFETY: the list is recording, and `rtv` and `dsv` address the face's live targets.
         unsafe { cmd.OMSetRenderTargets(1, Some(&raw const rtv), false, Some(&raw const dsv)) };
-        let clear_color = storage.clear_color(self.state.view.clear_color);
+        let clear_color = background.clear_color(storage, self.state.view.clear_color);
         // SAFETY: the list is recording, `rtv` is bound above, and the color and rect are locals.
         unsafe { cmd.ClearRenderTargetView(rtv, &clear_color, Some(&[scissor])) };
         // SAFETY: the list is recording, `dsv` is bound above, and the rect is a live local.
@@ -905,8 +904,10 @@ impl DxContext {
             face.slots(0),
         ));
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, view_gva, self.current_frame, sky_from_cube);
+        if background.draws_sky()
+            && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
+        {
+            self.encode_sky(cmd, view_gva, self.current_frame);
         }
     }
 }

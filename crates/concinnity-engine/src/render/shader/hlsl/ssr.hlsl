@@ -168,7 +168,7 @@ float4 ssr_resolve_fragment([[vk::location(0)]] float2 uv : TEXCOORD0) : SV_Targ
             sky = prefilter.SampleLevel(prefilter_samp, SKY_DIR(r_world), lod).rgb
                 * (SKY_CUBE_READ * params.pre_exposure);
         }
-        env = lerp(env, sky, sky_share);
+        env += sky * sky_share;
     }
 
     float3 step_v = r_dir * params.stride;

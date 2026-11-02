@@ -209,14 +209,18 @@ impl FramePlanner {
         self.temporal.invalidate_occlusion();
     }
 
-    /// Drop every history for a frame that does not continue the last.
+    /// Drop every history for a frame that does not continue the last, and
+    /// render every shadow cascade afresh.
     pub fn reset_history(&mut self) {
         self.temporal.reset();
+        self.shadow.reprime_cascades();
     }
 
-    /// Carry every history into the frame the world moved to.
+    /// Carry every history and the shadow cascades into the frame the world
+    /// moved to.
     pub fn rebase(&mut self, rebase: &Rebase) {
         self.temporal.rebase(rebase);
+        self.shadow.rebase(rebase);
     }
 
     /// Plan the frame `view` shows from `inputs`.

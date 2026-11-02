@@ -327,7 +327,6 @@ mod tests {
             records: [4, 6],
             resolution: 128,
             capture_distance: None,
-            faces_per_frame: 2,
             sea: false,
         }
     }

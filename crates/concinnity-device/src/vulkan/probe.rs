@@ -33,7 +33,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::scene_state::CaptureTiles;
 
 use super::allocator::PooledBuffer;
@@ -359,7 +359,7 @@ impl VkContext {
             FaceView {
                 global_set,
                 storage: FaceStorage::PROBE,
-                sky_from_cube: false,
+                background: FaceBackground::Sky,
             },
             bindless_set,
             packing,
@@ -638,7 +638,7 @@ impl VkContext {
         let FaceView {
             global_set,
             storage,
-            sky_from_cube,
+            background,
         } = view;
         let (Some(pipeline), Some(layout)) = (
             self.face_bindless_pipeline(),
@@ -647,7 +647,7 @@ impl VkContext {
             return;
         };
         let device = &self.hw.device;
-        let [r, g, b, a] = storage.clear_color(self.state.view.clear_color);
+        let [r, g, b, a] = background.clear_color(storage, self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [r, g, b, a],
@@ -722,8 +722,10 @@ impl VkContext {
         };
         self.draw_stream(cmd, packing.lists, 0, face.slots(0));
         // A face is always rendered lit, whatever the viewport shows.
-        if self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit) {
-            self.encode_sky(cmd, global_set, self.current_frame, sky_from_cube);
+        if background.draws_sky()
+            && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
+        {
+            self.encode_sky(cmd, global_set, self.current_frame);
         }
         // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
         // above.
@@ -923,13 +925,12 @@ impl ProbeBakeDevice for VkContext {
 
 // The view an off-camera render draws from: the global set holding its view
 // block, the scale that block writes the face at, which its clear follows, and
-// whether its sky is read from the environment's cube rather than an
-// atmosphere's sky-view table.
+// what it shows behind its geometry.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct FaceView {
     pub(in crate::vulkan) global_set: vk::DescriptorSet,
     pub(in crate::vulkan) storage: FaceStorage,
-    pub(in crate::vulkan) sky_from_cube: bool,
+    pub(in crate::vulkan) background: FaceBackground,
 }
 
 // Where an off-camera render draws in its framebuffer: the full `extent` the

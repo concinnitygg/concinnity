@@ -29,7 +29,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::planar_reflection::{
     self, MirrorFrame, MirrorShading, MirrorView, PLANAR_CROP_MARGIN, PlanarReflectors,
 };
-use concinnity_engine::render::probe::radiance::FaceStorage;
+use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::compact::DrawLists;
@@ -933,7 +933,7 @@ impl VkContext {
                 FaceView {
                     global_set: set.global_sets[ring],
                     storage,
-                    sky_from_cube: false,
+                    background: FaceBackground::Sky,
                 },
                 bindless_set,
                 packing,
