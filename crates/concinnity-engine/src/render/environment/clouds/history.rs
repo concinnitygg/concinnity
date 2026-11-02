@@ -1,10 +1,22 @@
-//! What the clouds' reconstruction carries from one frame to the next: how the
-//! previous frame projected the sky, so the target texels a frame does not
-//! march are taken from where the previous frame saw them.
+//! What the clouds carry from one frame to the next: how the previous frame
+//! projected the sky, so the target texels a frame does not march are taken
+//! from where the previous frame saw them, and whether the panorama already
+//! holds the clouds around the camera, so a frame blends its rays into it.
 
 use super::{CloudParams, cloud_target_size};
 use crate::render::environment::atmosphere::{AtmosphereFrame, AtmosphereSettings, AtmosphereView};
 use crate::transform::{Mat4, mat4_inverse, mat4_mul};
+use concinnity_core::math::vec3::{length, sub};
+
+// The share of a panorama texel a frame's ray replaces once the panorama is
+// filled: each texel is marched every fourth frame, so it settles over about
+// sixteen frames on the clouds filtered across it.
+const PANORAMA_SHARE: f32 = 0.25;
+
+// How far the camera may move in one frame, as a share of its height over
+// the ground plus a kilometer, before the panorama is marched afresh rather
+// than blended toward.
+const PANORAMA_JUMP: f32 = 0.1;
 
 /// How one frame projects the sky: directions from its camera, in the planet's
 /// fixed axes, onto its clip space, and where that camera was.
@@ -54,11 +66,39 @@ impl CloudProjection {
     }
 }
 
-/// The previous frame's projection, kept from one frame to the next. A change
-/// of the target's size drops it, since the history it addresses is gone.
+// Where the camera was when the panorama last took in the clouds around it.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+struct PanoramaHistory {
+    camera_km: Option<[f32; 3]>,
+}
+
+impl PanoramaHistory {
+    // The share of each marched texel this frame's rays replace for a camera
+    // `camera_km` from the planet's center over ground `ground_km` in radius:
+    // `PANORAMA_SHARE` while the panorama holds the clouds around a camera
+    // near it, else 1, marching it afresh.
+    fn share(&mut self, camera_km: [f32; 3], ground_km: f32) -> f32 {
+        let height = (length(camera_km) - ground_km).max(0.0);
+        let near = self
+            .camera_km
+            .is_some_and(|last| length(sub(camera_km, last)) <= PANORAMA_JUMP * (height + 1.0));
+        self.camera_km = Some(camera_km);
+        if near { PANORAMA_SHARE } else { 1.0 }
+    }
+
+    // Forget the panorama, so the next frame marches it afresh.
+    fn reset(&mut self) {
+        self.camera_km = None;
+    }
+}
+
+/// The previous frame's projection, kept from one frame to the next, and the
+/// panorama's own history. A change of the target's size drops the
+/// projection, since the history it addresses is gone.
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct CloudHistory {
     last: Option<(CloudProjection, [u32; 2])>,
+    panorama: PanoramaHistory,
 }
 
 impl CloudHistory {
@@ -73,9 +113,11 @@ impl CloudHistory {
         previous
     }
 
-    /// Forget the previous frame, as when a frame draws no clouds.
+    /// Forget the previous frame and the panorama, as when a frame draws no
+    /// clouds.
     pub fn reset(&mut self) {
         self.last = None;
+        self.panorama.reset();
     }
 
     /// Frame `index`'s block for the clouds of `settings` in `frame`, seen
@@ -108,9 +150,13 @@ impl CloudHistory {
             cloud_frame.camera_km,
         );
         let previous = self.advance(now, cloud_target_size(scene[0], scene[1]));
+        let share = self
+            .panorama
+            .share(cloud_frame.camera_km, settings.bottom_radius);
         Some(
             CloudParams::new(clouds, settings.bottom_radius, cloud_frame, scene, index)
-                .with_history(previous),
+                .with_history(previous)
+                .with_panorama_share(share),
         )
     }
 }
@@ -192,5 +238,33 @@ mod tests {
         assert_eq!(h.advance(a, [4, 4]), None);
         h.reset();
         assert_eq!(h.advance(a, [4, 4]), None);
+    }
+
+    // The first frame marches the panorama afresh, and later frames blend
+    // into it while the camera moves less than a tenth of its height plus a
+    // kilometer a frame.
+    #[test]
+    fn the_panorama_blends_unless_the_camera_jumps() {
+        let ground = 50.0;
+        let mut p = PanoramaHistory::default();
+        assert_eq!(p.share([0.0, 100.0, 0.0], ground), 1.0);
+        assert_eq!(p.share([0.0, 99.5, 0.3], ground), PANORAMA_SHARE);
+        assert_eq!(p.share([0.0, 92.0, 0.3], ground), 1.0);
+        assert_eq!(p.share([0.0, 92.0, 0.3], ground), PANORAMA_SHARE);
+        let low = [0.0, ground + 0.002, 0.0];
+        assert_eq!(p.share(low, ground), 1.0);
+        assert_eq!(p.share([0.05, ground + 0.002, 0.0], ground), PANORAMA_SHARE);
+        assert_eq!(p.share([0.3, ground + 0.002, 0.0], ground), 1.0);
+        p.reset();
+        assert_eq!(p.share([0.3, ground + 0.002, 0.0], ground), 1.0);
+    }
+
+    // A frame without clouds forgets the panorama.
+    #[test]
+    fn a_cloud_reset_marches_the_panorama_afresh() {
+        let mut h = CloudHistory::default();
+        h.panorama.share([0.0, 60.0, 0.0], 50.0);
+        h.reset();
+        assert_eq!(h.panorama.share([0.0, 60.0, 0.0], 50.0), 1.0);
     }
 }

@@ -1051,7 +1051,7 @@ impl VkContext {
         // maps finished with the barrier at the head of the pass.
         if let Some(clouds) = &atmo.clouds {
             kernel_step(rec);
-            clouds.encode_maps(rec, frame_idx, atmo.sky_cube.work.capture);
+            clouds.encode_maps(rec, frame_idx);
         }
         // The irradiance kernel reads the sky view; the cube opens for writing.
         rec.pipeline_barrier(

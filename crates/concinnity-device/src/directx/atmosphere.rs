@@ -769,8 +769,7 @@ impl DxContext {
         // clouds the panorama is never read, and the sky view holds its table.
         let panorama = match (&atmo.clouds, atmo.cloud_inputs(frame_idx)) {
             (Some(clouds), Some(inputs)) => {
-                let capture = atmo.sky_cube.as_ref().is_some_and(|c| c.work.get().capture);
-                clouds.encode_maps(cmd, inputs, frame_idx, capture);
+                clouds.encode_maps(cmd, inputs, frame_idx);
                 // SAFETY: the kernel root signature is owned by `atmo`.
                 unsafe { cmd.SetComputeRootSignature(&atmo.kernel_root_sig) };
                 // SAFETY: `params_gva` addresses this frame's live constant buffer at parameter 0.

@@ -164,15 +164,14 @@ impl CloudState {
         self.params.is_some()
     }
 
-    // Write this frame's shadow map, and the panorama when `panorama` (the
-    // sky cube redraws), inside the atmosphere's encoder, after building the
-    // noise volume on the first frame. The atmosphere's tables are bound at
-    // the indices the cloud kernels read them at by `bind_tables`.
+    // Write this frame's shadow map and panorama inside the atmosphere's
+    // encoder, after building the noise volume on the first frame. The
+    // atmosphere's tables are bound at the indices the cloud kernels read them
+    // at by `bind_tables`.
     pub(super) fn encode_maps(
         &self,
         enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
         atmo_params: &AtmosphereParams,
-        panorama: bool,
         bind_tables: impl Fn(&ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>),
     ) {
         let Some(params) = self.params.as_ref() else {
@@ -192,11 +191,10 @@ impl CloudState {
         enc.set_pipeline(&self.shadow_kernel);
         enc.set_texture(&self.shadow, 5);
         dispatch(enc, [SHADOW_SIZE, SHADOW_SIZE, 1], [8, 8, 1]);
-        if panorama {
-            enc.set_pipeline(&self.panorama_kernel);
-            enc.set_texture(&self.panorama, 5);
-            dispatch(enc, [PANORAMA_SIZE[0], PANORAMA_SIZE[1], 1], [8, 8, 1]);
-        }
+        enc.set_pipeline(&self.panorama_kernel);
+        enc.set_texture(&self.panorama, 5);
+        let [bw, bh] = cloud_march_size(PANORAMA_SIZE);
+        dispatch(enc, [bw, bh, 1], [8, 8, 1]);
     }
 }
 

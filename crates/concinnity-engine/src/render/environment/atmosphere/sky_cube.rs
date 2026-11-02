@@ -3,10 +3,12 @@
 //! specular term samples in place of an environment map's.
 //!
 //! Redrawing it every frame would cost a full prefilter per frame for a sky
-//! that changes slowly, so it is redrawn only once the sky has moved enough
-//! since the last draw, and the redraw is spread over frames: the sky and the
-//! prefilter's source pyramid in one frame, then one rough mip per frame. The
-//! first fill does it all at once, so nothing ever samples an empty cube.
+//! that changes slowly, so the sky and the prefilter's source pyramid are
+//! redrawn in any frame the sky has moved enough since the last draw, and the
+//! rough mips are convolved one per frame after it. A sky that keeps moving
+//! (a fast climb or descent, a sunset seen from it) is then redrawn as it
+//! moves, while its rough mips sweep round behind it. The first fill does it
+//! all at once, so nothing ever samples an empty cube.
 
 use super::frame::AtmosphereFrame;
 use super::lut::SKY_CUBE_FACE;
@@ -123,8 +125,11 @@ impl SkyCubeWork {
 pub struct SkyCubeSchedule {
     mips: u32,
     drawn: Option<SkyCubeKey>,
-    // The next rough mip of the redraw in progress; `mips` once it is done.
+    // The next rough mip of the sweep in progress; `mips` once it is done.
     next: u32,
+    // Whether the sky was redrawn after the sweep in progress began, so the
+    // mips it already convolved are stale and it goes round again.
+    again: bool,
 }
 
 impl SkyCubeSchedule {
@@ -134,42 +139,45 @@ impl SkyCubeSchedule {
             mips,
             drawn: None,
             next: mips,
+            again: false,
         }
     }
 
     /// This frame's work for a sky with `key`: the whole cube the first
-    /// time; the next rough mip while a redraw is in progress; the sky and
-    /// the pyramid once `key` has moved from the last drawn; else nothing.
+    /// time; else the sky and the pyramid once `key` has moved from the last
+    /// drawn, and the next rough mip while any is older than the sky.
     pub fn plan(&mut self, key: SkyCubeKey) -> SkyCubeWork {
-        match self.drawn {
-            None => {
-                self.drawn = Some(key);
-                self.next = self.mips;
-                SkyCubeWork {
-                    capture: true,
-                    ggx_first: 1,
-                    ggx_end: self.mips,
-                }
-            }
-            Some(_) if self.next < self.mips => {
-                let mip = self.next;
-                self.next += 1;
-                SkyCubeWork {
-                    capture: false,
-                    ggx_first: mip,
-                    ggx_end: mip + 1,
-                }
-            }
-            Some(last) if key.moved_from(&last) => {
-                self.drawn = Some(key);
+        let Some(last) = self.drawn else {
+            self.drawn = Some(key);
+            self.next = self.mips;
+            self.again = false;
+            return SkyCubeWork {
+                capture: true,
+                ggx_first: 1,
+                ggx_end: self.mips,
+            };
+        };
+        let capture = key.moved_from(&last);
+        if capture {
+            self.drawn = Some(key);
+            if self.next < self.mips {
+                self.again = true;
+            } else {
                 self.next = 1;
-                SkyCubeWork {
-                    capture: true,
-                    ggx_first: 1,
-                    ggx_end: 1,
-                }
             }
-            Some(_) => SkyCubeWork::default(),
+        }
+        let mip = self.next;
+        if mip < self.mips {
+            self.next += 1;
+            if self.next == self.mips && self.again {
+                self.next = 1;
+                self.again = false;
+            }
+        }
+        SkyCubeWork {
+            capture,
+            ggx_first: mip,
+            ggx_end: (mip + 1).min(self.mips),
         }
     }
 
@@ -178,6 +186,7 @@ impl SkyCubeSchedule {
     pub fn reset(&mut self) {
         self.drawn = None;
         self.next = self.mips;
+        self.again = false;
     }
 }
 
@@ -186,6 +195,7 @@ mod tests {
     use super::*;
     use crate::components::{Atmosphere, DirectionalLight};
     use crate::sky::SkyOrientation;
+    use alloc::vec::Vec;
 
     fn key(sun: [f32; 3], camera_km: [f32; 3], rows: [[f32; 4]; 3]) -> SkyCubeKey {
         let s = AtmosphereSettings::resolve(&Atmosphere::default(), None);
@@ -221,7 +231,7 @@ mod tests {
         }
     }
 
-    // A sun past the threshold is redrawn over frames: the sky and pyramid,
+    // A sun past the threshold is redrawn at once with the first rough mip,
     // then one rough mip a frame, in order, and nothing once done.
     #[test]
     fn a_moved_sun_is_redrawn_one_mip_a_frame() {
@@ -235,8 +245,9 @@ mod tests {
         assert!(s.plan(near).is_empty());
         let moved = key(sun_at(31.0), GROUND, SkyOrientation::IDENTITY_ROWS);
         let start = s.plan(moved);
-        assert!(start.capture && start.ggx_mips().is_empty());
-        for mip in 1..MIPS {
+        assert!(start.capture);
+        assert_eq!(start.ggx_mips(), 1..2);
+        for mip in 2..MIPS {
             let w = s.plan(moved);
             assert!(!w.capture);
             assert_eq!(w.ggx_mips(), mip..mip + 1);
@@ -244,17 +255,50 @@ mod tests {
         assert!(s.plan(moved).is_empty());
     }
 
-    // A move during a redraw waits for it to finish, then starts another.
+    // A move during a sweep redraws the sky that frame; the sweep carries on
+    // and then goes round again, so every rough mip is convolved from a sky
+    // drawn after the move.
     #[test]
-    fn a_redraw_finishes_before_the_next() {
+    fn a_move_mid_sweep_redraws_at_once_and_sweeps_again() {
         let mut s = SkyCubeSchedule::new(MIPS);
         s.plan(key(sun_at(30.0), GROUND, SkyOrientation::IDENTITY_ROWS));
         s.plan(key(sun_at(31.0), GROUND, SkyOrientation::IDENTITY_ROWS));
         let later = key(sun_at(40.0), GROUND, SkyOrientation::IDENTITY_ROWS);
-        for _ in 1..MIPS {
-            assert!(!s.plan(later).capture);
+        let redraw = s.plan(later);
+        assert!(redraw.capture);
+        assert_eq!(redraw.ggx_mips(), 2..3);
+        let mut swept = Vec::new();
+        loop {
+            let w = s.plan(later);
+            if w.is_empty() {
+                break;
+            }
+            assert!(!w.capture);
+            swept.push(w.ggx_first);
         }
-        assert!(s.plan(later).capture);
+        let expected: Vec<u32> = (3..MIPS).chain(1..MIPS).collect();
+        assert_eq!(swept, expected);
+    }
+
+    // A sky moving every frame is drawn every frame while one rough mip a
+    // frame sweeps round behind it.
+    #[test]
+    fn a_sky_moving_every_frame_is_drawn_every_frame() {
+        let mut s = SkyCubeSchedule::new(MIPS);
+        s.plan(key(sun_at(30.0), GROUND, SkyOrientation::IDENTITY_ROWS));
+        let mut mips = Vec::new();
+        for frame in 1..=2 * MIPS {
+            let w = s.plan(key(
+                sun_at(30.0 + frame as f32),
+                GROUND,
+                SkyOrientation::IDENTITY_ROWS,
+            ));
+            assert!(w.capture);
+            assert_eq!(w.ggx_mips().len(), 1);
+            mips.push(w.ggx_first);
+        }
+        let expected: Vec<u32> = (1..MIPS).cycle().take(mips.len()).collect();
+        assert_eq!(mips, expected);
     }
 
     // Turning the sky moves the sun and the up in the cube's frame alike;

@@ -603,16 +603,10 @@ impl VkClouds {
     }
 
     // The shadow map and the panorama the shaded passes and the sky's cubes
-    // read, the panorama only when `panorama` (the sky cube redraws), inside
-    // the atmosphere's pass after its aerial volume, building the noise volume
-    // on the first frame. Last frame's readers have finished with both, and
+    // read, inside the atmosphere's pass after its aerial volume, building the
+    // noise volume on the first frame. Last frame's readers have finished with both, and
     // the aerial volume's writes are visible, before the caller calls this.
-    pub(in crate::vulkan) fn encode_maps(
-        &self,
-        rec: &Recorder<'_>,
-        frame_idx: usize,
-        panorama: bool,
-    ) {
+    pub(in crate::vulkan) fn encode_maps(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(sets) = self.map_sets.get(frame_idx) else {
             return;
         };
@@ -690,14 +684,12 @@ impl VkClouds {
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             )],
         );
-        if panorama {
-            self.dispatch(
-                rec,
-                &self.panorama_kernel,
-                sets[1],
-                PANORAMA_SIZE.map(|s| s.div_ceil(MARCH_GROUP)),
-            );
-        }
+        self.dispatch(
+            rec,
+            &self.panorama_kernel,
+            sets[1],
+            cloud_march_size(PANORAMA_SIZE).map(|s| s.div_ceil(MARCH_GROUP)),
+        );
     }
 
     fn dispatch(

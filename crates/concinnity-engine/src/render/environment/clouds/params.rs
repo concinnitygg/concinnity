@@ -96,6 +96,9 @@ pub struct CloudParams {
     /// xyz: the previous frame's camera, as `camera`; w: 1 when the previous
     /// frame's target holds its clouds.
     pub prev_camera: [f32; 4],
+    /// x: the share of a marched panorama texel this frame's ray replaces
+    /// (see [`Self::with_panorama_share`]); yzw unused.
+    pub panorama: [f32; 4],
     /// The light the clouds are lit by, in the planet's fixed axes.
     pub daylight: DaylightBlock,
 }
@@ -203,6 +206,7 @@ impl CloudParams {
             ],
             prev_view: crate::transform::IDENTITY,
             prev_camera: [0.0; 4],
+            panorama: [1.0, 0.0, 0.0, 0.0],
             daylight: frame.daylight,
         }
     }
@@ -224,6 +228,17 @@ impl CloudParams {
                 prev_camera: [0.0; 4],
                 ..self
             },
+        }
+    }
+
+    /// This block with the panorama marching one texel of each 2x2 block,
+    /// the one [`march_texel`] names, and replacing `share` of each with this
+    /// frame's ray; a `share` of 1 marches every texel afresh.
+    #[must_use]
+    pub fn with_panorama_share(self, share: f32) -> Self {
+        Self {
+            panorama: [share, 0.0, 0.0, 0.0],
+            ..self
         }
     }
 }
@@ -254,7 +269,7 @@ mod tests {
 
     #[test]
     fn cloud_params_layout_matches_the_shader() {
-        assert_eq!(size_of::<CloudParams>(), 2192);
+        assert_eq!(size_of::<CloudParams>(), 2208);
         assert_eq!(offset_of!(CloudParams, layers), 0);
         assert_eq!(offset_of!(CloudParams, to_fixed), 256);
         assert_eq!(offset_of!(CloudParams, camera), 304);
@@ -268,7 +283,8 @@ mod tests {
         assert_eq!(offset_of!(CloudParams, horizon), 432);
         assert_eq!(offset_of!(CloudParams, prev_view), 448);
         assert_eq!(offset_of!(CloudParams, prev_camera), 512);
-        assert_eq!(offset_of!(CloudParams, daylight), 528);
+        assert_eq!(offset_of!(CloudParams, panorama), 528);
+        assert_eq!(offset_of!(CloudParams, daylight), 544);
     }
 
     #[test]

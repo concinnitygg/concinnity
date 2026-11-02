@@ -358,7 +358,7 @@ impl MtlContext {
         // irradiance and sky-cube kernels read their panorama.
         let panorama = match atmo.clouds.as_ref() {
             Some(clouds) => {
-                clouds.encode_maps(&enc, params, atmo.sky_cube.work.capture, |enc| {
+                clouds.encode_maps(&enc, params, |enc| {
                     enc.set_texture(&atmo.aerial, 1);
                     enc.set_texture(&atmo.transmittance, 2);
                     enc.set_texture(&atmo.multiscatter, 3);

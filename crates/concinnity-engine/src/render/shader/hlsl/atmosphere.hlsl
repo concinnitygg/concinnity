@@ -553,7 +553,7 @@ float3 behind_clouds(float3 dir, float3 light)
     {
         return light;
     }
-    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir), 0.0);
+    float4 c = cloud_panorama.SampleLevel(lut_sampler, cloud_panorama_uv(dir, atmo_camera_up()), 0.0);
     return light * c.a + c.rgb;
 }
 
@@ -1179,20 +1179,18 @@ void cloud_reconstruct_kernel(uint3 id : SV_DispatchThreadID)
 #endif
 
 #ifdef CLOUD_PANORAMA
-// One thread per texel: the clouds along its direction from the camera, at
-// half the view march's steps and without the detail, hazed by the air in
-// front of them, absolute, as the cubes hold their light.
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
+// The clouds along a direction inside panorama texel `texel` from the camera,
+// at half the view march's steps and without the detail, hazed by the air in
+// front of them, absolute, as the cubes hold their light. The point inside
+// the texel and the march's step offset turn each frame.
+float4 cloud_panorama_texel(uint2 texel)
 {
-    if (id.x >= CLOUD_PANORAMA_WIDTH || id.y >= CLOUD_PANORAMA_HEIGHT)
-    {
-        return;
-    }
-    float2 uv = (float2(id.xy) + 0.5) / float2(CLOUD_PANORAMA_WIDTH, CLOUD_PANORAMA_HEIGHT);
-    float3 dir = cloud_panorama_dir(uv);
-    CloudSight sight = cloud_march_ray(dir, 1e9, max(CLOUD.march.x * 0.5, 16.0), 0.5, false);
+    // The R2 sequence over the frame's index.
+    float2 inside = frac(0.5 + CLOUD.shell.w * float2(0.75487767, 0.56984029));
+    float2 uv = (float2(texel) + inside) / float2(CLOUD_PANORAMA_WIDTH, CLOUD_PANORAMA_HEIGHT);
+    float3 dir = cloud_panorama_dir(uv, atmo_camera_up());
+    CloudSight sight = cloud_march_ray(dir, 1e9, max(CLOUD.march.x * 0.5, 16.0),
+                                       cloud_step_offset(int2(texel)), false);
     float3 seen = sight.light;
     float2 air = atmo_aerial_span(dir);
     if (sight.transmittance < 1.0 && air.x >= 0.0)
@@ -1200,7 +1198,33 @@ void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
         float4 haze = aerial_march(dir, air.x, max(sight.distance - air.x, 0.0));
         seen = seen * (1.0 - haze.a) + haze.rgb / ATMO.cam_pos.w * (1.0 - sight.transmittance);
     }
-    cloud_out[id.xy] = float4(seen, sight.transmittance);
+    return float4(seen, sight.transmittance);
+}
+
+// One thread per 2x2 block of texels. A filled panorama marches the block's
+// texel this frame names and blends it in, so over frames it holds the
+// clouds filtered across each texel rather than one ray's view of them; an
+// unfilled one marches all four afresh.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cloud_panorama_kernel(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x * 2u >= CLOUD_PANORAMA_WIDTH || id.y * 2u >= CLOUD_PANORAMA_HEIGHT)
+    {
+        return;
+    }
+    float share = CLOUD.panorama.x;
+    if (share >= 1.0)
+    {
+        for (uint i = 0u; i < 4u; ++i)
+        {
+            uint2 texel = id.xy * 2u + uint2(i & 1u, i >> 1u);
+            cloud_out[texel] = cloud_panorama_texel(texel);
+        }
+        return;
+    }
+    uint2 texel = id.xy * 2u + uint2(CLOUD.scene.zw);
+    cloud_out[texel] = lerp(cloud_out[texel], cloud_panorama_texel(texel), share);
 }
 #endif
 

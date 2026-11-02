@@ -4,7 +4,7 @@
 // kilometers. `render::environment::clouds` mirrors the sizes, and its tests
 // lock the constants below to the Rust ones.
 //
-// CloudParams (2192 B) mirrors `render::environment::clouds::CloudParams`;
+// CloudParams (2208 B) mirrors `render::environment::clouds::CloudParams`;
 // every member is a float4 lane so the three targets lay it out alike.
 
 #ifndef CLOUD_TYPES
@@ -75,6 +75,9 @@ struct CloudParams
     // xyz: the previous frame's camera, as `camera`; w: 1 when the previous
     // frame's target holds its clouds.
     float4 prev_camera;
+    // x: the share of a marched panorama texel this frame's ray replaces; 1
+    // marches every texel afresh.
+    float4 panorama;
     // The light the clouds are lit by, directions in the fixed axes.
     DaylightBlock daylight;
 };
@@ -96,23 +99,39 @@ float cloud_depth_match(float a, float b)
     return smoothstep(0.85, 1.0, ratio);
 }
 
-// Where direction `dir` falls in the cloud panorama: longitude about +y
-// across, from straight up at the top to straight down at the bottom.
-// `panorama_uv` in render::environment::clouds.
-float2 cloud_panorama_uv(float3 dir)
+// `v` turned by the shortest rotation taking +y to the unit `up`, or back
+// from `up` to +y when `back`. The panorama stands on the camera's up so it
+// stays on the clouds when the frame's axes turn under the camera.
+float3 cloud_turn_up(float3 v, float3 up, bool back)
 {
-    float u = atan2(dir.z, dir.x) / (2.0 * CLOUD_TYPES_PI) + 0.5;
-    float v = acos(clamp(dir.y, -1.0, 1.0)) / CLOUD_TYPES_PI;
+    float c = up.y;
+    if (c < -0.9999)
+    {
+        return v;
+    }
+    float3 k = back ? float3(-up.z, 0.0, up.x) : float3(up.z, 0.0, -up.x);
+    return v * c + cross(k, v) + k * (dot(k, v) / (1.0 + c));
+}
+
+// Where direction `dir` falls in the cloud panorama around the camera's unit
+// `up`: longitude about it across, from straight up at the top to straight
+// down at the bottom.
+float2 cloud_panorama_uv(float3 dir, float3 up)
+{
+    float3 d = cloud_turn_up(dir, up, true);
+    float u = atan2(d.z, d.x) / (2.0 * CLOUD_TYPES_PI) + 0.5;
+    float v = acos(clamp(d.y, -1.0, 1.0)) / CLOUD_TYPES_PI;
     return float2(u, v);
 }
 
-// The direction panorama coordinate `uv` stands for.
-float3 cloud_panorama_dir(float2 uv)
+// The direction panorama coordinate `uv` stands for around the camera's unit
+// `up`.
+float3 cloud_panorama_dir(float2 uv, float3 up)
 {
     float phi = (uv.x - 0.5) * 2.0 * CLOUD_TYPES_PI;
     float theta = uv.y * CLOUD_TYPES_PI;
     float s = sin(theta);
-    return float3(s * cos(phi), cos(theta), s * sin(phi));
+    return cloud_turn_up(float3(s * cos(phi), cos(theta), s * sin(phi)), up, false);
 }
 
 #endif

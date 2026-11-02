@@ -63,6 +63,7 @@ pub(in crate::shader_layout) fn clouds() -> Vec<Case> {
             horizon,
             prev_view,
             prev_camera,
+            panorama,
             daylight,
         })),
         everywhere(mirror!(CloudLayerBlock => "CloudLayerBlock" {

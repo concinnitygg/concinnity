@@ -563,16 +563,14 @@ impl DxClouds {
         self.params_buffers.get(frame_idx).map(|b| com::gpu_va(b))
     }
 
-    // Write the shadow map, and the panorama when `panorama` (the sky cube
-    // redraws), after building the noise volume on the first frame. Inside the
-    // atmosphere's pass, after its aerial volume; leaves the march root
-    // signature bound.
+    // Write the shadow map and the panorama, after building the noise volume
+    // on the first frame. Inside the atmosphere's pass, after its aerial
+    // volume; leaves the march root signature bound.
     pub(in crate::directx) fn encode_maps(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         inputs: MarchInputs,
         frame_idx: usize,
-        panorama: bool,
     ) {
         let Some(params_gva) = self.params_gva(frame_idx) else {
             return;
@@ -603,20 +601,17 @@ impl DxClouds {
             unsafe { cmd.ResourceBarrier(&[close(&self.noise)]) };
             self.noise_built.set(true);
         }
-        let shadow = [(&self.shadow, &self.shadow_pso, SHADOW_UAV, [SHADOW_SIZE; 2])];
-        let both = [
-            shadow[0],
+        let maps = [
+            (&self.shadow, &self.shadow_pso, SHADOW_UAV, [SHADOW_SIZE; 2]),
             (
                 &self.panorama,
                 &self.panorama_pso,
                 PANORAMA_UAV,
-                PANORAMA_SIZE,
+                cloud_march_size(PANORAMA_SIZE),
             ),
         ];
-        let maps: &[(&ID3D12Resource, &ID3D12PipelineState, usize, [u32; 2])] =
-            if panorama { &both } else { &shadow };
         bind_march(cmd, self, inputs, params_gva);
-        for &(map, pso, uav, size) in maps {
+        for (map, pso, uav, grid) in maps {
             // SAFETY: the command list is recording and the map rests in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(map)]) };
             // SAFETY: the kernel is owned by `clouds` and matches the march root signature bound
@@ -624,7 +619,7 @@ impl DxClouds {
             unsafe { cmd.SetPipelineState(pso) };
             // SAFETY: table 6 of the march root signature takes the map's UAV in the bound heap.
             unsafe { cmd.set_compute_srv_table(6, self.slots.gpu[uav]) };
-            let groups = size.map(|s| s.div_ceil(MARCH_GROUP));
+            let groups = grid.map(|s| s.div_ceil(MARCH_GROUP));
             // SAFETY: the pipeline, root signature, constants and tables are bound.
             unsafe { cmd.Dispatch(groups[0], groups[1], 1) };
             // SAFETY: the map was opened for unordered access above.
