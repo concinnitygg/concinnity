@@ -10,7 +10,7 @@ fn profile_with_tier(tier: GpuTier) -> GpuProfile {
 
 #[test]
 fn only_custom_imposes_no_ceiling() {
-    // Custom never clamps, regardless of hardware.
+    // A Custom entered from no preset never clamps, regardless of hardware.
     assert_eq!(
         resolve_ceiling(
             QualityPreset::Custom,
@@ -24,6 +24,24 @@ fn only_custom_imposes_no_ceiling() {
         resolve_ceiling(QualityPreset::Auto, &profile_with_tier(GpuTier::Unknown)),
         QualityCeiling::MEDIUM
     );
+}
+
+// Custom keeps the ceiling of the preset it was entered from; every other
+// preset keeps its own.
+#[test]
+fn custom_runs_under_the_preset_it_was_entered_from() {
+    for from in QualityPreset::ALL {
+        assert_eq!(ceiling_preset(QualityPreset::Custom, Some(from)), from);
+    }
+    assert_eq!(
+        ceiling_preset(QualityPreset::Custom, None),
+        QualityPreset::Custom
+    );
+    for preset in QualityPreset::ALL {
+        if preset != QualityPreset::Custom {
+            assert_eq!(ceiling_preset(preset, Some(QualityPreset::Low)), preset);
+        }
+    }
 }
 
 #[test]

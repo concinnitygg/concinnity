@@ -12,7 +12,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{DisplayModes, FrameRateCap, PipelineContext};
 use crate::platform::{CompiledPlatforms, GraphicsApiStatus};
 use crate::render::backend;
-use crate::settings::quality::{auto_upscaling, preset_label};
+use crate::settings::quality::{auto_upscaling, ceiling_preset, preset_label};
 use crate::settings::registry::{self, DEFAULT_VOLUME};
 use crate::settings::rows::{quality_cycle, quality_toggle};
 use crate::settings::{
@@ -42,7 +42,7 @@ pub struct SettingsInit<'a> {
     pub capabilities: backend::DeviceCapabilities,
     /// The master quality preset this launch runs.
     pub preset: QualityPreset,
-    /// The preset's ceiling on this GPU.
+    /// The ceiling on this GPU of the preset's [`ceiling_preset`].
     pub ceiling: &'a QualityCeiling,
     /// The world's window, when it declares one.
     pub window: Option<Window>,
@@ -83,7 +83,8 @@ impl SettingsState {
         }
         let fullscreen = state.resolution;
         state.output = display_mode::predicted_output(&state.window_args, fullscreen, init.display);
-        state.auto_upscaling = auto_upscaling(init.preset, &init.gpu_profile, state.output);
+        let tier = ceiling_preset(init.preset, user.customized_from);
+        state.auto_upscaling = auto_upscaling(tier, &init.gpu_profile, state.output);
         state.authored = init.authored;
         state.session = init.session;
         state.resolved = state.resolve(user, init.ceiling);
@@ -173,6 +174,7 @@ impl SettingsState {
         self.capture_perf_sub_rows(ctx);
         self.capture_resolution_row(ctx);
         self.capture_ssr_row(ctx);
+        self.gate_launch_fixed_rows(ctx);
     }
 
     /// Adopt what the built backend reports about the display, when there is a
@@ -250,36 +252,38 @@ pub fn gate_unavailable_rows(
     vendor: backend::GpuVendor,
 ) {
     let compiled = ctx.resource::<CompiledPlatforms>().map_or(&[][..], |c| c.0);
-    // Mark each unavailable setting's region(s) disabled and collect their
-    // value-label ids (both stepper regions of a row reference its value
-    // label, so this is the row's anchor into the scroll element list).
-    let mut gated: hashbrown::HashSet<AssetId> = hashbrown::HashSet::new();
     // A single-API build's Graphics API row names the API it renders with,
     // which the device does support: it is grayed without the suffix.
-    let mut unsuffixed: hashbrown::HashSet<AssetId> = hashbrown::HashSet::new();
-    let unavailable: Vec<(SettingKey, Option<AssetId>)> = ctx
-        .query::<HitRegion>()
-        .filter_map(|r| match r.action {
-            Some(UiAction::Setting { key, .. })
-                if !registry::setting_available(key, caps, vendor, compiled) =>
-            {
-                Some((key, r.label.map(crate::ecs::reference::Ref::id)))
-            }
-            _ => None,
-        })
-        .collect();
+    disable_rows(
+        ctx,
+        |key| !registry::setting_available(key, caps, vendor, compiled),
+        |key| key != SettingKey::GraphicsApi,
+    );
+}
+
+// Disable every settings row whose key is `disabled`, gray its labels, and mark
+// the value label unsupported where `marked`.
+pub(super) fn disable_rows(
+    ctx: &mut PipelineContext<'_>,
+    disabled: impl Fn(SettingKey) -> bool,
+    marked: impl Fn(SettingKey) -> bool,
+) {
+    // Both stepper regions of a row reference its value label, so the value
+    // label is the row's anchor into the scroll element list.
+    let mut gated: hashbrown::HashSet<AssetId> = hashbrown::HashSet::new();
+    let mut marked_labels: hashbrown::HashSet<AssetId> = hashbrown::HashSet::new();
     for r in ctx.query_mut::<HitRegion>() {
-        if let Some(UiAction::Setting { key, .. }) = r.action
-            && unavailable.iter().any(|(k, _)| *k == key)
-        {
-            r.disabled = true;
+        let Some(UiAction::Setting { key, .. }) = r.action else {
+            continue;
+        };
+        if !disabled(key) {
+            continue;
         }
-    }
-    for (key, label) in unavailable {
-        if let Some(label) = label {
+        r.disabled = true;
+        if let Some(label) = r.label.map(crate::ecs::reference::Ref::id) {
             gated.insert(label);
-            if key == SettingKey::GraphicsApi {
-                unsuffixed.insert(label);
+            if marked(key) {
+                marked_labels.insert(label);
             }
         }
     }
@@ -294,7 +298,7 @@ pub fn gate_unavailable_rows(
                 .map(|r| r.elements.iter().map(|e| e.id()).collect())
         })
         .collect();
-    for &id in gated.difference(&unsuffixed) {
+    for &id in &marked_labels {
         crate::ecs::by_asset_id::update::<TextLabel>(ctx, Some(id), |l| {
             let marked: String = registry::unsupported_label(&l.content);
             l.content = marked;

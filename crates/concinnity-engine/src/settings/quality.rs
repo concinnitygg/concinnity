@@ -8,6 +8,10 @@
 //! user override always wins over it. The component defaults author the
 //! top-tier look, so under `Auto` the ceiling is what picks a world's quality:
 //! every tier below Ultra is reached by clamping, not by opting in.
+//!
+//! The preset is the only setting that moves others. A per-row change opts the
+//! preset out to `Custom`, which keeps the ceiling of the preset it left
+//! ([`ceiling_preset`]), so every row the user did not touch keeps its value.
 
 use crate::render::environment::clouds::CloudMarch;
 use crate::render::environment::grass::GrassThinning;
@@ -22,7 +26,8 @@ use crate::water::ocean::OceanQuality;
 
 /// The master graphics-quality choice. `Auto` resolves from the detected GPU
 /// tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`
-/// imposes no ceiling (the user's per-row overrides drive).
+/// keeps the ceiling of the preset it was entered from, with the user's per-row
+/// overrides over it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QualityPreset {
     /// Resolve the ceiling from the GPU tier detected at launch.
@@ -35,7 +40,8 @@ pub enum QualityPreset {
     High,
     /// Fixed top-tier ceiling.
     Ultra,
-    /// No ceiling: the world's authored look and the per-row overrides stand.
+    /// The ceiling of the preset it was entered from (none without one), with
+    /// the per-row overrides over it.
     Custom,
 }
 
@@ -152,7 +158,7 @@ const PLANAR_PLANES_MAX: u32 = planar_reflection::MAX_PLANAR_PLANES as u32;
 
 impl QualityCeiling {
     /// No ceiling: everything permitted, no forced upscaling. What `Custom`
-    /// resolves to.
+    /// resolves to when it was entered from no other preset.
     pub const NONE: Self = Self {
         aa_mode: AaMode::Taa,
         ssao: true,
@@ -348,7 +354,8 @@ pub fn more_aggressive_upscale(a: UpscaleQuality, b: UpscaleQuality) -> UpscaleQ
 }
 
 /// The active ceiling for a preset on this GPU. `Auto` maps the GPU tier to a
-/// named tier; `Custom` imposes none; a named tier is fixed.
+/// named tier; `Custom` imposes none; a named tier is fixed. Pass the
+/// [`ceiling_preset`], so a `Custom` keeps the ceiling it was entered from.
 pub fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> QualityCeiling {
     match preset {
         QualityPreset::Custom => QualityCeiling::NONE,
@@ -360,6 +367,19 @@ pub fn resolve_ceiling(preset: QualityPreset, profile: &GpuProfile) -> QualityCe
     }
 }
 
+/// The preset whose ceiling `preset` runs under: `Custom` keeps the ceiling of
+/// the preset it was entered from, `customized_from`, and every other preset
+/// its own.
+pub fn ceiling_preset(
+    preset: QualityPreset,
+    customized_from: Option<QualityPreset>,
+) -> QualityPreset {
+    match (preset, customized_from) {
+        (QualityPreset::Custom, Some(from)) => from,
+        _ => preset,
+    }
+}
+
 /// The output size, in pixels, above which a tier below the top upscales:
 /// 2560x1440.
 pub const AUTO_UPSCALE_PIXELS: u64 = 2560 * 1440;
@@ -367,8 +387,8 @@ pub const AUTO_UPSCALE_PIXELS: u64 = 2560 * 1440;
 /// Whether the preset turns temporal upscaling on where neither the world nor
 /// the user chose: every tier below Ultra, named or reached through `Auto`, on
 /// an output of more than [`AUTO_UPSCALE_PIXELS`]. The render scale is the
-/// tier's `min_upscale`. Ultra renders natively, and `Custom` keeps the world's
-/// choice.
+/// tier's `min_upscale`. Ultra renders natively, and a `Custom` with no ceiling
+/// keeps the world's choice. Pass the [`ceiling_preset`].
 pub fn auto_upscaling(preset: QualityPreset, profile: &GpuProfile, output: [u32; 2]) -> bool {
     preset != QualityPreset::Custom
         && resolve_ceiling(preset, profile) != QualityCeiling::ULTRA

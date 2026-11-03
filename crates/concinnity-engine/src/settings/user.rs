@@ -15,6 +15,7 @@ use crate::components::{
 };
 use crate::platform::Platform;
 use crate::render::output::dlss::DlssPreset;
+use crate::settings::SettingKey;
 use crate::settings::quality::QualityPreset;
 
 /// Persisted overrides for graphics settings. Missing fields stay `None` and
@@ -25,9 +26,15 @@ pub struct UserGraphicsSettings {
     /// launch seeds `Auto` (detect the GPU tier and clamp quality under the
     /// world's authored look) and saves once. `Auto` re-resolves from the
     /// detected tier each launch; a named tier is a fixed ceiling; `Custom`
-    /// imposes no ceiling (only the per-field overrides below apply).
+    /// keeps the ceiling of `customized_from` under the per-field overrides
+    /// below.
     #[serde(default, deserialize_with = "lenient")]
     pub quality_preset: Option<QualityPreset>,
+    /// The preset `Custom` was entered from, whose ceiling it keeps, so a
+    /// per-field change moves only that field. `None` under `Custom` imposes
+    /// no ceiling.
+    #[serde(default, deserialize_with = "lenient")]
+    pub customized_from: Option<QualityPreset>,
     /// Display sync (vsync). `None` uses the world's `FramePacing.vsync`.
     #[serde(default)]
     pub vsync: Option<bool>,
@@ -274,12 +281,33 @@ pub enum GraphicsApiTrial {
 }
 
 impl UserGraphicsSettings {
+    /// Whether these overrides, as a launch's session overrides, fix `key`'s
+    /// row for the whole run. A preset fixes the preset row and every row it
+    /// governs, since a change to one would save a `Custom` entered from it.
+    pub fn fixes(&self, key: SettingKey) -> bool {
+        let preset_fixed = self.quality_preset.is_some();
+        match key {
+            SettingKey::GraphicsQuality => preset_fixed,
+            SettingKey::GraphicsApi => self.graphics_api.is_some(),
+            SettingKey::Vsync => self.vsync.is_some(),
+            SettingKey::FpsCap => self.fps_cap.is_some(),
+            SettingKey::WindowMode => self.window_mode.is_some(),
+            SettingKey::TemporalUpscaling => self.temporal_upscaling.is_some(),
+            SettingKey::DlssPreset => self.dlss_preset.is_some(),
+            SettingKey::RayTracedReflections => {
+                preset_fixed || self.ray_traced_reflections.is_some()
+            }
+            key => preset_fixed && key.preset_governed(),
+        }
+    }
+
     /// These overrides with each one `top` sets in place of this one's: how a
     /// session override layers over the user's persisted choices.
     #[must_use]
     pub fn overlaid_by(&self, top: &Self) -> Self {
         let Self {
             quality_preset,
+            customized_from,
             vsync,
             fps_cap,
             perf_stats,
@@ -335,6 +363,7 @@ impl UserGraphicsSettings {
         } = *top;
         Self {
             quality_preset: quality_preset.or(self.quality_preset),
+            customized_from: customized_from.or(self.customized_from),
             vsync: vsync.or(self.vsync),
             fps_cap: fps_cap.or(self.fps_cap),
             perf_stats: perf_stats.or(self.perf_stats),

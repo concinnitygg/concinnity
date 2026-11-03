@@ -1,6 +1,7 @@
 // The quality-governed settings rows: the master "Graphics Quality" preset, the
 // feature toggles, and the cycle quality knobs. A per-row change opts the preset
-// out to Custom.
+// out to Custom, which keeps the ceiling it left, so only the preset moves other
+// rows.
 
 use crate::components::{SettingCommand, SettingOp};
 use crate::ecs::PipelineContext;
@@ -18,8 +19,8 @@ impl SettingsState {
     // enables a feature the world did not author), so picking a tier or Auto
     // clears the per-row quality overrides and re-resolves the preset-governed
     // group from the world's baseline under the new ceiling, exactly as the next
-    // launch will. Custom resolves to the no-op ceiling (the world's look). See
-    // `crate::settings::quality`.
+    // launch will. Picking Custom keeps every value: the ceiling it left and the
+    // per-row overrides. See `crate::settings::quality`.
     pub(super) fn apply_quality_preset(
         &mut self,
         ctx: &mut PipelineContext<'_>,
@@ -30,10 +31,18 @@ impl SettingsState {
         let cur = levels::GRAPHICS_QUALITY.index_of(self.quality_preset);
         let next = registry::cycle(cur, opts.len(), cmd.op);
         let preset = levels::GRAPHICS_QUALITY.at(next);
+        if preset == QualityPreset::Custom {
+            self.opt_out_of_preset(ctx, cfg);
+            if let Some(id) = cmd.value_label {
+                set_label_content(ctx, id, preset.name());
+            }
+            return true;
+        }
         self.quality_preset = preset;
         let ceiling = resolve_ceiling(preset, &self.gpu_profile);
 
         cfg.graphics.quality_preset = Some(preset);
+        cfg.graphics.customized_from = None;
         for row in &QUALITY_TOGGLES {
             *(row.persisted.get_mut)(&mut cfg.graphics) = None;
         }
@@ -158,12 +167,17 @@ impl SettingsState {
     }
 
     // An explicit per-row quality change opts the master preset out to Custom
-    // (no ceiling clamps the user's choice) and relabels the master row.
+    // and relabels the master row. Custom keeps the ceiling of the preset it
+    // left, so every row the user did not touch resolves as it did; the user's
+    // own choice beats that ceiling for its row.
     pub(super) fn opt_out_of_preset(
         &mut self,
         ctx: &mut PipelineContext<'_>,
         cfg: &mut StoredSettings,
     ) {
+        if self.quality_preset != QualityPreset::Custom {
+            cfg.graphics.customized_from = Some(self.quality_preset);
+        }
         self.quality_preset = QualityPreset::Custom;
         cfg.graphics.quality_preset = Some(self.quality_preset);
         set_cached_row_label(

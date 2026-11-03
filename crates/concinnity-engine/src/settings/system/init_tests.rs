@@ -9,7 +9,7 @@ use crate::components::{
 use crate::ecs::Resources;
 use crate::launch::{LaunchArgs, LaunchRequest};
 use crate::render::backend::{DeviceCapabilities, GpuProfile, GpuTier, GpuVendor};
-use crate::settings::quality::resolve_ceiling;
+use crate::settings::quality::{ceiling_preset, resolve_ceiling};
 use crate::settings::{
     QualityPreset, ResolvedGraphics, StoredSettings, WorldAssets, WorldSettings,
 };
@@ -59,7 +59,8 @@ impl Launch {
         let preset = self
             .request
             .resolve_quality_preset(&self.stored, &mut Resources::default());
-        let ceiling = resolve_ceiling(preset, &self.profile);
+        let tier = ceiling_preset(preset, self.stored.graphics.customized_from);
+        let ceiling = resolve_ceiling(tier, &self.profile);
         SettingsState::from_init(SettingsInit {
             stored: &self.stored,
             gpu_profile: self.profile,
@@ -104,7 +105,7 @@ pub(super) fn profile_at(tier: GpuTier) -> GpuProfile {
     }
 }
 
-fn stored_preset(preset: QualityPreset) -> StoredSettings {
+pub(super) fn stored_preset(preset: QualityPreset) -> StoredSettings {
     let mut stored = StoredSettings::default();
     stored.graphics.quality_preset = Some(preset);
     stored
@@ -476,7 +477,7 @@ fn auto_upscales_a_high_resolution_output() {
 
 // A mid-tier GPU launching a 1600x900 window onto a Retina display, which
 // Auto upscales.
-fn retina_launch() -> Launch {
+pub(super) fn retina_launch() -> Launch {
     let mut launch = Launch::new(GraphicsConfig::default()).on(profile_at(GpuTier::MidDiscrete));
     launch.window = Some(Window {
         width: 1600,

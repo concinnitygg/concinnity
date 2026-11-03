@@ -129,6 +129,31 @@ impl SettingKey {
         }
     }
 
+    /// Whether the quality preset clamps this setting, so changing it by hand
+    /// switches the preset to `Custom`.
+    pub const fn preset_governed(self) -> bool {
+        matches!(
+            self,
+            Self::RenderScale
+                | Self::AaMode
+                | Self::SsgiResolution
+                | Self::SsgiRays
+                | Self::RtReflectionResolution
+                | Self::ReflectionBlurResolution
+                | Self::ShadowMapSize
+                | Self::ShadowUpdate
+                | Self::ShadowDistance
+                | Self::ShadowCascades
+                | Self::Anisotropy
+                | Self::Ssao
+                | Self::Ssr
+                | Self::RayTracedReflections
+                | Self::RtReflectionShadows
+                | Self::Ssgi
+                | Self::AutoExposure
+        )
+    }
+
     /// The authored asset field this setting overrides, or `None` for a
     /// setting with no authored counterpart (the preset, the graphics API, a
     /// volume, a binding).

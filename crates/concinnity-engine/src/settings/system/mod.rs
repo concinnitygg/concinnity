@@ -34,7 +34,7 @@ use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::{backend, frame::snapshot, scene::flow};
 use crate::settings::apply::{ApplyPlan, plan_apply};
-use crate::settings::quality::resolve_ceiling;
+use crate::settings::quality::{ceiling_preset, resolve_ceiling};
 use crate::settings::{
     GraphicsApiTrial, QualityCeiling, QualityPreset, ResolvedGraphics, ResolvedSettings,
     SettingKey, SettingsLayers, SettingsRevision, UserGraphicsSettings, WorldSettings,
@@ -49,6 +49,9 @@ mod init_rows_tests;
 mod init_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod inspect;
+mod launch_fixed;
+#[cfg(test)]
+mod launch_fixed_tests;
 mod persist;
 mod quality;
 mod rebind;
@@ -387,7 +390,8 @@ impl SettingsState {
 
     // The active quality preset's performance ceiling on this GPU.
     pub(crate) fn ceiling(&self) -> QualityCeiling {
-        resolve_ceiling(self.quality_preset, &self.gpu_profile)
+        let preset = ceiling_preset(self.quality_preset, self.persisted_graphics.customized_from);
+        resolve_ceiling(preset, &self.gpu_profile)
     }
 
     // The resolver's layers: the authored baseline, `ceiling`, the user's

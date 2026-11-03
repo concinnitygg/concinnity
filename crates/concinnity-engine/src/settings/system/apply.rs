@@ -212,6 +212,13 @@ impl SettingsState {
         cmd: &SettingCommand,
     ) -> bool {
         use SettingKey as K;
+        if self.fixed_by_launch(cmd.setting) {
+            tracing::warn!(
+                "SettingsSystem: {:?} is fixed by a launch flag for this run",
+                cmd.setting
+            );
+            return false;
+        }
         let op = cmd.op;
         let stepper = matches!(
             op,

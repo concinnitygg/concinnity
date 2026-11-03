@@ -13,8 +13,9 @@ keeps that value.
 `graphics_quality` picks a preset: `Auto`, a named tier (Low, Medium, High,
 Ultra), or `Custom`. A tier is a ceiling over the world's authored look: it lowers
 the settings below where a world asks for more than the tier allows, and never
-turns a feature on. `Custom` imposes no ceiling. Changing any setting the preset
-governs switches the preset to `Custom`.
+turns a feature on. Changing any setting the preset governs switches the preset
+to `Custom`, which keeps the ceiling of the preset it left, so only that setting
+changes. Picking `Custom` itself keeps every current value.
 
 `Auto` picks the tier from the GPU, each launch:
 

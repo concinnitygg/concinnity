@@ -251,6 +251,7 @@ fn worlds() -> Vec<(&'static str, WorldSettings)> {
 fn users() -> Vec<(&'static str, UserGraphicsSettings)> {
     let every = UserGraphicsSettings {
         quality_preset: Some(QualityPreset::Custom),
+        customized_from: None,
         vsync: Some(true),
         fps_cap: Some(60),
         perf_stats: Some(false),

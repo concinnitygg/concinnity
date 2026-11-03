@@ -47,7 +47,7 @@ use concinnity_engine::render::world_load::world_fx::drain_world_fx;
 use concinnity_engine::render::world_load::world_scan::{
     capture_hud_chips, color_lut_strength, cursor_policy, declares_frame_captures, font_less_text,
 };
-use concinnity_engine::settings::quality::resolve_ceiling;
+use concinnity_engine::settings::quality::{ceiling_preset, resolve_ceiling};
 use concinnity_engine::settings::system::{
     DisplayReport, SettingsInit, SettingsSlot, SettingsState,
 };
@@ -110,7 +110,8 @@ impl GraphicsSystem {
         // `--graphics-quality` wins and is never persisted; a preset never
         // chosen seeds and persists `Auto` once.
         let preset = launch.resolve_quality_preset(persisted, ctx.resources);
-        let ceiling = resolve_ceiling(preset, &gpu_profile);
+        let tier = ceiling_preset(preset, persisted.graphics.customized_from);
+        let ceiling = resolve_ceiling(tier, &gpu_profile);
         tracing::info!(
             "auto-config: GPU tier {:?}, quality preset {:?}",
             gpu_profile.tier,

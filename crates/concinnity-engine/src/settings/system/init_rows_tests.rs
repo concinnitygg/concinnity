@@ -419,10 +419,10 @@ fn master_toggles_gray_the_rows_they_govern() {
 }
 
 // `--dlss-preset` outranks the stored preset for the launch: the state builds
-// with it and the row shows it, while the store keeps the saved choice until
-// the row itself is cycled.
+// with it and the row shows it, fixed for the run, while the store keeps the
+// saved choice.
 #[test]
-fn a_forced_dlss_preset_reaches_the_menu_unpersisted() {
+fn a_forced_dlss_preset_shows_on_a_fixed_row_unpersisted() {
     const ROW_LABEL: AssetId = AssetId(700);
     let mut saved = StoredSettings::default();
     saved.graphics.dlss_preset = Some(DlssPreset::K);
@@ -474,7 +474,8 @@ fn a_forced_dlss_preset_reaches_the_menu_unpersisted() {
         ((DlssPreset::M, Some(DlssPreset::K)), "M".to_string())
     );
 
-    // Cycling the row steps from the forced value and saves the preset alone.
+    // The row is inert, and a command for it changes and saves nothing.
+    assert!(world.query::<HitRegion>().all(|r| r.disabled));
     world.insert_resource(saved.clone());
     world.events_mut::<SettingCommand>().send(SettingCommand {
         setting: SettingKey::DlssPreset,
@@ -483,14 +484,8 @@ fn a_forced_dlss_preset_reaches_the_menu_unpersisted() {
         persist: true,
     });
     live.apply_setting_commands(&mut world.context(), &mut RenderOps::default());
-    assert_eq!(live.resolved().graphics.dlss_preset, DlssPreset::Default);
-    assert_eq!(label_text(&mut world, ROW_LABEL), "Default");
-    let mut expected = saved;
-    expected.graphics.dlss_preset = Some(DlssPreset::Default);
-    assert_eq!(world.resource::<StoredSettings>(), Some(&expected));
-    assert!(
-        world
-            .resource::<SettingsRevision>()
-            .is_some_and(|r| r.0 > 0)
-    );
+    assert_eq!(live.resolved().graphics.dlss_preset, DlssPreset::M);
+    assert_eq!(label_text(&mut world, ROW_LABEL), "M");
+    assert_eq!(world.resource::<StoredSettings>(), Some(&saved));
+    assert!(world.resource::<SettingsRevision>().is_none());
 }

@@ -9,6 +9,7 @@ use concinnity_engine::components::{InputKey, SettingCommand, SettingOp};
 use concinnity_engine::ecs::{ViewOverrides, World};
 use concinnity_engine::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_engine::input::keymap::Bindable;
+use concinnity_engine::launch::LaunchRequest;
 use concinnity_engine::settings::SettingKey;
 use serde_json::{Value, json};
 
@@ -66,7 +67,7 @@ const SHOW_FLAGS: [&str; ShowFlags::NAMED.len()] = {
 pub(in crate::debug) const VERBS: &[Verb] = &[
     Verb {
         name: "quality-set",
-        description: "Step the quality preset, a quality feature toggle, or a quality knob live, the way the settings menu does.",
+        description: "Step the quality preset, a quality feature toggle, or a quality knob live, the way the settings menu does. A setting a launch flag fixed for the run is refused.",
         access: Access::Mutating,
         params: &[
             required(
@@ -152,11 +153,24 @@ fn quality_set(call: &Call<'_>, args: Args) -> Reply {
         Step::Next => SettingOp::Next,
         Step::Prev => SettingOp::Prev,
     };
-    call.on_world(move |world, _| {
-        send_setting(world, setting, op);
-        Ok(())
-    })?;
+    call.on_world(move |world, _| send_quality_step(world, setting, op))?;
     Ok(queued())
+}
+
+// Send a quality step the settings drain would apply, or refuse a row a launch
+// flag fixed for this run, which the drain would ignore.
+fn send_quality_step(world: &mut World, setting: SettingKey, op: SettingOp) -> Result<(), String> {
+    if world
+        .resource::<LaunchRequest>()
+        .is_some_and(|launch| launch.fixes_setting(setting))
+    {
+        return Err(format!(
+            "quality-set: '{}' is fixed by a launch flag for this run",
+            setting.as_str()
+        ));
+    }
+    send_setting(world, setting, op);
+    Ok(())
 }
 
 // `setting` names a movement action (`key_forward`, `key_jump`, ...); `key` is
@@ -314,6 +328,47 @@ mod tests {
                     .unwrap_err()
                     .contains(&format!("unknown setting '{key}'"))
             );
+        }
+        assert!(sent(&engine).is_empty());
+    }
+
+    // A quality row a launch flag fixed for the run is refused with an error
+    // instead of a queued no-op; a row it leaves free still steps.
+    #[test]
+    fn quality_set_refuses_a_row_a_launch_flag_fixed() {
+        use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
+        use concinnity_engine::settings::QualityPreset;
+
+        let launched = |args| {
+            let mut world = World::new();
+            world.insert_resource(LaunchRequest {
+                args,
+                ..Default::default()
+            });
+            Engine::new(world)
+        };
+        let mut engine = launched(LaunchArgs {
+            rt_reflections: Some(false),
+            ..LaunchArgs::NONE
+        });
+        let error = engine.call(
+            "quality-set",
+            &json!({ "setting": "ray_traced_reflections" }),
+        );
+        assert!(error.unwrap_err().contains("fixed by a launch flag"));
+        assert!(sent(&engine).is_empty());
+        assert_eq!(
+            engine.call("quality-set", &json!({ "setting": "ssao" })),
+            Ok(json!({ "queued": true }))
+        );
+
+        let mut engine = launched(LaunchArgs {
+            graphics_quality: Some(QualityPreset::Low),
+            ..LaunchArgs::NONE
+        });
+        for name in QUALITY_SETTINGS {
+            let error = engine.call("quality-set", &json!({ "setting": name }));
+            assert!(error.is_err(), "{name}");
         }
         assert!(sent(&engine).is_empty());
     }

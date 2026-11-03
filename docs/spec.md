@@ -1895,10 +1895,13 @@ At first launch the GPU is classified into a tier:
 
 The quality preset is `Auto`, `Low`, `Medium`, `High`, `Ultra`, or `Custom`.
 `Auto` maps Integrated to Low, Entry and Unknown to Medium, Mid to High, and High
-to Ultra, re-resolving each launch. A named preset is a fixed ceiling; `Custom`
-imposes none. Every tier below Ultra, named or reached through `Auto`, turns
-temporal upscaling on for an output larger than 2560x1440 where neither the
-world nor the user chose, at the tier's minimum upscale quality.
+to Ultra, re-resolving each launch. A named preset is a fixed ceiling. Changing
+a setting the preset governs by hand switches the preset to `Custom`, which keeps
+the ceiling of the preset it left, so only the changed setting moves: the preset
+is the only setting that changes others. Every tier below Ultra, named or reached
+through `Auto`, turns temporal upscaling on for an output larger than 2560x1440
+where neither the world nor the user chose, at the tier's minimum upscale
+quality.
 
 **The preset is a ceiling, never a floor.** It only lowers what the world
 authored. The settings assets default to the look capable hardware runs (TAA, ambient occlusion, reflections, SSGI, 4096-texel every-frame
@@ -2790,10 +2793,15 @@ one of three ways:
 | ---------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
 | Live             | This frame.                                                                | FPS cap, HUD toggles, shadow distance, cascade count.    |
 | Restart-required | Sized once at backend init.                                                | Render scale, upscaler backend, anisotropy.              |
-| Preset-governed  | Clamped by the quality preset; a manual change flips the preset to Custom. | Shadow settings, effect quality.                         |
+| Preset-governed  | Clamped by the preset; a manual change goes Custom at the same ceiling.    | Shadow settings, effect quality.                         |
 
 The quality preset resolves at first launch from the GPU tier (12.17) and is saved
 once.
+
+A launch option that sets a setting (the quality preset, graphics API, window mode,
+vsync, frame-rate cap, upscaling, ray-traced reflections or DLSS preset) fixes it for
+the whole run: its row shows the option's value, grayed and inert, and the value is
+never saved. A preset given at launch also fixes every row the preset governs.
 
 ### 27.2 Saves
 

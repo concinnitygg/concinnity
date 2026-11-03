@@ -892,7 +892,7 @@ fn resolution_without_enumerated_modes_is_inert() {
 }
 
 // A quality toggle flips the live feature, rebuilds it on the backend, and opts
-// the master preset out to Custom (no ceiling clamps an explicit choice).
+// the master preset out to Custom, which keeps the ceiling it left.
 #[test]
 fn quality_toggle_flips_the_master_preset_to_custom() {
     let mut f = Fixture::with_profile(GpuProfile::UNKNOWN);
@@ -904,6 +904,7 @@ fn quality_toggle_flips_the_master_preset_to_custom() {
     assert_eq!(f.label(QUALITY_LABEL), QualityPreset::Custom.name());
     let cfg = f.persisted();
     assert_eq!(cfg.graphics.quality_preset, Some(QualityPreset::Custom));
+    assert_eq!(cfg.graphics.customized_from, Some(QualityPreset::High));
     assert!(cfg.graphics.ssao.is_some());
 }
 
@@ -1177,6 +1178,180 @@ fn graphics_quality_preset_clears_overrides_and_re_derives_the_rows() {
     assert_eq!(cfg.graphics.shadow_map_size, None);
     assert_eq!(cfg.graphics.render_scale, None);
     assert_eq!(cfg.graphics.anisotropy, None);
+    assert_eq!(cfg.graphics.customized_from, None);
+}
+
+// A row change under Custom keeps the ceiling Custom was entered from, so a
+// second change does not move it to the preset Custom itself would name.
+#[test]
+fn a_second_row_change_keeps_the_ceiling_custom_was_entered_from() {
+    let mut f = Fixture::new();
+    f.state.quality_preset = QualityPreset::Medium;
+    f.next(SettingKey::ShadowDistance);
+    f.next(SettingKey::Ssao);
+
+    assert_eq!(f.state.quality_preset, QualityPreset::Custom);
+    assert_eq!(
+        f.persisted().graphics.customized_from,
+        Some(QualityPreset::Medium)
+    );
+    assert_eq!(f.state.ceiling(), settings::QualityCeiling::MEDIUM);
+}
+
+// Picking Custom on the master row keeps every value: the ceiling of the preset
+// it left and the user's own choices.
+#[test]
+fn picking_custom_keeps_every_value() {
+    let mut f = Fixture::new();
+    f.state.quality_preset = QualityPreset::Low;
+    f.next(SettingKey::ShadowDistance);
+    f.apply(vec![SettingCommand {
+        setting: SettingKey::GraphicsQuality,
+        op: SettingOp::SetIndex(levels::GRAPHICS_QUALITY.index_of(QualityPreset::Ultra)),
+        value_label: Some(QUALITY_LABEL),
+        persist: true,
+    }]);
+    let before = f.state.resolved.clone();
+
+    f.next(SettingKey::GraphicsQuality);
+
+    assert_eq!(f.state.quality_preset, QualityPreset::Custom);
+    assert_eq!(f.label(VALUE_LABEL), QualityPreset::Custom.name());
+    assert!(f.state.resolved.diff(&before).is_empty());
+    let cfg = f.persisted();
+    assert_eq!(cfg.graphics.customized_from, Some(QualityPreset::Ultra));
+    assert_eq!(f.state.ceiling(), settings::QualityCeiling::ULTRA);
+}
+
+// Only the master preset moves other settings. One step on any other row
+// changes that row's own value and nothing else: live, and at the next launch
+// from what it saved, where the preset's ceiling and its upscaling decision
+// also stay as they were.
+#[test]
+fn every_other_row_changes_only_itself_live_and_at_the_next_launch() {
+    use super::init_tests::{retina_launch, stored_preset};
+    use crate::ecs::asset_fields::ParamChange;
+
+    // Whether `change` is `key`'s own value.
+    fn owns(key: SettingKey, change: &ParamChange) -> bool {
+        match key.field() {
+            Some(field) => field.asset == change.asset && field.key == change.key,
+            None if key == SettingKey::TextureQuality => change.asset == "StreamingConfig",
+            None => change.asset == "UserGraphicsSettings" && change.key == key.as_str(),
+        }
+    }
+
+    let presets = [
+        QualityPreset::Auto,
+        QualityPreset::Low,
+        QualityPreset::Medium,
+        QualityPreset::High,
+    ];
+    for preset in presets {
+        for key in SettingKey::ALL {
+            let cmd = if key == SettingKey::GraphicsQuality {
+                continue;
+            } else if registry::slider(key).is_some() {
+                drag(key, 0.9, true)
+            } else if settings::options(key).is_some() {
+                cycle(key, SettingOp::Next)
+            } else {
+                continue;
+            };
+            let mut launch = retina_launch();
+            launch.stored = stored_preset(preset);
+            let first = launch.state();
+            let mut f = Fixture::new();
+            f.state = launch.state();
+            f.world.insert_resource(launch.stored.clone());
+            f.apply(vec![cmd]);
+            assert_eq!(
+                f.state.quality_preset == QualityPreset::Custom,
+                key.preset_governed(),
+                "{preset:?}: {key:?} switches to Custom only if the preset governs it"
+            );
+            let saved = f
+                .world
+                .resource::<StoredSettings>()
+                .cloned()
+                .expect("the store is published");
+            let next = retina_launch().stored(saved).state();
+
+            for (when, after) in [("live", &f.state), ("next launch", &next)] {
+                let diff = after.resolved().diff(first.resolved());
+                let others: Vec<_> = diff.changes().filter(|c| !owns(key, c)).collect();
+                assert!(
+                    others.is_empty(),
+                    "{preset:?}: {key:?} moved {others:?} ({when})"
+                );
+            }
+            assert_eq!(
+                next.ceiling(),
+                first.ceiling(),
+                "{preset:?}: {key:?} moved the ceiling"
+            );
+            assert_eq!(
+                next.auto_upscaling, first.auto_upscaling,
+                "{preset:?}: {key:?} moved the preset's upscaling"
+            );
+        }
+    }
+}
+
+// A launch flag fixes its rows for the whole run: stepping every row under
+// every settings flag changes no fixed row, and no flag's value reaches the
+// stored settings.
+#[test]
+fn a_launch_flag_value_is_never_saved() {
+    use super::init_tests::retina_launch;
+    use crate::launch::{LaunchArgs, LaunchRequest};
+    use crate::platform::Platform;
+
+    let mut launch = retina_launch();
+    launch.request = LaunchRequest {
+        args: LaunchArgs {
+            graphics_quality: Some(QualityPreset::Low),
+            graphics_api: Some(Platform::Vulkan),
+            window_mode: Some(WindowMode::Borderless),
+            upscaling: Some(true),
+            rt_reflections: Some(true),
+            vsync: Some(true),
+            dlss_preset: Some(DlssPreset::K),
+            limit_fps: Some(30),
+            ..LaunchArgs::NONE
+        },
+        ..Default::default()
+    };
+    let session = launch.request.session_overrides();
+    let mut f = Fixture::new();
+    f.state = launch.state();
+    let first = f.state.resolved.clone();
+    for key in SettingKey::ALL {
+        let cmd = if registry::slider(key).is_some() {
+            drag(key, 0.9, true)
+        } else if settings::options(key).is_some() {
+            cycle(key, SettingOp::Next)
+        } else {
+            continue;
+        };
+        let before = f.state.resolved.clone();
+        f.apply(vec![cmd]);
+        if f.state.fixed_by_launch(key) {
+            assert!(
+                f.state.resolved.diff(&before).is_empty(),
+                "{key:?} is fixed"
+            );
+        }
+    }
+    assert_eq!(f.state.quality_preset, QualityPreset::Low);
+    assert!(!f.state.resolved.diff(&first).is_empty(), "free rows moved");
+
+    let stored = serde_json::to_value(&f.persisted().graphics).unwrap();
+    for (field, value) in serde_json::to_value(&session).unwrap().as_object().unwrap() {
+        if !value.is_null() {
+            assert!(stored[field].is_null(), "the launch's {field} was saved");
+        }
+    }
 }
 
 // The upscaling row stores an explicit choice that outranks every preset, so

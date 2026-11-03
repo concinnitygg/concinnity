@@ -4,7 +4,7 @@ use super::LaunchArgs;
 use crate::ecs::{Resources, ViewOverrides, World};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::render::rt_accel::geom::RtDynamicMode;
-use crate::settings::{QualityPreset, StoredSettings, UserGraphicsSettings};
+use crate::settings::{QualityPreset, SettingKey, StoredSettings, UserGraphicsSettings};
 
 /// Where screenshots land unless the launch names another directory: relative to the working directory the run started in.
 pub const DEFAULT_SCREENSHOTS_DIR: &str = "screenshots";
@@ -107,17 +107,24 @@ impl LaunchRequest {
         QualityPreset::Auto
     }
 
+    /// Whether this launch fixes `key`'s settings row for the whole run.
+    pub fn fixes_setting(&self, key: SettingKey) -> bool {
+        self.session_overrides().fixes(key)
+    }
+
     /// How the acceleration structure tracks moving props: the request, else `Auto`.
     pub fn resolve_rt_dynamic(&self) -> RtDynamicMode {
         self.args.rt_dynamic.unwrap_or_default()
     }
 
-    /// The settings this launch overrides for its own run, layered over the
-    /// user's persisted choices and never persisted: vsync, the frame-rate cap,
-    /// the window mode, temporal upscaling, ray-traced reflections and the DLSS
-    /// preset.
+    /// The settings this launch fixes for its own run, layered over the user's
+    /// persisted choices and never persisted: the quality preset, the graphics
+    /// API, vsync, the frame-rate cap, the window mode, temporal upscaling,
+    /// ray-traced reflections and the DLSS preset.
     pub fn session_overrides(&self) -> UserGraphicsSettings {
         UserGraphicsSettings {
+            quality_preset: self.args.graphics_quality,
+            graphics_api: self.args.graphics_api,
             vsync: self.args.vsync,
             fps_cap: self.args.limit_fps,
             window_mode: self.args.window_mode,
