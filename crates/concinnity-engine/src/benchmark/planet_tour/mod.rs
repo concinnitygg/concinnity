@@ -41,7 +41,8 @@ use framing::Framing;
 /// ground first: through the grass, down the beach and into the sea, where it
 /// floats and paddles, then is towed up to speed through the water, until the
 /// tour picks it up and flies it; on a planet with no sea it is picked up as
-/// the roll ends. A subject
+/// the roll ends. At sunrise it comes down to where it set out from over the
+/// ground and is let go, to roll on over the meadow by itself. A subject
 /// without one, or none at all, skims the ground instead.
 ///
 /// ```json
@@ -76,10 +77,11 @@ pub(crate) struct TourPlan {
     pub(crate) turn: Vec<CameraTurn>,
     pub(crate) boom: Vec<CameraBoom>,
     pub(crate) phases: Vec<BenchmarkPhase>,
-    /// How a rolling subject's drive is steered, and when the tour picks it
-    /// up, both in seconds after the warm-up.
+    /// How a rolling subject's drive is steered, when the tour picks it up
+    /// and when it lets go of it again, all in seconds after the warm-up.
     pub(crate) drive: Vec<DriveKey>,
     pub(crate) carry_from_seconds: f32,
+    pub(crate) carry_until_seconds: f32,
 }
 
 /// The tour over `world`'s planet and its sea, rolled over the ground first
@@ -108,10 +110,10 @@ pub(crate) fn plan(world: &World, tour: PlanetTour, rolls: bool) -> Option<TourP
         framing: &framing,
     };
     let path = Path::new(&shape, sea_level, &route);
-    let (drive, carry_from_seconds) = if rolls {
+    let script = if rolls {
         roll_script(&phases, tour.heading_deg)
     } else {
-        (Vec::new(), 0.0)
+        RollScript::default()
     };
     Some(TourPlan {
         start: CameraPose {
@@ -129,16 +131,26 @@ pub(crate) fn plan(world: &World, tour: PlanetTour, rolls: bool) -> Option<TourP
                 seconds: narrow_f32(phase.seconds),
             })
             .collect(),
-        drive,
-        carry_from_seconds,
+        drive: script.drive,
+        carry_from_seconds: script.carry_from_seconds,
+        carry_until_seconds: script.carry_until_seconds,
     })
+}
+
+// A rolling subject's drive and when the tour carries it, in seconds after the
+// warm-up.
+#[derive(Default)]
+struct RollScript {
+    drive: Vec<DriveKey>,
+    carry_from_seconds: f32,
+    carry_until_seconds: f32,
 }
 
 // The rolling subject's drive: held through the settle, then sprinting along
 // the course's heading through the roll and paddling on through any float,
-// towed up to the wake's pace through any wake, and picked up as the sea phase
-// opens.
-fn roll_script(phases: &[&timetable::Phase], heading_deg: f32) -> (Vec<DriveKey>, f32) {
+// towed up to the wake's pace through any wake, picked up as the sea phase
+// opens, and let go to coast once the sunrise has set it down.
+fn roll_script(phases: &[&timetable::Phase], heading_deg: f32) -> RollScript {
     let start = |name| narrow_f32(timetable::phase_start(phases, name).unwrap_or(0.0));
     let mut keys = alloc::vec![
         DriveKey {
@@ -163,7 +175,18 @@ fn roll_script(phases: &[&timetable::Phase], heading_deg: f32) -> (Vec<DriveKey>
             ..DriveKey::default()
         });
     }
-    (keys, start("sea"))
+    let landed = narrow_f32(timetable::landed(phases).unwrap_or(0.0));
+    keys.push(DriveKey {
+        seconds: landed,
+        heading_deg,
+        throttle: 0.0,
+        ..DriveKey::default()
+    });
+    RollScript {
+        drive: keys,
+        carry_from_seconds: start("sea"),
+        carry_until_seconds: landed,
+    }
 }
 
 #[cfg(test)]

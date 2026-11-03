@@ -25,7 +25,8 @@ pub(super) struct Phase {
 
 // Skimming the meadow the subject clears the tallest blades by a hand; over
 // the surf and the sea it clears the waves. A rolling subject is set down a
-// little over the ground and floats at the water's surface.
+// little over the ground, at the start and as it lands, and floats at the
+// water's surface.
 const MEADOW_HEIGHT: f64 = 1.3;
 const SEA_HEIGHT: f64 = 2.0;
 const ROLL_HEIGHT: f64 = 1.0;
@@ -108,16 +109,34 @@ const FLIGHT: [Phase; 7] = [
     phase("sunrise", 16.0, MEADOW_HEIGHT, SKIM_SPEED, 10.0),
 ];
 
+// The flight's sunrise for a rolling subject: it comes down to where it was
+// set down at the start, to be let go onto the meadow once it is there.
+static LANDING: Phase = phase("sunrise", 16.0, ROLL_HEIGHT, SKIM_SPEED, 10.0);
+
 /// The tour's phases in order: the ground stretch, rolled or skimmed, then
 /// the flight. A rolling subject floats and plows a wake only on a planet
-/// with a `sea`.
+/// with a `sea`, and lands on the ground rather than skimming it.
 pub(super) fn phases(rolls: bool, sea: bool) -> Vec<&'static Phase> {
     let ground: &[Phase] = if rolls { &ROLL } else { &SKIM };
+    let (flight, sunrise) = FLIGHT.split_at(FLIGHT.len() - 1);
+    let sunrise: &[Phase] = if rolls {
+        core::slice::from_ref(&LANDING)
+    } else {
+        sunrise
+    };
     ground
         .iter()
         .filter(|phase| sea || !matches!(phase.name, "float" | "wake"))
-        .chain(FLIGHT.iter())
+        .chain(flight)
+        .chain(sunrise)
         .collect()
+}
+
+/// Seconds from the start of the tour to the moment its last phase has come
+/// down to its height, where a rolling subject is let go onto the ground.
+pub(super) fn landed(phases: &[&Phase]) -> Option<f64> {
+    let (last, before) = phases.split_last()?;
+    Some(before.iter().map(|p| p.seconds).sum::<f64>() + last.change_seconds)
 }
 
 /// The least height over dry ground the path keeps for a rolling subject,

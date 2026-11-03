@@ -7,6 +7,8 @@ pub const MAX_DIRECTIONAL_LIGHTS: usize = 4;
 /// Capacity of the fixed point-light array in `LightUniforms`, which world
 /// Shader hooks read.
 pub const MAX_POINT_LIGHTS: usize = 8;
+/// Capacity of the sky-occluding spheres in `LightUniforms`.
+pub const MAX_SKY_OCCLUDERS: usize = 8;
 
 /// Capacity of the per-scene local-light storage buffer the forward pass reads.
 /// Distinct from `MAX_POINT_LIGHTS`, which bounds the fixed `LightUniforms` point
@@ -170,14 +172,19 @@ pub struct LightUniforms {
     /// Multiplier on the indirect (IBL / flat-fallback) ambient term in the main
     /// pass, resolved from `IndirectLighting.ambient_intensity`. 1.0 leaves the
     /// physically derived ambient untouched; higher values lift fill in shadowed
-    /// areas the directional light cannot reach. Occupies the first of the two
-    /// trailing pad words, so the 400-byte layout is unchanged.
+    /// areas the directional light cannot reach.
     pub ambient_intensity: f32,
     /// Number of valid entries in the `GpuLight` storage buffer the forward pass
-    /// reads. Occupies the second trailing pad word, so the 400-byte layout is
-    /// unchanged. Shader hooks read `num_point` against the fixed `point` array
+    /// reads. Shader hooks read `num_point` against the fixed `point` array
     /// instead.
     pub num_local_lights: i32,
+    /// Spheres that keep part of the sky's light off the surfaces around them:
+    /// center (xyz) and radius (w), the first `num_sky_occluders` live.
+    pub sky_occluders: [[f32; 4]; MAX_SKY_OCCLUDERS],
+    /// Live entries in `sky_occluders`.
+    pub num_sky_occluders: u32,
+    /// Pads the block to a whole float4 row.
+    pub _pad: [u32; 3],
 }
 
 impl LightUniforms {
@@ -208,6 +215,9 @@ impl LightUniforms {
         num_point: 0,
         ambient_intensity: 1.0,
         num_local_lights: 0,
+        sky_occluders: [[0.0; 4]; MAX_SKY_OCCLUDERS],
+        num_sky_occluders: 0,
+        _pad: [0; 3],
     };
 }
 

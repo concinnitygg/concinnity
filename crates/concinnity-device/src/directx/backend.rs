@@ -103,6 +103,7 @@ impl RenderTuning for DxContext {
         fn apply_settings(&mut self, graphics: &concinnity_engine::settings::ResolvedGraphics, plan: &concinnity_engine::settings::apply::ApplyPlan) -> RenderResult<()>;
         fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool);
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
+        fn update_sky_occluders(&mut self, occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders);
         fn move_local_lights(&mut self, lights: &concinnity_engine::render::light::lights::LightData, uniforms: &concinnity_engine::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }

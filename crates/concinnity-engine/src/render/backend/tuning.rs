@@ -70,6 +70,17 @@ pub trait RenderTuning {
         let _ = lights;
     }
 
+    /// Replace the spheres that keep part of the sky's light off their
+    /// surroundings, written into the shared `LightUniforms` in place.
+    /// Default no-op: a backend without it lights every surface with the
+    /// whole sky.
+    fn update_sky_occluders(
+        &mut self,
+        occluders: &crate::render::light::sky_occluders::SkyOccluders,
+    ) {
+        let _ = occluders;
+    }
+
     /// Move the local lights (point, spot and rect area) in place: `lights` is
     /// `lights::build_light_data` over the same lights in the same order, so
     /// the count and every slot assignment are unchanged and only positions

@@ -61,6 +61,8 @@ pub struct FrameScalars {
     pub sunlight: f32,
     /// Where the world's prop reflection probe is this frame, if it has one.
     pub prop_probe: Option<crate::render::probe::prop::PropProbeFrame>,
+    /// The spheres that keep part of the sky's light off their surroundings.
+    pub sky_occluders: crate::render::light::sky_occluders::SkyOccluders,
     /// When the input this frame's tick consumed was sampled, in microseconds
     /// on the host's process-wide monotonic clock, or `None` when unknown.
     pub input_sampled_us: Option<u64>,
@@ -88,6 +90,7 @@ impl Default for FrameScalars {
             daylight: crate::render::uniforms::DaylightBlock::OFF,
             sunlight: crate::gfx::render_types::LightUniforms::DEFAULT.directional[0].intensity,
             prop_probe: None,
+            sky_occluders: crate::render::light::sky_occluders::SkyOccluders::NONE,
             input_sampled_us: None,
         }
     }

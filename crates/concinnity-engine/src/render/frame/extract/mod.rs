@@ -21,6 +21,7 @@ use crate::planet::{FrameRebases, RebaseCursor};
 use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
+use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
 use crate::render::particles::ParticleBursts;
 use crate::render::probe::prop::PropProbeTarget;
@@ -32,6 +33,7 @@ use crate::sky::SkyOrientation;
 use crate::transform::propagation::{self, TransformCache};
 use crate::water::stir::WaterStirs;
 use concinnity_core::fanout::FanOut;
+use concinnity_core::math::vec3;
 
 mod atmosphere;
 #[cfg(test)]
@@ -510,6 +512,12 @@ impl FrameExtractor {
             .and_then(|f| f.flow.as_ref())
             .map(|f| f.current);
         let timing = ctx.resource::<SimTiming>().copied().unwrap_or_default();
+        let sky_occluders = SkyOccluders::gather(
+            ctx,
+            scene,
+            camera.position,
+            vec3::sub(camera.draw_position, camera.position),
+        );
         let history_reset = self.history_reset.observe(
             HistoryView {
                 camera: camera.entity,
@@ -548,6 +556,7 @@ impl FrameExtractor {
                 let sea = self.atmosphere.as_ref().is_some_and(|a| a.sea().is_some());
                 t.frame(ctx).map(|f| f.with_sea(sea))
             }),
+            sky_occluders,
             input_sampled_us: ctx.resource::<InputSampledAt>().map(|at| at.0),
         }
     }

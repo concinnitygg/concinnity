@@ -101,6 +101,7 @@ impl RenderTuning for VkContext {
     forward! { assert = debug_assert_main_thread;
         fn apply_settings(&mut self, graphics: &concinnity_engine::settings::ResolvedGraphics, plan: &concinnity_engine::settings::apply::ApplyPlan) -> RenderResult<()>;
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
+        fn update_sky_occluders(&mut self, occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders);
         fn move_local_lights(&mut self, lights: &concinnity_engine::render::light::lights::LightData, uniforms: &concinnity_engine::gfx::render_types::LightUniforms) -> RenderResult<()>;
         fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool);
     }

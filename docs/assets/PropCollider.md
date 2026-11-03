@@ -8,6 +8,10 @@ The shape dimensions are in the prop's local space and are scaled by the
 prop's `scale`. `ball` and `capsule` use the X scale component (they assume
 uniform scaling).
 
+A `ball` also keeps the sky's light off what lies around it, the way a ball
+resting on the ground darkens the ground where it touches. The eight balls
+nearest the camera do.
+
 ## Parameters
 
 - `shape`: A string (see [PropColliderShape](PropColliderShape.md)). Collision shape: `aabb` (alias `cuboid`), `ball` (alias `sphere`), or `capsule`. See [`PropColliderShape`]. Defaults to `"cuboid"`.

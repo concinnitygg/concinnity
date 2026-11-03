@@ -22,7 +22,7 @@ pub use light::{
     AreaLightData, CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterCamera, ClusterParams,
     DirectionalLightData, GpuLight, LIGHT_KIND_AREA, LIGHT_KIND_POINT, LIGHT_KIND_SPOT,
     LightUniforms, MAX_AREA_LIGHTS, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,
-    PointLightData,
+    MAX_SKY_OCCLUDERS, PointLightData,
 };
 pub use material::{
     FALLBACK_TEXTURE_COUNT, FarFieldTint, GpuMaterialParams, MATERIAL_PARAM_COUNT,

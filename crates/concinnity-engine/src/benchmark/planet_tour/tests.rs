@@ -105,7 +105,7 @@ fn a_rolling_subject_rolls_before_it_flies() {
     assert_eq!(&names[..5], ["settle", "roll", "float", "wake", "sea"]);
     let sea: f32 = rolled.phases[..4].iter().map(|p| p.seconds).sum();
     assert_eq!(rolled.carry_from_seconds, sea);
-    assert_eq!(rolled.drive.len(), 3);
+    assert_eq!(rolled.drive.len(), 4);
     assert_eq!(
         (rolled.drive[0].seconds, rolled.drive[0].throttle),
         (0.0, 0.0)
@@ -130,6 +130,42 @@ fn a_rolling_subject_rolls_before_it_flies() {
             .collect()
     };
     assert_eq!(flight(&rolled, 4), flight(&skimmed, 3));
+}
+
+// A rolling subject comes down at sunrise to the height it set out at and is
+// let go to coast once it is there; a skimming one is carried to the end,
+// clearing the grass.
+#[test]
+fn a_rolling_subject_lands_and_is_let_go() {
+    let tour = PlanetTour::default();
+    let rolled = plan(&world(true), tour, true).unwrap();
+    let total: f32 = rolled.phases.iter().map(|p| p.seconds).sum();
+    let sunrise = rolled.phases.last().unwrap();
+    assert_eq!(sunrise.name, "sunrise");
+    let landed = total - sunrise.seconds + 10.0;
+    assert!((rolled.carry_until_seconds - landed).abs() < 1e-3);
+    let coast = rolled.drive.last().unwrap();
+    assert_eq!(coast.seconds, rolled.carry_until_seconds);
+    assert_eq!((coast.throttle, coast.pace), (0.0, 0.0));
+    assert_eq!(coast.heading_deg, tour.heading_deg);
+    let skimmed = plan(&world(true), tour, false).unwrap();
+    assert_eq!(skimmed.carry_until_seconds, 0.0);
+    let ends = |plan: &TourPlan| {
+        let shape = world(true).query::<Planet>().next().unwrap().shape();
+        let at = plan.travel.iter().fold(plan.start.position, |at, leg| {
+            vec3::add(
+                at,
+                vec3::scale(vec3::normalize(leg.direction), leg.distance),
+            )
+        });
+        let up = dvec3::normalize_or(
+            dvec3::from_f32(vec3::sub(at, [0.0, -50_000.0, 0.0])),
+            [0.0, 1.0, 0.0],
+        );
+        f64::from(height(at)) - shape.height(up)
+    };
+    assert!((ends(&rolled) - 1.0).abs() < 0.1, "{} m", ends(&rolled));
+    assert!((ends(&skimmed) - 1.3).abs() < 0.1, "{} m", ends(&skimmed));
 }
 
 // With no sea to float on, a rolling subject is picked up as its roll ends,

@@ -5,13 +5,12 @@
 // for the local-light record.
 //
 // Layouts must match `LightUniforms` and `ShadowUniforms` in
-// `render/uniforms/`, and `GpuLight` in render_types.rs. The two trailing scalars of `LightUniforms` are live
-// fields, not padding: a pass that binds the buffer and calls them padding is
-// reading a stale layout. The array lengths are locked to gfx::render_types by
-// unit test.
+// `render/uniforms/`, and `GpuLight` in render_types.rs. The array lengths are
+// locked to gfx::render_types by unit test.
 
 static const uint MAX_DIRECTIONAL_LIGHTS = 4u;
 static const uint MAX_POINT_LIGHTS = 8u;
+static const uint MAX_SKY_OCCLUDERS = 8u;
 static const uint NUM_SHADOW_CASCADES = 4u;
 
 // col.w: the sine of the angular radius of the light's disc, 0 for a point.
@@ -29,6 +28,13 @@ struct LightUniforms
     float ambient_intensity;
     // Valid entry count in the local-light buffer.
     int num_local_lights;
+    // Spheres that keep part of the sky's light off the surfaces around them:
+    // center (xyz) and radius (w), the first num_sky_occluders live.
+    float4 sky_occluders[MAX_SKY_OCCLUDERS];
+    uint num_sky_occluders;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
 };
 
 // The clouds' shadow map over the ground around the camera, in the frame's

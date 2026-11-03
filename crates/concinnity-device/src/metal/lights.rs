@@ -8,6 +8,7 @@ use concinnity_engine::components::DirectionalLight;
 use concinnity_engine::gfx::render_types::LightUniforms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::light::lights::LightData;
+use concinnity_engine::render::light::sky_occluders::SkyOccluders;
 use concinnity_engine::render::shadow::spot;
 
 use super::context::{MtlContext, write_buffer_slice};
@@ -17,6 +18,11 @@ impl MtlContext {
     // included, reads the sun from the light state each frame.
     pub(crate) fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
         self.lights.set_directional(lights);
+    }
+
+    // Replace the sky-occluding spheres the light block carries.
+    pub(crate) fn update_sky_occluders(&mut self, occluders: &SkyOccluders) {
+        self.lights.set_sky_occluders(occluders);
     }
 
     // Move the local lights in place. The light, area and spot tables are

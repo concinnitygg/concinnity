@@ -104,6 +104,7 @@ fn resolve_route(world: &World, config: &mut BenchmarkConfig) {
     config.phases = plan.phases;
     config.drive = plan.drive;
     config.carry_from_seconds = plan.carry_from_seconds;
+    config.carry_until_seconds = plan.carry_until_seconds;
 }
 
 // Whether the run's subject rolls itself: it has a drive and a body to push.
@@ -169,12 +170,18 @@ fn track_args(config: &BenchmarkConfig) -> CameraTrackArgs {
     } else {
         0.0
     };
+    let carry_until_seconds = if config.carry_until_seconds > 0.0 {
+        warmup + config.carry_until_seconds
+    } else {
+        0.0
+    };
     CameraTrackArgs {
         travel,
         turn,
         subject: config.subject,
         boom,
         carry_from_seconds,
+        carry_until_seconds,
     }
 }
 

@@ -55,6 +55,9 @@ pub(in crate::shader_layout) fn main_bindless() -> Vec<Case> {
             [num_point] => ["num_pt"],
             ambient_intensity,
             num_local_lights,
+            sky_occluders,
+            num_sky_occluders,
+            [_pad] => ["_pad0", "_pad1", "_pad2"],
         })),
         everywhere(mirror!(DirectionalLightData => "DirLight" {
             [direction, intensity] => ["dir_i"],

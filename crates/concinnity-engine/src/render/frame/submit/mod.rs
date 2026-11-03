@@ -112,6 +112,7 @@ pub fn submit(
     if let Some(set) = snap.frame.directional {
         backend.update_directional_lights(set.as_slice());
     }
+    backend.update_sky_occluders(&snap.frame.sky_occluders);
 
     // On Metal, the OS event pump runs inside draw_frame, so update_view is
     // called first so any key/mouse events that arrived since the last tick

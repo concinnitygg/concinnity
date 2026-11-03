@@ -45,6 +45,10 @@ impl PropColliderShape {
 /// The shape dimensions are in the prop's local space and are scaled by the
 /// prop's `scale`. `ball` and `capsule` use the X scale component (they assume
 /// uniform scaling).
+///
+/// A `ball` also keeps the sky's light off what lies around it, the way a ball
+/// resting on the ground darkens the ground where it touches. The eight balls
+/// nearest the camera do.
 #[derive(
     Debug,
     Clone,

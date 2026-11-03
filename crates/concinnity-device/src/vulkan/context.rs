@@ -1601,6 +1601,15 @@ impl VkContext {
         self.uniforms.lights.set_directional(lights);
     }
 
+    // Replace the sky-occluding spheres the light block carries; a changed set
+    // re-arms the light ring.
+    pub(crate) fn update_sky_occluders(
+        &mut self,
+        occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders,
+    ) {
+        self.uniforms.lights.set_sky_occluders(occluders);
+    }
+
     // Move the local lights in place. The light SSBO, the area table and the
     // spot projections are single host-visible buffers every in-flight frame
     // reads, so the GPU is drained before they are rewritten; the cluster

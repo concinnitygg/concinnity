@@ -537,6 +537,37 @@ fn a_subject_picked_up_mid_motion_carries_on_without_a_jump() {
     assert!(end[2].abs() < 1e-3 && end[1].abs() < 1e-3, "{end:?}");
 }
 
+// A subject let go of is no longer carried: the track stops writing it and
+// films it where it goes, and never picks it up again.
+#[test]
+fn a_subject_let_go_of_is_filmed_where_it_goes() {
+    let mut track = track(vec![travel([1.0, 0.0, 0.0], 100.0, 10.0)], vec![], vec![]);
+    track.carry_until_seconds = 1.0;
+    let (mut world, mut system) = world_with(track, [0.0, 2.0, 5.0], [0.0; 3]);
+    system.init(&mut world.context());
+    let status = |world: &World| world.resource::<CameraTrackStatus>().unwrap().subject;
+    for _ in 0..59 {
+        frame(&mut world, &mut system, 1, 1.0);
+    }
+    assert_eq!(status(&world), Some(SUBJECT), "carried until then");
+    frame(&mut world, &mut system, 1, 1.0);
+    assert_eq!(status(&world), None, "let go");
+    let dropped = [10.0, -1.0, 0.0];
+    for _ in 0..60 {
+        if let Some(t) = world.context().get_mut_by_id::<Transform>(SUBJECT) {
+            t.position = dropped;
+        }
+        frame(&mut world, &mut system, 1, 1.0);
+        assert_eq!(status(&world), None, "never picked up again");
+        assert_eq!(subject(&world), dropped, "left where it went");
+    }
+    let eye = camera(&world).position;
+    assert!(
+        (vec3::length(vec3::sub(eye, dropped)) - vec3::length([0.0, 2.0, 5.0])).abs() < 1e-3,
+        "filmed from the boom: {eye:?}"
+    );
+}
+
 // A frame move while the subject is only filmed or still easing on carries
 // the path along: the subject ends where it would have with no move.
 #[test]

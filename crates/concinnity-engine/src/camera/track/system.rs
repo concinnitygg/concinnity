@@ -41,11 +41,13 @@ pub(crate) struct CameraTrackSystem {
     boom_start: [f32; 3],
     // The prop travel carries, while it is there to carry.
     subject: Option<AssetId>,
-    // Track time the subject is carried from, whether it is carried yet, how
-    // it moved while it was only filmed, and the blend onto travel's path it
-    // was picked up with.
+    // Track time the subject is carried from and let go at, whether it is
+    // carried yet or was let go, how it moved while it was only filmed, and
+    // the blend onto travel's path it was picked up with.
     carry_from: f32,
+    carry_until: f32,
     carrying: bool,
+    released: bool,
     filmed: Filmed,
     blend: Option<CarryBlend>,
     pickup: Option<TrackPickup>,
@@ -108,7 +110,9 @@ impl CameraTrackSystem {
             boom_start: [0.0; 3],
             subject: track.subject.map(crate::ecs::Ref::id),
             carry_from: track.carry_from_seconds,
+            carry_until: track.carry_until_seconds,
             carrying: false,
+            released: false,
             filmed: Filmed::default(),
             blend: None,
             pickup: None,
@@ -254,6 +258,14 @@ impl CameraTrackSystem {
         self.carrying = true;
     }
 
+    // Let go of the subject travel carries: from here its physics moves it
+    // and the camera only films it.
+    fn let_go(&mut self) {
+        self.carrying = false;
+        self.released = true;
+        self.blend = None;
+    }
+
     // Carry travel on from `at` mid-leg: where a frame move carried the point,
     // or where the camera stands once the subject it filmed is gone.
     fn reanchor(&mut self, at: [f32; 3]) {
@@ -352,6 +364,13 @@ impl System for CameraTrackSystem {
                 }
             }
         }
+        if self.carry_until > 0.0 && self.carry_until <= self.carry_from {
+            tracing::warn!(
+                "camera track: it lets go of its subject at {} s, no later than it picks it up at {} s, so it never carries it",
+                self.carry_until,
+                self.carry_from
+            );
+        }
         self.rebases = RebaseCursor::at(ctx.resource::<FrameRebases>());
         self.resolve_turn();
         self.duration = timeline::duration(&self.travel)
@@ -403,8 +422,15 @@ impl System for CameraTrackSystem {
             || timeline::cut_crossed(&self.turn, before, now)
             || (self.subject.is_some() && timeline::cut_crossed(&self.boom, before, now));
         self.pose_seconds = pose_seconds(now, &timing, self.pose_seconds, cut);
-        if !self.carrying && self.subject.is_some() && self.pose_seconds >= self.carry_from {
+        if !self.carrying
+            && !self.released
+            && self.subject.is_some()
+            && self.pose_seconds >= self.carry_from
+        {
             self.pick_up(ctx);
+        }
+        if self.carrying && self.carry_until > 0.0 && self.pose_seconds >= self.carry_until {
+            self.let_go();
         }
         self.apply(ctx);
         if cut && self.camera.is_some() {

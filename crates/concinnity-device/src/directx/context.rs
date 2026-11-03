@@ -1402,6 +1402,15 @@ impl DxContext {
         self.uniforms.lights.set_directional(lights);
     }
 
+    // Replace the sky-occluding spheres the light block carries; a changed set
+    // re-arms the light ring.
+    pub(crate) fn update_sky_occluders(
+        &mut self,
+        occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders,
+    ) {
+        self.uniforms.lights.set_sky_occluders(occluders);
+    }
+
     pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
         self.state.planner.shadow.cadence = cadence;
     }

@@ -157,6 +157,43 @@ float specular_occlusion(float NdV, float visibility, float rough)
     return saturate(pow(NdV + visibility, exp2(-16.0 * rough - 1.0)) - 1.0 + visibility);
 }
 
+// How many radii past a sky occluder its occlusion reaches; it fades out over
+// the last half of that.
+static const float SKY_OCCLUDER_REACH = 8.0;
+
+// The share of the sky a surface at `p` facing `n` sees past the spheres in
+// LIGHTS.sky_occluders. Each sphere covers the cosine-weighted share of the
+// sky its disc spans, clipped where the disc dips under the surface's horizon.
+float sky_occluder_visibility(float3 p, float3 n)
+{
+    float visibility = 1.0;
+    for (uint i = 0u; i < LIGHTS.num_sky_occluders; i++)
+    {
+        float4 sphere = LIGHTS.sky_occluders[i];
+        float3 d = sphere.xyz - p;
+        float dist = length(d);
+        // The sphere's own faceted surface reads as just outside it.
+        float h = max(dist / sphere.w, 1.0001);
+        if (h >= SKY_OCCLUDER_REACH)
+        {
+            continue;
+        }
+        float nl = dot(n, d) / max(dist, 1e-6);
+        float h2 = h * h;
+        float k2 = 1.0 - h2 * nl * nl;
+        float occlusion = max(nl, 0.0) / h2;
+        if (k2 > 1e-3)
+        {
+            float c = clamp(-nl * sqrt((h2 - 1.0) / (1.0 - nl * nl)), -1.0, 1.0);
+            occlusion = nl * acos(c) - sqrt(k2 * (h2 - 1.0));
+            occlusion = (occlusion / h2 + atan(sqrt(k2 / (h2 - 1.0)))) / PI;
+        }
+        float fade = 1.0 - smoothstep(0.5 * SKY_OCCLUDER_REACH, SKY_OCCLUDER_REACH, h);
+        visibility *= 1.0 - saturate(occlusion) * fade;
+    }
+    return visibility;
+}
+
 {SHADOW_CASCADE}
 
 // 3x3 hash-rotated PCF of one spot shadow slice. Returns [0, 1] (1.0 fully
@@ -732,6 +769,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // occluders, or, on the prop a prop probe rides on, where that probe's
     // capture of the prop's surroundings supplies the reflection.
     ScreenIndirect indirect = screen_indirect_at(screen_xy);
+    indirect.visibility *= sky_occluder_visibility(v.world_pos, N);
     float specular_visibility = specular_occlusion(NdV, indirect.visibility, roughness);
     bool probe_subject = v.object_id >= PROBE_SET.subject.x && v.object_id < PROBE_SET.subject.y;
     if (reflections_own || probe_subject)

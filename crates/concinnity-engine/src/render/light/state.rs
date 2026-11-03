@@ -10,6 +10,7 @@ use crate::components::DirectionalLight;
 use crate::gfx::render_types::{GpuLight, LightUniforms};
 use crate::render::light::cluster_range::ClusterReach;
 use crate::render::light::lights::{directional_light_data, sun_color, sun_direction};
+use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::slots::frame_dirty::FrameDirty;
 
 /// The first directional light after a change, which the shadow cascades and
@@ -93,6 +94,21 @@ impl LightState {
         Some(self.sun)
     }
 
+    /// Replace the sky-occluding spheres. Edge-triggered: an unchanged set
+    /// re-arms nothing.
+    pub fn set_sky_occluders(&mut self, occluders: &SkyOccluders) {
+        let live = occluders.as_slice();
+        let count = u32::saturating_from(live.len());
+        if self.uniforms.num_sky_occluders == count
+            && &self.uniforms.sky_occluders[..live.len()] == live
+        {
+            return;
+        }
+        self.uniforms.sky_occluders[..live.len()].copy_from_slice(live);
+        self.uniforms.num_sky_occluders = count;
+        self.mark_all();
+    }
+
     /// Whether `local_lights` can move in place: the packed count is the one
     /// the block was built with.
     pub fn same_local_count(&self, local_lights: &[GpuLight]) -> bool {
@@ -164,6 +180,38 @@ mod tests {
         assert!(s.take_dirty(0) && s.take_dirty(1));
         assert_eq!(s.set_directional(&lights), None);
         assert!(!s.take_dirty(0) && !s.take_dirty(1));
+    }
+
+    #[test]
+    fn moved_sky_occluders_rearm_and_unchanged_ones_do_not() {
+        let mut world = crate::ecs::World::new();
+        let ball = world.push(crate::components::Collider(
+            crate::components::PropCollider {
+                shape: crate::components::PropColliderShape::Ball,
+                ..Default::default()
+            },
+        ));
+        world.insert(
+            ball,
+            crate::components::GlobalTransform(crate::transform::IDENTITY),
+        );
+        world.insert(
+            ball,
+            crate::components::RenderHandle {
+                draws: [crate::gfx::render_types::DrawIndex(0)].into(),
+            },
+        );
+        let occluders = SkyOccluders::gather(&world.context(), None, [0.0; 3], [0.0; 3]);
+        let mut s = state(2);
+        s.set_sky_occluders(&occluders);
+        assert_eq!(s.uniforms().num_sky_occluders, 1);
+        assert_eq!(s.uniforms().sky_occluders[0], [0.0, 0.0, 0.0, 0.5]);
+        assert!(s.take_dirty(0) && s.take_dirty(1));
+        s.set_sky_occluders(&occluders);
+        assert!(!s.take_dirty(0));
+        s.set_sky_occluders(&SkyOccluders::NONE);
+        assert_eq!(s.uniforms().num_sky_occluders, 0);
+        assert!(s.take_dirty(0));
     }
 
     #[test]

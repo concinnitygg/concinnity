@@ -1736,6 +1736,7 @@ float4 grass_radiance(GrassVertexOut p)
                    ? albedo * irradiance_sample(N) / PI
                    : (float3)(0.03) * albedo;
     ScreenIndirect indirect = screen_indirect_at(screen_xy);
+    indirect.visibility *= sky_occluder_visibility(p.world_pos, N);
     ambient = ambient * indirect.visibility + albedo * indirect.bounce;
     ambient *= LIGHTS.ambient_intensity * occlusion;
     return float4(ambient + Lo * occlusion, 1.0);

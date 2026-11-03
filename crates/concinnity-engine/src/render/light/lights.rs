@@ -276,6 +276,7 @@ pub fn build_light_uniforms(
         num_point: i32::saturating_from(num_point),
         ambient_intensity,
         num_local_lights: i32::saturating_from(local_lights.len()),
+        ..LightUniforms::DEFAULT
     }
 }
 

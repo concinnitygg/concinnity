@@ -18,7 +18,8 @@ A subject with a [`RollingDrive`](RollingDrive.md) rolls itself over the
 ground first: through the grass, down the beach and into the sea, where it
 floats and paddles, then is towed up to speed through the water, until the
 tour picks it up and flies it; on a planet with no sea it is picked up as
-the roll ends. A subject
+the roll ends. At sunrise it comes down to where it set out from over the
+ground and is let go, to roll on over the meadow by itself. A subject
 without one, or none at all, skims the ground instead.
 
 ```json

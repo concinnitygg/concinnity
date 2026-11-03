@@ -250,6 +250,10 @@ pub struct CameraTrackArgs {
     /// seconds, so neither its position nor its speed jumps. `0` carries it
     /// from the start.
     pub carry_from_seconds: f32,
+    /// Seconds into the track from which it lets go of its `subject` again:
+    /// its physics and its drive move it once more, going as fast as it was
+    /// carried, and the track only films it. `0` carries it to the end.
+    pub carry_until_seconds: f32,
 }
 
 /// A point the travel track reaches, baked from a
@@ -366,6 +370,8 @@ pub struct CameraTrack {
     pub boom: Vec<CameraBoomKey>,
     /// Track time the subject is carried from; before it, only filmed.
     pub carry_from_seconds: f32,
+    /// Track time the subject is let go at, or `0` to carry it to the end.
+    pub carry_until_seconds: f32,
 }
 
 impl CameraTrack {
@@ -420,6 +426,7 @@ impl CameraTrack {
             subject: args.subject,
             boom,
             carry_from_seconds: args.carry_from_seconds.max(0.0),
+            carry_until_seconds: args.carry_until_seconds.max(0.0),
         }
     }
 }

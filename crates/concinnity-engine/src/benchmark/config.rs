@@ -25,7 +25,8 @@ const DEFAULT_PHASE_NAME: &str = "run";
 /// world starts it at for ten seconds after the warm-up, or, on a world with
 /// a [`Planet`](#planet), tours the planet as [`PlanetTour`](#planettour)
 /// describes. A config that authors any of its route (`start`, `travel`,
-/// `turn`, `boom`, `phases`, `drive` or `carry_from_seconds`) keeps it unless
+/// `turn`, `boom`, `phases`, `drive`, `carry_from_seconds` or
+/// `carry_until_seconds`) keeps it unless
 /// it asks for the tour by `route`. The run says which route it took as it starts. Declaring one
 /// does nothing on an ordinary launch, so a world can ship its benchmark
 /// beside it.
@@ -118,6 +119,11 @@ pub struct BenchmarkConfig {
     /// it; from then the run picks it up where it is, as fast as it is going,
     /// and eases it onto travel's path. `0` carries it from the start.
     pub carry_from_seconds: f32,
+    /// Seconds after the warm-up from which `travel` lets go of the subject
+    /// again, to be moved by its physics and its `drive` once more, going as
+    /// fast as it was carried, while the run films it. `0` carries it to the
+    /// end.
+    pub carry_until_seconds: f32,
     /// Where the camera goes after the warm-up, leg by leg.
     pub travel: Vec<CameraTravel>,
     /// Where the camera looks after the warm-up, leg by leg. Played against
@@ -161,6 +167,7 @@ impl BenchmarkConfig {
             || !self.phases.is_empty()
             || !self.drive.is_empty()
             || self.carry_from_seconds != 0.0
+            || self.carry_until_seconds != 0.0
     }
 
     /// The phases the run is measured in: the declared ones, or the one

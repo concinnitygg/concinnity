@@ -306,10 +306,30 @@ fn light_limits_match_shaders() {
     for (name, value) in [
         ("MAX_DIRECTIONAL_LIGHTS", MAX_DIRECTIONAL_LIGHTS),
         ("MAX_POINT_LIGHTS", MAX_POINT_LIGHTS),
+        ("MAX_SKY_OCCLUDERS", MAX_SKY_OCCLUDERS),
         ("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES),
     ] {
         assert_eq!(consts::uint(src, name), value, "{name}");
     }
+}
+
+// The light block: four 32-byte directional and eight 32-byte point records,
+// the four scalars, then the float4 occluder array on its 16-byte boundary and
+// the occluder count padded to a whole row.
+#[test]
+fn light_uniforms_layout_matches_msl() {
+    assert_eq!(size_of::<DirectionalLightData>(), 32);
+    assert_eq!(size_of::<PointLightData>(), 32);
+    assert_eq!(offset_of!(LightUniforms, directional), 0);
+    assert_eq!(offset_of!(LightUniforms, point), 128);
+    assert_eq!(offset_of!(LightUniforms, num_directional), 384);
+    assert_eq!(offset_of!(LightUniforms, num_point), 388);
+    assert_eq!(offset_of!(LightUniforms, ambient_intensity), 392);
+    assert_eq!(offset_of!(LightUniforms, num_local_lights), 396);
+    assert_eq!(offset_of!(LightUniforms, sky_occluders), 400);
+    assert_eq!(offset_of!(LightUniforms, num_sky_occluders), 528);
+    assert_eq!(offset_of!(LightUniforms, _pad), 532);
+    assert_eq!(size_of::<LightUniforms>(), 544);
 }
 
 #[test]

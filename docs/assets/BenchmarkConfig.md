@@ -9,7 +9,8 @@ declares one of these or not. Without one the camera holds the pose the
 world starts it at for ten seconds after the warm-up, or, on a world with
 a [`Planet`](Planet.md), tours the planet as [`PlanetTour`](PlanetTour.md)
 describes. A config that authors any of its route (`start`, `travel`,
-`turn`, `boom`, `phases`, `drive` or `carry_from_seconds`) keeps it unless
+`turn`, `boom`, `phases`, `drive`, `carry_from_seconds` or
+`carry_until_seconds`) keeps it unless
 it asks for the tour by `route`. The run says which route it took as it starts. Declaring one
 does nothing on an ordinary launch, so a world can ship its benchmark
 beside it.
@@ -49,6 +50,7 @@ with their shares.
 - `tour`: A [PlanetTour](PlanetTour.md) object. How the run tours the planet, when it does.
 - `drive`: An array of [DriveKey](DriveKey.md) objects. How the subject's [`RollingDrive`](RollingDrive.md) is steered after the warm-up, key by key, while the subject moves by itself. Defaults to `[]`.
 - `carry_from_seconds`: A float. Seconds after the warm-up from which `travel` carries the subject. Until then the run only films it, and its physics and its `drive` move it; from then the run picks it up where it is, as fast as it is going, and eases it onto travel's path. `0` carries it from the start. Defaults to `0.0`.
+- `carry_until_seconds`: A float. Seconds after the warm-up from which `travel` lets go of the subject again, to be moved by its physics and its `drive` once more, going as fast as it was carried, while the run films it. `0` carries it to the end. Defaults to `0.0`.
 - `travel`: An array of [CameraTravel](CameraTravel.md) objects. Where the camera goes after the warm-up, leg by leg. Defaults to `[]`.
 - `turn`: An array of [CameraTurn](CameraTurn.md) objects. Where the camera looks after the warm-up, leg by leg. Played against the same clock as `travel` and independent of it. Defaults to `[]`.
 - `boom`: An array of [CameraBoom](CameraBoom.md) objects. How the camera frames the `subject` after the warm-up, leg by leg, on the same clock as `travel` and `turn`. Defaults to `[]`.
