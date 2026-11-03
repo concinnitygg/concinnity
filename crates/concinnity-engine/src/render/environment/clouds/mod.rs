@@ -38,7 +38,7 @@ pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, mar
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
 pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
 pub use shape::{
-    CloudShell, coverage_density, height_profile, regional_coverage, shell_span, weather_cover,
+    CloudShell, coverage_density, height_profile, regional_coverage, shell_spans, weather_cover,
 };
 
 /// The resolution the clouds are kept at, as a divisor of the scene's.

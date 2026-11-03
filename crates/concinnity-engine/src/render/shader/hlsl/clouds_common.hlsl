@@ -71,51 +71,60 @@ bool cloud_sphere_hits(float3 origin, float3 dir, float radius, out float2 hits)
     return true;
 }
 
-// `shell_span` in render::environment::clouds: the stretch of the ray inside
-// the shell between `lower` and `upper` before it reaches `ground` or the
-// shell's bottom. False when the ray never enters the shell.
-bool cloud_shell_span(float3 origin, float3 dir, float ground, float lower, float upper,
-                      out float2 span)
+// `shell_spans` in render::environment::clouds: the stretches of the ray
+// inside the shell between `lower` and `upper` before it reaches `ground`,
+// nearer first in `spans.xy` and then `spans.zw`, and how many there are. A
+// ray that dips under the shell's bottom and misses the ground rises back
+// into the shell beyond, its second stretch.
+uint cloud_shell_spans(float3 origin, float3 dir, float ground, float lower, float upper,
+                       out float4 spans)
 {
-    span = (float2)0.0;
+    spans = (float4)0.0;
     float r = length(origin);
     float2 up_hits;
     if (!cloud_sphere_hits(origin, dir, upper, up_hits))
     {
-        return false;
+        return 0u;
     }
     float2 low_hits;
     bool low = cloud_sphere_hits(origin, dir, lower, low_hits);
     float2 ground_hits;
     bool hits_ground = cloud_sphere_hits(origin, dir, ground, ground_hits) && ground_hits.x > 0.0;
-    bool down = low && low_hits.x > 0.0;
-    float start;
-    float end;
+    float2 first;
+    float2 second = (float2)0.0;
     if (r < lower)
     {
         if (hits_ground)
         {
-            return false;
+            return 0u;
         }
-        start = low ? low_hits.y : 0.0;
-        end = up_hits.y;
-    }
-    else if (r <= upper)
-    {
-        start = 0.0;
-        end = down ? low_hits.x : up_hits.y;
+        first = float2(low ? low_hits.y : 0.0, up_hits.y);
     }
     else
     {
-        if (up_hits.x < 0.0)
+        float start = 0.0;
+        if (r > upper)
         {
-            return false;
+            if (up_hits.x < 0.0)
+            {
+                return 0u;
+            }
+            start = up_hits.x;
         }
-        start = up_hits.x;
-        end = down ? low_hits.x : up_hits.y;
+        bool down = low && low_hits.x > 0.0;
+        first = float2(start, down ? low_hits.x : up_hits.y);
+        if (down && !hits_ground)
+        {
+            second = float2(low_hits.y, up_hits.y);
+        }
     }
-    span = float2(max(start, 0.0), end);
-    return end > start;
+    first.x = max(first.x, 0.0);
+    if (first.y <= first.x)
+    {
+        return 0u;
+    }
+    spans = float4(first, second);
+    return second.y > second.x ? 2u : 1u;
 }
 
 float4 cloud_noise_at(float3 coord)

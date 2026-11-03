@@ -30,35 +30,46 @@ fn sphere_hits(origin: [f32; 3], dir: [f32; 3], radius: f32) -> Option<[f32; 2]>
     Some([-b - s, -b + s])
 }
 
-/// The stretch of the unit ray from `origin` (kilometers from the planet's
-/// center) along `dir` that lies inside `shell` before the ray reaches the
-/// ground or the shell's bottom, as distances along it; `None` when the ray
-/// never enters the shell. A ray that dips through the space under the shell
-/// is marched only until it reaches it. `cloud_shell_span`.
-pub fn shell_span(origin: [f32; 3], dir: [f32; 3], shell: &CloudShell) -> Option<[f32; 2]> {
+/// The stretches of the unit ray from `origin` (kilometers from the planet's
+/// center) along `dir` that lie inside `shell` before the ray reaches the
+/// ground, as distances along it, nearer first; both `None` when the ray
+/// never enters the shell. A ray that dips under the shell's bottom and
+/// misses the ground rises back into the shell beyond, its second stretch.
+/// `cloud_shell_spans`.
+pub fn shell_spans(origin: [f32; 3], dir: [f32; 3], shell: &CloudShell) -> [Option<[f32; 2]>; 2] {
+    let span = |start: f32, end: f32| (end > start).then_some([start.max(0.0), end]);
     let r = sqrt(dot(origin, origin));
-    let upper = sphere_hits(origin, dir, shell.upper)?;
-    let lower = sphere_hits(origin, dir, shell.lower);
-    let ground = sphere_hits(origin, dir, shell.ground).filter(|g| g[0] > 0.0);
-    let (start, end) = if r < shell.lower {
-        // Below the clouds: from leaving the bottom sphere to leaving the top.
-        if ground.is_some() {
-            return None;
-        }
-        (lower.map_or(0.0, |l| l[1]), upper[1])
-    } else if r <= shell.upper {
-        // Inside: to the top, or down to the bottom.
-        let down = lower.map(|l| l[0]).filter(|&t| t > 0.0);
-        (0.0, down.unwrap_or(upper[1]))
-    } else {
-        // Above: from entering the top, to the bottom or out of the top again.
-        if upper[0] < 0.0 {
-            return None;
-        }
-        let down = lower.map(|l| l[0]).filter(|&t| t > 0.0);
-        (upper[0], down.unwrap_or(upper[1]))
+    let Some(upper) = sphere_hits(origin, dir, shell.upper) else {
+        return [None, None];
     };
-    (end > start).then_some([start.max(0.0), end])
+    let lower = sphere_hits(origin, dir, shell.lower);
+    let hits_ground = sphere_hits(origin, dir, shell.ground).is_some_and(|g| g[0] > 0.0);
+    if r < shell.lower {
+        // Below the clouds: from leaving the bottom sphere to leaving the top.
+        if hits_ground {
+            return [None, None];
+        }
+        return [span(lower.map_or(0.0, |l| l[1]), upper[1]), None];
+    }
+    let start = if r <= shell.upper {
+        0.0
+    } else if upper[0] < 0.0 {
+        return [None, None];
+    } else {
+        upper[0]
+    };
+    match lower.filter(|l| l[0] > 0.0) {
+        // Down to the bottom, then up out of it to the top past the ground.
+        Some(l) => [
+            span(start, l[0]),
+            if hits_ground {
+                None
+            } else {
+                span(l[1], upper[1])
+            },
+        ],
+        None => [span(start, upper[1]), None],
+    }
 }
 
 /// How dense a layer's clouds are at height fraction `h` through the layer
@@ -126,21 +137,28 @@ mod tests {
 
     #[test]
     fn looking_up_from_the_ground_crosses_the_layer() {
-        let [a, b] = shell_span(at(0.002), [0.0, 1.0, 0.0], &SHELL).unwrap();
+        let [Some([a, b]), None] = shell_spans(at(0.002), [0.0, 1.0, 0.0], &SHELL) else {
+            panic!("one stretch");
+        };
         assert!(close(a, 0.598, 1e-3));
         assert!(close(b, 1.798, 1e-3));
     }
 
     #[test]
     fn looking_down_from_the_ground_sees_none() {
-        assert!(shell_span(at(0.002), [0.0, -1.0, 0.0], &SHELL).is_none());
+        assert_eq!(
+            shell_spans(at(0.002), [0.0, -1.0, 0.0], &SHELL),
+            [None, None]
+        );
     }
 
     // A level ray from the ground leaves the bottom sphere far off and the
     // top sphere farther still, both short of the horizon of the shell.
     #[test]
     fn a_level_ray_from_the_ground_reaches_the_layer_at_its_horizon() {
-        let [a, b] = shell_span(at(0.002), [1.0, 0.0, 0.0], &SHELL).unwrap();
+        let [Some([a, b]), None] = shell_spans(at(0.002), [1.0, 0.0, 0.0], &SHELL) else {
+            panic!("one stretch");
+        };
         let reach = |r: f32| sqrt(r * r - 50.002 * 50.002);
         assert!(close(a, reach(50.6), 1e-2));
         assert!(close(b, reach(51.8), 1e-2));
@@ -148,36 +166,97 @@ mod tests {
 
     #[test]
     fn inside_the_layer_the_march_starts_at_the_camera() {
-        let [a, b] = shell_span(at(1.0), [0.0, 1.0, 0.0], &SHELL).unwrap();
+        let [Some([a, b]), None] = shell_spans(at(1.0), [0.0, 1.0, 0.0], &SHELL) else {
+            panic!("one stretch");
+        };
         assert!(close(a, 0.0, 0.0));
         assert!(close(b, 0.8, 1e-3));
-        let [a, b] = shell_span(at(1.0), [0.0, -1.0, 0.0], &SHELL).unwrap();
+        let [Some([a, b]), None] = shell_spans(at(1.0), [0.0, -1.0, 0.0], &SHELL) else {
+            panic!("one stretch");
+        };
         assert!(close(a, 0.0, 0.0));
         assert!(close(b, 0.4, 1e-3));
     }
 
+    // From just inside the bottom of the layer, a ray dipping under it and
+    // missing the ground rises back into the layer far off, so the stretches
+    // it is marched over run on into those of a ray just clearing the bottom.
+    #[test]
+    fn a_ray_dipping_under_the_layer_rises_back_into_it() {
+        let o = at(0.65);
+        let r = 50.65_f32;
+        // A level ray's closest approach to the center is `r`; one that
+        // dips by `angle` passes `r * cos(angle)` from it.
+        let past = |closest: f32| {
+            let c = closest / r;
+            let s = sqrt(1.0 - c * c);
+            shell_spans(o, [c, -s, 0.0], &SHELL)
+        };
+        let [Some([a, b]), Some([c, d])] = past(SHELL.lower - 1e-4) else {
+            panic!("two stretches");
+        };
+        let [Some([e, f]), None] = past(SHELL.lower + 1e-4) else {
+            panic!("one stretch");
+        };
+        let tangent = sqrt(r * r - SHELL.lower * SHELL.lower);
+        assert!(close(a, 0.0, 0.0) && close(e, 0.0, 0.0));
+        assert!(b < tangent && c > tangent && c - b < 0.25, "{b} {c}");
+        assert!(close(d, f, 0.1), "{d} {f}");
+    }
+
+    #[test]
+    fn a_ray_dipping_into_the_ground_does_not_rise_back() {
+        let [Some(_), None] = shell_spans(at(0.65), [1.0, -0.5, 0.0], &SHELL) else {
+            panic!("one stretch");
+        };
+    }
+
     #[test]
     fn from_orbit_the_march_runs_from_the_top_down_to_the_bottom() {
-        let [a, b] = shell_span(at(150.0), [0.0, -1.0, 0.0], &SHELL).unwrap();
+        let [Some([a, b]), None] = shell_spans(at(150.0), [0.0, -1.0, 0.0], &SHELL) else {
+            panic!("one stretch");
+        };
         assert!(close(a, 148.2, 1e-2));
         assert!(close(b, 149.4, 1e-2));
-        assert!(shell_span(at(150.0), [0.0, 1.0, 0.0], &SHELL).is_none());
+        assert_eq!(
+            shell_spans(at(150.0), [0.0, 1.0, 0.0], &SHELL),
+            [None, None]
+        );
     }
 
     // A ray grazing the limb from orbit passes over the bottom of the layer
-    // and out of its top again.
+    // and out of its top again; one grazing lower passes under the bottom
+    // and through the layer again on its way out.
     #[test]
-    fn a_limb_ray_from_orbit_crosses_the_top_twice() {
+    fn a_limb_ray_from_orbit_crosses_the_layer_once_or_twice() {
         let o = [0.0, 0.0, -200.0];
+        let p = |dir: [f32; 3], t: f32| sqrt(dot(o, o) + 2.0 * t * dot(o, dir) + t * t);
+        let unit = |dir: [f32; 3]| {
+            let n = sqrt(dot(dir, dir));
+            dir.map(|v| v / n)
+        };
         // Its closest approach to the center is 51.2 km, inside the layer.
-        let dir = [0.0, 0.2648, 1.0];
-        let n = sqrt(dot(dir, dir));
-        let dir = dir.map(|v| v / n);
-        let [a, b] = shell_span(o, dir, &SHELL).unwrap();
+        let over = unit([0.0, 0.2648, 1.0]);
+        let [Some([a, b]), None] = shell_spans(o, over, &SHELL) else {
+            panic!("one stretch");
+        };
         assert!(a > 0.0 && b > a);
-        let p = |t: f32| sqrt(dot(o, o) + 2.0 * t * dot(o, dir) + t * t);
-        assert!(close(p(a), SHELL.upper, 1e-2));
-        assert!(close(p(b), SHELL.upper, 1e-2));
+        assert!(close(p(over, a), SHELL.upper, 1e-2));
+        assert!(close(p(over, b), SHELL.upper, 1e-2));
+        // Its closest approach is 50.3 km, between the ground and the layer.
+        let under = unit([0.0, 0.2600, 1.0]);
+        let [Some([a, b]), Some([c, d])] = shell_spans(o, under, &SHELL) else {
+            panic!("two stretches");
+        };
+        assert!(a < b && b < c && c < d);
+        for (t, radius) in [
+            (a, SHELL.upper),
+            (b, SHELL.lower),
+            (c, SHELL.lower),
+            (d, SHELL.upper),
+        ] {
+            assert!(close(p(under, t), radius, 1e-2), "{t}");
+        }
     }
 
     #[test]

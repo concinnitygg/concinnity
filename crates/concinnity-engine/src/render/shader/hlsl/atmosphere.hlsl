@@ -909,9 +909,14 @@ void cloud_march_layer(uint i, CloudRay ray, CloudPhase phase, float2 span, floa
     }
 }
 
+// The most stretches a view ray crosses the layers in: a ray that dips under
+// a layer and rises back into it crosses it twice.
+static const uint CLOUD_MAX_STRETCHES = CLOUD_MAX_LAYERS * 2u;
+
 // The clouds along the unit view ray `dir` (the frame's axes) up to `end_km`
-// from the camera: each layer marched over its own stretch of the ray, the
-// nearer first, in at most `max_steps` steps each starting `offset` of one in.
+// from the camera: each stretch of a layer the ray crosses marched on its
+// own, the nearer first, in at most `max_steps` steps each starting `offset`
+// of one in.
 CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offset, bool detail)
 {
     CloudRay ray;
@@ -919,17 +924,39 @@ CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offs
     ray.camera_up = normalize(ray.camera);
     ray.dir = cloud_to_fixed(dir);
     uint count = uint(CLOUD.shell.z);
-    float2 spans[CLOUD_MAX_LAYERS];
-    bool crossed[CLOUD_MAX_LAYERS];
+    // x, y: where the stretch starts and ends along the ray; z: its layer.
+    // A stretch the ray does not cross starts past every other.
+    float3 stretches[CLOUD_MAX_STRETCHES];
     [unroll]
     for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
     {
         float2 shell = CLOUD.layers[i].shell.xy;
-        spans[i] = (float2)0.0;
-        crossed[i] = i < count
-            && cloud_shell_span(ray.camera, ray.dir, CLOUD.camera.w, shell.x, shell.y, spans[i]);
-        spans[i].y = min(min(spans[i].y, end_km), spans[i].x + CLOUD.march.z);
-        crossed[i] = crossed[i] && spans[i].y > spans[i].x;
+        float4 spans = (float4)0.0;
+        uint crossed = i < count
+            ? cloud_shell_spans(ray.camera, ray.dir, CLOUD.camera.w, shell.x, shell.y, spans)
+            : 0u;
+        [unroll]
+        for (uint j = 0u; j < 2u; ++j)
+        {
+            float2 span = j == 0u ? spans.xy : spans.zw;
+            span.y = min(min(span.y, end_km), spans.x + CLOUD.march.z);
+            bool kept = j < crossed && span.y > span.x;
+            stretches[i * 2u + j] = kept ? float3(span, float(i)) : float3(1e30, 0.0, 0.0);
+        }
+    }
+    // Nearest first.
+    [unroll]
+    for (uint sweep = 1u; sweep < CLOUD_MAX_STRETCHES; ++sweep)
+    {
+        [unroll]
+        for (uint k = 0u; k + sweep < CLOUD_MAX_STRETCHES; ++k)
+        {
+            float3 a = stretches[k];
+            float3 b = stretches[k + 1u];
+            bool swap = b.x < a.x;
+            stretches[k] = swap ? b : a;
+            stretches[k + 1u] = swap ? a : b;
+        }
     }
     CloudPhase phase = cloud_phase_along(ray.dir);
     CloudMarchState state;
@@ -937,14 +964,14 @@ CloudSight cloud_march_ray(float3 dir, float end_km, float max_steps, float offs
     state.transmittance = 1.0;
     state.front = 0.0;
     state.front_weight = 0.0;
-    uint first = crossed[1] && (!crossed[0] || spans[1].x < spans[0].x) ? 1u : 0u;
-    [unroll]
-    for (uint k = 0u; k < CLOUD_MAX_LAYERS; ++k)
+    [loop]
+    for (uint k = 0u; k < CLOUD_MAX_STRETCHES; ++k)
     {
-        uint i = k == 0u ? first : 1u - first;
-        if (crossed[i] && state.transmittance >= 0.01)
+        float3 stretch = stretches[k];
+        if (stretch.y > stretch.x && state.transmittance >= 0.01)
         {
-            cloud_march_layer(i, ray, phase, spans[i], max_steps, offset, detail, state);
+            cloud_march_layer(uint(stretch.z), ray, phase, stretch.xy, max_steps, offset, detail,
+                              state);
         }
     }
     CloudSight sight;
@@ -1002,7 +1029,8 @@ void cloud_march_kernel(uint3 id : SV_DispatchThreadID)
 
 #ifdef CLOUD_RECONSTRUCT
 // How far along the unit ray `dir` (fixed axes) what it sees first lies: the
-// middle of the nearest layer's stretch it crosses, the scene `scene_km` away
+// middle of the nearest layer's reach along it, from where the ray first
+// enters the layer to where it last leaves it, the scene `scene_km` away
 // where that is nearer, or -1 past every layer with no scene in front.
 float cloud_reproject_distance(float3 dir, float scene_km)
 {
@@ -1013,10 +1041,14 @@ float cloud_reproject_distance(float3 dir, float scene_km)
     for (uint i = 0u; i < CLOUD_MAX_LAYERS; ++i)
     {
         float2 shell = CLOUD.layers[i].shell.xy;
-        float2 span = (float2)0.0;
-        if (i < count && cloud_shell_span(camera, dir, CLOUD.camera.w, shell.x, shell.y, span))
+        float4 spans = (float4)0.0;
+        uint crossed = i < count
+            ? cloud_shell_spans(camera, dir, CLOUD.camera.w, shell.x, shell.y, spans)
+            : 0u;
+        if (crossed > 0u)
         {
-            float mid = 0.5 * (span.x + min(span.y, span.x + CLOUD.march.z));
+            float end = crossed > 1u ? spans.w : spans.y;
+            float mid = 0.5 * (spans.x + min(end, spans.x + CLOUD.march.z));
             nearest = nearest < 0.0 ? mid : min(nearest, mid);
         }
     }
