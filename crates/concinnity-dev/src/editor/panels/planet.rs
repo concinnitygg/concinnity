@@ -24,9 +24,9 @@ const ITEM_ROWS: usize = 8;
 
 /// The most rows a planet shows: six headings, the shape's eight, the coasts'
 /// four, the sea's two, the ground's material and covers heading, every cover,
-/// the grass heading, every layer and the gravity.
+/// the grass heading, every layer, the gravity and the air.
 pub(crate) const MAX_ROWS: usize =
-    6 + 8 + 4 + 2 + 2 + MAX_COVERS * ITEM_ROWS + 1 + MAX_LAYERS * ITEM_ROWS + 1;
+    6 + 8 + 4 + 2 + 2 + MAX_COVERS * ITEM_ROWS + 1 + MAX_LAYERS * ITEM_ROWS + 2;
 
 // The vectors shown as one row per component.
 const EXPANDED: &[&str] = &["center"];
@@ -53,7 +53,7 @@ impl Section {
             Self::Sea => "Sea",
             Self::Ground => "Ground",
             Self::Grass => "Grass",
-            Self::Gravity => "Gravity",
+            Self::Gravity => "Gravity and air",
         }
     }
 }
@@ -298,6 +298,7 @@ pub(crate) fn rows(args: Option<&Map<String, Value>>) -> Vec<Row> {
         Section::Gravity.title(),
     ));
     out.extend(derived_row("gravity", "gravity", false));
+    out.extend(derived_row("air_scale_height", "air scale height", false));
     out
 }
 

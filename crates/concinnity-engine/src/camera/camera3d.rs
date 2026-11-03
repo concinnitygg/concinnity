@@ -53,8 +53,10 @@ pub struct FollowController {
     /// in world units.
     #[asset(default = 1.5)]
     pub height: f32,
-    /// Seconds the pivot takes to close half the distance to what it follows,
-    /// smoothing a bumpy ride. `0` follows exactly.
+    /// Seconds the pivot takes to catch up with a change in how what it
+    /// follows moves, smoothing a bumpy ride. Steady motion, however fast, is
+    /// followed exactly, and the pivot never falls behind by more than a
+    /// quarter of `distance`. `0` follows exactly.
     pub lag_seconds: f32,
     /// How the character moves; see [`FollowDrive`](#followdrive).
     #[asset(default = FollowDrive::RootMotion)]

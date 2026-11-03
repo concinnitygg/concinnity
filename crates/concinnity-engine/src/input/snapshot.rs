@@ -2,6 +2,8 @@
 
 use alloc::vec::Vec;
 
+use super::held_keys::HeldKeys;
+
 /// Accumulated input state since the last poll. Drained and reset every
 /// frame by the renderer and converted into a `FrameInput` component for
 /// `Camera3DSystem` to consume.
@@ -11,29 +13,10 @@ use alloc::vec::Vec;
     reason = "an input snapshot: one flag per action or key"
 )]
 pub struct InputSnapshot {
-    /// Forward movement key held.
-    pub forward: bool,
-    /// Backward movement key held.
-    pub backward: bool,
-    /// Left strafe key held.
-    pub left: bool,
-    /// Right strafe key held.
-    pub right: bool,
-    /// Sprint key held.
-    pub sprint: bool,
-    /// True for exactly one frame per interact-key press.
-    pub interact: bool,
-    /// True for exactly one frame per jump-key press.
-    pub jump: bool,
-    /// True while the Control key is held. A UI modifier (a story fast-forwards
-    /// its dialogue while it is down); not gated by menu state, like `escape` and
-    /// `key_events`. Wired on Metal; DirectX / Vulkan set it from their key
-    /// callbacks.
-    pub ctrl: bool,
-    /// True while the Option/Alt key is held. A UI modifier (the editor's orbit
-    /// drag); not gated by menu state, like `ctrl`. Wired on Metal; DirectX /
-    /// Vulkan set it from their key callbacks.
-    pub alt: bool,
+    /// The keys held down right now. Which action a key drives is the
+    /// engine's to decide, through the key map.
+    /// Shift, Control and Alt among them.
+    pub held: HeldKeys,
     /// True while the platform's command modifier is held: the Command key on
     /// macOS, where it is the idiomatic modifier for an application shortcut.
     /// Windows and Linux leave this false and keep Ctrl as their shortcut
@@ -114,8 +97,6 @@ impl InputPacket {
     pub fn merge_from(&mut self, newer: Self) {
         let old = core::mem::take(&mut self.raw);
         let mut raw = newer.raw;
-        raw.interact |= old.interact;
-        raw.jump |= old.jump;
         raw.left_click |= old.left_click;
         raw.right_click |= old.right_click;
         raw.hud_toggle |= old.hud_toggle;
@@ -163,7 +144,6 @@ mod tests {
     fn packet_merge_keeps_pulses_and_accumulates_deltas() {
         let mut pending = InputPacket {
             raw: InputSnapshot {
-                jump: true,
                 left_click: true,
                 mouse_dx: 2.0,
                 scroll_delta: 1.0,
@@ -179,7 +159,7 @@ mod tests {
         };
         pending.merge_from(InputPacket {
             raw: InputSnapshot {
-                interact: true,
+                right_click: true,
                 mouse_dx: 3.0,
                 scroll_delta: -0.5,
                 mouse_x: 42.0,
@@ -192,9 +172,8 @@ mod tests {
             top_inset: 28.0,
             window_minimized: false,
         });
-        assert!(pending.raw.jump, "the earlier pulse survives");
-        assert!(pending.raw.left_click);
-        assert!(pending.raw.interact, "the newer pulse is present");
+        assert!(pending.raw.left_click, "the earlier pulse survives");
+        assert!(pending.raw.right_click, "the newer pulse is present");
         assert_eq!(pending.raw.mouse_dx, 5.0, "deltas accumulate");
         assert_eq!(pending.raw.scroll_delta, 0.5);
         assert_eq!(pending.raw.mouse_x, 42.0, "position takes the newer value");

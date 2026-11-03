@@ -1,15 +1,14 @@
-//! The runtime, rebindable key map for the gameplay movement keys. Each backend
-//! decodes physical keys into the same semantic booleans (forward, jump, ...);
-//! this map says which canonical `InputKey` drives each action, so the settings menu can
-//! remap them at runtime. The map is canonical (backend-agnostic `InputKey` values); a
-//! backend resolves it to its own native key codes when it is pushed via
-//! `RenderBackend::set_keymap`.
+//! The runtime, rebindable key map for the gameplay keys. A backend reports
+//! only which canonical `InputKey`s are held and pressed; this map says which
+//! key drives each action (forward, jump, ...) when the input sampling turns
+//! them into the frame's `FrameInput`, so the settings menu can remap them at
+//! runtime.
 
 use crate::components::InputKey;
 use serde::{Deserialize, Serialize};
 
-/// A rebindable gameplay action. The four movement directions, sprint, jump, and
-/// interact. Pause (Escape) is deliberately not here: it carries cursor-release /
+/// A rebindable gameplay action. The four movement directions, sprint, jump,
+/// descend, and interact. Pause (Escape) is deliberately not here: it carries cursor-release /
 /// menu semantics that are fixed per-backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Bindable {
@@ -25,19 +24,22 @@ pub enum Bindable {
     Sprint,
     /// Jump.
     Jump,
+    /// Hold to go down, the way jump goes up.
+    Descend,
     /// Interact with the entity under the cursor.
     Interact,
 }
 
 impl Bindable {
     /// Every rebindable action, in Controls-tab row order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Forward,
         Self::Backward,
         Self::Left,
         Self::Right,
         Self::Sprint,
         Self::Jump,
+        Self::Descend,
         Self::Interact,
     ];
 
@@ -51,13 +53,14 @@ impl Bindable {
             Self::Right => "key_right",
             Self::Sprint => "key_sprint",
             Self::Jump => "key_jump",
+            Self::Descend => "key_descend",
             Self::Interact => "key_interact",
         }
     }
 }
 
-/// The canonical action -> key map. Persisted in `ControlsSettings` and pushed to
-/// the active backend. Each field is `#[serde(default)]` so adding an action in a
+/// The canonical action -> key map. Persisted in `ControlsSettings` and handed
+/// to the input sampling. Each field is `#[serde(default)]` so adding an action in a
 /// future build never invalidates an existing settings file (a missing field
 /// falls back to its default rather than failing the whole load).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +83,9 @@ pub struct KeyMap {
     #[serde(default = "def_jump")]
     /// `InputKey` bound to [`Bindable::Jump`].
     pub jump: InputKey,
+    #[serde(default = "def_descend")]
+    /// `InputKey` bound to [`Bindable::Descend`].
+    pub descend: InputKey,
     #[serde(default = "def_interact")]
     /// `InputKey` bound to [`Bindable::Interact`].
     pub interact: InputKey,
@@ -94,6 +100,7 @@ impl KeyMap {
         right: InputKey::D,
         sprint: InputKey::Shift,
         jump: InputKey::Space,
+        descend: InputKey::Control,
         interact: InputKey::E,
     };
 
@@ -106,6 +113,7 @@ impl KeyMap {
             Bindable::Right => self.right,
             Bindable::Sprint => self.sprint,
             Bindable::Jump => self.jump,
+            Bindable::Descend => self.descend,
             Bindable::Interact => self.interact,
         }
     }
@@ -119,6 +127,7 @@ impl KeyMap {
             Bindable::Right => self.right = key,
             Bindable::Sprint => self.sprint = key,
             Bindable::Jump => self.jump = key,
+            Bindable::Descend => self.descend = key,
             Bindable::Interact => self.interact = key,
         }
     }
@@ -171,6 +180,9 @@ fn def_sprint() -> InputKey {
 fn def_jump() -> InputKey {
     KeyMap::DEFAULT.jump
 }
+fn def_descend() -> InputKey {
+    KeyMap::DEFAULT.descend
+}
 fn def_interact() -> InputKey {
     KeyMap::DEFAULT.interact
 }
@@ -190,6 +202,7 @@ mod tests {
         assert_eq!(m.right, InputKey::D);
         assert_eq!(m.sprint, InputKey::Shift);
         assert_eq!(m.jump, InputKey::Space);
+        assert_eq!(m.descend, InputKey::Control);
         assert_eq!(m.interact, InputKey::E);
     }
 

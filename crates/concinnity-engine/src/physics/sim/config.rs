@@ -21,6 +21,10 @@ pub struct SimConfig {
     /// The point gravity pulls every body toward, from wherever it is, as a
     /// planet does. `None` pulls straight down along `-Y`.
     pub gravity_center: Option<[f32; 3]>,
+    /// How a planet's air thins with distance from `gravity_center`: each body's linear damping, its drag, falls with
+    /// the air. `None`, or no `gravity_center`, keeps the air as thick
+    /// everywhere.
+    pub air: Option<AirFalloff>,
     /// Velocity/position passes per step. More substeps buy stiffer stacks at
     /// a near-linear cost; below `1` the step does nothing.
     pub substeps: u32,
@@ -77,11 +81,24 @@ pub struct SimConfig {
     pub ccd_motion_ratio: f32,
 }
 
+/// How a planet's air thins with height: as thick as it is at `radius` from
+/// the planet's center everywhere within it, and thinner by `e` every
+/// `scale_height` meters beyond it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AirFalloff {
+    /// The distance from the planet's center the air starts thinning at, in
+    /// meters: the planet's radius.
+    pub radius: f32,
+    /// The height the air thins by `e` over, in meters.
+    pub scale_height: f32,
+}
+
 impl Default for SimConfig {
     fn default() -> Self {
         Self {
             gravity: GRAVITY,
             gravity_center: None,
+            air: None,
             substeps: 4,
             contact_hertz: 30.0,
             contact_damping_ratio: 10.0,
@@ -111,6 +128,19 @@ impl SimConfig {
             }
             None => vec3(0.0, -self.gravity, 0.0),
         }
+    }
+
+    /// The share of a body's linear damping the air at `position` leaves it:
+    /// 1 within the air's radius, falling by `e` every scale height beyond it.
+    pub(crate) fn air_share(&self, position: Vec3) -> f32 {
+        let (Some(center), Some(air)) = (self.gravity_center, self.air) else {
+            return 1.0;
+        };
+        let height = (position - Vec3::from_array(center)).length() - air.radius;
+        if height <= 0.0 || air.scale_height <= 0.0 {
+            return 1.0;
+        }
+        concinnity_core::math::exp(-height / air.scale_height)
     }
 
     /// Substeps as a positive count, so a caller cannot configure a step that
@@ -166,6 +196,29 @@ impl Softness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The air is as thick as at the ground up to it and under it, thins by
+    // `e` each scale height above, and stays whole with no planet.
+    #[test]
+    fn the_air_thins_with_height_over_the_ground() {
+        let config = SimConfig {
+            gravity_center: Some([0.0, -1_000.0, 0.0]),
+            air: Some(AirFalloff {
+                radius: 1_000.0,
+                scale_height: 100.0,
+            }),
+            ..SimConfig::default()
+        };
+        assert!((config.air_share(vec3(0.0, -50.0, 0.0)) - 1.0).abs() < 1e-6);
+        let e1 = concinnity_core::math::exp(-1.0);
+        assert!((config.air_share(vec3(0.0, 100.0, 0.0)) - e1).abs() < 1e-4);
+        assert!((config.air_share(vec3(0.0, 200.0, 0.0)) - e1 * e1).abs() < 1e-4);
+        let flat = SimConfig {
+            gravity_center: None,
+            ..config
+        };
+        assert!((flat.air_share(vec3(0.0, 1e6, 0.0)) - 1.0).abs() < 1e-6);
+    }
 
     #[test]
     fn the_default_matches_the_engine_gravity_and_simulates_something() {

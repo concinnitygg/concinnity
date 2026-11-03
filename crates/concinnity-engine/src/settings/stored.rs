@@ -89,6 +89,7 @@ impl StoredSettings {
             fov_y_degrees: self.graphics.fov,
             gamepad_look_sensitivity: self.controls.gamepad_look_sensitivity,
             gamepad_deadzone: self.controls.gamepad_deadzone,
+            keymap: self.controls.keymap,
             gamepad_map: self.controls.gamepad_map,
         }
     }

@@ -5,9 +5,13 @@
 //! and an afternoon, gives way to a sunset, then to a moonlit night of stars,
 //! the Milky Way and distant galaxies, and the sun comes back up in the east.
 //! You roll a chrome marble over it, watched from behind: WASD rolls it the
-//! way the camera looks, Shift sprints, Space jumps and the mouse turns the
-//! camera. It parts the grass as it goes, runs down the beach into the surf,
-//! and floats and paddles out at sea.
+//! way the camera looks, faster the longer a direction is held, Shift
+//! sprints, Space jumps and the mouse turns the camera. Holding Space flies
+//! the marble up, ever faster, out of the air until the whole planet is in
+//! view; let go, it falls back under gravity, and holding Control flies it
+//! down just as fast, slowing to land softly. It parts the grass as
+//! it goes, runs down the beach into the surf, and floats and paddles out at
+//! sea. A chip under the stats shows how fast it is going.
 //!
 //! The whole world is `planet.jsonl`, beside this file. This program only
 //! compiles it into a blob next to the executable and plays that blob; its

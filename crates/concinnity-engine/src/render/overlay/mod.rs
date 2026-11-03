@@ -57,9 +57,9 @@ pub struct OverlayAssets {
     pub sprite_texture_slots: maps::TextureSlots,
     /// The `DebugHud` chip label ids, top to bottom.
     pub debug_hud_chips: Vec<AssetId>,
-    /// The `StatHud` chip label ids: the top row, then the benchmark row, each
-    /// left to right.
-    pub stat_hud_chips: [Vec<AssetId>; 2],
+    /// The `StatHud` chip label ids: the top row, the benchmark row, then the
+    /// subject row, each left to right.
+    pub stat_hud_chips: [Vec<AssetId>; 3],
     /// The scroll-panel clip bands.
     pub clip_rects: maps::ClipRects,
     /// The backend's logical size at init, the viewport used until the first

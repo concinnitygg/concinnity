@@ -22,6 +22,9 @@ pub struct ControlsCommand {
     /// New gamepad stick deadzone as a deflection fraction in [0, 1]. None
     /// leaves it unchanged. Applied live by the input sampling.
     pub gamepad_deadzone: Option<f32>,
+    /// New action -> key map after a rebind. None leaves it unchanged.
+    /// Applied live by the input sampling.
+    pub keymap: Option<crate::input::keymap::KeyMap>,
     /// New gamepad action -> button map after a rebind. None leaves it
     /// unchanged. Applied live by the input sampling.
     pub gamepad_map: Option<crate::components::GamepadMap>,

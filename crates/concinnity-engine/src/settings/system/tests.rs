@@ -347,7 +347,11 @@ fn rebind_swaps_the_victim_and_relabels_both_rows() {
         forward_key,
         "the victim takes the rebound action's old key"
     );
-    assert!(f.saw(&Call::SetKeymap));
+    let keymap = f.state.keymap;
+    assert!(
+        f.sent_controls().iter().any(|c| c.keymap == Some(keymap)),
+        "the rebound map goes to the input sampling"
+    );
     assert_eq!(f.label(REBIND_LABEL), backward_key.display_name());
     assert_eq!(f.label(VICTIM_LABEL), forward_key.display_name());
     assert_eq!(f.persisted().controls.keymap, Some(f.state.keymap));
@@ -385,7 +389,7 @@ fn rebind_of_a_non_rebind_setting_is_ignored() {
         persist: true,
     }]);
 
-    assert!(!f.saw(&Call::SetKeymap));
+    assert!(f.sent_controls().iter().all(|c| c.keymap.is_none()));
     assert_eq!(f.state.keymap, KeyMap::default());
 }
 

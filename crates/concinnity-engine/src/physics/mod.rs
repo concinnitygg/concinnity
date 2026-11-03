@@ -90,8 +90,8 @@ pub use handle::BodyHandle;
 pub use joints::{JointMotor, JointSpec};
 pub use layers::LayerMask;
 pub use sim::{
-    CharacterCapsule, FluidLoad, FluidPiece, FluidShape, MAX_FLUID_PIECES, ShapeCast, ShapeCastHit,
-    SimConfig, Simulation, Submerged, submerged,
+    AirFalloff, CharacterCapsule, FluidLoad, FluidPiece, FluidShape, MAX_FLUID_PIECES, ShapeCast,
+    ShapeCastHit, SimConfig, Simulation, Submerged, submerged,
 };
 pub use system::PhysicsSystem;
 pub use types::{BodyState, ColliderShape, DynamicParams};

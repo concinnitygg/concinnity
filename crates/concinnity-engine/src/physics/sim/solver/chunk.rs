@@ -110,7 +110,8 @@ fn integrate_velocities(chunk: &mut Chunk<'_>, config: &SimConfig, fluids: &[Flu
         body.angular_velocity += body.inv_inertia.mul_vec3(body.torque) * h;
         // Implicit damping: stable at any timestep, unlike scaling by
         // (1 - h * damping), which turns a body inside out past h = 1/d.
-        body.linear_velocity = body.linear_velocity * (1.0 / (1.0 + h * body.linear_damping));
+        let drag = body.linear_damping * config.air_share(body.position);
+        body.linear_velocity = body.linear_velocity * (1.0 / (1.0 + h * drag));
         body.angular_velocity = body.angular_velocity * (1.0 / (1.0 + h * body.angular_damping));
     }
 }

@@ -4,7 +4,7 @@
 // GraphicsSystem each tick.
 
 use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress};
-use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::input::held_keys::HeldKeys;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
@@ -25,31 +25,11 @@ pub(crate) struct MouseSnapshot {
 
 // Per-key pressed state tracked across Win32 WM_KEYDOWN / WM_KEYUP messages.
 #[derive(Default)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "an input snapshot: one flag per action or key"
-)]
 pub(crate) struct KeyState {
-    pub forward: bool,
-    pub backward: bool,
-    pub left: bool,
-    pub right: bool,
-    pub sprint: bool,
-    // Held Control modifier (a story's Ctrl fast-forward reads it each frame).
-    // Windows delivers Ctrl as an ordinary WM_KEYDOWN/WM_KEYUP carrying
-    // VK_CONTROL, so it is tracked here like a held key rather than through a
-    // separate modifier path (unlike macOS FlagsChanged); it drives no gameplay
-    // binding. Not a one-shot, so `take` reads without resetting it.
-    pub ctrl: bool,
-    // Held Alt modifier (the editor's Alt+drag orbit reads it each frame).
-    // Windows routes Alt through WM_SYSKEYDOWN / WM_SYSKEYUP carrying VK_MENU
-    // rather than the ordinary key messages, so it is tracked from those (see
-    // `on_sys_key`) and cleared on focus loss so Alt+Tab does not leave it
-    // stuck down. Not a one-shot, so `take` reads without resetting it.
-    pub alt: bool,
-    // One-shot flags: set on down, cleared after take_input() reads them.
-    pub interact_pending: bool,
-    pub jump_pending: bool,
+    // The keys held down, from WM_KEYDOWN to WM_KEYUP. Control is held from
+    // its own messages, and Alt from the system-key ones (see `on_sys_key`);
+    // both and Shift are dropped on focus loss so Alt+Tab leaves none stuck.
+    pub held: HeldKeys,
     // One-shot: set on F1-down, cleared by `take`. Drives the `StatHud`
     // system's F1 toggle so the in-engine profiler overlay can be flipped
     // at runtime.
@@ -58,9 +38,6 @@ pub(crate) struct KeyState {
     // (When the cursor is captured the wnd_proc routes Escape through
     // `release_cursor` instead, matching the Metal backend.)
     pub escape_pending: bool,
-    // Held Shift modifier, tracked from VK_SHIFT like `ctrl` so each queued
-    // press records the modifiers held at that moment.
-    pub shift: bool,
     // Every key press (auto-repeats included) and printable glyph since the
     // last `take`, in arrival order; drained by `take`. Glyphs come from
     // WM_CHAR, which Windows resolves for the active layout, Shift, and dead
@@ -69,80 +46,33 @@ pub(crate) struct KeyState {
     // The high half of a surrogate pair WM_CHAR delivered, waiting for its low
     // half so a character outside the Basic Multilingual Plane types whole.
     pub high_surrogate: Option<u16>,
-    // The runtime movement key map. `on_key_down` / `on_key_up` decode events
-    // through it instead of hardcoded keys, so a settings-menu rebind takes
-    // effect immediately. Defaults to W/S/A/D/Shift/Space/E. (Windows delivers
-    // Shift as an ordinary WM_KEYDOWN, so it is just another key here -- no
-    // separate modifier path is needed, unlike macOS.)
-    pub keymap: KeyMap,
 }
 
 impl KeyState {
-    // Replace the runtime movement key map.
-    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
-        self.keymap = keymap;
-    }
-
-    // Apply a key transition to whichever gameplay actions are bound to `key`.
-    // `down` is the held state (movement / sprint follow it); `fire_pulse`
-    // fires the one-shot actions (jump / interact) on a press.
-    fn apply_binding(&mut self, key: InputKey, down: bool, fire_pulse: bool) {
-        let km = self.keymap;
-        if km.forward == key {
-            self.forward = down;
-        }
-        if km.backward == key {
-            self.backward = down;
-        }
-        if km.left == key {
-            self.left = down;
-        }
-        if km.right == key {
-            self.right = down;
-        }
-        if km.sprint == key {
-            self.sprint = down;
-        }
-        if fire_pulse {
-            if km.jump == key {
-                self.jump_pending = true;
-            }
-            if km.interact == key {
-                self.interact_pending = true;
-            }
-        }
-    }
-
     // The modifiers held right now, recorded on each queued press.
     fn mods(&self) -> KeyMods {
         KeyMods {
-            shift: self.shift,
-            ctrl: self.ctrl,
-            alt: self.alt,
+            shift: self.held.contains(InputKey::Shift),
+            ctrl: self.held.contains(InputKey::Control),
+            alt: self.held.contains(InputKey::Alt),
             cmd: false,
         }
     }
 
     // Update held/pending flags from a WM_KEYDOWN message. `repeat` is set for
     // the auto-repeat of a key already held (lParam bit 30). F1 stays fixed
-    // (the stat-HUD toggle); every other key routes through the key map.
+    // (the stat-HUD toggle); every other key is held until its WM_KEYUP.
     pub(crate) fn on_key_down(&mut self, vk: VIRTUAL_KEY, repeat: bool) {
         if vk == VK_F1 {
             self.hud_toggle_pending = true;
         }
-        if vk == VK_CONTROL {
-            self.ctrl = true;
-        }
-        if vk == VK_SHIFT {
-            self.shift = true;
-        }
         if let Some(key) = key_from_vk(vk) {
+            self.held.set(key, true);
             self.events.push(KeyEvent::Press(KeyPress {
                 key,
                 mods: self.mods(),
                 repeat,
             }));
-            self.apply_binding(key, true, true);
         }
     }
 
@@ -158,8 +88,17 @@ impl KeyState {
     // Only VK_MENU is read: the other system-key presses (Alt+F4, Alt+Enter)
     // stay with DefWindowProc.
     pub(crate) fn on_sys_key(&mut self, vk: VIRTUAL_KEY, down: bool) {
-        if vk == VK_MENU {
-            self.alt = down;
+        if vk != VK_MENU {
+            return;
+        }
+        let fresh = down && !self.held.contains(InputKey::Alt);
+        self.held.set(InputKey::Alt, down);
+        if fresh {
+            self.events.push(KeyEvent::Press(KeyPress {
+                key: InputKey::Alt,
+                mods: self.mods(),
+                repeat: false,
+            }));
         }
     }
 
@@ -167,21 +106,15 @@ impl KeyState {
     // Alt release, so without this the flag would stay set for the rest of the
     // session.
     pub(crate) fn on_focus_lost(&mut self) {
-        self.ctrl = false;
-        self.alt = false;
-        self.shift = false;
+        for key in [InputKey::Control, InputKey::Alt, InputKey::Shift] {
+            self.held.set(key, false);
+        }
     }
 
     // Update held flags from a WM_KEYUP message.
     pub(crate) fn on_key_up(&mut self, vk: VIRTUAL_KEY) {
-        if vk == VK_CONTROL {
-            self.ctrl = false;
-        }
-        if vk == VK_SHIFT {
-            self.shift = false;
-        }
         if let Some(key) = key_from_vk(vk) {
-            self.apply_binding(key, false, false);
+            self.held.set(key, false);
         }
     }
 
@@ -222,13 +155,7 @@ impl KeyState {
             scroll_delta,
         } = mouse;
         let s = InputSnapshot {
-            forward: self.forward,
-            backward: self.backward,
-            left: self.left,
-            right: self.right,
-            sprint: self.sprint,
-            interact: self.interact_pending,
-            jump: self.jump_pending,
+            held: self.held,
             mouse_dx,
             mouse_dy,
             scroll_delta,
@@ -239,22 +166,12 @@ impl KeyState {
             right_click,
             hud_toggle: self.hud_toggle_pending,
             escape: self.escape_pending,
-            // Held Control modifier (VK_CONTROL), tracked across key-down/up; a
-            // story's Ctrl fast-forward reads it. Held state, not a one-shot, so
-            // it is not reset below.
-            ctrl: self.ctrl,
-            // Held Alt modifier (VK_MENU via the system-key messages), tracked
-            // across down/up; the editor's orbit drag reads it. Held state, not
-            // a one-shot, so it is not reset below.
-            alt: self.alt,
             // Windows shortcuts are built on Ctrl, and the Windows key belongs
             // to the shell (Win+K opens a system panel), so nothing here claims
             // it.
             cmd: false,
             key_events: std::mem::take(&mut self.events),
         };
-        self.interact_pending = false;
-        self.jump_pending = false;
         self.hud_toggle_pending = false;
         self.escape_pending = false;
         s
@@ -334,6 +251,7 @@ fn key_from_vk(vk: VIRTUAL_KEY) -> Option<InputKey> {
         VK_BACK => InputKey::Backspace,
         VK_DELETE => InputKey::Delete,
         VK_SHIFT => InputKey::Shift,
+        VK_CONTROL => InputKey::Control,
         VK_LEFT => InputKey::Left,
         VK_RIGHT => InputKey::Right,
         VK_UP => InputKey::Up,
@@ -386,17 +304,53 @@ mod tests {
 
     #[test]
     fn control_key_tracks_held_ctrl_modifier() {
-        // Regression: `ctrl` used to be hardcoded `false` in `take`, so a story's
-        // Ctrl fast-forward never fired on Windows (worked on Metal only).
+        // Control is held from its own key messages, so a story's Ctrl
+        // fast-forward works on Windows as it does elsewhere.
         let mut ks = KeyState::default();
-        assert!(!snapshot(&mut ks).ctrl, "ctrl starts released");
+        assert!(
+            !snapshot(&mut ks).held.contains(InputKey::Control),
+            "ctrl starts released"
+        );
         ks.on_key_down(VK_CONTROL, false);
-        assert!(snapshot(&mut ks).ctrl, "ctrl held after VK_CONTROL down");
+        assert!(
+            snapshot(&mut ks).held.contains(InputKey::Control),
+            "ctrl held after VK_CONTROL down"
+        );
         // Held modifier, not a one-shot: still set on a later frame with no new
         // event (so a sustained hold keeps fast-forwarding).
-        assert!(snapshot(&mut ks).ctrl, "ctrl stays held across frames");
+        assert!(
+            snapshot(&mut ks).held.contains(InputKey::Control),
+            "ctrl stays held across frames"
+        );
         ks.on_key_up(VK_CONTROL);
-        assert!(!snapshot(&mut ks).ctrl, "ctrl released after VK_CONTROL up");
+        assert!(
+            !snapshot(&mut ks).held.contains(InputKey::Control),
+            "ctrl released after VK_CONTROL up"
+        );
+    }
+
+    // Control and Alt queue a press as they go down, once, so an action or a
+    // rebind capture bound to them sees them like any other key.
+    #[test]
+    fn modifiers_queue_a_press_as_they_go_down() {
+        let pressed = |snap: &InputSnapshot| -> Vec<InputKey> {
+            snap.key_events
+                .iter()
+                .filter_map(|e| match e {
+                    KeyEvent::Press(p) if !p.repeat => Some(p.key),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut ks = KeyState::default();
+        ks.on_key_down(VK_CONTROL, false);
+        ks.on_sys_key(VK_MENU, true);
+        ks.on_sys_key(VK_MENU, true);
+        let snap = snapshot(&mut ks);
+        assert_eq!(pressed(&snap), [InputKey::Control, InputKey::Alt]);
+        assert!(snap.held.contains(InputKey::Alt));
+        ks.on_sys_key(VK_MENU, false);
+        assert!(!snapshot(&mut ks).held.contains(InputKey::Alt));
     }
 
     fn text(ks: &mut KeyState) -> String {
@@ -466,10 +420,18 @@ mod tests {
             })
             .collect();
         let keys: Vec<InputKey> = presses.iter().map(|p| p.key).collect();
-        assert_eq!(keys, [InputKey::Z, InputKey::Left, InputKey::Left]);
-        assert!(presses[0].mods.ctrl, "Ctrl held for the Z");
-        assert!(!presses[1].mods.ctrl, "released before the Left");
-        assert!(!presses[1].repeat && presses[2].repeat);
+        assert_eq!(
+            keys,
+            [
+                InputKey::Control,
+                InputKey::Z,
+                InputKey::Left,
+                InputKey::Left
+            ]
+        );
+        assert!(presses[1].mods.ctrl, "Ctrl held for the Z");
+        assert!(!presses[2].mods.ctrl, "released before the Left");
+        assert!(!presses[2].repeat && presses[3].repeat);
     }
 
     #[test]

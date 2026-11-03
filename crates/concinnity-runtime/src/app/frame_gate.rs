@@ -54,9 +54,12 @@ mod tests {
     fn the_go_ahead_carries_the_frames_input() {
         let (go, gate) = frame_gate();
         let mut input = InputPacket::default();
-        input.raw.jump = true;
+        input.raw.left_click = true;
         assert!(go.send(input, 7));
-        assert!(gate.wait().is_some_and(|(p, at)| p.raw.jump && at == 7));
+        assert!(
+            gate.wait()
+                .is_some_and(|(p, at)| p.raw.left_click && at == 7)
+        );
     }
 
     #[test]

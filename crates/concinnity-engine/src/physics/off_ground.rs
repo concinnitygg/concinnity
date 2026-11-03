@@ -2,12 +2,14 @@
 // around the camera, so a freely simulated body the patch has moved away from
 // would fall into the planet. Such a body is held where it is, driven by
 // nothing and pulled by nothing, until the patch covers it again, and is then
-// handed back to the solver at rest.
+// handed back to the solver at rest. A body well up in the air needs no
+// ground yet, so it flies on until it comes down near it.
 
 use alloc::vec::Vec;
 
 use crate::physics::{BodyHandle, Simulation};
-use crate::planet::GroundPatch;
+use crate::planet::{GroundPatch, PlanetFrame};
+use concinnity_core::math::vec3::dot;
 
 // How far inside the patch's edge a body must stay to keep simulating, and
 // how far inside it a held body must be before it is let go. The gap between
@@ -15,11 +17,20 @@ use crate::planet::GroundPatch;
 const HOLD_INSET: f32 = 2.0;
 const RELEASE_INSET: f32 = 4.0;
 
+// How high over the ground a body off the patch may be and still be held, in
+// meters, and how far ahead its fall is looked, in seconds: one higher than
+// both together needs no ground for now.
+const HOLD_CLEARANCE: f32 = 50.0;
+const HOLD_LOOKAHEAD: f32 = 0.5;
+
 /// Where on the local `X`/`Z` plane a ground patch reaches.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Footprint {
     center: [f32; 2],
     half: [f32; 2],
+    // The patch's lowest ground, along local `Y`, which stands in for the
+    // ground off the patch without a planet to read it from.
+    base: f32,
 }
 
 impl Footprint {
@@ -27,7 +38,19 @@ impl Footprint {
         Self {
             center: [patch.center[0], patch.center[2]],
             half: patch.grid.extent(),
+            base: patch.center[1],
         }
+    }
+
+    // Whether a body at `p` moving at `velocity` could reach the ground soon:
+    // it is near the ground under it, the planet's where there is one, or
+    // falling fast enough to be.
+    fn near_ground(&self, planet: Option<&PlanetFrame>, p: [f32; 3], velocity: [f32; 3]) -> bool {
+        let (height, up) = planet.map_or((p[1] - self.base, [0.0, 1.0, 0.0]), |planet| {
+            (planet.height_over_ground(p), planet.up_at(p))
+        });
+        let falling = (-dot(velocity, up)).max(0.0);
+        height < HOLD_CLEARANCE + falling * HOLD_LOOKAHEAD
     }
 
     // Whether `p` lies at least `inset` inside the footprint's edge.
@@ -61,8 +84,9 @@ impl OffGroundBodies {
         self.held.binary_search(&handle).is_ok()
     }
 
-    /// Hold every body in `bodies` that has strayed off `footprint`, and let
-    /// go of every held one it covers again. `bodies` are the freely
+    /// Hold every body in `bodies` that has strayed off `footprint` near
+    /// enough the ground to need it, the ground of `planet` where there is
+    /// one, and let go of every held one it covers again. `bodies` are the freely
     /// simulated bodies the caller tracks, each with whether water holds it
     /// up: a floating body needs no ground, so it is never held, and a held
     /// one the water reaches is let go. A held body no longer among them is
@@ -72,6 +96,7 @@ impl OffGroundBodies {
         world: &mut Simulation,
         bodies: impl Iterator<Item = (BodyHandle, bool)>,
         footprint: &Footprint,
+        planet: Option<&PlanetFrame>,
     ) {
         self.keep.clear();
         self.keep.resize(self.held.len(), false);
@@ -86,8 +111,12 @@ impl OffGroundBodies {
                 }
                 Ok(i) => self.keep[i] = true,
                 Err(_) => {
+                    let velocity = world
+                        .body_state(handle)
+                        .map_or([0.0; 3], |state| state.linear_velocity);
                     if !afloat
                         && !footprint.covers(position, HOLD_INSET)
+                        && footprint.near_ground(planet, position, velocity)
                         && world.make_kinematic(handle)
                     {
                         self.newly_held.push(handle);
@@ -172,6 +201,7 @@ mod tests {
             world,
             bodies.iter().map(|&b| (b, false)),
             &Footprint::of(at),
+            None,
         );
         world.step(TICK);
     }
@@ -270,6 +300,63 @@ mod tests {
         assert!(!f.covers([10.0, 0.0, -5.0 - 15.0], HOLD_INSET));
     }
 
+    // A body well up in the air off the patch flies on until it falls near
+    // the ground, and one falling fast is held sooner, further up.
+    #[test]
+    fn a_body_high_in_the_air_needs_no_ground_until_it_nears_it() {
+        let (mut world, _ground, balls) = world_on([0.0; 3], &[[0.0, 200.0, 0.0]]);
+        let mut held = OffGroundBodies::default();
+        let away = patch([100.0, 0.0, 0.0]);
+        step(&mut world, &mut held, &balls, &away);
+        assert!(!held.is_held(balls[0]), "high in the air");
+        let mut fell = false;
+        for _ in 0..600 {
+            step(&mut world, &mut held, &balls, &away);
+            if held.is_held(balls[0]) {
+                fell = true;
+                break;
+            }
+        }
+        assert!(fell, "held once it came down near the ground");
+        assert!(
+            y(&world, balls[0]) > HOLD_CLEARANCE,
+            "{}",
+            y(&world, balls[0])
+        );
+        let f = Footprint::of(&away);
+        assert!(!f.near_ground(None, [0.0, 200.0, 0.0], [0.0; 3]));
+        assert!(f.near_ground(None, [0.0, 200.0, 0.0], [50.0, -400.0, 0.0]));
+        assert!(f.near_ground(None, [0.0, 40.0, 0.0], [0.0, 30.0, 0.0]));
+    }
+
+    // Over a planet the ground under the body is the one that counts, not the
+    // patch's: high over a low patch but low over a hill is near the ground.
+    #[test]
+    fn over_a_planet_the_ground_under_the_body_decides() {
+        use crate::planet::{Continents, LocalFrame, PlanetShape};
+        let planet = PlanetFrame {
+            shape: PlanetShape {
+                center: [0.0, -5_000.0, 0.0],
+                radius: 5_000.0,
+                amplitude: 0.0,
+                feature_size: 100.0,
+                octaves: 1,
+                seed: 0,
+                continents: Continents::NONE,
+                edits: None,
+            },
+            frame: LocalFrame::AUTHORED,
+        };
+        let low_patch = Footprint::of(&patch([0.0, -100.0, 0.0]));
+        assert!((planet.height_over_ground([0.0, 30.0, 0.0]) - 30.0).abs() < 1e-2);
+        assert!(low_patch.near_ground(Some(&planet), [0.0, 30.0, 0.0], [0.0; 3]));
+        assert!(!low_patch.near_ground(Some(&planet), [0.0, 80.0, 0.0], [0.0; 3]));
+        assert!(
+            !low_patch.near_ground(None, [0.0, 30.0, 0.0], [0.0; 3]),
+            "130 m over the patch"
+        );
+    }
+
     // A floating body needs no ground: one the water holds up is never held
     // off the patch, and a held one the water reaches is let go.
     #[test]
@@ -277,11 +364,11 @@ mod tests {
         let (mut world, _ground, balls) = world_on([0.0; 3], &[[0.0, 0.6, 0.0]]);
         let mut held = OffGroundBodies::default();
         let away = Footprint::of(&patch([100.0, 0.0, 0.0]));
-        held.update(&mut world, balls.iter().map(|&b| (b, true)), &away);
+        held.update(&mut world, balls.iter().map(|&b| (b, true)), &away, None);
         assert!(!held.is_held(balls[0]), "afloat");
-        held.update(&mut world, balls.iter().map(|&b| (b, false)), &away);
+        held.update(&mut world, balls.iter().map(|&b| (b, false)), &away, None);
         assert!(held.is_held(balls[0]), "aground, off the patch");
-        held.update(&mut world, balls.iter().map(|&b| (b, true)), &away);
+        held.update(&mut world, balls.iter().map(|&b| (b, true)), &away, None);
         assert!(!held.is_held(balls[0]), "the water reached it");
         assert!(world.body_state(balls[0]).is_some(), "simulated again");
     }

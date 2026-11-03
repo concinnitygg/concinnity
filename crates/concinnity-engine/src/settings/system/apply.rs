@@ -228,7 +228,7 @@ impl SettingsState {
         let text = match cmd.setting {
             K::KeyRebind(action) => {
                 return match op {
-                    SettingOp::Rebind(key) => self.apply_key_rebind(ctx, ops, cfg, action, key),
+                    SettingOp::Rebind(key) => self.apply_key_rebind(ctx, cfg, action, key),
                     _ => misrouted(cmd),
                 };
             }

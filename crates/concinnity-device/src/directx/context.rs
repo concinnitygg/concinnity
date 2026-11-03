@@ -7,7 +7,6 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
     InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
 };
-use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -1446,12 +1445,6 @@ impl DxContext {
             cur.settings = live;
         }
         self.refresh_gates(g);
-    }
-
-    // Replace the runtime movement key map. The window message loop decodes
-    // key events through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
-        self.win_mut().key.set_keymap(keymap);
     }
 
     pub(crate) fn take_input(&mut self) -> InputSnapshot {

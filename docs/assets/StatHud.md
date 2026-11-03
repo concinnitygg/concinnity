@@ -46,8 +46,15 @@ The second row appears in a benchmarked run (one armed with a
 - `draws_label`: the draw calls the CPU issued. Draws the GPU culls and
   issues for itself are not counted.
 
+A third row shows how the subject moves:
+- `speed_label`: how fast the prop the follow camera follows is moving,
+  in any direction, read from its [`RollingDrive`](RollingDrive.md)
+  (`SPEED 12.4 m/s`, then `SPEED 3.25 km/s` from a thousand meters per
+  second). Blank in a benchmarked run.
+
 `time_label` also shows in a run without a benchmark whenever a track is
-running. Chips whose stat is unavailable stay blank, and a blank chip
+running. A row with no chip showing takes no room, so the next one moves
+up into its place. Chips whose stat is unavailable stay blank, and a blank chip
 reserves no width. The chips' on-screen position is fixed by the engine
 rather than the authored coordinates.
 
@@ -89,3 +96,4 @@ without a menu. Declare an [`EngineDefaults`](EngineDefaults.md) with
 - `resolution_label`: A string. [`TextLabel`](TextLabel.md) that receives the resolution chip text. Optional.
 - `objects_label`: A string. [`TextLabel`](TextLabel.md) that receives the object-count chip text. Optional.
 - `draws_label`: A string. [`TextLabel`](TextLabel.md) that receives the draw-call chip text. Optional.
+- `speed_label`: A string. [`TextLabel`](TextLabel.md) that receives the speed chip text. Optional.

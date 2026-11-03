@@ -4,7 +4,6 @@
 use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::gfx::mesh_payload::SkinnedVertex;
 use concinnity_engine::gfx::render_types::SkinnedDrawObject;
-use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::profile::RenderStats;
 use concinnity_engine::render::backend::error::RenderResult;
@@ -88,7 +87,6 @@ impl WindowControl for DxContext {
         fn display_modes(&self) -> Vec<display_mode::DisplayMode>;
         fn current_display_mode(&self) -> Option<display_mode::DisplayMode>;
         fn set_display_mode(&mut self, mode: display_mode::DisplayMode);
-        fn set_keymap(&mut self, keymap: KeyMap);
         fn logical_size(&self) -> (f32, f32);
     }
 

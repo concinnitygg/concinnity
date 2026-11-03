@@ -34,6 +34,25 @@ use concinnity_core::math::vec3::{add, length, scale, sub};
 const SPEED_HALF_LIFE: f32 = 0.12;
 // Speeds below this snap to zero so the idle state is exactly at rest.
 const SPEED_EPSILON: f32 = 0.01;
+// The farthest a lagging pivot trails what it follows, as a share of the
+// boom, so a fast body stays in frame.
+const MAX_TRAIL: f32 = 0.25;
+
+// The most the velocity a pivot rides along with may lag what it follows, in
+// meters per second: enough to smooth a bumpy roll, little enough that a
+// body stopping or turning hard stays put on screen.
+const MAX_SPEED_LAG: f32 = 2.0;
+
+// `pivot` pulled to within `reach` of `goal`.
+fn trail_within(pivot: [f32; 3], goal: [f32; 3], reach: f32) -> [f32; 3] {
+    let behind = sub(pivot, goal);
+    let gap = length(behind);
+    if gap <= reach {
+        pivot
+    } else {
+        add(goal, scale(behind, reach / gap))
+    }
+}
 
 // Rotate `current` toward `desired` by at most `max_step` radians along the
 // shorter arc. Angles wrap; the result is not normalized.
@@ -99,6 +118,11 @@ pub struct ThirdPersonSystem {
     // Orbit pivot, refreshed from what is followed each step; keeps the
     // camera stable if it ever disappears. Carried through frame moves.
     pivot: [f32; 3],
+    // Where the pivot was headed last step, and the eased velocity it rides
+    // along with, so steady motion carries it rather than leaving it behind.
+    // Both carried through frame moves.
+    last_goal: Option<[f32; 3]>,
+    carry: [f32; 3],
     rebases: RebaseCursor,
     controls_cursor: EventCursor,
 }
@@ -133,6 +157,8 @@ impl ThirdPersonSystem {
             speed_param_index: None,
             speed: 0.0,
             pivot: [0.0; 3],
+            last_goal: None,
+            carry: [0.0; 3],
             rebases: RebaseCursor::default(),
             controls_cursor: EventCursor::default(),
         }
@@ -299,6 +325,8 @@ impl System for ThirdPersonSystem {
         );
         if let Some(rebase) = self.rebases.take(ctx.resource::<FrameRebases>()) {
             self.pivot = rebase.apply_point(self.pivot);
+            self.last_goal = self.last_goal.map(|g| rebase.apply_point(g));
+            self.carry = rebase.apply_vector(self.carry);
         }
 
         // Read (not drain) the input snapshot deposited by the renderer, so
@@ -370,21 +398,36 @@ impl System for ThirdPersonSystem {
                     control.heading = dir;
                     control.sprint = input.sprint;
                     control.jump |= input.jump;
+                    control.climb = input.jump_held;
+                    control.descend = input.descend;
                 }
             }
             None => {}
         }
 
-        // The pivot rides `height` above what is followed, closing on it by
-        // the lag's half life.
+        // The pivot rides `height` above what is followed, moving with it at a
+        // velocity eased toward its own and closing the rest of the gap by the
+        // lag's half life, never trailing it by more than a share of the
+        // boom: steady motion, however fast, holds it still on screen, and
+        // only bumps and sudden changes are smoothed.
         if let Some(at) = at {
             let goal = add(at, scale(up, self.height));
-            self.pivot = if self.lag_seconds > 0.0 {
+            self.pivot = if self.lag_seconds > 0.0 && dt > 0.0 {
                 let close = 1.0 - math::half_life_decay(dt, self.lag_seconds);
-                add(self.pivot, scale(sub(goal, self.pivot), close))
+                let moving = self
+                    .last_goal
+                    .map_or([0.0; 3], |last| scale(sub(goal, last), 1.0 / dt));
+                let eased = add(self.carry, scale(sub(moving, self.carry), close));
+                self.carry = trail_within(eased, moving, MAX_SPEED_LAG);
+                let carried = add(self.pivot, scale(self.carry, dt));
+                let eased = add(carried, scale(sub(goal, carried), close));
+                trail_within(eased, goal, self.distance * MAX_TRAIL)
+            } else if self.lag_seconds > 0.0 {
+                self.pivot
             } else {
                 goal
             };
+            self.last_goal = Some(goal);
         }
 
         // Place the camera on the orbit sphere behind the pivot, pulled in
@@ -783,6 +826,65 @@ mod tests {
             // The jump stays asked for until the physics takes it.
             frame(&mut world, &mut system, FrameInput::default());
             assert!(world.get::<RollingControl>(ball).unwrap().jump);
+        }
+
+        // A lagging pivot eases over a bump, never falls more than a quarter
+        // of the boom behind a prop that bolts, and once the prop moves
+        // steadily, however fast, it rides along with no gap at all.
+        #[test]
+        fn a_lagging_pivot_keeps_a_fast_prop_in_frame() {
+            let (mut world, mut system, ball, _) = rig(0.2);
+            frame(&mut world, &mut system, FrameInput::default());
+            let gap = |world: &World, system: &ThirdPersonSystem| {
+                let at = world.get::<Transform>(ball).unwrap().position;
+                let up = world.resource::<PlanetFrame>().unwrap().up_at(at);
+                length(sub(system.pivot, add(at, scale(up, 1.0))))
+            };
+            let step = |world: &mut World, meters: f32| {
+                let t = world.get_mut::<Transform>(ball).unwrap();
+                t.position[2] += meters;
+            };
+            step(&mut world, 0.02);
+            frame(&mut world, &mut system, FrameInput::default());
+            let bump = gap(&world, &system);
+            assert!(bump > 0.015 && bump < 0.02, "a bump is eased: {bump}");
+            for _ in 0..10 {
+                step(&mut world, 100.0);
+                frame(&mut world, &mut system, FrameInput::default());
+            }
+            let fast = gap(&world, &system);
+            assert!(fast <= 1.5 + 1e-3, "within a quarter of the boom: {fast}");
+            for _ in 0..360 {
+                step(&mut world, 100.0);
+                frame(&mut world, &mut system, FrameInput::default());
+            }
+            let steady = gap(&world, &system);
+            assert!(steady < 0.05, "riding along: {steady}");
+        }
+
+        // A prop stopping hard, from a climb at a kilometer a second, barely
+        // moves on screen: the pivot's velocity keeps up within its lag.
+        #[test]
+        fn a_hard_stop_barely_moves_the_prop_on_screen() {
+            let (mut world, mut system, ball, _) = rig(0.05);
+            let gap = |world: &World, system: &ThirdPersonSystem| {
+                let at = world.get::<Transform>(ball).unwrap().position;
+                let up = world.resource::<PlanetFrame>().unwrap().up_at(at);
+                length(sub(system.pivot, add(at, scale(up, 1.0))))
+            };
+            let mut speed = 1_000.0f32;
+            for _ in 0..120 {
+                world.get_mut::<Transform>(ball).unwrap().position[2] += speed / 60.0;
+                frame(&mut world, &mut system, FrameInput::default());
+            }
+            let mut worst = 0.0f32;
+            for _ in 0..120 {
+                speed *= 0.95;
+                world.get_mut::<Transform>(ball).unwrap().position[2] += speed / 60.0;
+                frame(&mut world, &mut system, FrameInput::default());
+                worst = worst.max(gap(&world, &system));
+            }
+            assert!(worst < 0.2, "{worst}");
         }
 
         // A frame move carries a lagging pivot with everything else, so the

@@ -4,7 +4,6 @@
 use crate::components::{ControlsCommand, GamepadAction, GamepadButton, InputKey};
 use crate::ecs::PipelineContext;
 use crate::input::keymap::Bindable;
-use crate::render::frame::ops::RenderOps;
 
 use super::SettingsState;
 use super::rows::set_label_content;
@@ -12,20 +11,21 @@ use crate::settings::StoredSettings;
 
 impl SettingsState {
     // Bind the action to the captured key, swapping with whatever action held it,
-    // push the map to the backend, and relabel the rebound row and any swap
-    // victim's.
+    // hand the map to the input sampling, and relabel the rebound row and any
+    // swap victim's.
     pub(super) fn apply_key_rebind(
         &mut self,
         ctx: &mut PipelineContext<'_>,
-        ops: &mut RenderOps,
         cfg: &mut StoredSettings,
         action: Bindable,
         key: InputKey,
     ) -> bool {
         let victim = self.keymap.action_for_key(key).filter(|&a| a != action);
         self.keymap.rebind(action, key);
-        let keymap = self.keymap;
-        ops.record(move |backend| backend.set_keymap(keymap));
+        ctx.events_mut::<ControlsCommand>().send(ControlsCommand {
+            keymap: Some(self.keymap),
+            ..Default::default()
+        });
         cfg.controls.keymap = Some(self.keymap);
         for act in [Some(action), victim].into_iter().flatten() {
             if let Some(row) = self.rebind_rows.iter().find(|r| r.action == act) {
@@ -35,8 +35,7 @@ impl SettingsState {
         true
     }
 
-    // The gamepad counterpart of `apply_key_rebind`. The live map travels to
-    // the input poll as a ControlsCommand, since the host polls the gamepad.
+    // The gamepad counterpart of `apply_key_rebind`.
     pub(super) fn apply_pad_rebind(
         &mut self,
         ctx: &mut PipelineContext<'_>,

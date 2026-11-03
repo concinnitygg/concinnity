@@ -3,6 +3,7 @@
 use super::{Simulation, pool_handle, proxy_for};
 use crate::physics::BodyHandle;
 use crate::physics::sim::body::Body;
+use crate::physics::sim::config::AirFalloff;
 use crate::physics::sim::math::{Quat, Vec3};
 use concinnity_core::math::SaturatingFrom;
 
@@ -121,6 +122,12 @@ impl Simulation {
     /// configured `gravity`.
     pub fn set_gravity_center(&mut self, center: Option<[f32; 3]>) {
         self.config.gravity_center = center;
+    }
+
+    /// Thin each body's linear damping with height as `air` describes, about
+    /// the gravity center, or keep it the same everywhere with `None`.
+    pub fn set_air(&mut self, air: Option<AirFalloff>) {
+        self.config.air = air;
     }
 
     /// Carry every body into another frame: each position becomes

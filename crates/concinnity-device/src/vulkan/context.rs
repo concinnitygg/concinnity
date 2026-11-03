@@ -9,7 +9,6 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{
     InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
 };
-use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
@@ -1678,12 +1677,6 @@ impl VkContext {
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         // Both platform windows snapshot straight into the shared InputSnapshot.
         self.window_mut().take_input()
-    }
-
-    // Replace the runtime movement key map. The window's key decode routes
-    // through it, so a settings-menu rebind takes effect immediately.
-    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
-        self.window_mut().set_keymap(keymap);
     }
 
     // Live window size for overlay (view-owned UI) scaling and cursor

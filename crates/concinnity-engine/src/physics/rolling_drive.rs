@@ -3,7 +3,7 @@
 
 use crate::components::Prop;
 use crate::ecs::Ref;
-use concinnity_core::math::vec3::{cross, dot, length, normalize_or, scale};
+use concinnity_core::math::vec3::{cross, dot, length, normalize_or, scale, sub};
 
 /// Rolls a companion [Prop](#prop)'s body the way it is steered.
 ///
@@ -15,6 +15,16 @@ use concinnity_core::math::vec3::{cross, dot, length, normalize_or, scale};
 /// paddle by the share of the body that floats, since a spinning ball does
 /// not swim. A third-person `Camera3D` that follows the prop steers it from
 /// the movement keys or the left stick, relative to where it looks.
+///
+/// A `ramp` builds the drive up the longer a direction is held. A
+/// `climb_rate` lets a held jump fly the body: it climbs away from the ground
+/// by a steady share of its height each second, from meters to kilometers in
+/// even tenfolds, and the movement keys carry it along as fast as it climbs,
+/// so forward and jump together fly it up and ahead, though never so fast
+/// along the ground that gravity cannot bring it back. Let go, the climb
+/// eases to a stop and the body falls under gravity, held back by the air.
+/// Holding descend in the air flies it down the same way, slowing as it
+/// nears the ground.
 ///
 /// ```json
 /// ["RollingDrive", { "prop_name": "ball", "acceleration": 8.0, "max_speed": 12.0 }]
@@ -51,14 +61,33 @@ pub struct RollingDrive {
     /// fully afloat it paddles at `paddle` times `acceleration`.
     #[asset(default = 0.3)]
     pub paddle: f32,
+    /// How much `acceleration` and `max_speed` grow for each second a
+    /// direction is held, as a share of them: 0.5 doubles them two seconds
+    /// in. Letting go of the direction starts them over. 0 holds them steady.
+    pub ramp: f32,
+    /// The most a held direction multiplies `acceleration` and `max_speed`
+    /// by.
+    #[asset(default = 4.0)]
+    pub ramp_limit: f32,
+    /// Share of its height over the ground a held jump climbs the body by
+    /// each second. 0 never climbs.
+    pub climb_rate: f32,
+    /// The fastest the body climbs, or flies along the ground, in meters per
+    /// second.
+    #[asset(default = 1000.0)]
+    pub climb_max_speed: f32,
 }
 
 /// The live steering of a [`RollingDrive`], on its prop's entity.
 ///
-/// Runtime-only. Whatever steers the body writes `heading`, `sprint` and
-/// `jump`; the physics reads them every tick and writes back whether the body
-/// is on the ground and how much of it floats.
+/// Runtime-only. Whatever steers the body writes `heading`, `sprint`, `jump`
+/// and `climb`; the physics reads them every tick and writes back how the
+/// body moves, whether it is on the ground and how much of it floats.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per steering input, and whether the body is grounded"
+)]
 pub struct RollingControl {
     /// Rolling acceleration on level ground, in meters per second squared.
     pub acceleration: f32,
@@ -70,6 +99,16 @@ pub struct RollingControl {
     pub jump_speed: f32,
     /// Share of the drive left to paddle with when fully afloat.
     pub paddle: f32,
+    /// Share of the base acceleration and top speed added per second a
+    /// direction is held.
+    pub ramp: f32,
+    /// The most a held direction multiplies them by.
+    pub ramp_limit: f32,
+    /// Share of its height over the ground the body climbs by each second
+    /// while it flies.
+    pub climb_rate: f32,
+    /// The fastest it climbs or flies along, in meters per second.
+    pub climb_max_speed: f32,
     /// Where to roll, in the simulated frame: a direction along the ground
     /// whose length, at most 1, is the throttle. Zero coasts.
     pub heading: [f32; 3],
@@ -78,6 +117,13 @@ pub struct RollingControl {
     /// A jump asked for. The physics takes it, jumping on the first tick the
     /// body is on the ground within a moment of the ask, or dropping it.
     pub jump: bool,
+    /// Whether the jump is held, which climbs a drive with a `climb_rate`.
+    pub climb: bool,
+    /// Whether descend is held, which flies a drive with a `climb_rate` down
+    /// as fast as it would climb, once it is off the ground.
+    pub descend: bool,
+    /// The body's velocity at its last tick, in meters per second.
+    pub velocity: [f32; 3],
     /// Whether the body was on the ground at its last tick.
     pub grounded: bool,
     /// The share of the body under water at its last tick, from 0 to 1.
@@ -93,14 +139,50 @@ impl RollingControl {
             sprint_multiplier: drive.sprint_multiplier.max(0.0),
             jump_speed: drive.jump_speed.max(0.0),
             paddle: drive.paddle.clamp(0.0, 1.0),
+            ramp: drive.ramp.max(0.0),
+            ramp_limit: drive.ramp_limit.max(1.0),
+            climb_rate: drive.climb_rate.max(0.0),
+            climb_max_speed: drive.climb_max_speed.max(0.0),
             heading: [0.0; 3],
             sprint: false,
             jump: false,
+            climb: false,
+            descend: false,
+            velocity: [0.0; 3],
             grounded: false,
             afloat: 0.0,
         }
     }
+
+    /// This control built up by a direction held `held_seconds`: its
+    /// acceleration and top speed grown by the ramp, to its limit.
+    pub(crate) fn ramped(&self, held_seconds: f32) -> Self {
+        let grow = (1.0 + self.ramp * held_seconds.max(0.0)).min(self.ramp_limit);
+        Self {
+            acceleration: self.acceleration * grow,
+            max_speed: self.max_speed * grow,
+            ..*self
+        }
+    }
+
+    /// How fast a flying body `height` meters over the ground climbs: its
+    /// climb rate's share of the height, no slower than the jump speed and no
+    /// faster than the most it climbs.
+    pub(crate) fn climb_speed(&self, height: f32) -> f32 {
+        let least = self.jump_speed.max(MIN_CLIMB_SPEED);
+        (self.climb_rate * height.max(0.0))
+            .max(least)
+            .min(self.climb_max_speed.max(least))
+    }
 }
+
+// The slowest a flying body climbs, in meters per second, so a drive that
+// never jumps still leaves the ground.
+const MIN_CLIMB_SPEED: f32 = 1.0;
+
+/// How hard a flying body is pulled toward its climb and its speed along the
+/// ground, in meters per second squared per meter per second short of them.
+const CLIMB_GAIN: f32 = 4.0;
 
 /// What a rolling body is like at one tick, as the drive reads it.
 #[derive(Debug, Clone, Copy)]
@@ -209,6 +291,56 @@ pub(crate) fn tow(pace: f32, toward: [f32; 3], body: &RollingBody) -> [f32; 3] {
 pub(crate) fn tow_hold(deeper: f32, sinking: f32, body: &RollingBody) -> [f32; 3] {
     let accel = (deeper * TOW_HOLD + sinking * TOW_HOLD_DAMPING).clamp(-TOW_HOLD_MAX, TOW_HOLD_MAX);
     scale(body.up, accel * body.mass)
+}
+
+/// The force that flies `body` at `rising` meters per second away from the
+/// ground against a pull of `gravity` meters per second squared: the pull
+/// held off, and the speed along up drawn toward `rising`.
+pub(crate) fn fly(rising: f32, gravity: f32, body: &RollingBody) -> [f32; 3] {
+    let short = rising - dot(body.linear_velocity, body.up);
+    scale(body.up, (gravity + short * CLIMB_GAIN) * body.mass)
+}
+
+/// The force a flying body is steered along the ground with: up to `speed`
+/// along `control`'s heading, by its throttle, turning what drifts across it
+/// away, and never holding back what already goes faster along it. No heading
+/// leaves the body to coast.
+pub(crate) fn steer_flight(control: &RollingControl, speed: f32, body: &RollingBody) -> [f32; 3] {
+    let flat = |v: [f32; 3]| sub(v, scale(body.up, dot(v, body.up)));
+    let heading = flat(control.heading);
+    let throttle = length(heading).min(1.0);
+    if throttle <= 1e-4 {
+        return [0.0; 3];
+    }
+    let toward = normalize_or(heading, 1e-6, [0.0; 3]);
+    let moving = flat(body.linear_velocity);
+    let along = dot(moving, toward);
+    let across = sub(moving, scale(toward, along));
+    let short = (speed * throttle - along).max(0.0);
+    let accel = sub(scale(toward, short), across);
+    scale(accel, CLIMB_GAIN * body.mass)
+}
+
+/// How long a climb let go of takes to wind down, in seconds: the rise falls
+/// by `e` over it, so the body eases to a stop rather than halting in a tick.
+const CLIMB_STOP_SECONDS: f32 = 0.3;
+
+/// The force that winds down a climb let go of, in newtons: against whatever
+/// the body still rises at, and nothing on a body already falling.
+pub(crate) fn stop_climb(body: &RollingBody) -> [f32; 3] {
+    let rising = dot(body.linear_velocity, body.up);
+    scale(body.up, -body.mass * rising.max(0.0) / CLIMB_STOP_SECONDS)
+}
+
+/// The share of the speed that would circle the planet a flying body may
+/// reach along the ground, so a body let go falls back rather than flying off.
+const CIRCLING_SHARE: f32 = 0.5;
+
+/// The fastest a body flies along the ground `distance` meters from the
+/// center of a pull of `gravity`: a share of the speed that pull would hold it
+/// circling at.
+pub(crate) fn flight_ceiling(gravity: f32, distance: f32) -> f32 {
+    CIRCLING_SHARE * concinnity_core::math::sqrt(gravity.max(0.0) * distance.max(0.0))
 }
 
 /// The impulse a jump gives `body`, in newton seconds: what brings its speed
@@ -385,6 +517,120 @@ mod tests {
             [16.0, 0.0, 0.0],
             TOL,
         ));
+    }
+
+    // A held direction grows the acceleration and top speed by the ramp's
+    // share each second, up to its limit, and leaves the rest alone.
+    #[test]
+    fn a_held_direction_ramps_the_drive_to_its_limit() {
+        let c = RollingControl {
+            ramp: 0.5,
+            ramp_limit: 3.0,
+            ..control()
+        };
+        let still = c.ramped(0.0);
+        assert!(close(
+            [still.acceleration, still.max_speed, 0.0],
+            [8.0, 10.0, 0.0],
+            TOL
+        ));
+        let two = c.ramped(2.0);
+        assert!(close(
+            [two.acceleration, two.max_speed, 0.0],
+            [16.0, 20.0, 0.0],
+            TOL
+        ));
+        assert!((two.sprint_multiplier - 2.0).abs() < TOL);
+        let long = c.ramped(60.0);
+        assert!(close(
+            [long.acceleration, long.max_speed, 0.0],
+            [24.0, 30.0, 0.0],
+            TOL
+        ));
+        assert!(
+            (control().ramped(60.0).max_speed - 10.0).abs() < TOL,
+            "no ramp"
+        );
+    }
+
+    // A flying body climbs by its rate's share of its height, no slower than
+    // the jump speed and no faster than the most it climbs.
+    #[test]
+    fn the_climb_speed_follows_the_height_between_its_bounds() {
+        let c = RollingControl::new(&RollingDrive {
+            jump_speed: 6.0,
+            climb_rate: 0.5,
+            climb_max_speed: 1000.0,
+            ..RollingDrive::default()
+        });
+        assert!((c.climb_speed(0.0) - 6.0).abs() < TOL);
+        assert!((c.climb_speed(-30.0) - 6.0).abs() < TOL, "below the ground");
+        assert!((c.climb_speed(100.0) - 50.0).abs() < TOL);
+        assert!((c.climb_speed(1e6) - 1000.0).abs() < TOL);
+        let still = RollingControl::new(&RollingDrive {
+            jump_speed: 0.0,
+            climb_rate: 0.5,
+            ..RollingDrive::default()
+        });
+        assert!((still.climb_speed(0.0) - MIN_CLIMB_SPEED).abs() < TOL);
+    }
+
+    // Flying holds the pull off and draws the speed along up toward the
+    // climb.
+    #[test]
+    fn flying_holds_off_the_pull_and_draws_toward_the_climb() {
+        let at_pace = fly(3.0, 20.0, &ball([3.0, 0.0, 5.0], 0.0));
+        assert!(close(at_pace, [40.0, 0.0, 0.0], TOL), "{at_pace:?}");
+        let short = fly(3.0, 20.0, &ball([1.0, 0.0, 0.0], 0.0));
+        assert!(close(
+            short,
+            [2.0 * (20.0 + 2.0 * CLIMB_GAIN), 0.0, 0.0],
+            TOL
+        ));
+    }
+
+    // Letting go of a climb winds its rise down and leaves a fall alone.
+    #[test]
+    fn stopping_a_climb_works_against_only_its_rise() {
+        let rising = stop_climb(&ball([30.0, 0.0, 5.0], 0.0));
+        let expected = -2.0 * 30.0 / CLIMB_STOP_SECONDS;
+        assert!(close(rising, [expected, 0.0, 0.0], 1e-2), "{rising:?}");
+        assert_eq!(stop_climb(&ball([-3.0, 0.0, 5.0], 0.0)), [0.0; 3]);
+    }
+
+    // Flight along the ground tops out at half the speed that would circle
+    // the planet at the body's distance.
+    #[test]
+    fn flight_along_the_ground_stays_under_circling_speed() {
+        assert!((flight_ceiling(20.0, 50_000.0) - 500.0).abs() < 1e-2);
+        assert!((flight_ceiling(20.0, 200_000.0) - 1_000.0).abs() < 1e-2);
+        assert_eq!(flight_ceiling(0.0, 1e6), 0.0);
+    }
+
+    // Steering a flying body speeds it along the heading by the throttle,
+    // turns drift across the heading away, never slows what already goes
+    // faster, ignores the climb, and leaves an unsteered body to coast.
+    #[test]
+    fn steering_in_flight_carries_the_body_along_the_heading() {
+        let mut c = control();
+        c.heading = [0.0, 0.0, 0.5];
+        let from_rest = steer_flight(&c, 10.0, &ball([7.0, 0.0, 0.0], 0.0));
+        assert!(
+            close(from_rest, [0.0, 0.0, 2.0 * 5.0 * CLIMB_GAIN], TOL),
+            "{from_rest:?}"
+        );
+        let drifting = steer_flight(&c, 10.0, &ball([0.0, 2.0, 5.0], 0.0));
+        assert!(
+            close(drifting, [0.0, -2.0 * 2.0 * CLIMB_GAIN, 0.0], TOL),
+            "{drifting:?}"
+        );
+        let faster = steer_flight(&c, 10.0, &ball([0.0, 0.0, 30.0], 0.0));
+        assert!(close(faster, [0.0; 3], TOL), "{faster:?}");
+        c.heading = [0.0; 3];
+        assert_eq!(
+            steer_flight(&c, 10.0, &ball([0.0, 2.0, 5.0], 0.0)),
+            [0.0; 3]
+        );
     }
 
     // Off the ground the drive does not wind up spin, and spin already wound

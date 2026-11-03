@@ -13,7 +13,7 @@ fn deposit(world: &mut World, packet: InputPacket) {
 fn walking() -> InputPacket {
     InputPacket {
         raw: InputSnapshot {
-            forward: true,
+            held: crate::input::held_keys::HeldKeys::NONE.with(crate::components::InputKey::W),
             mouse_x: 10.0,
             mouse_y: 20.0,
             ..Default::default()
@@ -119,17 +119,62 @@ fn lent_pads_reach_the_move_axis_through_the_live_deadzone() {
     assert_eq!(published(&world).move_axis, [0.0, 0.0]);
 }
 
-// Stored controls replace the defaults at init.
+// Stored controls replace the defaults at init, the rebound keys among them.
 #[test]
-fn stored_controls_seed_the_map_and_deadzone() {
+fn stored_controls_seed_the_maps_and_deadzone() {
+    use crate::components::InputKey;
+    use crate::input::keymap::{Bindable, KeyMap};
+
+    let mut keys = KeyMap::DEFAULT;
+    keys.rebind(Bindable::Jump, InputKey::J);
     let mut stored = StoredSettings::default();
     stored.controls.gamepad_deadzone = Some(0.4);
+    stored.controls.keymap = Some(keys);
     let mut world = World::new();
     world.insert_resource(stored);
     let mut system = InputSystem::new();
     started(&mut system, &mut world);
     assert_eq!(system.deadzone, 0.4);
-    assert_eq!(system.map, GamepadMap::default());
+    assert_eq!(
+        system.bindings,
+        Bindings {
+            keys,
+            ..Bindings::DEFAULT
+        }
+    );
+}
+
+// A key rebind sent mid-run takes effect on the next sampled packet.
+#[test]
+fn a_live_key_rebind_moves_the_action() {
+    use crate::components::InputKey;
+    use crate::input::held_keys::HeldKeys;
+    use crate::input::keymap::{Bindable, KeyMap};
+
+    let mut world = World::new();
+    let mut system = InputSystem::new();
+    started(&mut system, &mut world);
+    let mut keys = KeyMap::DEFAULT;
+    keys.rebind(Bindable::Forward, InputKey::Up);
+    world
+        .context()
+        .events_mut::<ControlsCommand>()
+        .send(ControlsCommand {
+            keymap: Some(keys),
+            ..Default::default()
+        });
+    deposit(
+        &mut world,
+        InputPacket {
+            raw: InputSnapshot {
+                held: HeldKeys::NONE.with(InputKey::Up),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    );
+    system.step(&mut world.context());
+    assert!(published(&world).forward, "Up walks forward once rebound");
 }
 
 // A sampled packet carries whatever chrome the backend reports over the top of

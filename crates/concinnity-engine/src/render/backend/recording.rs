@@ -19,7 +19,6 @@ use crate::gfx::render_types::{
     DrawIndex, DrawObject, MaterialUniforms, SkinnedDrawObject, SkinnedIndex,
 };
 use crate::gfx::{render_types, view_modes};
-use crate::input::keymap;
 use crate::input::snapshot::InputSnapshot;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
@@ -166,7 +165,6 @@ pub enum Call {
     /// The directional lights pushed, as (direction, color, intensity) per light.
     UpdateDirectionalLights(Vec<([f32; 3], [f32; 3], f32)>),
     UpdateFogSettings(Option<volumetric_fog::FogSettings>),
-    SetKeymap,
     SetShadowCadence(ShadowCadence),
     UpdatePostProcess,
     ApplyQualitySettings,
@@ -676,10 +674,6 @@ impl WindowControl for RecordingBackend {
 
     fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.record(Call::SetDisplayMode(mode));
-    }
-
-    fn set_keymap(&mut self, _keymap: keymap::KeyMap) {
-        self.record(Call::SetKeymap);
     }
 }
 

@@ -1,11 +1,38 @@
 //! The merge of a frame's window input and gamepad snapshot into the published
 //! `FrameInput`, under the gameplay gate.
 
-use crate::components::{FrameInput, GamepadButton, GamepadMap, NavDirection};
+use crate::components::{FrameInput, GamepadButton, GamepadMap, InputKey, KeyEvent, NavDirection};
 use crate::ecs::FrameTime;
 
+use super::keymap::KeyMap;
 use super::pad::PadSnapshot;
 use super::snapshot::InputSnapshot;
+
+/// What drives each gameplay action: the key map and the gamepad map.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Bindings {
+    /// The keyboard key bound to each action.
+    pub keys: KeyMap,
+    /// The gamepad button bound to each action.
+    pub pad: GamepadMap,
+}
+
+impl Bindings {
+    /// The default keys and buttons.
+    pub const DEFAULT: Self = Self {
+        keys: KeyMap::DEFAULT,
+        pad: GamepadMap::DEFAULT,
+    };
+}
+
+// Whether `key` went down this frame: a fresh press, not an auto-repeat, and
+// not part of a Command shortcut.
+fn pressed_now(raw: &InputSnapshot, key: InputKey) -> bool {
+    raw.key_events.iter().any(|e| match e {
+        KeyEvent::Press(p) => p.key == key && !p.repeat && !p.mods.cmd,
+        KeyEvent::Text(_) => false,
+    })
+}
 
 // Frame dt ceiling for the nav auto-repeat, so a hitch or debugger pause never
 // counts as a long hold.
@@ -17,23 +44,28 @@ pub fn nav_dt(frame: FrameTime) -> f32 {
 }
 
 /// Merge the window's keyboard/mouse snapshot with the gamepad snapshot under
-/// the gameplay gate. The caller fills in the window metrics.
+/// the gameplay gate, reading each action's key and button from `bindings`.
+/// The caller fills in the window metrics.
 pub fn compose_frame_input(
     raw: &InputSnapshot,
     pad: &PadSnapshot,
-    map: GamepadMap,
+    bindings: Bindings,
     nav: Option<NavDirection>,
     gameplay: bool,
 ) -> FrameInput {
     let axis = |v: [f32; 2]| if gameplay { v } else { [0.0, 0.0] };
+    let (keys, map) = (bindings.keys, bindings.pad);
+    let held = |key: InputKey| raw.held.contains(key);
     FrameInput {
-        forward: (raw.forward || pad.held(GamepadButton::DpadUp)) && gameplay,
-        backward: (raw.backward || pad.held(GamepadButton::DpadDown)) && gameplay,
-        left: (raw.left || pad.held(GamepadButton::DpadLeft)) && gameplay,
-        right: (raw.right || pad.held(GamepadButton::DpadRight)) && gameplay,
-        sprint: (raw.sprint || pad.held(map.sprint)) && gameplay,
-        interact: (raw.interact || pad.pressed(map.interact)) && gameplay,
-        jump: (raw.jump || pad.pressed(map.jump)) && gameplay,
+        forward: (held(keys.forward) || pad.held(GamepadButton::DpadUp)) && gameplay,
+        backward: (held(keys.backward) || pad.held(GamepadButton::DpadDown)) && gameplay,
+        left: (held(keys.left) || pad.held(GamepadButton::DpadLeft)) && gameplay,
+        right: (held(keys.right) || pad.held(GamepadButton::DpadRight)) && gameplay,
+        sprint: (held(keys.sprint) || pad.held(map.sprint)) && gameplay,
+        interact: (pressed_now(raw, keys.interact) || pad.pressed(map.interact)) && gameplay,
+        jump: (pressed_now(raw, keys.jump) || pad.pressed(map.jump)) && gameplay,
+        jump_held: (held(keys.jump) || pad.held(map.jump)) && gameplay,
+        descend: (held(keys.descend) || pad.held(map.descend)) && gameplay,
         move_axis: axis(pad.move_axis),
         look_axis: axis(pad.look_axis),
         mouse_dx: if gameplay { raw.mouse_dx } else { 0.0 },
@@ -56,13 +88,13 @@ pub fn compose_frame_input(
         escape: raw.escape || pad.pressed(GamepadButton::Start),
         // Not gated by `gameplay`: a story's Ctrl fast-forward works
         // while its stage (a view) is up, like the rebind capture below.
-        ctrl: raw.ctrl,
+        ctrl: held(InputKey::Control),
         // Not gated by `gameplay`: the editor's additive selection needs the
-        // modifier while it holds the cursor. `raw.sprint` is the Shift key.
-        shift: raw.sprint,
+        // modifier while it holds the cursor.
+        shift: held(InputKey::Shift),
         // Not gated by `gameplay`: the editor's orbit drag needs the modifier
         // while it holds the cursor, like `shift`.
-        alt: raw.alt,
+        alt: held(InputKey::Alt),
         // Not gated by `gameplay` either: it carries the same UI shortcuts
         // Ctrl does on the platforms that use it.
         cmd: raw.cmd,
@@ -83,8 +115,17 @@ pub fn compose_frame_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::GamepadAction;
+    use crate::components::{GamepadAction, KeyMods, KeyPress};
+    use crate::input::held_keys::HeldKeys;
     use crate::input::pad::{PadAxis, PadEvent, PadState};
+
+    fn press_key(key: InputKey, repeat: bool) -> KeyEvent {
+        KeyEvent::Press(KeyPress {
+            key,
+            mods: KeyMods::NONE,
+            repeat,
+        })
+    }
 
     fn pad_snapshot(events: &[PadEvent]) -> PadSnapshot {
         let mut state = PadState::default();
@@ -124,7 +165,7 @@ mod tests {
         let input = compose_frame_input(
             &InputSnapshot::default(),
             &pad,
-            GamepadMap::DEFAULT,
+            Bindings::DEFAULT,
             None,
             true,
         );
@@ -137,20 +178,14 @@ mod tests {
     #[test]
     fn keyboard_fields_pass_through_unchanged() {
         let raw = InputSnapshot {
-            forward: true,
-            sprint: true,
+            held: HeldKeys::NONE.with(InputKey::W).with(InputKey::Shift),
             mouse_dx: 3.0,
             mouse_dy: -2.0,
             scroll_delta: 1.5,
             ..Default::default()
         };
-        let input = compose_frame_input(
-            &raw,
-            &PadSnapshot::default(),
-            GamepadMap::DEFAULT,
-            None,
-            true,
-        );
+        let input =
+            compose_frame_input(&raw, &PadSnapshot::default(), Bindings::DEFAULT, None, true);
         assert!(input.forward && input.sprint);
         assert_eq!(input.mouse_dx, 3.0);
         assert_eq!(input.mouse_dy, -2.0);
@@ -164,8 +199,7 @@ mod tests {
     #[test]
     fn ui_modifiers_stay_live_behind_the_menu_gate() {
         let raw = InputSnapshot {
-            ctrl: true,
-            alt: true,
+            held: HeldKeys::NONE.with(InputKey::Control).with(InputKey::Alt),
             cmd: true,
             ..Default::default()
         };
@@ -173,7 +207,7 @@ mod tests {
             let input = compose_frame_input(
                 &raw,
                 &PadSnapshot::default(),
-                GamepadMap::DEFAULT,
+                Bindings::DEFAULT,
                 None,
                 gameplay,
             );
@@ -181,15 +215,96 @@ mod tests {
         }
     }
 
+    // Each action reads the key the map binds to it: held keys drive the held
+    // actions, and a fresh press (not a repeat, not a Command shortcut) the
+    // one-frame ones.
+    #[test]
+    fn keys_drive_the_actions_the_key_map_binds_them_to() {
+        let mut keys = KeyMap::DEFAULT;
+        keys.rebind(crate::input::keymap::Bindable::Jump, InputKey::J);
+        let bindings = Bindings {
+            keys,
+            ..Bindings::DEFAULT
+        };
+        let raw = InputSnapshot {
+            held: HeldKeys::NONE
+                .with(InputKey::J)
+                .with(InputKey::D)
+                .with(InputKey::Control),
+            key_events: alloc::vec![press_key(InputKey::J, false), press_key(InputKey::E, true)],
+            ..Default::default()
+        };
+        let pad = PadSnapshot::default();
+        let input = compose_frame_input(&raw, &pad, bindings, None, true);
+        assert!(input.jump && input.jump_held, "J jumps once rebound");
+        assert!(input.right && !input.forward);
+        assert!(input.descend, "Control descends by default");
+        assert!(!input.interact, "an auto-repeat is no fresh press");
+        let space = InputSnapshot {
+            held: HeldKeys::NONE.with(InputKey::Space),
+            key_events: alloc::vec![press_key(InputKey::Space, false)],
+            ..Default::default()
+        };
+        let input = compose_frame_input(&space, &pad, bindings, None, true);
+        assert!(!input.jump && !input.jump_held, "Space no longer jumps");
+        let shortcut = InputSnapshot {
+            key_events: alloc::vec![KeyEvent::Press(KeyPress {
+                key: InputKey::J,
+                mods: KeyMods {
+                    cmd: true,
+                    ..KeyMods::NONE
+                },
+                repeat: false,
+            })],
+            ..Default::default()
+        };
+        let input = compose_frame_input(&shortcut, &pad, bindings, None, true);
+        assert!(!input.jump, "a Command shortcut drives no action");
+    }
+
+    // A one-frame action bound to Control fires from its press, as any key's
+    // would: rebinding interact onto Control keeps it working.
+    #[test]
+    fn a_press_action_bound_to_control_fires() {
+        let mut keys = KeyMap::DEFAULT;
+        keys.rebind(crate::input::keymap::Bindable::Interact, InputKey::Control);
+        let bindings = Bindings {
+            keys,
+            ..Bindings::DEFAULT
+        };
+        let raw = InputSnapshot {
+            held: HeldKeys::NONE.with(InputKey::Control),
+            key_events: alloc::vec![KeyEvent::Press(KeyPress {
+                key: InputKey::Control,
+                mods: KeyMods::CTRL,
+                repeat: false,
+            })],
+            ..Default::default()
+        };
+        let input = compose_frame_input(&raw, &PadSnapshot::default(), bindings, None, true);
+        assert!(input.interact, "interact fires from Control");
+        assert!(!input.descend, "descend moved to E in the swap");
+    }
+
     #[test]
     fn rebound_map_routes_buttons_to_their_actions() {
         let mut map = GamepadMap::DEFAULT;
         map.rebind(GamepadAction::Jump, GamepadButton::North);
         let pad = pad_snapshot(&[press(GamepadButton::North)]);
-        let input = compose_frame_input(&InputSnapshot::default(), &pad, map, None, true);
+        let bindings = Bindings {
+            pad: map,
+            ..Bindings::DEFAULT
+        };
+        let input = compose_frame_input(&InputSnapshot::default(), &pad, bindings, None, true);
         assert!(input.jump, "jump follows the rebound button");
         let default_pad = pad_snapshot(&[press(GamepadButton::South)]);
-        let input = compose_frame_input(&InputSnapshot::default(), &default_pad, map, None, true);
+        let input = compose_frame_input(
+            &InputSnapshot::default(),
+            &default_pad,
+            bindings,
+            None,
+            true,
+        );
         assert!(!input.jump, "the old button no longer jumps");
     }
 
@@ -211,12 +326,12 @@ mod tests {
             },
         ]);
         let raw = InputSnapshot {
-            forward: true,
-            sprint: true,
+            held: HeldKeys::NONE.with(InputKey::W).with(InputKey::Shift),
+            key_events: alloc::vec![press_key(InputKey::Space, false)],
             mouse_dx: 5.0,
             ..Default::default()
         };
-        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
+        let input = compose_frame_input(&raw, &pad, Bindings::DEFAULT, None, false);
         // Movement, jump, axes, and mouse deltas all freeze behind the menu.
         assert!(!input.forward && !input.jump);
         assert!(!input.sprint, "sprint freezes behind the menu");
@@ -240,7 +355,7 @@ mod tests {
             ..Default::default()
         };
         let pad = pad_snapshot(&[]);
-        let input = compose_frame_input(&raw, &pad, GamepadMap::DEFAULT, None, false);
+        let input = compose_frame_input(&raw, &pad, Bindings::DEFAULT, None, false);
         assert!(input.left_click);
         assert!(input.right_click);
     }
@@ -262,7 +377,7 @@ mod tests {
         let input = compose_frame_input(
             &InputSnapshot::default(),
             &pad,
-            GamepadMap::DEFAULT,
+            Bindings::DEFAULT,
             None,
             true,
         );
@@ -282,7 +397,7 @@ mod tests {
         let input = compose_frame_input(
             &InputSnapshot::default(),
             &pad,
-            GamepadMap::DEFAULT,
+            Bindings::DEFAULT,
             nav,
             false,
         );
@@ -293,7 +408,7 @@ mod tests {
         let input = compose_frame_input(
             &InputSnapshot::default(),
             &pad,
-            GamepadMap::DEFAULT,
+            Bindings::DEFAULT,
             nav,
             true,
         );

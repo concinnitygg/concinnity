@@ -21,7 +21,7 @@ fn label(id: u32) -> Ref<TextLabel> {
 }
 
 // A world carrying a StatHud with every chip wired to its own label: `1..=15`
-// in field order, then the allocation chip at 16.
+// in field order, then the allocation chip at 16 and the speed chip at 17.
 fn hud_world() -> World {
     let mut world = World::new();
     world.add_component(StatHud {
@@ -41,8 +41,9 @@ fn hud_world() -> World {
         objects_label: Some(label(14)),
         draws_label: Some(label(15)),
         allocs_label: Some(label(16)),
+        speed_label: Some(label(17)),
     });
-    for id in 1..=16 {
+    for id in 1..=17 {
         world.push_identified(AssetId(id), TextLabel::default());
     }
     world
@@ -64,6 +65,19 @@ fn fps_text_averages_frames_over_window() {
     assert_eq!(fps_text(60, 1.0).to_string(), "FPS 60");
     assert_eq!(fps_text(75, 0.5).to_string(), "FPS 150");
     assert_eq!(fps_text(0, 0.0).to_string(), "FPS 0");
+}
+
+#[test]
+fn speed_text_switches_to_kilometers_from_a_thousand() {
+    assert_eq!(speed_text(Some(4.24)).to_string(), "SPEED 4.2 m/s");
+    assert_eq!(speed_text(Some(99.97)).to_string(), "SPEED 100 m/s");
+    assert_eq!(speed_text(Some(123.4)).to_string(), "SPEED 123 m/s");
+    assert_eq!(speed_text(Some(999.4)).to_string(), "SPEED 999 m/s");
+    assert_eq!(speed_text(Some(999.6)).to_string(), "SPEED 1.00 km/s");
+    assert_eq!(speed_text(Some(3_254.0)).to_string(), "SPEED 3.25 km/s");
+    assert_eq!(speed_text(Some(12_340.0)).to_string(), "SPEED 12.3 km/s");
+    assert_eq!(speed_text(None).to_string(), "");
+    assert_eq!(speed_text(Some(f32::NAN)).to_string(), "");
 }
 
 #[test]
@@ -305,4 +319,65 @@ fn a_benchmarked_run_fills_the_second_row() {
     assert_eq!(chip(&world, 11), "PHASE ground 12.0/60.0 s");
     assert_eq!(chip(&world, 14), "OBJECTS 1234");
     assert_eq!(chip(&world, 15), "DRAWS 56");
+}
+
+// A world whose follow camera follows a rolling prop moving at `velocity`.
+fn follow_world(velocity: [f32; 3]) -> World {
+    use crate::components::{CameraProbe, Followed, RollingControl, RollingDrive};
+
+    let mut world = hud_world();
+    let ball = world.spawn();
+    let mut control = RollingControl::new(&RollingDrive::default());
+    control.velocity = velocity;
+    world.insert(ball, control);
+    world.add_component(CameraProbe {
+        followed: Followed::Prop(ball),
+        pivot: [0.0; 3],
+        desired: [0.0; 3],
+        clearance: None,
+    });
+    world
+}
+
+// The speed chip reads the followed prop's drive every tenth of a second,
+// and stays blank with nothing followed.
+#[test]
+fn the_speed_chip_reads_the_followed_prop() {
+    use crate::components::RollingControl;
+
+    let mut world = follow_world([3.0, 0.0, 4.0]);
+    start(&mut world);
+    frame_time(&mut world, 0.05);
+    world.step();
+    assert_eq!(chip(&world, 17), "SPEED 5.0 m/s");
+
+    let ball = world
+        .query_with_entity::<RollingControl>()
+        .next()
+        .unwrap()
+        .0;
+    world.get_mut::<RollingControl>(ball).unwrap().velocity = [0.0, 2_000.0, 0.0];
+    world.step();
+    assert_eq!(chip(&world, 17), "SPEED 5.0 m/s", "not yet a tenth on");
+    world.step();
+    assert_eq!(chip(&world, 17), "SPEED 2.00 km/s");
+
+    let mut lone = hud_world();
+    start(&mut lone);
+    frame_time(&mut lone, 0.05);
+    lone.step();
+    assert_eq!(chip(&lone, 17), "");
+}
+
+// A benchmarked run leaves the speed chip blank.
+#[test]
+fn a_benchmarked_run_shows_no_speed() {
+    use crate::components::BenchmarkConfig;
+
+    let mut world = follow_world([3.0, 0.0, 4.0]);
+    world.insert_resource(BenchmarkRun::new(BenchmarkConfig::default()));
+    start(&mut world);
+    frame_time(&mut world, 0.05);
+    world.step();
+    assert_eq!(chip(&world, 17), "");
 }

@@ -261,10 +261,6 @@ impl GraphicsSystem {
             if let Err(e) = backend.apply_settings(&settings.resolved().graphics, &ambient) {
                 tracing::error!("GraphicsSystem: ambient push failed: {e}");
             }
-            // Push the movement key map (the persisted rebinds, or the default).
-            // The backend decodes physical keys through it; idempotent with its
-            // own default seed when there is no override.
-            backend.set_keymap(*settings.keymap());
             if cursor.capture_at_start {
                 backend.request_cursor_capture();
             }

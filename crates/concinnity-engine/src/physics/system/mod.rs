@@ -8,8 +8,8 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::physics::{
-    BodyHandle, CharacterCapsule, CharacterMoveInput, ColliderShape, ContactHit, GRAVITY,
-    PhysicsBudget, SensorCrossing, SimConfig, Simulation,
+    AirFalloff, BodyHandle, CharacterCapsule, CharacterMoveInput, ColliderShape, ContactHit,
+    GRAVITY, PhysicsBudget, SensorCrossing, SimConfig, Simulation,
 };
 
 use crate::camera::track::CameraTrackStatus;
@@ -360,6 +360,7 @@ impl PhysicsSystem {
             world.set_gravity_center(Some(gravity.center));
             self.gravity = gravity.strength;
         }
+        world.set_air(planet_air(ctx));
         if let (Some((handle, revision)), Some(ground)) = (
             self.planet_ground.as_mut(),
             ctx.resource::<PlanetGroundPatch>(),
@@ -383,6 +384,7 @@ impl PhysicsSystem {
                 world,
                 bodies,
                 &super::off_ground::Footprint::of(&ground.patch),
+                ctx.resource::<PlanetFrame>(),
             );
         }
     }
@@ -426,6 +428,20 @@ fn tracked_subject(ctx: &PipelineContext<'_>) -> Option<Entity> {
     ctx.query::<CameraTrack>().next()?;
     let subject = ctx.resource::<CameraTrackStatus>()?.subject?;
     ctx.entity_of(subject)
+}
+
+// How the planet's air thins over its ground, or `None` without a planet or
+// with air as thick at every height.
+fn planet_air(ctx: &PipelineContext<'_>) -> Option<AirFalloff> {
+    let radius = ctx.resource::<PlanetFrame>()?.shape.radius;
+    let scale_height = ctx
+        .query::<crate::components::Planet>()
+        .next()?
+        .air_scale_height;
+    (scale_height.is_finite() && scale_height > 0.0).then(|| AirFalloff {
+        radius: concinnity_core::math::narrow_f32(radius),
+        scale_height,
+    })
 }
 
 // Up at `p`: away from the pull, which is `+Y` without a planet.
@@ -659,9 +675,20 @@ impl System for PhysicsSystem {
         let planet = ctx.resource::<PlanetFrame>().cloned();
         let frame = planet.as_ref().map_or(LocalFrame::AUTHORED, |p| p.frame);
         // A planet reshaped while the world runs moves its sea's shore.
-        if let (Some(water), Some(planet)) = (self.water.as_mut(), planet) {
+        if let (Some(water), Some(planet)) = (self.water.as_mut(), planet.as_ref()) {
             water.reshape(&planet.shape);
         }
+        let sea_level = ctx
+            .query::<crate::components::Planet>()
+            .next()
+            .and_then(|p| p.sea.as_ref())
+            .map(|sea| sea.level);
+        let altimeter = drive::Altimeter {
+            planet: planet
+                .as_ref()
+                .map(|planet| drive::PlanetSurface { planet, sea_level }),
+            mask: self.layers.mask(LAYER_PROP),
+        };
 
         // Reap bodies whose entity was despawned before the step, keeping
         // self.held a valid index into the compacted list.
@@ -787,13 +814,16 @@ impl System for PhysicsSystem {
                 world.set_kinematic_translation(prop.handle, hold_pos);
             }
             self.props.drive_posed(world, tick, timing.ticks);
-            let north = frame.dir_to_local([0.0, 0.0, -1.0]);
+            let around = drive::Surroundings {
+                north: frame.dir_to_local([0.0, 0.0, -1.0]),
+                altimeter,
+            };
             self.drives.tick(
                 world,
                 ctx,
                 &self.props,
                 (timing.tick_start(tick), dt),
-                north,
+                &around,
             );
 
             // move the player capsule
@@ -868,7 +898,7 @@ impl System for PhysicsSystem {
             self.props.record_tick_poses(world);
         }
 
-        self.drives.publish(ctx, &self.props);
+        self.drives.publish(world, ctx, &self.props);
         if self.water.is_some() {
             publish_stirs(ctx, &self.props);
         }

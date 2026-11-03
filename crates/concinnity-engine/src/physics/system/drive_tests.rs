@@ -105,6 +105,188 @@ fn a_driven_ball_rolls_along_its_heading_to_its_top_speed() {
     );
 }
 
+fn tune(world: &mut World, entity: Entity, tuned: impl FnOnce(&mut RollingControl)) {
+    tuned(world.context().get_mut::<RollingControl>(entity).unwrap());
+}
+
+fn height(world: &World, entity: Entity) -> f32 {
+    world.get::<Transform>(entity).unwrap().position[1] - RADIUS
+}
+
+// A direction held long enough carries the ball past the drive's base top
+// speed, toward the ramped one.
+#[test]
+fn a_held_direction_rolls_past_the_base_top_speed() {
+    let mut world = World::new();
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    tune(&mut world, ball, |c| {
+        c.ramp = 0.5;
+        c.ramp_limit = 3.0;
+    });
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 30);
+    steer(&mut world, ball, [1.0, 0.0, 0.0]);
+    steps(&mut physics, &mut world, 900);
+    let top = velocity(&physics, ball)[0];
+    assert!((8.0..12.05).contains(&top), "ramped past 4 m/s: {top}");
+}
+
+// A held jump flies the ball up ever faster; let go, the climb eases to a
+// stop and gravity takes it back down to the ground.
+#[test]
+fn a_held_jump_climbs_and_gravity_brings_it_down() {
+    let mut world = World::new();
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    tune(&mut world, ball, |c| {
+        c.climb_rate = 1.0;
+        c.climb_max_speed = 40.0;
+    });
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 30);
+    tune(&mut world, ball, |c| {
+        c.jump = true;
+        c.climb = true;
+    });
+    steps(&mut physics, &mut world, 240);
+    let high = height(&world, ball);
+    assert!(high > 30.0, "climbed: {high}");
+    let rising = velocity(&physics, ball)[1];
+    assert!(rising > 20.0, "faster as it rises: {rising}");
+    assert!(!control(&world, ball).grounded);
+
+    tune(&mut world, ball, |c| c.climb = false);
+    steps(&mut physics, &mut world, 1);
+    let let_go = velocity(&physics, ball)[1];
+    assert!(
+        let_go > 0.8 * rising && let_go < rising,
+        "the climb eases off rather than halting: {let_go} of {rising}"
+    );
+    let mut previous = let_go;
+    for _ in 0..60 {
+        steps(&mut physics, &mut world, 1);
+        let now = velocity(&physics, ball)[1];
+        assert!(
+            now < previous && previous - now < 0.3 * rising,
+            "{previous} -> {now}"
+        );
+        previous = now;
+        if now < 0.0 {
+            break;
+        }
+    }
+    assert!(
+        previous < 0.0,
+        "and turns into a fall within a second: {previous}"
+    );
+    steps(&mut physics, &mut world, 60);
+    let a = velocity(&physics, ball)[1];
+    steps(&mut physics, &mut world, 30);
+    let gained = a - velocity(&physics, ball)[1];
+    assert!(
+        (9.0..10.5).contains(&gained),
+        "falling under gravity alone: {gained}"
+    );
+    steps(&mut physics, &mut world, 900);
+    assert!(
+        height(&world, ball) < 0.05,
+        "down: {}",
+        height(&world, ball)
+    );
+    assert!(control(&world, ball).grounded);
+}
+
+// High in the air, holding descend flies the ball down faster than it would
+// fall, slowing as it nears the ground to land about as fast as it jumps; on
+// the ground it does nothing.
+#[test]
+fn holding_descend_flies_the_ball_down_and_lands_it_softly() {
+    let mut world = World::new();
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    tune(&mut world, ball, |c| {
+        c.climb_rate = 1.0;
+        c.climb_max_speed = 40.0;
+        c.descend = true;
+    });
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 30);
+    assert!(height(&world, ball) < 0.05, "nothing on the ground");
+    tune(&mut world, ball, |c| {
+        c.descend = false;
+        c.jump = true;
+        c.climb = true;
+    });
+    steps(&mut physics, &mut world, 240);
+    tune(&mut world, ball, |c| c.climb = false);
+    steps(&mut physics, &mut world, 60);
+    let high = height(&world, ball);
+    assert!(high > 40.0, "{high}");
+
+    tune(&mut world, ball, |c| c.descend = true);
+    steps(&mut physics, &mut world, 30);
+    let diving = -velocity(&physics, ball)[1];
+    assert!(diving > 30.0, "faster than a fall from rest: {diving}");
+    let mut fastest_landing = 0.0f32;
+    for _ in 0..600 {
+        steps(&mut physics, &mut world, 1);
+        if height(&world, ball) < 0.5 {
+            fastest_landing = fastest_landing.max(-velocity(&physics, ball)[1]);
+        }
+    }
+    assert!(
+        height(&world, ball) < 0.05,
+        "down: {}",
+        height(&world, ball)
+    );
+    assert!(fastest_landing < 8.0, "landed softly: {fastest_landing}");
+}
+
+// Forward and a held jump fly the ball up and ahead together, about as fast
+// along the ground as it climbs.
+#[test]
+fn forward_and_a_held_jump_fly_up_and_ahead() {
+    let mut world = World::new();
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    tune(&mut world, ball, |c| {
+        c.climb_rate = 1.0;
+        c.climb_max_speed = 40.0;
+    });
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 30);
+    steer(&mut world, ball, [1.0, 0.0, 0.0]);
+    tune(&mut world, ball, |c| {
+        c.jump = true;
+        c.climb = true;
+    });
+    steps(&mut physics, &mut world, 240);
+    let v = velocity(&physics, ball);
+    assert!(v[1] > 20.0, "climbing: {v:?}");
+    assert!(v[0] > 0.6 * v[1], "and ahead: {v:?}");
+    assert!(v[2].abs() < 0.1, "along the heading: {v:?}");
+}
+
+// A tapped jump is only a jump: it lands as soon as one without a climb.
+#[test]
+fn a_tapped_jump_does_not_fly() {
+    let mut world = World::new();
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    tune(&mut world, ball, |c| c.climb_rate = 1.0);
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 30);
+    tune(&mut world, ball, |c| {
+        c.jump = true;
+        c.climb = true;
+    });
+    steps(&mut physics, &mut world, 6);
+    tune(&mut world, ball, |c| c.climb = false);
+    let mut peak = 0.0f32;
+    for _ in 0..120 {
+        steps(&mut physics, &mut world, 1);
+        peak = peak.max(height(&world, ball));
+    }
+    assert!(peak < 1.0, "an ordinary hop: {peak}");
+    assert!(height(&world, ball) < 0.05);
+}
+
 // A jump leaves the ground only from it. One asked for in the air waits a
 // moment for the landing and is dropped past it, and every ask is taken from
 // the control as it is read.
@@ -229,6 +411,84 @@ fn on_a_sphere_the_drive_rolls_along_the_ground() {
     })) - 5_000.0;
     assert!((height - RADIUS).abs() < 0.05, "on the ground: {height}");
     assert!(control(&world, ball).grounded);
+}
+
+fn planet_world() -> (World, Entity) {
+    let mut world = World::new();
+    let ball = driven_ball(&mut world, [0.0, RADIUS, 0.0]);
+    publish_planet(&mut world, &LocalFrame::AUTHORED, [0.0; 3], 0);
+    world.insert_resource(PlanetFrame {
+        shape: SHAPE,
+        frame: LocalFrame::AUTHORED,
+    });
+    world.add_component(crate::components::Planet::default());
+    (world, ball)
+}
+
+// Over a planet a held jump climbs far out of reach of any ground below,
+// measured from the planet's surface; let go, it stops climbing and falls
+// back, and flying along the ground stays slow enough to come back from.
+#[test]
+fn over_a_planet_a_held_jump_climbs_out_and_falls_back_when_let_go() {
+    let (mut world, ball) = planet_world();
+    tune(&mut world, ball, |c| {
+        c.climb_rate = 1.0;
+        c.climb_max_speed = 2_000.0;
+    });
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 30);
+    tune(&mut world, ball, |c| {
+        c.jump = true;
+        c.climb = true;
+    });
+    steps(&mut physics, &mut world, 900);
+    let high = height(&world, ball);
+    assert!(high > 5_000.0, "out of reach of the ground: {high}");
+    let rising = velocity(&physics, ball)[1];
+    assert!(
+        (1_500.0..2_100.0).contains(&rising),
+        "at the most it climbs: {rising}"
+    );
+
+    steer(&mut world, ball, [1.0, 0.0, 0.0]);
+    steps(&mut physics, &mut world, 300);
+    let at = world.get::<Transform>(ball).unwrap().position;
+    let up = up_of(at);
+    let v = velocity(&physics, ball);
+    let along = length(sub(v, scale(up, dot(v, up))));
+    let distance = length(sub(at, SHAPE.center.map(narrow_f32)));
+    let ceiling = 0.5 * (20.0 * distance).sqrt();
+    assert!(
+        along > 0.8 * ceiling && along < ceiling * 1.01,
+        "{along} vs {ceiling}"
+    );
+
+    tune(&mut world, ball, |c| c.climb = false);
+    steps(&mut physics, &mut world, 120);
+    let at = world.get::<Transform>(ball).unwrap().position;
+    let rising = dot(velocity(&physics, ball), up_of(at));
+    assert!(rising < 0.0, "falling back: {rising}");
+}
+
+// High over a planet the air is thin, so a dropped ball falls faster than
+// the ground's air would let it.
+#[test]
+fn high_over_a_planet_the_thin_air_barely_slows_a_fall() {
+    let (mut world, ball) = planet_world();
+    world.get_mut::<Transform>(ball).unwrap().position = [0.0, 30_000.0, 0.0];
+    let mut physics = started(&mut world);
+    steps(&mut physics, &mut world, 600);
+    let falling = -velocity(&physics, ball)[1];
+    let seconds = 600.0 * SimTiming::TICK_DT;
+    let thick: f32 = 20.0 / 0.05 * (1.0 - concinnity_core::math::exp(-0.05 * seconds));
+    assert!(
+        falling > thick + 0.75 * (20.0 * seconds - thick),
+        "{falling} vs {thick}"
+    );
+    assert!(
+        falling < 20.0 * seconds + 0.1,
+        "no faster than free fall: {falling}"
+    );
 }
 
 // A frame move turns a heading set before it with the frame, so the ball

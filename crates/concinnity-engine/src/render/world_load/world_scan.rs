@@ -46,10 +46,10 @@ pub fn font_less_text(ctx: &PipelineContext<'_>) -> bool {
 }
 
 /// The `DebugHud` chip ids (cursor, camera, sys, passes: the top-right stack
-/// order) and the `StatHud` chip ids, its top row then its benchmark row, each
-/// in left-to-right strip order, that the frame step anchors. Passes is last
+/// order) and the `StatHud` chip ids, its top row, its benchmark row and its
+/// subject row, each in left-to-right strip order, that the frame step anchors. Passes is last
 /// because its height follows the frame's step count.
-pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, [Vec<AssetId>; 2]) {
+pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, [Vec<AssetId>; 3]) {
     let debug = ctx
         .query::<DebugHud>()
         .next()
@@ -65,7 +65,13 @@ pub fn capture_hud_chips(ctx: &PipelineContext<'_>) -> (Vec<AssetId>, [Vec<Asset
     let stat = ctx
         .query::<StatHud>()
         .next()
-        .map(|s| [ids(&s.top_row()), ids(&s.bench_row())])
+        .map(|s| {
+            [
+                ids(&s.top_row()),
+                ids(&s.bench_row()),
+                ids(&s.subject_row()),
+            ]
+        })
         .unwrap_or_default();
     (debug, stat)
 }
@@ -192,7 +198,7 @@ mod tests {
         let mut world = World::new();
         assert_eq!(
             capture_hud_chips(&world.context()),
-            (Vec::new(), [Vec::new(), Vec::new()])
+            (Vec::new(), [Vec::new(), Vec::new(), Vec::new()])
         );
     }
 

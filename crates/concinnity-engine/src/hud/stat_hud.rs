@@ -5,6 +5,7 @@
 //! The frame-rate, frame-time, allocation, and GPU-memory chips are gated by the in-game
 //! video setting "Display performance stats" (published by the renderer as the
 //! `HudPrefs` resource); the other chips show whenever their reading exists.
+//! The speed chip reads what the follow camera follows.
 //! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
 use crate::ecs::{
@@ -16,7 +17,7 @@ use core::fmt::{self, Display, Write as _};
 use crate::benchmark::BenchmarkRun;
 use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::camera::track::CameraTrackStatus;
-use crate::components::TextLabel;
+use crate::components::{CameraProbe, Followed, RollingControl, TextLabel};
 use crate::platform::GraphicsApiStatus;
 use crate::profile::RenderResolution;
 use crate::render::streaming::pools::StreamingRuntime;
@@ -26,6 +27,10 @@ use super::rate_window::RateWindow;
 // How often the chip text is rebuilt, in seconds. The rates are averaged over
 // this window so the numbers are readable rather than flickering.
 const EMIT_INTERVAL_SECS: f32 = 0.5;
+
+// How often the speed chip is rewritten, in seconds: quick enough to follow
+// the body, slow enough to read.
+const SPEED_INTERVAL_SECS: f32 = 0.1;
 
 // The frame rate over a window of `frames` frames lasting `elapsed_secs`.
 fn fps_text(frames: u32, elapsed_secs: f32) -> impl Display {
@@ -113,6 +118,20 @@ fn edr_text(max_edr: Option<f32>) -> impl Display {
     })
 }
 
+// A speed in meters per second, in kilometers per second from a thousand,
+// with three figures; blank without one.
+fn speed_text(speed: Option<f32>) -> impl Display {
+    fmt::from_fn(move |out| match speed {
+        Some(v) if v.is_finite() => match v.max(0.0) {
+            v if v < 99.95 => write!(out, "SPEED {v:.1} m/s"),
+            v if v < 999.5 => write!(out, "SPEED {v:.0} m/s"),
+            v if v < 9_995.0 => write!(out, "SPEED {:.2} km/s", v / 1000.0),
+            v => write!(out, "SPEED {:.1} km/s", v / 1000.0),
+        },
+        _ => Ok(()),
+    })
+}
+
 fn time_text(secs: f32) -> impl Display {
     fmt::from_fn(move |out| write!(out, "TIME {secs:.1} s"))
 }
@@ -183,6 +202,8 @@ pub(crate) struct StatHudSystem {
     benchmark: Option<BenchmarkRun>,
     // What the time and phase chips last showed.
     clock: Option<ClockKey>,
+    // Seconds until the speed chip is next rewritten.
+    speed_wait: f32,
 }
 
 impl StatHudSystem {
@@ -203,6 +224,7 @@ impl StatHudSystem {
             hidden: false,
             benchmark: None,
             clock: None,
+            speed_wait: 0.0,
         }
     }
 
@@ -228,6 +250,7 @@ impl StatHudSystem {
             .top_row()
             .into_iter()
             .chain(self.labels.bench_row())
+            .chain(self.labels.subject_row())
         {
             Self::write_chip(ctx, label, "");
         }
@@ -271,6 +294,19 @@ impl StatHudSystem {
             );
             Self::write_chip(ctx, self.labels.phase_label, text);
         }
+    }
+
+    // The speed chip, every `SPEED_INTERVAL_SECS`: how fast the prop the
+    // follow camera follows moves, read from its drive. Blank in a benchmarked
+    // run, whose rows describe the run.
+    fn write_speed(&mut self, ctx: &mut PipelineContext<'_>, dt: f32) {
+        self.speed_wait -= dt;
+        if self.speed_wait > 0.0 {
+            return;
+        }
+        self.speed_wait = SPEED_INTERVAL_SECS;
+        let speed = followed_speed(ctx).filter(|_| self.benchmark.is_none());
+        Self::write_chip(ctx, self.labels.speed_label, speed_text(speed));
     }
 
     // Rewrite the window-paced chips from the window that just closed.
@@ -356,10 +392,21 @@ impl StatHudSystem {
     }
 }
 
+// The speed of the prop a follow camera follows, from its rolling drive.
+fn followed_speed(ctx: &PipelineContext<'_>) -> Option<f32> {
+    let entity = ctx.query::<CameraProbe>().find_map(|p| match p.followed {
+        Followed::Prop(entity) => Some(entity),
+        Followed::Rig(_) => None,
+    })?;
+    let control = ctx.get::<RollingControl>(entity)?;
+    Some(concinnity_core::math::vec3::length(control.velocity))
+}
+
 impl System for StatHudSystem {
     fn access(&self) -> Access {
         Access::new()
             .writes_components(crate::component_mask![TextLabel])
+            .reads_components(crate::component_mask![CameraProbe, RollingControl])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
                 HudPrefs,
@@ -399,6 +446,10 @@ impl System for StatHudSystem {
             // Every frame rather than on the emit tick: a moment called out on
             // screen should match the report to the tenth of a second.
             self.write_clock(ctx);
+            if revealed {
+                self.speed_wait = 0.0;
+            }
+            self.write_speed(ctx, dt);
         }
 
         // A HUD shown again fills at once from the window so far rather than
@@ -464,8 +515,15 @@ impl System for StatHudSystem {
 /// - `draws_label`: the draw calls the CPU issued. Draws the GPU culls and
 ///   issues for itself are not counted.
 ///
+/// A third row shows how the subject moves:
+/// - `speed_label`: how fast the prop the follow camera follows is moving,
+///   in any direction, read from its [`RollingDrive`](#rollingdrive)
+///   (`SPEED 12.4 m/s`, then `SPEED 3.25 km/s` from a thousand meters per
+///   second). Blank in a benchmarked run.
+///
 /// `time_label` also shows in a run without a benchmark whenever a track is
-/// running. Chips whose stat is unavailable stay blank, and a blank chip
+/// running. A row with no chip showing takes no room, so the next one moves
+/// up into its place. Chips whose stat is unavailable stay blank, and a blank chip
 /// reserves no width. The chips' on-screen position is fixed by the engine
 /// rather than the authored coordinates.
 ///
@@ -523,6 +581,8 @@ pub struct StatHud {
     pub objects_label: Option<Ref<TextLabel>>,
     /// [`TextLabel`](#textlabel) that receives the draw-call chip text.
     pub draws_label: Option<Ref<TextLabel>>,
+    /// [`TextLabel`](#textlabel) that receives the speed chip text.
+    pub speed_label: Option<Ref<TextLabel>>,
 }
 
 impl StatHud {
@@ -552,6 +612,11 @@ impl StatHud {
             self.objects_label,
             self.draws_label,
         ]
+    }
+
+    /// The subject row's labels, left to right.
+    pub(crate) fn subject_row(&self) -> [Option<Ref<TextLabel>>; 1] {
+        [self.speed_label]
     }
 }
 

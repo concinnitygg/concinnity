@@ -111,7 +111,7 @@ fn init_parks_overlay_assets_with_the_hud_chips() {
         .expect("OverlayAssets parked at init");
     assert_eq!(
         overlay.stat_hud_chips,
-        [vec![AssetId(10), AssetId(11)], vec![]],
+        [vec![AssetId(10), AssetId(11)], vec![], vec![]],
         "StatHud chip ids survive to the parked OverlayAssets"
     );
     // DebugHud strip order is mouse, camera, sys, passes; only mouse + passes
@@ -283,9 +283,8 @@ fn init_pushes_startup_backend_state() {
     // A camera with no UI: plain first-person capture, menu mode off.
     assert!(s.saw(&Call::SetMenuMode(false)));
     assert!(s.saw(&Call::RequestCursorCapture));
-    // The ambient scale + keymap are pushed once after construction.
+    // The ambient scale is pushed once after construction.
     assert!(s.saw(&Call::SetAmbientIntensity(1.0)));
-    assert!(s.saw(&Call::SetKeymap));
     // Reflection-probe placements are pushed once (auto-seed or empty).
     assert!(
         s.calls

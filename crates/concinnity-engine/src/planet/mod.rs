@@ -50,6 +50,7 @@ pub use carry::carry_world;
 pub use coast::{BEACH_SLOPE, CONTINENT_OCTAVES, Continents, HILL_RISE, SEABED_RELIEF};
 pub use concinnity_core::math::dmat3::DMat3;
 pub use concinnity_core::math::dvec3::DVec3;
+use concinnity_core::math::{dvec3, narrow_f32};
 pub use cover::{GroundCover, MAX_GROUND_COVERS};
 pub use edits::{
     EditArea, EditHit, EditPage, EditPages, PAGE_CELLS, PAGE_SAMPLES, PAGE_SIDE, PageFigures,
@@ -126,6 +127,21 @@ impl PlanetFrame {
     pub fn up_at(&self, p: [f32; 3]) -> [f32; 3] {
         let world = self.frame.to_world(p);
         self.frame.dir_to_local(self.shape.up_at(world))
+    }
+
+    /// How far local point `p` lies above the planet's radius, in meters.
+    pub fn altitude(&self, p: [f32; 3]) -> f32 {
+        let rel = dvec3::sub(self.frame.to_world(p), self.shape.center);
+        narrow_f32(dvec3::length(rel) - self.shape.radius)
+    }
+
+    /// How far local point `p` lies above the ground right under it, in
+    /// meters: negative inside the ground.
+    pub fn height_over_ground(&self, p: [f32; 3]) -> f32 {
+        let world = self.frame.to_world(p);
+        let rel = dvec3::sub(world, self.shape.center);
+        let dir = dvec3::normalize_or(rel, [0.0, 1.0, 0.0]);
+        narrow_f32(dvec3::length(rel) - self.shape.radius - self.shape.height(dir))
     }
 }
 
@@ -266,6 +282,13 @@ pub struct Planet {
     /// Pull toward the center, in meters per second squared.
     #[asset(default = crate::physics::GRAVITY)]
     pub gravity: f32,
+    /// How quickly the air thins with height, in meters: the height over
+    /// `radius` it thins by a factor of `e` over. It is as thick as at
+    /// `radius` everywhere below it. A body's drag (its `linear_damping`)
+    /// thins with it, so a fall from high up keeps speeding up until thicker
+    /// air holds it back. 0 keeps the air as thick at every height.
+    #[asset(default = 8_500.0)]
+    pub air_scale_height: f32,
     /// The grass that grows on the planet, one entry per look. Each grows
     /// over the whole planet as a meadow: soft-edged bare patches a couple of
     /// dozen meters across are laid over the ground, different for every
@@ -298,7 +321,7 @@ impl Planet {
     pub fn shape(&self) -> PlanetShape {
         let radius = f64::from(self.radius);
         PlanetShape {
-            center: concinnity_core::math::dvec3::from_f32(self.center),
+            center: dvec3::from_f32(self.center),
             radius,
             amplitude: f64::from(self.amplitude),
             feature_size: f64::from(self.feature_size),

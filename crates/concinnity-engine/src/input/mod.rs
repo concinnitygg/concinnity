@@ -1,5 +1,5 @@
 //! Backend-agnostic input: the per-frame snapshot a backend reports, the
-//! rebindable key map it decodes against, the gamepad fold and stick shaping,
+//! rebindable key map the engine reads its keys through, the gamepad fold and stick shaping,
 //! navigation pulses, and the text-field editor.
 
 pub mod compose;
@@ -7,6 +7,7 @@ pub(crate) mod controls_command;
 pub(crate) mod frame_input;
 pub(crate) mod gamepad_button;
 pub(crate) mod gamepad_map;
+pub mod held_keys;
 pub(crate) mod input_key;
 pub(crate) mod key_binding;
 pub(crate) mod key_event;

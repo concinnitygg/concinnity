@@ -4,7 +4,6 @@
 //! size, the cursor state the UI drives, and the system clipboard. Every method here is about the
 //! surface and its input, never about the scene drawn on it.
 
-use crate::input::keymap::KeyMap;
 use crate::window::clipboard::Clipboard;
 use alloc::vec::Vec;
 
@@ -133,16 +132,6 @@ pub trait WindowControl {
     /// no-op: a backend without mode switching leaves the display alone.
     fn set_display_mode(&mut self, mode: crate::window::display_mode::DisplayMode) {
         let _ = mode;
-    }
-
-    /// Push the gameplay movement key map. The backend resolves each canonical
-    /// `InputKey` to its native key code and decodes physical key events through the
-    /// map (instead of hardcoded keys), so a settings-menu rebind takes effect on
-    /// the next key event. Pushed once after the backend is built and again on
-    /// each rebind. Default no-op: a backend without keymap decode keeps its
-    /// built-in defaults.
-    fn set_keymap(&mut self, keymap: KeyMap) {
-        let _ = keymap;
     }
 
     /// The system clipboard this window reaches. Default `None`: a headless

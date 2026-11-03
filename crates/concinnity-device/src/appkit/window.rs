@@ -8,8 +8,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::narrow_f32;
-use concinnity_engine::components::{InputKey, KeyEvent, KeyPress, WindowMode};
-use concinnity_engine::input::keymap::KeyMap;
+use concinnity_engine::components::{KeyEvent, KeyPress, WindowMode};
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::window::clipboard::Clipboard;
 use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
@@ -85,11 +84,6 @@ pub(crate) struct AppKitWindow {
     fullscreen_display: FullscreenDisplayMode,
     keys: KeyState,
     clipboard: super::clipboard::SystemClipboard,
-    // The runtime movement key map (canonical action -> key). `handle_key`
-    // decodes physical events through this instead of hardcoded keys, so a
-    // settings-menu rebind takes effect immediately. Defaults to W/S/A/D/Shift/
-    // Space/E; GraphicsSystem pushes any persisted override via `set_keymap`.
-    keymap: KeyMap,
 }
 
 // What the backend hands over at construction, after it has created (or been
@@ -127,7 +121,6 @@ impl AppKitWindow {
             fullscreen_display: FullscreenDisplayMode::new(),
             keys: KeyState::default(),
             clipboard: super::clipboard::SystemClipboard,
-            keymap: KeyMap::default(),
         }
     }
 
@@ -509,16 +502,10 @@ impl AppKitWindow {
     // Snapshot the current input state for this frame.
     // InputKey booleans reflect what is held right now; mouse deltas are cleared
     // after being read so they don't accumulate across frames.
-    // `interact` and `jump` are true for exactly one frame per key press then cleared.
+    // The one-frame pulses are true for exactly one frame per press then cleared.
     pub(crate) fn take_input(&mut self) -> InputSnapshot {
         let snapshot = InputSnapshot {
-            forward: self.keys.forward,
-            backward: self.keys.backward,
-            left: self.keys.left,
-            right: self.keys.right,
-            sprint: self.keys.sprint,
-            interact: self.keys.interact_pulse,
-            jump: self.keys.jump_pulse,
+            held: self.keys.held,
             mouse_dx: self.keys.mouse_dx,
             mouse_dy: self.keys.mouse_dy,
             scroll_delta: self.keys.scroll_delta,
@@ -530,13 +517,9 @@ impl AppKitWindow {
             right_click: self.keys.right_click_pulse,
             hud_toggle: self.keys.hud_toggle_pulse,
             escape: self.keys.escape_pulse,
-            ctrl: self.keys.control_down,
-            alt: self.keys.alt_down,
             cmd: self.keys.command_down,
             key_events: std::mem::take(&mut self.keys.events),
         };
-        self.keys.interact_pulse = false;
-        self.keys.jump_pulse = false;
         self.keys.mouse_dx = 0.0;
         self.keys.mouse_dy = 0.0;
         self.keys.scroll_delta = 0.0;
@@ -570,28 +553,12 @@ impl AppKitWindow {
                 NSEventType::KeyUp => self.handle_key(&event, false),
                 NSEventType::FlagsChanged => {
                     // Fires immediately when a modifier key is pressed or
-                    // released, independent of any other key event. Shift is a
-                    // pure modifier on macOS (no KeyDown/KeyUp), so it is decoded
-                    // here: drive any action bound to Shift (sprint by default)
-                    // and queue a Shift press on its rising edge.
+                    // released, independent of any other key event. Shift,
+                    // Control and Option/Alt are pure modifiers on macOS (no
+                    // KeyDown/KeyUp), so they are decoded here: held while
+                    // down, with a press queued on each one's rising edge.
                     let flags = event.modifierFlags();
-                    let shift = flags.contains(NSEventModifierFlags::Shift);
-                    let edge_down = shift && !self.keys.shift_down;
-                    self.keys.shift_down = shift;
-                    if edge_down {
-                        self.keys.events.push(KeyEvent::Press(KeyPress::new(
-                            InputKey::Shift,
-                            event_mods(flags),
-                        )));
-                    }
-                    self.apply_binding(InputKey::Shift, shift, edge_down);
-                    // Control is a held modifier too (a story's Ctrl fast-forward
-                    // reads it each frame); track it like Shift but drive no
-                    // gameplay binding.
-                    self.keys.control_down = flags.contains(NSEventModifierFlags::Control);
-                    // Option/Alt is tracked the same way; like Control it
-                    // drives no gameplay binding.
-                    self.keys.alt_down = flags.contains(NSEventModifierFlags::Option);
+                    self.keys.modifiers_changed(flags);
                     // Command likewise, the modifier macOS shortcuts are built
                     // on.
                     self.keys.command_down = flags.contains(NSEventModifierFlags::Command);
@@ -708,49 +675,10 @@ impl AppKitWindow {
         p.y >= 0.0 && p.y < self.view.bounds().size.height
     }
 
-    // Replace the runtime movement key map. `handle_key` decodes events through
-    // it, so a settings-menu rebind takes effect on the next key event.
-    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
-        self.keymap = keymap;
-    }
-
-    // Apply a key transition to whichever gameplay actions are bound to `key`.
-    // `down` is the held state (movement / sprint follow it); `fire_pulse` fires
-    // the one-shot actions (jump / interact). For a keyboard event the press
-    // edge is the KeyDown, so both come from `pressed`; for the Shift modifier
-    // the pulse fires only on the rising edge (FlagsChanged can re-fire while
-    // Shift stays held if another modifier changes).
-    fn apply_binding(&mut self, key: InputKey, down: bool, fire_pulse: bool) {
-        let km = self.keymap;
-        if km.forward == key {
-            self.keys.forward = down;
-        }
-        if km.backward == key {
-            self.keys.backward = down;
-        }
-        if km.left == key {
-            self.keys.left = down;
-        }
-        if km.right == key {
-            self.keys.right = down;
-        }
-        if km.sprint == key {
-            self.keys.sprint = down;
-        }
-        if fire_pulse {
-            if km.jump == key {
-                self.keys.jump_pulse = true;
-            }
-            if km.interact == key {
-                self.keys.interact_pulse = true;
-            }
-        }
-    }
-
     // Update the persistent key state from a key event. Escape and F1 are fixed
-    // (not rebindable); every other key is decoded to a canonical `InputKey` and
-    // routed through the runtime key map. Sprint's default (Shift) is a pure
-    // modifier and is handled in the FlagsChanged arm, not here.
+    // window keys; every other key is decoded to a canonical `InputKey`, held
+    // from its press to its release. Shift is a pure modifier and is handled in
+    // the FlagsChanged arm, not here.
     fn handle_key(&mut self, event: &NSEvent, pressed: bool) {
         let kc = event.keyCode();
         // Fixed keys.
@@ -774,7 +702,6 @@ impl AppKitWindow {
         // below hold whatever order the queue delivered FlagsChanged in.
         let mods = event_mods(event.modifierFlags());
         let command = mods.cmd;
-        // Rebindable keys, decoded through the runtime key map.
         if let Some(key) = key_from_mac(kc) {
             if pressed {
                 self.keys.events.push(KeyEvent::Press(KeyPress {
@@ -783,12 +710,12 @@ impl AppKitWindow {
                     repeat: event.isARepeat(),
                 }));
             }
-            // A Command chord is a shortcut, so its press drives no gameplay
-            // action (Cmd+W is not "walk forward"). A release always binds:
-            // macOS withholds the key-up of a Command chord, so a key held
-            // before Command went down must still be able to let go.
+            // A Command chord is a shortcut, so its press holds no key (Cmd+W
+            // is not "walk forward"). A release always lets go: macOS withholds
+            // the key-up of a Command chord, so a key held before Command went
+            // down must still be able to.
             if !(pressed && command) {
-                self.apply_binding(key, pressed, pressed);
+                self.keys.held.set(key, pressed);
             }
         }
         // Printable text input: the OS-resolved glyph for this press (correct

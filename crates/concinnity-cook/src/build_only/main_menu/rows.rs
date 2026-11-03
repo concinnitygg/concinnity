@@ -156,13 +156,14 @@ const CONTROLS_SLIDERS: [(SettingKey, &str); 1] = [(SettingKey::MouseSensitivity
 // setting). Each emits a clickable row that captures a new key; the client
 // (`concinnity_engine::input::keymap` + the graphics system) owns the live key map and applies a
 // rebind without a restart.
-const CONTROLS_REBINDS: [(&str, SettingKey); 7] = [
+const CONTROLS_REBINDS: [(&str, SettingKey); 8] = [
     ("Move Forward", SettingKey::KeyRebind(Bindable::Forward)),
     ("Move Back", SettingKey::KeyRebind(Bindable::Backward)),
     ("Move Left", SettingKey::KeyRebind(Bindable::Left)),
     ("Move Right", SettingKey::KeyRebind(Bindable::Right)),
     ("Sprint", SettingKey::KeyRebind(Bindable::Sprint)),
     ("Jump", SettingKey::KeyRebind(Bindable::Jump)),
+    ("Descend", SettingKey::KeyRebind(Bindable::Descend)),
     ("Interact", SettingKey::KeyRebind(Bindable::Interact)),
 ];
 // Read-only key reference shown under the Controls tab: (action, key). Pause
@@ -180,9 +181,10 @@ const CONTROLS_PAD_SLIDERS: [(SettingKey, &str); 2] = [
 // Each emits a clickable row that captures a button press. Movement and look
 // ride the sticks (with the d-pad as a digital fallback) and pause rides Start,
 // so only the button-driven actions are rebindable.
-const CONTROLS_PAD_REBINDS: [(&str, SettingKey); 3] = [
+const CONTROLS_PAD_REBINDS: [(&str, SettingKey); 4] = [
     ("Sprint", SettingKey::PadRebind(GamepadAction::Sprint)),
     ("Jump", SettingKey::PadRebind(GamepadAction::Jump)),
+    ("Descend", SettingKey::PadRebind(GamepadAction::Descend)),
     ("Interact", SettingKey::PadRebind(GamepadAction::Interact)),
 ];
 

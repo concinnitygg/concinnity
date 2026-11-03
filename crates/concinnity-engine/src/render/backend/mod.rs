@@ -308,7 +308,6 @@ mod tests {
 
     use crate::components::ShaderPrograms;
     use crate::gfx::render_types::MaterialUniforms;
-    use crate::input::keymap::KeyMap;
     use crate::profile::RenderStats;
     use crate::render::backend::error::RenderError;
     use crate::render::backend::init::BackendInit;
@@ -388,7 +387,6 @@ mod tests {
         });
 
         // Live look + input tunable no-ops.
-        backend.set_keymap(KeyMap::default());
         let graphics = crate::settings::ResolvedGraphics::default();
         let mut plan =
             crate::settings::apply::ApplyPlan::live(crate::settings::apply::LiveChanges {

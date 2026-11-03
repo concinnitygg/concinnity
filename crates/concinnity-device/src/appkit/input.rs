@@ -4,10 +4,11 @@
 //! every backend that renders into an `NSView`; `window.rs` owns the event pump
 //! that drives them. Mirrors `win32/input.rs`.
 
-use concinnity_engine::components::{InputKey, KeyEvent, KeyMods};
+use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress};
+use concinnity_engine::input::held_keys::HeldKeys;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags};
 
-// Persistent key state tracked across frames. InputKey booleans are set on KeyDown
+// Persistent key state tracked across frames. Held keys are set on KeyDown
 // and cleared on KeyUp; they are never reset between frames so that held keys
 // remain active even when no repeat event arrives (avoiding the OS key-repeat
 // delay gap). Mouse deltas are accumulated here and cleared by take_input().
@@ -19,13 +20,7 @@ use objc2_app_kit::{NSEvent, NSEventModifierFlags};
     reason = "an input snapshot: one flag per action or key"
 )]
 pub(super) struct KeyState {
-    pub(super) forward: bool,
-    pub(super) backward: bool,
-    pub(super) left: bool,
-    pub(super) right: bool,
-    pub(super) sprint: bool,
-    pub(super) interact_pulse: bool,
-    pub(super) jump_pulse: bool,
+    pub(super) held: HeldKeys,
     pub(super) mouse_dx: f32,
     pub(super) mouse_dy: f32,
     // Accumulated vertical scroll-wheel delta since the last take_input();
@@ -54,18 +49,8 @@ pub(super) struct KeyState {
     // Control glyphs (Backspace, Enter, Escape, arrows) never become text:
     // those travel as presses.
     pub(super) events: Vec<KeyEvent>,
-    // Whether Shift is currently held, tracked from FlagsChanged so the rising
-    // edge can queue a Shift press and drive any action bound to Shift (Shift is
-    // a pure modifier on macOS: it generates FlagsChanged, not KeyDown/KeyUp).
-    pub(super) shift_down: bool,
-    // Whether Control is currently held, tracked from FlagsChanged like Shift.
-    // Surfaced as a held modifier (a story fast-forwards while it is down).
-    pub(super) control_down: bool,
-    // Whether Option/Alt is currently held, tracked from FlagsChanged like
-    // Control. Surfaced as a held modifier (the editor's orbit drag).
-    pub(super) alt_down: bool,
     // Whether Command is currently held, tracked from FlagsChanged like
-    // Control. Surfaced as a held modifier (the editor's palette shortcut); a
+    // Shift. Surfaced as a held modifier (the editor's palette shortcut); a
     // Command chord also suppresses text and gameplay bindings in `handle_key`.
     pub(super) command_down: bool,
     // Set by capture_cursor(); the next mouse-motion event after capture
@@ -178,9 +163,53 @@ pub(super) fn key_from_mac(kc: u16) -> Option<InputKey> {
     })
 }
 
+impl KeyState {
+    // Take the modifier keys a FlagsChanged event reports as held: each one
+    // that went down queues a press, so an action or a rebind capture bound to
+    // it sees it the way it sees any other key.
+    pub(super) fn modifiers_changed(&mut self, flags: NSEventModifierFlags) {
+        const MODIFIERS: [(InputKey, NSEventModifierFlags); 3] = [
+            (InputKey::Shift, NSEventModifierFlags::Shift),
+            (InputKey::Control, NSEventModifierFlags::Control),
+            (InputKey::Alt, NSEventModifierFlags::Option),
+        ];
+        for (key, flag) in MODIFIERS {
+            let down = flags.contains(flag);
+            if down && !self.held.contains(key) {
+                self.events
+                    .push(KeyEvent::Press(KeyPress::new(key, event_mods(flags))));
+            }
+            self.held.set(key, down);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Each modifier that goes down queues one press and is held until it is
+    // let go; one already down queues nothing more.
+    #[test]
+    fn modifiers_queue_a_press_as_they_go_down() {
+        let presses = |ks: &KeyState| -> Vec<InputKey> {
+            ks.events
+                .iter()
+                .filter_map(|e| match e {
+                    KeyEvent::Press(p) => Some(p.key),
+                    KeyEvent::Text(_) => None,
+                })
+                .collect()
+        };
+        let mut ks = KeyState::default();
+        ks.modifiers_changed(NSEventModifierFlags::Control);
+        ks.modifiers_changed(NSEventModifierFlags::Control | NSEventModifierFlags::Option);
+        assert_eq!(presses(&ks), [InputKey::Control, InputKey::Alt]);
+        assert!(ks.held.contains(InputKey::Control) && ks.held.contains(InputKey::Alt));
+        ks.modifiers_changed(NSEventModifierFlags::empty());
+        assert!(!ks.held.contains(InputKey::Control) && !ks.held.contains(InputKey::Alt));
+        assert_eq!(presses(&ks).len(), 2);
+    }
 
     #[test]
     fn key_from_mac_covers_the_defaults() {

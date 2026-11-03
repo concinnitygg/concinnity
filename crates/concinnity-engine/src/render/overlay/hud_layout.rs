@@ -96,7 +96,7 @@ pub(super) fn position_debug_hud(
 }
 
 // Pack the StatHud chips into tight rows from the top-left of the window, the
-// top row first and the benchmark row under it. Measured each frame (same
+// top row first, then the benchmark row, then the subject row. Measured each frame (same
 // timing rationale as the DebugHud stack) so a chip that changes width re-packs
 // its neighbors. A row with no visible chip takes no height, so the next row
 // moves up into its place.

@@ -354,10 +354,12 @@ fn controls_tab_emits_rebind_rows() {
         ("Move Right", "key_right"),
         ("Sprint", "key_sprint"),
         ("Jump", "key_jump"),
+        ("Descend", "key_descend"),
         ("Interact", "key_interact"),
         // The gamepad rows continue the index sequence in their group.
         ("Sprint", "pad_sprint"),
         ("Jump", "pad_jump"),
+        ("Descend", "pad_descend"),
         ("Interact", "pad_interact"),
     ]
     .iter()
@@ -388,7 +390,7 @@ fn controls_tab_emits_rebind_rows() {
     assert!(
         !assets
             .iter()
-            .any(|v| asset_name(v).starts_with("m_settings_controls_rebind_btn_10"))
+            .any(|v| asset_name(v).starts_with("m_settings_controls_rebind_btn_12"))
     );
     // The gamepad rows sit under a collapsible group header alongside the
     // stick sliders.

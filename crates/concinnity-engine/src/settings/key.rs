@@ -41,7 +41,7 @@ macro_rules! setting_keys {
 
         impl SettingKey {
             /// Every setting: the cycle rows, the sliders, then the rebinds.
-            pub const ALL: [SettingKey; 68] = [
+            pub const ALL: [SettingKey; 70] = [
                 $(SettingKey::$cycle,)*
                 $(SettingKey::$slider,)*
                 SettingKey::KeyRebind(Bindable::Forward),
@@ -50,9 +50,11 @@ macro_rules! setting_keys {
                 SettingKey::KeyRebind(Bindable::Right),
                 SettingKey::KeyRebind(Bindable::Sprint),
                 SettingKey::KeyRebind(Bindable::Jump),
+                SettingKey::KeyRebind(Bindable::Descend),
                 SettingKey::KeyRebind(Bindable::Interact),
                 SettingKey::PadRebind(GamepadAction::Sprint),
                 SettingKey::PadRebind(GamepadAction::Jump),
+                SettingKey::PadRebind(GamepadAction::Descend),
                 SettingKey::PadRebind(GamepadAction::Interact),
             ];
 

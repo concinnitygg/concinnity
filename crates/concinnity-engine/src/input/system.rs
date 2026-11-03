@@ -6,19 +6,20 @@
 //! text input) runs later in the same tick and the frame it ends with shows
 //! them.
 //!
-//! Digital pad buttons merge into the existing boolean fields (d-pad onto the
-//! movement keys, the bound buttons onto sprint / jump / interact, Start onto
-//! escape); the sticks publish as the analog `move_axis` / `look_axis` fields.
+//! The window reports which keys are held and pressed; the key map turns them
+//! into the gameplay actions. Digital pad buttons merge into the same fields
+//! (d-pad onto the movement keys, the bound buttons onto sprint / jump /
+//! interact, Start onto escape); the sticks publish as the analog `move_axis` / `look_axis` fields.
 //! The pads themselves come from the host's [`PadSource`].
 
 use alloc::boxed::Box;
 
-use crate::components::{ControlsCommand, FrameInput, GamepadButton, GamepadMap};
+use crate::components::{ControlsCommand, FrameInput, GamepadButton};
 use crate::ecs::{
     Access, CursorState, EventCursor, FlyCam, FrameTime, InputSampledAt, MenuActive,
     PipelineContext, ScreenStack, StepResult, System, WindowMinimized, World,
 };
-use crate::input::compose::{compose_frame_input, nav_dt};
+use crate::input::compose::{Bindings, compose_frame_input, nav_dt};
 use crate::input::mailbox::InputMailbox;
 use crate::input::nav::NavRepeat;
 use crate::input::pad::PadState;
@@ -39,7 +40,7 @@ pub trait PadSource: core::fmt::Debug + Send {
 pub struct InputSystem {
     pads: Option<Box<dyn PadSource>>,
     pad: PadState,
-    map: GamepadMap,
+    bindings: Bindings,
     deadzone: f32,
     // Auto-repeat state for the d-pad / stick navigation pulse.
     nav: NavRepeat,
@@ -93,7 +94,10 @@ impl System for InputSystem {
         // Stored settings-menu choices override the engine defaults.
         if let Some(stored) = ctx.resource::<StoredSettings>() {
             let controls = stored.controls_command();
-            self.map = controls.gamepad_map.unwrap_or_default();
+            self.bindings = Bindings {
+                keys: controls.keymap.unwrap_or_default(),
+                pad: controls.gamepad_map.unwrap_or_default(),
+            };
             if let Some(dz) = controls.gamepad_deadzone {
                 self.deadzone = dz;
             }
@@ -136,12 +140,15 @@ impl System for InputSystem {
         });
         ctx.insert_resource(WindowMinimized(packet.window_minimized));
 
-        // Live controls changes (a gamepad rebind or deadzone slider) sent by
-        // SettingsSystem earlier this tick.
+        // Live controls changes (a key or gamepad rebind, or the deadzone
+        // slider) sent by SettingsSystem earlier this tick.
         if let Some(events) = ctx.events::<ControlsCommand>() {
             for cmd in events.read(&mut self.controls_cursor) {
+                if let Some(keys) = cmd.keymap {
+                    self.bindings.keys = keys;
+                }
                 if let Some(map) = cmd.gamepad_map {
-                    self.map = map;
+                    self.bindings.pad = map;
                 }
                 if let Some(dz) = cmd.gamepad_deadzone {
                     self.deadzone = dz;
@@ -183,7 +190,7 @@ impl System for InputSystem {
         let frame_input = FrameInput {
             viewport: [vp_w, vp_h],
             top_inset,
-            ..compose_frame_input(&raw, &pad, self.map, nav, gameplay)
+            ..compose_frame_input(&raw, &pad, self.bindings, nav, gameplay)
         };
         // Publish the same snapshot two ways: the resource readers can
         // fetch by type, and the component column the camera and UI

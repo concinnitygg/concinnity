@@ -258,6 +258,7 @@ pub fn planet(mut args: Planet) -> Planet {
         .octaves
         .clamp(crate::planet::MIN_OCTAVES, crate::planet::MAX_OCTAVES);
     args.gravity = finite_at_least(args.gravity, 0.0, defaults.gravity);
+    args.air_scale_height = finite_at_least(args.air_scale_height, 0.0, defaults.air_scale_height);
     args.land_share = finite_or(args.land_share, defaults.land_share).clamp(0.0, 1.0);
     args.continent_size = finite_at_least(args.continent_size, 100.0, defaults.continent_size);
     args.ocean_depth =

@@ -1,24 +1,38 @@
 // The rolling drives: each frame takes every driven body's steering from its
 // `RollingControl`, each tick pushes the body by it, and the frame ends by
-// telling the control whether the body is on the ground and afloat.
+// telling the control how the body moves, whether it is on the ground and
+// afloat.
 
 use alloc::vec::Vec;
 
 use crate::components::{Collider, DriveScript, RollingControl, Transform};
 use crate::ecs::{Entity, PipelineContext};
 use crate::physics::drive_script::compass;
-use crate::physics::rolling_drive::{RollingBody, TOW_RAMP, jump_impulse, push, tow, tow_hold};
+use crate::physics::layers::LayerMask;
+use crate::physics::rolling_drive::{
+    RollingBody, TOW_RAMP, flight_ceiling, fly, jump_impulse, push, steer_flight, stop_climb, tow,
+    tow_hold,
+};
 use crate::physics::{BodyHandle, ColliderShape, Simulation};
+use crate::planet::PlanetFrame;
 
 use super::super::convert::collider_shape;
 use super::super::props::PropBodies;
 use super::up_at;
-use concinnity_core::math::vec3::dot;
+use concinnity_core::math::vec3::{dot, length, scale};
 use concinnity_core::math::{SaturatingFrom, ceil};
 
 // How long a jump asked for in the air is kept for the body to land, in
 // seconds.
 const JUMP_WINDOW: f32 = 0.15;
+
+// How long a jump is held before the body flies, in seconds, so a tapped jump
+// stays a jump.
+const CLIMB_HOLD: f32 = 0.25;
+
+// How far below a flying body the ground is looked for, in meters. Past it,
+// only a planet's surface is.
+const GROUND_REACH: f32 = 1_000.0;
 
 // The steepest ground the body counts as standing on: about 50 degrees.
 const GROUND_MIN_COS: f32 = 0.64;
@@ -28,6 +42,17 @@ struct Towed {
     pace: f32,
     draft: f32,
     last: f32,
+}
+
+// How a held jump or descend is flying the body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Flight {
+    // Rolling, or falling under gravity alone.
+    Off,
+    Up,
+    Down,
+    // A climb let go of, winding down.
+    Easing,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -44,8 +69,70 @@ struct Driven {
     // While a scripted tow pulls the body: the pace it has reached, and the
     // share of the body under water it floated at and had last tick.
     towed: Option<Towed>,
+    // Seconds the player has held a direction, and the jump.
+    steered_seconds: f32,
+    climb_seconds: f32,
+    flight: Flight,
     grounded: bool,
     afloat: f32,
+}
+
+/// What a flying body is measured against: the planet's surface and sea, and
+/// whatever lies under it within reach.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Altimeter<'a> {
+    pub(super) planet: Option<PlanetSurface<'a>>,
+    /// What the body's downward ray meets.
+    pub(super) mask: LayerMask,
+}
+
+/// A planet's ground as a flying body reads it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PlanetSurface<'a> {
+    pub(super) planet: &'a PlanetFrame,
+    /// The sea's level over the planet's radius, where it has one.
+    pub(super) sea_level: Option<f32>,
+}
+
+impl Altimeter<'_> {
+    /// How far the body `handle` at local point `at` is above what it would
+    /// land on, along `up`: the nearer of the ground under it and the
+    /// planet's surface or sea, or the reach where neither is found.
+    pub(super) fn height(
+        &self,
+        world: &Simulation,
+        handle: BodyHandle,
+        at: [f32; 3],
+        up: [f32; 3],
+    ) -> f32 {
+        let below = world
+            .raycast(at, scale(up, -1.0), GROUND_REACH, Some(handle), self.mask)
+            .map(|hit| hit.distance);
+        let over_planet = self.planet.map(|ground| ground.height(at));
+        match (below, over_planet) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(h), None) | (None, Some(h)) => h,
+            (None, None) => GROUND_REACH,
+        }
+    }
+}
+
+impl PlanetSurface<'_> {
+    // How far local point `at` lies above the planet's ground, or its sea
+    // where that is higher.
+    fn height(&self, at: [f32; 3]) -> f32 {
+        let ground = self.planet.height_over_ground(at);
+        self.sea_level
+            .map_or(ground, |level| ground.min(self.planet.altitude(at) - level))
+    }
+}
+
+/// What every drive's tick reads besides its own body: north before it is
+/// laid along the ground, and the ground a flying body climbs from.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Surroundings<'a> {
+    pub(super) north: [f32; 3],
+    pub(super) altimeter: Altimeter<'a>,
 }
 
 /// Every driven body and its steering for the frame.
@@ -99,6 +186,9 @@ impl Drives {
                     jump_ticks: 0,
                     script_key: None,
                     towed: None,
+                    steered_seconds: 0.0,
+                    climb_seconds: 0.0,
+                    flight: Flight::Off,
                     grounded: false,
                     afloat: 0.0,
                 });
@@ -118,9 +208,9 @@ impl Drives {
 
     /// One `dt`-second tick of every drive starting `time` seconds into the
     /// world: the steering a script has for that moment, a jump the body can
-    /// take, then the roll and the paddle for this tick's step, or the tow a
-    /// script's pace asks for in their place. North lies along `north` before
-    /// it is laid along the ground.
+    /// take, the flight a held jump gives it, then the roll and the paddle
+    /// for this tick's step, or the tow a script's pace asks for in their
+    /// place. A script's steering neither ramps nor flies.
     #[expect(clippy::float_cmp, reason = "zero push is no force to apply")]
     pub(super) fn tick(
         &mut self,
@@ -128,8 +218,10 @@ impl Drives {
         ctx: &PipelineContext<'_>,
         props: &PropBodies,
         (time, dt): (f64, f32),
-        north: [f32; 3],
+        around: &Surroundings<'_>,
     ) {
+        let north = around.north;
+        let gravity = world.config().gravity;
         for driven in &mut self.driven {
             driven.afloat = props.submerged_share(driven.entity);
             let Some(state) = world.body_state(driven.handle) else {
@@ -138,6 +230,7 @@ impl Drives {
             let up = up_at(world, state.position);
             let mut pace = 0.0;
             let mut heading_deg = 0.0;
+            let mut scripted = false;
             if let Some((index, key)) = ctx
                 .get::<DriveScript>(driven.entity)
                 .and_then(|script| script.key_at(time))
@@ -149,6 +242,7 @@ impl Drives {
                 driven.script_key = Some(index);
                 pace = key.pace;
                 heading_deg = key.heading_deg;
+                scripted = true;
             }
             driven.grounded = world.is_supported(driven.handle, up, GROUND_MIN_COS);
             let body = RollingBody {
@@ -190,6 +284,42 @@ impl Drives {
                 continue;
             }
             driven.towed = None;
+            let was = driven.flight;
+            driven.steer_time(scripted, dt);
+            if driven.flight == Flight::Off
+                && !scripted
+                && matches!(was, Flight::Up | Flight::Easing)
+                && dot(state.linear_velocity, up) > 0.0
+            {
+                driven.flight = Flight::Easing;
+            }
+            if driven.flight == Flight::Easing {
+                world.add_force(driven.handle, stop_climb(&body), [0.0; 3]);
+            }
+            if matches!(driven.flight, Flight::Up | Flight::Down) {
+                let height = around
+                    .altimeter
+                    .height(world, driven.handle, state.position, up)
+                    - driven.radius;
+                let speed = driven.control.climb_speed(height);
+                let mut ahead = speed.max(driven.control.ramped(driven.steered_seconds).max_speed);
+                if let Some(center) = world.config().gravity_center {
+                    let distance = length(core::array::from_fn(|i| state.position[i] - center[i]));
+                    ahead = ahead.min(flight_ceiling(gravity, distance));
+                }
+                let rising = if driven.flight == Flight::Down {
+                    -speed
+                } else {
+                    speed
+                };
+                let lift = fly(rising, gravity, &body);
+                let steer = steer_flight(&driven.control, ahead, &body);
+                world.add_force(
+                    driven.handle,
+                    core::array::from_fn(|i| lift[i] + steer[i]),
+                    [0.0; 3],
+                );
+            }
             if driven.jump_ticks > 0 {
                 driven.jump_ticks -= 1;
                 if driven.grounded && driven.control.jump_speed > 0.0 {
@@ -201,7 +331,7 @@ impl Drives {
                     driven.jump_ticks = 0;
                 }
             }
-            let push = push(&driven.control, &body);
+            let push = push(&driven.control.ramped(driven.steered_seconds), &body);
             if push.force != [0.0; 3] || push.torque != [0.0; 3] {
                 world.add_force(driven.handle, push.force, push.torque);
             }
@@ -209,13 +339,55 @@ impl Drives {
     }
 
     /// Hand each control what its body's last tick found.
-    pub(super) fn publish(&self, ctx: &mut PipelineContext<'_>, props: &PropBodies) {
+    pub(super) fn publish(
+        &self,
+        world: &Simulation,
+        ctx: &mut PipelineContext<'_>,
+        props: &PropBodies,
+    ) {
         for driven in &self.driven {
             if let Some(control) = ctx.get_mut::<RollingControl>(driven.entity) {
+                control.velocity = world
+                    .body_state(driven.handle)
+                    .map_or([0.0; 3], |state| state.linear_velocity);
                 control.grounded = driven.grounded;
                 control.afloat = props.submerged_share(driven.entity);
             }
         }
+    }
+}
+
+impl Driven {
+    // Count how long the player has held a direction and the jump this
+    // `dt`-second tick, and whether the body flies: up while a jump is held
+    // past a moment, down while descend is held off the ground and the water.
+    // Holding both flies neither way. A script holds none of them.
+    fn steer_time(&mut self, scripted: bool, dt: f32) {
+        let steering = !scripted && length(self.control.heading) > 1e-4;
+        self.steered_seconds = if steering {
+            self.steered_seconds + dt
+        } else {
+            0.0
+        };
+        let can_fly = !scripted && self.control.climb_rate > 0.0;
+        let climbing = can_fly && self.control.climb && !self.control.descend;
+        self.climb_seconds = if climbing {
+            self.climb_seconds + dt
+        } else {
+            0.0
+        };
+        let diving = can_fly
+            && self.control.descend
+            && !self.control.climb
+            && !self.grounded
+            && self.afloat <= 0.0;
+        self.flight = if self.climb_seconds >= CLIMB_HOLD {
+            Flight::Up
+        } else if diving {
+            Flight::Down
+        } else {
+            Flight::Off
+        };
     }
 }
 

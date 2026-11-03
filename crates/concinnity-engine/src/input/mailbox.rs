@@ -52,11 +52,11 @@ mod tests {
         let mut mailbox = InputMailbox::default();
         assert!(mailbox.take().is_none());
         let mut first = InputPacket::default();
-        first.raw.interact = true;
+        first.raw.left_click = true;
         mailbox.deposit(first, 10);
         mailbox.deposit(InputPacket::default(), 25);
         let (merged, at) = mailbox.take().expect("a packet");
-        assert!(merged.raw.interact, "the older edge survives the merge");
+        assert!(merged.raw.left_click, "the older edge survives the merge");
         assert_eq!(at, 25);
         assert!(mailbox.take().is_none());
     }

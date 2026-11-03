@@ -14,7 +14,6 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::WindowMode;
-use concinnity_engine::input::keymap::KeyMap;
 use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::window::clipboard::Clipboard;
@@ -149,10 +148,6 @@ impl AppKitVkWindow {
 
     pub(crate) fn window_minimized(&self) -> bool {
         self.win.window_minimized()
-    }
-
-    pub(crate) fn set_keymap(&mut self, keymap: KeyMap) {
-        self.win.set_keymap(keymap);
     }
 
     pub(crate) fn set_window_mode(&mut self, mode: WindowMode) {

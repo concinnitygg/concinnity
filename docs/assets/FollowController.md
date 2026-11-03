@@ -17,7 +17,7 @@ the pull: a [`Planet`](Planet.md)'s center, or `+Y`.
 - `prop`: A string. Name of the followed [Prop](Prop.md), in place of a `target`. Optional.
 - `distance`: A float. Orbit distance from the pivot to the camera, in world units. Defaults to `4.0`.
 - `height`: A float. Pivot height above the character's feet, or above a prop's center, in world units. Defaults to `1.5`.
-- `lag_seconds`: A float. Seconds the pivot takes to close half the distance to what it follows, smoothing a bumpy ride. `0` follows exactly. Defaults to `0.0`.
+- `lag_seconds`: A float. Seconds the pivot takes to catch up with a change in how what it follows moves, smoothing a bumpy ride. Steady motion, however fast, is followed exactly, and the pivot never falls behind by more than a quarter of `distance`. `0` follows exactly. Defaults to `0.0`.
 - `drive`: A string (see [FollowDrive](FollowDrive.md)). How the character moves; see [`FollowDrive`](FollowDrive.md). Defaults to `"root_motion"`.
 - `turn_speed`: A float. Character turn rate toward the input heading, in radians per second. Defaults to `10.0`.
 - `speed_parameter`: A string. Name of the character's [`AnimationGraph`](anim_graph.md) float parameter that receives the current travel speed in world units per second (drives a locomotion blendspace). Empty disables parameter writes, leaving the graph externally driven. Defaults to `"speed"`.

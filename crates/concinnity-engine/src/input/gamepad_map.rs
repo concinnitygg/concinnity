@@ -10,13 +10,15 @@ pub enum GamepadAction {
     Sprint,
     /// Jump.
     Jump,
+    /// Hold to go down, the way jump goes up.
+    Descend,
     /// Interact with the entity under the cursor.
     Interact,
 }
 
 impl GamepadAction {
     /// Every rebindable action, in Controls-tab row order.
-    pub const ALL: [Self; 3] = [Self::Sprint, Self::Jump, Self::Interact];
+    pub const ALL: [Self; 4] = [Self::Sprint, Self::Jump, Self::Descend, Self::Interact];
 
     /// The settings key string used in rebind actions and the
     /// engine settings registry. The `pad_` prefix distinguishes a button
@@ -25,6 +27,7 @@ impl GamepadAction {
         match self {
             Self::Sprint => "pad_sprint",
             Self::Jump => "pad_jump",
+            Self::Descend => "pad_descend",
             Self::Interact => "pad_interact",
         }
     }
@@ -45,6 +48,9 @@ pub struct GamepadMap {
     /// One-frame jump press.
     #[serde(default = "def_jump")]
     pub jump: GamepadButton,
+    /// Held to go down.
+    #[serde(default = "def_descend")]
+    pub descend: GamepadButton,
     /// One-frame interact press.
     #[serde(default = "def_interact")]
     pub interact: GamepadButton,
@@ -52,10 +58,11 @@ pub struct GamepadMap {
 
 impl GamepadMap {
     /// The default bindings: sprint on the left-stick click, jump on the bottom
-    /// face button, interact on the left face button.
+    /// face button, descend on the right one, interact on the left one.
     pub const DEFAULT: Self = Self {
         sprint: GamepadButton::LeftStick,
         jump: GamepadButton::South,
+        descend: GamepadButton::East,
         interact: GamepadButton::West,
     };
 
@@ -64,6 +71,7 @@ impl GamepadMap {
         match action {
             GamepadAction::Sprint => self.sprint,
             GamepadAction::Jump => self.jump,
+            GamepadAction::Descend => self.descend,
             GamepadAction::Interact => self.interact,
         }
     }
@@ -73,6 +81,7 @@ impl GamepadMap {
         match action {
             GamepadAction::Sprint => self.sprint = button,
             GamepadAction::Jump => self.jump = button,
+            GamepadAction::Descend => self.descend = button,
             GamepadAction::Interact => self.interact = button,
         }
     }
@@ -115,6 +124,9 @@ fn def_sprint() -> GamepadButton {
 fn def_jump() -> GamepadButton {
     GamepadMap::DEFAULT.jump
 }
+fn def_descend() -> GamepadButton {
+    GamepadMap::DEFAULT.descend
+}
 fn def_interact() -> GamepadButton {
     GamepadMap::DEFAULT.interact
 }
@@ -128,6 +140,7 @@ mod tests {
         let buttons = [
             GamepadButton::North,
             GamepadButton::East,
+            GamepadButton::LeftShoulder,
             GamepadButton::RightShoulder,
         ];
         let mut m = GamepadMap::default();
