@@ -145,12 +145,12 @@ fn write_jsonl_persists_entries_atomically() {
     std::fs::remove_file(&path).unwrap();
 }
 
-// A fresh project has no `worlds/` until its first save, so the write creates
-// the directory rather than failing on the rename.
+// A world whose directory does not exist yet is saved by creating the
+// directory rather than failing on the rename.
 #[test]
-fn write_jsonl_creates_the_worlds_directory() {
+fn write_jsonl_creates_a_missing_directory() {
     let tree = concinnity_testing::TempTree::new();
-    let path = tree.join("worlds").join("world.jsonl");
+    let path = tree.join("project").join("world.jsonl");
 
     let mut h = hook(vec![serde_json::json!({
         "type": "GraphicsConfig", "args": {"$id": "scene"}
@@ -301,7 +301,7 @@ fn save_writes_the_world_file_and_no_build_output() {
     let build_root = dir.path().join(".concinnity");
     crate::project::open(StateTree::at(dir.path()).with_build(&build_root));
 
-    let world_path = dir.path().join("worlds").join("world.jsonl");
+    let world_path = dir.path().join("world.jsonl");
     let entries = vec![serde_json::json!({"type":"PhysicsConfig","args":{"$id":"phys"}})];
     let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), entries);
     h.entries
@@ -332,7 +332,7 @@ fn a_failed_save_leaves_the_world_dirty() {
     // A path under a file, so `create_dir_all` of the parent fails.
     let blocker = dir.path().join("blocker");
     std::fs::write(&blocker, b"not a directory").unwrap();
-    let world_path = blocker.join("worlds").join("world.jsonl");
+    let world_path = blocker.join("world.jsonl");
 
     let mut h = EditorHook::new(world_path.to_string_lossy().into_owned(), Vec::new());
     h.entries

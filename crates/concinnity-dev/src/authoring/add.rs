@@ -240,7 +240,9 @@ fn scaffold_to_inject(
     if !world_exists && matches!(bootstrap, BootstrapKind::None) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("no world found at '{world_path}': create one with `cn init` or `cn new`"),
+            format!(
+                "no world found at '{world_path}': create one with `concinnity init` or `concinnity new`"
+            ),
         ));
     }
 

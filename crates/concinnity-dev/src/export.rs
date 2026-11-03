@@ -47,7 +47,7 @@ pub(crate) enum BundleFormat {
 /// What [`export`] packages and where it writes the result.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExportOptions {
-    /// The world JSONL to build; discovered from `worlds/` when `None`.
+    /// The world JSONL to build; the discovered `world.jsonl` when `None`.
     pub world: Option<String>,
     /// Overrides the application name the world's `AppConfig` declares.
     pub name: Option<String>,
@@ -327,8 +327,8 @@ fn check_target_platform(platform: Option<&str>) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
-            "cross-platform export is not supported yet: this `cn` targets '{host}'. \
-             Run `cn export` on a {requested} machine to produce a {requested} build."
+            "cross-platform export is not supported yet: this `concinnity` targets '{host}'. \
+             Run `concinnity export` on a {requested} machine to produce a {requested} build."
         ),
     ))
 }
@@ -348,7 +348,7 @@ fn runtime_binary_path() -> io::Result<PathBuf> {
     let cn = std::env::current_exe()?;
     let dir = cn
         .parent()
-        .ok_or_else(|| io::Error::other("cannot locate the cn executable's directory"))?;
+        .ok_or_else(|| io::Error::other("cannot locate the concinnity executable's directory"))?;
     let path = dir.join(exe_file_name("concinnity-run"));
     if path.exists() {
         Ok(path)
@@ -357,7 +357,7 @@ fn runtime_binary_path() -> io::Result<PathBuf> {
             io::ErrorKind::NotFound,
             format!(
                 "runtime player not found at {} -- the `concinnity-run` binary must sit \
-                 beside the `cn` executable (in a dev checkout, build it with \
+                 beside the `concinnity` executable (in a dev checkout, build it with \
                  `cargo build --features player`)",
                 path.display()
             ),
@@ -422,15 +422,15 @@ fn verify_runtime_backend(
         .map(|p| backend_label(p.key()))
         .collect();
     let hint = if missing.len() == 1 && !cookable.contains(Platform::Vulkan) {
-        " Rebuild `cn` with the `vulkan` feature (`cargo build --features editor,vulkan`)."
+        " Rebuild `concinnity` with the `vulkan` feature (`cargo build --features editor,vulkan`)."
     } else {
         ""
     };
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
         format!(
-            "runtime/cook backend mismatch: the `concinnity-run` player beside this `cn` \
-             renders with {}, which this `cn` cannot cook blobs for.{hint}",
+            "runtime/cook backend mismatch: the `concinnity-run` player beside this `concinnity` \
+             renders with {}, which this `concinnity` cannot cook blobs for.{hint}",
             missing.join(" and "),
         ),
     ))

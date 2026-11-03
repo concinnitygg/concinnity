@@ -1,18 +1,21 @@
-// `cn docs`: write the asset reference pages under docs/assets/ and the
-// graphics settings page under docs/settings/.
+// `concinnity docs`: write the asset reference pages under docs/assets/, the
+// graphics settings page under docs/settings/, and the command line reference.
 //
 // The prose, keys, types and defaults all come from the schema the derives
 // compile into the engine (`concinnity_engine::ecs::schema`, behind the `schema`
 // feature): `reference` walks it from the authoring registry and renders each
 // body, `defaults` serializes what an omitted key reads as, and `page`
-// assembles the pages. Nothing is read from the engine's sources, so any build
-// of `cn` regenerates the same pages.
+// assembles the pages. The settings page reads the rustdoc of the engine types
+// it describes, and the command line page reads the clap tree its derives build
+// from rustdoc. Nothing is read from the engine's sources, so any build of
+// `concinnity` regenerates the same pages.
 //
 // The pages are committed to the repository. Whether they still match the
 // sources is a question about a checkout, not about this code, so it belongs to
 // a repository check rather than a unit test: a test that reads the committed
 // pages passes or fails on files no test wrote.
 
+mod cli;
 mod defaults;
 mod page;
 mod prose;
@@ -59,8 +62,9 @@ fn pages(docs: &[AssetDoc]) -> BTreeMap<String, String> {
     out
 }
 
-/// Regenerate the asset reference pages under `docs/assets/` and the graphics
-/// settings page from the authored schema compiled into this build.
+/// Regenerate the asset reference pages under `docs/assets/`, the graphics
+/// settings page and the command line reference from the rustdoc compiled into
+/// this build.
 ///
 /// `root` is the directory the pages go under; `None` uses the working
 /// directory. Unchanged pages are left alone, so running this on an
@@ -78,13 +82,17 @@ pub(crate) fn docs(root: Option<&str>) -> io::Result<()> {
         dir.display()
     );
 
-    let path = root.join(settings::PAGE);
+    write_page(&root.join(settings::PAGE), &settings::render(&docs))?;
+    write_page(&root.join(cli::PAGE), &cli::render())
+}
+
+// Put one page at `path`, leaving it alone when it already reads `page`.
+fn write_page(path: &Path, page: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let page = settings::render(&docs);
-    if fs::read_to_string(&path).ok().as_deref() != Some(page.as_str()) {
-        fs::write(&path, page)?;
+    if fs::read_to_string(path).ok().as_deref() != Some(page) {
+        fs::write(path, page)?;
         println!("wrote {}", path.display());
     }
     Ok(())

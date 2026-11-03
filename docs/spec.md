@@ -708,7 +708,7 @@ Everything the engine writes for a project lives under one state directory.
 |   |-- 0            runtime cache segment                runtime-writable
 |   `-- 1            build cache segment                  cook only
 |-- assets/          source assets                        authored
-|-- worlds/          named world files                    authored
+|-- *.jsonl          world files (world.jsonl by default) authored
 |-- saves/           runtime save files                   runtime-writable
 |-- preview-saves/   sandboxed saves for preview sessions runtime-writable
 |-- crashes/         crash reports and minidumps          runtime-writable
@@ -716,7 +716,7 @@ Everything the engine writes for a project lives under one state directory.
 ```
 
 The tree has four roots, and a host that keeps them together gets the layout
-above. The **content** root holds what a person authors (`assets/`, `worlds/`);
+above. The **content** root holds what a person authors (`assets/`, world files);
 the **build** root holds what a build produces (`data/`, `world-lock.json`); the
 **writable** root holds what a run writes (`saves/`, `settings`, `crashes/`); the
 **cache** root holds the regenerable segments. Each of the last three defaults
@@ -732,7 +732,7 @@ scatters state beside whatever directory it was launched from.
 
 | Host        | Root                                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Development | The CLI roots the project at the directory it was run from, so `assets/` and `worlds/` sit beside the source that authored them, and places the build and writable roots in `.concinnity/` under it. A `world.jsonl` at the project root is used when `worlds/` holds none. |
+| Development | The CLI roots the project at the directory it was run from, so `assets/` and the world files sit beside the source that authored them, and places the build and writable roots in `.concinnity/` under it. With no `-f`, the nearest `world.jsonl` up from that directory is the world. |
 | Shipped     | The player installs the directory beside its own executable (or `Contents/Resources` inside a macOS bundle).                                                                                               |
 | Embedded    | A world loaded from a blob path anchors the tree beside that blob, stepping out of a directory named `data`. A host that names its own directory overrides that.                                          |
 

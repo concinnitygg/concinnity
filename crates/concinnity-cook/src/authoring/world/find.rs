@@ -1,149 +1,73 @@
+use std::path::Path;
+
 /// The world source file's conventional name.
 pub const WORLD_JSONL: &str = "world.jsonl";
-/// Locate a world JSONL file, searching `worlds_dir` first.
-///
-/// If `name` is given, returns `worlds_dir/<name>.jsonl` when it exists. If
-/// `name` is None, returns the most recently modified `.jsonl` there. Falls
-/// back to `world.jsonl` in the current directory and then walks up parent
-/// directories: a supported location for an ad hoc world beside `worlds/`,
-/// searched after it, and the whole search when the caller has no `worlds/` to
-/// offer.
+
+/// Locate the project's world: `world.jsonl` in the working directory, or in
+/// the nearest parent directory holding one.
 ///
 /// # Errors
 ///
-/// Returns an error if the world `name` names does not exist, or no world is
+/// Returns an error if the working directory cannot be read, or no world is
 /// found by the search.
-pub fn find_world_jsonl(
-    worlds_dir: Option<&std::path::Path>,
-    name: Option<&str>,
-) -> std::io::Result<String> {
-    if let Some(n) = name {
-        let path = worlds_dir.map(|d| d.join(format!("{n}.jsonl")));
-        if let Some(path) = &path
-            && path.exists()
-        {
-            return Ok(path.to_string_lossy().into_owned());
-        }
-        return Err(named_world_not_found(n, path.as_deref()));
-    }
-
-    // No name given: pick the most recently modified world in `worlds/`.
-    if let Some(worlds_dir) = worlds_dir.filter(|d| d.is_dir()) {
-        let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
-        if let Ok(entries) = std::fs::read_dir(worlds_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                if let Ok(meta) = std::fs::metadata(&path) {
-                    let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                    if best.as_ref().is_none_or(|(t, _)| mtime > *t) {
-                        best = Some((mtime, path));
-                    }
-                }
-            }
-        }
-        if let Some((_, path)) = best {
-            return Ok(path.to_string_lossy().into_owned());
-        }
-    }
-
-    // Fall back to world.jsonl in cwd or any parent directory.
-    let mut dir = std::env::current_dir()?;
-    loop {
-        let candidate = dir.join(WORLD_JSONL);
-        if candidate.exists() {
-            return Ok(candidate.to_string_lossy().into_owned());
-        }
-        match dir.parent() {
-            Some(parent) => dir = parent.to_path_buf(),
-            None => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("no world found: run `cn init` or create `worlds/{WORLD_JSONL}`"),
-                ));
-            }
-        }
-    }
+pub fn find_world_jsonl() -> std::io::Result<String> {
+    find_world_from(&std::env::current_dir()?)
 }
 
-// The error for a named world that could not be located. Split out so both
-// misses -- a `worlds/` holding no such world, and no `worlds/` at all -- read
-// the same way to a caller.
-fn named_world_not_found(name: &str, path: Option<&std::path::Path>) -> std::io::Error {
-    let message = match path {
-        Some(p) => format!("world '{}' not found at {}", name, p.display()),
-        None => format!("world '{name}' not found: no worlds directory"),
-    };
-    std::io::Error::new(std::io::ErrorKind::NotFound, message)
+// The nearest `world.jsonl` at `dir` or above it. Split from the working
+// directory lookup so the walk is testable without moving the process cwd,
+// which every other test in this binary shares.
+fn find_world_from(dir: &Path) -> std::io::Result<String> {
+    dir.ancestors()
+        .map(|d| d.join(WORLD_JSONL))
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("no world found: run `concinnity init` or create `{WORLD_JSONL}`"),
+            )
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // The named-miss branches are exercised through the pure error builder: the
-    // lookup itself walks up from the working directory, which is shared with
-    // every other test in this binary, so moving it would race them.
     #[test]
-    fn a_missing_named_world_names_the_file_it_looked_for() {
-        let path = std::path::Path::new("/proj/worlds/cn_test_no_such_world.jsonl");
-        let err = named_world_not_found("cn_test_no_such_world", Some(path));
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-        let msg = err.to_string();
-        assert!(msg.contains("cn_test_no_such_world"), "message was: {msg}");
-        assert!(msg.contains(".jsonl"), "message was: {msg}");
-    }
-
-    // With no `worlds/` there is no file to name, so the message says what is
-    // missing instead of pointing at a path nobody chose.
-    #[test]
-    fn a_named_world_without_a_worlds_directory_says_so() {
-        let err = named_world_not_found("main", None);
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-        let msg = err.to_string();
-        assert!(msg.contains("main"), "message was: {msg}");
-        assert!(msg.contains("no worlds directory"), "message was: {msg}");
-    }
-
-    // A named world is looked for in the directory the caller gave and nowhere
-    // else: a miss there never falls through to the cwd walk, which would open
-    // some other world under the name the caller asked for.
-    #[test]
-    fn a_named_world_is_looked_for_only_in_the_directory_given() {
+    fn a_world_in_the_directory_itself_is_found() {
         let tree = concinnity_testing::TempTree::new();
-        let err = find_world_jsonl(Some(tree.path()), Some("cn_test_no_such_world")).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
-        let msg = err.to_string();
-        assert!(msg.contains("cn_test_no_such_world"), "message was: {msg}");
-        assert!(
-            msg.contains(&tree.path().display().to_string()),
-            "message was: {msg}"
-        );
+        let world = tree.path().join(WORLD_JSONL);
+        std::fs::write(&world, "").unwrap();
+
+        let found = find_world_from(tree.path()).unwrap();
+        assert_eq!(Path::new(&found), world);
     }
 
-    // An unnamed lookup takes the most recently modified world in the directory
-    // given, so `cn cook` with no argument opens whatever was last edited.
+    // Running from inside a project's subdirectory still finds the project's
+    // world, and the nearest one wins over any further up.
     #[test]
-    fn an_unnamed_lookup_takes_the_newest_world_in_the_directory() {
+    fn the_nearest_world_above_the_directory_is_found() {
         let tree = concinnity_testing::TempTree::new();
-        let older = tree.path().join("older.jsonl");
-        let newer = tree.path().join("newer.jsonl");
-        std::fs::write(&older, "{}").unwrap();
-        std::fs::write(&newer, "{}").unwrap();
-        // `write` order does not guarantee distinct mtimes at this resolution;
-        // set them explicitly so the pick is the one under test.
-        let base = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
-        set_mtime(&older, base);
-        set_mtime(&newer, base + std::time::Duration::from_mins(1));
+        let project = tree.path().join("project");
+        let nested = project.join("assets").join("ground");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(tree.path().join(WORLD_JSONL), "").unwrap();
+        std::fs::write(project.join(WORLD_JSONL), "").unwrap();
 
-        let found = find_world_jsonl(Some(tree.path()), None).unwrap();
-        assert_eq!(std::path::Path::new(&found), newer);
+        let found = find_world_from(&nested).unwrap();
+        assert_eq!(Path::new(&found), project.join(WORLD_JSONL));
     }
 
-    fn set_mtime(path: &std::path::Path, at: std::time::SystemTime) {
-        let file = std::fs::File::options().write(true).open(path).unwrap();
-        file.set_modified(at).unwrap();
+    // Only `world.jsonl` is discovered: any other world file is named with
+    // `-f`, so a lookup never picks one of several by guesswork.
+    #[test]
+    fn another_world_file_is_not_discovered() {
+        let tree = concinnity_testing::TempTree::new();
+        std::fs::write(tree.path().join("arena.jsonl"), "").unwrap();
+
+        let err = find_world_from(tree.path()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(err.to_string().contains(WORLD_JSONL), "message was: {err}");
     }
 }

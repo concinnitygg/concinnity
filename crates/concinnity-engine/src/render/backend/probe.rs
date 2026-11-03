@@ -125,19 +125,23 @@ impl GpuVendor {
 /// Coarse performance class for default-quality selection, ordered low -> high so
 /// callers can compare with `>=`. Each backend maps its native signals (memory
 /// budget, discrete / integrated, Apple GPU family) onto this via `classify_tier`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, crate::ecs::Documented)]
 pub enum GpuTier {
-    /// Unknown hardware: the conservative default, never the top preset. Sorts
-    /// lowest so a comparison-based resolver treats it as the floor.
+    /// A GPU the engine cannot classify, such as a discrete GPU that reports no
+    /// VRAM.
+    ///
+    /// The conservative default, never the top preset. Sorts lowest so a
+    /// comparison-based resolver treats it as the floor.
     Unknown,
-    /// Integrated / low-power GPU: the lowest quality tier.
+    /// An integrated or low-power GPU.
     Integrated,
-    /// Older or small discrete GPU, or an Apple base M-series: entry quality.
+    /// A discrete GPU with under 6 GB of VRAM, or a base Apple M-series chip.
     EntryDiscrete,
-    /// Mainstream discrete GPU, or an Apple Pro: mid quality.
+    /// A discrete GPU with 6 GB to 12 GB of VRAM, an Apple Pro chip, an M1 or
+    /// M2 Max, or an M1 Ultra.
     MidDiscrete,
-    /// Enthusiast discrete GPU, or an Apple Max from M3 on / Ultra from M2 on:
-    /// high quality.
+    /// A discrete GPU with 12 GB of VRAM or more, an Apple Max from M3 on, or
+    /// an Apple Ultra from M2 on.
     HighDiscrete,
 }
 

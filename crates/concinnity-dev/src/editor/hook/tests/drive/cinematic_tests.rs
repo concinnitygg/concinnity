@@ -322,9 +322,9 @@ fn selecting_another_world_restarts_the_cycle() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook();
     h.refresh_worlds();
@@ -376,8 +376,8 @@ fn opening_the_preview_hands_the_world_its_own_camera_back() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 3_000);
     let path = lobby.to_string_lossy().into_owned();
 
     let mut h = start_hook();

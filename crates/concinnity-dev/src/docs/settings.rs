@@ -3,11 +3,13 @@
 // it overrides (whose documented meaning, default and apply timing it takes),
 // and what each quality preset allows.
 //
-// The settings come from `SettingKey` and the settings registry, the field
-// descriptions from the asset reference pages, and the preset table from the
+// The settings come from `SettingKey` and the settings registry, the prose from
+// the rustdoc of the engine types the page describes, the field descriptions
+// from the asset reference pages, and the preset table from the
 // `QualityCeiling` tiers, so the page follows the engine without a hand-kept
 // list.
 
+use concinnity_engine::ecs::schema::Documented;
 use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::{GpuProfile, GpuTier};
 use concinnity_engine::settings::quality::{AUTO_UPSCALE_PIXELS, preset_label};
@@ -16,6 +18,7 @@ use concinnity_engine::settings::{
 };
 
 use super::page::AUTOGEN_MARKER;
+use super::prose::first_paragraph;
 use super::reference::AssetDoc;
 
 // Where the page lands, relative to the directory given on the command line.
@@ -25,60 +28,42 @@ pub(super) const PAGE: &str = "docs/settings/graphics.md";
 const ASSETS: &str = "../assets/";
 
 // The named presets, lowest first, with the ceilings they impose.
-const TIERS: [(&str, QualityCeiling); 4] = [
-    ("Low", QualityCeiling::LOW),
-    ("Medium", QualityCeiling::MEDIUM),
-    ("High", QualityCeiling::HIGH),
-    ("Ultra", QualityCeiling::ULTRA),
+const TIERS: [(QualityPreset, QualityCeiling); 4] = [
+    (QualityPreset::Low, QualityCeiling::LOW),
+    (QualityPreset::Medium, QualityCeiling::MEDIUM),
+    (QualityPreset::High, QualityCeiling::HIGH),
+    (QualityPreset::Ultra, QualityCeiling::ULTRA),
 ];
 
-// What `Auto` reads each GPU class as, lowest first.
-const GPU_CLASSES: [(GpuTier, &str); 5] = [
-    (GpuTier::Integrated, "An integrated or low-power GPU"),
-    (GpuTier::Unknown, "A discrete GPU that reports no VRAM"),
-    (
-        GpuTier::EntryDiscrete,
-        "A discrete GPU with under 6 GB of VRAM, or a base Apple M-series chip",
-    ),
-    (
-        GpuTier::MidDiscrete,
-        "A discrete GPU with 6 GB to 12 GB of VRAM, an Apple Pro chip, an M1 or M2 Max, or an \
-         M1 Ultra",
-    ),
-    (
-        GpuTier::HighDiscrete,
-        "A discrete GPU with 12 GB of VRAM or more, an Apple Max from M3 on, or an Apple Ultra \
-         from M2 on",
-    ),
+// The GPU classes in the order of the tier `Auto` picks for them, lowest first.
+const GPU_CLASSES: [GpuTier; 5] = [
+    GpuTier::Integrated,
+    GpuTier::Unknown,
+    GpuTier::EntryDiscrete,
+    GpuTier::MidDiscrete,
+    GpuTier::HighDiscrete,
 ];
-
-const INTRO: &str = "\
-These are the settings a player can change while the app runs, from the settings
-menu or the stored settings file, that change how the scene is rendered or shown.
-Each heading is the key a settings row's action names. A setting that overrides
-an asset field starts from the world's authored value, and leaving it unchanged
-keeps that value.";
-
-const PRESETS: &str = "\
-`graphics_quality` picks a preset: `Auto`, a named tier (Low, Medium, High,
-Ultra), or `Custom`. A tier is a ceiling over the world's authored look: it lowers
-the settings below where a world asks for more than the tier allows, and never
-turns a feature on. Changing any setting the preset governs switches the preset
-to `Custom`, which keeps the ceiling of the preset it left, so only that setting
-changes. Picking `Custom` itself keeps every current value.";
 
 /// The graphics settings page.
 pub(super) fn render(docs: &[AssetDoc]) -> String {
-    let mut out = format!("{AUTOGEN_MARKER}\n\n# Graphics settings\n\n{INTRO}\n\n");
+    let mut out = format!(
+        "{AUTOGEN_MARKER}\n\n# Graphics settings\n\nThe settings below change how the scene \
+         is rendered or shown, each under the key a settings row's action names.\n\n{}\n\n",
+        SettingKey::DOC
+    );
     out.push_str("## Quality presets\n\n");
-    out.push_str(PRESETS);
-    out.push_str("\n\n`Auto` picks the tier from the GPU, each launch:\n\n");
+    out.push_str(QualityPreset::DOC);
+    out.push_str("\n\n### `Auto`\n\n");
+    out.push_str(&first_paragraph(QualityPreset::Auto.doc()));
+    out.push_str("\n\n");
     out.push_str(&auto_table());
-    out.push_str("\nThe finest value each tier allows:\n\n");
+    out.push_str("\n### Ceilings\n\n");
     out.push_str(&ceiling_table());
     for group in SettingGroup::ALL.into_iter().filter(|g| g.is_graphics()) {
         out.push_str("\n## ");
         out.push_str(group.name());
+        out.push_str("\n\n");
+        out.push_str(&first_paragraph(group.doc()));
         out.push('\n');
         for key in SettingKey::ALL.into_iter().filter(|k| k.group() == group) {
             out.push('\n');
@@ -95,7 +80,7 @@ fn table_row(cells: &[String]) -> String {
 
 fn auto_table() -> String {
     let mut out = String::from("| GPU | Auto picks |\n| --- | --- |\n");
-    for (tier, gpu) in GPU_CLASSES {
+    for tier in GPU_CLASSES {
         let profile = GpuProfile {
             tier,
             ..GpuProfile::UNKNOWN
@@ -105,14 +90,17 @@ fn auto_table() -> String {
             .strip_prefix("Auto (")
             .and_then(|l| l.strip_suffix(')'))
             .unwrap_or(&label);
+        let gpu = first_paragraph(tier.doc());
+        let gpu = gpu.strip_suffix('.').unwrap_or(&gpu);
         out.push_str(&table_row(&[gpu.to_string(), picked.to_string()]));
     }
     out
 }
 
 fn ceiling_table() -> String {
-    let mut out = String::from("| Setting | Low | Medium | High | Ultra |\n");
-    out.push_str("| --- | --- | --- | --- | --- |\n");
+    let names: Vec<&str> = TIERS.iter().map(|(preset, _)| preset.name()).collect();
+    let mut out = format!("| Setting | {} |\n", names.join(" | "));
+    out.push_str(&table_row(&vec!["---".to_string(); 1 + TIERS.len()]));
     for key in SettingKey::ALL {
         if cap(key, &QualityCeiling::ULTRA).is_some() {
             let cells: Vec<String> = core::iter::once(format!("`{}`", key.as_str()))
@@ -179,7 +167,7 @@ fn setting_section(key: SettingKey, docs: &[AssetDoc]) -> String {
     let mut lines = vec![
         format!("### `{}`", key.as_str()),
         String::new(),
-        key.summary().to_string(),
+        first_paragraph(key.doc()),
         String::new(),
     ];
     if let Some(choices) = choices(key) {
@@ -206,7 +194,7 @@ fn setting_section(key: SettingKey, docs: &[AssetDoc]) -> String {
     if cap(key, &QualityCeiling::ULTRA).is_some() {
         let caps: Vec<String> = TIERS
             .iter()
-            .map(|(name, c)| format!("{name} {}", cap(key, c).unwrap_or_default()))
+            .map(|(preset, c)| format!("{} {}", preset.name(), cap(key, c).unwrap_or_default()))
             .collect();
         lines.push(format!("- **Preset caps:** {}", caps.join(", ")));
     }
@@ -355,8 +343,8 @@ mod tests {
             discrete(8 * GB),
             discrete(32 * GB),
         ];
-        for ((tier, gpu), input) in GPU_CLASSES.iter().zip(examples) {
-            assert_eq!(classify_tier(&input), *tier, "{gpu}");
+        for (tier, input) in GPU_CLASSES.into_iter().zip(examples) {
+            assert_eq!(classify_tier(&input), tier, "{}", tier.doc());
         }
         // The Apple chips the Mid and High rows name.
         let apple = |name: &str| GpuClassInput {
@@ -374,6 +362,45 @@ mod tests {
             ("Apple M2 Ultra", GpuTier::HighDiscrete),
         ] {
             assert_eq!(classify_tier(&apple(name)), tier, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_gpu_classes_rise_with_the_tier_auto_picks() {
+        let rank = |tier| {
+            let profile = GpuProfile {
+                tier,
+                ..GpuProfile::UNKNOWN
+            };
+            let label = preset_label(QualityPreset::Auto, &profile);
+            TIERS
+                .iter()
+                .position(|(preset, _)| label == format!("Auto ({})", preset.name()))
+                .expect("Auto picks a named tier")
+        };
+        let ranks: Vec<usize> = GPU_CLASSES.into_iter().map(rank).collect();
+        assert!(ranks.is_sorted(), "{ranks:?}");
+    }
+
+    // Every tier has a row. Adding a GpuTier stops the match compiling until it
+    // gets an arm here.
+    #[test]
+    fn every_gpu_class_has_a_row() {
+        let all = [
+            GpuTier::Unknown,
+            GpuTier::Integrated,
+            GpuTier::EntryDiscrete,
+            GpuTier::MidDiscrete,
+            GpuTier::HighDiscrete,
+        ];
+        for tier in all {
+            match tier {
+                GpuTier::Unknown
+                | GpuTier::Integrated
+                | GpuTier::EntryDiscrete
+                | GpuTier::MidDiscrete
+                | GpuTier::HighDiscrete => assert!(GPU_CLASSES.contains(&tier), "{tier:?}"),
+            }
         }
     }
 

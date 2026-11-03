@@ -262,8 +262,8 @@ mod tests {
     fn a_path_under_the_working_directory_is_shown_relative() {
         let base = Path::new("/project");
         assert_eq!(
-            shown_path_from(&base.join("worlds").join("a.jsonl"), Some(base)),
-            Path::new("worlds").join("a.jsonl").display().to_string()
+            shown_path_from(&base.join("nested").join("a.jsonl"), Some(base)),
+            Path::new("nested").join("a.jsonl").display().to_string()
         );
         assert_eq!(
             shown_path_from(Path::new("x/y.jsonl"), Some(base)),

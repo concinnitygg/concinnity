@@ -25,17 +25,14 @@ impl EditorHook {
     // against this rather than reading the directory every frame.
     pub(in crate::editor::hook) fn refresh_worlds(&mut self) {
         let open = Path::new(&self.world_path);
-        self.worlds.rows = worlds::files::list(
-            crate::project::worlds_dir().as_deref(),
-            crate::project::content_root().as_deref(),
-        )
-        .into_iter()
-        .map(|w| WorldRow {
-            open: w.path == open,
-            name: w.name,
-            path: w.path.to_string_lossy().into_owned(),
-        })
-        .collect();
+        self.worlds.rows = worlds::files::list(crate::project::content_root().as_deref())
+            .into_iter()
+            .map(|w| WorldRow {
+                open: w.path == open,
+                name: w.name,
+                path: w.path.to_string_lossy().into_owned(),
+            })
+            .collect();
         let max = self.worlds_max_scroll();
         self.worlds.scroll = self.worlds.scroll.min(max);
     }
@@ -212,7 +209,7 @@ impl EditorHook {
     }
 
     // Take the name typed into the prompt: on a usable one the session moves
-    // onto `worlds/<name>.jsonl` and saves there, and on a rejected one the
+    // onto `<name>.jsonl` at the project root and saves there, and on a rejected one the
     // prompt comes back carrying the reason.
     pub(in crate::editor::hook) fn name_untitled_world(&mut self, typed: &str) {
         let existing: Vec<String> = self.worlds.rows.iter().map(|r| r.name.clone()).collect();
@@ -220,7 +217,7 @@ impl EditorHook {
             Ok(name) => name,
             Err(reason) => return self.prompt_world_name(Some(reason)),
         };
-        let Some(dir) = crate::project::worlds_dir() else {
+        let Some(dir) = crate::project::content_root() else {
             return self.prompt_world_name(Some("No project is open".to_string()));
         };
         // Claim the file before writing to it: the listing the name was checked

@@ -77,8 +77,8 @@ mod tests {
     #[test]
     fn a_target_joins_onto_the_including_files_directory() {
         assert_eq!(
-            include_target(Path::new("worlds/w.jsonl"), "../assets/g.jsonl"),
-            Path::new("worlds/../assets/g.jsonl")
+            include_target(Path::new("nested/w.jsonl"), "../assets/g.jsonl"),
+            Path::new("nested/../assets/g.jsonl")
         );
         assert_eq!(
             include_target(Path::new("w.jsonl"), "g.jsonl"),
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn spellings_of_one_file_are_the_same_file() {
         assert!(same_file(
-            Path::new("worlds/../assets/g.jsonl"),
+            Path::new("nested/../assets/g.jsonl"),
             Path::new("./assets/g.jsonl")
         ));
         assert!(!same_file(
@@ -102,7 +102,7 @@ mod tests {
     fn a_relative_path_climbs_out_of_the_including_directory() {
         let root = Path::new("/p");
         assert_eq!(
-            relative_from(&root.join("worlds"), &root.join("assets/ground/a.jsonl")),
+            relative_from(&root.join("nested"), &root.join("assets/ground/a.jsonl")),
             "../assets/ground/a.jsonl"
         );
         assert_eq!(
@@ -110,7 +110,7 @@ mod tests {
             "assets/a.jsonl"
         );
         assert_eq!(
-            relative_from(Path::new("worlds"), Path::new("worlds/../assets/a.jsonl")),
+            relative_from(Path::new("nested"), Path::new("nested/../assets/a.jsonl")),
             "../assets/a.jsonl",
             "relative spellings resolve against the working directory"
         );
@@ -121,7 +121,7 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(shown(&cwd.join("assets/./a.jsonl")), "assets/a.jsonl");
         assert_eq!(
-            shown(Path::new("worlds/../assets/a.jsonl")),
+            shown(Path::new("nested/../assets/a.jsonl")),
             "assets/a.jsonl"
         );
     }

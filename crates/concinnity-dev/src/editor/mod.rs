@@ -221,7 +221,7 @@ pub(crate) fn run_editor(args: LaunchArgs, json_path: Option<&str>) -> std::io::
 // not, so a brand-new file can be named) and loads straight away. With no path
 // the session opens an empty scene and the Worlds panel, which picks the world
 // to work on; the path stands in until it does, so a SAVE before any pick
-// still lands in the project's `worlds/`.
+// still lands at the project root.
 fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
     match json_path {
         Some(p) => (p.to_string(), false),
@@ -234,16 +234,13 @@ fn resolve_edit_target(json_path: Option<&str>) -> (String, bool) {
 // has a window to show the result in. A project with no worlds preselects
 // nothing, which is what the screen's empty listing already says.
 fn start_screen_pick() -> Option<String> {
-    let world = worlds::files::newest(
-        crate::project::worlds_dir().as_deref(),
-        crate::project::content_root().as_deref(),
-    )?;
+    let world = worlds::files::newest(crate::project::content_root().as_deref())?;
     Some(world.path.to_string_lossy().into_owned())
 }
 
 // Where the editor puts a world nobody has saved yet.
 pub(crate) fn unsaved_world_path() -> String {
-    crate::project::worlds_dir().map_or_else(
+    crate::project::content_root().map_or_else(
         || WORLD_JSONL.to_string(),
         |dir| dir.join(WORLD_JSONL).to_string_lossy().into_owned(),
     )
@@ -422,8 +419,7 @@ mod tests {
         let build_root = open_project(dir.path());
 
         // An explicit build, as `cn cook` runs it, over the stale world.
-        let world_path = dir.path().join("worlds").join(WORLD_JSONL);
-        std::fs::create_dir_all(world_path.parent().unwrap()).unwrap();
+        let world_path = dir.path().join(WORLD_JSONL);
         std::fs::write(
             &world_path,
             write_world_jsonl(&renderable_entries("stale")).unwrap(),
@@ -485,18 +481,18 @@ mod tests {
         assert_eq!(path, unsaved_world_path());
     }
 
-    // With no world to discover, the editor opens an unsaved one in the
-    // project's `worlds/`, so the first save lands where a build looks.
+    // With no world to discover, the editor opens an unsaved one at the
+    // project root, so the first save lands where a build looks.
     #[test]
-    fn an_unsaved_world_is_named_inside_the_projects_worlds_directory() {
+    fn an_unsaved_world_is_named_at_the_project_root() {
         // Reading the session's project; opening one is what the guard covers.
         let _guard = crate::test_support::lock();
         crate::test_support::isolate_state_dir();
 
-        let worlds = crate::project::worlds_dir().expect("the harness opened a project");
+        let root = crate::project::content_root().expect("the harness opened a project");
         assert_eq!(
             unsaved_world_path(),
-            worlds.join(WORLD_JSONL).to_string_lossy()
+            root.join(WORLD_JSONL).to_string_lossy()
         );
     }
 }

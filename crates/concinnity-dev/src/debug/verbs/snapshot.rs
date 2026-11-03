@@ -319,7 +319,7 @@ fn reload_shaders(call: &Call<'_>, _: Args) -> Reply {
     let flag = s
         .shader_reload
         .as_ref()
-        .ok_or("shader hot-reload not available (cn run -f only)")?;
+        .ok_or("shader hot-reload not available (concinnity run -f only)")?;
     flag.store(true, Ordering::SeqCst);
     Ok(json!({ "reload_queued": true }))
 }
@@ -329,7 +329,7 @@ fn reload_shaders(call: &Call<'_>, _: Args) -> Reply {
 fn reload_assets(call: &Call<'_>, _: Args) -> Reply {
     let s = call.snapshot();
     let signals = s.reload.as_ref().ok_or(
-        "asset hot-reload not available (cn run -f only; no file-backed textures captured yet)",
+        "asset hot-reload not available (concinnity run -f only; no file-backed textures captured yet)",
     )?;
     signals.request_all();
     Ok(json!({ "reload_queued": true }))

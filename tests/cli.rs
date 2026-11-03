@@ -75,8 +75,8 @@ const HELLO_WORLD: &str =
     "[\"TextLabel\",{\"$id\":\"hello_world\",\"content\":\"Hello, world!\"}]\n";
 
 // An isolated project for one test: a temp directory the spawned binary runs
-// in, so the project it anchors to its working directory -- authored `worlds/`
-// and `assets/`, derived `.concinnity/` -- resolves inside it. Isolation is
+// in, so the project it anchors to its working directory -- authored world
+// files and `assets/`, derived `.concinnity/` -- resolves inside it. Isolation is
 // per-process rather than per-thread, which is what makes these tests safe to
 // run in parallel: the path anchors they steer are process-global, so an
 // in-crate unit test could not do the same without racing every other test in
@@ -102,9 +102,7 @@ impl Project {
     // A project whose discovered world holds `content`.
     fn with_world(content: &str) -> Self {
         let project = Self::empty();
-        let worlds = project.path().join("worlds");
-        std::fs::create_dir_all(&worlds).expect("create worlds dir");
-        std::fs::write(worlds.join("main.jsonl"), content).expect("write world");
+        std::fs::write(project.path().join("world.jsonl"), content).expect("write world");
         project
     }
 
@@ -116,8 +114,7 @@ impl Project {
     // explicit `--file` instead of discovering one.
     fn world_path(&self) -> String {
         self.path()
-            .join("worlds")
-            .join("main.jsonl")
+            .join("world.jsonl")
             .to_string_lossy()
             .into_owned()
     }
@@ -172,15 +169,15 @@ fn every_version_spelling_prints_the_same_line() {
     let expected = stdout(&run(&["version"]));
     assert!(
         expected.starts_with(&format!("concinnity {}", env!("CARGO_PKG_VERSION"))),
-        "cn version printed {expected:?}"
+        "concinnity version printed {expected:?}"
     );
     for args in [&["--version"] as &[&str], &["-V"]] {
         let out = run(args);
-        expect_ok(&out, &format!("cn {}", args.join(" ")));
+        expect_ok(&out, &format!("concinnity {}", args.join(" ")));
         assert_eq!(
             stdout(&out),
             expected,
-            "cn {} printed a different line",
+            "concinnity {} printed a different line",
             args.join(" ")
         );
     }
@@ -230,7 +227,7 @@ fn a_bare_invocation_prints_the_help() {
 fn quiet_keeps_a_commands_own_output() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["-q", "check"]);
-    expect_ok(&out, "cn -q check");
+    expect_ok(&out, "concinnity -q check");
     assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
@@ -250,7 +247,9 @@ fn mcp_session(port: &str, messages: &[&str]) -> String {
             writeln!(stdin, "{message}").expect("write one message");
         }
     }
-    let out = child.wait_with_output().expect("cn mcp exits on EOF");
+    let out = child
+        .wait_with_output()
+        .expect("concinnity mcp exits on EOF");
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
@@ -278,50 +277,25 @@ fn mcp_serves_the_catalog_with_no_app_running() {
     assert!(lines[0].contains(r#""serverInfo""#), "{}", lines[0]);
     assert!(lines[1].contains(r#""name":"ping""#), "{}", lines[1]);
     assert!(lines[2].contains(r#""isError":true"#), "{}", lines[2]);
-    assert!(lines[2].contains("cn run --debug-port"), "{}", lines[2]);
+    assert!(
+        lines[2].contains("concinnity run --debug-port"),
+        "{}",
+        lines[2]
+    );
 }
 
-// `cn list` with no --file discovers the world under `worlds/`,
-// the branch an explicit path never reaches.
+// `concinnity list` with no --file discovers the project's `world.jsonl`, the
+// branch an explicit path never reaches.
 #[test]
 fn list_discovers_the_world_and_prints_the_asset_table() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["list"]);
-    expect_ok(&out, "cn list");
+    expect_ok(&out, "concinnity list");
 
     let printed = stdout(&out);
     assert!(printed.contains("hello_world"), "got: {printed}");
     assert!(printed.contains("TextLabel"), "got: {printed}");
     assert!(printed.contains("1 asset(s)"), "got: {printed}");
-}
-
-// A `world.jsonl` at the project root is a supported location, and discovery
-// finds it.
-#[test]
-fn list_discovers_a_world_at_the_project_root() {
-    let project = Project::empty();
-    std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
-
-    let out = project.cn(&["list"]);
-    expect_ok(&out, "cn list");
-    assert!(stdout(&out).contains("hello_world"), "{}", stdout(&out));
-}
-
-// `worlds/` wins over a root world.jsonl.
-#[test]
-fn a_world_in_worlds_outranks_the_root_one() {
-    let project = Project::with_world(HELLO_WORLD);
-    std::fs::write(
-        project.path().join("world.jsonl"),
-        "[\"Logger\",{\"$id\":\"root_only\"}]\n",
-    )
-    .expect("write root world");
-
-    let out = project.cn(&["list"]);
-    expect_ok(&out, "cn list");
-    let printed = stdout(&out);
-    assert!(printed.contains("hello_world"), "got: {printed}");
-    assert!(!printed.contains("root_only"), "got: {printed}");
 }
 
 // The expanded listing runs the build's front half, so it reports the injected
@@ -330,7 +304,7 @@ fn a_world_in_worlds_outranks_the_root_one() {
 fn list_expanded_tags_injected_assets_with_their_pass() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["list", "--expanded"]);
-    expect_ok(&out, "cn list --expanded");
+    expect_ok(&out, "concinnity list --expanded");
 
     let printed = stdout(&out);
     assert!(printed.contains("hello_world"), "got: {printed}");
@@ -345,7 +319,7 @@ fn list_expanded_tags_injected_assets_with_their_pass() {
 fn list_systems_names_each_system_and_its_gate() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["list", "--systems"]);
-    expect_ok(&out, "cn list --systems");
+    expect_ok(&out, "concinnity list --systems");
 
     let printed = stdout(&out);
     assert!(printed.contains("system(s), in order"), "got: {printed}");
@@ -364,7 +338,7 @@ fn list_systems_names_each_system_and_its_gate() {
 fn explain_prints_an_injected_asset_as_a_pasteable_line() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["explain", "Window"]);
-    expect_ok(&out, "cn explain Window");
+    expect_ok(&out, "concinnity explain Window");
 
     let printed = stdout(&out);
     assert!(printed.contains("injected:companion"), "got: {printed}");
@@ -387,7 +361,7 @@ fn explain_of_an_unknown_name_fails() {
 fn check_validates_the_discovered_world() {
     let project = Project::with_world(HELLO_WORLD);
     let out = project.cn(&["check"]);
-    expect_ok(&out, "cn check");
+    expect_ok(&out, "concinnity check");
     assert!(stdout(&out).contains("passed"), "{}", stdout(&out));
 }
 
@@ -406,7 +380,7 @@ fn cook_compiles_the_discovered_world_and_an_explicit_one() {
     let project = Project::with_world(HELLO_WORLD);
 
     let out = project.cn(&["cook"]);
-    expect_ok(&out, "cn cook");
+    expect_ok(&out, "concinnity cook");
     // The blobs and the lock file land under the project's hidden state
     // directory, not beside the authored world and not in the developer's tree.
     assert!(
@@ -432,7 +406,7 @@ fn cook_compiles_the_discovered_world_and_an_explicit_one() {
     );
 
     let out = project.cn(&["cook", "-f", &project.world_path()]);
-    expect_ok(&out, "cn cook -f");
+    expect_ok(&out, "concinnity cook -f");
 }
 
 // Removing a name the world does not declare reports the ones it does, so a typo
@@ -476,14 +450,15 @@ fn add_without_a_discoverable_world_falls_back_to_world_jsonl() {
     );
 }
 
-// `cn docs` renders the schema compiled into the binary, so it needs neither a
-// world nor the engine's sources: an empty directory gets the whole reference.
+// `concinnity docs` renders the rustdoc compiled into the binary, so it needs
+// neither a world nor the engine's sources: an empty directory gets the whole
+// reference.
 #[test]
-fn docs_writes_the_asset_reference_pages() {
+fn docs_writes_the_reference_pages() {
     let project = Project::empty();
     let root = project.path().to_string_lossy().into_owned();
     let out = project.cn(&["docs", "--root", &root]);
-    expect_ok(&out, "cn docs");
+    expect_ok(&out, "concinnity docs");
 
     assert!(stdout(&out).contains("asset pages in"), "{}", stdout(&out));
     let pages = project.path().join("docs").join("assets");
@@ -493,6 +468,12 @@ fn docs_writes_the_asset_reference_pages() {
         pages.join("MainMenuItem.md").exists(),
         "no MainMenuItem page"
     );
+    let docs = project.path().join("docs");
+    assert!(
+        docs.join("settings").join("graphics.md").exists(),
+        "no settings page"
+    );
+    assert!(docs.join("cli.md").exists(), "no command line page");
 }
 
 // Export refuses a target that is not the host before it builds anything, so
@@ -522,7 +503,7 @@ fn init_skips_a_directory_that_already_has_a_world() {
     std::fs::write(project.path().join("world.jsonl"), HELLO_WORLD).expect("write world");
 
     let out = project.cn(&["init"]);
-    expect_ok(&out, "cn init");
+    expect_ok(&out, "concinnity init");
     assert!(stdout(&out).contains("skipping init"), "{}", stdout(&out));
 }
 
@@ -535,11 +516,8 @@ fn new_scaffolds_and_builds_a_fresh_project() {
     let target_arg = target.to_string_lossy().into_owned();
 
     let out = project.cn(&["new", &target_arg]);
-    expect_ok(&out, "cn new");
-    assert!(
-        target.join("worlds").join("world.jsonl").exists(),
-        "no starter world"
-    );
+    expect_ok(&out, "concinnity new");
+    assert!(target.join("world.jsonl").exists(), "no starter world");
     assert!(stdout(&out).contains("Created"), "{}", stdout(&out));
 }
 
@@ -552,20 +530,16 @@ fn new_accepts_a_pre_existing_empty_directory() {
     std::fs::create_dir_all(&target).expect("create target dir");
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
-    expect_ok(&out, "cn new into an empty directory");
-    assert!(
-        target.join("worlds").join("world.jsonl").exists(),
-        "no starter world"
-    );
+    expect_ok(&out, "concinnity new into an empty directory");
+    assert!(target.join("world.jsonl").exists(), "no starter world");
 }
 
 #[test]
 fn new_refuses_a_directory_that_already_has_a_world() {
     let project = Project::empty();
-    let target = project.path().join("taken").join("worlds");
+    let target = project.path().join("taken");
     std::fs::create_dir_all(&target).expect("create target dir");
     std::fs::write(target.join("world.jsonl"), HELLO_WORLD).expect("write world");
-    let target = target.parent().expect("the project directory");
 
     let out = project.cn(&["new", &target.to_string_lossy()]);
     assert!(!out.status.success(), "an occupied directory should fail");

@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn an_entry_pushed_to_a_new_file_includes_it_from_the_world() {
-        let world = Path::new("worlds/w.jsonl");
+        let world = Path::new("nested/w.jsonl");
         let mut l = EntryList::new(vec![json!({"type": "Scene", "args": {}})]);
         let saved = l.clone();
         let file = Path::new("assets/ground/a.jsonl");
@@ -663,7 +663,7 @@ mod tests {
             "the second joins the first's run"
         );
         assert_eq!(l[1], include("../assets/ground/a.jsonl"));
-        let tag = Path::new("worlds/../assets/ground/a.jsonl");
+        let tag = Path::new("nested/../assets/ground/a.jsonl");
         assert_eq!(l.included_from(2), Some(tag), "tagged as a reload tags it");
         assert_eq!(
             l.unsaved_files(&saved),
@@ -671,7 +671,7 @@ mod tests {
             "the new file is written ahead of the line naming it"
         );
         assert!(
-            l.push_to(json!({"type": "Prop"}), Path::new("worlds/w.jsonl"), world)
+            l.push_to(json!({"type": "Prop"}), Path::new("nested/w.jsonl"), world)
                 .is_err()
         );
     }

@@ -376,7 +376,8 @@ fn texture_slot(texture: Option<&str>, slots: Option<&TextureNameSlots>) -> Resu
     let id =
         asset_id::lookup(name).ok_or_else(|| format!("texture '{name}' not found in interner"))?;
     let slots = slots.ok_or_else(|| {
-        "texture-name resolution requires cn run -f (texture-name slots not captured)".to_string()
+        "texture-name resolution requires concinnity run -f (texture-name slots not captured)"
+            .to_string()
     })?;
     slots
         .0

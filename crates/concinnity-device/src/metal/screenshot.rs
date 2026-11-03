@@ -51,7 +51,7 @@ impl MtlContext {
         // texture keeps the drawable's color surface alive for the read-back.
         let src = self.last_present_texture.clone().ok_or_else(|| {
             RenderError::Other(
-                "screenshot: no frame has been presented yet (capture is cn run -f only)"
+                "screenshot: no frame has been presented yet (capture is concinnity run -f only)"
                     .to_string(),
             )
         })?;

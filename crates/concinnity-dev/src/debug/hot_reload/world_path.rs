@@ -31,9 +31,9 @@ mod tests {
 
     #[test]
     fn a_clone_sees_a_later_set() {
-        let handle = WorldPathHandle::new("worlds/a.jsonl");
+        let handle = WorldPathHandle::new("a.jsonl");
         let clone = handle.clone();
-        handle.set("worlds/b.jsonl");
-        assert_eq!(clone.get(), "worlds/b.jsonl");
+        handle.set("b.jsonl");
+        assert_eq!(clone.get(), "b.jsonl");
     }
 }

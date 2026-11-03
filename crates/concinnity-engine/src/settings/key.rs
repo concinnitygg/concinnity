@@ -24,8 +24,12 @@ macro_rules! setting_keys {
         cycle { $(#[doc = $cycle_doc:literal] $cycle:ident => $cycle_str:literal,)* }
         slider { $(#[doc = $slider_doc:literal] $slider:ident => $slider_str:literal,)* }
     ) => {
-        /// A user-facing setting, keyed by the string a world authors (e.g. `vsync`).
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        /// A setting is a choice a player can change while the app runs, from
+        /// the settings menu or the stored settings file.
+        ///
+        /// A setting that overrides an asset field starts from the world's
+        /// authored value, and leaving it unchanged keeps that value.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, crate::ecs::Documented)]
         pub enum SettingKey {
             $(#[doc = $cycle_doc] $cycle,)*
             $(#[doc = $slider_doc] $slider,)*
@@ -52,23 +56,14 @@ macro_rules! setting_keys {
                 SettingKey::PadRebind(GamepadAction::Interact),
             ];
 
-            /// The `snake_case` key string worlds and settings-row actions use.
+            /// The `snake_case` key string worlds and settings-row actions use,
+            /// such as `vsync`.
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(SettingKey::$cycle => $cycle_str,)*
                     $(SettingKey::$slider => $slider_str,)*
                     SettingKey::KeyRebind(action) => action.setting_key(),
                     SettingKey::PadRebind(action) => action.setting_key(),
-                }
-            }
-
-            /// What the setting does, in one line: its rustdoc. Empty for a
-            /// rebind row, whose action names it.
-            pub const fn summary(self) -> &'static str {
-                match self {
-                    $(SettingKey::$cycle => $cycle_doc.trim_ascii(),)*
-                    $(SettingKey::$slider => $slider_doc.trim_ascii(),)*
-                    SettingKey::KeyRebind(_) | SettingKey::PadRebind(_) => "",
                 }
             }
 
@@ -331,13 +326,14 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "schema")]
     #[test]
-    fn every_row_but_a_rebind_has_a_summary() {
+    fn every_setting_is_documented() {
+        use crate::ecs::schema::Documented;
         for key in SettingKey::ALL {
-            let rebind = matches!(key.kind(), SettingKind::KeyRebind | SettingKind::PadRebind);
-            assert_eq!(key.summary().is_empty(), rebind, "{key:?}");
+            assert!(!key.doc().is_empty(), "{key:?}");
         }
-        assert_eq!(SettingKey::Vsync.summary(), "Vertical sync.");
+        assert_eq!(SettingKey::Vsync.doc(), "Vertical sync.");
     }
 
     #[test]

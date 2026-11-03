@@ -5,7 +5,7 @@
 use super::SettingKey;
 
 /// The settings-menu group a setting belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, crate::ecs::Documented)]
 pub enum SettingGroup {
     /// The window, the display output, and frame pacing.
     Display,

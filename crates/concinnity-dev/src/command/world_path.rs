@@ -19,9 +19,9 @@ pub(crate) fn resolve_world_path(file: Option<&str>) -> std::io::Result<String> 
     }
 }
 
-/// The project's world, found from `worlds/` or the working directory.
+/// The project's world, found from the working directory.
 pub(crate) fn discover_world_path() -> std::io::Result<String> {
-    find_world_jsonl(crate::project::worlds_dir().as_deref(), None)
+    find_world_jsonl()
 }
 
 #[cfg(test)]

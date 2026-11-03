@@ -343,7 +343,7 @@ mod tests {
         (0..n)
             .map(|i| WorldRow {
                 name: format!("world{i}"),
-                path: format!("/p/worlds/world{i}.jsonl"),
+                path: format!("/p/world{i}.jsonl"),
                 open: i == 0,
             })
             .collect()

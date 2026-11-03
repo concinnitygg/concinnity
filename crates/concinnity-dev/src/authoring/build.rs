@@ -491,8 +491,7 @@ mod tests {
         );
         let _project = ProjectGuard;
 
-        let world = dir.path().join("worlds").join("world.jsonl");
-        std::fs::create_dir_all(world.parent().unwrap()).unwrap();
+        let world = dir.path().join("world.jsonl");
         std::fs::write(&world, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
 
         let content = std::fs::read_to_string(&world).unwrap();

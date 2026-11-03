@@ -38,8 +38,8 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-// The tree rooted at the directory the command was run from: `assets/` and
-// `worlds/` in sight there, everything a build derives under `.concinnity/`
+// The tree rooted at the directory the command was run from: `assets/` and the
+// world files in sight there, everything a build derives under `.concinnity/`
 // beside them. Resolved once so every subcommand addresses the same tree.
 //
 // Falls back to the working directory as a relative path when it cannot be
@@ -99,7 +99,6 @@ mod tests {
         let root = tree.content_root();
 
         assert_eq!(tree.assets_dir(), root.join("assets"));
-        assert_eq!(tree.worlds_dir(), root.join("worlds"));
 
         let hidden = root.join(super::STATE_DIR);
         assert_eq!(tree.data_dir(), hidden.join("data"));

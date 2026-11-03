@@ -376,8 +376,7 @@ impl EditorHook {
     // the last save, each atomically (temp file + rename) so a crash mid-write
     // cannot truncate it, returning the paths written. Included files go first,
     // so a world naming a new file is never on disk without it. Directories are
-    // created as needed: a fresh project saves its first world into a
-    // `worlds/` that does not exist yet.
+    // created as needed, for an include or world path that does not exist yet.
     pub(super) fn write_files(&self) -> std::io::Result<Vec<PathBuf>> {
         let mut files = self.entries.unsaved_files(&self.saved);
         if !files.contains(&None) {

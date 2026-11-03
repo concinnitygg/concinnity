@@ -2,10 +2,10 @@
 //! new one has to pass. Pure filesystem work over paths the caller resolves, so
 //! the panel's listing, creation, and deletion are testable without a session.
 //!
-//! A project keeps its worlds in `worlds/*.jsonl`. A `world.jsonl` at the
-//! project root is a supported location too, listed beside them.
+//! A project keeps its worlds at its root as `*.jsonl`, `world.jsonl` among
+//! them.
 
-use concinnity_cook::authoring::world::{WORLD_JSONL, parse_world_jsonl};
+use concinnity_cook::authoring::world::parse_world_jsonl;
 use concinnity_cook::build_only::include::with_includes;
 use std::path::{Path, PathBuf};
 
@@ -29,12 +29,12 @@ pub(crate) struct WorldFile {
     pub modified: SystemTime,
 }
 
-// Every world a project offers, most recently edited first. Ties break by name
-// so a listing is stable when two files share an mtime. Directories that do not
-// exist contribute nothing rather than failing the listing.
-pub(crate) fn list(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> Vec<WorldFile> {
+// Every world in `dir`, most recently edited first. Ties break by name so a
+// listing is stable when two files share an mtime. A directory that does not
+// exist lists nothing rather than failing the listing.
+pub(crate) fn list(dir: Option<&Path>) -> Vec<WorldFile> {
     let mut found: Vec<WorldFile> = Vec::new();
-    if let Some(dir) = worlds_dir
+    if let Some(dir) = dir
         && let Ok(entries) = std::fs::read_dir(dir)
     {
         for entry in entries.flatten() {
@@ -45,14 +45,6 @@ pub(crate) fn list(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> Ve
             if let Some(world) = world_at(&path) {
                 found.push(world);
             }
-        }
-    }
-    if let Some(root) = content_root {
-        let root_world = root.join(WORLD_JSONL);
-        if !found.iter().any(|w| w.path == root_world)
-            && let Some(world) = world_at(&root_world)
-        {
-            found.push(world);
         }
     }
     found.sort_by(|a, b| {
@@ -78,8 +70,8 @@ fn world_at(path: &Path) -> Option<WorldFile> {
 
 // The world a session with none named should open on: the most recently
 // edited one, which is what the start screen preselects and previews.
-pub(crate) fn newest(worlds_dir: Option<&Path>, content_root: Option<&Path>) -> Option<WorldFile> {
-    list(worlds_dir, content_root).into_iter().next()
+pub(crate) fn newest(dir: Option<&Path>) -> Option<WorldFile> {
+    list(dir).into_iter().next()
 }
 
 // Read a world file's authored entries with its includes resolved in place, or
@@ -125,8 +117,8 @@ pub(crate) fn validate_name(name: &str, existing: &[String]) -> Result<String, S
 }
 
 // Create an empty world file under `dir`, failing rather than clobbering when
-// something already sits at the path. The directory is created first: a fresh
-// project has no `worlds/` until its first world.
+// something already sits at the path. The directory is created first if it is
+// missing.
 pub(crate) fn create(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(format!("{name}.{WORLD_EXT}"));
@@ -162,13 +154,12 @@ mod tests {
     #[test]
     fn worlds_list_newest_edited_first() {
         let tree = concinnity_testing::TempTree::new();
-        let dir = tree.path().join("worlds");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tree.path();
         touch(&dir.join("old.jsonl"), 1_000);
         touch(&dir.join("newest.jsonl"), 3_000);
         touch(&dir.join("middle.jsonl"), 2_000);
 
-        let listed = list(Some(&dir), None);
+        let listed = list(Some(dir));
         assert_eq!(names(&listed), ["newest", "middle", "old"]);
         assert_eq!(listed[0].path, dir.join("newest.jsonl"));
     }
@@ -178,38 +169,22 @@ mod tests {
     #[test]
     fn non_world_files_are_skipped_and_ties_break_by_name() {
         let tree = concinnity_testing::TempTree::new();
-        let dir = tree.path().join("worlds");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tree.path();
         touch(&dir.join("b.jsonl"), 5_000);
         touch(&dir.join("a.jsonl"), 5_000);
         touch(&dir.join("notes.txt"), 9_000);
         std::fs::create_dir_all(dir.join("nested.jsonl")).unwrap();
 
-        assert_eq!(names(&list(Some(&dir), None)), ["a", "b"]);
-    }
-
-    // A `world.jsonl` at the project root lists alongside the `worlds/` ones, so
-    // the panel can open it.
-    #[test]
-    fn a_root_world_is_listed_too() {
-        let tree = concinnity_testing::TempTree::new();
-        let dir = tree.path().join("worlds");
-        std::fs::create_dir_all(&dir).unwrap();
-        touch(&dir.join("arena.jsonl"), 1_000);
-        touch(&tree.path().join(WORLD_JSONL), 2_000);
-
-        let listed = list(Some(&dir), Some(tree.path()));
-        assert_eq!(names(&listed), ["world", "arena"]);
-        assert_eq!(listed[0].path, tree.path().join(WORLD_JSONL));
+        assert_eq!(names(&list(Some(dir))), ["a", "b"]);
     }
 
     // Nothing to list is an empty listing, not a failure: a project with no
-    // `worlds/` yet still opens the panel.
+    // worlds yet still opens the panel.
     #[test]
     fn missing_directories_list_nothing() {
         let tree = concinnity_testing::TempTree::new();
-        assert!(list(Some(&tree.path().join("absent")), Some(tree.path())).is_empty());
-        assert!(list(None, None).is_empty());
+        assert!(list(Some(&tree.path().join("absent"))).is_empty());
+        assert!(list(None).is_empty());
     }
 
     // What the start screen preselects: the most recently edited world, or
@@ -217,12 +192,11 @@ mod tests {
     #[test]
     fn newest_is_the_world_a_session_opens_on() {
         let tree = concinnity_testing::TempTree::new();
-        let dir = tree.path().join("worlds");
-        assert!(newest(Some(&dir), Some(tree.path())).is_none());
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tree.path();
+        assert!(newest(Some(dir)).is_none());
         touch(&dir.join("old.jsonl"), 1_000);
         touch(&dir.join("recent.jsonl"), 4_000);
-        assert_eq!(newest(Some(&dir), None).unwrap().name, "recent");
+        assert_eq!(newest(Some(dir)).unwrap().name, "recent");
     }
 
     // Reading gives back the authored entries, reports a file that will not
@@ -301,11 +275,11 @@ mod tests {
     #[test]
     fn create_makes_an_empty_file_and_refuses_to_clobber() {
         let tree = concinnity_testing::TempTree::new();
-        let dir = tree.path().join("worlds");
+        let dir = tree.path().join("project");
         let path = create(&dir, "arena").unwrap();
         assert_eq!(path, dir.join("arena.jsonl"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
-        assert_eq!(names(&list(Some(&dir), None)), ["arena"]);
+        assert_eq!(names(&list(Some(&dir))), ["arena"]);
 
         let err = create(&dir, "arena").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
@@ -314,10 +288,10 @@ mod tests {
     #[test]
     fn delete_removes_the_file_from_the_listing() {
         let tree = concinnity_testing::TempTree::new();
-        let dir = tree.path().join("worlds");
-        let path = create(&dir, "arena").unwrap();
+        let dir = tree.path();
+        let path = create(dir, "arena").unwrap();
         delete(&path).unwrap();
-        assert!(list(Some(&dir), None).is_empty());
+        assert!(list(Some(dir)).is_empty());
         assert_eq!(
             delete(&path).unwrap_err().kind(),
             std::io::ErrorKind::NotFound

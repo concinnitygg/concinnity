@@ -24,13 +24,19 @@ use crate::render::planar_reflection;
 use crate::settings::levels::{AA_MODE, RENDER_SCALE};
 use crate::water::ocean::OceanQuality;
 
-/// The master graphics-quality choice. `Auto` resolves from the detected GPU
-/// tier each launch; a named tier (Low..Ultra) is a fixed ceiling; `Custom`
-/// keeps the ceiling of the preset it was entered from, with the user's per-row
-/// overrides over it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// The graphics-quality preset `graphics_quality` picks: `Auto`, a named tier
+/// (Low, Medium, High, Ultra), or `Custom`.
+///
+/// A tier is a ceiling over the world's authored look: it lowers the settings
+/// below where a world asks for more than the tier allows, and never turns a
+/// feature on. Changing any setting the preset governs switches the preset to
+/// `Custom`, which keeps the ceiling of the preset it left, so only that
+/// setting changes. Picking `Custom` itself keeps every current value.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::ecs::Documented,
+)]
 pub enum QualityPreset {
-    /// Resolve the ceiling from the GPU tier detected at launch.
+    /// Picks the tier from the GPU, each launch.
     Auto,
     /// Fixed low-tier ceiling.
     Low,

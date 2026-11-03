@@ -107,7 +107,7 @@ pub use component::{AssetOrigin, AssetPayload, Component, ResourceAsset, Runtime
 
 // Typed asset references and the authoring tables derived from field types.
 pub use asset_fields::{ActionField, AssetFields, EnumField, FieldTable, RefField, ReferenceField};
-pub use concinnity_derive::{AssetDefault, AssetFields};
+pub use concinnity_derive::{AssetDefault, AssetFields, Documented};
 pub use name_ref::NameRef;
 pub use reference::{AnyAsset, Ref, RefTarget};
 

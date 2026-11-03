@@ -83,16 +83,10 @@ pub(crate) fn data_dir() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.data_dir())
 }
 
-/// The project root authored content sits directly under: `worlds/` and
-/// `assets/` are inside it, and a project that predates `worlds/` keeps its
-/// `world.jsonl` beside them.
+/// The project root authored content sits directly under: its world files, with
+/// `assets/` beside them.
 pub(crate) fn content_root() -> Option<std::path::PathBuf> {
     tree().map(|tree| tree.content_root().to_path_buf())
-}
-
-/// The `worlds/` a named world is looked up in.
-pub(crate) fn worlds_dir() -> Option<std::path::PathBuf> {
-    tree().map(|tree| tree.worlds_dir())
 }
 
 #[cfg(test)]
@@ -113,7 +107,7 @@ mod tests {
         assert_eq!(tree(), None);
         assert_eq!(assets_dir(), None);
         assert_eq!(data_dir(), None);
-        assert_eq!(worlds_dir(), None);
+        assert_eq!(content_root(), None);
         assert_eq!(
             require().unwrap_err().kind(),
             std::io::ErrorKind::NotFound,
@@ -127,7 +121,7 @@ mod tests {
         );
         assert_eq!(assets_dir(), Some(dir.path().join("assets")));
         assert_eq!(data_dir(), Some(dir.path().join("data")));
-        assert_eq!(worlds_dir(), Some(dir.path().join("worlds")));
+        assert_eq!(content_root(), Some(dir.path().to_path_buf()));
         assert!(require().is_ok());
 
         // An app built for the session runs against that same tree.

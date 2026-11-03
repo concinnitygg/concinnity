@@ -7,7 +7,7 @@ mod dispatch;
 mod launch_args;
 mod value_enums;
 
-use clap::Parser;
+use clap::{Command, CommandFactory, FromArgMatches, Parser};
 
 pub(crate) use commands::Commands;
 
@@ -33,7 +33,9 @@ impl Invocation {
     /// turn it on is to relaunch with the variable already set. Call this
     /// before spawning a thread or touching Metal.
     pub fn from_args() -> Self {
-        let cli = Cli::parse();
+        let mut command = terminal_help(Cli::command());
+        let cli = Cli::from_arg_matches_mut(&mut command.get_matches_mut())
+            .unwrap_or_else(|e| e.format(&mut command).exit());
         if let Some(args) = cli.command.launch_args(cli.quiet) {
             concinnity_runtime::reexec_with_metal_validation(args.graphics_validation);
         }
@@ -55,8 +57,8 @@ impl Invocation {
 #[command(about = BANNER, long_about = None)]
 #[command(arg_required_else_help = true)]
 // clap renders its own `-V, --version` as "{name} {version}", which is the
-// pair `command::version_line` prints, so `cn version` and `cn --version`
-// render the same line off one source.
+// pair `command::version_line` prints, so `concinnity version` and
+// `concinnity --version` render the same line off one source.
 #[command(version = crate::command::version_details())]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -67,10 +69,40 @@ pub(crate) struct Cli {
     pub(crate) quiet: bool,
 }
 
+// The tree as a terminal shows it: each command's example blocks, which are
+// Markdown fences in its rustdoc, as indented lines.
+fn terminal_help(command: Command) -> Command {
+    command.mut_subcommands(|sub| match sub.get_long_about() {
+        Some(about) => {
+            let about = unfenced(&about.to_string());
+            sub.long_about(about)
+        }
+        None => sub,
+    })
+}
+
+// `text` with each fenced block's fence lines dropped and its lines indented.
+fn unfenced(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_block = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_block = !in_block;
+            continue;
+        }
+        if in_block {
+            out.push_str("  ");
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.truncate(out.trim_end().len());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::CommandFactory;
 
     // Walks the whole command tree and asserts clap's own invariants (no
     // conflicting args, valid defaults, unique names). A cheap guard against
@@ -97,6 +129,19 @@ mod tests {
         assert!(Cli::try_parse_from(["concinnity", "-v"]).is_err());
         let cli = Cli::try_parse_from(["concinnity", "version"]).unwrap();
         assert!(matches!(cli.command, Commands::Version));
+    }
+
+    #[test]
+    fn a_fenced_example_reads_as_indented_lines() {
+        assert_eq!(
+            unfenced("Run it\n\n```sh\nconcinnity run\n```\n"),
+            "Run it\n\n  concinnity run"
+        );
+        let mut command = terminal_help(Cli::command());
+        let run = command.find_subcommand_mut("run").expect("run");
+        let help = run.render_long_help().to_string();
+        assert!(help.contains("\n  concinnity run\n"), "{help}");
+        assert!(!help.contains("```"), "{help}");
     }
 
     #[test]

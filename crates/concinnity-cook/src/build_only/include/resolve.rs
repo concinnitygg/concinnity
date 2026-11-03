@@ -227,15 +227,15 @@ mod tests {
     #[test]
     fn nested_includes_resolve_relative_to_their_own_file() {
         let dir = tempfile::tempdir().unwrap();
-        let root = write(dir.path(), "worlds/world.jsonl", "");
+        let root = write(dir.path(), "world.jsonl", "");
         write(
             dir.path(),
-            "worlds/parts/outer.jsonl",
+            "parts/outer.jsonl",
             "[\"Window\",{\"$id\":\"outer\"}]\n[\"Include\",{\"path\":\"inner/leaf.jsonl\"}]\n",
         );
         write(
             dir.path(),
-            "worlds/parts/inner/leaf.jsonl",
+            "parts/inner/leaf.jsonl",
             "[\"Window\",{\"$id\":\"leaf\"}]\n",
         );
         let out = resolve_includes(vec![include("parts/outer.jsonl")], Some(&root)).unwrap();

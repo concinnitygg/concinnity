@@ -2,32 +2,38 @@
 
 # Graphics settings
 
-These are the settings a player can change while the app runs, from the settings
-menu or the stored settings file, that change how the scene is rendered or shown.
-Each heading is the key a settings row's action names. A setting that overrides
-an asset field starts from the world's authored value, and leaving it unchanged
-keeps that value.
+The settings below change how the scene is rendered or shown, each under the key a settings row's action names.
+
+A setting is a choice a player can change while the app runs, from
+the settings menu or the stored settings file.
+
+A setting that overrides an asset field starts from the world's
+authored value, and leaving it unchanged keeps that value.
 
 ## Quality presets
 
-`graphics_quality` picks a preset: `Auto`, a named tier (Low, Medium, High,
-Ultra), or `Custom`. A tier is a ceiling over the world's authored look: it lowers
-the settings below where a world asks for more than the tier allows, and never
-turns a feature on. Changing any setting the preset governs switches the preset
-to `Custom`, which keeps the ceiling of the preset it left, so only that setting
-changes. Picking `Custom` itself keeps every current value.
+The graphics-quality preset `graphics_quality` picks: `Auto`, a named tier
+(Low, Medium, High, Ultra), or `Custom`.
 
-`Auto` picks the tier from the GPU, each launch:
+A tier is a ceiling over the world's authored look: it lowers the settings
+below where a world asks for more than the tier allows, and never turns a
+feature on. Changing any setting the preset governs switches the preset to
+`Custom`, which keeps the ceiling of the preset it left, so only that
+setting changes. Picking `Custom` itself keeps every current value.
+
+### `Auto`
+
+Picks the tier from the GPU, each launch.
 
 | GPU | Auto picks |
 | --- | --- |
 | An integrated or low-power GPU | Low |
-| A discrete GPU that reports no VRAM | Medium |
+| A GPU the engine cannot classify, such as a discrete GPU that reports no VRAM | Medium |
 | A discrete GPU with under 6 GB of VRAM, or a base Apple M-series chip | Medium |
 | A discrete GPU with 6 GB to 12 GB of VRAM, an Apple Pro chip, an M1 or M2 Max, or an M1 Ultra | High |
 | A discrete GPU with 12 GB of VRAM or more, an Apple Max from M3 on, or an Apple Ultra from M2 on | Ultra |
 
-The finest value each tier allows:
+### Ceilings
 
 | Setting | Low | Medium | High | Ultra |
 | --- | --- | --- | --- | --- |
@@ -51,6 +57,8 @@ The finest value each tier allows:
 | `auto_exposure` | On | On | On | On |
 
 ## Display
+
+The window, the display output, and frame pacing.
 
 ### `graphics_api`
 
@@ -116,6 +124,8 @@ The camera field of view.
 - **Overrides:** [`Camera3D.fov_y_degrees`](../assets/Camera3D.md). A float. Vertical field-of-view in degrees. Defaults to `75.0`.
 
 ## Quality
+
+The quality preset and the render features and budgets it governs.
 
 ### `graphics_quality`
 
@@ -300,6 +310,8 @@ Automatic exposure adaptation.
 - **Preset caps:** Low On, Medium On, High On, Ultra On
 
 ## Image
+
+The look of the final image: exposure, bloom, grading, and per-effect strengths.
 
 ### `exposure`
 

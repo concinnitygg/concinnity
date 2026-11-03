@@ -197,7 +197,7 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     );
     assert!(
         slots.is_none(),
-        "the texture-name map is captured only under cn run -f"
+        "the texture-name map is captured only under concinnity run -f"
     );
     backend
         .and_then(|slot| slot.0.as_deref_mut())

@@ -11,6 +11,7 @@ mod asset_attrs;
 mod asset_default;
 mod asset_fields;
 mod docs;
+mod documented;
 mod schema;
 mod section;
 mod serde_attrs;
@@ -53,6 +54,18 @@ pub fn derive_asset_fields(input: TokenStream) -> TokenStream {
 pub fn derive_asset_default(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as syn::DeriveInput);
     asset_default::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Generate `concinnity_engine::ecs::schema::Documented` for a struct or enum:
+/// the type's rustdoc, and for an enum each variant's, as the text the
+/// reference pages print. Behind the deriving crate's `schema` feature, so the
+/// text never reaches a shipped player.
+#[proc_macro_derive(Documented)]
+pub fn derive_documented(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    documented::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

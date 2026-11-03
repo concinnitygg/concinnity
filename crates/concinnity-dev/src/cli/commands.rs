@@ -6,99 +6,189 @@ use concinnity_engine::launch::{DEFAULT_DEBUG_PORT, LaunchArgs};
 use super::launch_args::{BenchScope, LaunchArgsArg, RunScope};
 use super::value_enums::BundleFormatArg;
 
+// Each command's rustdoc is its `--help` text and its section of the command
+// line reference: the first line is the summary, and the ```sh block lists
+// examples, each a whole command line.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum Commands {
     /// Create a new app in the current directory
-    #[command(name = "init")]
+    ///
+    /// Writes a starter world to `world.jsonl` and cooks it. A directory that
+    /// already holds a world is left alone.
+    ///
+    /// ```sh
+    /// concinnity init
+    /// ```
+    #[command(name = "init", verbatim_doc_comment)]
     Init,
 
     /// Create a new app in a new directory
-    #[command(name = "new")]
+    ///
+    /// Creates the directory, writes a starter world to `world.jsonl` in it and
+    /// cooks it. A directory that already holds a world is refused.
+    ///
+    /// ```sh
+    /// concinnity new my-app
+    /// ```
+    #[command(name = "new", verbatim_doc_comment)]
     New(NewArgs),
 
     /// Cook an app into binary blobs
-    #[command(name = "cook")]
+    ///
+    /// Compiles the world into the blobs a run loads and writes
+    /// `world-lock.json`, showing each step as it runs and the warnings the
+    /// build raises.
+    ///
+    /// ```sh
+    /// concinnity cook
+    /// concinnity cook -f arena.jsonl --verbose
+    /// ```
+    #[command(name = "cook", verbatim_doc_comment)]
     Cook(CookArgs),
 
     /// Validate an app without cooking it
-    #[command(name = "check")]
+    ///
+    /// ```sh
+    /// concinnity check
+    /// concinnity check -f arena.jsonl
+    /// ```
+    #[command(name = "check", verbatim_doc_comment)]
     Check(CheckArgs),
 
     /// Run an app
-    //
-    // Without -f: the cooked blobs, cooking the discovered world first when
-    // there are none. With -f: the named world cooked in memory and
-    // hot-reloaded. --debug-port serves the debug protocol (MCP) either way.
-    #[command(name = "run")]
+    ///
+    /// Without `-f`, runs the cooked blobs, cooking the discovered world first
+    /// when there are none. With `-f`, cooks the named world in memory and
+    /// reloads it as its files change. `--debug-port` serves the debug
+    /// protocol (MCP) either way.
+    ///
+    /// ```sh
+    /// concinnity run
+    /// concinnity run -f arena.jsonl --debug-port
+    /// concinnity run --graphics-api vulkan --graphics-quality high --no-vsync
+    /// ```
+    #[command(name = "run", verbatim_doc_comment)]
     Run(RunArgs),
 
     /// Benchmark an app and print what its frames cost
-    //
-    // Finds its world the way `run` does.
-    #[command(name = "bench")]
+    ///
+    /// Finds its world the way `run` does, and prints the frame costs when the
+    /// run ends.
+    ///
+    /// ```sh
+    /// concinnity bench
+    /// concinnity bench --start-at 10 --stop-at 40 --screenshot-at 20:mid.png
+    /// ```
+    #[command(name = "bench", verbatim_doc_comment)]
     Bench(BenchArgs),
 
     /// Edit an app in-engine with a save-back HUD
-    //
-    // Compiles world.jsonl in memory (no prior `cn cook` needed, and the blobs
-    // one wrote are neither read nor refreshed here), overlays the editor HUD (a
-    // SAVE button plus an add-asset button), and persists edits by writing
-    // world.jsonl. No command channel unless --debug-port is given (which
-    // stands up the same MCP debug server `cn run` uses, so an agent can
-    // drive an editor session).
-    #[command(name = "edit")]
+    ///
+    /// Cooks the world in memory, so it needs no `concinnity cook` first and
+    /// neither reads nor refreshes the cooked blobs. The editor HUD saves edits
+    /// back to the world file and adds assets. `--debug-port` serves the same
+    /// debug protocol `run` does, so an MCP client can drive the editor.
+    ///
+    /// ```sh
+    /// concinnity edit
+    /// concinnity edit -f arena.jsonl --debug-port 8777
+    /// ```
+    #[command(name = "edit", verbatim_doc_comment)]
     Edit(EditArgs),
 
     /// Add an asset to the active app
-    //
-    // TARGET can be:
-    //   - A file path  (shaders/pbr.vert, models/scene.obj)
-    //     Type is inferred from the file extension or the JSON `type` field.
-    //   - A type name  (Logger, LLM, HttpServer, VulkanRenderer, ...)
-    //     Asset is created with the type's registered default args.
-    #[command(name = "add")]
+    ///
+    /// TARGET is one of:
+    ///
+    /// - A file path, such as `shaders/pbr.vert` or `models/scene.glb`. The type
+    ///   comes from the file extension or the JSON `type` field.
+    /// - A type name, such as `PointLight`. The asset takes the type's
+    ///   registered default args.
+    /// - A whole entry, such as `'["Window", {}]'`.
+    ///
+    /// ```sh
+    /// concinnity add models/scene.glb --template minimal-3d-world
+    /// concinnity add PointLight --id lamp
+    /// concinnity add '["Window", {}]'
+    /// ```
+    #[command(name = "add", verbatim_doc_comment)]
     Add(AddArgs),
 
     /// Remove an asset from the active app by its id
-    //
-    // ID is the `$id` an entry declares in its args (e.g. "pbr_vert"), or the
-    // `<Type>#<ordinal>` handle of an anonymous one (e.g. "Prop#3").
-    #[command(name = "rm")]
+    ///
+    /// ID is the `$id` an entry declares in its args, or the `<Type>#<ordinal>`
+    /// handle of an anonymous one.
+    ///
+    /// ```sh
+    /// concinnity rm lamp
+    /// concinnity rm 'Prop#3'
+    /// ```
+    #[command(name = "rm", verbatim_doc_comment)]
     Rm(RmArgs),
 
     /// List all declared assets
-    #[command(name = "list")]
+    ///
+    /// ```sh
+    /// concinnity list
+    /// concinnity list --expanded --systems
+    /// ```
+    #[command(name = "list", verbatim_doc_comment)]
     List(ListArgs),
 
     /// Print an asset's effective entry from the expanded app
-    //
-    // Prints the full JSONL line for ID as the cook sees it, including
-    // assets that only exist through cook-time expansion or injection. The
-    // output can be pasted into world.jsonl verbatim to override a default.
-    #[command(name = "explain")]
+    ///
+    /// Prints the whole world line for ID as the cook sees it, including assets
+    /// that only exist through cook-time expansion or injection. The line can
+    /// be pasted into the world file as it stands to override a default.
+    ///
+    /// ```sh
+    /// concinnity explain lamp
+    /// concinnity explain 'Window#0' -f arena.jsonl
+    /// ```
+    #[command(name = "explain", verbatim_doc_comment)]
     Explain(ExplainArgs),
 
-    /// Regenerate the asset reference pages
-    //
-    // Renders the asset schema compiled into this build, rustdoc included, so
-    // it needs no source tree.
-    #[command(name = "docs")]
+    /// Regenerate the reference pages
+    ///
+    /// Writes the asset reference, the graphics settings page and the command
+    /// line reference from the rustdoc compiled into this build, so it needs no
+    /// source tree.
+    ///
+    /// ```sh
+    /// concinnity docs
+    /// concinnity docs --root ../engine
+    /// ```
+    #[command(name = "docs", verbatim_doc_comment)]
     Docs(DocsArgs),
 
     /// Package a cooked app for distribution
-    #[command(name = "export")]
+    ///
+    /// ```sh
+    /// concinnity export
+    /// concinnity export --name "My App" --version 1.2.0 --format dir --out build
+    /// ```
+    #[command(name = "export", verbatim_doc_comment)]
     Export(ExportArgs),
 
     /// Serve the debug protocol to an MCP client over stdio
-    //
-    // A child process an MCP client spawns, not a listener: it speaks JSON-RPC
-    // over stdin/stdout and forwards each tool call to a running app's debug
-    // port, which serves the same protocol to any client that posts to it.
-    #[command(name = "mcp")]
+    ///
+    /// An MCP client spawns it as a child process. It speaks JSON-RPC over
+    /// stdin and stdout and forwards each tool call to a running app's debug
+    /// port, which serves the same protocol to any client that posts to it.
+    ///
+    /// ```sh
+    /// concinnity mcp
+    /// concinnity mcp --debug-port 9100
+    /// ```
+    #[command(name = "mcp", verbatim_doc_comment)]
     Mcp(McpArgs),
 
     /// Print the version
-    #[command(name = "version")]
+    ///
+    /// ```sh
+    /// concinnity version
+    /// ```
+    #[command(name = "version", verbatim_doc_comment)]
     Version,
 }
 
@@ -124,7 +214,9 @@ impl Commands {
 // not exist is an error.
 #[derive(Debug, clap::Args)]
 pub(crate) struct WorldArg {
-    /// Path to a world JSONL file (default: the discovered one)
+    /// Path to a world JSONL file
+    ///
+    /// Defaults to the nearest `world.jsonl` up from the current directory.
     #[arg(short = 'f', long)]
     file: Option<String>,
 }
@@ -175,14 +267,16 @@ pub(crate) struct AddArgs {
     pub(crate) target: String,
 
     /// The `$id` written into the world
-    // If omitted, a file target's id is derived from the filename, and a type
-    // name or inline entry without one is added anonymous.
+    ///
+    /// Without one, a file target's id comes from its file name, and a type
+    /// name or an entry without one is added anonymous.
     #[arg(short, long)]
     pub(crate) id: Option<String>,
 
     /// Named scaffold preset used when bootstrapping a new world
-    // Currently only "minimal-3d-world" (a camera, sun, room, and sky on top of
-    // the base scaffold). Ignored when scaffolding doesn't fire.
+    ///
+    /// `minimal-3d-world` adds a camera, sun, room and sky to the base
+    /// scaffold. Ignored when the world already exists.
     #[arg(short = 't', long)]
     pub(crate) template: Option<String>,
 }
@@ -205,14 +299,16 @@ pub(crate) struct ListArgs {
     pub(crate) world: WorldArg,
 
     /// List the expanded world the cook produces
-    // cook-time macros are expanded and injected defaults included,
-    // each row tagged with its provenance (authored / injected / expanded).
+    ///
+    /// Cook-time macros are expanded and injected defaults included, each row
+    /// tagged with where it came from: authored, injected or expanded.
     #[arg(long)]
     pub(crate) expanded: bool,
 
-    /// List the systems this world runs, in order, each with the condition
-    // that includes it. Builds the world and reports `World::system_manifest()`
-    // -- the same gates the runtime runs at start -- so it cannot drift.
+    /// List the systems this world runs, in order, each with the condition that
+    /// includes it
+    // Builds the world and reports `World::system_manifest()`, the same gates
+    // the runtime runs at start, so it cannot drift.
     #[arg(long)]
     pub(crate) systems: bool,
 }
@@ -228,7 +324,7 @@ pub(crate) struct ExplainArgs {
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct DocsArgs {
-    /// Directory to write the docs/assets pages under
+    /// Directory to write the docs/ pages under
     #[arg(long, default_value = ".")]
     pub(crate) root: Option<String>,
 }
@@ -262,7 +358,8 @@ pub(crate) struct ExportArgs {
     #[arg(long)]
     pub(crate) version: Option<String>,
 
-    /// `EntityTarget` platform
+    /// Target platform, which must be this machine's (`macos`, `windows` or
+    /// `linux`)
     #[arg(long)]
     pub(crate) platform: Option<String>,
 
@@ -453,7 +550,7 @@ mod tests {
         assert_eq!(
             port(&["concinnity", "run", "--debug-port"]),
             Some(DEFAULT_DEBUG_PORT),
-            "the same default cn mcp dials"
+            "the same default concinnity mcp dials"
         );
         assert_eq!(
             port(&["concinnity", "run", "--debug-port", "9100"]),

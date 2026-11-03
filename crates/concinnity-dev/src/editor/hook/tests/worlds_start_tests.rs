@@ -34,10 +34,9 @@ fn start_hook(dir: &std::path::Path, previewing: Option<&str>) -> EditorHook {
 // The same session at the frame the window opens on: the listing is up, the
 // pick is preselected, and nothing has been compiled for it yet.
 fn booting_hook(dir: &std::path::Path, previewing: Option<&str>) -> EditorHook {
-    let worlds_dir = dir.join("worlds");
-    let placeholder = worlds_dir.join("world.jsonl");
+    let placeholder = dir.join("world.jsonl");
     let picked = previewing
-        .map(|name| worlds_dir.join(format!("{name}.jsonl")))
+        .map(|name| dir.join(format!("{name}.jsonl")))
         .map(|p| p.to_string_lossy().into_owned());
     EditorHook::new(placeholder.to_string_lossy().into_owned(), Vec::new())
         .with_start_screen(picked)
@@ -128,8 +127,8 @@ fn the_loading_cover_takes_the_render_and_leaves_the_listing() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = booting_hook(dir.path(), Some("lobby"));
     h.viewport = VP;
@@ -254,11 +253,11 @@ fn the_newest_world_is_preselected_and_compiled_once_the_screen_is_up() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
-    let newest = worlds::files::newest(Some(&worlds_dir), None).expect("a world to open on");
+    let newest = worlds::files::newest(Some(root)).expect("a world to open on");
     assert_eq!(newest.name, "lobby", "the most recently edited world");
 
     let mut h = booting_hook(dir.path(), Some("lobby"));
@@ -335,9 +334,9 @@ fn selecting_a_row_previews_it_without_retargeting_the_session() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -373,10 +372,10 @@ fn selecting_an_unparseable_world_reports_it_and_keeps_the_preview() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
-    write_world(&worlds_dir, "broken", &[], 2_000);
-    std::fs::write(worlds_dir.join("broken.jsonl"), "{not json").unwrap();
+    let root = dir.path();
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
+    write_world(root, "broken", &[], 2_000);
+    std::fs::write(root.join("broken.jsonl"), "{not json").unwrap();
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -399,9 +398,9 @@ fn opening_the_previewed_world_commits_it_without_rebuilding() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -441,9 +440,9 @@ fn opening_a_row_that_is_not_showing_compiles_it() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -472,9 +471,9 @@ fn deleting_the_previewed_world_falls_back_to_the_empty_scene() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -509,9 +508,9 @@ fn deleting_another_world_leaves_the_preview_standing() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -534,10 +533,10 @@ fn rapid_selections_coalesce_into_one_rebuild() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "gym", &[prop_entry("bench")], 2_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "gym", &[prop_entry("bench")], 2_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -568,9 +567,9 @@ fn previewing_a_world_leaves_a_half_typed_name_alone() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -601,9 +600,9 @@ fn an_in_session_row_click_opens_behind_the_guard_and_never_previews() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    let arena = write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    let arena = write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = hook_at(&arena, vec![prop_entry("crate_a")]);
     h.open[PanelKey::Worlds] = true;
@@ -648,9 +647,9 @@ fn start_mode_routing_reaches_the_panel_and_nothing_else() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -697,9 +696,9 @@ fn the_row_menus_open_commits_that_row() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    let lobby = write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    let lobby = write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -741,8 +740,8 @@ fn plus_leaves_the_start_screen_for_an_untitled_world() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     settle_rebuild(&mut h);
@@ -761,7 +760,7 @@ fn plus_leaves_the_start_screen_for_an_untitled_world() {
     h.save();
     set_world_name(&mut world, "gym");
     press_modal(&mut h, &mut world, "Save");
-    let created = worlds_dir.join("gym.jsonl");
+    let created = root.join("gym.jsonl");
     assert!(created.exists());
     assert_eq!(h.world_path, created.to_string_lossy());
     assert!(!h.untitled);
@@ -780,7 +779,7 @@ fn scrolling_follows_the_visible_row_window() {
     h.worlds.rows = (0..shown + 3)
         .map(|i| WorldRow {
             name: format!("w{i}"),
-            path: format!("/p/worlds/w{i}.jsonl"),
+            path: format!("/p/w{i}.jsonl"),
             open: false,
         })
         .collect();
@@ -802,9 +801,9 @@ fn a_failed_preview_is_not_adopted_when_its_row_is_opened() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     let lobby = world_row_index(&h, "lobby");
@@ -833,9 +832,9 @@ fn opening_a_pending_preview_still_compiles_it() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = start_hook(dir.path(), Some("lobby"));
     let arena = world_row_index(&h, "arena");
@@ -858,9 +857,9 @@ fn deleting_the_boot_pick_before_it_compiles_drops_the_pick() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
-    write_world(&worlds_dir, "arena", &[prop_entry("crate_a")], 1_000);
-    write_world(&worlds_dir, "lobby", &[prop_entry("desk")], 3_000);
+    let root = dir.path();
+    write_world(root, "arena", &[prop_entry("crate_a")], 1_000);
+    write_world(root, "lobby", &[prop_entry("desk")], 3_000);
 
     let mut h = booting_hook(dir.path(), Some("lobby"));
     let lobby_path = h.worlds.rows[world_row_index(&h, "lobby")].path.clone();
@@ -885,14 +884,9 @@ fn the_scroll_follows_the_window_when_it_grows() {
     let _guard = crate::test_support::lock();
     let dir = concinnity_testing::TempTree::new();
     open_project(dir.path());
-    let worlds_dir = dir.path().join("worlds");
+    let root = dir.path();
     for i in 0..30 {
-        write_world(
-            &worlds_dir,
-            &format!("w{i:02}"),
-            &[prop_entry("a")],
-            1_000 + i,
-        );
+        write_world(root, &format!("w{i:02}"), &[prop_entry("a")], 1_000 + i);
     }
 
     let mut h = start_hook(dir.path(), Some("w29"));

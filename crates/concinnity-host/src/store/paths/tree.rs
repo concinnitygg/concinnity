@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 const ASSETS_DIR: &str = "assets";
 const DATA_DIR: &str = "data";
 const WORLD_LOCK_FILE: &str = "world-lock.json";
-const WORLDS_DIR: &str = "worlds";
 const SAVES_DIR: &str = "saves";
 const PREVIEW_SAVES_DIR: &str = "preview-saves";
 const SETTINGS_FILE: &str = "settings";
@@ -32,7 +31,8 @@ const BUILD_CACHE_SEGMENT: &str = "1";
 ///
 /// Four roots, because the four fall apart on real installs:
 ///
-/// - the **content** root holds what a person authors (`assets/`, `worlds/`),
+/// - the **content** root holds what a person authors (`assets/` and the
+///   world files beside it),
 /// - the **build** root holds what a build produces (`data/`, the world lock),
 ///   split away when the authored content should stay visible and the output
 ///   should not,
@@ -76,7 +76,7 @@ impl StateTree {
     }
 
     /// Move what a build produces to `dir`, leaving the authored content where
-    /// it is: a dev project keeps `assets/` and `worlds/` in sight and its
+    /// it is: a dev project keeps `assets/` and its worlds in sight and its
     /// blobs, lock, and caches out of the way.
     #[must_use]
     pub fn with_build<P: Into<PathBuf>>(mut self, dir: P) -> Self {
@@ -131,11 +131,6 @@ impl StateTree {
     /// The content root's `assets/` directory, holding authored source files.
     pub fn assets_dir(&self) -> PathBuf {
         self.content.join(ASSETS_DIR)
-    }
-
-    /// The content root's `worlds/` directory, holding authored worlds.
-    pub fn worlds_dir(&self) -> PathBuf {
-        self.content.join(WORLDS_DIR)
     }
 
     /// The build root's `data/` directory, holding the blobs a build writes
@@ -238,7 +233,6 @@ mod tests {
         assert_eq!(tree.assets_dir(), root.join("assets"));
         assert_eq!(tree.data_dir(), root.join("data"));
         assert_eq!(tree.world_lock_path(), root.join("world-lock.json"));
-        assert_eq!(tree.worlds_dir(), root.join("worlds"));
         assert_eq!(tree.saves_dir(), root.join("saves"));
         assert_eq!(tree.preview_saves_dir(), root.join("preview-saves"));
         assert_eq!(tree.settings_path(), root.join("settings"));
@@ -268,7 +262,6 @@ mod tests {
         assert_eq!(tree.data_dir(), content.join("data"));
         assert_eq!(tree.world_lock_path(), content.join("world-lock.json"));
         assert_eq!(tree.assets_dir(), content.join("assets"));
-        assert_eq!(tree.worlds_dir(), content.join("worlds"));
         assert_eq!(tree.build_cache_path(), content.join("cache").join("1"));
     }
 
@@ -317,7 +310,6 @@ mod tests {
             .with_build(hidden);
 
         assert_eq!(tree.assets_dir(), project.join("assets"));
-        assert_eq!(tree.worlds_dir(), project.join("worlds"));
 
         assert_eq!(tree.data_dir(), hidden.join("data"));
         assert_eq!(tree.world_lock_path(), hidden.join("world-lock.json"));

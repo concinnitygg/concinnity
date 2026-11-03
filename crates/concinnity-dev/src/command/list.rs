@@ -177,7 +177,7 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
         injected,
         json_path
     );
-    println!("Use `cn explain <id>` to print an entry for overriding.");
+    println!("Use `concinnity explain <id>` to print an entry for overriding.");
     Ok(())
 }
 
