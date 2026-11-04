@@ -68,13 +68,13 @@ macro_rules! draw_list_index {
         pub struct $name(pub u32);
 
         impl $name {
-            /// The position this index names in its draw-object list.
+            /// The position this index names in its list.
             pub const fn index(self) -> usize {
                 self.0 as usize
             }
 
-            /// Wrap a draw-object list position. Debug builds assert that it
-            /// fits in a `u32`.
+            /// Wrap a list position. Debug builds assert that it fits in a
+            /// `u32`.
             pub fn from_usize(i: usize) -> Self {
                 debug_assert!(
                     u32::try_from(i).is_ok(),
@@ -100,6 +100,12 @@ draw_list_index! {
 draw_list_index! {
     /// A slot in a backend's skinned draw-object list ([`SkinnedDrawObject`]).
     SkinnedIndex
+}
+
+draw_list_index! {
+    /// A slot in a backend's shared texture pool, the index a draw's albedo or
+    /// normal-map reference samples.
+    TextureSlot
 }
 
 /// One renderable object: vertex/index slice within the shared GPU buffers,

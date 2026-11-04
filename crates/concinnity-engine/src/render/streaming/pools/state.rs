@@ -20,6 +20,7 @@ use crate::bake::texture::TextureImage;
 use crate::ecs::asset_id::AssetId;
 use crate::geometry::chunk_coord::{self, ChunkCoord};
 use crate::gfx::render_types::DrawIndex;
+use crate::gfx::render_types::TextureSlot;
 use crate::planet::{PlanetEdited, PlanetFrame};
 use crate::render::backend::ChunkMesh;
 use crate::render::frame::ops::{OpFailure, RenderOps};
@@ -329,25 +330,15 @@ impl StreamingState {
                 }
                 OpFailure::TextureUpload { slot } => {
                     if let Some(pool) = &mut pools.texture {
-                        pool.note_upload_failed(slot);
+                        pool.note_upload_failed(slot.index());
                     }
-                    note_resident(
-                        &mut pools.scene_residency,
-                        CHANNEL_TEXTURE,
-                        u32::saturating_from(slot),
-                        false,
-                    );
+                    note_resident(&mut pools.scene_residency, CHANNEL_TEXTURE, slot.0, false);
                 }
                 OpFailure::TextureEvict { slot } => {
                     if let Some(pool) = &mut pools.texture {
-                        pool.note_evict_failed(slot, self.frame_count);
+                        pool.note_evict_failed(slot.index(), self.frame_count);
                     }
-                    note_resident(
-                        &mut pools.scene_residency,
-                        CHANNEL_TEXTURE,
-                        u32::saturating_from(slot),
-                        true,
-                    );
+                    note_resident(&mut pools.scene_residency, CHANNEL_TEXTURE, slot.0, true);
                 }
                 OpFailure::PlanetTileAdd { tile } => {
                     if let Some(tiles) = &mut pools.planet {
@@ -463,7 +454,7 @@ impl StreamingState {
         let frame = self.frame_count;
         pool.update_scores(cam_pos, frame);
         if !loads_frozen {
-            for slot in pool.plan() {
+            for slot in pool.plan().into_iter().map(TextureSlot::from_usize) {
                 ops.record_with(move |backend, out| {
                     if let Err(e) = backend.evict_texture_slot(slot) {
                         tracing::warn!("texture evict slot {}: {}", slot, e);
@@ -471,15 +462,11 @@ impl StreamingState {
                         out.failures.push(OpFailure::TextureEvict { slot });
                     }
                 });
-                note_resident(
-                    residency,
-                    CHANNEL_TEXTURE,
-                    u32::saturating_from(slot),
-                    false,
-                );
+                note_resident(residency, CHANNEL_TEXTURE, slot.0, false);
             }
         }
         pool.drain_completed(frame, |slot, image| {
+            let slot = TextureSlot::from_usize(slot);
             // Marked resident on handoff; a refused upload comes back as an op
             // failure and is rolled back next tick.
             ops.record_with(move |backend, out| {
@@ -489,7 +476,7 @@ impl StreamingState {
                     out.failures.push(OpFailure::TextureUpload { slot });
                 }
             });
-            note_resident(residency, CHANNEL_TEXTURE, u32::saturating_from(slot), true);
+            note_resident(residency, CHANNEL_TEXTURE, slot.0, true);
         });
         pool.drain_failed(|slot| note_failed(residency, CHANNEL_TEXTURE, slot));
         if let Some((resident, pending, unloaded)) =

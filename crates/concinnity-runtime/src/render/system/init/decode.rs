@@ -10,7 +10,9 @@ use super::{
     retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
 };
 use crate::live_edit::shader_overrides::ShaderOverrides;
+use crate::render::system::RenderInitFailure;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::error::RenderError;
 use concinnity_engine::render::environment::terrain::LoadedTerrain;
 use concinnity_engine::render::overlay::maps::{Atlas, AtlasPool};
 use concinnity_engine::render::world_load::scene_deferral::ShaderDeferral;
@@ -444,7 +446,7 @@ impl GraphicsSystem {
         )?;
 
         let (skinned_geometry, skinned_blob_indices) = skinned::decode_skinned(ctx)
-            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .map_err(|e| decode_failed(ctx, &e))
             .ok()?;
 
         // drain Model components into a name-keyed map for Prop lookup
@@ -468,7 +470,7 @@ impl GraphicsSystem {
         let texture_table = ctx.resource::<TextureTable>().unwrap_or(&empty_textures);
         let texture_count = texture_table.len();
         let textures = tables::texture_pool(texture_table)
-            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .map_err(|e| decode_failed(ctx, &e))
             .ok()?;
         let (asset_source_map, texture_name_to_slot) = if capture_sources {
             texture_catalog(
@@ -483,14 +485,14 @@ impl GraphicsSystem {
             ctx.resource::<MaterialTable>().unwrap_or(&empty_materials),
             texture_count,
         )
-        .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+        .map_err(|e| decode_failed(ctx, &e))
         .ok()?;
 
         // Build skinned draw objects, the shared skinned vertex/index buffers,
         // and bind-pose skeletons from the decoded SkinnedMesh geometry. Runs
         // after the material map so SkinnedMesh material references resolve.
         let skinned = skinned::assemble_skinned(&skinned_geometry, &materials.map)
-            .map_err(|e| tracing::error!("GraphicsSystem: {e}"))
+            .map_err(|e| decode_failed(ctx, &e))
             .ok()?;
         let skinned_mesh_source_map = if capture_sources {
             skinned_mesh_source_map(&skinned_geometry, &skinned)
@@ -561,5 +563,39 @@ impl GraphicsSystem {
             color_lut_source,
             text_atlas_data,
         })
+    }
+}
+
+// Log a world decode failure and leave it where `Runtime::start` reports it,
+// so the run fails with its cause rather than stopping on a renderer that drew
+// nothing.
+fn decode_failed(ctx: &mut PipelineContext<'_>, error: &impl core::fmt::Display) {
+    tracing::error!("GraphicsSystem: {error}");
+    ctx.insert_resource(RenderInitFailure(RenderError::Other(format!(
+        "decoding the world's render data: {error}"
+    ))));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use concinnity_engine::ecs::World;
+
+    // A decode failure is left for `Runtime::start` with its cause named.
+    #[test]
+    fn a_decode_failure_is_left_for_start_to_report() {
+        let mut world = World::new();
+        decode_failed(&mut world.context(), &"material 3 names no texture");
+        let failure = world
+            .remove_resource::<RenderInitFailure>()
+            .expect("the failure is published");
+        assert!(
+            failure
+                .0
+                .to_string()
+                .contains("material 3 names no texture"),
+            "{}",
+            failure.0
+        );
     }
 }

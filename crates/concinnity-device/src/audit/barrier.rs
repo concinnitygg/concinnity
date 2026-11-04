@@ -213,7 +213,12 @@ const AUDITS: &[BackendAudit] = &[
                 2,
                 Reason::IntraPass,
             ),
-            ("raymarch.rs", "cmd_pipeline_barrier", 2, Reason::IntraPass),
+            (
+                "raymarch/mod.rs",
+                "cmd_pipeline_barrier",
+                2,
+                Reason::IntraPass,
+            ),
             ("draw/main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
             // SSGI's resolve output, written ahead of the main pass that samples
             // it: the graph models it, but the registry leaves it to the pass,
@@ -298,7 +303,12 @@ const AUDITS: &[BackendAudit] = &[
                 1,
                 Reason::AttachmentLayout,
             ),
-            ("raymarch.rs", ".final_layout(", 2, Reason::AttachmentLayout),
+            (
+                "raymarch/mod.rs",
+                ".final_layout(",
+                2,
+                Reason::AttachmentLayout,
+            ),
             (
                 "post/gbuffer.rs",
                 ".final_layout(",
@@ -351,7 +361,7 @@ const AUDITS: &[BackendAudit] = &[
             // RENDER_TARGET, and `ResolveSubresource` needs them in the resolve
             // states for the length of one call.
             ("draw/main.rs", ".ResourceBarrier(", 2, Reason::IntraPass),
-            ("raymarch.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
+            ("raymarch/mod.rs", ".ResourceBarrier(", 4, Reason::IntraPass),
             // The refraction snapshot: a fragment cannot sample the attachment
             // it is blending into, so the pass copies the scene into a private
             // target and restores the scene to the state it was handed. The

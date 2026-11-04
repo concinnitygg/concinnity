@@ -1,5 +1,6 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::ecs::Ref;
+use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::gfx::render_types::{MaterialUniforms, NO_NORMAL_MAP_SLOT};
 use concinnity_engine::render::backend::recording::{Call, SharedRecording, recording_backend};
 
@@ -67,8 +68,8 @@ fn texture_setup_evicts_every_slot_and_builds_the_pool() {
     );
     assert!(gs.stream_workers.texture.is_some());
     let s = recorded.lock();
-    assert!(s.saw(&Call::EvictTextureSlot(0)));
-    assert!(s.saw(&Call::EvictTextureSlot(1)));
+    assert!(s.saw(&Call::EvictTextureSlot(TextureSlot(0))));
+    assert!(s.saw(&Call::EvictTextureSlot(TextureSlot(1))));
 }
 
 // The three guards that leave a world unstreamed: no config declared, no
@@ -154,7 +155,7 @@ fn an_unresolvable_disk_source_leaves_the_textures_alone() {
         centers(1),
     );
     assert!(gs.stream_pools.texture.is_none());
-    assert!(!recorded.lock().saw(&Call::EvictTextureSlot(0)));
+    assert!(!recorded.lock().saw(&Call::EvictTextureSlot(TextureSlot(0))));
 }
 
 // With a shrinkable seed reserved, the streamed geometry was never baked in:

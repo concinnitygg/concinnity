@@ -1,4 +1,5 @@
 use super::*;
+use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::render::streaming::pools::{StreamingRuntime, StreamingStats};
 
 // The streaming pools graphics init publishes, for the streaming assertions.
@@ -27,7 +28,7 @@ fn streaming_init_evicts_streamable_slots() {
     // The albedo pool slot is evicted to a placeholder at init; the mesh
     // keeps its build-time region (cap covers the whole set) but is evicted
     // so the streamer brings it back nearest-first.
-    assert!(s.saw(&Call::EvictTextureSlot(0)));
+    assert!(s.saw(&Call::EvictTextureSlot(TextureSlot(0))));
     assert!(s.saw(&Call::EvictMesh(DrawIndex(0))));
 }
 
@@ -50,7 +51,7 @@ fn texture_streaming_uploads_evicted_slots() {
                 matches!(
                     c,
                     Call::UpdateTextureSlot {
-                        slot: 0,
+                        slot: TextureSlot(0),
                         w: 2,
                         h: 2
                     }

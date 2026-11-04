@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use concinnity_engine::components::build_skeleton_from_joint_defs;
-use concinnity_engine::gfx::render_types;
+use concinnity_engine::gfx::render_types::{self, TextureSlot};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{
     self, DrawGeometryUpdate, LiveEdit, SkinnedDrawGeometryUpdate,
@@ -51,7 +51,7 @@ pub(super) fn textures(
     tally: &mut Tally,
 ) {
     for tex in textures {
-        let result = backend.update_texture_slot(tex.slot, &tex.image);
+        let result = backend.update_texture_slot(TextureSlot::from_usize(tex.slot), &tex.image);
         tally.record(1, result, || {
             format!(
                 "backend rejected slot {} update for '{}'",

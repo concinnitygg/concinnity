@@ -2,6 +2,7 @@
 // voxel-world and planet streaming pools onto the backend, starts their load
 // threads, and parks both for StreamingSystem.
 
+use concinnity_engine::gfx::render_types::TextureSlot;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -214,7 +215,7 @@ impl GraphicsSystem {
         };
         // Each backend's update_texture_slot rewrites whichever descriptors,
         // argument-buffers, or per-cluster SRVs sample that slot.
-        for slot in 0..slot_count {
+        for slot in (0..slot_count).map(TextureSlot::from_usize) {
             if let Err(e) = backend.evict_texture_slot(slot) {
                 tracing::warn!("GraphicsSystem: texture evict slot {}: {}", slot, e);
             }

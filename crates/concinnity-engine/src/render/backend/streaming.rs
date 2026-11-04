@@ -12,7 +12,7 @@
 
 use crate::components::ShaderPrograms;
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawIndex, MaterialUniforms};
+use crate::gfx::render_types::{DrawIndex, MaterialUniforms, TextureSlot};
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::{PipelineBuilder, PreparedPipelines, SceneHost};
 use alloc::sync::Arc;
@@ -78,7 +78,7 @@ pub trait DrawStreaming: SceneHost {
     /// # Errors
     ///
     /// Returns an error if the slot is out of range.
-    fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()>;
     /// Replace a texture slot's image after a streaming upload.
     ///
     /// # Errors
@@ -87,7 +87,7 @@ pub trait DrawStreaming: SceneHost {
     /// uploaded.
     fn update_texture_slot(
         &mut self,
-        slot: usize,
+        slot: TextureSlot,
         image: &crate::bake::texture::TextureImage,
     ) -> RenderResult<()>;
 

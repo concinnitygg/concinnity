@@ -276,7 +276,7 @@ pub(in crate::metal) fn build_raymarch_pipeline(
 // *not* included: this library defines only `raymarch_shadow_vertex` /
 // `raymarch_shadow_fragment`), then builds a render pipeline with no color
 // attachment and a `Depth32Float` depth attachment matching the CSM
-// `shadow_map`. Mirrors `directx/raymarch.rs::compile_volume_shadow_pso`.
+// `shadow_map`. Mirrors `directx::raymarch::compile_volume_shadow_pso`.
 pub(in crate::metal) fn build_raymarch_shadow_pipeline(
     device: &ProtocolObject<dyn MTLDevice>,
     programs: &SdfPrograms,

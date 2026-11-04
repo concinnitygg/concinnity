@@ -1,6 +1,7 @@
 use super::*;
 use crate::render::streaming::texture::{self, PayloadSource};
 use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::render::backend::recording::{Call, recording_backend};
 use concinnity_engine::render::frame::ops::RenderOps;
 use concinnity_engine::render::frame::queues::RenderQueues;
@@ -67,7 +68,7 @@ fn the_texture_pool_loads_through_its_thread() {
         (runtime.state.streaming_stats().texture == Some((2, 0, 0))).then_some(())
     });
     let s = recorded.lock();
-    for slot in [0, 1] {
+    for slot in [TextureSlot(0), TextureSlot(1)] {
         assert!(s.saw(&Call::UpdateTextureSlot { slot, w: 1, h: 1 }));
     }
 }

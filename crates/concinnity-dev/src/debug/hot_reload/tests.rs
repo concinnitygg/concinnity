@@ -7,6 +7,7 @@ use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{EventCursor, World};
+use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_engine::gfx::{mesh_payload, render_types};
 use concinnity_engine::input::snapshot::InputSnapshot;
@@ -772,16 +773,16 @@ impl backend::SkinnedDraws for RecordingBackend {
 }
 
 impl backend::DrawStreaming for RecordingBackend {
-    fn evict_texture_slot(&mut self, _: usize) -> error::RenderResult<()> {
+    fn evict_texture_slot(&mut self, _: TextureSlot) -> error::RenderResult<()> {
         Ok(())
     }
     fn update_texture_slot(
         &mut self,
-        slot: usize,
+        slot: TextureSlot,
         image: &TextureImage,
     ) -> error::RenderResult<()> {
         self.texture_updates
-            .push((slot, image.width(), image.height()));
+            .push((slot.index(), image.width(), image.height()));
         if self.fail_texture_updates {
             return Err(error::RenderError::Other("texture update rejected".into()));
         }

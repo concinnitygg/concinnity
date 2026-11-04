@@ -89,9 +89,9 @@ impl SkinnedDraws for MtlContext {
 
 impl DrawStreaming for MtlContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()>;
+        fn evict_texture_slot(&mut self, slot: concinnity_engine::gfx::render_types::TextureSlot) -> RenderResult<()>;
         fn evict_world_shader(&mut self, bucket: u32);
-        fn update_texture_slot(&mut self, slot: usize, image: &bake::texture::TextureImage) -> RenderResult<()>;
+        fn update_texture_slot(&mut self, slot: concinnity_engine::gfx::render_types::TextureSlot, image: &bake::texture::TextureImage) -> RenderResult<()>;
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> RenderResult<()>;
     }
 

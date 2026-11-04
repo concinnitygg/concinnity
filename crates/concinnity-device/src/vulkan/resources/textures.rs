@@ -6,6 +6,7 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::bake;
+use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use super::super::context::VkContext;
@@ -81,9 +82,10 @@ impl VkContext {
     // hot-reload paths below.
     pub(crate) fn update_texture_slot(
         &mut self,
-        slot: usize,
+        slot: TextureSlot,
         image: &bake::texture::TextureImage,
     ) -> RenderResult<()> {
+        let slot = slot.index();
         if slot >= self.scene.textures.len() {
             return Err(RenderError::Other(format!(
                 "update_texture_slot: slot {} out of range (pool size {})",
@@ -128,7 +130,7 @@ impl VkContext {
     }
 
     // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
         let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
         self.update_texture_slot(slot, &gray)
     }

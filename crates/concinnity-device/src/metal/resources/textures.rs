@@ -4,6 +4,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::bake;
+use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use crate::metal::context::MtlContext;
@@ -18,9 +19,10 @@ impl MtlContext {
     // next `draw_frame` with no pipeline rebuild.
     pub(crate) fn update_texture_slot(
         &mut self,
-        slot: usize,
+        slot: TextureSlot,
         image: &bake::texture::TextureImage,
     ) -> RenderResult<()> {
+        let slot = slot.index();
         texture_slot_in_range("update_texture_slot", slot, self.scene.textures.len())?;
         self.scene.textures[slot] = upload_texture_image(&self.hw.allocator, image)?;
         self.arg_buffers.texture_epoch += 1;
@@ -33,7 +35,8 @@ impl MtlContext {
     // not yet resident; a later `update_texture_slot` brings the real texture
     // back. The gray is distinct from the white no-texture fallback so a
     // not-yet-streamed slot reads differently under inspection.
-    pub(crate) fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
+    pub(crate) fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
+        let slot = slot.index();
         texture_slot_in_range("evict_texture_slot", slot, self.scene.textures.len())?;
         self.scene.textures[slot] =
             upload_texture(&self.hw.allocator, 1, 1, &[128, 128, 128, 255])?;

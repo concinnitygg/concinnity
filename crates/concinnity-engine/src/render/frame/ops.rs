@@ -6,6 +6,7 @@
 //! boundary with the snapshot that carries it.
 
 use crate::geometry::chunk_coord::ChunkCoord;
+use crate::gfx::render_types::TextureSlot;
 use crate::render::backend::RenderBackend;
 use crate::render::backend::error::{RenderError, RenderResult};
 use alloc::boxed::Box;
@@ -27,13 +28,13 @@ pub enum OpFailure {
     /// to unloaded and retries.
     TextureUpload {
         /// The texture-pool slot that failed to upload.
-        slot: usize,
+        slot: TextureSlot,
     },
     /// A streamed texture eviction failed; the texture is still on the GPU, so
     /// the streamer restores the slot to resident and its bytes count again.
     TextureEvict {
         /// The texture-pool slot that failed to evict.
-        slot: usize,
+        slot: TextureSlot,
     },
     /// A chunk-mesh add failed; the chunk's tracking and draw slot roll back.
     ChunkAdd {

@@ -8,6 +8,7 @@ use super::{
     LiveEdit, RenderBackend, RenderResult, RenderTuning, SceneEffects, SceneHost, SkinnedDraws,
     WindowControl,
 };
+use crate::gfx::render_types::TextureSlot;
 
 /// A `RenderBackend` that accepts every call and draws nothing.
 pub struct NullBackend;
@@ -50,12 +51,12 @@ impl SkinnedDraws for NullBackend {
 }
 
 impl DrawStreaming for NullBackend {
-    fn evict_texture_slot(&mut self, _slot: usize) -> RenderResult<()> {
+    fn evict_texture_slot(&mut self, _slot: TextureSlot) -> RenderResult<()> {
         Ok(())
     }
     fn update_texture_slot(
         &mut self,
-        _slot: usize,
+        _slot: TextureSlot,
         _image: &crate::bake::texture::TextureImage,
     ) -> RenderResult<()> {
         Ok(())

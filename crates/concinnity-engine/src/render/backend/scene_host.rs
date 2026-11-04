@@ -146,12 +146,15 @@ mod tests {
     }
 
     impl DrawStreaming for Hosted {
-        fn evict_texture_slot(&mut self, _: usize) -> RenderResult<()> {
+        fn evict_texture_slot(
+            &mut self,
+            _: crate::gfx::render_types::TextureSlot,
+        ) -> RenderResult<()> {
             Ok(())
         }
         fn update_texture_slot(
             &mut self,
-            _: usize,
+            _: crate::gfx::render_types::TextureSlot,
             _: &crate::bake::texture::TextureImage,
         ) -> RenderResult<()> {
             Ok(())

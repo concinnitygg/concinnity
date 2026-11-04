@@ -1,10 +1,9 @@
 //! Per-frame encoder for the raymarched SDF volume pass on D3D12. Runs at
 //! `PassId::Raymarch`, between `AutoExposure` and `Decals` on the
 //! `hdr_resolve` RMW chain. Each `SdfVolume` rasterizes one face set of
-//! its world-space bounding box and runs a user-authored HLSL fragment
-//! shader that sphere-traces the SDF inside the box. HLSL port of
-//! `src/metal/raymarch.rs`: same shader interface, same
-//! depth-compositing rules.
+//! its world-space bounding box and runs the single-source `raymarch.hlsl`
+//! fragment that sphere-traces the SDF inside the box, with the same
+//! depth-compositing rules as the other backends.
 //!
 //! DX architecture:
 //!   * One `ID3D12PipelineState` per `SdfVolume` (built at init from the

@@ -494,7 +494,12 @@ fn an_out_of_memory_texture_evict_raises_pressure_and_restores_residency() {
         matches!(f, OpFailure::TextureEvict { .. })
     });
     assert!(outcome.memory_pressure);
-    assert_eq!(outcome.failures, vec![OpFailure::TextureEvict { slot: 1 }]);
+    assert_eq!(
+        outcome.failures,
+        vec![OpFailure::TextureEvict {
+            slot: TextureSlot(1)
+        }]
+    );
     assert_eq!(progress(&state), Some(0.0));
 
     state.apply_op_failures(&outcome.failures, &mut q.slots);
@@ -597,7 +602,7 @@ fn completed_loads_are_uploaded_to_the_backend() {
         texture(s).stats().0 == 2 && mesh(s).stats().0 == 2
     });
     let s = recorded.lock();
-    for slot in [0, 1] {
+    for slot in [TextureSlot(0), TextureSlot(1)] {
         assert!(s.saw(&Call::UpdateTextureSlot { slot, w: 1, h: 1 }));
     }
     for draw_idx in [DrawIndex(10), DrawIndex(11)] {
@@ -643,7 +648,11 @@ fn moving_the_camera_evicts_the_now_distant_item_over_the_cap() {
         &view([100.0, 0.0, 0.0], IDENTITY4, false),
     );
     let s = recorded.lock();
-    assert!(s.saw(&Call::EvictTextureSlot(0)), "{:?}", s.calls);
+    assert!(
+        s.saw(&Call::EvictTextureSlot(TextureSlot(0))),
+        "{:?}",
+        s.calls
+    );
     assert!(s.saw(&Call::EvictMesh(DrawIndex(10))), "{:?}", s.calls);
 }
 

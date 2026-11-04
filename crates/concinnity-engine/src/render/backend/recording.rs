@@ -16,7 +16,7 @@ use crate::bake::texture;
 use crate::components::{DirectionalLight, WindowMode};
 use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{
-    DrawIndex, DrawObject, MaterialUniforms, SkinnedDrawObject, SkinnedIndex,
+    DrawIndex, DrawObject, MaterialUniforms, SkinnedDrawObject, SkinnedIndex, TextureSlot,
 };
 use crate::gfx::{render_types, view_modes};
 use crate::input::snapshot::InputSnapshot;
@@ -136,9 +136,9 @@ pub enum Call {
     UpdateSkinnedPose(SkinnedIndex),
     UpdateSkinnedModel(SkinnedIndex),
     RevealSkinnedInstance(SkinnedIndex),
-    EvictTextureSlot(usize),
+    EvictTextureSlot(TextureSlot),
     UpdateTextureSlot {
-        slot: usize,
+        slot: TextureSlot,
         w: u32,
         h: u32,
     },
@@ -547,7 +547,7 @@ impl DrawStreaming for RecordingBackend {
         self.state.lock().pipeline_builder.clone()
     }
 
-    fn evict_texture_slot(&mut self, slot: usize) -> RenderResult<()> {
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
         let mut s = self.state.lock();
         s.calls.push(Call::EvictTextureSlot(slot));
         s.fail_texture_evict.clone().map_or(Ok(()), Err)
@@ -555,7 +555,7 @@ impl DrawStreaming for RecordingBackend {
 
     fn update_texture_slot(
         &mut self,
-        slot: usize,
+        slot: TextureSlot,
         image: &texture::TextureImage,
     ) -> RenderResult<()> {
         let mut s = self.state.lock();
@@ -833,7 +833,7 @@ mod tests {
     fn a_failure_knob_fails_its_call() {
         let (state, mut backend) = recording_backend();
         state.lock().fail_texture_evict = Some(RenderError::Other("evict".to_string()));
-        assert!(backend.evict_texture_slot(1).is_err());
-        assert!(state.lock().saw(&Call::EvictTextureSlot(1)));
+        assert!(backend.evict_texture_slot(TextureSlot(1)).is_err());
+        assert!(state.lock().saw(&Call::EvictTextureSlot(TextureSlot(1))));
     }
 }

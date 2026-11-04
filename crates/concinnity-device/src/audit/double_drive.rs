@@ -130,10 +130,10 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     // length of one call, so each pass borrows them and hands them back.
     ("directx", "draw/main.rs", "hdr.color"),
     ("directx", "draw/main.rs", "hdr_scene_target()"),
-    ("directx", "raymarch.rs", "hdr.color"),
+    ("directx", "raymarch/mod.rs", "hdr.color"),
     // Raymarch also snapshots the scene for refractive user shaders: a fragment
     // cannot sample the attachment it is writing.
-    ("directx", "raymarch.rs", "hdr_scene_target()"),
+    ("directx", "raymarch/mod.rs", "hdr_scene_target()"),
     // The translucent pass's refraction snapshot, on whichever scene the graph
     // handed it.
     ("directx", "transparent.rs", "post_scene_target()"),
