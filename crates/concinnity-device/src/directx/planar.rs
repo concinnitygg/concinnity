@@ -72,8 +72,7 @@ const MIRROR_CBV_SIZE: u64 =
 // target and resolve out of it a plane at a time, the way the probe shares one
 // face target across its six faces. Single-sampled planes have nothing to resolve,
 // so each renders straight into its own resolve through a render-target view of
-// it: no shared target, and no full-target copy per plane. Mirrors the Vulkan
-// planar set, whose shared color is likewise `Some` only under MSAA.
+// it: no shared target, and no full-target copy per plane.
 enum PlanarColor {
     // The shared target every plane renders into, resolved into the plane's own
     // resolve before the next plane overwrites it.

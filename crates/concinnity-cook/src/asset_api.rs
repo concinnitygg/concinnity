@@ -10,8 +10,8 @@ use crate::authoring::registry::{RegisteredType, Registration};
 /// Incoming request to construct an asset from an external caller
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AssetRequest {
-    /// type name as it appears in the world declaration ("Mesh", "Material", ...)
-    /// case-insensitive; underscores ignored
+    /// The exact registered type name, as it appears in a world declaration
+    /// ("Mesh", "Material", ...).
     pub asset_type: String,
     /// constructor args. If None, the type's `default_args` are used
     #[serde(default)]

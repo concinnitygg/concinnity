@@ -10,11 +10,11 @@ use concinnity_engine::render::backend::error::RenderResult;
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use super::compute::{ComputeCull, main_cull_set};
+use crate::vulkan::builtin_shaders::{CULL_LATE, CompileProgram as _};
 use crate::vulkan::context::HDR_FORMAT;
 use crate::vulkan::descriptor_layout::PoolSizes;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedPipeline, OwnedRenderPass};
-use crate::vulkan::pipeline::compile_cull_shader_late;
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::render_pass::create_main_render_pass_two_pass;
 use crate::vulkan::resources::alloc_descriptor_sets;
@@ -98,7 +98,7 @@ pub(super) fn build_two_pass_cull(
         let status_size = n * size_of::<u32>() as u64;
 
         // Late cull pipeline (`CULL_LATE`, shared layout).
-        let cs_late = compile_cull_shader_late(hot_reload)?;
+        let cs_late = CULL_LATE.compile(hot_reload)?;
         let late_pipeline =
             compute_pipeline(device, pipeline_layout.handle(), &cs_late, "cull late")?;
 

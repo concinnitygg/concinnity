@@ -1,6 +1,6 @@
 //! The wall-clock side of the simulation clock. Runs at the runtime level, after
 //! the frame pacer and before the world steps: each frame's wall delta feeds
-//! core's [`TickAccumulator`], which publishes the frame's clock.
+//! the engine's [`TickAccumulator`], which publishes the frame's clock.
 
 use concinnity_engine::ecs::{TickAccumulator, World};
 use std::num::NonZeroU32;

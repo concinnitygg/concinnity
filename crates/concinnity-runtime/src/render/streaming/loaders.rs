@@ -1,5 +1,5 @@
-//! The load threads behind core's streaming pools: each pool's worker and the
-//! deferred shader builds, lent to core's `StreamingSystem` as its
+//! The load threads behind the engine's streaming pools: each pool's worker and the
+//! deferred shader builds, lent to the engine's `StreamingSystem` as its
 //! `StreamLoaders`. Graphics init builds them and publishes them inside the
 //! `StreamingRuntime` resource.
 

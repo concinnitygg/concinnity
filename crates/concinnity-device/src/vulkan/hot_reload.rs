@@ -17,10 +17,11 @@ use concinnity_engine::render::shader::world_pipelines::{
 use super::context::VkContext;
 use super::pipeline::{
     BindlessSpv, BucketPipelines, build_bucket_pipeline, compile_bindless_shaders,
-    compile_composite_shaders, compile_cull_shader, compile_cull_shader_late, compile_text_shaders,
-    create_composite_pipeline, create_text_pipeline,
+    compile_composite_shaders, compile_text_shaders, create_composite_pipeline,
+    create_text_pipeline,
 };
 use super::pipeline_desc::compute_pipeline;
+use crate::vulkan::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
 // Rebuild a feature's pipeline(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -38,12 +39,12 @@ impl VkContext {
     // Rebuild every built-in Vulkan pipeline from disk-resident source.
     // Each pipeline is constructed into a temporary first; only when every
     // rebuild succeeds does the context swap them in (after destroying
-    // the displaced ones). Any GLSL compile or pipeline-create failure
+    // the displaced ones). Any shader compile or pipeline-create failure
     // logs the underlying message and leaves the live pipelines untouched:
     // a typo in a shader edit won't crash the running session.
     //
-    // Covers every runtime-bundled pipeline whose source lives in
-    // `vulkan/shaders/`: composite, text, bloom (prefilter / downsample /
+    // Covers every runtime-bundled pipeline built from the engine's HLSL
+    // sources (`builtin_shaders`): composite, text, bloom (prefilter / downsample /
     // upsample), every shader bucket's main and G-buffer pre-pass pair (when
     // the bindless main pass is live), GPU-cull compute, auto-exposure
     // (build + average), projected-decal, volumetric-fog, SSAO (depth copy,
@@ -137,13 +138,11 @@ impl VkContext {
             .as_ref()
             .map(|kernels| {
                 let layout = kernels.pipeline_layout.handle();
-                let pipeline = compute_pipeline(device, layout, &compile_cull_shader(hr)?, "cull")?;
+                let pipeline = compute_pipeline(device, layout, &CULL_EARLY.compile(hr)?, "cull")?;
                 let late = kernels
                     .pipeline_late
                     .as_ref()
-                    .map(|_| {
-                        compute_pipeline(device, layout, &compile_cull_shader_late(hr)?, "cull")
-                    })
+                    .map(|_| compute_pipeline(device, layout, &CULL_LATE.compile(hr)?, "cull"))
                     .transpose()?;
                 Ok::<_, RenderError>((pipeline, late))
             })

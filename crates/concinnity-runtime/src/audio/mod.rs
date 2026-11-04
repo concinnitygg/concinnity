@@ -1,4 +1,4 @@
-//! The kira adapter behind core's audio: the [`AudioOut`] a world's
+//! The kira adapter behind the engine's audio: the [`AudioOut`] a world's
 //! `AudioSystem` plays through, its background decode thread, and authored
 //! attenuation mapped onto kira's spatial tracks. kira (and its cpal /
 //! symphonia dependencies) is confined to this module.

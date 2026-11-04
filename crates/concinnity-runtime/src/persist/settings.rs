@@ -1,8 +1,8 @@
-//! The settings-menu choices on disk: core's `StoredSettings` at the state
+//! The settings-menu choices on disk: the engine's `StoredSettings` at the state
 //! root's `settings`, the mutable sibling of the build-regenerated `data`.
 //! Stored as CBOR, binary like the data blobs but self-describing; bincode,
 //! which the data blobs use, is positional and safe only for files regenerated
-//! each build. Core's `SettingsSystem` writes through [`FileStore`] on a
+//! each build. The engine's `SettingsSystem` writes through [`FileStore`] on a
 //! background thread whenever its revision moves.
 
 use concinnity_engine::settings::StoredSettings;

@@ -2,14 +2,14 @@ use super::*;
 use alloc::string::String;
 
 use crate::components::{
-    CameraTrackArgs, CameraTravel, PropCollider, PropColliderShape, RollingDrive,
+    Camera3D, CameraTrackArgs, CameraTravel, PropCollider, PropColliderShape, RollingDrive,
 };
 use crate::ecs::World;
 use crate::planet::{
     FrameRebases, LocalFrame, PlanetGravity, PlanetGroundPatch, PlanetShape, Rebase, ground_patch,
 };
 use concinnity_core::math::narrow_f32;
-use concinnity_core::math::vec3::{dot, length, sub};
+use concinnity_core::math::vec3::{dot, length, scale, sub};
 
 const RADIUS: f32 = 0.5;
 

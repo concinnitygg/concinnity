@@ -49,7 +49,7 @@ impl AnimationSystem {
         weights: Vec<f32>,
         duration_secs: f32,
     ) -> Result<(), String> {
-        let target = self.name_index.get(target);
+        let target = self.resolve_target("anim-crossfade", target)?;
         self.apply_crossfade(target, weights, duration_secs, self.clip_secs)
     }
 
@@ -61,7 +61,7 @@ impl AnimationSystem {
     /// Returns an error if the target is unknown, has no animation graph, or
     /// the graph declares no parameter `name`.
     pub fn set_param(&mut self, target: AssetId, name: &str, value: f32) -> Result<(), String> {
-        let target = self.name_index.get(target);
+        let target = self.resolve_target("anim-param", target)?;
         self.queue_param(target, name, value)
     }
 
@@ -71,8 +71,23 @@ impl AnimationSystem {
     ///
     /// Returns an error if the target is unknown or has no animation graph.
     pub fn graph_state(&mut self, target: AssetId) -> Result<GraphStateReport, String> {
-        let target = self.name_index.get(target);
+        let target = self.resolve_target("anim-state", target)?;
         self.graph_report(target)
+    }
+
+    // The handle of the mesh named `target`, or the command's unknown-target
+    // error. Without a renderer's index the authored names and handles share
+    // one id space, so the id is the handle.
+    fn resolve_target(&self, verb: &str, target: AssetId) -> Result<SkinnedMeshHandle, String> {
+        match &self.name_index {
+            None => Ok(SkinnedMeshHandle::new(target.0)),
+            Some(index) => index.get(target).ok_or_else(|| {
+                format!(
+                    "{verb}: no SkinnedMesh is loaded under name id {}",
+                    target.0
+                )
+            }),
+        }
     }
 
     // Set up a weight ramp on a flat bucket from its current weights to
@@ -456,7 +471,7 @@ mod tests {
     #[test]
     fn crossfade_translates_the_name_to_its_bucket() {
         let mut sys = flat_system(2);
-        sys.name_index = name_index();
+        sys.name_index = Some(name_index());
         sys.crossfade(NAME, vec![0.0, 1.0], 0.25).unwrap();
         let tr = transition(&sys).expect("the named target's bucket ramped");
         assert_eq!(tr.target_weights, vec![0.0, 1.0]);
@@ -468,7 +483,7 @@ mod tests {
     #[test]
     fn crossfade_anchors_at_the_clip_clock() {
         let mut sys = flat_system(2);
-        sys.name_index = name_index();
+        sys.name_index = Some(name_index());
         sys.clip_secs = 7.5;
         sys.crossfade(NAME, vec![0.0, 1.0], 1.0).unwrap();
         assert_eq!(transition(&sys).unwrap().start_secs, 7.5);
@@ -478,7 +493,7 @@ mod tests {
     #[test]
     fn set_param_and_graph_state_translate_the_name() {
         let mut sys = graph_system(0.0);
-        sys.name_index = name_index();
+        sys.name_index = Some(name_index());
         sys.set_param(NAME, "speed", 4.0).unwrap();
         assert_eq!(sys.graph_state(NAME).unwrap().state, "idle");
     }
@@ -490,5 +505,16 @@ mod tests {
         assert!(sys.crossfade(NAME, vec![1.0], 0.0).is_err());
         assert!(sys.set_param(NAME, "speed", 1.0).is_err());
         assert!(sys.graph_state(NAME).is_err());
+    }
+
+    // A name id that happens to equal a live handle's index still misses: it
+    // is never reinterpreted as that handle.
+    #[test]
+    fn a_name_id_matching_a_handle_index_is_not_that_mesh() {
+        let mut sys = flat_system(2);
+        sys.name_index = Some(name_index());
+        let err = sys.crossfade(AssetId(1), vec![0.0, 1.0], 0.0).unwrap_err();
+        assert!(err.contains("no SkinnedMesh"), "{err}");
+        assert!(transition(&sys).is_none());
     }
 }

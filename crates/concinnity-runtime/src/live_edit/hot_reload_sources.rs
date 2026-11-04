@@ -1,6 +1,6 @@
 //! The source catalogs graphics init captures when the launch arms the dev
 //! loop, bundled as the one `HotReloadSources` world resource the dev drive
-//! takes once. The catalogs themselves are core's
+//! takes once. The catalogs themselves are the engine's
 //! `render::world_load::source_maps`.
 
 use concinnity_engine::components::{Identity, ProceduralMesh};

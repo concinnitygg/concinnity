@@ -1,4 +1,4 @@
-// The host half of frame submission: core's `submit::submit` timed by
+// The host half of frame submission: the engine's `submit::submit` timed by
 // the monotonic clock, with a device loss reported to the crash handler.
 
 use concinnity_engine::render::backend::RenderBackend;

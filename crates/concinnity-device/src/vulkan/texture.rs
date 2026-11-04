@@ -1355,8 +1355,8 @@ pub(super) fn create_sampler_linear_clamp(device: &VkDevice) -> RenderResult<Own
         .map_err(|e| map_vk_result(e, "linear clamp sampler"))
 }
 
-// IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
-// `EnvironmentMapTextures` shape so the fragment-shader code stays portable.
+// IBL textures produced by a single `EnvironmentMap` asset. Every backend holds
+// the same set, so the fragment-shader code stays portable.
 // `prefilter_mip_count == 0` means no EnvironmentMap is declared; the fragment
 // shader then uses the flat albedo ambient term instead of IBL.
 pub(super) struct EnvironmentMapTextures {

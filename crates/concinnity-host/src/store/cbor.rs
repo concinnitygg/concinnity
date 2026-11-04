@@ -8,7 +8,14 @@ use std::path::Path;
 /// naming `what` when it is present but unreadable, so a truncated or
 /// incompatible file starts fresh rather than failing the caller.
 pub fn read<T: serde::de::DeserializeOwned>(path: &Path, what: &str) -> Option<T> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!("{what} unreadable, starting fresh: {e}");
+            return None;
+        }
+    };
     match ciborium::from_reader(&bytes[..]) {
         Ok(value) => Some(value),
         Err(e) => {
@@ -56,5 +63,14 @@ mod tests {
 
         tree.write("store", b"not cbor at all");
         assert_eq!(read::<Vec<u32>>(&path, "test store"), None, "corrupt file");
+    }
+
+    #[test]
+    fn a_present_path_that_cannot_be_read_reads_as_none() {
+        let tree = concinnity_testing::TempTree::new();
+        let path = tree.join("store");
+        std::fs::create_dir(&path).expect("a directory where the file belongs");
+
+        assert_eq!(read::<Vec<u32>>(&path, "test store"), None);
     }
 }

@@ -56,6 +56,14 @@ impl UtcTime {
             self.year, self.month, self.day, self.hour, self.minute, self.second
         )
     }
+
+    /// RFC 3339 form at whole-second precision: `YYYY-MM-DDThh:mm:ssZ`.
+    pub fn rfc3339(&self) -> String {
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            self.year, self.month, self.day, self.hour, self.minute, self.second
+        )
+    }
 }
 
 /// `YYYY-MM-DD hh:mm:ss`.
@@ -86,6 +94,7 @@ mod tests {
         let t = UtcTime::from_unix(1_786_192_496);
         assert_eq!(t.to_string(), "2026-08-08 12:34:56");
         assert_eq!(t.stem(), "20260808-123456");
+        assert_eq!(t.rfc3339(), "2026-08-08T12:34:56Z");
         // A leap day: 2024-02-29 23:59:59 UTC.
         let t = UtcTime::from_unix(1_709_251_199);
         assert_eq!(t.to_string(), "2024-02-29 23:59:59");

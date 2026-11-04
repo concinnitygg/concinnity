@@ -195,7 +195,7 @@ impl BackendProbe for MtlContext {
 
     // Inherent method is named `capture_screenshot` to keep the forwarder
     // unambiguous (an inherent `screenshot` would shadow the trait method and
-    // recurse). Mirrors the DX/VK backends.
+    // recurse).
     fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         debug_assert_main_thread("screenshot");
         self.capture_screenshot(path)

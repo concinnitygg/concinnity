@@ -1,6 +1,6 @@
 //! CPU frame pacer for the FPS cap. Runs at the runtime level, before the world
 //! steps, so no system pays the sleep inside its own step time and the cap
-//! applies whichever systems the world built. The cap in force is core's
+//! applies whichever systems the world built. The cap in force is the engine's
 //! `frame_cap`, lowered to a background rate while the `WindowMinimized`
 //! resource says nothing drawn can be seen.
 
@@ -8,7 +8,7 @@ use concinnity_engine::ecs::{WindowMinimized, World};
 use concinnity_engine::render::frame::submit::{FramePace, PaceWait, frame_cap};
 use std::time::Instant;
 
-// Holds each frame's start to the deadline core's `FramePace` plans: sleeps to
+// Holds each frame's start to the deadline the engine's `FramePace` plans: sleeps to
 // its margin before the deadline, then spins the rest. One per `Runtime`,
 // driven once per world step.
 #[derive(Debug)]

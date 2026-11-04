@@ -286,14 +286,13 @@ impl DxContext {
             // below (different bound VB/IB), reading the same indirect buffer
             // from `skinned_record_base()` on.
             //
-            // Once per shader bucket: bucket 0 runs under the bindless
-            // pipeline bound above, each later bucket under its material
-            // shader's own pipeline. The cull kernel wrote every record's
-            // command into exactly one bucket's region, so the regions never
-            // double-draw.
+            // Once per shader bucket: bucket 0 runs under the bindless pipeline
+            // bound above, each later bucket under its material shader's own
+            // pipeline. The cull kernel wrote every record's command into
+            // exactly one bucket's region, so the regions never double-draw.
             // One CPU draw issued; the kernel-written list runs N indirect
-            // commands inside, but the call count surfaced to the profiler
-            // is the host-side draw. Mirrors Metal's bindless main pass.
+            // commands inside, but the call count surfaced to the profiler is
+            // the host-side draw.
             self.inc_draw_calls(self.execute_main_stream(cmd, cull_sig, indirect, 0));
             self.inc_draw_calls(self.execute_bucket_regions(cmd, cull_sig, indirect, frame_idx));
             // Restore the default bindless pipeline for the sub-paths below.

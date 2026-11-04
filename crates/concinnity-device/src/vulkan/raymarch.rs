@@ -1,20 +1,19 @@
 //! Raymarched SDF volume pass for the Vulkan backend. Runs at `PassId::Raymarch`
 //! between `AutoExposure` and `Decals` on the `hdr_resolve` RMW chain. Each
 //! `SdfVolume` rasterizes the back faces of its world-space bounding box and runs
-//! a user-authored GLSL fragment shader that sphere-traces the SDF inside the
-//! box. GLSL/Vulkan port of `src/directx/raymarch.rs`: same shader interface,
-//! same depth-compositing rules.
+//! the single-source `raymarch.hlsl` fragment that sphere-traces the SDF inside
+//! the box, with the same depth-compositing rules as the other backends.
 //!
 //! MSAA depth write-back. MSAA is on by default, so the pass renders the proxy
 //! into the multisampled HDR color + the writable scene depth (the shader
-//! writes hit depth via `gl_FragDepth` redeclared `depth_less`), then the render
+//! writes hit depth through a conservative `SV_Depth` output), then the render
 //! pass resolves the combined color into `hdr_resolve` so the single-sample
 //! post stack picks up the raymarched pixels and the raymarched-surface depth.
 //! This reuses the two-pass-occlusion main render passes (`load = false` STOREs
 //! the MSAA color at the main pass so this pass can `load = true` it back), and
 //! the existing main framebuffers, which are render-pass-compatible. The main
 //! pass selects the STORE-color variant whenever raymarch is active (see
-//! `vulkan/main.rs`). When single-sampled the main pass already leaves the scene
+//! `vulkan/draw/main.rs`). When single-sampled the main pass already leaves the scene
 //! in `hdr_resolve`, so the pass loads it directly and re-stores it (no resolve).
 //!
 //! Every `SdfVolume` builds here from its one distance-field payload, the same
@@ -619,7 +618,7 @@ fn cube_proxy<'a>(
 
 // Build a per-volume raymarch graphics pipeline drawing the proxy's `faces`:
 // depth-tested inclusively against the camera depth with depth write (the
-// fragment overrides `gl_FragDepth`, so downstream passes see the raymarched
+// fragment writes `SV_Depth`, so downstream passes see the raymarched
 // surface), opaque. Negative-height viewport is applied dynamically at encode
 // time.
 fn create_pipeline(
@@ -639,9 +638,8 @@ fn create_pipeline(
 // Build the volumetric variant of the per-volume pipeline. Same cube proxy +
 // front cull as the opaque pass, but the color output alpha-blends over the
 // existing scene (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) and the depth state keeps the
-// inclusive early-z test without writing: the medium is translucent and
-// never updates the depth buffer downstream passes read. Mirrors the DirectX
-// `create_raymarch_volumetric_pso`.
+// inclusive early-z test without writing: the medium is translucent and never
+// updates the depth buffer downstream passes read.
 fn create_volumetric_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,
@@ -709,7 +707,7 @@ fn create_volumetric_pipeline(
 // Build a per-volume depth-only shadow-caster pipeline. Same cube proxy + front
 // cull as the main pass, but no color attachment (single-sample shadow map),
 // the shadow casters' depth test (matching the rasterized CSM casters) with depth write, and
-// the fragment writes hit depth via `gl_FragDepth`. Targets `shadow_render_pass`.
+// the fragment writes hit depth via `SV_Depth`. Targets `shadow_render_pass`.
 fn create_shadow_pipeline(
     device: &VkDevice,
     shadow_render_pass: vk::RenderPass,

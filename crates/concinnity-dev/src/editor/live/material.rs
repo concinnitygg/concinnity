@@ -1,7 +1,7 @@
 //! A Material's Shader parameters. Every other Material field is baked into the
 //! draws that use it at load, but `params` live in the renderer's parameter
 //! table, one row per material, so an edit that changes only them rewrites that
-//! row through core's `live_preview::material` module.
+//! row through the engine's `live_preview::material` module.
 
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_core::math::narrow_f32;

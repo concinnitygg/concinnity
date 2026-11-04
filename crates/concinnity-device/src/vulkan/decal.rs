@@ -459,7 +459,7 @@ pub(in crate::vulkan) fn rebuild_decal_pipeline(
 
 // A unit cube with front faces culled, so the back faces still rasterize when
 // the camera is inside the decal volume, alpha-blended into the SINGLE-SAMPLE
-// resolved HDR regardless of the main pass's MSAA. Mirrors DirectX / Metal.
+// resolved HDR regardless of the main pass's MSAA.
 fn create_decal_pipeline(
     device: &VkDevice,
     render_pass: vk::RenderPass,

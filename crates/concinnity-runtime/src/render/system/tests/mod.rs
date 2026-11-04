@@ -1,4 +1,4 @@
-// GraphicsSystem unit tests: drive its init and run_step against core's
+// GraphicsSystem unit tests: drive its init and run_step against the engine's
 // recording backend (built through `hooks`) and a World over an in-memory blob. No GPU device is created and the on-disk settings store is
 // never read or written: a test's settings are the `StoredSettings` resource
 // it inserts, and the injection seam supplies the GPU profile and backend.

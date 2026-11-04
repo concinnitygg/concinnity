@@ -96,7 +96,9 @@ pub static CULL_LATE: ShaderProgram = ShaderProgram {
     gates: &["CULL_LATE"],
     msaa: false,
 };
-/// `cull_kernel` from `cull.hlsl` under `SHADOW_CULL`: light-frustum only.
+/// `cull_kernel` from `cull.hlsl` under `SHADOW_CULL`: light-frustum only, with
+/// no Hi-Z test, distance cull or status write, so it binds neither the Hi-Z
+/// pyramid nor the status buffer.
 pub static CULL_SHADOW: ShaderProgram = ShaderProgram {
     file: "cull.hlsl",
     entry: "cull_kernel",

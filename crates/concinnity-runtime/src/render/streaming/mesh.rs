@@ -1,5 +1,5 @@
 //! Where streamed mesh geometry comes from, and the thread that fetches it for
-//! core's mesh pool.
+//! the engine's mesh pool.
 //!
 //! `MeshPayloadSource` is the seam. `MemMeshSource` serves geometry kept
 //! resident in RAM (used by `cn run -f`, which builds geometry in memory with no

@@ -208,7 +208,7 @@ pub use crate::benchmark::PlanetTour;
 pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, BenchmarkRoute, CameraPose};
 pub use crate::screenshot::Screenshot;
 
-// HUD-overlay request components; their behavior lives in the client crate.
+// HUD-overlay request components; their behavior lives in `crate::hud`.
 pub use crate::hud::debug_hud::DebugHud;
 pub use crate::hud::fps_counter::FpsCounter;
 pub use crate::hud::stat_hud::StatHud;

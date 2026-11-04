@@ -56,13 +56,13 @@ pub(crate) struct WindowState {
     pub(crate) mouse_x: f32,
     pub(crate) mouse_y: f32,
     pub(crate) left_click_pending: bool,
-    // True while the left button is held with the cursor free (a UI drag, e.g.
-    // a settings Slider handle). Set on WM_LBUTTONDOWN, cleared on WM_LBUTTONUP;
+    // True while the left button is held with the cursor free (a UI drag, e.g. a
+    // settings Slider handle). Set on WM_LBUTTONDOWN, cleared on WM_LBUTTONUP;
     // unlike `left_click_pending` it persists across take_input() so a drag can
-    // track the cursor. Mirrors the Metal `left_button_down` signal.
+    // track the cursor.
     pub(crate) left_button_down: bool,
     // Set on WM_RBUTTONDOWN with the cursor free; a one-shot cleared by
-    // take_input(). Mirrors the Metal `right_click_pulse` signal.
+    // take_input().
     pub(crate) right_click_pending: bool,
     // Accumulated vertical scroll-wheel delta since the last take_input(), in
     // scroll_delta units (WM_MOUSEWHEEL notches scaled via

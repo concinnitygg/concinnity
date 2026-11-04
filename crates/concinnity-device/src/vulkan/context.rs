@@ -300,13 +300,13 @@ pub(super) struct VkCullKernels {
 }
 
 // GPU-driven cull + bindless static main pass (+ optional two-pass Hi-Z
-// occlusion), grouped off the flat `VkContext` field soup. Mirrors the DirectX
-// backend's `cull: CullState`. A compute kernel frustum/distance-tests the
-// build-time static objects and writes one indirect draw per survivor; the
-// bindless main pass issues the whole buffer with one indirect draw. All
-// `Some` / non-empty only when the world has anything to GPU-drive. Field names
-// are kept verbatim (heterogeneous prefixes, no single cluster prefix to drop).
-// The two-pass Hi-Z pyramid + its temporal state live here too.
+// occlusion), grouped off the flat `VkContext` field soup. A compute kernel
+// frustum/distance-tests the build-time static objects and writes one indirect
+// draw per survivor; the bindless main pass issues the whole buffer with one
+// indirect draw. All `Some` / non-empty only when the world has anything to
+// GPU-drive. Field names are kept verbatim (heterogeneous prefixes, no single
+// cluster prefix to drop). The two-pass Hi-Z pyramid + its temporal state live
+// here too.
 pub(super) struct VkCull {
     // Packs the static draws' records into `object_buffers` / `draw_args_buffers`.
     pub(super) packer: crate::record_pack::RecordPacker,
@@ -1385,8 +1385,7 @@ impl VkContext {
     // (WM_SIZE reports zero on minimize; the GLFW / AppKit windows report the
     // same). Vulkan forbids a zero-extent swapchain, render area, viewport, or
     // image copy, so `draw_frame` and `rebuild_swapchain` park their work until
-    // the window is restored. Mirrors the DirectX backend, whose
-    // `maybe_handle_resize` skips the rebuild (and thus the frame) at 0x0.
+    // the window is restored.
     #[inline]
     pub(super) fn is_minimized(&self) -> bool {
         let (w, h) = self.window().framebuffer_size();

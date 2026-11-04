@@ -11,15 +11,13 @@ use super::CullPlan;
 use super::bindless::BindlessPass;
 use super::compute::{ComputeCull, VARIANT_BUFFER_BYTES, shadow_cull_set};
 use crate::vulkan::allocator::PooledBuffer;
+use crate::vulkan::builtin_shaders::{CULL_SHADOW, CompileProgram as _, SHADOW_VERT_BINDLESS};
 use crate::vulkan::compact::{CompactBuffers, DrawLists, INDIRECT_USAGE};
 use crate::vulkan::context::{VkDescriptors, VkShadow};
 use crate::vulkan::cull::VkShadowView;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
-use crate::vulkan::pipeline::{
-    CULL_PUSH_CONSTANT_BYTES, compile_shadow_bindless_vs, compile_shadow_cull_shader,
-    create_shadow_pipeline,
-};
+use crate::vulkan::pipeline::{CULL_PUSH_CONSTANT_BYTES, create_shadow_pipeline};
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
@@ -98,7 +96,7 @@ pub(super) fn build_shadow_cull(
                     .push_constant_ranges(std::slice::from_ref(&sc_push)),
             )
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "shadow cull pipeline layout"))?;
-        let sc_spv = compile_shadow_cull_shader(hot_reload)?;
+        let sc_spv = CULL_SHADOW.compile(hot_reload)?;
         let sc_pipeline = compute_pipeline(device, sc_pl.handle(), &sc_spv, "shadow cull")?;
 
         // Depth-only bindless shadow graphics pipeline: shadow-global set 0 +
@@ -120,7 +118,7 @@ pub(super) fn build_shadow_cull(
             .map_err(|e| {
                 crate::vulkan::error::map_vk_result(e, "shadow bindless pipeline layout")
             })?;
-        let sb_spv = compile_shadow_bindless_vs(hot_reload)?;
+        let sb_spv = SHADOW_VERT_BINDLESS.compile(hot_reload)?;
         let sb_pipeline =
             create_shadow_pipeline(device, shadow.render_pass.handle(), sb_pl.handle(), &sb_spv)?;
 

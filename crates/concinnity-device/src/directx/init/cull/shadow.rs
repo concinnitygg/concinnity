@@ -9,15 +9,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::CullPlan;
 use super::compute::ComputeCull;
+use crate::directx::builtin_shaders::{CULL_SHADOW, CompileProgram as _, SHADOW_VERT_BINDLESS};
 use crate::directx::context::dump_on_err;
 use crate::directx::cull::{
-    DxShadowViews, compile_cull_shader_shadow, create_cull_command_signature, create_cull_pso,
-    shadow_status_bytes,
+    DxShadowViews, create_cull_command_signature, create_cull_pso, shadow_status_bytes,
 };
 use crate::directx::init::InitGpu;
-use crate::directx::init::pipelines::{
-    compile_shadow_bindless_vs, create_shadow_bindless_root_signature, create_shadow_pso,
-};
+use crate::directx::init::pipelines::{create_shadow_bindless_root_signature, create_shadow_pso};
 use crate::directx::texture::create_uav_buffer;
 
 pub(super) struct ShadowCull {
@@ -57,14 +55,14 @@ pub(super) fn build_shadow_cull(
     let device = gpu.hw.alloc.device();
     let info_queue = gpu.hw.info_queue.as_ref();
     let hot_reload = gpu.hot_reload;
-    let svs = compile_shadow_bindless_vs(hot_reload)?;
+    let svs = SHADOW_VERT_BINDLESS.compile(hot_reload)?;
     let sbrs = dump_on_err(info_queue, create_shadow_bindless_root_signature(device))?;
     // Reuse the depth-only shadow PSO builder (no pixel shader, 0 RTVs,
     // D32 DSV, slope-scaled depth bias, main vertex layout).
     let sbpso = dump_on_err(info_queue, create_shadow_pso(device, &sbrs, &svs))?;
     let sbsig = dump_on_err(info_queue, create_cull_command_signature(device, &sbrs))?;
     // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
-    let scs = compile_cull_shader_shadow(hot_reload)?;
+    let scs = CULL_SHADOW.compile(hot_reload)?;
     let cull_pso = dump_on_err(info_queue, create_cull_pso(device, crs, &scs))?;
     let mut views = Vec::with_capacity(gpu.hw.frames());
     let mut spot_views = Vec::new();

@@ -2217,7 +2217,6 @@ impl VkContext {
         // `graph_exec` uses to skip the planar mirror re-render, so the two always
         // agree. The textured variant additionally needs the bindless albedo/normal
         // pool the GPU-cull path populates; without it the flat-tint trace runs.
-        // Mirrors DirectX's selection.
         let rt_live = self.rt_transparent_active();
         let textured =
             rt_live && self.cull.bindless_pipeline.is_some() && transparent.rt_textured_ready();

@@ -10,10 +10,10 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use crate::directx::allocator::PooledBuffer;
+use crate::directx::builtin_shaders::{CULL_EARLY, CompileProgram as _};
 use crate::directx::context::{DxDescriptors, DxTargets, align256, dump_on_err};
 use crate::directx::cull::{
-    CullKernels, compile_cull_shader, create_cull_command_signature, create_cull_pso,
-    create_cull_root_signature,
+    CullKernels, create_cull_command_signature, create_cull_pso, create_cull_root_signature,
 };
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::error::map_hresult;
@@ -99,7 +99,7 @@ pub(super) fn build_compute_cull(
             hiz: None,
         });
     }
-    let cs = compile_cull_shader(gpu.hot_reload)?;
+    let cs = CULL_EARLY.compile(gpu.hot_reload)?;
     let crs = dump_on_err(info_queue, create_cull_root_signature(device))?;
     let cps = dump_on_err(info_queue, create_cull_pso(device, &crs, &cs))?;
     let csig = dump_on_err(

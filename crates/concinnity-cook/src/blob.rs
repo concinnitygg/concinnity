@@ -16,8 +16,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 /// Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
@@ -394,9 +392,10 @@ pub(crate) fn checksum(data: &[u8]) -> String {
 }
 
 fn now_iso8601() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("time format")
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    concinnity_core::utc::UtcTime::from_unix(secs).rfc3339()
 }
 
 // Shared harness for tests that drive the build's file output: a state tree
@@ -680,7 +679,7 @@ mod tests {
 
         let lock: BlobLock = serde_json::from_str(&written).expect("lock is valid json");
         assert_eq!(lock.engine_version, env!("CARGO_PKG_VERSION"));
-        assert!(OffsetDateTime::parse(&lock.built_at, &Rfc3339).is_ok());
+        assert!(is_rfc3339_utc(&lock.built_at), "{}", lock.built_at);
 
         assert_eq!(lock.blobs.len(), 1);
         assert_eq!(lock.blobs[0].path, paths[0]);
@@ -845,10 +844,23 @@ mod tests {
         );
     }
 
+    // `YYYY-MM-DDThh:mm:ssZ`, digits everywhere but the separators.
+    fn is_rfc3339_utc(stamp: &str) -> bool {
+        let pattern = b"dddd-dd-ddTdd:dd:ddZ";
+        stamp.len() == pattern.len()
+            && stamp.bytes().zip(pattern).all(|(b, &p)| {
+                if p == b'd' {
+                    b.is_ascii_digit()
+                } else {
+                    b == p
+                }
+            })
+    }
+
     #[test]
-    fn now_iso8601_is_rfc3339_parseable() {
+    fn now_iso8601_is_an_rfc3339_utc_stamp() {
         let stamp = now_iso8601();
-        assert!(OffsetDateTime::parse(&stamp, &Rfc3339).is_ok());
+        assert!(is_rfc3339_utc(&stamp), "{stamp}");
     }
 
     #[test]

@@ -20,14 +20,10 @@ use crate::ecs::asset_id::AssetId;
 pub struct SkinnedMeshNameIndex(pub HashMap<AssetId, SkinnedMeshHandle>);
 
 impl SkinnedMeshNameIndex {
-    /// The handle for an interned mesh name. An id the index does not hold
-    /// reads as the handle of the same value, which is how a world built
-    /// without the renderer correlates its interned `target` names.
-    pub fn get(&self, name_id: AssetId) -> SkinnedMeshHandle {
-        self.0
-            .get(&name_id)
-            .copied()
-            .unwrap_or_else(|| SkinnedMeshHandle::new(name_id.0))
+    /// The handle of the skinned mesh interned as `name_id`; `None` when the
+    /// running world loaded no skinned mesh under that name.
+    pub fn get(&self, name_id: AssetId) -> Option<SkinnedMeshHandle> {
+        self.0.get(&name_id).copied()
     }
 }
 
@@ -67,13 +63,18 @@ mod tests {
         map.insert(AssetId(10), SkinnedMeshHandle::new(0));
         map.insert(AssetId(20), SkinnedMeshHandle::new(1));
         let index = SkinnedMeshNameIndex(map);
-        assert_eq!(index.get(AssetId(20)), SkinnedMeshHandle::new(1));
+        assert_eq!(index.get(AssetId(20)), Some(SkinnedMeshHandle::new(1)));
     }
 
+    // An id from the interned-name space is never reinterpreted as a handle,
+    // which could address a different mesh.
     #[test]
-    fn unknown_name_falls_back_to_the_id_value() {
-        let index = SkinnedMeshNameIndex::default();
-        assert_eq!(index.get(AssetId(42)), SkinnedMeshHandle::new(42));
+    fn unknown_name_has_no_handle() {
+        let mut map = HashMap::new();
+        map.insert(AssetId(10), SkinnedMeshHandle::new(0));
+        let index = SkinnedMeshNameIndex(map);
+        assert_eq!(index.get(AssetId(0)), None);
+        assert_eq!(index.get(AssetId(42)), None);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! The planet live path: an edit to the world's `Planet` that only reshapes
-//! its ground or changes its pull goes to the running planet through core's
+//! its ground or changes its pull goes to the running planet through the engine's
 //! `live_preview::planet`; any other field is read once at load, so the edit
 //! declines and the world rebuilds.
 

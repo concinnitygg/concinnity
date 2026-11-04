@@ -268,7 +268,7 @@ pub(crate) fn assign_shader_handles(
 // Classify the expanded world's geometry producers into the shared mesh-source
 // handle space and assign it. Call over the same expanded + injected `assets`
 // list the blob is emitted from, after the per-kind generic pass and before
-// installing the map; the block ordering itself is core's.
+// installing the map; the block ordering itself is the engine's.
 pub(crate) fn assign_mesh_source_handles(
     handles: &mut ResourceHandles,
     assets: &[crate::authoring::world::WorldJsonlAsset],

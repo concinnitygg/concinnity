@@ -10,7 +10,7 @@ fn position(name: &str) -> usize {
         .unwrap_or_else(|| panic!("{name} is a table entry"))
 }
 
-// The table is well formed, holds every core entry, and keeps core's order.
+// The table is well formed, holds every core entry, and keeps the engine's order.
 #[test]
 fn the_table_holds_every_core_system_in_core_order() {
     assert_eq!(SYSTEMS.check_complete(Core::ALL), Ok(()));

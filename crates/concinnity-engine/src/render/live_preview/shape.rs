@@ -26,11 +26,7 @@ pub struct ShapeTarget {
 /// The handle of the skinned mesh interned as `name_id`, if the running world
 /// loaded one under that name.
 pub fn mesh_handle(world: &World, name_id: AssetId) -> Option<SkinnedMeshHandle> {
-    world
-        .resource::<SkinnedMeshNameIndex>()?
-        .0
-        .get(&name_id)
-        .copied()
+    world.resource::<SkinnedMeshNameIndex>()?.get(name_id)
 }
 
 /// What the mesh behind `handle` exposes to a shape. `None` until the mesh

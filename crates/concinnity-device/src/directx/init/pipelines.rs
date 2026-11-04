@@ -63,13 +63,6 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
     })
 }
 
-// Compile the GPU-driven shadow pass's depth-only bindless vertex shader. Built
-// alongside the bindless main pass (same built-in-shader gate); a depth-only
-// PSO with no pixel shader consumes it.
-pub(in crate::directx) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
-}
-
 // Root signature builders
 
 // Root signature for the GPU-driven main pass, shared by every shader bucket.

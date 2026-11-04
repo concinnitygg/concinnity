@@ -11,7 +11,7 @@ use concinnity_engine::render::shader::programs::Variant;
 use concinnity_engine::render::shader::source::Splice;
 
 /// The exact source text a program compiles for `platform`. `file` names the
-/// shader under core's `src/render/shader/hlsl/`; under `hot_reload` its checkout
+/// shader under the engine's `src/render/shader/hlsl/`; under `hot_reload` its checkout
 /// copy is preferred, for the shader and for every fragment spliced into it.
 /// `splices` fills markers no file in the tree can, which today is only a
 /// world's own distance field.

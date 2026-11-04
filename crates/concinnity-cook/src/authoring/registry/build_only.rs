@@ -6,7 +6,7 @@
 //! because nothing in the runtime can hold one: they have no `ComponentTag`, no
 //! `ComponentAsset` variant, no column, and no `Component` impl. What they do
 //! have is a [`RegisteredType`](super::RegisteredType) variant, so the
-//! authoring registry composes this group with core's two.
+//! authoring registry composes this group with the engine's two.
 //!
 //! Being in the group is the origin, which is why the entries carry no origin
 //! flag. Each schema sits beside its expansion in a per-asset module under
@@ -47,7 +47,7 @@ pub trait BuildOnlyAsset {}
 /// exactly like concinnity-engine's groups, so one callback serves both.
 ///
 /// The `$cb, $prefix` form prepends tokens to what `$cb` receives, which is how
-/// `for_each_authored_type!` hands a callback core's groups and this one
+/// `for_each_authored_type!` hands a callback the engine's groups and this one
 /// together.
 #[macro_export]
 macro_rules! for_each_build_only_type {
@@ -78,7 +78,7 @@ macro_rules! for_each_build_only_type {
 
 // The marker impls, generated from the list so the group and the trait cannot
 // disagree. Each type is also a reference target under its registry name, as
-// core's are, so a field can name one.
+// the engine's are, so a field can name one.
 macro_rules! __impl_build_only {
     (build_only: { $( $variant:ident => $ty:path { $($meta:tt)* } ),+ $(,)? } $(,)?) => {
         $(
@@ -99,7 +99,7 @@ mod tests {
 
     // The composition is what keeps this group in the one authoring registry:
     // the list lives in this crate while the other two come from
-    // concinnity-engine, and a callback that saw only core's would silently drop
+    // concinnity-engine, and a callback that saw only the engine's would silently drop
     // every name below. Derived from the list, so an entry added or removed
     // updates the check with it.
     macro_rules! assert_registered_as_build_only {

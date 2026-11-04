@@ -926,7 +926,7 @@ impl VkContext {
 
         // Textured hit shading needs the bindless albedo/normal pool, which only
         // the bindless static path populates; otherwise fall back to the
-        // flat-tint variant. Mirrors DirectX's bindless gate.
+        // flat-tint variant.
         let textured = self.cull.bindless_pipeline.is_some() && rt.textured_pso.is_some();
         let (trace_pso, trace_layout) = match (
             textured,

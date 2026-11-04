@@ -31,6 +31,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
+use crate::directx::builtin_shaders::FOG_FROXEL;
 use crate::directx::context::{DxContext, align256, dump_on_err};
 use crate::directx::descriptor_slot::{DescriptorTables, SrvSlot};
 use crate::directx::error::map_hresult;
@@ -62,11 +63,6 @@ pub(in crate::directx) fn compile_fog_shaders(
     Ok((vs, ps))
 }
 
-// Compile the froxel-volume compute kernel.
-pub(in crate::directx) fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::FOG_FROXEL.compile(hot_reload)
-}
-
 // Rebuild the fog PSO against fresh shader source. Called from the DirectX
 // shader hot-reload pass; reuses the existing root signature.
 pub(in crate::directx) fn rebuild_fog_pso(
@@ -87,7 +83,7 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
     hot_reload: bool,
     info_queue: Option<&ID3D12InfoQueue>,
 ) -> RenderResult<ID3D12PipelineState> {
-    let cs = compile_fog_froxel_shader(hot_reload)?;
+    let cs = FOG_FROXEL.compile(hot_reload)?;
     dump_on_err(info_queue, create_fog_froxel_pso(device, root_sig, &cs))
 }
 
@@ -342,7 +338,7 @@ impl FogResources {
             hot_reload,
         } = params;
         let (vs, ps) = compile_fog_shaders(msaa_samples, hot_reload)?;
-        let cs = compile_fog_froxel_shader(hot_reload)?;
+        let cs = FOG_FROXEL.compile(hot_reload)?;
 
         let root_sig = dump_on_err(info_queue, create_fog_root_signature(device))?;
         let pso = dump_on_err(info_queue, create_fog_pso(device, &root_sig, &vs, &ps))?;

@@ -2,7 +2,7 @@
 //
 // The systems in `run_tests` are synthetic, written to exercise the driver.
 // These run the real thing -- a `Behavior` compiled and evaluated by the
-// system core's own table gates in -- so what they prove is that the loop, the
+// system the engine's own table gates in -- so what they prove is that the loop, the
 // table, and a simulation system fit together into a world that does something.
 
 use alloc::boxed::Box;

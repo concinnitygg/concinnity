@@ -1,4 +1,4 @@
-// The threads that build a planet's terrain tile meshes for core's tile pool.
+// The threads that build a planet's terrain tile meshes for the engine's tile pool.
 
 use concinnity_engine::render::streaming::pools::{TileBuild, TileBuilt};
 

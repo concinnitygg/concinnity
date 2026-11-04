@@ -33,7 +33,7 @@ pub(super) struct DxgiSwapchain {
 }
 
 // The window's own configuration: its title, requested size, and whether the
-// title bar is drawn. Mirrors the Metal backend's `WindowConfig`.
+// title bar is drawn.
 #[derive(Clone, Copy)]
 pub(super) struct WindowConfig<'a> {
     pub title: &'a str,

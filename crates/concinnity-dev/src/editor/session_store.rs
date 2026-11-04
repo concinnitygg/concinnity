@@ -1,7 +1,8 @@
 //! Persisted editor session state: one small CBOR file per project at
 //! `<writable state dir>/editor`, keyed by world file stem so several worlds in
 //! a project keep separate entries. Load tolerates a missing or unreadable
-//! file (fresh default); save is whole-file, the store is tiny.
+//! file (fresh default, with a warning when unreadable); save replaces the
+//! whole file atomically, the store is tiny.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -38,20 +39,11 @@ pub(crate) fn world_key(world_path: &str) -> String {
 }
 
 pub(crate) fn load(path: &Path) -> SessionStore {
-    let Ok(file) = std::fs::File::open(path) else {
-        return SessionStore::default();
-    };
-    ciborium::from_reader(std::io::BufReader::new(file)).unwrap_or_default()
+    concinnity_host::store::cbor::read(path, "editor session").unwrap_or_default()
 }
 
 pub(crate) fn save(path: &Path, store: &SessionStore) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut bytes = Vec::new();
-    ciborium::into_writer(store, &mut bytes)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, bytes)
+    concinnity_host::store::cbor::write(path, store)
 }
 
 // Drop a world's entry: a deleted world file leaves nothing for its bookmarks

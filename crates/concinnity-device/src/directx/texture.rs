@@ -1391,8 +1391,7 @@ pub(super) fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
 // the first frame (nothing has used it yet) and across the single-buffered
 // cyclic reuse without tracking the live occupant. After it, `after`'s contents
 // are undefined and `after` must be re-initialized (a Clear/Discard/Copy) before
-// any non-overwriting use. Mirrors the Vulkan executor's `UNDEFINED -> ...`
-// aliasing transition.
+// any non-overwriting use.
 pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     D3D12_RESOURCE_BARRIER {
         Type: D3D12_RESOURCE_BARRIER_TYPE_ALIASING,
@@ -1406,13 +1405,13 @@ pub(super) fn aliasing_barrier(after: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER
     }
 }
 
-// IBL textures produced by a single `EnvironmentMap` asset. Mirrors the Metal
-// `EnvironmentMapTextures` shape so the fragment-shader code stays portable.
+// IBL textures produced by a single `EnvironmentMap` asset. Every backend holds
+// the same set, so the fragment-shader code stays portable.
 // `prefilter_mip_count == 0` means no EnvironmentMap is declared; the fragment
-// shader then uses the flat albedo ambient term instead of IBL.
-// The `irradiance` / `prefilter` fields hold the COM resources alive while
-// their SRVs are referenced via the shader-visible descriptor heap; the SRV
-// GPU handles are read by `draw.rs`, not the GpuResource itself.
+// shader then uses the flat albedo ambient term instead of IBL. The
+// `irradiance` / `prefilter` fields hold the COM resources alive while their
+// SRVs are referenced via the shader-visible descriptor heap; the SRV GPU
+// handles are read by `draw.rs`, not the GpuResource itself.
 pub(super) struct EnvironmentMapTextures {
     pub irradiance: GpuResource,
     pub prefilter: GpuResource,

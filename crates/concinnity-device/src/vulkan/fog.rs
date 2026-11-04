@@ -34,7 +34,7 @@ use super::set_writes::SetWrites;
 use super::texture::{
     LayoutTransition, SubresourceRange, one_shot_submit, transition_image_layout_range,
 };
-use crate::vulkan::builtin_shaders::CompileProgram;
+use crate::vulkan::builtin_shaders::{CompileProgram, FOG_FROXEL};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
@@ -175,7 +175,7 @@ impl FogResources {
         let froxel_set_layout = create_descriptor_set_layout(device, &froxel_set_bindings())?;
         let froxel_pipeline_layout =
             create_froxel_pipeline_layout(device, froxel_set_layout.handle())?;
-        let froxel_spv = compile_fog_froxel_shader(hot_reload)?;
+        let froxel_spv = FOG_FROXEL.compile(hot_reload)?;
         let froxel_pipeline = compute_pipeline(
             device,
             froxel_pipeline_layout.handle(),
@@ -594,12 +594,6 @@ fn compile_fog_shaders(hot_reload: bool, msaa: bool) -> RenderResult<(Vec<u8>, V
     Ok((vert, frag))
 }
 
-// Compile the froxel-volume compute kernel. MSAA-independent (the kernel does
-// not read the scene depth attachment).
-fn compile_fog_froxel_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::FOG_FROXEL.compile(hot_reload)
-}
-
 // Rebuild the fog graphics pipeline against the existing render pass +
 // layout. Used by the Vulkan shader hot-reload path. The caller is
 // responsible for destroying the previous pipeline only after this call
@@ -626,7 +620,7 @@ pub(in crate::vulkan) fn rebuild_fog_froxel_pipeline(
     fog: &FogResources,
     hot_reload: bool,
 ) -> RenderResult<OwnedPipeline> {
-    let spv = compile_fog_froxel_shader(hot_reload)?;
+    let spv = FOG_FROXEL.compile(hot_reload)?;
     compute_pipeline(
         device,
         fog.froxel_pipeline_layout.handle(),
@@ -787,31 +781,33 @@ impl VkContext {
 
 #[cfg(test)]
 mod tests {
+    use crate::vulkan::builtin_shaders::{CompileProgram as _, FOG_FROXEL};
     use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
     use std::mem::size_of;
 
     #[test]
-    fn fog_params_ubo_size_matches_glsl() {
+    fn fog_params_ubo_size_matches_hlsl() {
         // Both halves of fog.hlsl read the same 176 B std140 FogBlock.
         assert_eq!(size_of::<FogParams>(), 176);
     }
 
     #[test]
-    fn fog_froxel_params_ubo_size_matches_glsl() {
+    fn fog_froxel_params_ubo_size_matches_hlsl() {
         // The FogFroxelBlock std140 layout (mat4 + uvec3 + uint + 2 float + vec2)
-        // is 96 B; the offsets are pinned by the core render_types tests.
+        // is 96 B; the offsets are pinned by the engine render_types tests.
         assert_eq!(size_of::<FogFroxelParams>(), 96);
     }
 
     #[test]
     fn fog_shaders_compile() {
         concinnity_shader::require_dxc!();
-        // Compile the rewritten froxel-sampling fragment shader (both MSAA
-        // modes) + the froxel compute kernel so a GLSL regression fails the
-        // test suite without needing a GPU. Mirrors the cull-shader compile
-        // guard the two-pass occlusion landing added.
+        // Compile the froxel-sampling fragment shader (both MSAA modes) and
+        // the froxel compute kernel for Vulkan, so a shader regression fails
+        // the test suite without needing a GPU.
         super::compile_fog_shaders(false, false).expect("fog shaders (no MSAA) compile");
         super::compile_fog_shaders(false, true).expect("fog shaders (MSAA) compile");
-        super::compile_fog_froxel_shader(false).expect("fog froxel kernel compiles");
+        FOG_FROXEL
+            .compile(false)
+            .expect("fog froxel kernel compiles");
     }
 }

@@ -34,7 +34,6 @@ tracing = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
 concinnity-testing = { workspace = true }
-tempfile = { workspace = true }
 
 [build-dependencies]
 cbindgen = { workspace = true }

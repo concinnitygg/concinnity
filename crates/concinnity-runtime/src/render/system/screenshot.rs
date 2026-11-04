@@ -1,4 +1,4 @@
-// The I/O half of a `screenshot` action: the burst core's extraction names and
+// The I/O half of a `screenshot` action: the burst the engine's extraction names and
 // schedules starts here, with its directory made and its time stamp taken.
 
 use concinnity_engine::ecs::{PipelineContext, ScreenshotRequest};

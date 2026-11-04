@@ -323,7 +323,7 @@ impl MtlContext {
         }
     }
 
-    // Plan this frame in core over what this backend holds, then put what the
+    // Plan this frame in the engine over what this backend holds, then put what the
     // encoders read from `&self` in place: the spot slices, the cull's view and
     // the cluster grid, and the jitter MetalFX is dispatched with.
     pub(super) fn plan_frame(&mut self, args: PlanArgs<'_>) -> error::RenderResult<FramePlan> {

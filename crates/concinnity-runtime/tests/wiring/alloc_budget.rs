@@ -2,7 +2,7 @@
 // heap churn of a world under the runtime's table, so a change that
 // reintroduces per-frame allocation (a rebuilt HashMap, a fresh Vec per tick)
 // fails loudly instead of eroding it back. The extraction pass's own pin sits
-// beside core's `FrameExtractor`.
+// beside the engine's `FrameExtractor`.
 //
 // The allocation counters are process-wide and other
 // test threads allocate concurrently, so a single frame's delta is only an

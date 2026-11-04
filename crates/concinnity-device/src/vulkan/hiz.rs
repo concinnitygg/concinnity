@@ -5,10 +5,10 @@
 //! projects each `DrawObject` AABB through the previous frame's un-jittered
 //! view-projection, picks the Hi-Z mip whose texels are ~the size of the
 //! projected rect, 4-tap-samples the max occluder depth, and culls the AABB when
-//! its nearest projected NDC depth is strictly behind. Mirrors the DirectX
-//! implementation in `directx/hiz.rs`; Metal keeps the older per-mip chain (see
-//! `metal/hiz.rs`). Every backend's kernels ship from the single-source
-//! `src/render/shader/hlsl/hiz_build.hlsl` (one variant compile per kernel):
+//! its nearest projected NDC depth is strictly behind. Metal keeps the older
+//! per-mip chain instead (see `metal/hiz.rs`). Every backend's kernels ship from
+//! the single-source `src/render/shader/hlsl/hiz_build.hlsl` (one variant
+//! compile per kernel):
 //!
 //!   * `hiz_spd_single`: reduce a single-sample main depth into mips 0..6.
 //!   * `hiz_spd_msaa`  : the same for an MSAA main depth, taking the MAX over

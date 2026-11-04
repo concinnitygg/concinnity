@@ -1,14 +1,14 @@
-//! What this host lends core: the system table, the `SystemHost` seams core's
+//! What this host lends the engine: the system table, the `SystemHost` seams the engine's
 //! gates build their systems through, and the resources only this host can
 //! publish at world start.
 //!
-//! The table holds core's systems (`CoreSystems`, each entry defined once in
+//! The table holds the engine's systems (`CoreSystems`, each entry defined once in
 //! concinnity-engine) with this crate's own among them. Table order is run order.
 //! A core system's phase, edges, gate and description come from its core entry;
 //! this file decides only where this crate's systems sit. A new core system is
 //! listed here in its run position after its entry is added to `CoreSystems`.
 //!
-//! Entries are in phase order (see core's `Phase` for what each band holds),
+//! Entries are in phase order (see the engine's `Phase` for what each band holds),
 //! so a system registered with `World::add_system` anchors to a phase, never an
 //! entry.
 //!
@@ -41,7 +41,7 @@ mod access_check;
 mod ground;
 mod resources;
 
-// What this host lends core's systems: the job pool, the planet's ground
+// What this host lends the engine's systems: the job pool, the planet's ground
 // worker, the kira audio output, gilrs gamepads, the file stores behind
 // behavior state, settings and story saves, and stdout for a benchmark's
 // report.

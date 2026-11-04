@@ -1,6 +1,6 @@
 // Which rows a settings tab shows, and how one row is emitted. The tables pair
-// each `SettingKey` with its label; core's `SettingKey` owns the key vocabulary
-// and core's settings system knows each key's options and how to apply it.
+// each `SettingKey` with its label; the engine's `SettingKey` owns the key vocabulary
+// and the engine's settings system knows each key's options and how to apply it.
 
 use concinnity_engine::components::GamepadAction;
 use concinnity_engine::input::keymap::Bindable;
@@ -27,7 +27,7 @@ pub(super) fn settings_tabs(profile: SettingsProfile) -> &'static [(&'static str
     }
 }
 
-// Setting rows per tab, top to bottom: (setting, display label). Core's settings
+// Setting rows per tab, top to bottom: (setting, display label). The engine's settings
 // system knows each setting's options and how to apply it; this only chooses
 // which rows appear.
 const VIDEO_ROWS: [(SettingKey, &str); 7] = [
@@ -77,7 +77,7 @@ const VIDEO_ADVANCED_ROWS: [(SettingKey, &str); 9] = [
     (SettingKey::TextureQuality, "Texture Quality"),
 ];
 // Live post-process sliders in the Advanced group. Each slider's value range,
-// display format, and apply path live in core's settings system; a row here
+// display format, and apply path live in the engine's settings system; a row here
 // only chooses which sliders appear. All but `AmbientIntensity` are pure
 // `PostProcessParams` fields applied via `update_post_process`;
 // `AmbientIntensity` rides a dedicated backend setter.
@@ -93,7 +93,7 @@ const VIDEO_ADVANCED_SLIDERS: [(SettingKey, &str); 8] = [
     (SettingKey::Fov, "Field of View"),
 ];
 // Quality toggles in the Video "Quality" collapsible group (collapsed by
-// default): the heavier render features. Each is an Off/On cycle row. Core's
+// default): the heavier render features. Each is an Off/On cycle row. The engine's
 // settings system knows each setting's options and applies it live by
 // rebuilding the affected render resources; on backends
 // without a live path the choice persists and applies at the next launch.

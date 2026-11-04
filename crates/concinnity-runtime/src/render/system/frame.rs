@@ -1,7 +1,7 @@
-// GraphicsSystem per-frame step: core's frame extraction into the owned
+// GraphicsSystem per-frame step: the engine's frame extraction into the owned
 // RenderSnapshot, then submission of that snapshot to the backend (see
 // `submit`), or its hand-off to the render thread. Asset streaming and the
-// camera-relative view rebase run in core's StreamingSystem just before it.
+// camera-relative view rebase run in the engine's StreamingSystem just before it.
 
 use crate::app::pipeline::PipelinedFrames;
 use concinnity_engine::ecs::ActiveRenderBackend;

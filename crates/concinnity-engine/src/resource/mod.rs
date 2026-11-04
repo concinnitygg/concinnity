@@ -3,8 +3,8 @@
 //! is compiled by cook and addressed at runtime by its dense per-kind handle. The
 //! owning system reads the table by that handle instead of querying an ECS column
 //! or scanning names, so a resource lives in a table it owns rather than as a
-//! component. Renderer-free (the tables are plain handle-indexed data), so they
-//! live here where the physics / audio subsystem crates can reach them. The
+//! component. Renderer-free (the tables are plain handle-indexed data), so the
+//! physics and audio systems read them without depending on a backend. The
 //! development source catalogs ([`MeshSources`] and its siblings) sit beside
 //! them.
 

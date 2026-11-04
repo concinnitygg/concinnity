@@ -22,7 +22,7 @@ fn process_cpu_time() -> Option<Duration> {
     imp::process_cpu_time()
 }
 
-/// Samples the process CPU clock into core's `CpuRate`.
+/// Samples the process CPU clock into the engine's `CpuRate`.
 #[derive(Debug)]
 pub struct CpuSampler {
     origin: Instant,

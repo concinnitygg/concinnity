@@ -44,7 +44,6 @@ png = { workspace = true }
 pulldown-cmark = { workspace = true }
 rayon = { workspace = true }
 sha2 = { workspace = true }
-time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 concinnity-core = { workspace = true, features = ["test-support"] }

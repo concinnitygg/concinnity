@@ -10,8 +10,8 @@
 // is one `ExecuteIndirect` under that bucket's pipeline. Mirrors
 // `metal/world_shaders.rs` + the bucket loop in `metal/draw/main.rs`.
 //
-// Unlike Metal there is no on-disk GPU-binary cache behind the build: see
-// `docs/todos.md` for why the D3D12 pipeline-library equivalent is still open.
+// Unlike Metal there is no on-disk GPU-binary cache behind the build: the D3D12
+// equivalent (an `ID3D12PipelineLibrary`) is not implemented.
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};

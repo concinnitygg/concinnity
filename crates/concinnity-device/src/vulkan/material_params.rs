@@ -1,4 +1,4 @@
-// The material parameter table on Vulkan: core's table ringed over one
+// The material parameter table on Vulkan: the engine's table ringed over one
 // persistently mapped storage buffer per frame in flight, each bound at binding
 // `MATERIAL_PARAMS_BINDING` of that frame's bindless set, beside its object
 // records. A frame's copy is rewritten only after a row changed.

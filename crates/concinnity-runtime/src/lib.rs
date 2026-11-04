@@ -2,7 +2,7 @@
 //! `concinnity_engine` makes every decision; this crate holds the run loop and
 //! host entry ([`Runtime`], [`run_from`]), the graphics driver that builds a
 //! `Box<dyn RenderBackend>` through concinnity-device and submits each frame
-//! without naming a concrete backend, and what core's systems are lent through
+//! without naming a concrete backend, and what the engine's systems are lent through
 //! `SystemHost`: the job pool, the planet ground thread, the kira audio output,
 //! gilrs gamepads and the file stores behind saves and settings. It also
 //! installs crash capture and the allocator. Depends on concinnity-engine,
@@ -19,17 +19,17 @@
 
 // The run loop, its frame drivers and the `cn run` / shipped-player entry.
 mod app;
-// The system table and what this host lends core's systems.
+// The system table and what this host lends the engine's systems.
 mod lend;
-// The file stores behind core's persistence seams.
+// The file stores behind the engine's persistence seams.
 mod persist;
 // The graphics driver: GraphicsSystem and its streaming load threads.
 mod render;
 
-// The kira audio output core's AudioSystem plays through; the one module that
+// The kira audio output the engine's AudioSystem plays through; the one module that
 // names kira.
 mod audio;
-// The gilrs gamepads core's InputSystem merges; the one module that names gilrs.
+// The gilrs gamepads the engine's InputSystem merges; the one module that names gilrs.
 mod gamepad;
 mod heap;
 

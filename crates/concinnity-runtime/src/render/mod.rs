@@ -1,5 +1,5 @@
 //! The graphics driver: `GraphicsSystem`, the load threads and payload sources
-//! behind core's streaming pools, and the standalone startup-error window. The
+//! behind the engine's streaming pools, and the standalone startup-error window. The
 //! decisions they act on live in `concinnity_engine::settings` and
 //! `concinnity_engine::render`.
 

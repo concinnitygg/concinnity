@@ -1,4 +1,4 @@
-//! The frame every backend executes, planned once in core: the graph that
+//! The frame every backend executes, planned once in the engine: the graph that
 //! runs, the camera it runs through, and every CPU-built block a pass binds.
 //!
 //! A backend reports what it has built ([`ResidentFeatures`]) and what the

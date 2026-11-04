@@ -5,7 +5,7 @@
 //!
 //! Each target `SkinnedMesh` gets a bucket of clips driven in one of two
 //! modes: `Flat` blends every clip by a live weight vector (startup fade-in +
-//! runtime crossfades; see core's `animation::flat_blend`), while `Graph` walks a compiled animation
+//! runtime crossfades; see the engine's `animation::flat_blend`), while `Graph` walks a compiled animation
 //! state machine whose transitions are driven by the target's `AnimationParams`
 //! component (see `graph`). Name-addressed runtime control for both modes
 //! lives in `commands`.
@@ -102,7 +102,9 @@ pub struct AnimationSystem {
     targets: BTreeMap<SkinnedMeshHandle, TargetState>,
     // Interned-name -> handle index snapshotted at init, so the animation
     // debug tool calls (which address a mesh by name) can find the bucket.
-    name_index: SkinnedMeshNameIndex,
+    // `None` when no renderer published one: a world without a renderer
+    // resolves its `target` names to handles of the same value.
+    name_index: Option<SkinnedMeshNameIndex>,
     // Clip time `t` in seconds: the frame time of every unpaused step, so
     // playback freezes on its pose behind a menu and resumes from it.
     clip_secs: f32,
@@ -143,7 +145,7 @@ impl AnimationSystem {
     pub fn new() -> Self {
         Self {
             targets: BTreeMap::new(),
-            name_index: SkinnedMeshNameIndex::default(),
+            name_index: None,
             clip_secs: 0.0,
             reload_entries: Vec::new(),
             ik_frames: HashMap::new(),
@@ -240,10 +242,7 @@ impl System for AnimationSystem {
         // loaded the SkinnedMesh table before this system inits), kept for the
         // animation debug tool calls. The correlation web itself is keyed by
         // the authored `target` handles directly.
-        self.name_index = ctx
-            .resource::<SkinnedMeshNameIndex>()
-            .cloned()
-            .unwrap_or_default();
+        self.name_index = ctx.resource::<SkinnedMeshNameIndex>().cloned();
         let skin_index = ctx
             .resource::<crate::animation::skinned_mesh_map::SkinnedMeshSkinIndex>()
             .cloned()

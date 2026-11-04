@@ -35,7 +35,7 @@ use crate::directx::error::map_hresult;
 // Everything about one label that is fixed once the pool is built: which placed
 // resource backs it, and which member it reclaims heap memory from. The executor
 // resolves both for every graph resource every frame, so they are indexed here
-// rather than re-scanned per lookup. Mirrors the Vulkan pool's `by_label`.
+// rather than re-scanned per lookup.
 struct LabelEntry {
     // Index into `resources`.
     resource: usize,

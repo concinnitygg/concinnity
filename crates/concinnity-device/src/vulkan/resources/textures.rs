@@ -1,8 +1,7 @@
 //! Texture-pool slot management for `VkContext`: bindless-pool, decal and
 //! particle descriptor rewires when an albedo or normal-map slot is streamed in
-//! or evicted. Mirrors the Metal pattern of "the texture pool gets re-read every
-//! frame," except Vulkan bakes texture *views* into descriptor sets, so a slot
-//! swap must walk every set that samples this slot.
+//! or evicted. Vulkan bakes texture *views* into descriptor sets, so a slot swap
+//! must walk every set that samples this slot.
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;

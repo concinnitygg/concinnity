@@ -5,7 +5,7 @@
 //!
 //! `AssetFields` and `Vocabulary` also emit the type's static schema (`concinnity_engine::ecs::schema`)
 //! behind `#[cfg(feature = "schema")]`, which resolves in the deriving crate:
-//! a crate that derives declares a `schema` feature enabling core's.
+//! a crate that derives declares a `schema` feature enabling the engine's.
 
 mod asset_attrs;
 mod asset_default;

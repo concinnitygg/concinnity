@@ -209,8 +209,8 @@ impl VkContext {
             // stream's list, so the lists never double-draw.
             self.draw_main_stream(cmd, self.cull.indirect_buffers[frame_idx].buffer(), 0);
             // GPU expands the indirect buffer to up to `draw.n_objects` draw
-            // commands inside, but the call count surfaced to the profiler
-            // is the host-side draw. Mirrors DirectX / Metal.
+            // commands inside, but the call count surfaced to the profiler is
+            // the host-side draw.
             self.inc_draw_calls(1);
             self.inc_draw_calls(self.draw_bucket_regions(
                 cmd,

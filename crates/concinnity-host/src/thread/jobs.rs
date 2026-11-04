@@ -52,7 +52,7 @@ impl JobPool {
     }
 }
 
-/// The pool lent to core: physics steps, behavior evaluation, pose sampling,
+/// The pool lent to the engine: physics steps, behavior evaluation, pose sampling,
 /// bake rows and render-graph recording.
 impl FanOut for JobPool {
     fn workers(&self) -> usize {

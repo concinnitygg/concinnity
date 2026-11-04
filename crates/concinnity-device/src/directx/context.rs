@@ -234,9 +234,8 @@ impl DxUniforms {
 }
 
 // Per-frame command infrastructure (allocators + lists), grouped off the flat
-// `DxContext`. Mirrors Vulkan's `VkCommands`. The frame is split across two
-// outer cmd lists + a per-pass pool so non-composite passes can record in
-// parallel:
+// `DxContext`. The frame is split across two outer cmd lists + a per-pass pool
+// so non-composite passes can record in parallel:
 //
 //   * `command_allocators` / `command_lists`: "start" outer cmd list. Holds the
 //     timestamp pre-init at the top of every frame (D3D12 debug layer flags an
@@ -284,7 +283,7 @@ pub(super) struct DxFrameSync {
 }
 
 // Shared static-mesh geometry buffers + their views, grouped off the flat
-// `DxContext`. Mirrors Vulkan's `VkGeometry`.
+// `DxContext`.
 pub(super) struct DxGeometry {
     pub vertex_buffer: PooledBuffer,
     pub index_buffer: PooledBuffer,
@@ -292,9 +291,9 @@ pub(super) struct DxGeometry {
     pub index_buffer_view: D3D12_INDEX_BUFFER_VIEW,
 }
 
-// Instanced-prop clusters, grouped off the flat `DxContext`. Mirrors Vulkan's
-// `VkInstanced`. Every instance folds into the GPU-driven cull records, so no
-// pass walks the instances on the CPU.
+// Instanced-prop clusters, grouped off the flat `DxContext`. Every instance
+// folds into the GPU-driven cull records, so no pass walks the instances on the
+// CPU.
 pub(super) struct DxInstanced {
     pub clusters: Vec<InstancedCluster>,
     // Whether any cluster declares LOD alternates. False skips the per-frame

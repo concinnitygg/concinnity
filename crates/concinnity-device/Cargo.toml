@@ -70,7 +70,6 @@ concinnity-testing = { workspace = true }
 
 [build-dependencies]
 concinnity-engine = { workspace = true }
-concinnity-core = { workspace = true }
 concinnity-shader = { workspace = true }
 concinnity-toolchain = { workspace = true }
 

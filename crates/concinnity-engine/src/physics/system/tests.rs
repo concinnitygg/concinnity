@@ -3,8 +3,8 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 
 use crate::components::{
-    CameraController, CharacterRig, Collider, FollowController, Pickup, PropCollider,
-    PropColliderShape,
+    Camera3D, CameraController, CharacterRig, Collider, ContactEvent, FollowController, Held,
+    Pickup, PropCollider, PropColliderShape, VolumeEvent, WakeRequest,
 };
 use crate::ecs::{Ref, SkinnedMeshHandle, World};
 use crate::physics::LayerMask;

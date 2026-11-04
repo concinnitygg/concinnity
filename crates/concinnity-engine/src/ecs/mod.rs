@@ -23,9 +23,10 @@
 //! [`BlobAssetDef`]), the [`System`] behavior trait, and the
 //! [`World`]: the components, resources, events, payloads, profile, and frame
 //! scratch a tick reads and writes, plus the systems that run over them and
-//! their schedule. The system table itself ([`SystemTable`]) names a host's own
-//! system types, so it is written in the client crate, whose own `ecs` module
-//! holds that table and the resources only a renderer-bearing runtime has.
+//! their schedule. A [`SystemTable`] lists a host's systems, so each host
+//! writes its own from the entries [`CoreSystems`] lends plus its own
+//! (concinnity-runtime's is `lend::SYSTEMS`); [`HEADLESS_SYSTEMS`] is the one
+//! for a world with no host.
 //!
 //! The interner that assigns asset identities keeps a per-thread table and
 //! lives in concinnity-host. The authoring `Registration` record lives in
@@ -124,7 +125,7 @@ pub use frame::{FrameContext, FrameVec};
 // Renderer-free resources the runtime systems publish and read to coordinate a
 // tick (menu state, frame-rate cap, HUD prefs, cursor + dropdown views), plus
 // the world's cook-counted physics reservation. They name no renderer type, so
-// they live here where the physics / audio subsystem crates can reach them.
+// the physics and audio systems read them without depending on a backend.
 pub use protocol::{
     BlobMeshBounds, BlobSceneGroups, CursorShape, CursorState, DesiredCursor, DisabledSettingRows,
     DisplayModes, DropdownView, ExecutionTrace, FlyCam, FrameCaptureRequest, FrameRateCap,

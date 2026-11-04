@@ -23,7 +23,7 @@ mod fault_log;
 // GpuFrameBuffers, FaceTargets) defined in draw/main.rs.
 mod builtin_shaders;
 #[cfg(test)]
-mod cull_variants_test;
+mod cull_variants_tests;
 pub(in crate::metal) mod draw;
 mod fog;
 mod frame_pacing;

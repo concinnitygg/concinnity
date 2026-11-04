@@ -197,17 +197,16 @@ pub(super) fn build_screen_space(
     };
 
     // Unified geometry G-buffer pre-pass. Built whenever any screen-space
-    // consumer of the merged buffer is on: SSR resolve / SSGI / RT (all
-    // fold into `ssr`), SSAO, or the velocity channel a TAA / upscale
-    // consumer needs. One jittered traversal rasterizes the normal+depth /
-    // roughness / velocity MRT every reader then samples, replacing the
-    // separate SSR / SSAO / velocity pre-passes. The skinned variant is built
-    // lazily by `upload_skinned` once the joint-set layout exists (it doesn't
-    // at init). Mirrors the DirectX `self.gbuffer` build. The gate is the
-    // same `gbuffer_enabled` the transient pool was built from, so the pool
-    // cannot place the MRT channels for a pre-pass that is not built
-    // (harmless) or -- the dangerous direction -- leave them unplaced for one
-    // that is.
+    // consumer of the merged buffer is on: SSR resolve / SSGI / RT (all fold
+    // into `ssr`), SSAO, or the velocity channel a TAA / upscale consumer
+    // needs. One jittered traversal rasterizes the normal+depth / roughness /
+    // velocity MRT every reader then samples, replacing the separate SSR / SSAO
+    // / velocity pre-passes. The skinned variant is built lazily by
+    // `upload_skinned` once the joint-set layout exists (it doesn't at init).
+    // The gate is the same `gbuffer_enabled` the transient pool was built from,
+    // so the pool cannot place the MRT channels for a pre-pass that is not
+    // built (harmless) or -- the dangerous direction -- leave them unplaced for
+    // one that is.
     let gbuffer = if features.gbuffer_enabled {
         Some(GbufferResources::new(
             crate::vulkan::post::gbuffer::GbufferDeviceCtx { alloc, device },

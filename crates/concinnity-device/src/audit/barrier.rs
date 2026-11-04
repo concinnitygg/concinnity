@@ -161,7 +161,7 @@ const AUDITS: &[BackendAudit] = &[
             ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
             ("compact.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
             (
-                "compact_test.rs",
+                "compact_tests.rs",
                 "cmd_pipeline_barrier",
                 1,
                 Reason::OutOfFrame,

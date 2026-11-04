@@ -567,7 +567,7 @@ impl DxContext {
         }
     }
 
-    // Plan this frame in core over what this backend holds, then put what the
+    // Plan this frame in the engine over what this backend holds, then put what the
     // encoders read from `&self` in place: the spot slices and the jitter the
     // upscaler is dispatched with.
     pub(in crate::directx) fn plan_frame(&mut self, args: PlanArgs<'_>) -> RenderResult<FramePlan> {

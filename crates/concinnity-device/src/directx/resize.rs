@@ -5,8 +5,7 @@
 //! (only the resources they point at) so the live root signatures + pipelines +
 //! pre-bound GPU descriptor handles keep working without a re-bind.
 //!
-//! Mirrors the Vulkan `rebuild_swapchain` flow in src/vulkan/swapchain.rs: a
-//! `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
+//! A `wait_idle` gate, a wholesale drop + recreate, then per-effect resource
 //! rebuilds (TAA / SSAO / SSR / bloom). The shared post passes take their
 //! targets' descriptors from the post block, so a pass whose target count
 //! follows the resolution (the bloom chain's octaves) moves no other slot.

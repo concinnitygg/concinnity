@@ -564,10 +564,9 @@ pub(crate) struct MtlContext {
     // `cn run -f` `screenshot` command can blit it back to a host buffer and
     // PNG-encode it (see metal/screenshot.rs). Set each frame only under
     // `hot_reload` (the path that runs the debug endpoint able to request a
-    // capture); `None` in production and before the first present, so a
-    // capture then returns a clean error. The MTKView has `framebufferOnly`
-    // switched off under the same gate so the drawable is blit-readable.
-    // Mirrors the DX/VK `last_present_index`.
+    // capture); `None` in production and before the first present, so a capture
+    // then returns a clean error. The MTKView has `framebufferOnly` switched
+    // off under the same gate so the drawable is blit-readable.
     pub(super) last_present_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     // Frame captures asked of `draw_frame`: their read-back buffers and the
     // writer they are handed to once their command buffer completes.

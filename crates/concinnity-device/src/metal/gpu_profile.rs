@@ -3,7 +3,7 @@
 //! the unified-memory flag, the recommended working-set as the memory budget,
 //! the highest supported Apple GPU family as the generation, and the name's
 //! Pro / Max / Ultra suffix as the variant. The shared
-//! `classify_tier` (core's render/backend/probe.rs) maps these to a tier so every
+//! `classify_tier` (the engine's render/backend/probe.rs) maps these to a tier so every
 //! backend classifies the same way.
 
 use concinnity_engine::render::backend::{

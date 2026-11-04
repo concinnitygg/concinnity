@@ -1,4 +1,4 @@
-//! The material parameter table on Metal: core's table ringed over the same
+//! The material parameter table on Metal: the engine's table ringed over the same
 //! slots as the object buffer (the frames in flight plus the probe bake's), each
 //! slot's copy rewritten only when it is fresh or behind a change.
 

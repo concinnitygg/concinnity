@@ -241,8 +241,6 @@ fn create_samplers(
     // trilinear minification samples that garbage and the text reads choppy.
     // Clamp MaxLOD to 0 so only the full-resolution (supersampled) mip 0 is
     // sampled; the SDF stays crisp under bilinear minification on its own.
-    // Mirrors the Vulkan text sampler (`create_sampler_linear_clamp`, whose
-    // max_lod defaults to 0).
     let clamp_samp = D3D12_SAMPLER_DESC {
         Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
         AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,

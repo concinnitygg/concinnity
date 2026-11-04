@@ -95,32 +95,6 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
 // minimum guaranteed push-constant range.
 pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 128;
 
-// Compile the Compute cull compute kernel to SPIR-V.
-pub(super) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_EARLY.compile(hot_reload)
-}
-
-// Compile the late pass (two-pass occlusion) variant of the cull kernel. Same
-// source as `compile_cull_shader`, with a `CULL_LATE` define selecting the
-// re-test of the early pass's Hi-Z-occluded objects against the rebuilt pyramid.
-// Mirrors the `#define` split the Hi-Z init kernel uses.
-pub(super) fn compile_cull_shader_late(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_LATE.compile(hot_reload)
-}
-
-// Compile the GPU-driven shadow cull kernel: the same cull source with a
-// `SHADOW_CULL` define, which drops the Hi-Z (set 1) + status (binding 3)
-// bindings and tests each cascade's light frustum only. Paired with the lean
-// 3-SSBO shadow cull set layout.
-pub(super) fn compile_shadow_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::CULL_SHADOW.compile(hot_reload)
-}
-
-// Compile the GPU-driven shadow pass's depth-only bindless vertex shader.
-pub(super) fn compile_shadow_bindless_vs(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    super::builtin_shaders::SHADOW_VERT_BINDLESS.compile(hot_reload)
-}
-
 // A shader module scoped to pipeline creation: destroyed on drop, so the
 // early-return error paths between module and pipeline creation cannot leak it.
 pub(in crate::vulkan) struct SpvModule<'d> {
@@ -591,9 +565,11 @@ pub(super) fn create_composite_pipeline(
 #[cfg(test)]
 mod tests {
     use super::{
-        CompileProgram, SHADOW_VERTEX_ATTRS, compile_bindless_shaders, compile_cull_shader,
-        compile_cull_shader_late, compile_shadow_bindless_vs, compile_shadow_cull_shader, is_spirv,
-        spirv_words, world_entry,
+        CompileProgram, SHADOW_VERTEX_ATTRS, compile_bindless_shaders, is_spirv, spirv_words,
+        world_entry,
+    };
+    use crate::vulkan::builtin_shaders::{
+        CULL_EARLY, CULL_LATE, CULL_SHADOW, SHADOW_VERT_BINDLESS,
     };
 
     // Whole words become native-endian u32s, matching the raw reinterpretation
@@ -631,9 +607,9 @@ mod tests {
     // Vulkan-on-Windows runtime cannot currently exercise.
     #[test]
     fn cull_shaders_compile_both_phases() {
-        let early = compile_cull_shader(false).expect("early cull compiles");
-        let late = compile_cull_shader_late(false).expect("late cull compiles");
-        let shadow = compile_shadow_cull_shader(false).expect("shadow cull compiles");
+        let early = CULL_EARLY.compile(false).expect("early cull compiles");
+        let late = CULL_LATE.compile(false).expect("late cull compiles");
+        let shadow = CULL_SHADOW.compile(false).expect("shadow cull compiles");
         assert!(is_spirv(&early), "early cull is valid SPIR-V");
         assert!(is_spirv(&late), "late cull is valid SPIR-V");
         assert!(is_spirv(&shadow), "shadow cull is valid SPIR-V");
@@ -647,7 +623,9 @@ mod tests {
     #[test]
     fn shadow_bindless_vs_compiles() {
         concinnity_shader::require_dxc!();
-        let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
+        let vs = SHADOW_VERT_BINDLESS
+            .compile(false)
+            .expect("shadow bindless VS compiles");
         assert!(is_spirv(&vs), "shadow bindless VS is valid SPIR-V");
     }
 
@@ -657,7 +635,9 @@ mod tests {
     #[test]
     fn the_shadow_pipeline_binds_what_its_shader_reads() {
         concinnity_shader::require_dxc!();
-        let vs = compile_shadow_bindless_vs(false).expect("shadow bindless VS compiles");
+        let vs = SHADOW_VERT_BINDLESS
+            .compile(false)
+            .expect("shadow bindless VS compiles");
         let words = spirv_words(&vs).expect("whole words");
         let mut bound: Vec<u32> = SHADOW_VERTEX_ATTRS.iter().map(|a| a.location).collect();
         bound.sort_unstable();

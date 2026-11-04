@@ -222,14 +222,13 @@ pub(in crate::directx) struct RaymarchResources {
         reason = "holds the scene_color slot open during init; the live SRV is re-pointed before the first frame"
     )]
     scene_color_fallback: PooledTexture,
-    // Pre-raymarch HDR scene snapshot. At the top of `encode_raymarch`
-    // we `CopyResource` from `hdr_resolve` (or `hdr_color` when MSAA
-    // is off) into this resource, so refractive user shaders that
-    // sample `scene_color` through `sampleSceneRefracted` see the
-    // scene as it stood after Main + AutoExposure but before raymarch
-    // itself writes / decals / fog / particles. Sized to render dims;
-    // recreated by `resize_to` on window resize. Mirrors the Metal
-    // `hdr_resolve_copy` snapshot.
+    // Pre-raymarch HDR scene snapshot. At the top of `encode_raymarch` we
+    // `CopyResource` from `hdr_resolve` (or `hdr_color` when MSAA is off) into
+    // this resource, so refractive user shaders that sample `scene_color`
+    // through `sampleSceneRefracted` see the scene as it stood after Main +
+    // AutoExposure but before raymarch itself writes / decals / fog /
+    // particles. Sized to render dims; recreated by `resize_to` on window
+    // resize.
     hdr_resolve_copy: ID3D12Resource,
     // CPU descriptor handle of the `scene_color` SRV slot, captured
     // at init so `resize_to` can rewrite the descriptor in place after
@@ -1529,7 +1528,7 @@ impl DxContext {
         // Only cast into cascades the rasterized shadow pass re-rendered this
         // frame: a skipped cascade's slice must stay exactly as it was last fully
         // rendered (raster + SDF), so we neither clear nor add to it. The 0
-        // sentinel falls back to all cascades. Mirrors Metal.
+        // sentinel falls back to all cascades.
         let all_cascades = (1u32 << render_types::NUM_SHADOW_CASCADES) - 1;
         let render_mask = if self.state.planner.shadow.cascade_mask == 0 {
             all_cascades

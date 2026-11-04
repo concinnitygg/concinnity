@@ -80,13 +80,12 @@ pub(in crate::metal) struct RaymarchVolumeRecord {
     // The volume's asset name, for pipeline errors.
     pub(in crate::metal) label: String,
     // The volume's draw pipeline. Compiled as the opaque surface variant
-    // (cone-marched SDF, depth write) for a normal volume, or the
-    // alpha-blended volumetric variant (Beer-Lambert march, no depth write)
-    // when the asset's `volumetric` flag is set. A volume is one or the
-    // other, never both: a volumetric shader provides `sampleVolume`
-    // instead of `map`/`shade`, so the surface template would not link
-    // against it. Mirrors DirectX's single per-volume `pso`.
-    // A surface's is the back-face variant; `front_pipeline` is the other.
+    // (cone-marched SDF, depth write) for a normal volume, or the alpha-blended
+    // volumetric variant (Beer-Lambert march, no depth write) when the asset's
+    // `volumetric` flag is set. A volume is one or the other, never both: a
+    // volumetric shader provides `sampleVolume` instead of `map`/`shade`, so
+    // the surface template would not link against it. A surface's is the
+    // back-face variant; `front_pipeline` is the other.
     pub(in crate::metal) pipeline: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     // The surface's front-face pipeline; `None` for a medium.
     pub(in crate::metal) front_pipeline:

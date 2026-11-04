@@ -145,9 +145,9 @@ does and a shipped player carries none of the build machinery.
 
 | Part                | Responsibility                                                                                                                                                                           |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Core**            | The runtime vocabulary and the CPU compute over it: components, entity storage, scheduling, the compiled-world format, render preparation and the render graph, physics, behaviors, animation math, bake algorithms. Platform-independent, needs no operating system. |
+| **Core**            | The runtime vocabulary and the CPU compute over it: components, entity storage, scheduling, the compiled-world format, render preparation and the render graph, physics, behaviors, animation, audio policy, input, UI, HUDs, settings, streaming pools, story playback, bake algorithms. Platform-independent, needs no operating system (`concinnity-core` for math, memory and fan-out; `concinnity-engine` for the rest). |
 | **Host**            | What the engine needs from the machine it runs on: the state tree and its paths, the blob store, threads and their priorities, process memory queries.                                 |
-| **Engine runtime**  | The application loop and the systems that need an operating system: the renderer driver, audio, input, UI interaction, HUDs, settings, streaming, story playback.                     |
+| **Engine runtime**  | The application loop and the adapters that need an operating system: the graphics driver, the audio mixer, gamepads, the streaming load threads, and the file stores behind settings, saves and crash reports. |
 | **Device**          | The hardware-facing layer: the Metal, DirectX 12, and Vulkan backends, windowing, presentation, upscaler SDK integration, and GPU memory allocation.                                   |
 | **Shader toolchain** | Compiles the engine's single-source HLSL into each backend's format. Used at engine build time, by the renderer for hot reload, and by the cook for world shaders.                     |
 | **Cook**            | The build side: parsing, expansion, validation, source import, payload compilation, packing, thumbnail baking.                                                                         |
@@ -186,9 +186,10 @@ endpoint, and `cn edit` cooks in memory and overlays the in-engine editor. Neith
 | Linux    | Vulkan          | none                                           | GLFW (X11 and Wayland)            |
 | iOS      | Metal           | none                                           | Host-owned view through the C ABI |
 
-Exactly one backend is compiled into a build. A build with no backend runs a
-world with nothing to draw, or one that declares `AppConfig.headless`, and
-refuses any other. DirectX 12 can fall back to the WARP software adapter.
+On a platform that has one, a build always compiles the default backend, and
+Vulkan joins it under the `vulkan` feature; the backend is then chosen at
+launch. A build with no backend runs a world with nothing to draw, or one that
+declares `AppConfig.headless`, and refuses any other. DirectX 12 can fall back to the WARP software adapter.
 
 ### 3.4 Layering rules
 

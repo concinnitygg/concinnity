@@ -110,11 +110,11 @@ impl VkContext {
         self.state.skinned.morph_weights = vec![Vec::new(); n];
         self.skinned.morph_weight_buffers = Vec::new();
 
-        // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline +
-        // per-frame deformed-vertex buffers + their descriptor sets, and set
+        // GPU-driven main-pass skinning: build the `rt_skin` compute pipeline + per-frame
+        // deformed-vertex buffers + their descriptor sets, and set
         // `self.state.draw.n_skinned` so `draw.record_count()` covers the skinned tail. Every
-        // skinned draw rides the GPU-driven pass, so a build failure is a
-        // startup error, as on Metal. Mirrors the DirectX `upload_skinned`.
+        // skinned draw rides the GPU-driven pass, so a build failure is a startup error, as
+        // on Metal.
         self.build_main_skin(vertices.len())
             .map_err(|e| e.context("skinned: main-pass skin fold build failed"))?;
         Ok(())
@@ -187,12 +187,11 @@ impl VkContext {
         }
     }
 
-    // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned
-    // draw objects. `morphs[i]` pairs with draw object `i`; instance copies share
-    // their template's `Arc`, so each unique entry set becomes one device buffer. Allocates the per-frame
-    // weight buffers (one f32 per target per object) and re-points the main fold's
-    // skin descriptor-set morph bindings when any object carries morphs. Called
-    // once after `upload_skinned`. Mirrors the DirectX `upload_skinned_morphs`.
+    // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned draw objects.
+    // `morphs[i]` pairs with draw object `i`; instance copies share their template's `Arc`, so each
+    // unique entry set becomes one device buffer. Allocates the per-frame weight buffers (one f32 per
+    // target per object) and re-points the main fold's skin descriptor-set morph bindings when any object
+    // carries morphs. Called once after `upload_skinned`.
     pub(in crate::vulkan) fn upload_skinned_morphs(
         &mut self,
         morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],

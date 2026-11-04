@@ -8,7 +8,7 @@
 //! rebinding. Everything here works over a `BufRead` / `Write` pair, so the
 //! whole surface is exercised without a socket.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use super::server::{Executor, Server};
 
@@ -17,6 +17,12 @@ const PATH: &str = "/mcp";
 
 /// Largest body accepted, so a stray connection cannot exhaust memory.
 const MAX_BODY: usize = 1 << 20;
+
+/// Longest request or header line accepted, terminator included.
+const MAX_LINE: usize = 8 << 10;
+
+/// Most header fields accepted in one request.
+const MAX_HEADERS: usize = 64;
 
 /// Why a request was refused before any protocol work.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,6 +33,7 @@ pub(super) enum Refusal {
     NoLength,
     ForeignOrigin,
     TooLarge,
+    HeadersTooLarge,
 }
 
 impl Refusal {
@@ -38,6 +45,7 @@ impl Refusal {
             Self::WrongMethod => (405, "Method Not Allowed"),
             Self::NoLength => (411, "Length Required"),
             Self::TooLarge => (413, "Payload Too Large"),
+            Self::HeadersTooLarge => (431, "Request Header Fields Too Large"),
         }
     }
 }
@@ -87,8 +95,9 @@ where
 
 /// Read one HTTP/1.1 request and report the JSON-RPC body it carried.
 pub(super) fn read_request<R: BufRead>(input: &mut R) -> Incoming {
-    let Some(start) = read_line(input) else {
-        return Incoming::Refused(Refusal::Malformed);
+    let start = match read_line(input) {
+        Ok(line) => line,
+        Err(refusal) => return Incoming::Refused(refusal),
     };
     if start.trim().is_empty() {
         return Incoming::Empty;
@@ -101,13 +110,19 @@ pub(super) fn read_request<R: BufRead>(input: &mut R) -> Incoming {
 
     let mut length: Option<usize> = None;
     let mut origin: Option<String> = None;
+    let mut headers = 0usize;
     loop {
-        let Some(line) = read_line(input) else {
-            return Incoming::Refused(Refusal::Malformed);
+        let line = match read_line(input) {
+            Ok(line) => line,
+            Err(refusal) => return Incoming::Refused(refusal),
         };
         let line = line.trim_end_matches(['\r', '\n']);
         if line.is_empty() {
             break;
+        }
+        headers += 1;
+        if headers > MAX_HEADERS {
+            return Incoming::Refused(Refusal::HeadersTooLarge);
         }
         let Some((name, value)) = line.split_once(':') else {
             return Incoming::Refused(Refusal::Malformed);
@@ -149,14 +164,19 @@ pub(super) fn read_request<R: BufRead>(input: &mut R) -> Incoming {
     }
 }
 
-// One line including its terminator, or None when the stream ended or failed
-// mid-line. An empty read is a clean EOF, reported as an empty line.
-fn read_line<R: BufRead>(input: &mut R) -> Option<String> {
+// One line including its terminator, read no further than `MAX_LINE` bytes.
+// An empty read is a clean EOF, reported as an empty line.
+fn read_line<R: BufRead>(input: &mut R) -> Result<String, Refusal> {
     let mut line = String::new();
-    match input.read_line(&mut line) {
-        Ok(_) => Some(line),
-        Err(_) => None,
+    let read = input
+        .by_ref()
+        .take(MAX_LINE as u64)
+        .read_line(&mut line)
+        .map_err(|_| Refusal::Malformed)?;
+    if read == MAX_LINE && !line.ends_with('\n') {
+        return Err(Refusal::HeadersTooLarge);
     }
+    Ok(line)
 }
 
 // The path of a request target, dropping any query string. An absolute-form
@@ -336,6 +356,40 @@ mod tests {
             MAX_BODY + 1
         );
         assert_eq!(incoming(&text), Incoming::Refused(Refusal::TooLarge));
+    }
+
+    #[test]
+    fn an_endless_request_line_is_refused_at_the_line_cap() {
+        let text = format!("POST /{} HTTP/1.1\r\n\r\n", "a".repeat(MAX_LINE));
+        assert_eq!(incoming(&text), Incoming::Refused(Refusal::HeadersTooLarge));
+    }
+
+    #[test]
+    fn an_endless_header_line_is_refused_at_the_line_cap() {
+        let headers = format!("X-Pad: {}\r\n", "a".repeat(MAX_LINE));
+        assert_eq!(
+            incoming(&request("POST", PATH, &headers, "{}")),
+            Incoming::Refused(Refusal::HeadersTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_header_line_just_under_the_cap_is_read() {
+        let pad = "a".repeat(MAX_LINE - "X-Pad: \r\n".len());
+        let headers = format!("X-Pad: {pad}\r\n");
+        assert!(matches!(
+            incoming(&request("POST", PATH, &headers, "{}")),
+            Incoming::Body(_)
+        ));
+    }
+
+    #[test]
+    fn too_many_header_fields_are_refused() {
+        let headers = "X-Pad: 1\r\n".repeat(MAX_HEADERS);
+        assert_eq!(
+            incoming(&request("POST", PATH, &headers, "{}")),
+            Incoming::Refused(Refusal::HeadersTooLarge)
+        );
     }
 
     #[test]

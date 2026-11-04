@@ -1,4 +1,4 @@
-//! The gilrs adapter: OS gamepad events converted to core's `PadEvent` and
+//! The gilrs adapter: OS gamepad events converted to the engine's `PadEvent` and
 //! folded into a `PadState`.
 
 use concinnity_core::math::SaturatingFrom;

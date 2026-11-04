@@ -1,4 +1,4 @@
-// The material parameter table on DirectX: core's table ringed over one
+// The material parameter table on DirectX: the engine's table ringed over one
 // persistently mapped upload buffer per frame in flight plus the probe bake's
 // slot, bound as the bindless main pass's root SRV at t20. A slot's copy is
 // rewritten only after a row changed.

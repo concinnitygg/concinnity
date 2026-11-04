@@ -23,7 +23,7 @@ impl VkContext {
         // The flag is cleared regardless of outcome so a failed rebuild (typo in a shader edit)
         // doesn't loop, and the previous pipelines stay live so the session keeps rendering; only a
         // device failure propagates. Wait for the GPU to drain first so swapping pipelines out from
-        // under in-flight command buffers is safe. Mirrors the DirectX `apply_pending_rebuilds`.
+        // under in-flight command buffers is safe.
         if self.hot_reload.requested() {
             self.hot_reload.clear();
             self.wait_idle();

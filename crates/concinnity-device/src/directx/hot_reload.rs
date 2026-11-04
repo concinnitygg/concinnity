@@ -22,6 +22,7 @@ use concinnity_engine::render::post::ssgi::SsgiPipelines;
 use super::context::DxContext;
 use super::init::pipelines::{BucketPipelineTargets, BucketPsos, build_bucket_pipeline};
 use super::post::post_device::PostPipeline;
+use crate::directx::builtin_shaders::{CULL_EARLY, CULL_LATE, CompileProgram as _};
 
 // Rebuild a feature's PSO(s) into a temporary only when `$cond` says the
 // feature is live, propagating any compile/create error out of the enclosing
@@ -138,11 +139,11 @@ impl DxContext {
                         super::cull::create_cull_pso(device, &kernels.root_sig, cs),
                     )
                 };
-                let pso = create(&super::cull::compile_cull_shader(hr)?)?;
+                let pso = create(&CULL_EARLY.compile(hr)?)?;
                 let late = kernels
                     .pso_late
                     .as_ref()
-                    .map(|_| create(&super::cull::compile_cull_shader_late(hr)?))
+                    .map(|_| create(&CULL_LATE.compile(hr)?))
                     .transpose()?;
                 Ok::<_, RenderError>((pso, late))
             })

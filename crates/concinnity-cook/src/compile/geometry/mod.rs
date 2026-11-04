@@ -494,7 +494,7 @@ mod tests {
         Vertex, deserialize_skinned_with_lods, deserialize_with_lods,
     };
 
-    // core's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
+    // The engine's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
     // not linkable here; recover the (vertices, indices) pair from the public
     // with-LODs reader.
     fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {

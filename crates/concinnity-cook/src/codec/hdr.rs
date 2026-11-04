@@ -78,7 +78,7 @@ pub(crate) fn load_file(path: &str) -> Result<HdrImage, String> {
 // HDR (Radiance RGBE) decoder
 
 // The in-memory image type and the equirect→cube resampler live with the IBL
-// bake in core; this module decodes source files into that type.
+// bake in the engine; this module decodes source files into that type.
 pub(crate) use concinnity_engine::bake::environment_map::source::{HdrImage, equirect_to_cube};
 
 // Decode a Radiance .hdr blob. Supports both the run-length-encoded

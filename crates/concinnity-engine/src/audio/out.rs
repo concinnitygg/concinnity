@@ -1,4 +1,4 @@
-//! The seam between core's audio policy and the host's mixer: a host lends an
+//! The seam between the engine's audio policy and the host's mixer: a host lends an
 //! [`AudioOut`] that owns the device, the mix buses, the spatial emitter
 //! tracks, the playing voices and the clip decoder. Everything it is asked to
 //! do arrives already decided, in decibels and hertz.

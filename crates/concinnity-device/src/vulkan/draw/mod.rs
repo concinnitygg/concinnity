@@ -281,17 +281,15 @@ impl VkContext {
     ) -> RenderResult<vk::CommandBuffer> {
         let device = self.hw.device.clone();
         let device = &device;
-        // Profiler-overlay timestamp pair. The pool slot for this frame is
-        // reset (the matching `get_query_pool_results` already ran in
+        // Profiler-overlay timestamp pair. The pool slot for this frame is reset
+        // (the matching `get_query_pool_results` already ran in
         // `read_gpu_timings`, after the fence wait that gated the previous trip's
-        // writes), then the start tick is recorded as the first cmd-buffer
-        // op. The matching end tick is written just before
-        // `end_command_buffer` returns control. Mirrors the DirectX
-        // EndQuery(TIMESTAMP) + ResolveQueryData pattern.
-        // Outer "start" command buffer: the leading timestamp (the frame's
-        // first GPU op), recorded into its own buffer so it can be submitted
-        // before the per-pass buffers. The query-pool reset must precede every
-        // pass, hence it lives here at the head of the batch.
+        // writes), then the start tick is recorded as the first cmd-buffer op.
+        // The matching end tick is written just before `end_command_buffer`
+        // returns control. Outer "start" command buffer: the leading timestamp
+        // (the frame's first GPU op), recorded into its own buffer so it can be
+        // submitted before the per-pass buffers. The query-pool reset must
+        // precede every pass, hence it lives here at the head of the batch.
         let start_cmd = self.commands.start_command_buffers[frame_idx];
         // SAFETY: `start_cmd` belongs to this frame slot, whose fence was already waited on, so
         // it is not in flight and may be reset.
@@ -437,7 +435,7 @@ impl VkContext {
         }
     }
 
-    // Plan this frame in core over what this backend holds, then put what the
+    // Plan this frame in the engine over what this backend holds, then put what the
     // encoders read from `&self` in place: the spot slices and the jitter the
     // upscaler is dispatched with.
     fn plan_frame(&mut self, args: PlanArgs) -> RenderResult<FramePlan> {

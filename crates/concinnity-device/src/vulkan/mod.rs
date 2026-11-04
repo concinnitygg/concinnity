@@ -12,7 +12,7 @@ mod canopy;
 mod clouds;
 mod compact;
 #[cfg(test)]
-mod compact_test;
+mod compact_tests;
 mod context;
 mod cull;
 mod cull_readback;

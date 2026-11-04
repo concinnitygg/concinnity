@@ -111,11 +111,10 @@ impl Features {
         let taa_enabled = plan.temporal;
         let msaa_samples = Self::msaa_samples(hw, hdr_samples);
         // Pair the authored tunables with the resolved mode's output flags. On
-        // the SDR path both stay 0.0 and the shader runs the full ACES + gamma
-        // + FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output`
-        // picks scRGB-linear passthrough (0.0) vs SMPTE ST 2084 in-shader
-        // encode (1.0). Mirrors the Metal hop in `metal/init/mod.rs`. `setup`
-        // may have already downgraded the encoding when
+        // the SDR path both stay 0.0 and the shader runs the full ACES + gamma +
+        // FXAA + LUT chain unchanged. Inside the HDR branch, `pq_output` picks
+        // scRGB-linear passthrough (0.0) vs SMPTE ST 2084 in-shader encode
+        // (1.0). `setup` may have already downgraded the encoding when
         // `CheckColorSpaceSupport(HDR10 PQ)` came back negative, so composing
         // after `setup` returns is what makes `hw.hdr_mode` the source of truth.
         let post_process = hw.hdr_mode.post_process_params(graphics.post_process());

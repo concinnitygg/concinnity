@@ -4,7 +4,7 @@
 //! `vk::Format` / `DXGI_FORMAT`) into a `PixelLayout` and calls `decode_to_rgba8`;
 //! the per-channel math here is identical across backends. PNG encoding + file
 //! I/O stay in the backends (debug-only, and would pull `std::fs` / the png crate
-//! into core).
+//! into the engine).
 
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, powf, powi};

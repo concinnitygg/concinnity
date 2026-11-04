@@ -1,5 +1,5 @@
 //! Where streamed texture payloads come from, and the thread that decodes them
-//! for core's texture pool.
+//! for the engine's texture pool.
 //!
 //! `PayloadSource` is the seam. `MemPayloadSource` serves compiled texture
 //! payloads already resident in RAM (used by `cn run -f`, which builds payloads

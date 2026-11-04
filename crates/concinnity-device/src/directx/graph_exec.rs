@@ -1,8 +1,7 @@
-//! DirectX-side executor for the render graph. `DxContext::execute_graph`
-//! walks the `CompiledGraph` produced by the shared
-//! `concinnity_engine::render::render_graph::build_frame_graph`
-//! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
-//! Vulkan executors; every backend now drives the same builder.
+//! DirectX-side executor for the render graph. `DxContext::execute_graph` walks
+//! the `CompiledGraph` produced by the shared
+//! `concinnity_engine::render::render_graph::build_frame_graph` and dispatches
+//! each pass to its `encode_*` method. Every backend drives the same builder.
 //!
 //! **Per-pass command lists.** Each non-composite pass records into its
 //! own `ID3D12GraphicsCommandList` (drawn from the `pass_cmd_lists` pool
@@ -469,7 +468,7 @@ fn emit_graph_restores(
 //
 // This is where a registry entry that claims a resource the graph does not fully
 // cover shows up; the headless sweep in `render_graph::validate` covers the
-// deriver itself. Mirrors the Vulkan executor's `debug_assert_graph_drives`.
+// deriver itself.
 #[cfg(debug_assertions)]
 fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
     use super::barrier_translate::d3d12_state;
@@ -572,8 +571,7 @@ pub(in crate::directx) struct FrameGpuBuffers {
     pub shadow_ubo_gva: u64,
 }
 
-// Per-frame params the executor threads into each pass's `encode_*`
-// method. Mirrors the Vulkan executor's `GraphFrameParams`.
+// Per-frame params the executor threads into each pass's `encode_*` method.
 pub(in crate::directx) struct GraphFrameParams<'a> {
     pub cmd: &'a ID3D12GraphicsCommandList,
     pub frame_idx: usize,
@@ -706,8 +704,7 @@ impl DxContext {
         // Particle per-frame state (dt / frame index / per-emitter spawn runs
         // and their params-ring slots) is advanced here, once, before any pass
         // encodes, so the sim and draw halves record on separate workers against
-        // one consistent frame. `None` when the pass is inert. Mirrors Vulkan's
-        // and Metal's `prepare_particle_pass` hoist.
+        // one consistent frame. `None` when the pass is inert.
         let particle_ref = params.particle.as_ref();
         if let Some(frame) = particle_ref {
             self.write_particle_params(params.frame_idx, frame, params.vp_mat);

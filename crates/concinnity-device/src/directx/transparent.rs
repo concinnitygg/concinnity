@@ -1342,13 +1342,13 @@ impl DxContext {
         };
         let cam = [view.camera_pos[0], view.camera_pos[1], view.camera_pos[2]];
 
-        // Per-pixel RT reflection is selected over the probe/planar path when RT
-        // is live (the scene TLAS is built) AND every live producer's RT pipelines
+        // Per-pixel RT reflection is selected over the probe/planar path when RT is
+        // live (the scene TLAS is built) AND every live producer's RT pipelines
         // compiled at init -- single-sourced via `rt_transparent_active`, the same
-        // predicate graph_exec uses to skip the planar mirror re-render (so the
-        // two always agree). The textured variant additionally needs the bindless
+        // predicate graph_exec uses to skip the planar mirror re-render (so the two
+        // always agree). The textured variant additionally needs the bindless
         // albedo/normal pool the GPU-cull path populates; without it, the flat-tint
-        // trace runs. Mirrors Metal's transparent-draw pipeline selection.
+        // trace runs.
         let rt_live = self.rt_transparent_active();
         let textured =
             rt_live && self.cull.main_bindless_pso.is_some() && transparent.rt_textured_ready();

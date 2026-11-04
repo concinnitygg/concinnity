@@ -214,12 +214,11 @@ pub(super) fn build_bindless_pass(
         let set_layouts: Vec<_> = (0..frames).map(|_| set_layout.handle()).collect();
         let sets =
             alloc_descriptor_sets(device, descriptors.descriptor_pool.handle(), &set_layouts)?;
-        // Every slot the layout declares has to be written, and at the
-        // ceiling there are more of them than the world fills: the world's
-        // textures, then the reserved fallbacks (flat-normal, white), then
-        // white again across the unused tail so a slot the shader can index
-        // still names a live view. Mirrors the Metal pool's fill. Sizing
-        // guarantees the world fits, so this only ever pads.
+        // Every slot the layout declares has to be written, and at the ceiling
+        // there are more of them than the world fills: the world's textures,
+        // then the reserved fallbacks (flat-normal, white), then white again
+        // across the unused tail so a slot the shader can index still names a
+        // live view. Sizing guarantees the world fits, so this only ever pads.
         let mut pool_infos: Vec<vk::DescriptorImageInfo> = scene
             .textures
             .iter()

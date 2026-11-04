@@ -1,8 +1,7 @@
-//! Vulkan-side executor for the render graph. `VkContext::execute_graph`
-//! walks the `CompiledGraph` produced by the shared
-//! `concinnity_engine::render::render_graph::build_frame_graph`
-//! and dispatches each pass to its `encode_*` method. Mirrors the Metal +
-//! DirectX executors: every backend now drives the same builder.
+//! Vulkan-side executor for the render graph. `VkContext::execute_graph` walks
+//! the `CompiledGraph` produced by the shared
+//! `concinnity_engine::render::render_graph::build_frame_graph` and dispatches
+//! each pass to its `encode_*` method. Every backend drives the same builder.
 //!
 //! The catch-all arm at the bottom returns a clear error if any not-yet-ported
 //! `PassId` slips into the compiled graph.
@@ -611,7 +610,7 @@ impl VkContext {
         // budgets) is advanced here on `&mut self` before any pass encodes, so
         // the `&self` `encode_particles` (which may run on a parallel-recording
         // worker) never mutates the particle `Cell`s. `None` when the pass is
-        // inert. Mirrors Metal's `prepare_particle_pass` hoist.
+        // inert.
         let particle_frame = self.prepare_particle_pass(
             narrow_f32(params.elapsed),
             params.particle_bursts,

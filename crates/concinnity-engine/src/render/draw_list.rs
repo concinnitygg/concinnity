@@ -584,8 +584,7 @@ pub struct DrawListInputs<'a> {
     /// Every terrain, appended as static culled chunks.
     pub terrains: &'a [crate::render::environment::terrain::LoadedTerrain],
     /// Size of the shared texture pool; a texture handle is in range when its
-    /// index is below this. A legacy texture-on-mesh reference past it falls back
-    /// to slot 0.
+    /// index is below this. A room texture past it falls back to slot 0.
     pub texture_count: usize,
     /// Every baked material by handle.
     pub material_map: &'a hashbrown::HashMap<MaterialHandle, MaterialEntry>,

@@ -604,11 +604,11 @@ impl MtlContext {
                 },
             )?,
             PassId::Shadow => {
-                // Build the raymarch view only when a volume opts into
-                // shadow casting; otherwise pass `None` so the shadow encoder
-                // skips the SDF caster sub-pass with zero overhead. The view
-                // matches the matching `PassId::Raymarch` build later this
-                // frame (same camera VP / time / viewport). Mirrors DirectX.
+                // Build the raymarch view only when a volume opts into shadow
+                // casting; otherwise pass `None` so the shadow encoder skips
+                // the SDF caster sub-pass with zero overhead. The view matches
+                // the matching `PassId::Raymarch` build later this frame (same
+                // camera VP / time / viewport).
                 let raymarch_view = if self.any_raymarch_shadow_casters() {
                     Some(self.build_raymarch_view(params))
                 } else {

@@ -259,7 +259,7 @@ pub fn expand_world_from_str<'a>(
     let mut assets = load_world(source.into())
         .map_err(|errs| std::io::Error::new(std::io::ErrorKind::InvalidData, errs.join("\n")))?;
 
-    let _ = expand_world(&mut assets, assets_dir)
+    expand_world(&mut assets, assets_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     Ok(assets)

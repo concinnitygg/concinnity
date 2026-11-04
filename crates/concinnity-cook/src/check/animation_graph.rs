@@ -409,7 +409,7 @@ mod tests {
         assert!(e.contains("condition #0"), "got: {e}");
     }
 
-    // The blend kinds matched above are the tags core's `AnimationBlend` writes.
+    // The blend kinds matched above are the tags the engine's `AnimationBlend` writes.
     #[test]
     fn blend_kinds_match_the_animation_blend_tags() {
         use concinnity_engine::components::AnimationBlend;

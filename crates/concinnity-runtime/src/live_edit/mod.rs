@@ -7,7 +7,7 @@
 //!
 //! - When the launch request arms the dev loop, graphics init captures the
 //!   source catalogs ([`hot_reload_sources`]) and parks them as world
-//!   resources beside the render backend (core's `Parked` slot), with the
+//!   resources beside the render backend (the engine's `Parked` slot), with the
 //!   texture-name map and the pushed fog settings.
 //! - A host reaches the parked backend only on the main thread, between world
 //!   steps; from inside a step it is taken.

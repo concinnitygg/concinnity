@@ -6,8 +6,9 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::bindless::BindlessPass;
 use super::compute::ComputeCull;
+use crate::directx::builtin_shaders::{CULL_LATE, CompileProgram as _};
 use crate::directx::context::dump_on_err;
-use crate::directx::cull::{compile_cull_shader_late, create_cull_pso};
+use crate::directx::cull::create_cull_pso;
 use crate::directx::init::InitGpu;
 use crate::directx::texture::create_uav_buffer;
 
@@ -36,7 +37,7 @@ pub(super) fn build_two_pass_cull(
         });
     };
     let device = gpu.hw.alloc.device();
-    let cs_late = compile_cull_shader_late(gpu.hot_reload)?;
+    let cs_late = CULL_LATE.compile(gpu.hot_reload)?;
     let pso = dump_on_err(
         gpu.hw.info_queue.as_ref(),
         create_cull_pso(device, crs, &cs_late),

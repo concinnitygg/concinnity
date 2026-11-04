@@ -63,10 +63,10 @@ impl MtlContext {
         deformed_skinned: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
         // When `Some`, raymarched SDF casters draw into each cascade after the
         // rasterized + skinned draws (and before the Main pass samples the
-        // shadow map). Built by the graph executor: same matrix / time /
-        // camera the main raymarch pass will use later this frame, so the
-        // shadow cast and the live surface agree. `None` when no volume opts
-        // into `cast_shadows`. Mirrors the DirectX shadow pass.
+        // shadow map). Built by the graph executor: same matrix / time / camera
+        // the main raymarch pass will use later this frame, so the shadow cast
+        // and the live surface agree. `None` when no volume opts into
+        // `cast_shadows`.
         raymarch_view: Option<&crate::metal::raymarch::RaymarchView>,
         // This frame's grass, whose cascade blades draw into the nearest
         // cascade after its rasterized casters, when it casts this frame.

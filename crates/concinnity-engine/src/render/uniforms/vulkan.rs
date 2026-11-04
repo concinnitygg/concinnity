@@ -1,16 +1,12 @@
 //! repr(C) uniform / push-constant structs only the Vulkan frame encoders bind
-//! (std140 / std430 / push-constant layouts). Each is mirrored field-for-field
-//! in a `.glsl`/`.vert`/`.frag`/`.comp` shader under `vulkan/shaders/`, or in
-//! the one single-source block Vulkan alone declares.
+//! (std140 / std430 / push-constant layouts), each mirroring the block its
+//! single-source HLSL declares for Vulkan.
 //!
-//! Blocks whose shader counterpart is a single-source declaration are
-//! declared once for every backend in the parent module; what is left here is
-//! what only this backend binds. Their layouts are checked by `shader_layout` in
-//! concinnity-device, which reads the expected offsets out of the compiled
-//! module per target. The hand-written asserts below are for the families
-//! whose shaders are still per backend -- the cull kernel, the skinning and
-//! morph kernels, the raymarch SDF templates, the velocity pass, and Metal's
-//! water.
+//! Blocks declared once for every backend live in the parent module; what is
+//! left here is what only this backend binds. Layouts are checked by
+//! `shader_layout` in concinnity-device, which reads the expected offsets out of
+//! the compiled module per target; the asserts below pin the cull kernel's
+//! blocks, whose shader still declares a layout per backend.
 
 /// Byte size of the auto-exposure push-constant range. Pins the struct size to
 /// what the pipeline layout declares.

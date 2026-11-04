@@ -30,7 +30,6 @@ use concinnity_engine::render::uniforms::directx::CullParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::builtin_shaders::{self, CompileProgram as _};
 use crate::directx::com;
 use crate::directx::compact::{CompactPass, DrawLists, UavSpan};
 use crate::directx::context::DxContext;
@@ -169,24 +168,6 @@ pub(in crate::directx) struct CullState {
 pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Pipeline + command signature builders
-
-// Compile the early GPU-cull compute kernel (`main`) to DXBC.
-pub(in crate::directx) fn compile_cull_shader(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::CULL_EARLY.compile(hot_reload)
-}
-
-// Compile the late GPU-cull compute kernel (`CULL_LATE`) for two-pass
-// occlusion. Same source / root signature as the early pass, different entry point.
-pub(in crate::directx) fn compile_cull_shader_late(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::CULL_LATE.compile(hot_reload)
-}
-
-// Compile the GPU-driven shadow cull kernel (`main_shadow`): light-frustum only
-// (no Hi-Z, no distance cull, no status write). Same source / root signature as
-// the early pass, different entry point.
-pub(in crate::directx) fn compile_cull_shader_shadow(hot_reload: bool) -> RenderResult<Vec<u8>> {
-    builtin_shaders::CULL_SHADOW.compile(hot_reload)
-}
 
 // Root signature for the GPU-cull compute kernel: a `CullParams` root-constant
 // block at b0, the `GpuObjectData` + `GpuDrawArgs` inputs as root SRVs (t0,
@@ -1286,12 +1267,11 @@ impl DxContext {
     }
 
     // True when two-pass Hi-Z occlusion runs this frame: the world requested
-    // `occlusion_two_pass`, the late cull PSO + Hi-Z resource are built, and
-    // the bindless GPU-cull path is active with build-time geometry. This is the
-    // exact condition under which the shared graph inserts the HizEarly / CullLate
-    // / MainLate chain, so `seed_inputs`, `encode_main_pass` (resolve skip), and
-    // the executor's late arms all gate on it identically. Mirrors Metal's
-    // `CullState.two_pass_occlusion` gate.
+    // `occlusion_two_pass`, the late cull PSO + Hi-Z resource are built, and the
+    // bindless GPU-cull path is active with build-time geometry. This is the exact
+    // condition under which the shared graph inserts the HizEarly / CullLate /
+    // MainLate chain, so `seed_inputs`, `encode_main_pass` (resolve skip), and the
+    // executor's late arms all gate on it identically.
     pub(in crate::directx) fn two_pass_occlusion_active(&self) -> bool {
         self.two_pass_occlusion_built() && self.state.draw.record_count() > 0
     }

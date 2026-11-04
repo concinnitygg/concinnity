@@ -27,8 +27,8 @@ use super::{has_queue, with_ops};
 /// texture-pool slots they sample, and the handle the entity records.
 #[derive(Clone, Copy)]
 pub struct DrawMaterial {
-    // `None` for a placement drawing on its legacy texture (or on nothing),
-    // which is what the entity's renderer then records.
+    // `None` for a placement with no material of its own, which draws the
+    // default and is what the entity's renderer then records.
     handle: Option<MaterialHandle>,
     entry: MaterialEntry,
 }
@@ -359,9 +359,9 @@ mod tests {
         assert!(f.replay().is_empty());
     }
 
-    // What the placement draws with now: its own material, or the default over
-    // its legacy texture when it names none. A model-backed placement has no
-    // per-placement material at all.
+    // What the placement draws with now: its own material, or the default when
+    // it names none. A model-backed placement has no per-placement material at
+    // all.
     #[test]
     fn the_drawn_material_follows_the_renderer() {
         let mut f = fixture();

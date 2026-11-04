@@ -93,8 +93,6 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
 /// Byte offset within a blob file at which its payload section begins. Reads
 /// only the header; the disk-backed streaming source uses it to turn a
 /// `PayloadLocator` offset into an absolute file offset.
-/// Used only by the Metal-driven disk-backed streaming source for now
-/// (Vulkan/DirectX streaming catch-up is a follow-up).
 ///
 /// # Errors
 ///
@@ -133,8 +131,7 @@ fn read_file(path: &str) -> Result<Vec<u8>, BlobLoadError> {
 ///
 /// # Errors
 ///
-/// Returns an error if no state root is set, or a blob file cannot be read or
-/// does not parse.
+/// Returns an error if a blob file cannot be read or does not parse.
 pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), BlobLoadError> {
     anchor(primary);
     load_raw_from(blob_path)

@@ -10,10 +10,11 @@ use concinnity_engine::render::backend::init::SceneData;
 
 use super::CullPlan;
 use super::bindless::BindlessPass;
+use crate::vulkan::builtin_shaders::{CULL_EARLY, CompileProgram as _};
 use crate::vulkan::context::{VkCullKernels, VkDescriptors, VkSceneAssets, VkTargets};
 use crate::vulkan::descriptor_layout::Binding;
 use crate::vulkan::init::InitGpu;
-use crate::vulkan::pipeline::{CULL_PUSH_CONSTANT_BYTES, compile_cull_shader};
+use crate::vulkan::pipeline::CULL_PUSH_CONSTANT_BYTES;
 use crate::vulkan::pipeline_desc::compute_pipeline;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
@@ -186,7 +187,7 @@ pub(super) fn build_compute_cull(
                 )
                 .map_err(|e| crate::vulkan::error::map_vk_result(e, "cull pipeline layout"))?;
 
-            let cs = compile_cull_shader(hot_reload)?;
+            let cs = CULL_EARLY.compile(hot_reload)?;
             let pipeline = compute_pipeline(device, pipeline_layout.handle(), &cs, "cull")?;
 
             // Per-frame GpuDrawArgs (host-visible, rebuilt each frame) and
