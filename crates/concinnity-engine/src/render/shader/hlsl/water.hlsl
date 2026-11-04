@@ -601,6 +601,8 @@ struct WaterShading
 {
     float3 normal;
     float alpha;
+    // The rms slope of every wave and ripple, drawn or filtered alike.
+    float spread;
 };
 
 // Whitecap lace: value noise over two octaves, the coarser this many meters
@@ -677,6 +679,8 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     float3 binormal = float3(1.0, 0.0, 0.0); // dP/dx
     float3 tangent = float3(0.0, 0.0, 1.0);  // dP/dz
     float removed = 0.0;
+    float total = 0.0;
+    float top = log2(float(params.ocean.layers.z));
 
     uint cascades = min(params.ocean.layers.x, WATER_OCEAN_MAX_CASCADES);
     for (uint c = 0u; c < cascades; c++)
@@ -694,6 +698,13 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
         binormal.y += m.x;
         tangent.y += m.y;
         removed += max(m.z - m.x * m.x, 0.0) + max(m.w - m.y * m.y, 0.0);
+        // The whole tile averaged: every slope it carries.
+        float4 whole = WATER_DAMPED_SLOPES(c, ocean_slopes.SampleLevel(ocean_sampler,
+                                                                       float3((float2)0.5, layer), top));
+#ifdef WATER_SEA
+        whole *= float4(calm, calm, calm * calm, calm * calm);
+#endif
+        total += max(whole.z - whole.x * whole.x, 0.0) + max(whole.w - whole.y * whole.y, 0.0);
     }
 
     uint count = min(params.wave_count, WATER_MAX_WAVES);
@@ -707,6 +718,7 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
         float fade = water_fade(WATER_TAU / k, foot);
         float slope = k * w.dir_amp_k.z;
         removed += (1.0 - fade * fade) * 0.5 * slope * slope;
+        total += 0.5 * slope * slope;
 
         float wa = slope * fade;
         float q = w.motion.x;
@@ -758,6 +770,7 @@ WaterShading water_shading(float2 local_xz, float2 dx, float2 dy)
     float base = max(params.roughness, 0.02);
     base *= base;
     o.alpha = sqrt(base * base + removed + variance * WATER_UNRESOLVED_RIPPLE);
+    o.spread = sqrt(base * base + total + variance);
     return o;
 }
 
@@ -1633,6 +1646,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
     float3 w = water_sea_weights(i.rest);
     float3 slope = (float3)0.0;
     float alpha2 = 0.0;
+    float spread2 = 0.0;
     float cover = 0.0;
     // The shore waves, faded as their crests shrink below the pixel; what the
     // fade takes goes to the roughness, the foam to the lace below.
@@ -1646,6 +1660,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
         float fade = water_fade(WATER_TAU / max(waves.k, 1e-4), footprint);
         slope += fade * water_shore_to_frame(waves.slope);
         alpha2 += (1.0 - fade * fade) * 0.5 * waves.steepness * waves.steepness;
+        spread2 += 0.5 * waves.steepness * waves.steepness;
         float3 at = WATER_SHORE.lace.xyz
                   + float3(dot(WATER_SHORE.planet_rows[0].xyz, i.rest), dot(WATER_SHORE.planet_rows[1].xyz, i.rest),
                            dot(WATER_SHORE.planet_rows[2].xyz, i.rest));
@@ -1677,6 +1692,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
         float2 rise = -face.normal.xz / max(face.normal.y, 1e-3);
         slope += w[f] * p.stretch * (rise.x * p.tu + rise.y * p.tv);
         alpha2 += w[f] * w[f] * face.alpha * face.alpha;
+        spread2 += w[f] * w[f] * face.spread * face.spread;
         if (water_whitecaps())
         {
             cover += w[f] * w[f] * water_whitecap_cover(p.s, sdx, sdy);
@@ -1706,6 +1722,7 @@ WaterShading water_sea_shading(WaterVertexOut i, float3 dx, float3 dy)
     WaterShading o;
     o.normal = normalize(up - slope);
     o.alpha = sqrt(alpha2);
+    o.spread = sqrt(spread2);
     return o;
 }
 
@@ -1958,7 +1975,7 @@ float3 water_lambert(float3 n, float shadow, WaterDaylight day)
             }
         }
         sun = lerp(sun, lit * WATER_INV_PI, day.reach);
-        sky = lerp(sky, daylight_point_irradiance(day, n) * WATER_INV_PI, day.reach);
+        sky = daylight_point_irradiance(day, n, sky / WATER_INV_PI) * WATER_INV_PI;
     }
 #endif
     return sun + sky * view.ambient.y;
@@ -1985,6 +2002,9 @@ struct WaterSurfacePoint
     float3 normal;
     // GGX alpha, the base roughness widened by the slopes the pixel filtered.
     float alpha;
+    // The surface's up at rest, and the rms slope of all its waves.
+    float3 up;
+    float spread;
     // The whitecap cover, which hides the reflection and the glint.
     float foam;
     float2 frag_uv;
@@ -2000,6 +2020,8 @@ WaterSurfacePoint water_surface(WaterVertexOut i, WATER_STEP dx, WATER_STEP dy)
     WaterShading shading = WATER_SHADE(i, dx, dy);
     s.normal = shading.normal;
     s.alpha = shading.alpha;
+    s.up = WATER_UP(i);
+    s.spread = shading.spread;
     s.foam = 0.0;
 
     float2 vp_dim = max(view.viewport, (float2)(1.0));
@@ -2124,7 +2146,7 @@ float3 water_environment(float3 world_pos, float3 r, float alpha, WaterDaylight 
     // On a planet's sea away from the camera, the sky over the point.
     if (day.reach > 0.0)
     {
-        env = lerp(env, daylight_point_sky(day, r), day.reach);
+        env = daylight_point_sky(day, r, env);
     }
 #endif
     return env;
@@ -2199,11 +2221,21 @@ float3 water_sun_glint(float3 normal, float3 view_dir, float alpha, WaterDayligh
 static const float WATER_REACTIVE_FRESNEL = 0.5;
 static const float2 WATER_REACTIVE_FADE_METERS = float2(4.0, 16.0);
 
-// The share of the surface's color its reflection takes before whitecaps.
+// The Fresnel weight at `n_dot_v`.
+float water_fresnel_at(float n_dot_v)
+{
+    return 0.02 + 0.98 * pow(1.0 - saturate(n_dot_v), max(params.fresnel_power, 1e-3));
+}
+
+// The share of the surface's color its reflection takes before whitecaps: off
+// the surface at rest, averaged over all its slopes tilted toward and away
+// from the viewer by their rms, so it never changes with which waves the
+// pixel still draws.
 float water_fresnel(WaterSurfacePoint s, float3 view_dir)
 {
-    float n_dot_v = saturate(dot(s.normal, view_dir));
-    return 0.02 + 0.98 * pow(1.0 - n_dot_v, max(params.fresnel_power, 1e-3));
+    float angle = acos(saturate(dot(s.up, view_dir)));
+    float tilt = atan(s.spread * 0.70710678);
+    return 0.5 * (water_fresnel_at(cos(angle - tilt)) + water_fresnel_at(cos(min(angle + tilt, 1.57079633))));
 }
 
 // The whitecap cover that hides the reflection and the glint, 0 where this

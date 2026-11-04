@@ -522,7 +522,6 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
     // camera's, as it lies further round the planet or the camera climbs.
 #ifdef DAYLIGHT_SURFACE
     DaylightPoint day = daylight_point(v.world_pos);
-    float3 day_up = day.up;
     float day_reach = day.reach;
 #endif
 
@@ -705,11 +704,6 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
         }
     }
 
-#ifdef DAYLIGHT_SURFACE
-    // The point's own sky on a level surface, for the ground and the canopy.
-    float3 day_sky = day.irradiance;
-#endif
-
     // What the surface reflects of diffuse light arriving from every side.
     float3 diffuse_albedo;
     float3 ambient;
@@ -721,7 +715,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 #ifdef DAYLIGHT_SURFACE
         if (day_reach > 0.0)
         {
-            irradiance = lerp(irradiance, day_sky * saturate(0.5 + 0.5 * dot(N, day_up)), day_reach);
+            irradiance = daylight_point_irradiance(day, N, irradiance);
         }
 #endif
         ambient = diffuse_albedo * irradiance / PI;
@@ -803,7 +797,7 @@ float4 shade_surface(VertexOut v, GpuObjectData od)
 #ifdef DAYLIGHT_SURFACE
         if (ibl_enabled && day_reach > 0.0)
         {
-            sky = lerp(sky, day_sky * saturate(0.5 + 0.5 * dot(canopy.along, day_up)) / PI, day_reach);
+            sky = daylight_point_irradiance(day, canopy.along, sky * PI) / PI;
         }
 #endif
         sky = (sky * indirect.visibility + indirect.bounce) * LIGHTS.ambient_intensity;

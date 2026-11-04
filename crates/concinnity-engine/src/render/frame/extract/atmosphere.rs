@@ -19,7 +19,7 @@ use crate::render::uniforms::{DaylightBlock, DaylightBody, DaylightView};
 use crate::sky::SkyOrientation;
 use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3::{length, normalize_or};
-use concinnity_core::math::{acos, cos, smoothstep};
+use concinnity_core::math::{acos, atan2, cos, smoothstep, sqrt};
 
 // How far the sun's transmittance, or the moon's light as a share of its
 // full brightness, may drift from what the lights were last pushed with
@@ -253,6 +253,13 @@ fn moon_above_air(
     sun.color.map(|c| c * sun.intensity * brightness * phase)
 }
 
+// How far below level the horizon lies from `height` over a ground of
+// `radius`, both in the same units, in radians.
+fn horizon_dip(radius: f32, height: f32) -> f32 {
+    let h = height.max(0.0);
+    atan2(sqrt(h * (2.0 * radius + h)), radius)
+}
+
 // Where the camera of `frame` stands toward the planet centered at `center`
 // in the simulated frame, lit by `bodies`.
 fn daylight_view(
@@ -269,6 +276,7 @@ fn daylight_view(
             .map(concinnity_core::math::narrow_f32),
         camera_up: normalize_or(camera, 1e-6, [0.0, 1.0, 0.0]),
         camera_reach: smoothstep(OWN_SKY_HEIGHT_KM[0], OWN_SKY_HEIGHT_KM[1], height),
+        camera_dip: horizon_dip(settings.bottom_radius, height),
         reach: OWN_SKY_REACH_DEG.map(|deg| cos(deg.to_radians())),
         ground_radius: settings.bottom_radius * 1_000.0,
         ground_height: GROUND_HEIGHT_M,
@@ -580,6 +588,32 @@ mod tests {
         let between = view(1_000.0).camera_reach;
         assert!(0.0 < between && between < 1.0, "{between}");
         assert_eq!(view(10_000.0).camera_reach, 1.0);
+    }
+
+    // The camera's horizon dips below level as it climbs, by the angle the
+    // ground's tangent from it makes.
+    #[test]
+    fn the_horizon_dips_as_the_camera_climbs() {
+        let s = planet_settings();
+        let sun = DirectionalLight {
+            direction: [0.0, 1.0, 0.0],
+            color: [1.0; 3],
+            intensity: 2.0,
+            angular_radius_deg: 0.0,
+        };
+        let dip = |height_m: f64| {
+            let camera = [0.0, height_m, 0.0];
+            let frame = AtmosphereFrame::new(&s, s.camera_km(camera, Some(CENTER)), &sun);
+            daylight_view(&s, &frame, Some(CENTER), [None; 2]).camera_dip
+        };
+        assert!(dip(0.0) < 1e-3);
+        let expected = acos(RADIUS_M / (RADIUS_M + 200.0));
+        assert!(
+            (dip(200.0) / expected - 1.0).abs() < 0.05,
+            "{} vs {expected}",
+            dip(200.0)
+        );
+        assert!(dip(2_000.0) > dip(200.0));
     }
 
     // The moon's light above the air is the sun's scaled by its brightness

@@ -136,6 +136,11 @@ struct DaylightPoint
     // The sky's radiance at the horizon and the zenith, from every body.
     float3 horizon;
     float3 zenith;
+    // The same three as the camera sees them, the bodies raised by the dip of
+    // its horizon.
+    float3 camera_irradiance;
+    float3 camera_horizon;
+    float3 camera_zenith;
 };
 
 DaylightPoint daylight_point(float3 pos)
@@ -157,14 +162,41 @@ DaylightPoint daylight_point(float3 pos)
         if (DAYLIGHT.body_dir[i].w > 0.5)
         {
             Daylight d = daylight_at(dot(p.up, DAYLIGHT.body_dir[i].xyz));
+            Daylight c = daylight_at(DAYLIGHT.body_light[i].w);
             float3 light = DAYLIGHT.body_light[i].rgb;
             p.light[i] = light * d.transmittance;
             p.irradiance += light * d.irradiance;
             p.horizon += light * d.horizon;
             p.zenith += light * d.zenith;
+            p.camera_irradiance += light * c.irradiance;
+            p.camera_horizon += light * c.horizon;
+            p.camera_zenith += light * c.zenith;
         }
     }
     return p;
+}
+
+// The most a point's own sky scales the camera's, either way. The curves
+// leave out the night sky's own glow the camera's sky carries, so where both
+// are dark their ratio means nothing.
+static const float DAYLIGHT_MAX_SCALE = 8.0;
+
+// `own` over `at_camera` per color, held within DAYLIGHT_MAX_SCALE.
+float3 daylight_scale(float3 own, float3 at_camera)
+{
+    float3 low = at_camera / DAYLIGHT_MAX_SCALE;
+    return clamp(own, low, at_camera * DAYLIGHT_MAX_SCALE) / max(at_camera, (float3)1e-30)
+         + select(at_camera > 0.0, (float3)0.0, (float3)1.0);
+}
+
+// What the point takes of a sky quantity the camera's sky gives as `seen`,
+// scaled by `scale`, the curves' at the point over the camera's, or `own`,
+// the curves' outright. The curves know no clouds and nothing of where round
+// the horizon the bodies stand, so near the ground they only scale the
+// camera's sky; from high above the air the point's own sky stands in.
+float3 daylight_point_blend(DaylightPoint p, float3 seen, float3 scale, float3 own)
+{
+    return lerp(seen, lerp(seen * scale, own, DAYLIGHT.camera_up.w), p.reach);
 }
 
 // The light of body `i` at the point, `i` any directional light's index.
@@ -182,14 +214,20 @@ float3 daylight_point_light(DaylightPoint p, uint i)
     return light;
 }
 
-// `daylight_irradiance` at the point.
-float3 daylight_point_irradiance(DaylightPoint p, float3 n)
+// The sky's light on a surface facing `n` at the point, from the camera's sky
+// irradiance `seen` on that surface (`daylight_point_blend`).
+float3 daylight_point_irradiance(DaylightPoint p, float3 n, float3 seen)
 {
-    return p.irradiance * saturate(0.5 + 0.5 * dot(n, p.up));
+    float3 own = p.irradiance * saturate(0.5 + 0.5 * dot(n, p.up));
+    return daylight_point_blend(p, seen, daylight_scale(p.irradiance, p.camera_irradiance), own);
 }
 
-// `daylight_sky` at the point.
-float3 daylight_point_sky(DaylightPoint p, float3 dir)
+// The sky's radiance along `dir` at the point, from the camera's sky radiance
+// `seen` along it (`daylight_point_blend`).
+float3 daylight_point_sky(DaylightPoint p, float3 dir, float3 seen)
 {
-    return lerp(p.horizon, p.zenith, sqrt(saturate(dot(dir, p.up))));
+    float3 own = lerp(p.horizon, p.zenith, sqrt(saturate(dot(dir, p.up))));
+    float3 at_camera = lerp(p.camera_horizon, p.camera_zenith,
+                            sqrt(saturate(dot(dir, DAYLIGHT.camera_up.xyz))));
+    return daylight_point_blend(p, seen, daylight_scale(own, at_camera), own);
 }

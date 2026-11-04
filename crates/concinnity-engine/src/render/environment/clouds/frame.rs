@@ -242,6 +242,7 @@ mod tests {
                 center: [0.0; 3],
                 camera_up: [0.0, 1.0, 0.0],
                 camera_reach: 0.0,
+                camera_dip: 0.0,
                 reach: [1.0, 1.0],
                 ground_radius: 50_000.0,
                 ground_height: 5000.0,

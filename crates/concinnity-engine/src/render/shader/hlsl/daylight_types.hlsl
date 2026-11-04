@@ -27,7 +27,8 @@ struct DaylightBlock
     // xyz: toward the body lighting as directional light i; w: 1 when it is
     // lit by the curves.
     float4 body_dir[DAYLIGHT_BODIES];
-    // rgb: that body's light above the air.
+    // rgb: that body's light above the air; w: the cosine of its angle from
+    // the camera's up once raised by how far the camera's horizon dips.
     float4 body_light[DAYLIGHT_BODIES];
     // xyz: the planet sea's deep-water albedo; w: its height above the
     // ground's datum. Read only by a view whose ground stands in for the sea.

@@ -2,7 +2,7 @@
 //! and the lights that ride them.
 
 use crate::render::environment::atmosphere::{DAYLIGHT_KNOTS, knot_coord};
-use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::{SaturatingFrom, acos, cos};
 
 /// The directional lights the curves light: the first (the shadowed one) and
 /// the second. `DAYLIGHT_BODIES` in `daylight_types.hlsl`.
@@ -30,6 +30,9 @@ pub struct DaylightView {
     /// How much each point's own sky stands in for the camera's wherever it
     /// is, from the camera's height: 0 on the ground, 1 high above it.
     pub camera_reach: f32,
+    /// How far below level the camera's horizon lies, in radians: the bodies
+    /// stand that much higher over it than over the ground beneath.
+    pub camera_dip: f32,
     /// The cosines between a point's up and the camera's at which the
     /// point's own sky starts to take over and has.
     pub reach: [f32; 2],
@@ -57,7 +60,8 @@ pub struct DaylightBlock {
     pub reach: [f32; 4],
     /// xyz: toward body i; w: 1 when there is one.
     pub body_dir: [[f32; 4]; DAYLIGHT_BODIES],
-    /// rgb: body i's light above the air.
+    /// rgb: body i's light above the air; w: the cosine of its angle from
+    /// the camera's up once raised by [`DaylightView::camera_dip`].
     pub body_light: [[f32; 4]; DAYLIGHT_BODIES],
     /// xyz: the planet sea's deep-water albedo; w: the sea's height above
     /// the ground's datum. Read only by a view that shades the ground under
@@ -116,8 +120,9 @@ impl DaylightBlock {
             if let Some(b) = body {
                 let [x, y, z] = b.direction;
                 let [r, g, bl] = b.light;
+                let mu = ux * x + uy * y + uz * z;
                 block.body_dir[i] = [x, y, z, 1.0];
-                block.body_light[i] = [r, g, bl, 0.0];
+                block.body_light[i] = [r, g, bl, raised(mu, view.camera_dip)];
             }
         }
         block
@@ -128,8 +133,8 @@ impl DaylightBlock {
         self.center[3] > 0.5
     }
 
-    /// The sky's light on a level surface where the camera is, from every
-    /// body. Mirrors `daylight_level_irradiance` in `daylight.hlsl`.
+    /// The sky's light on a level surface on the ground under the camera,
+    /// from every body. Mirrors `daylight_level_irradiance` in `daylight.hlsl`.
     pub fn camera_irradiance(&self) -> [f32; 3] {
         let up = [self.camera_up[0], self.camera_up[1], self.camera_up[2]];
         let mut e = [0.0; 3];
@@ -156,6 +161,14 @@ impl DaylightBlock {
         let b = self.knots[i * 3 + 3 + lane];
         core::array::from_fn(|c| a[c] + (b[c] - a[c]) * t)
     }
+}
+
+// The cosine of an angle of cosine `mu` from up once raised by a horizon
+// `dip` radians below level: the dipped horizon maps to level and straight up
+// stays put.
+fn raised(mu: f32, dip: f32) -> f32 {
+    let quarter = core::f32::consts::FRAC_PI_2;
+    cos(acos(mu.clamp(-1.0, 1.0)) * quarter / (quarter + dip.max(0.0)))
 }
 
 #[cfg(test)]
@@ -216,6 +229,7 @@ mod tests {
             center: [0.0; 3],
             camera_up: [0.0, 1.0, 0.0],
             camera_reach: 0.0,
+            camera_dip: 0.0,
             reach: [0.9999, 0.998],
             ground_radius: 1.0,
             ground_height: 1.0,
@@ -231,6 +245,39 @@ mod tests {
         assert_eq!(DaylightBlock::OFF.camera_irradiance(), [0.0; 3]);
     }
 
+    // Each body's cosine for the camera's sky maps the camera's dipped
+    // horizon to level and keeps straight up.
+    #[test]
+    fn the_camera_sees_each_body_raised_by_its_dip() {
+        let view = |dip, direction| DaylightView {
+            center: [0.0; 3],
+            camera_up: [0.0, 1.0, 0.0],
+            camera_reach: 0.0,
+            camera_dip: dip,
+            reach: [0.9999, 0.998],
+            ground_radius: 1.0,
+            ground_height: 1.0,
+            bodies: [
+                Some(DaylightBody {
+                    direction,
+                    light: [1.0; 3],
+                }),
+                None,
+            ],
+        };
+        let knots = [[0.0; 4]; DAYLIGHT_KNOTS * 3];
+        let dip = 0.1_f32;
+        let under = [dip.cos(), -dip.sin(), 0.0];
+        let dipped = DaylightBlock::new(knots, &view(dip, under));
+        assert!(dipped.body_light[0][3].abs() < 1e-5);
+        let horizon = DaylightBlock::new(knots, &view(dip, [1.0, 0.0, 0.0]));
+        assert!(horizon.body_light[0][3] > 0.0 && horizon.body_light[0][3] < dip.sin());
+        let overhead = DaylightBlock::new(knots, &view(dip, [0.0, 1.0, 0.0]));
+        assert!((overhead.body_light[0][3] - 1.0).abs() < 1e-6);
+        let level = DaylightBlock::new(knots, &view(0.0, [1.0, 0.0, 0.0]));
+        assert!(level.body_light[0][3].abs() < 1e-6);
+    }
+
     #[test]
     fn a_view_fills_its_bodies_in_order() {
         let block = DaylightBlock::new(
@@ -239,6 +286,7 @@ mod tests {
                 center: [1.0, -50_000.0, 2.0],
                 camera_up: [0.0, 1.0, 0.0],
                 camera_reach: 0.25,
+                camera_dip: 0.0,
                 reach: [0.9999, 0.998],
                 ground_radius: 50_000.0,
                 ground_height: 5_000.0,
@@ -257,7 +305,8 @@ mod tests {
         assert_eq!(block.reach, [0.9999, 0.998, 50_000.0, 5_000.0]);
         assert_eq!(block.body_dir[0][3], 0.0);
         assert_eq!(block.body_dir[1], [0.0, 0.0, 1.0, 1.0]);
-        assert_eq!(block.body_light[1], [3.0, 2.0, 1.0, 0.0]);
+        assert_eq!(block.body_light[1][..3], [3.0, 2.0, 1.0]);
+        assert!(block.body_light[1][3].abs() < 1e-6);
         assert_eq!(block.knots[5], [0.5; 4]);
     }
 }
