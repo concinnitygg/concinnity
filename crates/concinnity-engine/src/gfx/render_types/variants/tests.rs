@@ -422,3 +422,18 @@ fn variant_constants_match_the_cull_shader() {
     );
     assert_eq!(size_of::<GpuBucketRegion>(), 2 * 16);
 }
+
+// A bucket draws only when it is live and its region holds a command; one past
+// the mask's width never does.
+#[test]
+fn drawn_buckets_need_a_live_bit_and_a_command() {
+    let mut variants = GpuCullVariants::default();
+    for b in [1, 2, 3] {
+        variants.regions[b].count = 1;
+    }
+    let live = (1 << 1) | (1 << 3) | (1 << 4);
+    let drawn: Vec<usize> = variants
+        .drawn_buckets(live, [1, 2, 3, 4, 70].into_iter())
+        .collect();
+    assert_eq!(drawn, [1, 3]);
+}

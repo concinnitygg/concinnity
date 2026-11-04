@@ -246,7 +246,7 @@ pub(crate) fn instance_count(entries: &[Value], def: &str) -> usize {
     loop {
         let mut grew = false;
         for e in entries {
-            if entry_type(e).and_then(RegisteredType::parse) != Some(RegisteredType::Prefab) {
+            if entry_type(e) != Some(RegisteredType::Prefab) {
                 continue;
             }
             let name = entry_name(e);
@@ -264,7 +264,7 @@ pub(crate) fn instance_count(entries: &[Value], def: &str) -> usize {
     }
     entries
         .iter()
-        .filter(|e| entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prop))
+        .filter(|e| entry_type(e) == Some(RegisteredType::Prop))
         .filter(|e| {
             e.get("args")
                 .and_then(|a| a.get("prefab"))

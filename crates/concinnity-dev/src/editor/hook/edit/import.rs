@@ -12,7 +12,7 @@ use concinnity_engine::ecs::World;
 use std::path::Path;
 
 use crate::editor::hook::{
-    EditorHook, FormTarget, declared_id, entry_type, scroll_step, short_status,
+    EditorHook, FormTarget, declared_id, entry_type_name, scroll_step, short_status,
 };
 use crate::editor::panels::import_panel::{
     self, ImportAction, ImportRow, ImportStatus, ImportView,
@@ -28,7 +28,7 @@ impl EditorHook {
             .iter()
             .enumerate()
             .filter_map(|(i, e)| {
-                let ty = entry_type(e)?;
+                let ty = entry_type_name(e)?;
                 if !import_panel::IMPORT_TYPES.contains(&ty) {
                     return None;
                 }
@@ -185,7 +185,12 @@ impl EditorHook {
         let Some(key) = self.entries.key_at(idx) else {
             return;
         };
-        let Some(ty) = self.entries.get(idx).and_then(entry_type).map(String::from) else {
+        let Some(ty) = self
+            .entries
+            .get(idx)
+            .and_then(entry_type_name)
+            .map(String::from)
+        else {
             return;
         };
         self.open[PanelKey::Assets] = true;

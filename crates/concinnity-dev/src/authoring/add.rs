@@ -20,7 +20,7 @@ use concinnity_core::math::SaturatingFrom;
 
 use crate::build_status::Verbosity;
 use concinnity_cook::authoring::world::{
-    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, entry_type, parse_entry,
+    WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, entry_type_name, parse_entry,
     patch_world_jsonl_to, set_entry_id, take_entry_id,
 };
 
@@ -740,7 +740,7 @@ fn entry_from_json_file(
             format!("could not parse '{}': {}", path.display(), e),
         )
     })?;
-    let asset_type = entry_type(&json).unwrap_or_default();
+    let asset_type = entry_type_name(&json).unwrap_or_default();
     refuse_build_config(asset_type)?;
 
     let (id, args) = split_entry(&json, &path.display().to_string())?;
@@ -754,7 +754,7 @@ fn entry_from_inline_json(raw: &str) -> std::io::Result<serde_json::Value> {
             format!("could not parse inline entry: {e}"),
         )
     })?;
-    let asset_type = entry_type(&json).unwrap_or_default();
+    let asset_type = entry_type_name(&json).unwrap_or_default();
     refuse_build_config(asset_type)?;
 
     let (id, args) = split_entry(&json, "inline entry")?;

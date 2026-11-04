@@ -5,7 +5,6 @@
 
 use concinnity_core::fanout::FanOut;
 use concinnity_engine::bake::texture::TextureImage;
-use concinnity_engine::components::build_skeleton_from_joint_defs;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend;
 use concinnity_engine::render::world_load::source_maps::{
@@ -14,9 +13,10 @@ use concinnity_engine::render::world_load::source_maps::{
 use concinnity_host::thread::jobs::pool;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
+use super::apply;
 use super::state::{
     AssetHotReloadState, DecodedAssetBatch, DecodedColorLut, DecodedMesh, DecodedSkinnedMesh,
-    DecodedTexture, PendingSkeletonUpdate,
+    DecodedTexture,
 };
 
 // Trigger a hot-reload pass. Spawns at most two worker threads: one for the
@@ -146,6 +146,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
                     env_map_copy.prefilter_samples,
                     env_map_copy.prefilter_clamp,
                 )
+                .map_err(|e| e.to_string())
             });
             let _ = tx.send(result);
         }) {
@@ -233,7 +234,8 @@ pub(super) fn decode_asset_batch(
                         &doc,
                         &entry.source,
                         entry.image_index,
-                    ),
+                    )
+                    .map_err(|e| e.to_string()),
                     Err(e) => Err(e),
                 }
             } else {
@@ -242,6 +244,7 @@ pub(super) fn decode_asset_batch(
                     entry.image_index,
                     assets_dir.as_deref(),
                 )
+                .map_err(|e| e.to_string())
             };
             let image = decoded.map(|(w, h, px)| TextureImage::rgba8(w, h, px).with_mip_chain());
             (entry.clone(), image)
@@ -451,288 +454,23 @@ pub(crate) fn poll_pending_assets(
     *slot = None;
     drop(slot);
 
-    let mut reloaded = 0usize;
-    let mut failed = batch.decode_failures;
-
-    for tex in &batch.textures {
-        let result = backend.update_texture_slot(tex.slot, &tex.image);
-        match result {
-            Ok(()) => reloaded += 1,
-            Err(e) => {
-                tracing::error!(
-                    "asset hot-reload: backend rejected slot {} update for '{}': {}",
-                    tex.slot,
-                    tex.source,
-                    e
-                );
-                failed += 1;
-            }
-        }
-    }
-
+    let mut tally = apply::Tally::new(batch.decode_failures);
+    apply::textures(backend, &batch.textures, &mut tally);
     // Everything past the textures rewrites built content in place.
     let Some(backend) = backend.live_edit() else {
         tracing::error!("asset hot-reload: the backend cannot rewrite a built world");
         return true;
     };
-
     if let Some(lut) = &batch.color_lut {
-        match backend.update_color_lut(lut.size, &lut.data) {
-            Ok(()) => reloaded += 1,
-            Err(e) => {
-                tracing::error!(
-                    "asset hot-reload: backend rejected ColorLut update for '{}': {}",
-                    lut.source,
-                    e
-                );
-                failed += 1;
-            }
-        }
+        apply::color_lut(backend, lut, &mut tally);
     }
-
-    // Static meshes: same in-place vs rebuild dispatch the inline path
-    // used to do, just driven by the worker's pre-decoded results.
-    let mut rebuild_changes: Vec<backend::DrawGeometryUpdate> = Vec::new();
-    let mut rebuild_entry_count = 0usize;
-    for dm in &batch.meshes {
-        let Some(entry) = state.meshes.entries.get(dm.entry_idx) else {
-            tracing::warn!(
-                "asset hot-reload: decoded Mesh entry_idx {} out of range (source \
-                 map mutated mid-pass?); skipping",
-                dm.entry_idx
-            );
-            failed += 1;
-            continue;
-        };
-        let size_changed = entry.draw_indices.iter().any(|&draw_idx| {
-            let base_changed = match backend.draw_geometry_size(draw_idx) {
-                Some((v, i)) => v != dm.vertices.len() || i != dm.indices.len(),
-                None => false,
-            };
-            let lod_changed = match backend.draw_lod_index_counts(draw_idx) {
-                Some(counts) => {
-                    counts.len() != dm.lod_alternates.len()
-                        || counts
-                            .iter()
-                            .zip(dm.lod_alternates.iter())
-                            .any(|(c, (_, idx))| *c != idx.len())
-                }
-                None => false,
-            };
-            base_changed || lod_changed
-        });
-        if size_changed {
-            rebuild_entry_count += 1;
-            for &draw_idx in &entry.draw_indices {
-                rebuild_changes.push(backend::DrawGeometryUpdate {
-                    draw_idx,
-                    vertices: dm.vertices.clone(),
-                    indices: dm.indices.clone(),
-                    lod_alternates: dm.lod_alternates.clone(),
-                });
-            }
-            continue;
-        }
-        let mut slot_failures = 0usize;
-        for &draw_idx in &entry.draw_indices {
-            if let Err(e) = backend.update_mesh_geometry(
-                draw_idx,
-                &dm.vertices,
-                &dm.indices,
-                &dm.lod_alternates,
-            ) {
-                tracing::error!(
-                    "asset hot-reload: backend rejected mesh update for draw {} \
-                     (source '{}', primitive {}): {}",
-                    draw_idx,
-                    entry.source,
-                    entry.primitive_index,
-                    e
-                );
-                slot_failures += 1;
-            }
-        }
-        if slot_failures == 0 {
-            reloaded += 1;
-        } else {
-            failed += 1;
-        }
-    }
-    if !rebuild_changes.is_empty() {
-        tracing::info!(
-            "asset hot-reload: {} Mesh entry/entries had size changes; rebuilding \
-             shared static-geometry buffers ({} draw slot(s) affected)",
-            rebuild_entry_count,
-            rebuild_changes.len()
-        );
-        match backend.rebuild_static_geometry(rebuild_changes) {
-            Ok(()) => reloaded += rebuild_entry_count,
-            Err(e) => {
-                tracing::error!(
-                    "asset hot-reload: rebuild_static_geometry failed: {} \
-                     ({} Mesh entry/entries kept their old geometry)",
-                    e,
-                    rebuild_entry_count
-                );
-                failed += rebuild_entry_count;
-            }
-        }
-    }
-
-    // Skinned meshes: same in-place vs rebuild dispatch the static-Mesh
-    // loop above does, plus a parallel skeleton-shape pass that resizes
-    // each affected slot's joint-matrix buffers and queues a SkeletonPose
-    // refresh for the next step. Joint-count and vertex/index counts change
-    // independently: a tweak to a single joint's bind translation keeps
-    // both counts the same, while a re-export with a different skeleton may
-    // also rewrite the mesh's vertex count, so the two checks are
-    // independent and either path may fire.
-    let mut skinned_rebuild_changes: Vec<backend::SkinnedDrawGeometryUpdate> = Vec::new();
-    let mut skinned_rebuild_entries: Vec<usize> = Vec::new();
-    // Per-slot new joint count, parallel to the corresponding decoded
-    // entry; applied after the rebuild dispatch (success path only).
-    let mut joint_count_changes: Vec<(usize /*entry_idx*/, usize /*new_count*/)> = Vec::new();
-    for ds in &batch.skinned_meshes {
-        let Some(entry) = state.skinned_meshes.entries.get(ds.entry_idx) else {
-            tracing::warn!(
-                "asset hot-reload: decoded SkinnedMesh entry_idx {} out of range; \
-                 skipping",
-                ds.entry_idx
-            );
-            failed += 1;
-            continue;
-        };
-        let new_joint_count = ds.skeleton.len().min(render_types::MAX_JOINTS);
-        let joint_count_changed = new_joint_count != entry.joint_count;
-        let size_changed =
-            ds.vertices.len() != entry.vertex_count || ds.indices.len() != entry.index_count;
-        if joint_count_changed {
-            joint_count_changes.push((ds.entry_idx, new_joint_count));
-            state.pending_skeleton_updates.push(PendingSkeletonUpdate {
-                skinned_index: entry.skinned_index,
-                new_skeleton: build_skeleton_from_joint_defs(&ds.skeleton),
-            });
-            tracing::info!(
-                "asset hot-reload: SkinnedMesh '{}' joint count changed ({} → {}), \
-                 resizing joint buffers and refreshing SkeletonPose",
-                entry.source,
-                entry.joint_count,
-                new_joint_count
-            );
-        }
-        if size_changed {
-            skinned_rebuild_entries.push(ds.entry_idx);
-            skinned_rebuild_changes.push(backend::SkinnedDrawGeometryUpdate {
-                skinned_index: entry.skinned_index,
-                vertices: ds.vertices.clone(),
-                indices: ds.indices.clone(),
-            });
-            continue;
-        }
-        match backend.update_skinned_mesh_geometry(
-            entry.skinned_index,
-            entry.vertex_base,
-            &ds.vertices,
-            &ds.indices,
-        ) {
-            Ok(()) => reloaded += 1,
-            Err(e) => {
-                tracing::error!(
-                    "asset hot-reload: backend rejected SkinnedMesh update for \
-                     skinned slot {} (source '{}'): {}",
-                    entry.skinned_index,
-                    entry.source,
-                    e
-                );
-                failed += 1;
-            }
-        }
-    }
-    if !skinned_rebuild_changes.is_empty() {
-        tracing::info!(
-            "asset hot-reload: {} SkinnedMesh entry/entries had size changes; \
-             rebuilding shared skinned vertex / index buffers",
-            skinned_rebuild_changes.len()
-        );
-        match backend.rebuild_skinned_geometry(skinned_rebuild_changes) {
-            Ok(new_layouts) => {
-                // Every slot's vertex_base may have shifted (the rebuild
-                // re-packs from scratch). Refresh every captured source
-                // entry's layout so the next reload pass's size check uses
-                // current state, and so a future
-                // `update_skinned_mesh_geometry` call uses the new
-                // vertex_base.
-                apply_skinned_layouts_to_entries(&mut state.skinned_meshes.entries, &new_layouts);
-                reloaded += skinned_rebuild_entries.len();
-            }
-            Err(e) => {
-                tracing::error!(
-                    "asset hot-reload: rebuild_skinned_geometry failed: {} \
-                     ({} SkinnedMesh entry/entries kept their old geometry)",
-                    e,
-                    skinned_rebuild_entries.len()
-                );
-                failed += skinned_rebuild_entries.len();
-                // The geometry rebuild failed, so the slot kept its old
-                // vertices/indices: discard any queued skeleton update
-                // tied to a failed rebuild so the SkeletonPose stays in
-                // sync with the unchanged geometry.
-                let failed_skinned: std::collections::HashSet<render_types::SkinnedIndex> =
-                    skinned_rebuild_entries
-                        .iter()
-                        .filter_map(|&i| state.skinned_meshes.entries.get(i))
-                        .map(|e| e.skinned_index)
-                        .collect();
-                state
-                    .pending_skeleton_updates
-                    .retain(|u| !failed_skinned.contains(&u.skinned_index));
-                // Also drop the joint-count changes for the failed slots so
-                // the apply-to-entries step below doesn't write a stale
-                // joint_count into the source map.
-                joint_count_changes.retain(|(entry_idx, _)| {
-                    state
-                        .skinned_meshes
-                        .entries
-                        .get(*entry_idx)
-                        .is_none_or(|e| !failed_skinned.contains(&e.skinned_index))
-                });
-            }
-        }
-    }
-    // Apply queued joint-count changes: resize each affected slot's
-    // backend joint-matrix buffers and update the source map's
-    // captured `joint_count`. Runs after the (possibly failing) rebuild
-    // dispatch so failed rebuilds can prune their joint-count writes
-    // before they land.
-    for (entry_idx, new_count) in &joint_count_changes {
-        let Some(entry) = state.skinned_meshes.entries.get_mut(*entry_idx) else {
-            continue;
-        };
-        if let Err(e) = backend.update_skinned_skeleton(entry.skinned_index, *new_count) {
-            tracing::error!(
-                "asset hot-reload: backend rejected joint-count update for skinned slot {} \
-                 (source '{}'): {} (joint_count stays at {})",
-                entry.skinned_index,
-                entry.source,
-                e,
-                entry.joint_count
-            );
-            // Drop the queued SkeletonPose update so it doesn't desync
-            // from the unchanged backend joint_count.
-            let stale_skinned_index = entry.skinned_index;
-            state
-                .pending_skeleton_updates
-                .retain(|u| u.skinned_index != stale_skinned_index);
-            failed += 1;
-        } else {
-            entry.joint_count = *new_count;
-        }
-    }
+    apply::static_meshes(backend, &state.meshes.entries, &batch.meshes, &mut tally);
+    apply::skinned_meshes(state, backend, &batch.skinned_meshes, &mut tally);
 
     tracing::info!(
         "asset hot-reload: applied off-thread batch, reloaded {} asset(s) ({} failed)",
-        reloaded,
-        failed
+        tally.reloaded,
+        tally.failed
     );
     true
 }

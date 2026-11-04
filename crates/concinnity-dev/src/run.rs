@@ -94,9 +94,7 @@ fn play_cooked(launch: LaunchRequest, tree: &StateTree) -> std::io::Result<()> {
     let world_path = discover_world_path().ok();
     let hook = debug_hook(launch.args.debug_port, world_path.as_deref())?;
     let mut runtime = Runtime::new().in_tree(tree.clone()).with_launch(launch);
-    runtime
-        .load_blob()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    runtime.load_blob()?;
     start_app(runtime, hook)
 }
 

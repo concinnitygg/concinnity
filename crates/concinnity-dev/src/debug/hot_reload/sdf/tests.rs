@@ -11,7 +11,6 @@ use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::sync::Mutex;
-use std::time::Duration;
 
 // A backend that records every volume swap with the pipelines it was handed,
 // holds the volumes in `resident`, and rejects every build when `reject` is
@@ -413,7 +412,7 @@ fn an_unreadable_field_fails_before_compiling() {
         &reports[0].outcome,
         ReloadOutcome::Failed(ReloadFailure::Unstarted(e)) if e.contains("cloud.hlsl")
     ));
-    std::thread::sleep(Duration::from_millis(50));
+    assert!(!f.reload.compiled_any(), "no worker was started");
     assert!(f.reload.poll(&mut backend).is_empty());
     assert!(f.compiles().is_empty());
 }

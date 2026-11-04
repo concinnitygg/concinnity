@@ -116,6 +116,12 @@ impl ShaderReload {
             })
             .collect()
     }
+
+    // Whether any request started a compile worker.
+    #[cfg(test)]
+    fn compiled_any(&self) -> bool {
+        self.compiles.submitted_any()
+    }
 }
 
 // Hand fresh programs, and the pipeline built from them, to the backend. A

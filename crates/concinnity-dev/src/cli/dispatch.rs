@@ -5,7 +5,7 @@
 
 use super::{Cli, Commands};
 use crate::command;
-use crate::export::ExportOptions;
+use crate::command::export::ExportOptions;
 use concinnity_engine::launch::LaunchArgs;
 use concinnity_host::store::paths::StateTree;
 
@@ -46,7 +46,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
         Commands::List(args) => command::list(args.world.file(), args.expanded, args.systems),
         Commands::Explain(args) => command::explain(&args.id, args.world.file()),
         Commands::Docs(args) => crate::docs::docs(args.root.as_deref()),
-        Commands::Export(args) => crate::export::export(&ExportOptions {
+        Commands::Export(args) => command::export::export(&ExportOptions {
             world: args.world.file().map(str::to_string),
             name: args.name.clone(),
             version: args.version.clone(),

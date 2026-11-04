@@ -49,8 +49,6 @@ pub mod cli;
 pub(crate) mod command;
 /// The asset reference pages, generated from the engine's own schema sources.
 pub(crate) mod docs;
-/// Packaging a built world into a distributable bundle.
-pub(crate) mod export;
 pub mod project;
 
 // Process-global test serialization lock; test builds only.

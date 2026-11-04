@@ -4,6 +4,7 @@
 //! them as, with the actions each row's menu offers. A file's status is its
 //! Shader's latest reload outcome as it bears on that file.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{entry_handles, entry_type};
 use concinnity_engine::components::ShaderStage;
 use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
@@ -52,7 +53,7 @@ pub(crate) fn declared(
     entries
         .iter()
         .enumerate()
-        .filter(|(_, e)| entry_type(e) == Some("Shader"))
+        .filter(|(_, e)| entry_type(e) == Some(RegisteredType::Shader))
         .enumerate()
         .filter_map(|(order, (i, e))| {
             let name = names[i].clone()?;
@@ -71,7 +72,7 @@ pub(crate) fn declared(
                 .collect();
             let materials = select_related::entries_using(entries, &name)
                 .into_iter()
-                .filter(|&m| entry_type(&entries[m]) == Some("Material"))
+                .filter(|&m| entry_type(&entries[m]) == Some(RegisteredType::Material))
                 .filter_map(|m| Some((m, names[m].clone()?)))
                 .collect();
             Some(ShaderDecl {
@@ -88,7 +89,7 @@ pub(crate) fn declared(
 pub(crate) fn shader_count(entries: &[serde_json::Value]) -> usize {
     entries
         .iter()
-        .filter(|e| entry_type(e) == Some("Shader"))
+        .filter(|e| entry_type(e) == Some(RegisteredType::Shader))
         .count()
 }
 

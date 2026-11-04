@@ -3,6 +3,7 @@
 //! as form rows; why the form cannot confirm; and the edits a commit makes to
 //! other entries.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{entry_handles, entry_type, find_entry};
 use concinnity_engine::components::ShaderStage;
 
@@ -79,7 +80,7 @@ impl ShaderForm {
         let used_by = entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| entry_type(e) == Some("Material"))
+            .filter(|(_, e)| entry_type(e) == Some(RegisteredType::Material))
             .filter_map(|(i, e)| {
                 let material = handles[i].clone()?;
                 let names = shader_of(e);
@@ -338,7 +339,7 @@ fn choice(id: usize, stage: ShaderStage, selected: usize) -> ExtraRow {
     }
 }
 fn is_shader(e: &serde_json::Value) -> bool {
-    entry_type(e) == Some(SHADER)
+    entry_type(e) == Some(RegisteredType::Shader)
 }
 
 fn vertex_of(e: &serde_json::Value) -> Option<&str> {

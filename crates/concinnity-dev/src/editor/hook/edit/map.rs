@@ -8,7 +8,6 @@
 //! by. An entry the registry cannot type is left out, because a build would not
 //! place one either.
 
-use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{WorldJsonlAsset, args_without_id, entry_handles};
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
@@ -33,7 +32,7 @@ impl EditorHook {
                 self.entries.key_at(i)?,
                 WorldJsonlAsset {
                     id: handles.get(i)?.clone()?,
-                    asset_type: RegisteredType::parse(entry_type(entry)?)?,
+                    asset_type: entry_type(entry)?,
                     args: args_without_id(entry.get("args").cloned().unwrap_or(Value::Null)),
                 },
             ))

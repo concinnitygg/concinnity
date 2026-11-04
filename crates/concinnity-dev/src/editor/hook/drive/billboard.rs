@@ -12,7 +12,7 @@ use concinnity_engine::ecs::{Entity, PickIndex, World};
 use concinnity_engine::gfx::pick::ray_aabb;
 use concinnity_host::thread::asset_id;
 
-use crate::editor::hook::{EditorHook, entry_type, pick};
+use crate::editor::hook::{EditorHook, entry_type_name, pick};
 use concinnity_cook::authoring::world::{entry_handle, entry_handles};
 
 use crate::editor::asset_handle::AssetHandle;
@@ -43,7 +43,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn seed_billboard_transforms(&self, world: &mut World) {
         let handles = entry_handles(&self.entries);
         for (e, name) in self.entries.iter().zip(&handles) {
-            let (Some(name), Some(ty)) = (name, entry_type(e)) else {
+            let (Some(name), Some(ty)) = (name, entry_type_name(e)) else {
                 continue;
             };
             if !billboards::eligible(ty) {
@@ -86,7 +86,7 @@ impl EditorHook {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| entry_type(e).is_some_and(billboards::eligible))
+            .filter(|(_, e)| entry_type_name(e).is_some_and(billboards::eligible))
             .filter(|(i, _)| {
                 !self
                     .entries
@@ -127,7 +127,7 @@ impl EditorHook {
             .into_iter()
             .filter_map(|s| {
                 let e = self.entries.get(s.entry)?;
-                let (name, ty) = (entry_handle(&self.entries, s.entry)?, entry_type(e)?);
+                let (name, ty) = (entry_handle(&self.entries, s.entry)?, entry_type_name(e)?);
                 Some(billboards::Icon {
                     screen: s.screen,
                     tint: billboards::tint(ty),

@@ -67,7 +67,7 @@ fn drag_out_places_a_prop_where_the_ghost_lands() {
     assert!(h.content.drag.is_none());
     assert_eq!(h.entries.len(), before + 1);
     let placed = &h.entries[before];
-    assert_eq!(entry_type(placed), Some("Prop"));
+    assert_eq!(entry_type(placed), Some(RegisteredType::Prop));
     assert_eq!(placed["args"]["mesh"], "demo_ball");
     assert!(
         placed["args"]["position"][1].as_f64().unwrap().abs() < 1e-3,

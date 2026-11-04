@@ -11,6 +11,7 @@ mod add;
 mod check;
 mod cook;
 mod explain;
+pub(crate) mod export;
 mod list;
 mod new;
 mod rm;

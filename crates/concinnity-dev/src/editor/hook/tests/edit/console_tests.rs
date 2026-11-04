@@ -6,6 +6,7 @@
 
 // A world holding the console's command-line field.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_engine::components::{
     FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, TextInput, TextLabel,
 };
@@ -416,7 +417,10 @@ fn console_commands_edit_the_working_entries() {
     h.run_console_line(&mut world, "/add PhysicsConfig phys");
     assert_eq!(h.entries.len(), 1);
     assert_eq!(declared_id(&h.entries[0]), Some("phys"));
-    assert_eq!(entry_type(&h.entries[0]), Some("PhysicsConfig"));
+    assert_eq!(
+        entry_type(&h.entries[0]),
+        Some(RegisteredType::PhysicsConfig)
+    );
     assert!(h.dirty, "an added entry marks the world dirty");
 
     h.run_console_line(&mut world, "/del phys");

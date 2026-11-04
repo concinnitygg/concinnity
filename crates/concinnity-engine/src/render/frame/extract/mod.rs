@@ -495,9 +495,10 @@ impl FrameExtractor {
         if let Some(rebase) = &rebase {
             self.history_reset.rebase(rebase);
             if let Some((data, uniforms)) = lights::carry_local_lights(ctx, rebase) {
-                snap.ops.record(move |backend| {
+                snap.ops.record_with(move |backend, out| {
                     if let Err(e) = backend.move_local_lights(&data, &uniforms) {
                         tracing::error!("moving the local lights: {e}");
+                        out.note(&e);
                     }
                 });
             }

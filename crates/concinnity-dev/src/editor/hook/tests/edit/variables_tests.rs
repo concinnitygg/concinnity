@@ -5,6 +5,7 @@
 //! removing a declaration leaves behind, and the re-check each change runs over
 //! the behaviors reading it.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_engine::components::{InputKey, TextInput};
 use concinnity_engine::ecs::World;
 
@@ -94,7 +95,7 @@ fn declaring_the_first_variable_creates_the_table_holding_it() {
     h.apply_variables_action(VariablesAction::Declare, &mut world);
 
     let idx = h.variables_entry().expect("the table was created");
-    assert_eq!(entry_type(&h.entries[idx]), Some("Variables"));
+    assert_eq!(entry_type(&h.entries[idx]), Some(RegisteredType::Variables));
     assert_eq!(
         table_args(&h)["vars"],
         serde_json::json!([{"name": "score", "value": {"int": 0}}]),

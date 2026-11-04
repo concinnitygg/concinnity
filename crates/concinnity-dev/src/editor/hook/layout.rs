@@ -7,8 +7,8 @@ use concinnity_engine::ecs::{CursorShape, HudLayers, World};
 
 use super::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::panels::asset_list::{self, ListRow};
-use crate::editor::panels::list_panel::Row;
 use crate::editor::panels::registry::{self, PanelKey};
+use crate::editor::panels::row_list::Row;
 use crate::editor::viewport::resize;
 use crate::editor::widget::{self, point_in};
 use crate::editor::{create_menu, hud, modal, toast_overlay, view_menu, worlds};

@@ -179,7 +179,13 @@ pub(crate) fn anchored_path() -> Option<PathBuf> {
 // turn every operation above into a miss, so payloads are compiled fresh rather
 // than warmed from a segment nothing can invalidate.
 fn open<'a>(held: &'a mut MutexGuard<'static, Option<Loaded>>) -> Option<&'a mut Loaded> {
-    let path = anchored_path()?;
+    let Some(path) = anchored_path() else {
+        static UNANCHORED: std::sync::Once = std::sync::Once::new();
+        UNANCHORED.call_once(|| {
+            tracing::debug!("build cache: no segment is anchored, so every payload compiles fresh");
+        });
+        return None;
+    };
     let token = identity::token()?;
     Some(open_at(held, path, token))
 }

@@ -7,6 +7,7 @@
 //! area takes the frame's key events and pointer while it holds focus and the
 //! panel is frontmost.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
 
@@ -25,7 +26,7 @@ impl EditorHook {
     pub(super) fn story_import_index(&self) -> Option<usize> {
         self.entries
             .iter()
-            .position(|e| entry_type(e) == Some("StoryImport"))
+            .position(|e| entry_type(e) == Some(RegisteredType::StoryImport))
     }
 
     // The import's source path, if an import with a source exists.

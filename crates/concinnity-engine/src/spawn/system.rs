@@ -49,10 +49,10 @@ fn record_clone_static(
     model: [[f32; 4]; 4],
 ) -> DrawIndex {
     let dst = slots.allocate_draw();
-    ops.record(move |backend| {
-        if let Err(e) = backend.clone_static_draw_object(src, model, dst) {
-            tracing::warn!("SpawnSystem: draw-slot clone of {} failed: {}", src, e);
-        }
+    ops.record_fallible(move |backend| {
+        backend
+            .clone_static_draw_object(src, model, dst)
+            .map_err(|e| e.context(format_args!("SpawnSystem: draw-slot clone of {src}")))
     });
     dst.slot()
 }

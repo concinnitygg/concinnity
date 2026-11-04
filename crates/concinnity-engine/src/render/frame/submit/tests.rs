@@ -343,3 +343,35 @@ fn an_empty_snapshot_pushes_no_models_or_ui_intents() {
         Call::UpdateModel(_) | Call::SetMenuMode(_) | Call::SetCameraCapture(_)
     )));
 }
+
+// A tolerated op that lost the device stops the run before the draw, the way
+// a lost draw does.
+#[test]
+fn a_device_lost_by_a_replayed_op_stops_before_the_draw() {
+    let (state, mut backend) = recording_backend();
+    let mut snap = RenderSnapshot::default();
+    snap.ops.record_fallible(|_| {
+        Err(RenderError::DeviceLost {
+            reason: DeviceLostReason::Removed,
+            detail: "chunk remove".to_string(),
+        })
+    });
+    let outcome = submit(
+        &mut FramePolicy::default(),
+        &mut snap,
+        &mut backend,
+        no_clock,
+    );
+    assert_eq!(outcome.result, StepResult::Stop);
+    assert!(
+        outcome
+            .device_lost
+            .is_some_and(|m| m.contains("chunk remove"))
+    );
+    let drew = state
+        .lock()
+        .calls
+        .iter()
+        .any(|c| matches!(c, Call::DrawFrame { .. }));
+    assert!(!drew, "nothing is drawn on a lost device");
+}

@@ -28,7 +28,6 @@ use crate::planet::{
     MAX_RESIDENT_TILES, PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh,
     TileMorphFrame, TileSeams, TileView, tile_mesh,
 };
-use crate::render::backend::error;
 use crate::render::backend::{ChunkMesh, PlanetChunk};
 use crate::render::environment::grass::CanopyRange;
 use crate::render::frame::ops::{OpFailure, RenderOps};
@@ -505,10 +504,10 @@ impl PlanetTiles {
             for tile in self.tiles.values() {
                 if let Tile::Resident { draw, origin, .. } = *tile {
                     let model = planet.frame.model_at(origin);
-                    ops.record(move |backend| {
-                        if let Err(e) = backend.set_chunk_model(draw, model) {
-                            tracing::warn!("planet tile rebase: {e}");
-                        }
+                    ops.record_fallible(move |backend| {
+                        backend
+                            .set_chunk_model(draw, model)
+                            .map_err(|e| e.context("planet tile rebase"))
                     });
                 }
             }
@@ -562,10 +561,10 @@ impl PlanetTiles {
         for tile in core::mem::take(&mut self.tiles).into_values() {
             if let Tile::Resident { draw, .. } = tile {
                 slots.free_draw(draw);
-                ops.record(move |backend| {
-                    if let Err(e) = backend.remove_chunk_mesh(draw, retire_frame) {
-                        tracing::warn!("planet tile remove: {e}");
-                    }
+                ops.record_fallible(move |backend| {
+                    backend
+                        .remove_chunk_mesh(draw, retire_frame)
+                        .map_err(|e| e.context("planet tile remove"))
                 });
             }
         }
@@ -614,10 +613,10 @@ impl PlanetTiles {
         for id in plan.evict {
             if let Some(Tile::Resident { draw, .. }) = self.tiles.remove(&id) {
                 slots.free_draw(draw);
-                ops.record(move |backend| {
-                    if let Err(e) = backend.remove_chunk_mesh(draw, retire_frame) {
-                        tracing::warn!("planet tile remove: {e}");
-                    }
+                ops.record_fallible(move |backend| {
+                    backend
+                        .remove_chunk_mesh(draw, retire_frame)
+                        .map_err(|e| e.context("planet tile remove"))
                 });
             }
         }
@@ -733,8 +732,7 @@ impl PlanetTiles {
                     }
                     Err(e) => {
                         tracing::warn!("planet tile add: {e}");
-                        out.memory_pressure |=
-                            matches!(e, error::RenderError::OutOfDeviceMemory(_));
+                        out.note(&e);
                         out.failures.push(OpFailure::PlanetTileAdd { tile: id });
                     }
                 }

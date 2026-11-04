@@ -6,7 +6,7 @@
 //! in their extra chrome (the Assets panel adds hover / selection tints, a
 //! triple-dot menu, and delete); that stays in `assets_panel.rs`, layered over this base.
 
-use concinnity_cook::authoring::world::entry_type;
+use concinnity_cook::authoring::world::entry_type_name;
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
 
@@ -48,7 +48,7 @@ pub(crate) struct ListRow {
 fn distinct_types(entries: &[serde_json::Value]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for e in entries {
-        if let Some(ty) = entry_type(e)
+        if let Some(ty) = entry_type_name(e)
             && !out.iter().any(|s| s == ty)
         {
             out.push(ty.to_string());
@@ -79,7 +79,7 @@ pub(crate) fn grouped_rows(
             .enumerate()
             .filter_map(|(i, (e, name))| {
                 let name = name.as_deref()?;
-                (entry_type(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
+                (entry_type_name(e) == Some(ty.as_str())).then(|| (i, name.to_string()))
             })
             .collect();
         if named.is_empty() {

@@ -29,7 +29,6 @@ use crate::components::{
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
 use crate::platform::GraphicsApiStatus;
-use crate::render::backend::error::RenderError;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::{backend, frame::snapshot, scene::flow};
@@ -251,7 +250,7 @@ pub(crate) fn record_plan(ops: &mut RenderOps, graphics: &ResolvedGraphics, plan
     ops.record_with(move |backend, out| {
         if let Err(e) = backend.apply_settings(&graphics, &plan) {
             tracing::error!("SettingsSystem: settings apply failed: {e}");
-            out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+            out.note(&e);
         }
     });
 }

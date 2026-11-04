@@ -365,17 +365,8 @@ impl VkContext {
             .get(frame_idx)
             .map_or(u64::MAX, |l| l.load(std::sync::atomic::Ordering::Relaxed));
         self.cull
-            .world_pipelines
-            .resident_buckets()
-            .filter(move |&b| {
-                (live >> b) & 1 != 0
-                    && self
-                        .cull
-                        .variants
-                        .regions
-                        .get(b)
-                        .is_some_and(|r| !r.is_empty())
-            })
+            .variants
+            .drawn_buckets(live, self.cull.world_pipelines.resident_buckets())
     }
 
     // Draw stream `stream`'s list of `indirect`, one of the main view's

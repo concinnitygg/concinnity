@@ -28,6 +28,7 @@
 // The no-dependency `.cube` parse, the classifier, the (de)serializers, and the
 // size validator stay in concinnity-engine; the `.png` slice-strip decode below
 // lives here in the build crate alongside the `png` crate.
+use crate::compile::CompileError;
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::bake::color_lut::{
     LutFormat, classify_source, parse_cube, serialize, validate_size,
@@ -54,7 +55,7 @@ pub(crate) fn validate_color_lut_args(args: &serde_json::Value) -> Result<(), St
 pub(crate) fn compile_color_lut_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     let source = color_lut_source(args)?;
     let (size, data) = decode(&concinnity_host::store::source::resolve_source_path(
         source, assets_dir,
@@ -85,19 +86,18 @@ fn color_lut_strength(args: &serde_json::Value) -> f32 {
 ///
 /// Returns an error if the file cannot be read or does not decode as a `.cube`
 /// or PNG-strip LUT.
-pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), String> {
+pub fn decode_source(path: &str) -> Result<(u32, Vec<u8>), CompileError> {
     decode(path)
 }
 
 // Read the LUT at `path` in the format its extension names. Resolution never
 // renames a source, so this classifies the same way whether it is handed the
 // authored string or the path that string resolved to.
-fn decode(path: &str) -> Result<(u32, Vec<u8>), String> {
+fn decode(path: &str) -> Result<(u32, Vec<u8>), CompileError> {
     match classify_source(path)? {
         LutFormat::Cube => {
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("failed to read LUT source '{path}': {e}"))?;
-            parse_cube(&text)
+            let text = CompileError::read_text(path, "failed to read LUT source")?;
+            parse_cube(&text).map_err(CompileError::from)
         }
         LutFormat::Png => parse_png_strip(path),
     }
@@ -108,12 +108,12 @@ fn decode(path: &str) -> Result<(u32, Vec<u8>), String> {
 // Parse a horizontal LUT slice strip PNG into `(size, RGBA8 data)`. The image
 // is `(n*n)` wide by `n` tall: n square slices laid left-to-right where blue
 // selects the slice, red is the column within a slice and green is the row.
-pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
+pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), CompileError> {
     let (width, height, pixels) = load_png_rgba8(path)?;
     let size = height;
     validate_size(size)?;
     if width != size * size {
-        return Err(format!(
+        return Err(CompileError::Invalid(format!(
             "ColorLut strip '{}' is {}x{}; a size-{} strip must be {}x{}",
             path,
             width,
@@ -121,7 +121,7 @@ pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
             size,
             size * size,
             size
-        ));
+        )));
     }
     let n = size as usize;
     let mut data = Vec::with_capacity(n * n * n * 4);
@@ -140,23 +140,23 @@ pub(crate) fn parse_png_strip(path: &str) -> Result<(u32, Vec<u8>), String> {
 
 // Decode a PNG into (width, height, RGBA8 pixels). Only RGB / RGBA color
 // types are accepted: a LUT strip is always full color.
-fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     use png::ColorType;
     let file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open LUT source '{path}': {e}"))?;
+        .map_err(|e| CompileError::source(path, "failed to open LUT source", e))?;
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder
         .read_info()
-        .map_err(|e| format!("failed to read PNG info for '{path}': {e}"))?;
+        .map_err(|e| CompileError::Invalid(format!("failed to read PNG info for '{path}': {e}")))?;
     let mut buf = vec![
         0u8;
-        reader
-            .output_buffer_size()
-            .ok_or("failed to compute PNG output buffer size")?
+        reader.output_buffer_size().ok_or_else(|| {
+            CompileError::Invalid("failed to compute PNG output buffer size".to_string())
+        })?
     ];
-    let info = reader
-        .next_frame(&mut buf)
-        .map_err(|e| format!("failed to decode PNG frame for '{path}': {e}"))?;
+    let info = reader.next_frame(&mut buf).map_err(|e| {
+        CompileError::Invalid(format!("failed to decode PNG frame for '{path}': {e}"))
+    })?;
     let raw = &buf[..info.buffer_size()];
     let pixels = match info.color_type {
         ColorType::Rgba => raw.to_vec(),
@@ -168,9 +168,9 @@ fn load_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
             out
         }
         other => {
-            return Err(format!(
+            return Err(CompileError::Invalid(format!(
                 "ColorLut strip '{path}' has unsupported PNG color type {other:?} (need RGB/RGBA)"
-            ));
+            )));
         }
     };
     Ok((info.width, info.height, pixels))
@@ -255,7 +255,7 @@ mod tests {
         // Height 2 demands width 4; give it 3.
         let src = write_png(&dir, "s.png", 3, 2, png::ColorType::Rgba, &[0u8; 3 * 2 * 4]);
         let err = parse_png_strip(&src).unwrap_err();
-        assert!(err.contains("must be 4x2"), "got: {err}");
+        assert!(err.to_string().contains("must be 4x2"), "got: {err}");
     }
 
     #[test]
@@ -264,7 +264,7 @@ mod tests {
         // Height 1 means LUT size 1, below the minimum of 2.
         let src = write_png(&dir, "s.png", 1, 1, png::ColorType::Rgba, &[0u8; 4]);
         let err = parse_png_strip(&src).unwrap_err();
-        assert!(err.contains("out of range"), "got: {err}");
+        assert!(err.to_string().contains("out of range"), "got: {err}");
     }
 
     #[test]
@@ -272,7 +272,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_png(&dir, "s.png", 4, 2, png::ColorType::Grayscale, &[0u8; 8]);
         let err = parse_png_strip(&src).unwrap_err();
-        assert!(err.contains("unsupported PNG color type"), "got: {err}");
+        assert!(
+            err.to_string().contains("unsupported PNG color type"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -280,7 +283,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing.png");
         let err = parse_png_strip(path.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("failed to open LUT source"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open LUT source"),
+            "got: {err}"
+        );
     }
 
     // .cube compile
@@ -376,7 +382,10 @@ LUT_3D_SIZE 2
         let path = dir.path().join("missing.cube");
         let args = serde_json::json!({"source": path.to_str().unwrap()});
         let err = compile_color_lut_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to read LUT source"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read LUT source"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -396,7 +405,10 @@ LUT_3D_SIZE 2
     #[test]
     fn decode_source_rejects_an_unknown_extension() {
         let err = decode_source("grade.tga").unwrap_err();
-        assert!(err.contains("must be a .cube or .png"), "got: {err}");
+        assert!(
+            err.to_string().contains("must be a .cube or .png"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -405,7 +417,10 @@ LUT_3D_SIZE 2
         // Declares a size-2 LUT but supplies a single triplet.
         let src = write_cube(&dir, "LUT_3D_SIZE 2\n0 0 0\n");
         let err = compile_color_lut_payload(&serde_json::json!({"source": src}), None).unwrap_err();
-        assert_eq!(err, "ColorLut .cube has 1 entries, expected 8 for size 2");
+        assert_eq!(
+            err.to_string(),
+            "ColorLut .cube has 1 entries, expected 8 for size 2"
+        );
     }
 
     #[test]
@@ -413,7 +428,7 @@ LUT_3D_SIZE 2
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_png(&dir, "s.png", 3, 2, png::ColorType::Rgba, &[0u8; 3 * 2 * 4]);
         let err = compile_color_lut_payload(&serde_json::json!({"source": src}), None).unwrap_err();
-        assert!(err.contains("must be 4x2"), "got: {err}");
+        assert!(err.to_string().contains("must be 4x2"), "got: {err}");
     }
 
     #[test]
@@ -421,7 +436,10 @@ LUT_3D_SIZE 2
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("missing.cube");
         let err = decode_source(path.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("failed to read LUT source"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read LUT source"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -430,7 +448,10 @@ LUT_3D_SIZE 2
         let path = dir.path().join("s.png");
         std::fs::write(&path, b"definitely not a png").expect("write");
         let err = parse_png_strip(path.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("failed to read PNG info"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read PNG info"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -442,6 +463,9 @@ LUT_3D_SIZE 2
         bytes.truncate(bytes.len() - 20);
         std::fs::write(&src, &bytes).expect("write truncated png");
         let err = parse_png_strip(&src).unwrap_err();
-        assert!(err.contains("failed to decode PNG frame"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode PNG frame"),
+            "got: {err}"
+        );
     }
 }

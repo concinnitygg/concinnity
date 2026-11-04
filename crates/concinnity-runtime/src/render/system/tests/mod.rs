@@ -239,7 +239,7 @@ fn quad_mesh_payload() -> Vec<u8> {
         v([1.0, 0.0, 1.0], [1.0, 1.0]),
         v([0.0, 0.0, 1.0], [0.0, 1.0]),
     ];
-    mesh_payload::serialize(&vertices, &[0, 1, 2, 0, 2, 3])
+    mesh_payload::serialize(&vertices, &[0, 1, 2, 0, 2, 3]).unwrap()
 }
 
 // A w x h mid-gray RGBA image in the compiled texture payload format.
@@ -489,4 +489,5 @@ fn skinned_payload_with_morphs(
         morphs,
         lods,
     )
+    .unwrap()
 }

@@ -13,7 +13,7 @@
 //!   u32  `index_count`                              // LOD0 indices
 //!   `index_count`  * 2 bytes    u16 indices
 //!   optional LOD trailer
-//!   4 bytes                   ascii "LODS" magic (absent for legacy / single-LOD payloads)
+//!   4 bytes                   ascii "LODS" magic (absent when the mesh has no alternates)
 //!   u32  `alt_count`            // number of additional LODs beyond LOD0
 //!   `alt_count` × {
 //!     f32  `switch_distance`    // camera-distance threshold (LOD i+1 applies at d >= `switch_distance`)
@@ -29,7 +29,6 @@ use crate::bake::decode::{ByteReader, checked_product};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use concinnity_core::math::SaturatingFrom;
 
 // The little-endian f32 at byte offset `at` of a fixed-size chunk.
 fn chunk_f32(chunk: &[u8], at: usize) -> f32 {
@@ -108,11 +107,23 @@ pub struct SkinnedPayload {
     pub lods: LodAlternates,
 }
 
+// A section length as the u32 prefix the decoder trusts, refused rather than
+// clamped when it does not fit.
+fn count(len: usize, what: &str) -> Result<[u8; 4], String> {
+    u32::try_from(len)
+        .map(u32::to_le_bytes)
+        .map_err(|_| format!("mesh payload: {len} {what} exceed the format's u32 count"))
+}
+
 /// Serialize vertex and index slices into the packed binary payload format.
 /// Each vertex tuple is (pos, normal, tangent, color, uv).
-pub fn serialize(vertices: &[VertTuple], indices: &[u16]) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if a length does not fit the format's u32 count.
+pub fn serialize(vertices: &[VertTuple], indices: &[u16]) -> Result<Vec<u8>, String> {
     let mut buf = Vec::with_capacity(4 + vertices.len() * 56 + 4 + indices.len() * 2);
-    buf.extend_from_slice(&u32::saturating_from(vertices.len()).to_le_bytes());
+    buf.extend_from_slice(&count(vertices.len(), "vertices")?);
     for (pos, normal, tangent, color, uv) in vertices {
         for x in pos
             .iter()
@@ -124,15 +135,14 @@ pub fn serialize(vertices: &[VertTuple], indices: &[u16]) -> Vec<u8> {
             buf.extend_from_slice(&x.to_le_bytes());
         }
     }
-    buf.extend_from_slice(&u32::saturating_from(indices.len()).to_le_bytes());
+    buf.extend_from_slice(&count(indices.len(), "indices")?);
     for i in indices {
         buf.extend_from_slice(&i.to_le_bytes());
     }
-    buf
+    Ok(buf)
 }
 
-// Magic header for the optional LOD trailer. Absent in legacy payloads so
-// `deserialize` keeps working without changes.
+// Magic that opens the LOD trailer, written only when the mesh has alternates.
 const LODS_MAGIC: &[u8; 4] = b"LODS";
 
 /// Serialize a multi-LOD mesh payload. `indices` is LOD0; `lod_alternates`
@@ -140,25 +150,29 @@ const LODS_MAGIC: &[u8; 4] = b"LODS";
 /// camera-distance threshold that triggers a switch to it. When
 /// `lod_alternates` is empty this is byte-identical to the single-LOD
 /// `serialize` output, so the build can call this unconditionally.
+///
+/// # Errors
+///
+/// Returns an error if a length does not fit the format's u32 count.
 pub fn serialize_with_lods(
     vertices: &[VertTuple],
     indices: &[u16],
     lod_alternates: &[(f32, Vec<u16>)],
-) -> Vec<u8> {
-    let mut buf = serialize(vertices, indices);
+) -> Result<Vec<u8>, String> {
+    let mut buf = serialize(vertices, indices)?;
     if lod_alternates.is_empty() {
-        return buf;
+        return Ok(buf);
     }
     buf.extend_from_slice(LODS_MAGIC);
-    buf.extend_from_slice(&u32::saturating_from(lod_alternates.len()).to_le_bytes());
+    buf.extend_from_slice(&count(lod_alternates.len(), "LOD alternates")?);
     for (distance, idx) in lod_alternates {
         buf.extend_from_slice(&distance.to_le_bytes());
-        buf.extend_from_slice(&u32::saturating_from(idx.len()).to_le_bytes());
+        buf.extend_from_slice(&count(idx.len(), "LOD indices")?);
         for i in idx {
             buf.extend_from_slice(&i.to_le_bytes());
         }
     }
-    buf
+    Ok(buf)
 }
 
 /// Vertex layout for skeletally animated meshes. A superset of `Vertex`: the
@@ -234,15 +248,14 @@ pub struct PayloadJoint {
 // so a payload deserializes into a self-contained runtime view, no need
 // for the args JSON to carry the skeleton alongside.
 //
-// Calls [`serialize_skinned_with_lods`] with an empty alternates list, so
-// the on-wire format is identical to the legacy single-LOD payload when
-// no alternates are present.
+// Calls [`serialize_skinned_with_lods`] with no morphs and no alternates, so
+// neither optional block is written.
 #[cfg(test)]
 pub(crate) fn serialize_skinned(
     vertices: &[SkinnedVertex],
     indices: &[u16],
     joints: &[PayloadJoint],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
     serialize_skinned_with_lods(vertices, indices, joints, &PayloadMorphs::default(), &[])
 }
 
@@ -253,17 +266,21 @@ pub(crate) fn serialize_skinned(
 /// bytes of sparse [`MorphEntry`]s, see [`PayloadMorphs`]) and `"LODS"`
 /// (`u32 alt_count`, then per alternate `f32 switch_distance`,
 /// `u32 index_count`, `index_count * 2` bytes of u16 indices). Empty morphs
-/// and alternates match the legacy single-LOD payload byte-for-byte.
+/// and alternates write neither block.
+///
+/// # Errors
+///
+/// Returns an error if a length does not fit the format's u32 count.
 pub fn serialize_skinned_with_lods(
     vertices: &[SkinnedVertex],
     indices: &[u16],
     joints: &[PayloadJoint],
     morphs: &PayloadMorphs,
     lod_alternates: &[(f32, Vec<u16>)],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
     let mut buf = Vec::with_capacity(4 + 4 + vertices.len() * 80 + 4 + indices.len() * 2 + 4);
     buf.extend_from_slice(SKINNED_MAGIC);
-    buf.extend_from_slice(&u32::saturating_from(vertices.len()).to_le_bytes());
+    buf.extend_from_slice(&count(vertices.len(), "vertices")?);
     for v in vertices {
         for f in v
             .pos
@@ -282,14 +299,14 @@ pub fn serialize_skinned_with_lods(
             buf.extend_from_slice(&w.to_le_bytes());
         }
     }
-    buf.extend_from_slice(&u32::saturating_from(indices.len()).to_le_bytes());
+    buf.extend_from_slice(&count(indices.len(), "indices")?);
     for i in indices {
         buf.extend_from_slice(&i.to_le_bytes());
     }
-    buf.extend_from_slice(&u32::saturating_from(joints.len()).to_le_bytes());
+    buf.extend_from_slice(&count(joints.len(), "joints")?);
     for j in joints {
         let name_bytes = j.name.as_bytes();
-        buf.extend_from_slice(&u32::saturating_from(name_bytes.len()).to_le_bytes());
+        buf.extend_from_slice(&count(name_bytes.len(), "name bytes")?);
         buf.extend_from_slice(name_bytes);
         buf.extend_from_slice(&j.parent.to_le_bytes());
         for x in j
@@ -303,13 +320,13 @@ pub fn serialize_skinned_with_lods(
     }
     if !morphs.is_empty() {
         buf.extend_from_slice(MORPH_MAGIC);
-        buf.extend_from_slice(&u32::saturating_from(morphs.names.len()).to_le_bytes());
+        buf.extend_from_slice(&count(morphs.names.len(), "morph targets")?);
         for name in &morphs.names {
             let name_bytes = name.as_bytes();
-            buf.extend_from_slice(&u32::saturating_from(name_bytes.len()).to_le_bytes());
+            buf.extend_from_slice(&count(name_bytes.len(), "name bytes")?);
             buf.extend_from_slice(name_bytes);
         }
-        buf.extend_from_slice(&u32::saturating_from(morphs.entries.len()).to_le_bytes());
+        buf.extend_from_slice(&count(morphs.entries.len(), "morph entries")?);
         for o in &morphs.offsets {
             buf.extend_from_slice(&o.to_le_bytes());
         }
@@ -322,16 +339,16 @@ pub fn serialize_skinned_with_lods(
     }
     if !lod_alternates.is_empty() {
         buf.extend_from_slice(LODS_MAGIC);
-        buf.extend_from_slice(&u32::saturating_from(lod_alternates.len()).to_le_bytes());
+        buf.extend_from_slice(&count(lod_alternates.len(), "LOD alternates")?);
         for (distance, idx) in lod_alternates {
             buf.extend_from_slice(&distance.to_le_bytes());
-            buf.extend_from_slice(&u32::saturating_from(idx.len()).to_le_bytes());
+            buf.extend_from_slice(&count(idx.len(), "LOD indices")?);
             for i in idx {
                 buf.extend_from_slice(&i.to_le_bytes());
             }
         }
     }
-    buf
+    Ok(buf)
 }
 
 /// Deserialize a packed skinned-mesh payload produced by `serialize_skinned`.
@@ -349,9 +366,9 @@ pub fn deserialize_skinned(bytes: &[u8]) -> Result<DeserializedSkinned, String> 
 }
 
 /// Deserialize a packed skinned-mesh payload, also returning any optional
-/// LOD trailer. Mirrors [`deserialize_with_lods`] for static meshes:
-/// legacy single-LOD payloads have no trailer and produce an empty
-/// alternates vec.
+/// LOD trailer. Mirrors [`deserialize_with_lods`] for static meshes: a
+/// payload without alternates has no trailer and yields an empty alternates
+/// vec.
 ///
 /// # Errors
 ///
@@ -426,9 +443,9 @@ pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
             .map_err(|e| format!("skinned mesh payload morph block: {e}"))?;
     }
 
-    // Optional LOD trailer (mirrors the static-mesh format): legacy
-    // single-LOD payloads end at the joint block; if the next four bytes
-    // are the `LODS` magic, the alternates follow.
+    // Optional LOD trailer (mirrors the static-mesh format): a payload
+    // without alternates ends at the joint block; if the next four bytes are
+    // the `LODS` magic, the alternates follow.
     let mut alternates: Vec<(f32, Vec<u16>)> = Vec::new();
     if cur.peek(LODS_MAGIC) {
         cur.skip(4)?;
@@ -470,8 +487,8 @@ pub fn deserialize_with_lods(bytes: &[u8]) -> Result<DeserializedStatic, String>
     let index_count = cur.u32()? as usize;
     let indices = read_indices(&mut cur, index_count, "indices")?;
 
-    // Optional LOD trailer. The legacy single-LOD payload ends here; check
-    // for the `LODS` magic before reading anything more.
+    // Optional LOD trailer. A payload without alternates ends here; check for
+    // the `LODS` magic before reading anything more.
     let mut alternates = Vec::new();
     if cur.peek(LODS_MAGIC) {
         cur.skip(4)?;
@@ -532,14 +549,6 @@ fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, 
         })
         .collect())
 }
-/// Deserialize a packed payload back into typed vertex and index vecs (static),
-/// ignoring any LOD trailer.
-#[cfg(test)]
-pub(crate) fn deserialize(bytes: &[u8]) -> Result<(Vec<Vertex>, Vec<u16>), String> {
-    let (vertices, indices, _) = deserialize_with_lods(bytes)?;
-    Ok((vertices, indices))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,7 +601,7 @@ mod tests {
         let verts = sample_skinned();
         let idxs = vec![0u16, 1, 0];
         let skel = sample_skeleton();
-        let bytes = serialize_skinned(&verts, &idxs, &skel);
+        let bytes = serialize_skinned(&verts, &idxs, &skel).unwrap();
         let (out_v, out_i, out_s) = deserialize_skinned(&bytes).expect("deserialize");
         assert_eq!(out_v, verts);
         assert_eq!(out_i, idxs);
@@ -605,7 +614,7 @@ mod tests {
         // is uniform regardless of whether the asset declared a skeleton.
         let verts = sample_skinned();
         let idxs = vec![0u16, 1, 0];
-        let bytes = serialize_skinned(&verts, &idxs, &[]);
+        let bytes = serialize_skinned(&verts, &idxs, &[]).unwrap();
         let (out_v, out_i, out_s) = deserialize_skinned(&bytes).expect("deserialize");
         assert_eq!(out_v, verts);
         assert_eq!(out_i, idxs);
@@ -617,7 +626,7 @@ mod tests {
         // magic + vert_count + 2*vertex + idx_count + 3*idx + joint_count
         // + per-joint: name_len + name + parent + 3*vec3.
         let skel = sample_skeleton();
-        let bytes = serialize_skinned(&sample_skinned(), &[0u16, 1, 0], &skel);
+        let bytes = serialize_skinned(&sample_skinned(), &[0u16, 1, 0], &skel).unwrap();
         let per_joint = skel
             .iter()
             .map(|j| 4 + j.name.len() + 4 + 12 + 12 + 12)
@@ -663,7 +672,8 @@ mod tests {
     fn deserialize_skinned_rejects_missing_magic() {
         // The static payload format has no magic header, so feeding one in
         // must be rejected rather than silently misread.
-        let static_bytes = serialize(&[([0.0; 3], [0.0; 3], [0.0; 3], [1.0; 3], [0.0; 2])], &[]);
+        let static_bytes =
+            serialize(&[([0.0; 3], [0.0; 3], [0.0; 3], [1.0; 3], [0.0; 2])], &[]).unwrap();
         assert!(deserialize_skinned(&static_bytes).is_err());
     }
 
@@ -713,7 +723,8 @@ mod tests {
             "only the two non-zero deltas are stored"
         );
         let lods = vec![(9.0_f32, vec![0u16, 1, 0])];
-        let bytes = serialize_skinned_with_lods(&vertices, &[0, 1, 0], &joints, &morphs, &lods);
+        let bytes =
+            serialize_skinned_with_lods(&vertices, &[0, 1, 0], &joints, &morphs, &lods).unwrap();
         let p = deserialize_skinned_with_lods(&bytes).expect("deserialize");
         assert_eq!(p.vertices.len(), 2);
         assert_eq!(p.joints.len(), 1);
@@ -739,20 +750,21 @@ mod tests {
                 normal: [0.0; 3],
             }],
         };
-        let bytes = serialize_skinned_with_lods(&vertices, &[0, 0, 0], &[], &morphs, &[]);
+        let bytes = serialize_skinned_with_lods(&vertices, &[0, 0, 0], &[], &morphs, &[]).unwrap();
         let err = deserialize_skinned_with_lods(&bytes).unwrap_err();
         assert!(err.contains("morph block"), "{err}");
         assert!(err.contains("target 3 of 1"), "{err}");
     }
 
     #[test]
-    fn skinned_payload_without_morphs_is_byte_identical_to_legacy() {
+    fn skinned_payload_without_morphs_writes_no_morph_block() {
         let vertices = vec![sample_skinned_vertex([0.0, 0.0, 0.0])];
-        let legacy = serialize_skinned(&vertices, &[0, 0, 0], &[]);
+        let plain = serialize_skinned(&vertices, &[0, 0, 0], &[]).unwrap();
         let with_empty =
-            serialize_skinned_with_lods(&vertices, &[0, 0, 0], &[], &PayloadMorphs::default(), &[]);
-        assert_eq!(legacy, with_empty, "empty morphs must add no bytes");
-        let p = deserialize_skinned_with_lods(&legacy).expect("deserialize");
+            serialize_skinned_with_lods(&vertices, &[0, 0, 0], &[], &PayloadMorphs::default(), &[])
+                .unwrap();
+        assert_eq!(plain, with_empty, "empty morphs must add no bytes");
+        let p = deserialize_skinned_with_lods(&plain).expect("deserialize");
         assert!(p.morphs.is_empty());
     }
 
@@ -783,12 +795,12 @@ mod tests {
     }
 
     #[test]
-    fn serialize_with_no_lods_matches_legacy_format() {
+    fn serialize_with_no_lods_writes_no_trailer() {
         let verts = sample_static_verts();
         let idx = vec![0u16, 1, 2];
-        let legacy = serialize(&verts, &idx);
-        let with_lods = serialize_with_lods(&verts, &idx, &[]);
-        assert_eq!(legacy, with_lods, "no alternates → no trailer bytes");
+        let plain = serialize(&verts, &idx).unwrap();
+        let with_lods = serialize_with_lods(&verts, &idx, &[]).unwrap();
+        assert_eq!(plain, with_lods, "no alternates, no trailer bytes");
     }
 
     #[test]
@@ -796,7 +808,7 @@ mod tests {
         let verts = sample_static_verts();
         let lod0 = vec![0u16, 1, 2];
         let alternates = vec![(8.0_f32, vec![0u16, 2, 1]), (25.0_f32, vec![0u16, 1, 2])];
-        let bytes = serialize_with_lods(&verts, &lod0, &alternates);
+        let bytes = serialize_with_lods(&verts, &lod0, &alternates).unwrap();
         let (out_v, out_idx, out_alts) = deserialize_with_lods(&bytes).expect("deserialize");
         assert_eq!(out_v.len(), verts.len());
         assert_eq!(out_idx, lod0);
@@ -808,27 +820,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_payload_has_no_alternates() {
-        // A payload written by the single-LOD `serialize` must deserialize via
-        // `deserialize_with_lods` with an empty alternates vec: backward
-        // compatibility for every existing on-disk blob.
+    fn a_payload_without_a_trailer_reads_no_alternates() {
         let verts = sample_static_verts();
         let idx = vec![0u16, 1, 2];
-        let bytes = serialize(&verts, &idx);
+        let bytes = serialize(&verts, &idx).unwrap();
         let (_, _, alts) = deserialize_with_lods(&bytes).expect("deserialize");
         assert!(alts.is_empty());
     }
 
+    // A section longer than its u32 prefix can say is refused, never clamped
+    // into a count the decoder would trust.
     #[test]
-    fn legacy_deserialize_still_works_on_multi_lod_payload() {
-        // The legacy `deserialize` reader must keep ignoring the LODS
-        // trailer so any code path that didn't migrate yet still loads
-        // LOD0 from a multi-LOD payload.
-        let verts = sample_static_verts();
-        let lod0 = vec![0u16, 1, 2];
-        let bytes = serialize_with_lods(&verts, &lod0, &[(10.0, vec![0u16, 2, 1])]);
-        let (out_v, out_idx) = deserialize(&bytes).expect("legacy reader");
-        assert_eq!(out_v.len(), verts.len());
-        assert_eq!(out_idx, lod0);
+    #[cfg(target_pointer_width = "64")]
+    fn a_count_past_u32_is_refused() {
+        let past = usize::try_from(u64::from(u32::MAX) + 1).expect("a 64-bit host");
+        let err = count(past, "vertices").unwrap_err();
+        assert!(err.contains("vertices"), "{err}");
+        assert_eq!(count(3, "vertices"), Ok(3u32.to_le_bytes()));
     }
 }

@@ -15,6 +15,7 @@ pub(crate) mod character_shape;
 pub mod color_lut;
 pub(crate) mod cubemap;
 pub mod environment_map;
+mod error;
 /// Referenced-file assets: paths and their compiled payloads.
 pub(crate) mod file;
 pub(crate) mod font;
@@ -36,3 +37,5 @@ pub(crate) mod spawn_population;
 pub(crate) mod terrain;
 pub mod texture;
 pub(crate) mod thumbnail;
+
+pub use error::CompileError;

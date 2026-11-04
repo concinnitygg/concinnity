@@ -78,7 +78,8 @@ fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
 }
 
 /// Read `src_path`, apply a fallible mutation to the asset list, and write
-/// the result to `dst_path`. src and dst may be the same path or different.
+/// the result to `dst_path`, replacing it atomically so a failed write leaves
+/// the old file whole. src and dst may be the same path or different.
 ///
 /// # Errors
 ///
@@ -88,10 +89,7 @@ pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io:
 where
     F: FnOnce(&mut Vec<serde_json::Value>) -> std::io::Result<()>,
 {
-    let content = std::fs::read_to_string(src_path).map_err(|e| {
-        tracing::error!("Could not read {}: {}", src_path, e);
-        e
-    })?;
+    let content = std::fs::read_to_string(src_path)?;
 
     let mut assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
@@ -102,7 +100,10 @@ where
 
     f(&mut assets)?;
 
-    std::fs::write(dst_path, write_world_jsonl(&assets)?)
+    let text = write_world_jsonl(&assets)?;
+    concinnity_host::store::atomic::replace(std::path::Path::new(dst_path), |out| {
+        std::io::Write::write_all(out, text.as_bytes())
+    })
 }
 
 /// Read every entry's handle from world.jsonl without a full parse, for error

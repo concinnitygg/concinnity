@@ -13,7 +13,7 @@ use concinnity_engine::ecs::World;
 use std::sync::atomic::Ordering;
 
 use crate::editor::entry_list::build_text;
-use crate::editor::hook::{EditorHook, declared_id, entry_type, scroll_step};
+use crate::editor::hook::{EditorHook, declared_id, entry_type_name, scroll_step};
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
 use crate::editor::panels::registry::PanelKey;
@@ -243,7 +243,7 @@ impl EditorHook {
             if let Some(base) = declared_id(entry).map(str::to_string) {
                 set_entry_id(entry, &self.unique_from(&base));
             }
-            let ty = entry_type(entry).unwrap_or("?").to_string();
+            let ty = entry_type_name(entry).unwrap_or("?").to_string();
             self.entries.push(entry.clone());
             let handle = entry_handle(&self.entries, self.entries.len() - 1).unwrap_or_default();
             self.console_sink.info(&format!("added '{handle}' ({ty})"));
@@ -260,7 +260,9 @@ impl EditorHook {
                 .error(&format!("no authored asset named '{name}'"));
             return;
         };
-        let ty = entry_type(&self.entries[idx]).unwrap_or("?").to_string();
+        let ty = entry_type_name(&self.entries[idx])
+            .unwrap_or("?")
+            .to_string();
         self.remove_entry_at(idx);
         self.assets.row_menu = None;
         self.console_sink.info(&format!("removed '{name}' ({ty})"));

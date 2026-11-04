@@ -3,6 +3,7 @@
 //! `Texture`. The images are decoded here; the grid and mask math is
 //! `concinnity_engine::terrain`'s.
 
+use crate::compile::CompileError;
 use std::path::Path;
 
 use concinnity_engine::components::{Terrain, validate};
@@ -55,15 +56,16 @@ pub(crate) fn compile_terrain_payload<'a>(
     args: &serde_json::Value,
     texture: impl Fn(&str) -> Option<&'a serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     let scalars = without_references(args);
     let terrain: Terrain = schema_args(RegisteredType::Terrain, name, Some(&scalars))?;
     let terrain = validate::terrain(terrain);
     let pixels = |field: &str, texture_name: &str| {
-        let args = texture(texture_name)
-            .ok_or_else(|| format!("{field} names no Texture '{texture_name}'"))?;
+        let args = texture(texture_name).ok_or_else(|| {
+            CompileError::Invalid(format!("{field} names no Texture '{texture_name}'"))
+        })?;
         crate::compile::texture::texture_rgba8(args, assets_dir)
-            .map_err(|e| format!("{field} Texture '{texture_name}': {e}"))
+            .map_err(|e| e.context(format_args!("{field} Texture '{texture_name}'")))
     };
 
     let heights = match args.get("heightmap").and_then(|v| v.as_str()) {
@@ -199,12 +201,13 @@ mod tests {
         let args = json!({"heightmap": "nowhere"});
         let err = compile_terrain_payload("t", &args, no_textures, None).unwrap_err();
         assert!(
-            err.contains("heightmap names no Texture 'nowhere'"),
+            err.to_string()
+                .contains("heightmap names no Texture 'nowhere'"),
             "{err}"
         );
         let args = json!({"layers": [{"grass": "g", "density_mask": "gone"}]});
         let err = compile_terrain_payload("t", &args, no_textures, None).unwrap_err();
-        assert!(err.contains("layers[0].density_mask"), "{err}");
+        assert!(err.to_string().contains("layers[0].density_mask"), "{err}");
     }
 
     // References parse to nothing here, so a compile worker with no name
@@ -226,7 +229,7 @@ mod tests {
     fn mistyped_args_are_refused() {
         let err = compile_terrain_payload("t", &json!({"resolution": "lots"}), no_textures, None)
             .unwrap_err();
-        assert!(err.contains("resolution"), "{err}");
+        assert!(err.to_string().contains("resolution"), "{err}");
     }
 
     // The cooked grid is the one surface the mesh, the collider and the grass

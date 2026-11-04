@@ -249,7 +249,7 @@ impl EditorHook {
             .into_iter()
             .find_map(|name| {
                 let idx = find_entry(&self.entries, &name)?;
-                (entry_type(&self.entries[idx]) == Some("Prop")).then_some(idx)
+                (entry_type(&self.entries[idx]) == Some(RegisteredType::Prop)).then_some(idx)
             });
         let Some(idx) = hit else {
             return;

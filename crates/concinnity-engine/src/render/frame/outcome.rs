@@ -172,8 +172,8 @@ mod tests {
 
     fn pressured() -> ReplayOutcome {
         ReplayOutcome {
-            failures: Vec::new(),
             memory_pressure: true,
+            ..ReplayOutcome::default()
         }
     }
 
@@ -207,7 +207,7 @@ mod tests {
         let mut world = World::new();
         let failed = |failures| ReplayOutcome {
             failures,
-            memory_pressure: false,
+            ..ReplayOutcome::default()
         };
         apply(&mut world.context(), 1, failed(Vec::new()), None);
         assert!(world.resource::<RenderOpFailures>().is_none());

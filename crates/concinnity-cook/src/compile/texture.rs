@@ -22,6 +22,7 @@
 // pixels decoders below live here in the build crate alongside the png / jpeg /
 // gltf crates.
 use super::ground_surface;
+use crate::compile::CompileError;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::noise::{lattice_hash, lattice_value, lcg_hash};
 use concinnity_engine::bake::texture::{
@@ -46,7 +47,7 @@ pub(crate) fn validate_texture_generator(args: &serde_json::Value) -> Result<(),
 pub(crate) fn compile_texture_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     Ok(serialize(
         &texture_image(args, assets_dir)?.with_mip_chain(),
     ))
@@ -58,17 +59,19 @@ pub(crate) fn compile_texture_payload(
 pub(crate) fn texture_rgba8(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<(u32, u32, Vec<u8>), String> {
-    texture_image(args, assets_dir)?.into_rgba8()
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
+    texture_image(args, assets_dir)?
+        .into_rgba8()
+        .map_err(CompileError::from)
 }
 
 // The image a Texture's args describe, before it is tagged into a payload.
 fn texture_image(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<TextureImage, String> {
-    let tex: Texture =
-        Deserialize::deserialize(args).map_err(|e| format!("Texture: invalid args: {e}"))?;
+) -> Result<TextureImage, CompileError> {
+    let tex: Texture = Deserialize::deserialize(args)
+        .map_err(|e| CompileError::Invalid(format!("Texture: invalid args: {e}")))?;
 
     if let Some(sand) = &tex.sand {
         return Ok(rgba8_image(ground_surface::sand_texture(
@@ -99,11 +102,17 @@ fn texture_image(
         "puff" => rgba8_image(generate_puff(tex.resolution)),
         "" => {
             if tex.source.is_empty() {
-                return Err("file-backed Texture requires a `source` path".to_string());
+                return Err(CompileError::Invalid(
+                    "file-backed Texture requires a `source` path".to_string(),
+                ));
             }
             compile_image_source(&tex.source, tex.image_index, tex.max_size, assets_dir)?
         }
-        other => return Err(format!("unknown texture generator '{other}'")),
+        other => {
+            return Err(CompileError::Invalid(format!(
+                "unknown texture generator '{other}'"
+            )));
+        }
     })
 }
 
@@ -118,14 +127,15 @@ fn compile_image_source(
     image_index: u32,
     max_size: u32,
     assets_dir: Option<&Path>,
-) -> Result<TextureImage, String> {
+) -> Result<TextureImage, CompileError> {
     let lower = source.to_lowercase();
     let image = if Path::new(&lower)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("ktx2"))
     {
         let bytes = read_source(source, "KTX2 texture")?;
-        crate::codec::ktx2::compile_ktx2(&bytes).map_err(|e| format!("'{source}': {e}"))?
+        crate::codec::ktx2::compile_ktx2(&bytes)
+            .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?
     } else if Path::new(&lower)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("dds"))
@@ -140,10 +150,10 @@ fn compile_image_source(
 
 // DDS with a stored mip chain passes its BCn blocks through; a top-mip-only DDS
 // decodes to RGBA8 so the cooked RGBA8 chain applies.
-fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, String> {
+fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, CompileError> {
     let bytes = read_source(source, "DDS texture")?;
-    let blocks =
-        crate::codec::dds::decode_dds_blocks(&bytes).map_err(|e| format!("'{source}': {e}"))?;
+    let blocks = crate::codec::dds::decode_dds_blocks(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?;
     let mips = cap_block_mips(blocks.mips, max_size);
     if mips.len() >= 2 {
         return Ok(TextureImage {
@@ -151,8 +161,8 @@ fn compile_dds_source(source: &str, max_size: u32) -> Result<TextureImage, Strin
             mips,
         });
     }
-    let (w, h, px) =
-        crate::codec::dds::decode_dds(&bytes).map_err(|e| format!("'{source}': {e}"))?;
+    let (w, h, px) = crate::codec::dds::decode_dds(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?;
     Ok(TextureImage::rgba8(w, h, px))
 }
 
@@ -214,7 +224,7 @@ pub fn decode_source(
     source: &str,
     image_index: u32,
     assets_dir: Option<&Path>,
-) -> Result<(u32, u32, Vec<u8>), String> {
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let lower = source.to_lowercase();
     if Path::new(&lower)
         .extension()
@@ -255,34 +265,36 @@ pub fn decode_source(
 // Decode a KTX2 to RGBA8 for the runtime asset hot-reload live preview. The
 // build path keeps KTX2 block-compressed; this decodes/transcodes the base
 // level so `cn run -f` can show an edited texture without a compressed upload.
-fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_ktx2(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let bytes = read_source(source, "KTX2 texture")?;
-    crate::codec::ktx2::decode_ktx2_rgba8(&bytes).map_err(|e| format!("'{source}': {e}"))
+    crate::codec::ktx2::decode_ktx2_rgba8(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Read an authored image file, naming the kind in the open error. Every
 // file-backed decoder below reports a missing or unreadable source the same way.
-fn read_source(source: &str, label: &str) -> Result<Vec<u8>, String> {
-    std::fs::read(source).map_err(|e| format!("failed to open {label} '{source}': {e}"))
+fn read_source(source: &str, label: &str) -> Result<Vec<u8>, CompileError> {
+    CompileError::read(source, &format!("failed to open {label}"))
 }
 
 // Decode a block-compressed DDS (DXT1/DXT5/ATI2) from disk into RGBA.
-fn load_dds(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
-    let bytes =
-        std::fs::read(source).map_err(|e| format!("failed to open DDS texture '{source}': {e}"))?;
-    crate::codec::dds::decode_dds(&bytes).map_err(|e| format!("'{source}': {e}"))
+fn load_dds(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
+    let bytes = read_source(source, "DDS texture")?;
+    crate::codec::dds::decode_dds(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Decode a Targa (.tga) image from disk into RGBA.
-fn load_tga(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_tga(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let bytes = read_source(source, "TGA texture")?;
-    crate::codec::tga::decode_tga(&bytes).map_err(|e| format!("'{source}': {e}"))
+    crate::codec::tga::decode_tga(&bytes)
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Decode a PNG file from disk into (width, height, RGBA pixels).
-fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let bytes = read_source(source, "texture source")?;
-    decode_png_bytes(&bytes).map_err(|e| format!("'{source}': {e}"))
+    decode_png_bytes(&bytes).map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))
 }
 
 // Decode a JPEG file to RGBA. The `jpeg-decoder` crate (already on the
@@ -291,13 +303,13 @@ fn load_png(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
 // pipeline downstream of this function doesn't need a per-format branch.
 // Used for PolyHaven-style PBR sets where the diffuse + roughness
 // channels ship as `.jpg`.
-fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), String> {
+fn load_jpg(source: &str) -> Result<(u32, u32, Vec<u8>), CompileError> {
     use jpeg_decoder::PixelFormat;
     let bytes = read_source(source, "JPEG texture")?;
     let mut decoder = jpeg_decoder::Decoder::new(std::io::Cursor::new(bytes));
     let raw = decoder
         .decode()
-        .map_err(|e| format!("'{source}': failed to decode JPEG: {e}"))?;
+        .map_err(|e| CompileError::Invalid(format!("'{source}': failed to decode JPEG: {e}")))?;
     let info = decoder
         .info()
         .ok_or_else(|| format!("'{source}': JPEG has no info after decode"))?;
@@ -458,7 +470,7 @@ fn load_gltf_image(
     source: &str,
     image_index: u32,
     assets_dir: Option<&Path>,
-) -> Result<(u32, u32, Vec<u8>), String> {
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let doc = crate::import::glb::parse_glb(source, assets_dir)?;
     decode_glb_image_from_doc(&doc, source, image_index)
 }
@@ -477,22 +489,20 @@ pub fn decode_glb_image_from_doc(
     doc: &crate::import::gltf_source::GltfDoc,
     source: &str,
     image_index: u32,
-) -> Result<(u32, u32, Vec<u8>), String> {
+) -> Result<(u32, u32, Vec<u8>), CompileError> {
     let (bytes, mime_type) = doc
         .image_bytes(image_index)
-        .map_err(|e| format!("'{source}': {e}"))?;
+        .map_err(|e| CompileError::Invalid(format!("'{source}': {e}")))?;
 
     match mime_type.as_deref() {
-        Some("image/png") | None => {
-            decode_png_bytes(&bytes).map_err(|e| format!("'{source}': image {image_index}: {e}"))
-        }
-        Some("image/jpeg") => {
-            decode_jpeg_bytes(&bytes).map_err(|e| format!("'{source}': image {image_index}: {e}"))
-        }
-        Some(other) => Err(format!(
+        Some("image/png") | None => decode_png_bytes(&bytes)
+            .map_err(|e| CompileError::Invalid(format!("'{source}': image {image_index}: {e}"))),
+        Some("image/jpeg") => decode_jpeg_bytes(&bytes)
+            .map_err(|e| CompileError::Invalid(format!("'{source}': image {image_index}: {e}"))),
+        Some(other) => Err(CompileError::Invalid(format!(
             "'{source}': image {image_index} has unsupported MIME type '{other}'; only image/png and \
              image/jpeg are handled"
-        )),
+        ))),
     }
 }
 
@@ -1053,7 +1063,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.png", b"definitely not a png");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("failed to read PNG info"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read PNG info"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1072,7 +1085,8 @@ mod tests {
         let src = write_file(&dir, "t.png", &out);
         let err = decode_source(&src, 0, None).unwrap_err();
         assert!(
-            err.contains("unsupported PNG color type Indexed"),
+            err.to_string()
+                .contains("unsupported PNG color type Indexed"),
             "got: {err}"
         );
     }
@@ -1169,7 +1183,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.jpg", b"not a jpeg");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("failed to decode JPEG"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode JPEG"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1177,7 +1194,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", b"nope");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains(".dds"), "got: {err}");
+        assert!(err.to_string().contains(".dds"), "got: {err}");
     }
 
     #[test]
@@ -1217,7 +1234,10 @@ mod tests {
         let glb = glb_with_image(&png_bytes, "image/png");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 5).unwrap_err();
-        assert!(err.contains("image_index 5 is out of range"), "got: {err}");
+        assert!(
+            err.to_string().contains("image_index 5 is out of range"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1230,7 +1250,7 @@ mod tests {
         });
         let doc = crate::import::glb::test_fixtures::parse(&make_glb(&json, None));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("does not carry"), "got: {err}");
+        assert!(err.to_string().contains("does not carry"), "got: {err}");
     }
 
     #[test]
@@ -1244,7 +1264,10 @@ mod tests {
         });
         let doc = crate::import::glb::test_fixtures::parse(&make_glb(&json, Some(&[0u8; 4])));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("exceeds buffer size"), "got: {err}");
+        assert!(
+            err.to_string().contains("exceeds buffer size"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1255,7 +1278,10 @@ mod tests {
         });
         let doc = crate::import::glb::test_fixtures::parse(&make_glb(&json, None));
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("without a source directory"), "got: {err}");
+        assert!(
+            err.to_string().contains("without a source directory"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1281,7 +1307,10 @@ mod tests {
         let glb = glb_with_image(&png_bytes, "image/webp");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("unsupported MIME type"), "got: {err}");
+        assert!(
+            err.to_string().contains("unsupported MIME type"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1308,7 +1337,8 @@ mod tests {
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
         assert!(
-            err.contains("unsupported JPEG pixel format CMYK32"),
+            err.to_string()
+                .contains("unsupported JPEG pixel format CMYK32"),
             "got: {err}"
         );
     }
@@ -1318,7 +1348,10 @@ mod tests {
         let glb = glb_with_image(b"not a jpeg", "image/jpeg");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("failed to decode JPEG"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode JPEG"),
+            "got: {err}"
+        );
     }
 
     // compile_texture_payload: file-backed branch and payload envelope
@@ -1427,9 +1460,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
         let err = compile_texture_payload(&serde_json::json!({"source": src}), None).unwrap_err();
-        assert!(err.contains("not a valid KTX2 container"), "got: {err}");
         assert!(
-            err.contains("t.ktx2"),
+            err.to_string().contains("not a valid KTX2 container"),
+            "got: {err}"
+        );
+        assert!(
+            err.to_string().contains("t.ktx2"),
             "error should name the source: {err}"
         );
     }
@@ -1438,7 +1474,10 @@ mod tests {
     fn compile_texture_payload_surfaces_a_missing_ktx2() {
         let args = serde_json::json!({"source": "zzz_missing_texture.ktx2"});
         let err = compile_texture_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to open KTX2 texture"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open KTX2 texture"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1458,7 +1497,7 @@ mod tests {
     fn decode_source_routes_ktx2_to_the_ktx2_loader() {
         let err = decode_source("zzz_missing_texture.ktx2", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open KTX2 texture"),
+            err.to_string().contains("failed to open KTX2 texture"),
             "expected .ktx2 to route to the KTX2 loader, got: {err}"
         );
     }
@@ -1548,22 +1587,31 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.dds", b"nope");
         let err = compile_texture_payload(&serde_json::json!({"source": src}), None).unwrap_err();
-        assert!(err.contains("DDS too short"), "got: {err}");
-        assert!(err.contains("t.dds"), "error should name the source: {err}");
+        assert!(err.to_string().contains("DDS too short"), "got: {err}");
+        assert!(
+            err.to_string().contains("t.dds"),
+            "error should name the source: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_surfaces_a_missing_dds() {
         let args = serde_json::json!({"source": "zzz_missing_texture.dds"});
         let err = compile_texture_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to open DDS texture"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open DDS texture"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_surfaces_a_missing_png() {
         let args = serde_json::json!({"source": "zzz_missing_texture.png"});
         let err = compile_texture_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to open texture source"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to open texture source"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1571,7 +1619,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let src = write_file(&dir, "t.ktx2", b"not a ktx2 container");
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("not a valid KTX2 container"), "got: {err}");
+        assert!(
+            err.to_string().contains("not a valid KTX2 container"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1582,7 +1633,10 @@ mod tests {
         bytes.truncate(bytes.len() - 20);
         let src = write_file(&dir, "t.png", &bytes);
         let err = decode_source(&src, 0, None).unwrap_err();
-        assert!(err.contains("failed to decode PNG frame"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode PNG frame"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1597,19 +1651,25 @@ mod tests {
         let glb = glb_with_image(b"not a png at all", "image/png");
         let doc = crate::import::glb::test_fixtures::parse(&glb);
         let err = decode_glb_image_from_doc(&doc, "t.glb", 0).unwrap_err();
-        assert!(err.contains("failed to read PNG info"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to read PNG info"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_requires_a_source_when_no_generator() {
         let err = compile_texture_payload(&serde_json::json!({}), None).unwrap_err();
-        assert!(err.contains("requires a `source` path"), "got: {err}");
+        assert!(
+            err.to_string().contains("requires a `source` path"),
+            "got: {err}"
+        );
     }
 
     #[test]
     fn compile_texture_payload_rejects_mistyped_args() {
         let err = compile_texture_payload(&serde_json::json!({"generator": 5}), None).unwrap_err();
-        assert!(err.contains("invalid args"), "got: {err}");
+        assert!(err.to_string().contains("invalid args"), "got: {err}");
     }
 
     #[test]
@@ -1634,7 +1694,7 @@ mod tests {
     fn decode_source_routes_jpg_to_jpeg_loader() {
         let err = decode_source("zzz_missing_texture.jpg", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open JPEG texture"),
+            err.to_string().contains("failed to open JPEG texture"),
             "expected .jpg to route to the JPEG loader, got: {err}"
         );
     }
@@ -1643,7 +1703,7 @@ mod tests {
     fn decode_source_routes_jpeg_extension_to_jpeg_loader() {
         let err = decode_source("zzz_missing_texture.jpeg", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open JPEG texture"),
+            err.to_string().contains("failed to open JPEG texture"),
             "expected .jpeg to route to the JPEG loader, got: {err}"
         );
     }
@@ -1653,7 +1713,7 @@ mod tests {
         // Extension matching is case-insensitive (build path lower-cases too).
         let err = decode_source("zzz_missing_texture.JPG", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open JPEG texture"),
+            err.to_string().contains("failed to open JPEG texture"),
             "expected .JPG to route to the JPEG loader, got: {err}"
         );
     }
@@ -1662,7 +1722,7 @@ mod tests {
     fn decode_source_routes_png_to_png_loader() {
         let err = decode_source("zzz_missing_texture.png", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open texture source"),
+            err.to_string().contains("failed to open texture source"),
             "expected .png to route to the PNG loader, got: {err}"
         );
     }
@@ -1671,7 +1731,7 @@ mod tests {
     fn decode_source_routes_dds_to_dds_loader() {
         let err = decode_source("zzz_missing_texture.dds", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open DDS texture"),
+            err.to_string().contains("failed to open DDS texture"),
             "expected .dds to route to the DDS loader, got: {err}"
         );
     }
@@ -1681,7 +1741,7 @@ mod tests {
         // Mixed-case extension still routes correctly (dispatch lower-cases).
         let err = decode_source("zzz_missing_texture.TGA", 0, None).unwrap_err();
         assert!(
-            err.contains("failed to open TGA texture"),
+            err.to_string().contains("failed to open TGA texture"),
             "expected .TGA to route to the TGA loader, got: {err}"
         );
     }

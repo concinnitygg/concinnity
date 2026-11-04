@@ -212,6 +212,23 @@ impl GpuCullVariants {
         (!routed | live) & all
     }
 
+    /// The buckets among `resident` whose regions draw: set in `live` (a bit
+    /// per bucket, as [`live_buckets`](Self::live_buckets) writes it) and
+    /// holding a command.
+    pub fn drawn_buckets(
+        &self,
+        live: u64,
+        resident: impl Iterator<Item = usize>,
+    ) -> impl Iterator<Item = usize> {
+        resident.filter(move |&b| {
+            u32::try_from(b)
+                .ok()
+                .and_then(|shift| live.checked_shr(shift))
+                .is_some_and(|bits| bits & 1 != 0)
+                && self.regions.get(b).is_some_and(|r| !r.is_empty())
+        })
+    }
+
     /// The features a draw with `args`'s flags and bounds `bb_min..bb_max`
     /// has seen from `cam_pos`, among those `route` tests; a draw the cull
     /// does not frustum-test counts as reaching everywhere. Mirrors

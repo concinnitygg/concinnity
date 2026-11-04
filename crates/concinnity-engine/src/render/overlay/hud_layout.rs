@@ -168,54 +168,15 @@ fn position_chip_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bake::font::metrics;
     use crate::components::{Justify, LayoutRow, SpriteFit, TextAlign};
     use crate::ecs::{FontHandle, Ref, World};
+    use crate::render::overlay::test_fonts::{FONT, loaded_fonts};
     use alloc::string::ToString;
     use alloc::vec;
 
-    const FONT: FontHandle = FontHandle::new(0);
     // An authored position no layout pass should ever produce, so an untouched
     // label is unmistakable.
     const SENTINEL: f32 = -999.0;
-
-    fn make_glyph(advance_px: f32) -> metrics::GlyphMetrics {
-        metrics::GlyphMetrics {
-            char_code: 0,
-            atlas_x: 0,
-            atlas_y: 0,
-            atlas_w: 8,
-            atlas_h: 12,
-            advance_px,
-            bearing_x: 0.0,
-            bearing_y: 12.0,
-        }
-    }
-
-    // A fixed-width synthetic font (every glyph 10px in a 16px em, caps 12px
-    // tall) makes the measured boxes exact: a 1-line unpadded chip measures
-    // 10px per char wide, 12px tall, with a -2px top inset.
-    fn loaded_fonts() -> text::FontSet {
-        let metrics: text::FontMetrics = ('a'..='z')
-            .chain('A'..='Z')
-            .map(|c| (c as u32, make_glyph(10.0)))
-            .collect();
-        let cap_px = text::derive_cap_px(&metrics, 16.0);
-        let mut fonts = text::FontSet::default();
-        fonts.insert(
-            FONT,
-            text::LoadedFont {
-                atlas_slot: 0,
-                cap_px,
-                metrics,
-                atlas_w: 128,
-                atlas_h: 128,
-                size_px: 16.0,
-                supersample: 1.0,
-            },
-        );
-        fonts
-    }
 
     fn chip(content: &str) -> TextLabel {
         TextLabel {

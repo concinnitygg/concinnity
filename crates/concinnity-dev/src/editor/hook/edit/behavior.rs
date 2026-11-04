@@ -84,7 +84,7 @@ impl EditorHook {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| entry_type(e) == Some("Behavior"))
+            .filter(|(_, e)| entry_type(e) == Some(RegisteredType::Behavior))
             .map(|(i, _)| i)
             .collect()
     }
@@ -117,7 +117,7 @@ impl EditorHook {
     pub(super) fn variables_args(&self) -> Option<Value> {
         self.entries
             .iter()
-            .find(|e| entry_type(e) == Some("Variables"))
+            .find(|e| entry_type(e) == Some(RegisteredType::Variables))
             .and_then(|e| e.get("args"))
             .cloned()
             .map(args_without_id)
@@ -210,7 +210,7 @@ impl EditorHook {
             .filter_map(|(i, entry)| {
                 Some(relations::Declared {
                     name: handles.get(i)?.clone()?,
-                    asset_type: RegisteredType::parse(entry_type(entry)?)?,
+                    asset_type: entry_type(entry)?,
                     key: self.entries.key_at(i)?,
                 })
             })

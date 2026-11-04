@@ -16,7 +16,7 @@ pub enum BlobLoadError {
     NoStateRoot,
 
     /// The file could not be read.
-    #[error("reading {path} failed")]
+    #[error("reading {path} failed: {source}")]
     Io {
         /// The file that was being read.
         path: String,
@@ -66,6 +66,7 @@ mod tests {
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
         );
         assert!(io.to_string().contains("data/0"), "{io}");
+        assert!(io.to_string().ends_with(": denied"), "{io}");
         assert_eq!(io.source().expect("the io error").to_string(), "denied");
 
         let format = BlobLoadError::format("data/0", BlobError::ValidityMismatch(7));

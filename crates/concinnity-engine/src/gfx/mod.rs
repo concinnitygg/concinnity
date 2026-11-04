@@ -4,10 +4,13 @@
 //! screen-overlay coordinate space, software rasterization, payload decoding,
 //! line expansion.
 //!
-//! The rule that separates this from [`crate::render`]: gfx holds `repr(C)`
-//! layouts and pure math kernels; render holds the per-frame builders, the
-//! passes, and the backend seam. Nothing here owns a backend handle or drives a
-//! frame.
+//! What separates this from [`crate::render`]: gfx holds the per-object and
+//! per-draw `repr(C)` layouts and pure math kernels; render holds the per-frame
+//! builders, the passes, the backend seam, and the uniform blocks a pass uploads
+//! (`render::uniforms`). Nothing here owns a backend handle or drives a frame,
+//! though a layout may pack a type or apply a rule render defines (the depth
+//! convention, a capture's tiles, the daylight block, a canopy's range, when
+//! light clustering is active).
 pub mod auto_exposure;
 pub mod camera;
 pub mod cubemap;

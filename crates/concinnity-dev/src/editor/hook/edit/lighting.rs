@@ -9,7 +9,7 @@
 use concinnity_cook::authoring::world::replace_args;
 use concinnity_engine::ecs::World;
 
-use crate::editor::hook::{EditorHook, LightingData, declared_id, entry_type, short_status};
+use crate::editor::hook::{EditorHook, LightingData, declared_id, entry_type_name, short_status};
 use crate::editor::panels::form::{self, FormField};
 use crate::editor::panels::lighting;
 use crate::editor::panels::lighting_panel::{self, LightingAction, LightingView};
@@ -20,7 +20,9 @@ impl EditorHook {
     // The `entries` index of the first entry of type `ty` (the lighting assets
     // are effectively singletons; extra instances are not surfaced here).
     pub(super) fn entry_index_of(&self, ty: &str) -> Option<usize> {
-        self.entries.iter().position(|e| entry_type(e) == Some(ty))
+        self.entries
+            .iter()
+            .position(|e| entry_type_name(e) == Some(ty))
     }
 
     // The authored args of entry `idx` (empty when the entry carries none).

@@ -5,7 +5,6 @@
 use std::path::{Path, PathBuf};
 
 use concinnity_cook::authoring::refs::{count_references, rename_references};
-use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{ID_KEY, entry_handle, set_entry_id};
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
@@ -99,7 +98,7 @@ impl EditorHook {
             };
         };
         let before = declared_id(&self.entries[idx]).map(str::to_string);
-        let target = entry_type(&self.entries[idx]).and_then(RegisteredType::parse);
+        let target = entry_type(&self.entries[idx]);
         let args = self.entries[idx].get("args").cloned().unwrap_or_default();
         if let (None, Some(old), Some(target)) = (&name, &before, target) {
             let naming: usize = self

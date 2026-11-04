@@ -112,7 +112,7 @@ pub(crate) fn compile_mesh_from_vertex_data(
         .zip(tangents)
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
-    Ok(mesh_payload::serialize(&verts5, indices))
+    mesh_payload::serialize(&verts5, indices)
 }
 
 // The level-of-detail request of a skinned mesh: `levels` includes LOD0 (so
@@ -257,13 +257,13 @@ pub(crate) fn compile_skinned_mesh_payload_with_lods(
     )
     .map_err(|e| format!("SkinnedMesh {e}"))?;
 
-    Ok(mesh_payload::serialize_skinned_with_lods(
+    mesh_payload::serialize_skinned_with_lods(
         &skinned,
         indices,
         &payload_joints,
         &morphs,
         &alternates,
-    ))
+    )
 }
 
 // Compile a VoxelChunk component into a packed binary mesh payload.

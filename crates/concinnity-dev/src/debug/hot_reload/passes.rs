@@ -69,8 +69,7 @@ pub(super) fn reload_volumetric_fog(
     // `None`, which disables the pass.
     let mut resolved: Option<volumetric_fog::FogSettings> = None;
     for entry in &entries {
-        if entry_type(entry).and_then(RegisteredType::parse) != Some(RegisteredType::VolumetricFog)
-        {
+        if entry_type(entry) != Some(RegisteredType::VolumetricFog) {
             continue;
         }
         let args = entry
@@ -176,8 +175,7 @@ pub(super) fn reload_procedural_meshes(
         (ProceduralMesh, serde_json::Value),
     > = std::collections::HashMap::new();
     for entry in &entries {
-        if entry_type(entry).and_then(RegisteredType::parse) != Some(RegisteredType::ProceduralMesh)
-        {
+        if entry_type(entry) != Some(RegisteredType::ProceduralMesh) {
             continue;
         }
         let mut entry = entry.clone();

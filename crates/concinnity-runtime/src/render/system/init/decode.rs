@@ -41,8 +41,8 @@ fn deferred_shader_source(
             .to_vec();
         return Ok(ShaderPayloadSource::Bytes(bytes));
     }
-    let (path, start) =
-        crate::render::streaming::sources::blob_payload_section(locator.blob_index)?;
+    let (path, start) = crate::render::streaming::sources::blob_payload_section(locator.blob_index)
+        .map_err(|e| e.to_string())?;
     Ok(ShaderPayloadSource::Disk {
         path,
         offset: start + locator.offset,

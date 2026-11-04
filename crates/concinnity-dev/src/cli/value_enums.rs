@@ -1,6 +1,6 @@
 // The argv mirrors of engine types. The value-enum derives live here so no
 // layer below the command line carries a clap dependency.
-use crate::export::BundleFormat;
+use crate::command::export::BundleFormat;
 
 // The argv face of the export `BundleFormat`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]

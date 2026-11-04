@@ -117,6 +117,14 @@ impl std::error::Error for StartupError {
     }
 }
 
+/// The failure as the process reports it: missing data is `NotFound`, data
+/// present but unusable is `InvalidData`, and the error stays its source.
+impl From<StartupError> for std::io::Error {
+    fn from(error: StartupError) -> Self {
+        Self::new(error.io_kind(), error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +196,19 @@ mod tests {
         assert!(err.to_string().contains("`data/` directory"), "{err:?}");
         assert!(err.to_string().contains('3'), "{err:?}");
         assert_eq!(err.io_kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    // Reported as an io::Error, the failure keeps its kind and its cause.
+    #[test]
+    fn the_io_error_keeps_the_kind_and_the_cause() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let blob = dir.path().join("0");
+        std::fs::write(&blob, b"garbage").expect("write blob");
+
+        let io = std::io::Error::from(StartupError::from_blob_failure(blob, cause()));
+        assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
+        let inner = io.into_inner().expect("the startup error is the source");
+        assert!(inner.downcast::<StartupError>().is_ok());
     }
 
     // A missing state root is a not-found, not a corrupt-data report: there is

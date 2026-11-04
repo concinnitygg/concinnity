@@ -12,7 +12,7 @@ use std::path::Path;
 use concinnity_cook::authoring::world::set_entry_id;
 
 use super::entry_home::EntryHome;
-use super::{EditorHook, declared_id, entry_type};
+use super::{EditorHook, declared_id, entry_type_name};
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::notify;
 use crate::editor::owned_files::{self, Copied};
@@ -43,7 +43,7 @@ impl EditorHook {
             let Some(idx) = self.handle_index(&handle) else {
                 continue;
             };
-            let Some(ty) = entry_type(&self.entries[idx]).map(str::to_string) else {
+            let Some(ty) = entry_type_name(&self.entries[idx]).map(str::to_string) else {
                 continue;
             };
             if assets_panel::is_singleton(&ty) {

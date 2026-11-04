@@ -17,7 +17,7 @@ use concinnity_engine::gfx::lines::Line;
 use concinnity_cook::authoring::world::entry_handles;
 
 use crate::editor::asset_handle::AssetHandle;
-use crate::editor::hook::{EditorHook, entry_type};
+use crate::editor::hook::{EditorHook, entry_type_name};
 use crate::editor::outlines;
 use crate::editor::outlines::shapes::{self, Stroke};
 use crate::editor::panels::form;
@@ -87,7 +87,7 @@ impl EditorHook {
                 return;
             }
             let (Some(name), Some(ty), Some(key)) =
-                (name.as_deref(), entry_type(e), self.entries.key_at(i))
+                (name.as_deref(), entry_type_name(e), self.entries.key_at(i))
             else {
                 continue;
             };

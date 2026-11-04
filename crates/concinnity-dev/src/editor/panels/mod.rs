@@ -15,7 +15,7 @@
 //! shares with the outliner. The Shaders list (`shader_list*`) spawns the
 //! Shader source panel (`shader_source*`, with `shader_diagnostics` for what a
 //! compile marks). `form` and `form_panel` are the add / edit form
-//! every panel opens, and `list_panel` the shared chrome behind the simple row
+//! every panel opens, and `row_list` the shared chrome behind the simple row
 //! lists (Preview, Templates, View).
 //!
 //! Three panels keep a directory of their own instead, their model being more
@@ -37,12 +37,12 @@ pub(crate) mod health_panel;
 pub(crate) mod import_panel;
 pub(crate) mod lighting;
 pub(crate) mod lighting_panel;
-pub(crate) mod list_panel;
 pub(crate) mod planet;
 pub(crate) mod planet_panel;
 pub(crate) mod planet_tool_strip;
 pub(crate) mod preview;
 pub(crate) mod registry;
+pub(crate) mod row_list;
 pub(crate) mod sdf_field_edit;
 pub(crate) mod sdf_field_list;
 pub(crate) mod sdf_form;

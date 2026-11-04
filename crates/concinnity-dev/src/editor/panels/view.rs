@@ -6,12 +6,12 @@
 //! `inject.rs`), driven each frame by the editor hook -- nothing here reaches
 //! the shipped runtime. Each row is a checkbox that reflects, and toggles, one
 //! panel's shown state; the top-bar "View" button opens / closes this panel.
-//! The title bar, close button, and row draw come from the shared `list_panel`.
+//! The title bar, close button, and row draw come from the shared `row_list`.
 
 use concinnity_engine::ecs::World;
 
-use super::list_panel::{self, ListIds, Row};
 use super::registry::{self, PanelKey};
+use super::row_list::{self, ListIds, Row};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::widget::{self, point_in};
 
@@ -59,13 +59,13 @@ pub(crate) enum ViewAction {
 // Preview panel's default anchor so the two do not overlap at launch.
 pub(crate) fn default_origin() -> [f32; 2] {
     let preview = super::preview::default_origin();
-    [8.0, preview[1] + list_panel::size(VIEW_W, 1)[1] + 8.0]
+    [8.0, preview[1] + row_list::size(VIEW_W, 1)[1] + 8.0]
 }
 
 // The panel's footprint (tracks the registered toggle count), for the hook's
 // drag clamp.
 pub(crate) fn size() -> [f32; 2] {
-    list_panel::size(VIEW_W, count())
+    row_list::size(VIEW_W, count())
 }
 
 // Resolve a click at `(mx, my)` against the panel at origin `o`, size `s`.
@@ -73,7 +73,7 @@ pub(crate) fn size() -> [f32; 2] {
 // the hook intercepts them first to start a drag (the shared routing owns the
 // title-bar geometry).
 pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<ViewAction> {
-    if let Some(i) = list_panel::hit_row(mx, my, o, s[0], count()) {
+    if let Some(i) = row_list::hit_row(mx, my, o, s[0], count()) {
         return Some(ViewAction::Toggle(i));
     }
     point_in(mx, my, widget::outer_rect(o, s)).then_some(ViewAction::Consume)
@@ -82,7 +82,7 @@ pub(crate) fn hit_test(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> Option<Vie
 // Position + show the panel at origin `o`, effective size `s`, with the given
 // toggle rows (built by the hook from the registry).
 pub(crate) fn place(world: &mut World, o: [f32; 2], s: [f32; 2], rows: &[Row], mouse: [f32; 2]) {
-    list_panel::place(world, &LIST, o, s, "View", rows, mouse);
+    row_list::place(world, &LIST, o, s, "View", rows, mouse);
 }
 
 #[cfg(test)]
@@ -105,7 +105,7 @@ mod tests {
     fn hit_test_resolves_a_row_or_swallows() {
         let o = default_origin();
         let s = size();
-        let r0 = list_panel::row_rect(o, VIEW_W, 0);
+        let r0 = row_list::row_rect(o, VIEW_W, 0);
         assert_eq!(
             hit_test(r0[0] + 10.0, r0[1] + 10.0, o, s),
             Some(ViewAction::Toggle(0))
@@ -118,7 +118,7 @@ mod tests {
         assert_eq!(hit_test(2000.0, 2000.0, o, s), None);
         // Widening the panel keeps the same rows and swallows body clicks.
         let wide = [VIEW_W + 120.0, s[1]];
-        let rw = list_panel::row_rect(o, wide[0], 0);
+        let rw = row_list::row_rect(o, wide[0], 0);
         assert_eq!(
             hit_test(rw[0] + 10.0, rw[1] + 10.0, o, wide),
             Some(ViewAction::Toggle(0))

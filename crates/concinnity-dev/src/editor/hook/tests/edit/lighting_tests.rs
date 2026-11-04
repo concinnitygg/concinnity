@@ -13,7 +13,7 @@ use crate::editor::hook::tests::fixtures::hook;
 
 use crate::editor::{inject, widget};
 
-use crate::editor::panels::{lighting, lighting_panel, list_panel};
+use crate::editor::panels::{lighting, lighting_panel, row_list};
 
 use crate::editor::panels::registry::PanelKey;
 
@@ -57,7 +57,7 @@ fn lighting_opens_via_the_view_panel_and_seeds() {
     h.open[PanelKey::View] = true;
     let vp = [1280.0, 720.0];
     let vo = h.origin(PanelKey::View, vp);
-    let row = list_panel::row_rect(vo, 200.0, 3);
+    let row = row_list::row_rect(vo, 200.0, 3);
     // Click the row's interior (clear of the edge resize band).
     assert!(h.try_panel_press(
         PanelKey::View,

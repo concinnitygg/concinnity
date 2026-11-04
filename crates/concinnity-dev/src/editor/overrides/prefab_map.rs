@@ -53,7 +53,7 @@ pub(crate) fn resolve(
 ) -> Result<TemplateSlot, String> {
     let instance = find_entry(entries, generated_by)
         .map(|i| &entries[i])
-        .filter(|e| entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prop))
+        .filter(|e| entry_type(e) == Some(RegisteredType::Prop))
         .ok_or_else(|| format!("no Prop instance named '{generated_by}'"))?;
     let args = instance.get("args").cloned().unwrap_or(Value::Null);
     let prefab_ref = args
@@ -92,10 +92,7 @@ fn walk(
 ) -> Result<(), String> {
     let def_index = entries
         .iter()
-        .position(|e| {
-            entry_name(e) == def_name
-                && entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prefab)
-        })
+        .position(|e| entry_name(e) == def_name && entry_type(e) == Some(RegisteredType::Prefab))
         .ok_or_else(|| {
             format!(
                 "prefab '{def_name}' is a disk preset; materialize it as an authored Prefab first"

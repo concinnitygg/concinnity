@@ -1740,7 +1740,7 @@ mod tests {
                 [0.0, 0.0],
             )
         };
-        mesh_payload::serialize(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2])
+        mesh_payload::serialize(&[v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], &[0u16, 1, 2]).unwrap()
     }
 
     // load_mesh_geometry decodes a MeshTable entry's in-memory payload into the

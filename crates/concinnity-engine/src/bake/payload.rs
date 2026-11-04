@@ -309,7 +309,7 @@ mod tests {
         ] {
             let generator = m.generator.clone();
             let payload = procedural_mesh(m).unwrap_or_else(|e| panic!("{generator}: {e}"));
-            let read = mesh_payload::deserialize(payload.as_bytes())
+            let read = mesh_payload::deserialize_with_lods(payload.as_bytes())
                 .unwrap_or_else(|e| panic!("{generator}: {e}"));
             assert!(!read.0.is_empty(), "{generator} has vertices");
         }
@@ -358,8 +358,8 @@ mod tests {
     #[test]
     fn raw_geometry_bakes_with_derived_normals() {
         let payload = super::mesh(&triangle()).expect("a triangle bakes");
-        let (verts, indices) =
-            mesh_payload::deserialize(payload.as_bytes()).expect("the payload reads back");
+        let (verts, indices, _) = mesh_payload::deserialize_with_lods(payload.as_bytes())
+            .expect("the payload reads back");
         assert_eq!(indices, alloc::vec![0, 1, 2]);
         assert!(verts.iter().all(|v| (v.normal[2] - 1.0).abs() < 1e-5));
     }

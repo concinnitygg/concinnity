@@ -447,5 +447,5 @@ impl EditorHook {
 }
 
 fn is_prefab(e: &serde_json::Value) -> bool {
-    entry_type(e).and_then(RegisteredType::parse) == Some(RegisteredType::Prefab)
+    entry_type(e) == Some(RegisteredType::Prefab)
 }

@@ -11,7 +11,7 @@ use concinnity_engine::ecs::World;
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::build_text;
 use crate::editor::hook::{
-    EditorHook, FormTarget, PanelData, entry_type, scroll_step, short_status,
+    EditorHook, FormTarget, PanelData, entry_type_name, scroll_step, short_status,
 };
 use crate::editor::panels::asset_tree::{self, TreeRow};
 use crate::editor::panels::assets_panel::{self, PanelAction, PanelView};
@@ -205,7 +205,7 @@ impl EditorHook {
                             let idx = self
                                 .entries
                                 .iter()
-                                .position(|e| entry_type(e) == Some(ty.as_str()))?;
+                                .position(|e| entry_type_name(e) == Some(ty.as_str()))?;
                             self.entries.key_at(idx)
                         })
                         .flatten();
@@ -322,7 +322,7 @@ impl EditorHook {
             if let Some(ty) = self
                 .entries
                 .by_key(key)
-                .and_then(entry_type)
+                .and_then(entry_type_name)
                 .map(String::from)
             {
                 self.open_form(world, ty, FormTarget::Entry(key));

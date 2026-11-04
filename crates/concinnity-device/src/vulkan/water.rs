@@ -12,6 +12,7 @@
 //! as the DirectX and Metal hosts.
 
 use ash::vk;
+use concinnity_engine::planet::Rebase;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
 use concinnity_engine::water::WaterBody;
@@ -19,9 +20,10 @@ use concinnity_engine::water::WaterBody;
 use concinnity_engine::render::shader::programs::ShaderProgram;
 
 use crate::vulkan::builtin_shaders::CompileProgram;
+use crate::vulkan::context::VkContext;
 use crate::vulkan::transparent::{
     ProducerCtx, RecordUpload, ShapePipelines, TransparentProducer, TransparentRecord,
-    TransparentVertexInput, create_transparent_pipeline, upload_record,
+    TransparentResources, TransparentVertexInput, create_transparent_pipeline, upload_record,
 };
 
 // The programs one water shape draws with: a rectangle's, or a planet sea's.
@@ -238,6 +240,102 @@ fn build_water_rt_pipelines(
         _ => None,
     };
     Ok((Some(flat), textured))
+}
+
+impl VkContext {
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
+    pub(in crate::vulkan) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
+        if let Some(water) = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+        {
+            water.rebase_water(rebase);
+        }
+        self.wake.rebase(rebase);
+    }
+
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    pub(in crate::vulkan) fn reshape_planet(
+        &mut self,
+        shape: &concinnity_engine::planet::PlanetShape,
+    ) {
+        let water = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+            .map(|w| w.water.iter_mut())
+            .into_iter()
+            .flatten();
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            water,
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::vulkan) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[concinnity_engine::water::stir::WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water_sim
+                .as_ref()
+                .is_some_and(super::water_sim::OceanSim::wakes);
+        let sea = self
+            .transparent
+            .as_ref()
+            .and_then(TransparentResources::water)
+            .and_then(|w| w.sea_datum(camera));
+        self.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => self.wake.advance(camera, sea, time, stirs),
+            _ => None,
+        };
+    }
+
+    // Write each visible water surface's params, advanced to `time` seconds
+    // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
+    // `encode_transparent`.
+    pub(in crate::vulkan) fn advance_transparent_water(
+        &self,
+        frame_idx: usize,
+        time: f64,
+        camera: [f32; 3],
+    ) {
+        if let Some(water) = self
+            .transparent
+            .as_ref()
+            .and_then(TransparentResources::water)
+        {
+            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let trace = self
+                .rt_reflections
+                .as_ref()
+                .is_some_and(|rt| rt.settings.water_trace);
+            water.advance_water(frame_idx, time, camera, &wake, trace);
+        }
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::vulkan) fn water_sim_live(&self) -> bool {
+        self.water_sim
+            .as_ref()
+            .is_some_and(super::water_sim::OceanSim::simulates)
+            && self
+                .transparent
+                .as_ref()
+                .and_then(TransparentResources::water)
+                .is_some_and(TransparentProducer::samples_ocean)
+    }
 }
 
 #[cfg(test)]

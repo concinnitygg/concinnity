@@ -21,7 +21,7 @@ use crate::editor::hud::{self, HudAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
 use crate::editor::panels::shader_source::SourceKey;
 use crate::editor::panels::template_panel::{self, TemplateAction};
-use crate::editor::panels::{list_panel, template, view};
+use crate::editor::panels::{row_list, template, view};
 use crate::editor::{inject, widget};
 use crate::frame_hook::FrameHook;
 use crate::test_support::isolate_state_dir;
@@ -425,7 +425,7 @@ fn preview_rows_toggle_play_mode_and_fly() {
     let vp = [1280.0, 720.0];
     let o = h.origin(PanelKey::Preview, vp);
     let row_mid = |i: usize| {
-        let r = list_panel::row_rect(o, 200.0, i);
+        let r = row_list::row_rect(o, 200.0, i);
         [r[0] + 10.0, r[1] + r[3] * 0.5]
     };
     let click = |h: &mut EditorHook, world: &mut World, pos: [f32; 2]| {

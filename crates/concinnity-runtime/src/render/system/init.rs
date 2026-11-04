@@ -24,9 +24,7 @@ use super::backend_handoff::RuntimeHandoff;
 use super::skinned_templates::SkinnedUpload;
 use super::streaming::StreamingSetup;
 use super::{FrameCounter, GraphicsSystem, RenderInitFailure, flow, maps};
-use crate::live_edit::hot_reload_sources::{
-    HotReloadSources, procedural_mesh_snapshot, resolve_sdf_fields,
-};
+use crate::live_edit::hot_reload_sources::{procedural_mesh_snapshot, resolve_sdf_fields};
 use concinnity_engine::launch::LaunchRequest;
 use concinnity_engine::render::frame::extract::gather_lights;
 use concinnity_engine::render::world_load::blob_release::{blobs_to_release, retained_blobs};
@@ -35,9 +33,8 @@ use concinnity_engine::render::world_load::media;
 use concinnity_engine::render::world_load::prop_draws::{PropDrawInputs, assemble_prop_draws};
 use concinnity_engine::render::world_load::skinned::{self, SkinnedAssembly};
 use concinnity_engine::render::world_load::source_maps::{
-    ColorLutSource, EnvironmentMapSource, ShaderSourceMap, SkinnedMeshSourceMap, TextureNameSlots,
-    TextureSourceMap, mesh_source_map, procedural_mesh_source_map, skinned_mesh_source_map,
-    texture_catalog,
+    ColorLutSource, EnvironmentMapSource, ShaderSourceMap, SkinnedMeshSourceMap, TextureSourceMap,
+    skinned_mesh_source_map, texture_catalog,
 };
 use concinnity_engine::render::world_load::tables::{self, DecodedMaterials, TexturePool};
 use concinnity_engine::render::world_load::texture_payloads::{
@@ -53,6 +50,7 @@ use concinnity_engine::settings::system::{
 };
 use concinnity_engine::settings::{QualityCeiling, QualityPreset, WorldAssets, WorldSettings};
 
+mod compose;
 mod decode;
 
 use decode::{WorldLoad, WorldPayloads};
@@ -386,7 +384,7 @@ impl GraphicsSystem {
         // A development loop gathers the file-backed source maps the hot-reload
         // watcher consumes.
         let capture_sources = launch.dev_loop;
-        let world = self.decode_world(
+        let mut world = self.decode_world(
             ctx,
             WorldLoad {
                 streaming: streaming_config.is_some(),
@@ -410,35 +408,9 @@ impl GraphicsSystem {
         let cluster_count = instanced_clusters.len();
         let total_instances: usize = instanced_clusters.iter().map(|c| c.instances.len()).sum();
 
-        let planet_surface = planet.as_ref().map(|p| {
-            use concinnity_engine::render::material_entry::MaterialEntry;
-            let textures = ctx.resource::<TextureTable>();
-            let mean = |slot: usize| textures.and_then(|t| t.mean(slot));
-            let entry = |h| world.materials.map.get(&h).copied();
-            let seen = |h: Option<concinnity_engine::ecs::MaterialHandle>| {
-                h.and_then(entry)
-                    .unwrap_or(MaterialEntry::UNTEXTURED)
-                    .mean_albedo(mean)
-            };
-            let mut cover_albedo = [[0.0; 3]; concinnity_engine::planet::MAX_GROUND_COVERS];
-            for (albedo, cover) in cover_albedo.iter_mut().zip(&p.covers) {
-                *albedo = seen(cover.material);
-            }
-            let surface = concinnity_engine::render::world_load::world_fx::PlanetSurface {
-                albedo: seen(p.material),
-                cover_albedo,
-                grass: concinnity_engine::render::world_load::world_scan::planet_grass(
-                    p,
-                    &concinnity_engine::render::environment::terrain::grass_by_id(ctx),
-                ),
-                covers: concinnity_engine::render::environment::ground::GroundCovers::of(
-                    p,
-                    entry,
-                    u32::saturating_from(world.texture_count),
-                ),
-            };
-            (p, surface)
-        });
+        let planet_surface = planet
+            .as_ref()
+            .map(|p| (p, compose::planet_surface(ctx, p, &world)));
         let fx = drain_world_fx(
             ctx,
             concinnity_host::thread::asset_id::name_of,
@@ -478,6 +450,14 @@ impl GraphicsSystem {
             fx.water_surfaces.iter().map(|w| &w.surface),
             &fx.glass_panels,
         );
+
+        let (hot_reload_sources, texture_name_slots) = if capture_sources {
+            let (sources, slots) =
+                compose::take_hot_reload_sources(&mut world, &mesh_handle_to_draws, sdf_fields);
+            (Some(sources), Some(slots))
+        } else {
+            (None, None)
+        };
 
         // Assemble the backend construction inputs, derive the world's render
         // requirements from them (a world with no 3D content drops every
@@ -580,44 +560,6 @@ impl GraphicsSystem {
             backend.set_reflection_probes(&probe_placements, self.extractor.prop_probe().is_some());
         }
 
-        let (hot_reload_sources, texture_name_slots) = if capture_sources {
-            let sources = HotReloadSources {
-                map: world.asset_source_map,
-                color_lut: world.color_lut_source,
-                environment_map: world.environment_map_source,
-                meshes: mesh_source_map(&world.mesh.sources, &mesh_handle_to_draws),
-                skinned_meshes: world.skinned_mesh_source_map,
-                procedural_meshes: procedural_mesh_source_map(
-                    &world.proc_mesh_args_snapshot,
-                    &world.mesh.component_handles,
-                    &mesh_handle_to_draws,
-                ),
-                shaders: world.shaders.source_map,
-                shader_overrides: world.shaders.overrides,
-                sdf_fields,
-            };
-            // Parked even when empty: the dev drive's watcher still subscribes
-            // to the host's world.jsonl.
-            tracing::info!(
-                "asset hot-reload: captured {} file-backed texture source(s), {} \
-                 ColorLut source(s), {} EnvironmentMap source(s), {} Mesh \
-                 source(s), {} SkinnedMesh source(s), {} ProceduralMesh source(s), \
-                 {} Shader source(s), and {} SdfVolume field(s)",
-                sources.map.len(),
-                usize::from(sources.color_lut.is_some()),
-                usize::from(sources.environment_map.is_some()),
-                sources.meshes.len(),
-                sources.skinned_meshes.len(),
-                sources.procedural_meshes.len(),
-                sources.shaders.len(),
-                sources.sdf_fields.len(),
-            );
-            let slots = TextureNameSlots(world.texture_name_to_slot);
-            (Some(sources), Some(slots))
-        } else {
-            (None, None)
-        };
-
         let skinned_upload = SkinnedUpload {
             vertices: world.skinned.vertices,
             indices: world.skinned.indices,
@@ -664,18 +606,16 @@ impl GraphicsSystem {
                 hot_reload_sources,
             },
         );
-        tracing::info!(
-            "GraphicsSystem: ready ({}x{} \"{}\", {} frames in flight, {} draw objects, {} instanced clusters ({} instances total), {} decals, {} particle emitter(s), fog={})",
-            settings.window().width,
-            settings.window().height,
-            settings.window().title,
-            settings.resolved().graphics.frame_pacing.frames_in_flight,
-            draw_object_count,
-            cluster_count,
-            total_instances,
-            decal_count,
-            particle_count,
-            if fog_settings.is_some() { "on" } else { "off" },
+        compose::log_ready(
+            &settings,
+            &compose::ReadyCounts {
+                draw_objects: draw_object_count,
+                clusters: cluster_count,
+                instances: total_instances,
+                decals: decal_count,
+                particles: particle_count,
+                fog: fog_settings.is_some(),
+            },
         );
         ctx.insert_resource(SettingsSlot::new(settings));
         Some(())

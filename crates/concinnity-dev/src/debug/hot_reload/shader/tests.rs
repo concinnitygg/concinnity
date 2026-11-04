@@ -12,7 +12,6 @@ use concinnity_engine::render::world_load::source_maps::ShaderFile;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::Duration;
 
 // A backend that records every Shader update with the pipeline it was handed,
 // reports the buckets in `resident` as installed, and rejects every build when
@@ -450,7 +449,7 @@ fn an_unreadable_file_fails_before_compiling() {
         [ReloadReport { subject, outcome: ReloadOutcome::Failed(ReloadFailure::Unstarted(e)) }]
             if subject.name == "shader2" && e.contains("water.hlsl")
     ));
-    std::thread::sleep(Duration::from_millis(50));
+    assert!(!f.reload.compiled_any(), "no worker was started");
     assert!(f.reload.poll(&mut backend).is_empty());
     assert!(backend.updates.is_empty());
 }

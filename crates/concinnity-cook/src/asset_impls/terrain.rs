@@ -22,7 +22,7 @@ impl crate::asset::BuildAsset for Terrain {
             |name| texture(ctx.all_assets, name),
             ctx.assets_dir,
         )
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        .map_err(std::io::Error::from)
     }
 
     // The textures a terrain decodes are other assets: their args, and the

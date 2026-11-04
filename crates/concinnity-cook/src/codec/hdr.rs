@@ -65,14 +65,9 @@ pub(crate) fn deserialize(bytes: &[u8]) -> Result<(u32, &[u8]), String> {
 }
 
 // Read a Radiance `.hdr` file off disk and decode it to a linear-light image.
-pub(crate) fn load_file(path: &str) -> Result<HdrImage, String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| format!("failed to open HDR source '{path}': {e}"))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("failed to read HDR source '{path}': {e}"))?;
-    decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{path}': {e}"))
+pub(crate) fn load_file(path: &str) -> Result<HdrImage, crate::compile::CompileError> {
+    let bytes = crate::compile::CompileError::read(path, "failed to open HDR source")?;
+    Ok(decode_hdr(&bytes).map_err(|e| format!("failed to decode HDR '{path}': {e}"))?)
 }
 
 // HDR (Radiance RGBE) decoder

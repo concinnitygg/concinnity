@@ -32,6 +32,7 @@
 //!
 //! Face order matches `CubemapTexture`: +X, -X, +Y, -Y, +Z, -Z.
 
+use crate::compile::CompileError;
 use concinnity_engine::bake::environment_map::source::{bake_payload, generate_sky_equirect};
 use concinnity_engine::bake::environment_map::stars::generate_stars_equirect;
 use concinnity_engine::components::{EnvironmentMap, FramePriority};
@@ -131,7 +132,7 @@ fn is_supported_source(source: &str) -> bool {
 // linear radiance; a `.glb` carries a display-encoded panorama on a sphere,
 // which `crate::import::panorama` unwraps and linearizes (see that module
 // for the range an LDR panorama implies for the baked lighting).
-fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
+fn load_equirect_source(resolved: &str) -> Result<HdrImage, CompileError> {
     let lower = resolved.to_ascii_lowercase();
     if Path::new(&lower)
         .extension()
@@ -140,7 +141,7 @@ fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
     {
-        crate::import::panorama::load_panorama_file(resolved)
+        crate::import::panorama::load_panorama_file(resolved).map_err(CompileError::from)
     } else {
         crate::codec::hdr::load_file(resolved)
     }
@@ -149,7 +150,7 @@ fn load_equirect_source(resolved: &str) -> Result<HdrImage, String> {
 pub(crate) fn compile_environment_map_payload(
     args: &serde_json::Value,
     assets_dir: Option<&Path>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     let map = resolve_args(args)?;
     let params = BakeInputs::of(&map);
 
@@ -157,7 +158,11 @@ pub(crate) fn compile_environment_map_payload(
         match params.generator {
             "sky" => generate_sky_equirect(),
             "stars" => generate_stars_equirect(),
-            other => return Err(format!("unknown EnvironmentMap generator '{other}'")),
+            other => {
+                return Err(CompileError::Invalid(format!(
+                    "unknown EnvironmentMap generator '{other}'"
+                )));
+            }
         }
     } else {
         // A bare filename (no directory component) is resolved via the same
@@ -202,7 +207,7 @@ pub fn decode_source(
     irradiance_face: u32,
     prefilter_samples: u32,
     prefilter_clamp: f32,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, CompileError> {
     let hdr = load_equirect_source(path)?;
     Ok(bake_payload(
         &hdr,
@@ -274,7 +279,7 @@ mod tests {
 
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
-        assert!(err.contains("exactly one mesh"), "got: {err}");
+        assert!(err.to_string().contains("exactly one mesh"), "got: {err}");
     }
 
     // The record's runtime fields carry the authored background flag, so the
@@ -392,8 +397,14 @@ mod tests {
         std::fs::write(&path, b"not a radiance file\n").expect("write hdr");
         let args = serde_json::json!({ "source": path.to_str().unwrap() });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
-        assert!(err.contains("failed to decode HDR"), "got: {err}");
-        assert!(err.contains("missing Radiance magic"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode HDR"),
+            "got: {err}"
+        );
+        assert!(
+            err.to_string().contains("missing Radiance magic"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -401,7 +412,7 @@ mod tests {
         // A directory-qualified path resolves verbatim, so the load fails on open.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr" });
         let err = compile_environment_map_payload(&args, None).unwrap_err();
-        assert!(err.contains("HDR"), "got: {err}");
+        assert!(err.to_string().contains("HDR"), "got: {err}");
     }
 
     #[test]
@@ -458,7 +469,7 @@ mod tests {
         let err = decode_source("/definitely/does/not/exist.hdr", 16, 8, 16, 0.0)
             .expect_err("should fail");
         assert!(
-            err.contains("failed to open") || err.contains("No such file"),
+            err.to_string().contains("failed to open") || err.to_string().contains("No such file"),
             "got: {err}"
         );
     }

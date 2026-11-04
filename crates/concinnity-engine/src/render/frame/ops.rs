@@ -7,6 +7,7 @@
 
 use crate::geometry::chunk_coord::ChunkCoord;
 use crate::render::backend::RenderBackend;
+use crate::render::backend::error::{RenderError, RenderResult};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
@@ -54,6 +55,20 @@ pub struct ReplayOutcome {
     pub failures: Vec<OpFailure>,
     /// An op hit device-memory exhaustion; feeds the streaming valve.
     pub memory_pressure: bool,
+    /// The first device loss an op reported: the op was tolerated, but the
+    /// frame loop must not draw on a device that no longer services work.
+    pub device_lost: Option<RenderError>,
+}
+
+impl ReplayOutcome {
+    /// Note a tolerated op failure: memory exhaustion feeds the streaming
+    /// valve, and the first device loss is kept for the frame loop.
+    pub fn note(&mut self, error: &RenderError) {
+        self.memory_pressure |= matches!(error, RenderError::OutOfDeviceMemory(_));
+        if matches!(error, RenderError::DeviceLost { .. }) && self.device_lost.is_none() {
+            self.device_lost = Some(error.clone());
+        }
+    }
 }
 
 /// Backend effects recorded by simulation systems, replayed in order by the
@@ -75,6 +90,25 @@ impl RenderOps {
     /// Record a fire-and-forget backend effect.
     pub fn record(&mut self, op: impl FnOnce(&mut dyn RenderBackend) + Send + 'static) {
         self.ops.push(Box::new(move |backend, _| op(backend)));
+    }
+
+    /// Record an effect whose failure is tolerated: logged and noted in the
+    /// replay outcome, so a device failure still reaches the frame loop. The
+    /// op names what failed through [`RenderError::context`].
+    pub fn record_fallible(
+        &mut self,
+        op: impl FnOnce(&mut dyn RenderBackend) -> RenderResult<()> + Send + 'static,
+    ) {
+        self.ops.push(Box::new(move |backend, out| {
+            if let Err(e) = op(backend) {
+                if e.is_device_failure() {
+                    tracing::error!("{e}");
+                } else {
+                    tracing::warn!("{e}");
+                }
+                out.note(&e);
+            }
+        }));
     }
 
     /// Record an effect that reports into the replay outcome (failure
@@ -121,7 +155,9 @@ impl RenderOps {
 mod tests {
     use super::*;
 
+    use alloc::string::String;
     use alloc::vec;
+
     // Replay hands ops the backend in record order and drains the queue.
     // The mock records call order through the outcome's failure list.
     #[test]
@@ -164,5 +200,35 @@ mod tests {
                 OpFailure::MeshUpload { stream_id: 1 },
             ]
         );
+    }
+
+    // A tolerated op still hands a device loss to the frame loop, even after an
+    // earlier op ran out of memory: exhaustion feeds the streaming valve.
+    #[test]
+    fn a_fallible_op_notes_device_failures_for_the_frame_loop() {
+        use crate::render::backend::error::DeviceLostReason;
+        let lost = RenderError::DeviceLost {
+            reason: DeviceLostReason::Hung,
+            detail: String::from("chunk remove"),
+        };
+        let mut ops = RenderOps::default();
+        ops.record_fallible(|_| Err(RenderError::Other(String::from("refused"))));
+        ops.record_fallible(|_| Err(RenderError::OutOfDeviceMemory(String::from("full"))));
+        let first = lost.clone();
+        ops.record_fallible(move |_| Err(first));
+        ops.record_fallible(|_| Err(RenderError::OutOfDeviceMemory(String::from("again"))));
+        let outcome = ops.replay(&mut crate::render::backend::NullBackend);
+        assert_eq!(outcome.device_lost, Some(lost));
+        assert!(outcome.memory_pressure);
+        assert!(outcome.failures.is_empty(), "nothing to roll back");
+    }
+
+    #[test]
+    fn a_step_failure_is_not_a_device_failure() {
+        let mut ops = RenderOps::default();
+        ops.record_fallible(|_| Err(RenderError::Other(String::from("refused"))));
+        let outcome = ops.replay(&mut crate::render::backend::NullBackend);
+        assert!(outcome.device_lost.is_none());
+        assert!(!outcome.memory_pressure);
     }
 }

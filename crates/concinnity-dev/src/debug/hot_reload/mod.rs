@@ -28,6 +28,7 @@
 //!   `world_path` the session's world.jsonl path, shared with the host that switches worlds
 
 mod animation;
+mod apply;
 mod compile_queue;
 mod decode;
 mod driver;

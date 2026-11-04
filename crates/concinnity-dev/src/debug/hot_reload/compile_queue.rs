@@ -97,6 +97,12 @@ where
             .map_err(|e| format!("could not spawn the compile worker: {e}"))
     }
 
+    // Whether any compile has ever been submitted.
+    #[cfg(test)]
+    pub(super) fn submitted_any(&self) -> bool {
+        self.generations.next > 0
+    }
+
     // Every result that has arrived and still answers its key's newest
     // request. Never blocks.
     pub(super) fn drain(&self) -> Vec<(K, T)> {

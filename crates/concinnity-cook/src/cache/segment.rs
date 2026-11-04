@@ -71,14 +71,14 @@ impl Index {
     /// holds no such entry, or when the read fails.
     pub(super) fn get(&self, kind: CacheEntryKind, key: &str) -> Option<Vec<u8>> {
         let span = *self.entries.get(&(kind, key.to_owned()))?;
-        let mut file = self.handle()?;
+        let mut file = self.lock_file()?;
         read_span(&mut file, self.payload_start, span).ok()
     }
 
-    // The indexed file, for the length of one read. A poisoned lock is taken
+    // Lock the indexed file for the length of one read. A poisoned lock is taken
     // anyway: a panic mid-read leaves a cursor, not a corrupt file, and every
     // read seeks before it starts.
-    fn handle(&self) -> Option<MutexGuard<'_, File>> {
+    fn lock_file(&self) -> Option<MutexGuard<'_, File>> {
         Some(
             self.file
                 .as_ref()?
@@ -169,7 +169,7 @@ pub(super) fn write(
     let Ok(prefix) = encode_cnb_prefix(token, &meta) else {
         return false;
     };
-    let mut carried_from = index.handle();
+    let mut carried_from = index.lock_file();
     concinnity_host::store::atomic::replace(path, |out| {
         out.write_all(&prefix)?;
         for planned in &plan {

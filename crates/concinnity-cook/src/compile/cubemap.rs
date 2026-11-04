@@ -19,6 +19,7 @@
 use crate::codec::hdr::{
     CUBE_FORMAT_RGBA32F, CUBE_PAYLOAD_HEADER_BYTES, CUBE_PAYLOAD_MAGIC, equirect_to_cube,
 };
+use crate::compile::CompileError;
 use concinnity_core::math::SaturatingFrom;
 
 // The `source` path a `CubemapTexture`'s args declare, checked for extension.
@@ -56,7 +57,7 @@ pub(crate) fn validate_cubemap_args(args: &serde_json::Value) -> Result<(), Stri
 }
 
 // Compile a CubemapTexture component's JSON args into a packed binary payload.
-pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, String> {
+pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8>, CompileError> {
     validate_cubemap_args(args)?;
     let source = cubemap_source(args)?;
     let face_size = u32::saturating_from(
@@ -154,7 +155,7 @@ mod tests {
         // A directory-qualified path resolves verbatim; opening it fails.
         let args = serde_json::json!({ "source": "/no/such/dir/missing.hdr", "face_size": 8 });
         let err = compile_cubemap_payload(&args).unwrap_err();
-        assert!(err.contains("failed to open HDR"), "got: {err}");
+        assert!(err.to_string().contains("failed to open HDR"), "got: {err}");
     }
 
     fn write_hdr(dir: &tempfile::TempDir, name: &str, bytes: &[u8]) -> String {
@@ -190,7 +191,13 @@ mod tests {
         let src = write_hdr(&dir, "broken.hdr", b"not a radiance file\n");
         let args = serde_json::json!({ "source": src, "face_size": 8 });
         let err = compile_cubemap_payload(&args).unwrap_err();
-        assert!(err.contains("failed to decode HDR"), "got: {err}");
-        assert!(err.contains("missing Radiance magic"), "got: {err}");
+        assert!(
+            err.to_string().contains("failed to decode HDR"),
+            "got: {err}"
+        );
+        assert!(
+            err.to_string().contains("missing Radiance magic"),
+            "got: {err}"
+        );
     }
 }

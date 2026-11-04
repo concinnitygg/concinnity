@@ -6,6 +6,7 @@
 //! through `form::assemble` + `form::validate` and `mark_changed` once; the
 //! per-frame drag preview lives in `drag/shape.rs`.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::registry::build_only::{CharacterSchema, ShapePreset};
 use concinnity_cook::authoring::world::replace_args;
 use concinnity_cook::compile::character::builtin_schema;
@@ -50,14 +51,14 @@ impl EditorHook {
         let name = self.handle_name(active)?;
         let entry = &self.entries[idx];
         match entry_type(entry)? {
-            "SkinnedMesh" | "CharacterModel" => Some(ShapeBinding {
+            RegisteredType::SkinnedMesh | RegisteredType::CharacterModel => Some(ShapeBinding {
                 shape_idx: self.entries.iter().position(|e| {
-                    entry_type(e) == Some("CharacterShape")
+                    entry_type(e) == Some(RegisteredType::CharacterShape)
                         && e.pointer("/args/target").and_then(|t| t.as_str()) == Some(&name)
                 }),
                 mesh: name,
             }),
-            "CharacterShape" => {
+            RegisteredType::CharacterShape => {
                 let mesh = entry.pointer("/args/target")?.as_str()?.to_string();
                 Some(ShapeBinding {
                     mesh,
@@ -117,7 +118,7 @@ impl EditorHook {
         let Some(idx) = self.entry_index_named(mesh) else {
             return builtin_schema::humanoid().clone();
         };
-        if entry_type(&self.entries[idx]) != Some("CharacterModel") {
+        if entry_type(&self.entries[idx]) != Some(RegisteredType::CharacterModel) {
             return builtin_schema::humanoid().clone();
         }
         let name = self
@@ -127,7 +128,7 @@ impl EditorHook {
             .unwrap_or(builtin_schema::HUMANOID_SCHEMA)
             .to_string();
         self.entry_index_named(&name)
-            .filter(|&i| entry_type(&self.entries[i]) == Some("CharacterSchema"))
+            .filter(|&i| entry_type(&self.entries[i]) == Some(RegisteredType::CharacterSchema))
             .and_then(|i| {
                 serde_json::from_value(serde_json::Value::Object(self.entry_args(i))).ok()
             })

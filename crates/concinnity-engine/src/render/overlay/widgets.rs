@@ -376,9 +376,9 @@ pub(super) fn build_text_input_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bake::font::metrics;
     use crate::ecs::asset_id::AssetId;
-    use crate::ecs::{DropdownView, FontHandle, Ref};
+    use crate::ecs::{DropdownView, Ref};
+    use crate::render::overlay::test_fonts::{FONT, loaded_fonts};
     use alloc::format;
     use alloc::string::ToString;
 
@@ -419,47 +419,6 @@ mod tests {
     // A fixed-width mock metric (every char 10px) makes `fit_line` widths exact.
     fn mock_advance(s: &str) -> f32 {
         s.chars().count() as f32 * 10.0
-    }
-
-    const FONT: FontHandle = FontHandle::new(0);
-
-    fn make_glyph(advance_px: f32) -> metrics::GlyphMetrics {
-        metrics::GlyphMetrics {
-            char_code: 0,
-            atlas_x: 0,
-            atlas_y: 0,
-            atlas_w: 8,
-            atlas_h: 12,
-            advance_px,
-            bearing_x: 0.0,
-            bearing_y: 12.0,
-        }
-    }
-
-    // A fixed-width synthetic font (every glyph 10px in a 16px em) makes the
-    // built geometry exact.
-    fn loaded_fonts() -> text::FontSet {
-        let metrics: text::FontMetrics = ('a'..='z')
-            .chain('A'..='Z')
-            .chain('0'..='9')
-            .chain(['.', ' '])
-            .map(|c| (c as u32, make_glyph(10.0)))
-            .collect();
-        let cap_px = text::derive_cap_px(&metrics, 16.0);
-        let mut fonts = text::FontSet::default();
-        fonts.insert(
-            FONT,
-            text::LoadedFont {
-                atlas_slot: 0,
-                cap_px,
-                metrics,
-                atlas_w: 128,
-                atlas_h: 128,
-                size_px: 16.0,
-                supersample: 1.0,
-            },
-        );
-        fonts
     }
 
     fn no_fonts() -> text::FontSet {

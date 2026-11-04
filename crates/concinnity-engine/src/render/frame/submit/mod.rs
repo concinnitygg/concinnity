@@ -70,6 +70,15 @@ pub fn submit(
     // before the draw when they ran in-place, and still do here.
     let mut replay = snap.ops.replay(backend);
     let replay_us = since(started);
+    // A tolerated op that lost the device leaves nothing to draw on.
+    if let Some(e) = &replay.device_lost {
+        tracing::error!("device lost during replay, stopping: {e}");
+        let device_lost = Some(e.to_string());
+        return SubmitOutcome {
+            device_lost,
+            ..SubmitOutcome::stop(replay)
+        };
+    }
 
     backend.set_ui_cursor_hidden(snap.ui.cursor_hidden);
     if let Some(on) = snap.ui.menu_mode {

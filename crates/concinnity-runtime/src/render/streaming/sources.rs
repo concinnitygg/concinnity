@@ -3,16 +3,26 @@
 use hashbrown::HashMap;
 
 use concinnity_engine::ecs::PayloadLocator;
-use concinnity_host::store::blob::{blob_path, payload_section_start};
+use concinnity_host::store::blob::{BlobLoadError, blob_path, payload_section_start};
 
 use concinnity_engine::render::streaming::pools::DeferredMeshPayload;
 
+// Why a blob's payload section could not be located: the blob, and the load
+// failure, whose message carries its cause.
+#[derive(Debug, thiserror::Error)]
+#[error("blob {blob_index}: {source}")]
+pub(crate) struct PayloadSectionError {
+    blob_index: u32,
+    #[source]
+    source: BlobLoadError,
+}
+
 // Blob `blob_index`'s file and where its payload section starts in it, so a
 // locator's payload-section offset becomes an absolute file offset.
-pub(crate) fn blob_payload_section(blob_index: u32) -> Result<(String, u64), String> {
-    let path = blob_path(blob_index)
-        .ok_or_else(|| format!("blob {blob_index}: no blob layout installed"))?;
-    let start = payload_section_start(&path).map_err(|e| format!("blob {blob_index}: {e}"))?;
+pub(crate) fn blob_payload_section(blob_index: u32) -> Result<(String, u64), PayloadSectionError> {
+    let error = |source| PayloadSectionError { blob_index, source };
+    let path = blob_path(blob_index).ok_or_else(|| error(BlobLoadError::NoStateRoot))?;
+    let start = payload_section_start(&path).map_err(error)?;
     Ok((path, start))
 }
 
@@ -27,7 +37,7 @@ pub(crate) fn build_texture_payload_source(
     payloads: Vec<Vec<u8>>,
     locators: &[PayloadLocator],
     disk_backed: bool,
-) -> Result<std::sync::Arc<dyn super::texture::PayloadSource>, String> {
+) -> Result<std::sync::Arc<dyn super::texture::PayloadSource>, PayloadSectionError> {
     if !disk_backed {
         return Ok(std::sync::Arc::new(super::texture::MemPayloadSource::new(
             payloads,
@@ -74,6 +84,33 @@ pub(crate) fn disk_mesh_payload(locator: &PayloadLocator) -> Option<DeferredMesh
 mod tests {
     use super::*;
     use concinnity_engine::bake::texture;
+
+    // A log line names the blob and every cause, down to the read's own error.
+    #[test]
+    fn a_payload_section_error_names_the_blob_and_its_causes() {
+        let error = PayloadSectionError {
+            blob_index: 3,
+            source: BlobLoadError::Io {
+                path: "data/3".to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+            },
+        };
+        assert_eq!(error.to_string(), "blob 3: reading data/3 failed: gone");
+
+        let error = PayloadSectionError {
+            blob_index: 1,
+            source: BlobLoadError::Format {
+                path: "data/1".to_string(),
+                source: concinnity_engine::blob::BlobError::ValidityMismatch(7),
+            },
+        };
+        let text = error.to_string();
+        assert!(
+            text.starts_with("blob 1: data/1 is not usable world data: "),
+            "{text}"
+        );
+        assert_eq!(text.matches("different version").count(), 1, "{text}");
+    }
 
     // The RAM-resident source decodes a compiled texture payload on fetch.
     #[test]

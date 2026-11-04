@@ -12,6 +12,7 @@
 //! Escape gives it up. There is no navigation to add, because the panel is one
 //! list and the arrows are already what the text fields use.
 
+use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::replace_args;
 use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;
@@ -44,7 +45,7 @@ impl EditorHook {
     pub(in crate::editor::hook) fn variables_entry(&self) -> Option<usize> {
         self.entries
             .iter()
-            .position(|e| entry_type(e) == Some("Variables"))
+            .position(|e| entry_type(e) == Some(RegisteredType::Variables))
     }
 
     pub(in crate::editor::hook) fn variables_data(&self) -> VariablesData {

@@ -133,7 +133,13 @@ struct Loaded {
 // `None` when nothing anchored the cache, which turns every operation above
 // into a miss: artifacts are produced fresh rather than warmed from disk.
 fn with<R>(f: impl FnOnce(&mut Segment) -> R) -> Option<R> {
-    let path = writable_path()?;
+    let Some(path) = writable_path() else {
+        static UNANCHORED: std::sync::Once = std::sync::Once::new();
+        UNANCHORED.call_once(|| {
+            tracing::debug!("runtime cache: no segment is anchored, so every lookup misses");
+        });
+        return None;
+    };
     let mut held = lock();
     if held.as_ref().is_some_and(|loaded| loaded.path != path)
         && let Some(mut previous) = held.take()

@@ -129,9 +129,7 @@ pub(in crate::editor::hook) fn seed_tree(h: &mut EditorHook, extra: Vec<TreeGrou
             .iter()
             .map(|e| asset_tree::TreeAsset {
                 name: declared_id(e).unwrap_or_default().to_string(),
-                asset_type: entry_type(e)
-                    .and_then(RegisteredType::parse)
-                    .expect("a registered entry type"),
+                asset_type: entry_type(e).expect("a registered entry type"),
                 badge: asset_tree::Badge::Authored,
                 promote: None,
             })

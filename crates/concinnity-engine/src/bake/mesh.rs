@@ -72,11 +72,7 @@ pub fn finish_mesh_payload(
         .map(|((pos, normal, color, uv), tangent)| (pos, normal, tangent, color, uv))
         .collect();
     let alternates = build_lod_alternates(lod_levels, lod_distances, &verts5, indices)?;
-    Ok(crate::gfx::mesh_payload::serialize_with_lods(
-        &verts5,
-        indices,
-        &alternates,
-    ))
+    crate::gfx::mesh_payload::serialize_with_lods(&verts5, indices, &alternates)
 }
 
 // Build the per-LOD `(switch_distance, indices)` list for a mesh. Returns an

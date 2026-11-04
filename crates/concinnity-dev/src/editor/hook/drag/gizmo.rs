@@ -12,7 +12,7 @@
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::entry_list::{EntryId, EntryList};
-use crate::editor::hook::{EditorHook, declared_id, entry_type, pick};
+use crate::editor::hook::{EditorHook, declared_id, entry_type_name, pick};
 use crate::editor::panels::form;
 use crate::editor::round::{round1, round3};
 use crate::editor::viewport::gizmo::{self, GizmoMode};
@@ -79,7 +79,7 @@ impl EditorHook {
     ) -> Option<GizmoTarget> {
         let idx = self.handle_index(handle)?;
         let key = self.entries.key_at(idx)?;
-        let ty = entry_type(self.entries.get(idx)?)?;
+        let ty = entry_type_name(self.entries.get(idx)?)?;
         let merged = form::working_args(ty, Some(&self.entry_args(idx)));
         if !merged
             .get(mode.arg_key())

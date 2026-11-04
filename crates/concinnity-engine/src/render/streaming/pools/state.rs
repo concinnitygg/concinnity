@@ -22,7 +22,6 @@ use crate::geometry::chunk_coord::{self, ChunkCoord};
 use crate::gfx::render_types::DrawIndex;
 use crate::planet::{PlanetEdited, PlanetFrame};
 use crate::render::backend::ChunkMesh;
-use crate::render::backend::error::RenderError;
 use crate::render::frame::ops::{OpFailure, RenderOps};
 use crate::render::frame::queues::RenderQueues;
 use crate::render::slots::render_slots::RenderSlots;
@@ -468,7 +467,7 @@ impl StreamingState {
                 ops.record_with(move |backend, out| {
                     if let Err(e) = backend.evict_texture_slot(slot) {
                         tracing::warn!("texture evict slot {}: {}", slot, e);
-                        out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+                        out.note(&e);
                         out.failures.push(OpFailure::TextureEvict { slot });
                     }
                 });
@@ -486,7 +485,7 @@ impl StreamingState {
             ops.record_with(move |backend, out| {
                 if let Err(e) = backend.update_texture_slot(slot, &image) {
                     tracing::debug!("texture upload slot {} deferred: {}", slot, e);
-                    out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+                    out.note(&e);
                     out.failures.push(OpFailure::TextureUpload { slot });
                 }
             });
@@ -520,10 +519,10 @@ impl StreamingState {
         if !loads_frozen {
             for stream_id in pool.plan() {
                 if let Some(&draw_idx) = draws.get(stream_id) {
-                    ops.record(move |backend| {
-                        if let Err(e) = backend.evict_mesh(draw_idx, retire_frame) {
-                            tracing::warn!("mesh evict draw {}: {}", draw_idx, e);
-                        }
+                    ops.record_fallible(move |backend| {
+                        backend
+                            .evict_mesh(draw_idx, retire_frame)
+                            .map_err(|e| e.context(format_args!("mesh evict draw {draw_idx}")))
                     });
                 }
                 note_resident(
@@ -542,7 +541,7 @@ impl StreamingState {
                 ops.record_with(move |backend, out| {
                     if let Err(e) = backend.upload_mesh(draw_idx, &vertices, &indices, frame) {
                         tracing::debug!("mesh upload draw {} deferred: {}", draw_idx, e);
-                        out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+                        out.note(&e);
                         out.failures.push(OpFailure::MeshUpload { stream_id });
                     }
                 });
@@ -593,10 +592,12 @@ impl StreamingState {
             for coord in cs.pool.plan(camera_chunk) {
                 if let Some(draw_idx) = cs.draws.remove(&coord) {
                     slots.free_draw(draw_idx);
-                    ops.record(move |backend| {
-                        if let Err(e) = backend.remove_chunk_mesh(draw_idx, retire_frame) {
-                            tracing::warn!("chunk remove ({},{}): {}", coord.x, coord.z, e);
-                        }
+                    ops.record_fallible(move |backend| {
+                        backend
+                            .remove_chunk_mesh(draw_idx, retire_frame)
+                            .map_err(|e| {
+                                e.context(format_args!("chunk remove ({},{})", coord.x, coord.z))
+                            })
                     });
                 }
             }
@@ -607,10 +608,10 @@ impl StreamingState {
         if camera_chunk != cs.origin_chunk {
             for (&coord, &draw_idx) in &cs.draws {
                 let model = chunk_model_matrix(coord, camera_chunk, cs.chunk_w, cs.chunk_d);
-                ops.record(move |backend| {
-                    if let Err(e) = backend.set_chunk_model(draw_idx, model) {
-                        tracing::warn!("chunk rebase ({},{}): {}", coord.x, coord.z, e);
-                    }
+                ops.record_fallible(move |backend| {
+                    backend.set_chunk_model(draw_idx, model).map_err(|e| {
+                        e.context(format_args!("chunk rebase ({},{})", coord.x, coord.z))
+                    })
                 });
             }
             cs.origin_chunk = camera_chunk;
@@ -642,7 +643,7 @@ impl StreamingState {
                 };
                 if let Err(e) = backend.add_chunk_mesh(mesh, dst) {
                     tracing::warn!("chunk add ({},{}): {}", coord.x, coord.z, e);
-                    out.memory_pressure |= matches!(e, RenderError::OutOfDeviceMemory(_));
+                    out.note(&e);
                     out.failures.push(OpFailure::ChunkAdd { coord });
                 }
             });

@@ -4,6 +4,7 @@ use alloc::{format, vec};
 
 use super::*;
 use crate::gfx::mesh_payload::Vertex;
+use crate::render::backend::error::RenderError;
 use crate::render::backend::recording::{Call, RecordingBackend, recording_backend};
 use crate::render::frame::ops::ReplayOutcome;
 use crate::render::slots::render_slots::RenderSlots;

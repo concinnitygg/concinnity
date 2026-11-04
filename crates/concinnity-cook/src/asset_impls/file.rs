@@ -13,8 +13,7 @@ impl crate::asset::BuildAsset for File {
                 format!("Asset '{}': unsupported File kind '{}'", ctx.name, kind_str),
             )
         })?;
-        crate::compile::file::compile_file_payload(path, &kind)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        crate::compile::file::compile_file_payload(path, &kind).map_err(std::io::Error::from)
     }
 }
 
@@ -57,10 +56,10 @@ mod tests {
     }
 
     #[test]
-    fn a_compile_failure_is_reported_as_invalid_data() {
+    fn a_missing_source_is_reported_as_not_found() {
         let args = serde_json::json!({"path": "/no/such/model.obj", "kind": "obj"});
         let err = File::compile_payload(&args, &ctx()).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(err.to_string().contains("/no/such/model.obj"), "got: {err}");
     }
 }

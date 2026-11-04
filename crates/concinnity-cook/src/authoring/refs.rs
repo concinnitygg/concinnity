@@ -9,7 +9,7 @@
 use crate::authoring::field_path::{retarget_leaves, string_leaves};
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::resource_type::is_mesh_source;
-use crate::authoring::world::WorldJsonlAsset;
+use crate::authoring::world::{WorldJsonlAsset, entry_type};
 use crate::check::asset_refs::{CrossRef, RefKind};
 use crate::check::cross_reference::cross_refs_for;
 use concinnity_engine::ecs::RefField;
@@ -132,13 +132,6 @@ pub fn count_references(
 
 fn may_name(field: &RefField, target_type: &str) -> bool {
     field.targets.is_empty() || field.targets.contains(&target_type)
-}
-
-fn entry_type(entry: &serde_json::Value) -> Option<RegisteredType> {
-    entry
-        .get("type")
-        .and_then(|t| t.as_str())
-        .and_then(RegisteredType::parse)
 }
 
 // How many of the structured references in `args`, a `ty` entry's, name

@@ -33,7 +33,7 @@
 //! re-serializes the entry list to world.jsonl and stops there: the compiled
 //! blobs are refreshed by an explicit build, not by editing.
 
-use concinnity_cook::authoring::world::entry_type;
+use concinnity_cook::authoring::world::{entry_type, entry_type_name};
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
@@ -395,7 +395,7 @@ fn declared_id(e: &serde_json::Value) -> Option<&str> {
 fn names_of_types(entries: &[serde_json::Value], types: &[&str]) -> Vec<String> {
     entries
         .iter()
-        .filter(|e| types.is_empty() || entry_type(e).is_some_and(|t| types.contains(&t)))
+        .filter(|e| types.is_empty() || entry_type_name(e).is_some_and(|t| types.contains(&t)))
         .filter_map(|e| declared_id(e).map(String::from))
         .collect()
 }

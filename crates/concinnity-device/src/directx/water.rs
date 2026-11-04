@@ -11,6 +11,7 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
+use concinnity_engine::planet::Rebase;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
 use concinnity_engine::water::WaterBody;
@@ -19,9 +20,10 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::allocator::DeviceAllocator;
 use crate::directx::builtin_shaders;
 use crate::directx::builtin_shaders::CompileProgram;
-use crate::directx::context::dump_on_err;
+use crate::directx::context::{DxContext, dump_on_err};
 use crate::directx::transparent::{
-    RecordUpload, ShapePsos, TransparentProducer, create_transparent_pso, upload_record,
+    RecordUpload, ShapePsos, TransparentProducer, TransparentResources, create_transparent_pso,
+    upload_record,
 };
 use concinnity_engine::render::shader::programs::ShaderProgram;
 
@@ -232,6 +234,102 @@ impl WaterBuild<'_> {
             ),
         )?;
         Ok((flat, textured))
+    }
+}
+
+impl DxContext {
+    // Carry the water surfaces and the wake into the frame the world moved
+    // to.
+    pub(in crate::directx) fn rebase_transparent_water(&mut self, rebase: &Rebase) {
+        if let Some(water) = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+        {
+            water.rebase_water(rebase);
+        }
+        self.wake.rebase(rebase);
+    }
+
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    pub(in crate::directx) fn reshape_planet(
+        &mut self,
+        shape: &concinnity_engine::planet::PlanetShape,
+    ) {
+        let water = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+            .map(|w| w.water.iter_mut())
+            .into_iter()
+            .flatten();
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            water,
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
+    }
+
+    // Advance the wake to this frame when a sea runs one and the `WaterSim`
+    // node will, so the node and the draws read the same frame of it.
+    pub(in crate::directx) fn prepare_water_wake(
+        &mut self,
+        camera: [f32; 3],
+        time: f64,
+        stirs: &[concinnity_engine::water::stir::WaterStir],
+    ) {
+        let wakes = self.water_sim_live()
+            && self
+                .water_sim
+                .as_ref()
+                .is_some_and(super::water_sim::DxOceanSim::wakes);
+        let sea = self
+            .transparent
+            .as_ref()
+            .and_then(TransparentResources::water)
+            .and_then(|w| w.sea_datum(camera));
+        self.wake_frame = match (wakes, sea) {
+            (true, Some(sea)) => self.wake.advance(camera, sea, time, stirs),
+            _ => None,
+        };
+    }
+
+    // Write each visible water surface's params, advanced to `time` seconds
+    // into the world, into frame slot `frame_idx`'s copy, ahead of this frame's
+    // `encode_transparent`.
+    pub(in crate::directx) fn advance_transparent_water(
+        &self,
+        frame_idx: usize,
+        time: f64,
+        camera: [f32; 3],
+    ) {
+        if let Some(water) = self
+            .transparent
+            .as_ref()
+            .and_then(TransparentResources::water)
+        {
+            let wake = self.wake_frame.map(|f| f.draw).unwrap_or_default();
+            let trace = self
+                .rt_reflections
+                .as_ref()
+                .is_some_and(|rt| rt.settings.water_trace);
+            water.advance_water(frame_idx, time, camera, &wake, trace);
+        }
+    }
+
+    // True when a visible surface samples a simulated ocean, so `WaterSim` has
+    // a reader this frame.
+    pub(in crate::directx) fn water_sim_live(&self) -> bool {
+        self.water_sim
+            .as_ref()
+            .is_some_and(super::water_sim::DxOceanSim::simulates)
+            && self
+                .transparent
+                .as_ref()
+                .and_then(TransparentResources::water)
+                .is_some_and(TransparentProducer::samples_ocean)
     }
 }
 

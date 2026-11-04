@@ -5,6 +5,8 @@
 use serde_json::Value;
 use std::collections::HashMap;
 
+use crate::authoring::registry::RegisteredType;
+
 /// The args key an entry declares its identity under. The `$` keeps it apart
 /// from every schema field, so no asset type can ever collide with it.
 pub const ID_KEY: &str = "$id";
@@ -14,8 +16,15 @@ pub fn entry_id(entry: &Value) -> Option<&str> {
     entry.get("args")?.get(ID_KEY)?.as_str()
 }
 
-/// The asset type an entry names, or `None` when it names none.
-pub fn entry_type(entry: &Value) -> Option<&str> {
+/// The registered asset type an entry names, or `None` when it names none or
+/// names a type the registry does not know.
+pub fn entry_type(entry: &Value) -> Option<RegisteredType> {
+    entry_type_name(entry).and_then(RegisteredType::parse)
+}
+
+/// The asset type name an entry carries, as written, whether or not it is a
+/// registered type; for display and for echoing an unknown name back.
+pub fn entry_type_name(entry: &Value) -> Option<&str> {
     entry.get("type")?.as_str()
 }
 
@@ -185,10 +194,18 @@ mod tests {
     fn entry_type_reads_the_named_type() {
         assert_eq!(
             entry_type(&json!({"type": "Prop", "args": {}})),
-            Some("Prop")
+            Some(RegisteredType::Prop)
         );
         assert_eq!(entry_type(&json!({"args": {}})), None);
         assert_eq!(entry_type(&json!({"type": 3})), None);
+    }
+
+    // A name the registry does not know has no type, but its text survives.
+    #[test]
+    fn an_unregistered_type_name_reads_as_text_only() {
+        let entry = json!({"type": "NoSuchType", "args": {}});
+        assert_eq!(entry_type(&entry), None);
+        assert_eq!(entry_type_name(&entry), Some("NoSuchType"));
     }
 
     #[test]

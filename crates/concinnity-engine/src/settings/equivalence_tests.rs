@@ -1,26 +1,14 @@
 // Pins what the settings chain hands the backend for a matrix of inputs: every
 // preset (Auto over each GPU tier), worlds authored above and below every
 // ceiling, and the user's overrides on and off. Each case folds the resolved
-// settings, what the backend reads from them, and a preset change's
+// settings, what the backend derives from them, and a preset change's
 // re-resolved quality group into one digest, so a change to any value the
-// backend receives fails here by name. The text keeps the shape of the
-// settings structs the digests were pinned over.
-//
-// The exposure slider once moved only the composite's exposure, and
-// auto-exposure metered for the world's authored display. The slider now sets
-// the resolved EV, which also biases auto-exposure, and metering follows the
-// resolved display; the text prints both as the pinned digests saw them, and
-// `user_overrides_reach_the_exposure_bias_and_metering` checks the new values.
-//
-// The `bare` world (no `GraphicsConfig`) once resolved two values apart from
-// the section defaults: two-pass occlusion off and an upscaler at native scale.
-// Absence now means the defaults, so a `bare` case checks those two values
-// against the resolver's rules and prints them as the pinned digests saw them.
+// backend receives fails here by name, with the case's text to diff.
 
 use crate::components::BackgroundOverrides;
 use crate::components::PlanetDetailOverrides;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write as _;
@@ -325,138 +313,15 @@ fn users() -> Vec<(&'static str, UserGraphicsSettings)> {
     ]
 }
 
-// The values the settings chain resolves, in a shape independent of the
-// structs that carry them. The quality group prints as the single config the
-// pinned digests were taken over: the resolved effects, and the world's values
-// for the fields no layer above it moved then.
-fn resolved_text(r: &ResolvedSettings, world: &WorldSettings, two_pass: bool) -> String {
-    let g = &r.graphics;
+// Everything the settings chain resolved, field by field.
+fn resolved_text(r: &ResolvedSettings) -> String {
+    format!("{r:#?}")
+}
+
+// What the backend derives from the resolved settings at init.
+fn backend_text(g: &ResolvedGraphics, launch: &LaunchRequest) -> String {
     format!(
-        "{:?}",
-        (
-            (
-                &PostProcessConfig::of(g, world),
-                g.anti_aliasing.upscale_quality,
-                g.shadows.map_size,
-                g.shadow_cadence(),
-                g.texture_filtering.anisotropy,
-            ),
-            g.post_process(),
-            g.ambient_intensity(),
-            (
-                g.frame_pacing.vsync,
-                g.frame_pacing.fps_cap,
-                r.perf_stats,
-                r.show_fps,
-                r.show_vram
-            ),
-            g.frame_pacing.frames_in_flight as usize,
-            (g.display.hdr, g.display.pq, g.anti_aliasing.upscaling),
-            (g.anti_aliasing.upscaler, g.dlss_preset, two_pass),
-            (r.texture_cap, r.texture_budget),
-        )
-    )
-}
-
-// The quality group in the field order the digests were pinned in.
-#[derive(Debug)]
-#[expect(dead_code, reason = "the fields are read only through `Debug`")]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "mirrors independent post-process settings"
-)]
-struct PostProcessConfig {
-    bloom_intensity: f32,
-    bloom_threshold: f32,
-    bloom_knee: f32,
-    exposure_ev: f32,
-    vignette_strength: f32,
-    lut_strength: f32,
-    aa_mode: AaMode,
-    ssao: bool,
-    ssao_radius: f32,
-    ssao_intensity: f32,
-    ssr: bool,
-    ssr_intensity: f32,
-    ssr_max_distance: f32,
-    ray_traced_reflections: bool,
-    rt_reflection_resolution: PassResolution,
-    rt_reflection_shadows: bool,
-    reflection_blur_resolution: PassResolution,
-    indirect_lighting: IndirectTechnique,
-    ambient_intensity: f32,
-    ssgi_intensity: f32,
-    ssgi_max_distance: f32,
-    ssgi_resolution: PassResolution,
-    ssgi_rays: u32,
-    auto_exposure: bool,
-    auto_exposure_min_ev: f32,
-    auto_exposure_max_ev: f32,
-    auto_exposure_speed: f32,
-    hdr_display: bool,
-    hdr_pq: bool,
-    temporal_upscaling: bool,
-    upscale_quality: UpscaleQuality,
-    upscale_backend: UpscalerBackend,
-    occlusion_two_pass: bool,
-}
-
-impl PostProcessConfig {
-    fn of(g: &ResolvedGraphics, world: &WorldSettings) -> Self {
-        let w = &world.graphics;
-        let ao = &g.ambient_occlusion;
-        let r = &g.reflections;
-        let gi = &g.indirect_lighting;
-        let ex = &g.exposure;
-        Self {
-            bloom_intensity: w.bloom.intensity,
-            bloom_threshold: w.bloom.threshold,
-            bloom_knee: w.bloom.knee,
-            exposure_ev: w.exposure.ev,
-            vignette_strength: w.vignette.strength,
-            lut_strength: w.lut_strength,
-            aa_mode: g.anti_aliasing.mode,
-            ssao: ao.enabled,
-            ssao_radius: ao.radius,
-            ssao_intensity: ao.intensity,
-            ssr: r.screen_space,
-            ssr_intensity: r.intensity,
-            ssr_max_distance: r.max_distance,
-            ray_traced_reflections: r.ray_traced,
-            rt_reflection_resolution: r.ray_traced_resolution,
-            rt_reflection_shadows: r.ray_traced_shadows,
-            reflection_blur_resolution: r.blur_resolution,
-            indirect_lighting: gi.technique,
-            ambient_intensity: w.indirect_lighting.ambient_intensity,
-            ssgi_intensity: gi.ssgi_intensity,
-            ssgi_max_distance: gi.ssgi_max_distance,
-            ssgi_resolution: gi.ssgi_resolution,
-            ssgi_rays: gi.ssgi_rays,
-            auto_exposure: ex.auto,
-            auto_exposure_min_ev: ex.auto_min_ev,
-            auto_exposure_max_ev: ex.auto_max_ev,
-            auto_exposure_speed: ex.auto_speed,
-            hdr_display: w.display.hdr,
-            hdr_pq: w.display.pq,
-            temporal_upscaling: w.anti_aliasing.upscaling,
-            upscale_quality: w.anti_aliasing.upscale_quality,
-            upscale_backend: w.anti_aliasing.upscaler,
-            occlusion_two_pass: w.culling.two_pass_occlusion,
-        }
-    }
-}
-
-// What the backend reads at init, in the field order of the pinned digests.
-fn backend_text(
-    g: &ResolvedGraphics,
-    world: &WorldSettings,
-    launch: &LaunchRequest,
-    bare: Option<(f32, bool)>,
-) -> String {
-    let (upscale_scale, two_pass) =
-        bare.unwrap_or_else(|| (g.upscale_scale(), g.culling.two_pass_occlusion));
-    format!(
-        "{:?}",
+        "{:#?}",
         (
             (g.post_process(), g.taa(), g.hdr_samples()),
             (g.ssao(), g.ssr(), g.ssgi(), g.rt_reflections()),
@@ -465,23 +330,16 @@ fn backend_text(
                 launch.resolve_rt_skinned_geometry(),
                 g.reflection_blur_scale()
             ),
-            legacy_exposure(g, world),
-            (
-                g.display.hdr,
-                g.display.pq,
-                g.anti_aliasing.upscaling,
-                upscale_scale
-            ),
-            (g.anti_aliasing.upscaler, g.dlss_preset, two_pass),
+            (g.auto_exposure(), g.auto_exposure_bias_ev()),
+            (g.upscale_scale(), g.shadow_cadence(), g.ambient_intensity()),
         )
     )
 }
 
-// What a live quality rebuild reads, in the field order of the pinned digests.
-fn quality_text(g: &ResolvedGraphics, world: &WorldSettings) -> String {
-    let (auto_exposure, bias) = legacy_exposure(g, world);
+// What a live quality rebuild reads.
+fn quality_text(g: &ResolvedGraphics) -> String {
     format!(
-        "{:?}",
+        "{:#?}",
         (
             g.taa(),
             g.ssao(),
@@ -489,42 +347,10 @@ fn quality_text(g: &ResolvedGraphics, world: &WorldSettings) -> String {
             g.rt_reflections(),
             g.ssgi(),
             g.reflection_blur_scale(),
-            auto_exposure,
-            bias,
+            g.auto_exposure(),
+            g.auto_exposure_bias_ev(),
         )
     )
-}
-
-// Auto-exposure as the pinned digests saw it: metered for the world's display,
-// biased by the world's EV.
-fn legacy_exposure(
-    g: &ResolvedGraphics,
-    world: &WorldSettings,
-) -> (Option<AutoExposureSettings>, f32) {
-    let w = &world.graphics;
-    let settings = g.exposure.auto_settings(w.display.hdr).map(|s| {
-        // No case authors a night bias or night vision; the digests predate
-        // them.
-        assert_eq!(s.night_bias_ev, 0.0);
-        assert_eq!(s.night_vision, 0.0);
-        AutoExposureSettings {
-            min_ev: s.min_ev,
-            max_ev: s.max_ev,
-            speed: s.speed,
-            target_log_lum: s.target_log_lum,
-        }
-    });
-    (settings, w.exposure.ev)
-}
-
-// The auto-exposure settings in the shape the digests were pinned over.
-#[derive(Debug)]
-#[expect(dead_code, reason = "the fields are read only through `Debug`")]
-struct AutoExposureSettings {
-    min_ev: f32,
-    max_ev: f32,
-    speed: f32,
-    target_log_lum: f32,
 }
 
 // The user's choices after a preset change: every preset-governed override
@@ -577,7 +403,7 @@ fn case_text(
     let cleared = preset_cleared(user);
     let mut after_preset = resolved.clone();
     after_preset.set_quality(&layers(&cleared).resolve_quality());
-    let (bare, two_pass, after_two_pass) = if world_name == "bare" {
+    if world_name == "bare" {
         let render_scale = user.render_scale.unwrap_or_else(|| {
             more_aggressive_upscale(UpscaleQuality::default(), ceiling.min_upscale)
         });
@@ -586,37 +412,28 @@ fn case_text(
         let two_pass = user.occlusion_two_pass.unwrap_or(true);
         assert_eq!(g.culling.two_pass_occlusion, two_pass);
         assert_eq!(after_preset.graphics.culling.two_pass_occlusion, two_pass);
-        let legacy_two_pass = user.occlusion_two_pass.unwrap_or(false);
-        (
-            Some((1.0, legacy_two_pass)),
-            legacy_two_pass,
-            legacy_two_pass,
-        )
-    } else {
-        (
-            None,
-            resolved.graphics.culling.two_pass_occlusion,
-            after_preset.graphics.culling.two_pass_occlusion,
-        )
-    };
+    }
     format!(
         "{}\n{}\n{}\n{}",
-        resolved_text(&resolved, world, two_pass),
-        backend_text(&resolved.graphics, world, &launch, bare),
-        quality_text(&resolved.graphics, world),
-        resolved_text(&after_preset, world, after_two_pass),
+        resolved_text(&resolved),
+        backend_text(&resolved.graphics, &launch),
+        quality_text(&resolved.graphics),
+        resolved_text(&after_preset),
     )
 }
 
-fn digests() -> Vec<(String, u64)> {
+// Every case's name, text and digest.
+fn cases() -> Vec<(String, String, u64)> {
     let mut out = Vec::new();
     for (world_name, world) in worlds() {
         for (user_name, user) in users() {
             for (ceiling_name, preset, tier) in ceilings() {
                 let text = case_text(world_name, &world, &user, preset, tier);
+                let digest = Fnv1a::of(text.as_bytes());
                 out.push((
                     format!("{world_name}/{user_name}/{ceiling_name}"),
-                    Fnv1a::of(text.as_bytes()),
+                    text,
+                    digest,
                 ));
             }
         }
@@ -626,175 +443,174 @@ fn digests() -> Vec<(String, u64)> {
 
 // Every case's digest as the settings chain resolves it.
 const EXPECTED: &[(&str, u64)] = &[
-    ("bare/none/auto-Unknown", 0x26af_6c9f_f137_1fbe),
-    ("bare/none/auto-Integrated", 0x934a_487a_1a6b_7c8b),
-    ("bare/none/auto-EntryDiscrete", 0x26af_6c9f_f137_1fbe),
-    ("bare/none/auto-MidDiscrete", 0xd36a_a937_3bf6_16a0),
-    ("bare/none/auto-HighDiscrete", 0xb74f_c29d_53c9_5c6a),
-    ("bare/none/Low", 0x934a_487a_1a6b_7c8b),
-    ("bare/none/Medium", 0x26af_6c9f_f137_1fbe),
-    ("bare/none/High", 0xd36a_a937_3bf6_16a0),
-    ("bare/none/Ultra", 0xb74f_c29d_53c9_5c6a),
-    ("bare/none/Custom", 0xb74f_c29d_53c9_5c6a),
-    ("bare/every/auto-Unknown", 0xb42b_f02e_8133_4a17),
-    ("bare/every/auto-Integrated", 0xaf21_63bc_c5c4_4cfa),
-    ("bare/every/auto-EntryDiscrete", 0xb42b_f02e_8133_4a17),
-    ("bare/every/auto-MidDiscrete", 0xfbb4_dc8a_b599_abc8),
-    ("bare/every/auto-HighDiscrete", 0x8a19_8180_606e_d3ab),
-    ("bare/every/Low", 0xaf21_63bc_c5c4_4cfa),
-    ("bare/every/Medium", 0xb42b_f02e_8133_4a17),
-    ("bare/every/High", 0xfbb4_dc8a_b599_abc8),
-    ("bare/every/Ultra", 0x8a19_8180_606e_d3ab),
-    ("bare/every/Custom", 0x8a19_8180_606e_d3ab),
-    ("bare/off/auto-Unknown", 0x912b_43ac_4867_aa48),
-    ("bare/off/auto-Integrated", 0xb7cc_e711_e3a9_4a8e),
-    ("bare/off/auto-EntryDiscrete", 0x912b_43ac_4867_aa48),
-    ("bare/off/auto-MidDiscrete", 0x289f_1405_c76a_6831),
-    ("bare/off/auto-HighDiscrete", 0x708f_073c_e6cb_96ee),
-    ("bare/off/Low", 0xb7cc_e711_e3a9_4a8e),
-    ("bare/off/Medium", 0x912b_43ac_4867_aa48),
-    ("bare/off/High", 0x289f_1405_c76a_6831),
-    ("bare/off/Ultra", 0x708f_073c_e6cb_96ee),
-    ("bare/off/Custom", 0x708f_073c_e6cb_96ee),
-    ("defaults/none/auto-Unknown", 0xfe6e_6712_328c_77b0),
-    ("defaults/none/auto-Integrated", 0x8fa8_1548_48f5_8876),
-    ("defaults/none/auto-EntryDiscrete", 0xfe6e_6712_328c_77b0),
-    ("defaults/none/auto-MidDiscrete", 0xb444_9dfc_b4ce_822f),
-    ("defaults/none/auto-HighDiscrete", 0x1ae4_f835_162a_7dcb),
-    ("defaults/none/Low", 0x8fa8_1548_48f5_8876),
-    ("defaults/none/Medium", 0xfe6e_6712_328c_77b0),
-    ("defaults/none/High", 0xb444_9dfc_b4ce_822f),
-    ("defaults/none/Ultra", 0x1ae4_f835_162a_7dcb),
-    ("defaults/none/Custom", 0x1ae4_f835_162a_7dcb),
-    ("defaults/every/auto-Unknown", 0x5de4_46ed_6918_75e4),
-    ("defaults/every/auto-Integrated", 0xe7e4_baa6_3b72_91f7),
-    ("defaults/every/auto-EntryDiscrete", 0x5de4_46ed_6918_75e4),
-    ("defaults/every/auto-MidDiscrete", 0xf025_85b8_8ee0_c251),
-    ("defaults/every/auto-HighDiscrete", 0x3f1b_c524_d07d_29a2),
-    ("defaults/every/Low", 0xe7e4_baa6_3b72_91f7),
-    ("defaults/every/Medium", 0x5de4_46ed_6918_75e4),
-    ("defaults/every/High", 0xf025_85b8_8ee0_c251),
-    ("defaults/every/Ultra", 0x3f1b_c524_d07d_29a2),
-    ("defaults/every/Custom", 0x3f1b_c524_d07d_29a2),
-    ("defaults/off/auto-Unknown", 0xc335_b718_8f89_ff74),
-    ("defaults/off/auto-Integrated", 0x8359_d1bc_b813_6f8d),
-    ("defaults/off/auto-EntryDiscrete", 0xc335_b718_8f89_ff74),
-    ("defaults/off/auto-MidDiscrete", 0x5bc4_5f26_f908_0f8a),
-    ("defaults/off/auto-HighDiscrete", 0xa54a_5f21_4c4a_4449),
-    ("defaults/off/Low", 0x8359_d1bc_b813_6f8d),
-    ("defaults/off/Medium", 0xc335_b718_8f89_ff74),
-    ("defaults/off/High", 0x5bc4_5f26_f908_0f8a),
-    ("defaults/off/Ultra", 0xa54a_5f21_4c4a_4449),
-    ("defaults/off/Custom", 0xa54a_5f21_4c4a_4449),
-    ("above/none/auto-Unknown", 0x175f_9348_ef92_9e6c),
-    ("above/none/auto-Integrated", 0xd44c_c1b1_1ab1_e097),
-    ("above/none/auto-EntryDiscrete", 0x175f_9348_ef92_9e6c),
-    ("above/none/auto-MidDiscrete", 0x94b0_b299_0d5d_d367),
-    ("above/none/auto-HighDiscrete", 0x1239_fe32_a903_dfb3),
-    ("above/none/Low", 0xd44c_c1b1_1ab1_e097),
-    ("above/none/Medium", 0x175f_9348_ef92_9e6c),
-    ("above/none/High", 0x94b0_b299_0d5d_d367),
-    ("above/none/Ultra", 0x1239_fe32_a903_dfb3),
-    ("above/none/Custom", 0x7469_30da_3bf7_01df),
-    ("above/every/auto-Unknown", 0x4b68_18ed_21b9_1de9),
-    ("above/every/auto-Integrated", 0xd641_987b_c823_fa20),
-    ("above/every/auto-EntryDiscrete", 0x4b68_18ed_21b9_1de9),
-    ("above/every/auto-MidDiscrete", 0x31d2_0ade_66a9_1cb3),
-    ("above/every/auto-HighDiscrete", 0x9b11_3d73_3830_6ff5),
-    ("above/every/Low", 0xd641_987b_c823_fa20),
-    ("above/every/Medium", 0x4b68_18ed_21b9_1de9),
-    ("above/every/High", 0x31d2_0ade_66a9_1cb3),
-    ("above/every/Ultra", 0x9b11_3d73_3830_6ff5),
-    ("above/every/Custom", 0xc91b_84b1_51c9_aac3),
-    ("above/off/auto-Unknown", 0xd5ce_63e0_3fbb_4a88),
-    ("above/off/auto-Integrated", 0xf725_0103_e47b_39a5),
-    ("above/off/auto-EntryDiscrete", 0xd5ce_63e0_3fbb_4a88),
-    ("above/off/auto-MidDiscrete", 0xcd35_4c7a_28c1_af9c),
-    ("above/off/auto-HighDiscrete", 0x2e90_ae7a_30f5_c4ec),
-    ("above/off/Low", 0xf725_0103_e47b_39a5),
-    ("above/off/Medium", 0xd5ce_63e0_3fbb_4a88),
-    ("above/off/High", 0xcd35_4c7a_28c1_af9c),
-    ("above/off/Ultra", 0x2e90_ae7a_30f5_c4ec),
-    ("above/off/Custom", 0xf30f_8cb4_8879_26d0),
-    ("below/none/auto-Unknown", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/auto-Integrated", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/auto-EntryDiscrete", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/auto-MidDiscrete", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/auto-HighDiscrete", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/Low", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/Medium", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/High", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/Ultra", 0x1b94_aaa3_fcdc_9b12),
-    ("below/none/Custom", 0x1b94_aaa3_fcdc_9b12),
-    ("below/every/auto-Unknown", 0xb58d_ac42_3371_d457),
-    ("below/every/auto-Integrated", 0xb58d_ac42_3371_d457),
-    ("below/every/auto-EntryDiscrete", 0xb58d_ac42_3371_d457),
-    ("below/every/auto-MidDiscrete", 0xb58d_ac42_3371_d457),
-    ("below/every/auto-HighDiscrete", 0x7c83_86ec_5155_ce4b),
-    ("below/every/Low", 0xb58d_ac42_3371_d457),
-    ("below/every/Medium", 0xb58d_ac42_3371_d457),
-    ("below/every/High", 0xb58d_ac42_3371_d457),
-    ("below/every/Ultra", 0x7c83_86ec_5155_ce4b),
-    ("below/every/Custom", 0x7c83_86ec_5155_ce4b),
-    ("below/off/auto-Unknown", 0x17c6_ea53_3554_aac1),
-    ("below/off/auto-Integrated", 0x17c6_ea53_3554_aac1),
-    ("below/off/auto-EntryDiscrete", 0x17c6_ea53_3554_aac1),
-    ("below/off/auto-MidDiscrete", 0x17c6_ea53_3554_aac1),
-    ("below/off/auto-HighDiscrete", 0x17c6_ea53_3554_aac1),
-    ("below/off/Low", 0x17c6_ea53_3554_aac1),
-    ("below/off/Medium", 0x17c6_ea53_3554_aac1),
-    ("below/off/High", 0x17c6_ea53_3554_aac1),
-    ("below/off/Ultra", 0x17c6_ea53_3554_aac1),
-    ("below/off/Custom", 0x17c6_ea53_3554_aac1),
-    ("odd/none/auto-Unknown", 0xcfe8_18ad_36d1_ef01),
-    ("odd/none/auto-Integrated", 0x83ed_e00e_4ead_a7f3),
-    ("odd/none/auto-EntryDiscrete", 0xcfe8_18ad_36d1_ef01),
-    ("odd/none/auto-MidDiscrete", 0x6f76_95ea_ddac_f2fc),
-    ("odd/none/auto-HighDiscrete", 0xad6c_0bfe_f1d1_69b2),
-    ("odd/none/Low", 0x83ed_e00e_4ead_a7f3),
-    ("odd/none/Medium", 0xcfe8_18ad_36d1_ef01),
-    ("odd/none/High", 0x6f76_95ea_ddac_f2fc),
-    ("odd/none/Ultra", 0xad6c_0bfe_f1d1_69b2),
-    ("odd/none/Custom", 0xe24c_3775_4668_1526),
-    ("odd/every/auto-Unknown", 0x035f_f943_dded_9ef1),
-    ("odd/every/auto-Integrated", 0x6d74_85c7_14a5_0f90),
-    ("odd/every/auto-EntryDiscrete", 0x035f_f943_dded_9ef1),
-    ("odd/every/auto-MidDiscrete", 0x7296_d3c1_230e_6066),
-    ("odd/every/auto-HighDiscrete", 0xe559_5509_afd8_bb69),
-    ("odd/every/Low", 0x6d74_85c7_14a5_0f90),
-    ("odd/every/Medium", 0x035f_f943_dded_9ef1),
-    ("odd/every/High", 0x7296_d3c1_230e_6066),
-    ("odd/every/Ultra", 0xe559_5509_afd8_bb69),
-    ("odd/every/Custom", 0xa5da_c859_a888_ddcf),
-    ("odd/off/auto-Unknown", 0x2f63_10d3_f264_ec84),
-    ("odd/off/auto-Integrated", 0x0ead_71ab_7061_a531),
-    ("odd/off/auto-EntryDiscrete", 0x2f63_10d3_f264_ec84),
-    ("odd/off/auto-MidDiscrete", 0xc154_5ab8_a8b9_2f48),
-    ("odd/off/auto-HighDiscrete", 0x8c89_01ed_a893_744d),
-    ("odd/off/Low", 0x0ead_71ab_7061_a531),
-    ("odd/off/Medium", 0x2f63_10d3_f264_ec84),
-    ("odd/off/High", 0xc154_5ab8_a8b9_2f48),
-    ("odd/off/Ultra", 0x8c89_01ed_a893_744d),
-    ("odd/off/Custom", 0xc3d8_42fc_07a4_eb79),
+    ("bare/none/auto-Unknown", 0xa267_9cdf_315e_ab16),
+    ("bare/none/auto-Integrated", 0x0b32_dbb2_2e58_cba7),
+    ("bare/none/auto-EntryDiscrete", 0xa267_9cdf_315e_ab16),
+    ("bare/none/auto-MidDiscrete", 0x3ca8_f71b_0a1c_7ef4),
+    ("bare/none/auto-HighDiscrete", 0x9808_3e64_1a34_de64),
+    ("bare/none/Low", 0x0b32_dbb2_2e58_cba7),
+    ("bare/none/Medium", 0xa267_9cdf_315e_ab16),
+    ("bare/none/High", 0x3ca8_f71b_0a1c_7ef4),
+    ("bare/none/Ultra", 0x9808_3e64_1a34_de64),
+    ("bare/none/Custom", 0x9808_3e64_1a34_de64),
+    ("bare/every/auto-Unknown", 0x6914_c4e7_a6a7_a3bf),
+    ("bare/every/auto-Integrated", 0x547e_abcf_2212_fbca),
+    ("bare/every/auto-EntryDiscrete", 0x6914_c4e7_a6a7_a3bf),
+    ("bare/every/auto-MidDiscrete", 0x1042_f35b_38a3_0fc6),
+    ("bare/every/auto-HighDiscrete", 0xc372_517a_2710_9eef),
+    ("bare/every/Low", 0x547e_abcf_2212_fbca),
+    ("bare/every/Medium", 0x6914_c4e7_a6a7_a3bf),
+    ("bare/every/High", 0x1042_f35b_38a3_0fc6),
+    ("bare/every/Ultra", 0xc372_517a_2710_9eef),
+    ("bare/every/Custom", 0xc372_517a_2710_9eef),
+    ("bare/off/auto-Unknown", 0xe389_46c5_cc7f_6125),
+    ("bare/off/auto-Integrated", 0x7cb9_bd5d_5ff4_8625),
+    ("bare/off/auto-EntryDiscrete", 0xe389_46c5_cc7f_6125),
+    ("bare/off/auto-MidDiscrete", 0x0aee_b680_f635_a52e),
+    ("bare/off/auto-HighDiscrete", 0x2f96_fddb_d473_0325),
+    ("bare/off/Low", 0x7cb9_bd5d_5ff4_8625),
+    ("bare/off/Medium", 0xe389_46c5_cc7f_6125),
+    ("bare/off/High", 0x0aee_b680_f635_a52e),
+    ("bare/off/Ultra", 0x2f96_fddb_d473_0325),
+    ("bare/off/Custom", 0x2f96_fddb_d473_0325),
+    ("defaults/none/auto-Unknown", 0xa267_9cdf_315e_ab16),
+    ("defaults/none/auto-Integrated", 0x0b32_dbb2_2e58_cba7),
+    ("defaults/none/auto-EntryDiscrete", 0xa267_9cdf_315e_ab16),
+    ("defaults/none/auto-MidDiscrete", 0x3ca8_f71b_0a1c_7ef4),
+    ("defaults/none/auto-HighDiscrete", 0x9808_3e64_1a34_de64),
+    ("defaults/none/Low", 0x0b32_dbb2_2e58_cba7),
+    ("defaults/none/Medium", 0xa267_9cdf_315e_ab16),
+    ("defaults/none/High", 0x3ca8_f71b_0a1c_7ef4),
+    ("defaults/none/Ultra", 0x9808_3e64_1a34_de64),
+    ("defaults/none/Custom", 0x9808_3e64_1a34_de64),
+    ("defaults/every/auto-Unknown", 0x03bb_f435_f9ad_b6f9),
+    ("defaults/every/auto-Integrated", 0x9b0b_7c87_ce3c_2e18),
+    ("defaults/every/auto-EntryDiscrete", 0x03bb_f435_f9ad_b6f9),
+    ("defaults/every/auto-MidDiscrete", 0xfe46_3715_5103_a1ba),
+    ("defaults/every/auto-HighDiscrete", 0x7c04_5e2d_7c4a_3bdd),
+    ("defaults/every/Low", 0x9b0b_7c87_ce3c_2e18),
+    ("defaults/every/Medium", 0x03bb_f435_f9ad_b6f9),
+    ("defaults/every/High", 0xfe46_3715_5103_a1ba),
+    ("defaults/every/Ultra", 0x7c04_5e2d_7c4a_3bdd),
+    ("defaults/every/Custom", 0x7c04_5e2d_7c4a_3bdd),
+    ("defaults/off/auto-Unknown", 0xe389_46c5_cc7f_6125),
+    ("defaults/off/auto-Integrated", 0x7cb9_bd5d_5ff4_8625),
+    ("defaults/off/auto-EntryDiscrete", 0xe389_46c5_cc7f_6125),
+    ("defaults/off/auto-MidDiscrete", 0x0aee_b680_f635_a52e),
+    ("defaults/off/auto-HighDiscrete", 0x2f96_fddb_d473_0325),
+    ("defaults/off/Low", 0x7cb9_bd5d_5ff4_8625),
+    ("defaults/off/Medium", 0xe389_46c5_cc7f_6125),
+    ("defaults/off/High", 0x0aee_b680_f635_a52e),
+    ("defaults/off/Ultra", 0x2f96_fddb_d473_0325),
+    ("defaults/off/Custom", 0x2f96_fddb_d473_0325),
+    ("above/none/auto-Unknown", 0x0c7b_ce1a_caea_b086),
+    ("above/none/auto-Integrated", 0x613d_4768_3721_ad98),
+    ("above/none/auto-EntryDiscrete", 0x0c7b_ce1a_caea_b086),
+    ("above/none/auto-MidDiscrete", 0x5244_e5ef_f93f_8309),
+    ("above/none/auto-HighDiscrete", 0x6b88_624a_3671_7d69),
+    ("above/none/Low", 0x613d_4768_3721_ad98),
+    ("above/none/Medium", 0x0c7b_ce1a_caea_b086),
+    ("above/none/High", 0x5244_e5ef_f93f_8309),
+    ("above/none/Ultra", 0x6b88_624a_3671_7d69),
+    ("above/none/Custom", 0xebf9_4c70_95e8_e179),
+    ("above/every/auto-Unknown", 0x7a36_08c8_7979_2d0e),
+    ("above/every/auto-Integrated", 0x167b_42ce_717c_36d1),
+    ("above/every/auto-EntryDiscrete", 0x7a36_08c8_7979_2d0e),
+    ("above/every/auto-MidDiscrete", 0x7261_03f6_c6d5_63e4),
+    ("above/every/auto-HighDiscrete", 0x1872_228f_04d6_a37e),
+    ("above/every/Low", 0x167b_42ce_717c_36d1),
+    ("above/every/Medium", 0x7a36_08c8_7979_2d0e),
+    ("above/every/High", 0x7261_03f6_c6d5_63e4),
+    ("above/every/Ultra", 0x1872_228f_04d6_a37e),
+    ("above/every/Custom", 0x9f54_fc1d_e9a6_6a54),
+    ("above/off/auto-Unknown", 0x57da_0e09_6c57_01d5),
+    ("above/off/auto-Integrated", 0x2ceb_a6e8_6f0e_4263),
+    ("above/off/auto-EntryDiscrete", 0x57da_0e09_6c57_01d5),
+    ("above/off/auto-MidDiscrete", 0x5570_1911_c0a5_895d),
+    ("above/off/auto-HighDiscrete", 0x2c75_c446_59d1_5235),
+    ("above/off/Low", 0x2ceb_a6e8_6f0e_4263),
+    ("above/off/Medium", 0x57da_0e09_6c57_01d5),
+    ("above/off/High", 0x5570_1911_c0a5_895d),
+    ("above/off/Ultra", 0x2c75_c446_59d1_5235),
+    ("above/off/Custom", 0xed6f_e113_0c89_28b9),
+    ("below/none/auto-Unknown", 0xc06d_1bc4_9333_95dc),
+    ("below/none/auto-Integrated", 0xb784_0850_67a2_0210),
+    ("below/none/auto-EntryDiscrete", 0xc06d_1bc4_9333_95dc),
+    ("below/none/auto-MidDiscrete", 0x8af9_ab70_7066_f814),
+    ("below/none/auto-HighDiscrete", 0x6cce_133b_50d3_3e76),
+    ("below/none/Low", 0xb784_0850_67a2_0210),
+    ("below/none/Medium", 0xc06d_1bc4_9333_95dc),
+    ("below/none/High", 0x8af9_ab70_7066_f814),
+    ("below/none/Ultra", 0x6cce_133b_50d3_3e76),
+    ("below/none/Custom", 0x6cce_133b_50d3_3e76),
+    ("below/every/auto-Unknown", 0x63ab_1c53_d4f8_c7a3),
+    ("below/every/auto-Integrated", 0xbdeb_5a9d_9a50_6a93),
+    ("below/every/auto-EntryDiscrete", 0x63ab_1c53_d4f8_c7a3),
+    ("below/every/auto-MidDiscrete", 0xad7b_21ff_7ada_3a7d),
+    ("below/every/auto-HighDiscrete", 0x296c_bb1d_3bc9_95bf),
+    ("below/every/Low", 0xbdeb_5a9d_9a50_6a93),
+    ("below/every/Medium", 0x63ab_1c53_d4f8_c7a3),
+    ("below/every/High", 0xad7b_21ff_7ada_3a7d),
+    ("below/every/Ultra", 0x296c_bb1d_3bc9_95bf),
+    ("below/every/Custom", 0x296c_bb1d_3bc9_95bf),
+    ("below/off/auto-Unknown", 0x61aa_3f40_849f_44c9),
+    ("below/off/auto-Integrated", 0x072a_02bf_d853_5835),
+    ("below/off/auto-EntryDiscrete", 0x61aa_3f40_849f_44c9),
+    ("below/off/auto-MidDiscrete", 0x0392_f58c_0fb0_29ab),
+    ("below/off/auto-HighDiscrete", 0x0b8a_19d0_19f2_3b71),
+    ("below/off/Low", 0x072a_02bf_d853_5835),
+    ("below/off/Medium", 0x61aa_3f40_849f_44c9),
+    ("below/off/High", 0x0392_f58c_0fb0_29ab),
+    ("below/off/Ultra", 0x0b8a_19d0_19f2_3b71),
+    ("below/off/Custom", 0x0b8a_19d0_19f2_3b71),
+    ("odd/none/auto-Unknown", 0xa00f_2988_2f25_23cd),
+    ("odd/none/auto-Integrated", 0x0ae3_7817_dd53_791e),
+    ("odd/none/auto-EntryDiscrete", 0xa00f_2988_2f25_23cd),
+    ("odd/none/auto-MidDiscrete", 0x8f5a_8f0a_568e_cb99),
+    ("odd/none/auto-HighDiscrete", 0x3e86_97b6_0368_689f),
+    ("odd/none/Low", 0x0ae3_7817_dd53_791e),
+    ("odd/none/Medium", 0xa00f_2988_2f25_23cd),
+    ("odd/none/High", 0x8f5a_8f0a_568e_cb99),
+    ("odd/none/Ultra", 0x3e86_97b6_0368_689f),
+    ("odd/none/Custom", 0xbcc8_ad36_1849_806b),
+    ("odd/every/auto-Unknown", 0xc598_f283_d2e3_6660),
+    ("odd/every/auto-Integrated", 0xef45_60c9_b8be_240f),
+    ("odd/every/auto-EntryDiscrete", 0xc598_f283_d2e3_6660),
+    ("odd/every/auto-MidDiscrete", 0x45c5_4780_b866_dac5),
+    ("odd/every/auto-HighDiscrete", 0xafe3_b77f_cecf_e786),
+    ("odd/every/Low", 0xef45_60c9_b8be_240f),
+    ("odd/every/Medium", 0xc598_f283_d2e3_6660),
+    ("odd/every/High", 0x45c5_4780_b866_dac5),
+    ("odd/every/Ultra", 0xafe3_b77f_cecf_e786),
+    ("odd/every/Custom", 0x2a8e_6403_a471_77ac),
+    ("odd/off/auto-Unknown", 0xa7e4_e397_7351_64ab),
+    ("odd/off/auto-Integrated", 0xd848_668b_13dd_23f1),
+    ("odd/off/auto-EntryDiscrete", 0xa7e4_e397_7351_64ab),
+    ("odd/off/auto-MidDiscrete", 0xe029_7697_315d_bdb4),
+    ("odd/off/auto-HighDiscrete", 0x0369_2962_5cbc_a659),
+    ("odd/off/Low", 0xd848_668b_13dd_23f1),
+    ("odd/off/Medium", 0xa7e4_e397_7351_64ab),
+    ("odd/off/High", 0xe029_7697_315d_bdb4),
+    ("odd/off/Ultra", 0x0369_2962_5cbc_a659),
+    ("odd/off/Custom", 0xb8d7_00ed_6940_a8e9),
 ];
 
 #[test]
 fn the_settings_chain_resolves_every_case_as_pinned() {
-    let actual = digests();
-    let listing = actual
-        .iter()
-        .fold(String::new(), |mut listing, (name, digest)| {
-            writeln!(listing, "    (\"{name}\", 0x{digest:016x}),").unwrap();
-            listing
-        });
-    let expected: Vec<(String, u64)> = EXPECTED
-        .iter()
-        .map(|(name, digest)| (name.to_string(), *digest))
-        .collect();
-    assert_eq!(actual.len(), 150);
+    let actual = cases();
+    assert_eq!(actual.len(), EXPECTED.len());
+    let mut changed = String::new();
+    let mut listing = String::new();
+    for ((name, text, digest), (expected_name, expected)) in actual.iter().zip(EXPECTED) {
+        assert_eq!(name, expected_name, "the case matrix changed order");
+        writeln!(listing, "    (\"{name}\", 0x{digest:016x}),").unwrap();
+        if digest != expected {
+            writeln!(changed, "{name} now resolves to:\n{text}\n").unwrap();
+        }
+    }
     assert!(
-        actual == expected,
-        "the resolved settings changed:\n{listing}"
+        changed.is_empty(),
+        "the resolved settings changed:\n{changed}\nre-pinned digests:\n{listing}"
     );
 }
 

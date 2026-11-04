@@ -131,6 +131,12 @@ impl SdfReload {
         }
         reports
     }
+
+    // Whether any request started a compile worker.
+    #[cfg(test)]
+    fn compiled_any(&self) -> bool {
+        self.compiles.submitted_any()
+    }
 }
 
 // The compiles a request asks for: every volume `pending` names, grouped by

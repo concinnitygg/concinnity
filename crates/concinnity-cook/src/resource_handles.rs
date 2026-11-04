@@ -34,21 +34,23 @@ impl RegisteredType {
     ) -> std::io::Result<Vec<u8>> {
         match self {
             Self::AudioClip => crate::compile::audio_clip::compile_audio_clip_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                .map_err(std::io::Error::from),
             Self::Texture => crate::compile::texture::compile_texture_payload(args, assets_dir)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::CubemapTexture => crate::compile::cubemap::compile_cubemap_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                .map_err(std::io::Error::from),
+            Self::CubemapTexture => {
+                crate::compile::cubemap::compile_cubemap_payload(args).map_err(std::io::Error::from)
+            }
             Self::EnvironmentMap => {
                 crate::compile::environment_map::compile_environment_map_payload(args, assets_dir)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                    .map_err(std::io::Error::from)
             }
             Self::ColorLut => {
                 crate::compile::color_lut::compile_color_lut_payload(args, assets_dir)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                    .map_err(std::io::Error::from)
             }
-            Self::Font => crate::compile::font::compile_font_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Self::Font => {
+                crate::compile::font::compile_font_payload(args).map_err(std::io::Error::from)
+            }
             Self::Material => compile_material_data(args)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
             Self::Mesh => crate::compile::mesh::compile_mesh_payload(args)
