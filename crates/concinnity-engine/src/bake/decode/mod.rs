@@ -13,5 +13,5 @@
 pub mod reader;
 pub mod size;
 
-pub use reader::ByteReader;
+pub use reader::{ByteReader, DecodeError};
 pub use size::checked_product;

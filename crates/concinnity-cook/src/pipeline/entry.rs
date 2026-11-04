@@ -3,9 +3,9 @@
 //! references, then compile and pack.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::platform::PlatformSet;
 use concinnity_engine::ecs::BlobAssetDef;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::platform::PlatformSet;
 use concinnity_host::thread::asset_id;
 use std::path::Path;
 
@@ -387,12 +387,12 @@ mod tests {
     use crate::authoring::registry::RegisteredType;
     use crate::pipeline::fixtures::{wja, write_fixture};
     use crate::pipeline::result::{MeshSourceInfo, TextureSourceInfo};
+    use concinnity_core::platform::Platform;
     use concinnity_engine::components::{
         HitRegion, KeyBinding, Material, Prop, ScreenCommand, Sprite, TextLabel, UiAction,
     };
     use concinnity_engine::ecs::asset_id::AssetId;
     use concinnity_engine::ecs::{MeshHandle, Ref};
-    use concinnity_engine::platform::Platform;
 
     #[test]
     fn build_pipeline_interns_names_and_resolves_refs() {

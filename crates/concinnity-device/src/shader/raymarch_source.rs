@@ -11,7 +11,7 @@
 // checkout, digests differently, and recompiles. A machine with no compiler
 // says so, naming the volume, rather than drawing nothing.
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_engine::render::backend::error::RenderError;
 use concinnity_engine::render::backend::error::RenderResult;

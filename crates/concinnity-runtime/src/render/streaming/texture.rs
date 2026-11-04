@@ -38,7 +38,7 @@ impl PayloadSource for MemPayloadSource {
             .payloads
             .get(id)
             .ok_or_else(|| format!("no payload for streamed texture {id}"))?;
-        texture::deserialize(bytes)
+        Ok(texture::deserialize(bytes)?)
     }
 }
 
@@ -73,7 +73,7 @@ impl PayloadSource for DiskPayloadSource {
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed texture {id}"))?;
         let bytes = super::file_range::read_at(&loc.path, loc.file_offset, loc.len)?;
-        texture::deserialize(&bytes)
+        Ok(texture::deserialize(&bytes)?)
     }
 }
 

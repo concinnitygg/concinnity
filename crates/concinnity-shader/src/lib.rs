@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 
 pub use stage::{Stage, stage_of};
 pub use vendored::vendored_releases;

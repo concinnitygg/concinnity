@@ -19,7 +19,7 @@ use std::path::Path;
 
 /// Per-blob entry in the lock file
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BlobEntry {
+pub(crate) struct BlobEntry {
     /// The blob file's path, relative to the build output.
     pub path: String,
     /// sha-256 of the blob file.
@@ -31,7 +31,7 @@ pub struct BlobEntry {
 /// The resolved build record written alongside the binary blobs
 /// Human-readable; owned by the build, not the user
 #[derive(Debug, Serialize, Deserialize)]
-pub struct BlobLock {
+pub(crate) struct BlobLock {
     /// Engine version the blob was built with; injected defaults come from the
     /// engine, so their content can change across versions.
     pub engine_version: String,
@@ -58,7 +58,7 @@ pub struct BlobLock {
 
 /// One asset as recorded in the lock file
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LockedAsset {
+pub(crate) struct LockedAsset {
     /// The asset's declared name.
     pub name: String,
     /// The dense interned id the build assigned this name. Lets a process that
@@ -78,7 +78,7 @@ pub struct LockedAsset {
 
 /// One injected asset as recorded in the lock file
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LockedInjection {
+pub(crate) struct LockedInjection {
     /// The injected asset's name.
     pub name: String,
     /// The asset's world line, `["Type", {args}]`, kept compact in the lock
@@ -91,12 +91,13 @@ pub struct LockedInjection {
 impl LockedInjection {
     fn new(injected: &crate::build_only::InjectedAsset) -> std::io::Result<Self> {
         use crate::authoring::world::{args_with_id, entry_line, is_label_of};
-        let args = if is_label_of(&injected.name, &injected.asset_type) {
+        let args = if is_label_of(&injected.name, injected.asset_type.as_str()) {
             injected.args.clone()
         } else {
             args_with_id(injected.args.clone(), &injected.name)
         };
-        let line = entry_line(&serde_json::json!({"type": injected.asset_type, "args": args}))?;
+        let line =
+            entry_line(&serde_json::json!({"type": injected.asset_type.as_str(), "args": args}))?;
         Ok(Self {
             name: injected.name.clone(),
             entry: serde_json::value::RawValue::from_string(line)?,
@@ -108,7 +109,7 @@ impl LockedInjection {
 /// One generated asset the world overrides with its own copy. Carries no args:
 /// the copy that won is the world.jsonl line of the same name.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct LockedShadow {
+pub(crate) struct LockedShadow {
     /// The shadowed asset's name.
     pub name: String,
     #[serde(rename = "type")]
@@ -123,7 +124,7 @@ pub struct LockedShadow {
 /// instead of a component discriminant. `payload_blob` is None for a data
 /// resource (bytes ride inline in the record).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LockedResource {
+pub(crate) struct LockedResource {
     /// The resource's declared name.
     pub name: String,
     /// The dense interned id the build assigned this name (the same id space
@@ -151,7 +152,7 @@ pub struct LockedResource {
 
 /// A texture resource's watchable file source as recorded in the lock file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LockedTextureSource {
+pub(crate) struct LockedTextureSource {
     /// Authored source path; empty when there is nothing to watch.
     pub source: String,
     /// Index of the image within the source document.
@@ -160,7 +161,7 @@ pub struct LockedTextureSource {
 
 /// A mesh resource's re-import inputs as recorded in the lock file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct LockedMeshSource {
+pub(crate) struct LockedMeshSource {
     /// Authored source path; empty when there is nothing to watch.
     pub source: String,
     /// Index of the primitive within the source document.
@@ -172,7 +173,7 @@ pub struct LockedMeshSource {
 }
 
 /// The result of a build pack: the blobs written and the path of each
-pub struct PackResult {
+pub(crate) struct PackResult {
     /// Path of each blob file written.
     pub blob_paths: Vec<String>,
 }
@@ -371,7 +372,7 @@ pub(crate) fn write_lock(
             .iter()
             .map(|s| LockedShadow {
                 name: s.name.clone(),
-                asset_type: s.asset_type.clone(),
+                asset_type: s.asset_type.as_str().to_string(),
                 generated_by: s.generated_by.clone(),
             })
             .collect(),
@@ -654,13 +655,13 @@ mod tests {
         }];
         let injected = vec![crate::build_only::InjectedAsset {
             name: "debug_hud".to_string(),
-            asset_type: "DebugHud".to_string(),
+            asset_type: crate::authoring::registry::RegisteredType::DebugHud,
             args: serde_json::json!({"enabled": true}),
             injected_by: "engine",
         }];
         let shadowed = vec![crate::build_only::ShadowedAsset {
             name: "bistro_mat_wood".to_string(),
-            asset_type: "Material".to_string(),
+            asset_type: crate::authoring::registry::RegisteredType::Material,
             generated_by: "bistro".to_string(),
             args: serde_json::json!({}),
         }];
@@ -903,7 +904,7 @@ mod tests {
             injected: vec![
                 LockedInjection::new(&crate::build_only::InjectedAsset {
                     name: "DebugHud#0".to_string(),
-                    asset_type: "DebugHud".to_string(),
+                    asset_type: crate::authoring::registry::RegisteredType::DebugHud,
                     args: serde_json::json!({}),
                     injected_by: "engine",
                 })

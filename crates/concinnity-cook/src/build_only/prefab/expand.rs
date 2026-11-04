@@ -155,7 +155,7 @@ fn resolve_generated(
             ));
         }
         let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
-        report.record_shadowed(&name, authored_type.as_str(), instance_name, args.clone());
+        report.record_shadowed(&name, authored_type, instance_name, args.clone());
         merges.push((name, args));
         return Ok(false);
     }
@@ -166,7 +166,9 @@ fn resolve_generated(
              instance or the prefab entry"
         ));
     }
-    report.record_generated(&name, &entry_type, instance_name);
+    if let Some(asset_type) = registered_type(entry) {
+        report.record_generated(&name, asset_type, instance_name);
+    }
     Ok(true)
 }
 

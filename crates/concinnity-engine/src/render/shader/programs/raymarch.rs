@@ -8,10 +8,10 @@
 use alloc::string::String;
 
 use crate::components::SdfVolume;
-use crate::platform::Platform;
 use crate::render::depth::DEPTH_NEAR;
 use crate::render::shader::source::{self, SourceFile, Splice};
 use crate::render::uniforms::RaymarchView;
+use concinnity_core::platform::Platform;
 
 /// The shader file every entry below compiles from.
 pub const FILE: &str = "raymarch.hlsl";

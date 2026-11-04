@@ -92,6 +92,13 @@ impl RenderError {
     }
 }
 
+/// A payload the backend was handed did not decode.
+impl From<crate::bake::decode::DecodeError> for RenderError {
+    fn from(error: crate::bake::decode::DecodeError) -> Self {
+        Self::Other(alloc::string::ToString::to_string(&error))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -70,7 +70,7 @@ impl MeshPayloadSource for DiskMeshSource {
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed mesh {id}"))?;
         let bytes = super::file_range::read_at(&self.path, loc.file_offset, loc.len)?;
-        decode_mesh(&bytes)
+        Ok(decode_mesh(&bytes)?)
     }
 }
 
@@ -105,10 +105,10 @@ impl MeshPayloadSource for SceneDeferredMeshSource {
     fn fetch(&self, id: usize) -> Result<DecodedMesh, String> {
         match self.deferred.get(&id) {
             None => self.base.fetch(id),
-            Some(DeferredMeshPayload::Bytes(bytes)) => decode_deferred_payload(bytes),
+            Some(DeferredMeshPayload::Bytes(bytes)) => Ok(decode_deferred_payload(bytes)?),
             Some(DeferredMeshPayload::Disk { path, offset, len }) => {
                 let bytes = super::file_range::read_at(path, *offset, *len)?;
-                decode_deferred_payload(&bytes)
+                Ok(decode_deferred_payload(&bytes)?)
             }
         }
     }

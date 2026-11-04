@@ -34,7 +34,7 @@
 // (anchoring it, locating `data/`, and naming the `assets/` a host passes as a
 // build's search root); `platform` is the shader-platform vocabulary a host
 // names the backend it cooks for with.
-pub use concinnity_engine::platform;
+pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 pub(crate) mod asset;
 pub mod asset_api;
@@ -44,7 +44,7 @@ pub(crate) mod asset_impls;
 /// build-only args schemas. Everything the cook reads before it compiles
 /// anything.
 pub mod authoring;
-pub mod blob;
+pub(crate) mod blob;
 /// The build-time expansion passes: one module per build-only asset type, plus
 /// preset loading and the build front-half orchestrator.
 pub mod build_only;
@@ -62,19 +62,20 @@ mod file_stamp;
 /// Source-file readers: the scene expansion and the container readers it
 /// dispatches into.
 pub mod import;
-pub mod pipeline;
-pub mod resource_handles;
+pub(crate) mod pipeline;
+pub(crate) mod resource_handles;
 #[cfg(test)]
 mod test_support;
-pub mod world_builder;
+pub(crate) mod world_builder;
 
 // Public build API: the entry points the CLI, the editor FFI, and the infra
 // server call. The runtime-side decode API stays in concinnity-engine.
 pub use authoring::world::WorldSource;
 pub use build_only::prepare_world;
 pub use pipeline::{
-    BuildProgress, BuildReport, BuildStage, PipelineResult, ProgressFn, ThumbnailReport,
-    build_compiled, build_compiled_with_progress, build_from_path, build_loaded,
-    build_pipeline_from_str, validate_asset, validate_world_jsonl, write_build_outputs,
+    BuildProgress, BuildReport, BuildStage, MeshSourceInfo, PipelineResult, ProgressFn,
+    TextureSourceInfo, ThumbnailReport, build_compiled, build_compiled_with_progress,
+    build_from_path, build_loaded, build_pipeline_from_str, validate_asset, validate_world_jsonl,
+    write_build_outputs,
 };
 pub use world_builder::{WorldBuildError, WorldBuilder, world};

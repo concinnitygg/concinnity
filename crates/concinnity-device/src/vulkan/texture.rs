@@ -1392,8 +1392,7 @@ fn create_cube_image(
     let mut mip_sizes: Vec<usize> = Vec::with_capacity(mip_count as usize);
     let mut total: usize = 0;
     for (m, bytes) in mip_bytes.iter().enumerate() {
-        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, m)
-            .map_err(RenderError::Other)?;
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, m)?;
         if bytes.len() < needed {
             return Err(RenderError::Other(format!(
                 "cubemap mip {} too short: {} bytes, need {}",

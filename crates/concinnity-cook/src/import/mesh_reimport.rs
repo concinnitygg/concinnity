@@ -71,7 +71,7 @@ pub fn decode_mesh_from_parsed_glb(
         "lod_distances": lod_distances,
     });
     let payload = compile_mesh_payload(&args)?;
-    deserialize_with_lods(&payload)
+    Ok(deserialize_with_lods(&payload)?)
 }
 
 /// A skinned mesh re-imported to its inline (authored) form: the fields the

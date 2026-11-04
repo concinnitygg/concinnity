@@ -12,7 +12,7 @@ include!(concat!(env!("OUT_DIR"), "/engine_metallibs.rs"));
 #[cfg(test)]
 mod tests {
     use super::embedded_metallib;
-    use concinnity_engine::platform::Platform;
+    use concinnity_core::platform::Platform;
     use concinnity_engine::render::shader::programs::metal::TABLE;
 
     // A shader the build script always compiles when the Metal toolchain is

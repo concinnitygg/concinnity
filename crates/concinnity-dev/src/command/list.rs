@@ -315,18 +315,18 @@ mod tests {
             assets: Vec::new(),
             injected: vec![concinnity_cook::build_only::InjectedAsset {
                 name: "debug_hud".to_string(),
-                asset_type: "DebugHud".to_string(),
+                asset_type: RegisteredType::DebugHud,
                 args: serde_json::json!({}),
                 injected_by: "debug_hud",
             }],
             generated: vec![concinnity_cook::build_only::GeneratedAsset {
                 name: "bistro_mat_wood".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: RegisteredType::Material,
                 generated_by: "bistro".to_string(),
             }],
             shadowed: vec![concinnity_cook::build_only::ShadowedAsset {
                 name: "bistro_mat_glass".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: RegisteredType::Material,
                 generated_by: "bistro".to_string(),
                 args: serde_json::json!({}),
             }],

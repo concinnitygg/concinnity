@@ -139,7 +139,7 @@ mod tests {
         let result = build_pipeline_from_str(
             world,
             None,
-            concinnity_engine::platform::Platform::Metal.into(),
+            concinnity_core::platform::Platform::Metal.into(),
         )
         .expect("build");
         let bytes = result

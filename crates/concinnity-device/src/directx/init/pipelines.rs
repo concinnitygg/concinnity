@@ -35,7 +35,7 @@ pub(in crate::directx) fn world_entry(
     hot_reload: bool,
 ) -> RenderResult<Vec<u8>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_engine::platform::Platform::DirectX,
+        platform: concinnity_core::platform::Platform::DirectX,
         hot_reload,
     };
     crate::shader::surface_source::artifact(world, program, req, crate::shader::compile::cooked)

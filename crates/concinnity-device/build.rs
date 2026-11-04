@@ -19,7 +19,7 @@
 //! 5. Derive the hash of the shader-compile sources that `shader_cache` folds
 //!    into every artifact key (see `emit_shader_compile_source_hash`).
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::shader::programs::metal::bindless_textures;
 use concinnity_engine::render::shader::programs::{
     ShaderProgram, Table, commands, dx, metal, shared, spd,

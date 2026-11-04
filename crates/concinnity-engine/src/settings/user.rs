@@ -13,10 +13,10 @@ use core::fmt;
 use crate::components::{
     AaMode, PassResolution, ShadowUpdate, UpscaleQuality, UpscalerBackend, WindowMode,
 };
-use crate::platform::Platform;
 use crate::render::output::dlss::DlssPreset;
 use crate::settings::SettingKey;
 use crate::settings::quality::QualityPreset;
+use concinnity_core::platform::Platform;
 
 /// Persisted overrides for graphics settings. Missing fields stay `None` and
 /// fall back to the world's settings assets and `Window`.

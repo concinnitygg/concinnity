@@ -1,10 +1,10 @@
 use super::scan::{defines_helper, identifiers, strip_comments, struct_fields};
 use super::*;
-use crate::platform::Platform;
 use crate::render::shader::programs::surface;
 use crate::render::shader::source;
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
+use concinnity_core::platform::Platform;
 
 #[test]
 fn names_are_unique_within_their_owner() {

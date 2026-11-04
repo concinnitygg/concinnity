@@ -29,8 +29,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use concinnity_core::fnv::Fnv1a;
 
-use crate::platform::Platform;
 use crate::render::shader::embedded;
+use concinnity_core::platform::Platform;
 
 /// The shared fragments, as (marker, file). A shader carrying a marker has the
 /// named file's text spliced in at that point.

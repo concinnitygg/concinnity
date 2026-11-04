@@ -1309,7 +1309,7 @@ fn every_other_row_changes_only_itself_live_and_at_the_next_launch() {
 fn a_launch_flag_value_is_never_saved() {
     use super::init_tests::retina_launch;
     use crate::launch::{LaunchArgs, LaunchRequest};
-    use crate::platform::Platform;
+    use concinnity_core::platform::Platform;
 
     let mut launch = retina_launch();
     launch.request = LaunchRequest {
@@ -1634,8 +1634,8 @@ fn step_drains_into_the_op_queue_and_reparks() {
 // once. A newer choice still untried survives for the next launch to try.
 #[test]
 fn a_drawn_frame_confirms_the_trial_graphics_api() {
-    use crate::platform::{GraphicsApiStatus, Platform};
     use crate::settings::GraphicsApiTrial;
+    use concinnity_core::platform::{GraphicsApiStatus, Platform};
     let run = |trial: GraphicsApiTrial, confirm_pending: bool| {
         let mut world = World::new();
         let mut stored = StoredSettings::default();

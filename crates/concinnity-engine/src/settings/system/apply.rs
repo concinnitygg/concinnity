@@ -15,10 +15,10 @@ use alloc::vec::Vec;
 
 use super::SettingsState;
 use super::rows::{set_label_content, set_rows_grayed, set_sprite_x};
-use crate::platform::{CompiledPlatforms, GraphicsApiStatus};
 use crate::settings::registry::{self, SliderSetting, SliderTarget};
 use crate::settings::rows::{quality_cycle, quality_toggle};
 use crate::settings::{self, SettingKey, StoredSettings, UserGraphicsSettings, levels};
+use concinnity_core::platform::{CompiledPlatforms, GraphicsApiStatus};
 
 // A cycle row's option labels.
 pub(super) type RowOptions = &'static [&'static str];

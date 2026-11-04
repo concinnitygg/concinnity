@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use concinnity_core::platform::PlatformSet;
 use concinnity_engine::ecs::{ComponentAsset, ResourceRecord, World};
-use concinnity_engine::platform::PlatformSet;
 use concinnity_host::store::blob::BlobData;
 
 use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
@@ -328,7 +328,7 @@ mod tests {
     // a backend the compile never reaches; Metal is what the rest of this
     // crate's tests name.
     fn builder() -> WorldBuilder {
-        world(concinnity_engine::platform::Platform::Metal)
+        world(concinnity_core::platform::Platform::Metal)
     }
 
     // The typed path: authored structs instead of string-keyed specs, across

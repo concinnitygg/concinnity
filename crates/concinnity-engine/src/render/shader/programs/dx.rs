@@ -56,7 +56,7 @@ pub fn shader_model_6_5(program: &ShaderProgram) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::Platform;
+    use concinnity_core::platform::Platform;
 
     // SM 6.5 is a ray-tracing requirement, so a program asking for it must
     // reach a `RayQuery`. A 6.0 program reaching one is dxc's to catch, and

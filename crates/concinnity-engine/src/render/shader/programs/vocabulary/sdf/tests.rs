@@ -1,11 +1,11 @@
 use super::super::scan::{defines_helper, identifiers, strip_comments, struct_fields};
 use super::*;
-use crate::platform::Platform;
 use crate::render::shader::programs::raymarch::{self, Family};
 use crate::render::shader::source::SourceFile;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
+use concinnity_core::platform::Platform;
 
 #[test]
 fn names_are_unique_within_their_struct() {

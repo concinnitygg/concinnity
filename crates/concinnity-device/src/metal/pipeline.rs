@@ -72,7 +72,7 @@ fn world_msl<'a>(
     hot_reload: bool,
 ) -> RenderResult<Cow<'a, [u8]>> {
     let req = crate::shader::surface_source::Request {
-        platform: concinnity_engine::platform::Platform::Metal,
+        platform: concinnity_core::platform::Platform::Metal,
         hot_reload,
     };
     crate::shader::surface_source::artifact(programs, program, req, crate::shader::compile::cooked)

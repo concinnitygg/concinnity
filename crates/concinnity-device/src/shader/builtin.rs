@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 
 #[cfg(any(backend_dx, backend_vk))]
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
 #[cfg(any(backend_dx, backend_vk))]
 use concinnity_engine::render::shader::programs::{ShaderProgram, Variant};

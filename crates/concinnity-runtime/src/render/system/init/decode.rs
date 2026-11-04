@@ -381,7 +381,10 @@ impl GraphicsSystem {
             };
             match ctx.read_payload(&locator) {
                 Ok(bytes) => {
-                    match texture::deserialize(bytes).and_then(texture::TextureImage::into_rgba8) {
+                    match texture::deserialize(bytes)
+                        .map_err(String::from)
+                        .and_then(texture::TextureImage::into_rgba8)
+                    {
                         Ok(atlas) => pool.push_sprite(tex_id, atlas),
                         Err(e) => {
                             tracing::warn!("GraphicsSystem: sprite texture {:?}: {}", tex_id, e);

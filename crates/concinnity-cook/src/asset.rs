@@ -10,8 +10,8 @@
 //! concinnity-engine, since the engine selects a Shader stage's source with it at
 //! runtime.
 
+use concinnity_core::platform::PlatformSet;
 use concinnity_engine::ecs::Component;
-use concinnity_engine::platform::PlatformSet;
 use std::path::Path;
 
 use crate::authoring::world::WorldJsonlAsset;

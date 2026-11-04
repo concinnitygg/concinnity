@@ -3,7 +3,7 @@
 // a compiler, a content-addressed cache, or a filesystem for, over the
 // declarations it brings into the backend's scope.
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
 pub(super) use concinnity_engine::render::shader::programs::commands::CULL_SCATTER;
 pub(super) use concinnity_engine::render::shader::programs::shared::*;

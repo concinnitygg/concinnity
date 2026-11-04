@@ -217,7 +217,7 @@ pub(crate) fn build_world_file_as(
 // fewer backends than this `cn`.
 pub(crate) fn build_world_file_for(
     json_path: &str,
-    targets: concinnity_engine::platform::PlatformSet,
+    targets: concinnity_core::platform::PlatformSet,
 ) -> std::io::Result<()> {
     build_world(json_path, json_path, Verbosity::Normal, targets)
 }
@@ -226,7 +226,7 @@ fn build_world(
     json_path: &str,
     shown: &str,
     verbosity: Verbosity,
-    targets: concinnity_engine::platform::PlatformSet,
+    targets: concinnity_core::platform::PlatformSet,
 ) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;

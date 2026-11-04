@@ -40,7 +40,7 @@ pub mod bake;
 pub mod source;
 pub mod stars;
 
-use crate::bake::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, DecodeError, checked_product};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -92,13 +92,14 @@ pub fn check_sizes(map: &crate::components::EnvironmentMap) -> Result<(), String
 /// # Errors
 ///
 /// Returns an error if mip `mip` would have no texels or its size overflows.
-pub fn cube_mip_byte_len(face_size: u32, mip: usize) -> Result<usize, String> {
+pub fn cube_mip_byte_len(face_size: u32, mip: usize) -> Result<usize, DecodeError> {
     let face = face_size
         .checked_shr(u32::saturating_from(mip))
         .unwrap_or(0) as usize;
     if face == 0 {
-        return Err(format!(
-            "cube mip {mip} has no texels (face size {face_size})"
+        return Err(DecodeError::invalid(
+            "environment map",
+            format!("cube mip {mip} has no texels (face size {face_size})"),
         ));
     }
     checked_product("cube mip", &[6, face, face, 16])
@@ -170,7 +171,7 @@ pub struct EnvMapView<'a> {
 // to the GPU without copying. Called by every backend at init time, and by
 // the Metal hot-reload path via `update_environment_map`.
 // Bytes the six RGBA32F faces of a cube with edge length `edge` occupy.
-fn cube_face_bytes(label: &str, edge: u32) -> Result<usize, String> {
+fn cube_face_bytes(label: &'static str, edge: u32) -> Result<usize, DecodeError> {
     checked_product(label, &[6, edge as usize, edge as usize, 4, 4])
 }
 
@@ -180,33 +181,40 @@ fn cube_face_bytes(label: &str, edge: u32) -> Result<usize, String> {
 ///
 /// Returns an error if `bytes` is not an RGBA32F environment-map payload,
 /// declares an invalid mip count, or is too short for its faces.
-pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
+pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, DecodeError> {
     let mut r = ByteReader::open_payload(
         bytes,
         ENVMAP_PAYLOAD_MAGIC,
         ENVMAP_PAYLOAD_HEADER_BYTES,
-        "envmap",
+        "environment map",
     )?;
     let format = r.u32()?;
     if format != ENVMAP_FORMAT_RGBA32F {
-        return Err(format!("envmap format_id {format} unsupported"));
+        return Err(DecodeError::invalid(
+            "environment map",
+            format!("format_id {format} unsupported"),
+        ));
     }
     let irradiance_face = r.u32()?;
     let prefilter_face = r.u32()?;
     let prefilter_mips = r.u32()?;
     if prefilter_mips == 0 || prefilter_mips > 12 {
-        return Err(format!(
-            "envmap prefilter_mips {prefilter_mips} out of range"
+        return Err(DecodeError::invalid(
+            "environment map",
+            format!("prefilter_mips {prefilter_mips} out of range"),
         ));
     }
     // Face edges are payload-supplied, so each section's footprint is checked
     // before it is used as a length. The seek skips the header's trailing pad.
     r.seek(ENVMAP_PAYLOAD_HEADER_BYTES)?;
-    let irradiance_bytes = r.take(cube_face_bytes("envmap irradiance", irradiance_face)?)?;
+    let irradiance_bytes = r.take(cube_face_bytes(
+        "environment map irradiance",
+        irradiance_face,
+    )?)?;
     let mut prefilter_mip_bytes = Vec::with_capacity(prefilter_mips as usize);
     for mip in 0..prefilter_mips {
         let edge = prefilter_face >> mip;
-        let mip_size = cube_face_bytes("envmap prefilter mip", edge)?;
+        let mip_size = cube_face_bytes("environment map prefilter mip", edge)?;
         prefilter_mip_bytes.push(r.take(mip_size)?);
     }
     Ok(EnvMapView {
@@ -222,6 +230,7 @@ pub fn deserialize(bytes: &[u8]) -> Result<EnvMapView<'_>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn cube_mips_halve_and_a_vanished_mip_is_an_error() {
@@ -296,7 +305,7 @@ mod tests {
         let mut bytes = header_only(4, 8, 2);
         bytes.extend(core::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4 - 8));
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("unexpected end"), "{}", err);
+        assert!(err.to_string().contains("unexpected end"), "{}", err);
     }
 
     #[test]
@@ -306,7 +315,7 @@ mod tests {
         bytes.extend(core::iter::repeat_n(0u8, 6 * 8 * 8 * 4 * 4));
         // Second mip (4x4 faces) is missing entirely.
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("unexpected end"), "{}", err);
+        assert!(err.to_string().contains("unexpected end"), "{}", err);
     }
 
     // A face edge near u32::MAX makes `6 * edge * edge * 16` wrap; the wrapped
@@ -316,7 +325,7 @@ mod tests {
     fn rejects_an_irradiance_face_that_overflows_its_footprint() {
         let bytes = header_only(u32::MAX, 8, 2);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("overflow"), "{}", err);
+        assert!(err.to_string().contains("overflow"), "{}", err);
     }
 
     #[test]
@@ -324,7 +333,7 @@ mod tests {
         let mut bytes = header_only(4, u32::MAX, 2);
         bytes.extend(core::iter::repeat_n(0u8, 6 * 4 * 4 * 4 * 4));
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("overflow"), "{}", err);
+        assert!(err.to_string().contains("overflow"), "{}", err);
     }
 
     #[test]

@@ -38,7 +38,7 @@ mod mirror;
 mod mirrors;
 mod programs;
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use mirror::Case;
 use programs::Program;
 

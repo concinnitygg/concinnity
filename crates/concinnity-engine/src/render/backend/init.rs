@@ -13,7 +13,6 @@ use crate::gfx::render_types::{
     AreaLightData, DrawObject, GpuLight, GpuMaterialParams, InstancedCluster, LightUniforms,
     SpotShadowData, clone_reserve,
 };
-use crate::platform::Platform;
 use crate::render::backend::RenderBackend;
 use crate::render::decal::DecalRecord;
 use crate::render::environment::volumetric_fog::FogSettings;
@@ -24,6 +23,7 @@ use crate::water::ocean::OceanQuality;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use concinnity_core::platform::Platform;
 
 /// Static scene geometry and the draw lists built over it.
 pub struct SceneData<'a> {

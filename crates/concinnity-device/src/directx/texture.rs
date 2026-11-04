@@ -1584,8 +1584,7 @@ fn upload_cube_resource(
     mip_count: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)
-        .map_err(RenderError::Other)?;
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)?;
     if mip_count == 1 && bytes.len() < needed {
         return Err(RenderError::Other(format!(
             "cubemap data too short for face_size {}: {} bytes, need {}",
@@ -1668,8 +1667,7 @@ fn upload_face_major_into_cube(
         )));
     }
     for (mip, slab) in mip_bytes.iter().enumerate().take(mip_count as usize) {
-        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)
-            .map_err(RenderError::Other)?;
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)?;
         if slab.len() < needed {
             return Err(RenderError::Other(format!(
                 "cube upload mip {mip} too short: {} bytes, need {needed}",

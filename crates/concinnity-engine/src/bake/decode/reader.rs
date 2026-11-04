@@ -4,8 +4,119 @@
 //! integer goes through `array`, which yields an owned `[u8; N]` and removes
 //! the `try_into().unwrap()` that hand-rolled cursors need.
 
-use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+/// Why a payload did not decode, naming the payload kind (or, for an
+/// overflow, what was being sized) it was reading.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DecodeError {
+    /// The buffer is shorter than the payload's fixed header.
+    #[error("{payload} payload too short: {len} bytes (need at least {need} for header)")]
+    ShortHeader {
+        /// The payload kind.
+        payload: &'static str,
+        /// The buffer's length.
+        len: usize,
+        /// The header's length.
+        need: usize,
+    },
+    /// The payload does not open with its kind's magic number.
+    #[error("{payload} payload magic 0x{found:08x} does not match expected 0x{expected:08x}")]
+    BadMagic {
+        /// The payload kind.
+        payload: &'static str,
+        /// The number found.
+        found: u32,
+        /// The number expected.
+        expected: u32,
+    },
+    /// The bytes at the cursor are not the tag the format places there.
+    #[error("{payload} tag {found:02x?} does not match expected {expected:02x?}")]
+    BadTag {
+        /// The payload kind.
+        payload: &'static str,
+        /// The bytes found.
+        found: Vec<u8>,
+        /// The tag expected.
+        expected: Vec<u8>,
+    },
+    /// A read ran past the end of the buffer.
+    #[error("unexpected end of {payload}: need {need} bytes at offset {offset}, have {len}")]
+    Truncated {
+        /// The payload kind.
+        payload: &'static str,
+        /// Bytes the read wanted.
+        need: usize,
+        /// Where the read started.
+        offset: usize,
+        /// The buffer's length.
+        len: usize,
+    },
+    /// A declared length overflowed before it could be checked.
+    #[error("{payload} length overflow reading {need} bytes at offset {offset}")]
+    LengthOverflow {
+        /// The payload kind.
+        payload: &'static str,
+        /// Bytes the read wanted.
+        need: usize,
+        /// Where the read started.
+        offset: usize,
+    },
+    /// A seek named an offset past the end of the buffer.
+    #[error("{payload} seek to offset {offset} past end of {len} bytes")]
+    SeekPastEnd {
+        /// The payload kind.
+        payload: &'static str,
+        /// The offset sought.
+        offset: usize,
+        /// The buffer's length.
+        len: usize,
+    },
+    /// A size computed from declared dimensions overflowed.
+    #[error("{what} size overflow in {factors:?}")]
+    SizeOverflow {
+        /// What was being sized.
+        what: &'static str,
+        /// The factors whose product overflowed.
+        factors: Vec<usize>,
+    },
+    /// An offset computed from declared lengths overflowed.
+    #[error("{what} offset overflow in {terms:?}")]
+    OffsetOverflow {
+        /// What was being placed.
+        what: &'static str,
+        /// The terms whose sum overflowed.
+        terms: Vec<usize>,
+    },
+    /// The bytes read but do not describe a valid payload.
+    #[error("{payload}: {message}")]
+    Invalid {
+        /// The payload kind.
+        payload: &'static str,
+        /// What is wrong with it.
+        message: String,
+    },
+}
+
+impl DecodeError {
+    /// A payload whose bytes read but whose contents are not valid.
+    pub fn invalid(payload: &'static str, message: impl Into<String>) -> Self {
+        Self::Invalid {
+            payload,
+            message: message.into(),
+        }
+    }
+}
+
+/// A bridge for the decoders that still report failures as text (cook's
+/// image codecs and color LUT reader, mesh reimport, the runtime's streaming
+/// sources), so they can read through a typed reader with `?`.
+impl From<DecodeError> for String {
+    fn from(error: DecodeError) -> Self {
+        error.to_string()
+    }
+}
 
 /// Reader over `bytes`, tracking a cursor and the payload name used in errors.
 #[derive(Debug, Clone)]
@@ -16,6 +127,11 @@ pub struct ByteReader<'a> {
 }
 
 impl<'a> ByteReader<'a> {
+    /// The payload kind this reader names in its errors.
+    pub fn label(&self) -> &'static str {
+        self.label
+    }
+
     /// A reader positioned at the start of `bytes`. `label` names the payload
     /// kind in every error this reader produces.
     pub fn new(bytes: &'a [u8], label: &'static str) -> Self {
@@ -40,21 +156,22 @@ impl<'a> ByteReader<'a> {
         magic: u32,
         header_bytes: usize,
         label: &'static str,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, DecodeError> {
         if bytes.len() < header_bytes {
-            return Err(format!(
-                "{} payload too short: {} bytes (need at least {} for header)",
-                label,
-                bytes.len(),
-                header_bytes
-            ));
+            return Err(DecodeError::ShortHeader {
+                payload: label,
+                len: bytes.len(),
+                need: header_bytes,
+            });
         }
         let mut r = Self::new(bytes, label);
         let found = r.u32()?;
         if found != magic {
-            return Err(format!(
-                "{label} payload magic 0x{found:08x} does not match expected 0x{magic:08x}"
-            ));
+            return Err(DecodeError::BadMagic {
+                payload: label,
+                found,
+                expected: magic,
+            });
         }
         Ok(r)
     }
@@ -84,28 +201,27 @@ impl<'a> ByteReader<'a> {
     /// # Errors
     ///
     /// Returns an error if fewer than `n` bytes remain.
-    pub fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self.pos.checked_add(n).ok_or_else(|| {
-            format!(
-                "{} length overflow reading {} bytes at offset {}",
-                self.label, n, self.pos
-            )
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8], DecodeError> {
+        let end = self.pos.checked_add(n).ok_or(DecodeError::LengthOverflow {
+            payload: self.label,
+            need: n,
+            offset: self.pos,
         })?;
-        let out = self.bytes.get(self.pos..end).ok_or_else(|| {
-            format!(
-                "unexpected end of {}: need {} bytes at offset {}, have {}",
-                self.label,
-                n,
-                self.pos,
-                self.bytes.len()
-            )
-        })?;
+        let out = self
+            .bytes
+            .get(self.pos..end)
+            .ok_or(DecodeError::Truncated {
+                payload: self.label,
+                need: n,
+                offset: self.pos,
+                len: self.bytes.len(),
+            })?;
         self.pos = end;
         Ok(out)
     }
 
     /// Consume exactly `N` bytes as an owned array, ready for `from_le_bytes`.
-    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], String> {
+    pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
         let mut out = [0u8; N];
         out.copy_from_slice(self.take(N)?);
         Ok(out)
@@ -113,12 +229,12 @@ impl<'a> ByteReader<'a> {
 
     /// Read one byte.
     #[cfg(test)]
-    pub(crate) fn u8(&mut self) -> Result<u8, String> {
+    pub(crate) fn u8(&mut self) -> Result<u8, DecodeError> {
         Ok(u8::from_le_bytes(self.array::<1>()?))
     }
 
     /// Read a little-endian `u16`.
-    pub(crate) fn u16(&mut self) -> Result<u16, String> {
+    pub(crate) fn u16(&mut self) -> Result<u16, DecodeError> {
         Ok(u16::from_le_bytes(self.array::<2>()?))
     }
 
@@ -127,28 +243,28 @@ impl<'a> ByteReader<'a> {
     /// # Errors
     ///
     /// Returns an error if fewer than four bytes remain.
-    pub fn u32(&mut self) -> Result<u32, String> {
+    pub fn u32(&mut self) -> Result<u32, DecodeError> {
         Ok(u32::from_le_bytes(self.array::<4>()?))
     }
 
     /// Read a little-endian `u64`.
     #[cfg(test)]
-    pub(crate) fn u64(&mut self) -> Result<u64, String> {
+    pub(crate) fn u64(&mut self) -> Result<u64, DecodeError> {
         Ok(u64::from_le_bytes(self.array::<8>()?))
     }
 
     /// Read a little-endian `i32`.
-    pub(crate) fn i32(&mut self) -> Result<i32, String> {
+    pub(crate) fn i32(&mut self) -> Result<i32, DecodeError> {
         Ok(i32::from_le_bytes(self.array::<4>()?))
     }
 
     /// Read a little-endian `f32`.
-    pub(crate) fn f32(&mut self) -> Result<f32, String> {
+    pub(crate) fn f32(&mut self) -> Result<f32, DecodeError> {
         Ok(f32::from_le_bytes(self.array::<4>()?))
     }
 
     /// Advance past `n` bytes without returning them.
-    pub(crate) fn skip(&mut self, n: usize) -> Result<(), String> {
+    pub(crate) fn skip(&mut self, n: usize) -> Result<(), DecodeError> {
         self.take(n).map(|_| ())
     }
 
@@ -157,14 +273,13 @@ impl<'a> ByteReader<'a> {
     /// # Errors
     ///
     /// Returns an error if `pos` is past the end of the buffer.
-    pub fn seek(&mut self, pos: usize) -> Result<(), String> {
+    pub fn seek(&mut self, pos: usize) -> Result<(), DecodeError> {
         if pos > self.bytes.len() {
-            return Err(format!(
-                "{} seek to offset {} past end of {} bytes",
-                self.label,
-                pos,
-                self.bytes.len()
-            ));
+            return Err(DecodeError::SeekPastEnd {
+                payload: self.label,
+                offset: pos,
+                len: self.bytes.len(),
+            });
         }
         self.pos = pos;
         Ok(())
@@ -178,15 +293,19 @@ impl<'a> ByteReader<'a> {
             .is_some_and(|b| b == magic)
     }
 
-    // Consume `magic`, or report that the buffer does not start with it.
-    #[cfg(test)]
-    pub(crate) fn expect_magic(&mut self, magic: &[u8]) -> Result<(), String> {
+    /// Consume `tag`, or report that the bytes at the cursor are not it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bytes at the cursor are not `tag`.
+    pub fn expect_tag(&mut self, magic: &[u8]) -> Result<(), DecodeError> {
         let found = self.take(magic.len())?;
         if found != magic {
-            return Err(format!(
-                "{} magic {:02x?} does not match expected {:02x?}",
-                self.label, found, magic
-            ));
+            return Err(DecodeError::BadTag {
+                payload: self.label,
+                found: found.to_vec(),
+                expected: magic.to_vec(),
+            });
         }
         Ok(())
     }
@@ -241,8 +360,12 @@ mod tests {
         let buf = [1u8, 2, 3];
         let mut r = reader(&buf);
         let err = r.take(4).unwrap_err();
-        assert!(err.contains("unexpected end of test"), "{}", err);
-        assert!(err.contains("have 3"), "{}", err);
+        assert!(
+            err.to_string().contains("unexpected end of test"),
+            "{}",
+            err
+        );
+        assert!(err.to_string().contains("have 3"), "{}", err);
     }
 
     // A declared length near usize::MAX must not wrap the cursor arithmetic
@@ -253,7 +376,7 @@ mod tests {
         let mut r = reader(&buf);
         r.skip(2).unwrap();
         let err = r.take(usize::MAX).unwrap_err();
-        assert!(err.contains("length overflow"), "{}", err);
+        assert!(err.to_string().contains("length overflow"), "{}", err);
     }
 
     #[test]
@@ -291,7 +414,7 @@ mod tests {
         assert!(r.peek(b"CNB\0"));
         assert!(!r.peek(b"XXXX"));
         assert_eq!(r.position(), 0);
-        r.expect_magic(b"CNB\0").unwrap();
+        r.expect_tag(b"CNB\0").unwrap();
         assert_eq!(r.position(), 4);
     }
 
@@ -303,18 +426,18 @@ mod tests {
     }
 
     #[test]
-    fn expect_magic_reports_mismatch() {
+    fn expect_tag_reports_mismatch() {
         let buf = *b"XXXXrest";
         let mut r = reader(&buf);
-        let err = r.expect_magic(b"CNB\0").unwrap_err();
-        assert!(err.contains("does not match"), "{}", err);
+        let err = r.expect_tag(b"CNB\0").unwrap_err();
+        assert!(err.to_string().contains("does not match"), "{}", err);
     }
 
     #[test]
-    fn expect_magic_on_short_buffer_errors() {
+    fn expect_tag_on_short_buffer_errors() {
         let buf = *b"CN";
         let mut r = reader(&buf);
-        assert!(r.expect_magic(b"CNB\0").is_err());
+        assert!(r.expect_tag(b"CNB\0").is_err());
     }
 
     #[test]
@@ -349,14 +472,14 @@ mod tests {
     fn open_payload_rejects_a_short_header() {
         let bytes = tagged(&[7]);
         let err = ByteReader::open_payload(&bytes, MAGIC, 12, "test").unwrap_err();
-        assert!(err.contains("too short"), "{}", err);
+        assert!(err.to_string().contains("too short"), "{}", err);
     }
 
     #[test]
     fn open_payload_rejects_a_wrong_magic() {
         let bytes = tagged(&[7, 8]);
         let err = ByteReader::open_payload(&bytes, 0xDEAD_BEEF, 12, "test").unwrap_err();
-        assert!(err.contains("magic"), "{}", err);
+        assert!(err.to_string().contains("magic"), "{}", err);
     }
 
     // The header length guard has to run before the magic read, so an empty
@@ -364,7 +487,7 @@ mod tests {
     #[test]
     fn open_payload_on_an_empty_buffer_reports_a_short_header() {
         let err = ByteReader::open_payload(&[], MAGIC, 12, "test").unwrap_err();
-        assert!(err.contains("too short"), "{}", err);
+        assert!(err.to_string().contains("too short"), "{}", err);
     }
 
     #[test]
@@ -373,5 +496,32 @@ mod tests {
         assert!(r.is_empty());
         assert_eq!(r.remainder(), &[] as &[u8]);
         assert!(r.u8().is_err());
+    }
+
+    // Each failure keeps its shape, so a caller can tell a truncated payload
+    // from one that names the wrong kind.
+    #[test]
+    fn failures_carry_their_kind() {
+        let mut r = reader(&[1, 2, 3]);
+        assert_eq!(
+            r.take(4),
+            Err(DecodeError::Truncated {
+                payload: "test",
+                need: 4,
+                offset: 0,
+                len: 3,
+            })
+        );
+        let err = ByteReader::open_payload(&[0; 12], 0xDEAD_BEEF, 12, "test").unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DecodeError::BadMagic {
+                    payload: "test",
+                    ..
+                }
+            ),
+            "{err}"
+        );
     }
 }

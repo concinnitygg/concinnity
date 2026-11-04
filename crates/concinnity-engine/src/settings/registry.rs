@@ -17,13 +17,13 @@ use concinnity_core::math::{SaturatingFrom, round};
 
 use crate::components::{ControlsCommand, SettingOp, UpscalerBackend};
 use crate::gfx::auto_exposure::EV_LIMIT;
-use crate::platform::Platform;
 use crate::render::backend::{DeviceCapabilities, GpuVendor};
 use crate::settings::rows::{GRAPHICS_SLIDERS, GraphicsSlider, Lens};
 use crate::settings::{
     DEFAULT_GAMEPAD_LOOK_SENSITIVITY, GraphicsApiTrial, ResolvedGraphics, SettingKey,
     StoredSettings,
 };
+use concinnity_core::platform::Platform;
 
 /// The value label an unavailable row shows: the resolved value, marked as one
 /// the device cannot change.

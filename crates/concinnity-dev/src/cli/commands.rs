@@ -447,7 +447,7 @@ mod tests {
             ]);
             assert_eq!(
                 args.graphics_api,
-                Some(concinnity_engine::platform::Platform::Vulkan),
+                Some(concinnity_core::platform::Platform::Vulkan),
                 "{command}"
             );
             assert_eq!(args.graphics_quality, Some(QualityPreset::Ultra));

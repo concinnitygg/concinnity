@@ -51,7 +51,7 @@ pub(in crate::pipeline) struct MeshCacheEntry {
 pub(in crate::pipeline) fn probe_mesh_payload_cache(
     assets: &[WorldJsonlAsset],
     assets_dir: Option<&Path>,
-    targets: concinnity_engine::platform::PlatformSet,
+    targets: concinnity_core::platform::PlatformSet,
 ) -> std::collections::HashMap<String, MeshCacheEntry> {
     let mut out = std::collections::HashMap::new();
     let empty: [WorldJsonlAsset; 0] = [];
@@ -176,7 +176,7 @@ pub(in crate::pipeline) struct PackContext<'a> {
     pub(in crate::pipeline) mesh_source_handles: &'a concinnity_engine::resource::ResourceHandles,
     pub(in crate::pipeline) max_blob_bytes: u64,
     pub(in crate::pipeline) assets_dir: Option<&'a Path>,
-    pub(in crate::pipeline) targets: concinnity_engine::platform::PlatformSet,
+    pub(in crate::pipeline) targets: concinnity_core::platform::PlatformSet,
     pub(in crate::pipeline) mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     pub(in crate::pipeline) progress: Progress<'a>,
 }
@@ -420,7 +420,7 @@ struct CompileShared<'a> {
     assets: &'a [WorldJsonlAsset],
     named_src: &'a [usize],
     assets_dir: Option<&'a Path>,
-    targets: concinnity_engine::platform::PlatformSet,
+    targets: concinnity_core::platform::PlatformSet,
     mesh_cache: &'a std::collections::HashMap<String, MeshCacheEntry>,
     stage: &'a StageProgress<'a>,
     cache_hits: &'a AtomicUsize,
@@ -611,7 +611,7 @@ mod tests {
         let probed = probe_mesh_payload_cache(
             &assets,
             None,
-            concinnity_engine::platform::Platform::Metal.into(),
+            concinnity_core::platform::Platform::Metal.into(),
         );
 
         let mut names: Vec<&str> = probed.keys().map(String::as_str).collect();
@@ -644,7 +644,7 @@ mod tests {
         let probed = probe_mesh_payload_cache(
             &assets,
             None,
-            concinnity_engine::platform::Platform::Metal.into(),
+            concinnity_core::platform::Platform::Metal.into(),
         );
         assert_eq!(probed.len(), 1);
         assert!(probed.contains_key("m"));
@@ -702,8 +702,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -790,8 +790,8 @@ mod tests {
             &mut named,
             &[],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -833,8 +833,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],
@@ -888,8 +888,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -989,8 +989,8 @@ mod tests {
             &mut [],
             &[],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &resource_jobs,
@@ -1083,8 +1083,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],
@@ -1132,8 +1132,8 @@ mod tests {
             &mut named,
             &[0],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],
@@ -1186,8 +1186,8 @@ mod tests {
             &mut named,
             &[0, 1],
             PackContext {
-                targets: concinnity_engine::platform::PlatformSet::single(
-                    concinnity_engine::platform::Platform::Metal,
+                targets: concinnity_core::platform::PlatformSet::single(
+                    concinnity_core::platform::Platform::Metal,
                 ),
                 assets: &assets,
                 resource_jobs: &[],

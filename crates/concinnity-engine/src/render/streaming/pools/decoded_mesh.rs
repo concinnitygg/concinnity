@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
-use crate::bake::decode::ByteReader;
+use crate::bake::decode::{ByteReader, DecodeError};
 use crate::gfx::mesh_payload::{self, Vertex};
 
 /// A mesh payload decoded to GPU-ready vertex and index data.
@@ -52,7 +52,7 @@ pub enum DeferredMeshPayload {
 /// # Errors
 ///
 /// Returns an error if the payload does not deserialize.
-pub fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, String> {
+pub fn decode_deferred_payload(bytes: &[u8]) -> Result<DecodedMesh, DecodeError> {
     let (vertices, indices, _) = mesh_payload::deserialize_with_lods(bytes)?;
     Ok(DecodedMesh { vertices, indices })
 }
@@ -89,7 +89,7 @@ pub fn encode_mesh(mesh: &DecodedMesh) -> Vec<u8> {
 /// # Errors
 ///
 /// Returns an error if the record is truncated.
-pub fn decode_mesh(bytes: &[u8]) -> Result<DecodedMesh, String> {
+pub fn decode_mesh(bytes: &[u8]) -> Result<DecodedMesh, DecodeError> {
     const VERTEX_BYTES: usize = size_of::<Vertex>();
 
     let mut r = ByteReader::new(bytes, "mesh record");

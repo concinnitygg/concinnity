@@ -106,18 +106,18 @@ mod tests {
             assets: Vec::new(),
             injected: vec![InjectedAsset {
                 name: "hud_font".to_string(),
-                asset_type: "Font".to_string(),
+                asset_type: crate::authoring::registry::RegisteredType::Font,
                 args: serde_json::json!({}),
                 injected_by: "debug_hud",
             }],
             generated: vec![GeneratedAsset {
                 name: "bistro_mat_wood".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: crate::authoring::registry::RegisteredType::Material,
                 generated_by: "bistro".to_string(),
             }],
             shadowed: vec![ShadowedAsset {
                 name: "bistro_mat_glass".to_string(),
-                asset_type: "Material".to_string(),
+                asset_type: crate::authoring::registry::RegisteredType::Material,
                 generated_by: "bistro".to_string(),
                 args: serde_json::json!({}),
             }],

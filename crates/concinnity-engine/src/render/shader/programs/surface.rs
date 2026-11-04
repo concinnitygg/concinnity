@@ -12,8 +12,8 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::platform::Platform;
 use crate::render::shader::source::{self, SourceFile, Splice};
+use concinnity_core::platform::Platform;
 
 /// The marker the world's `vertex` file is spliced at.
 const VERTEX_MARKER: &str = "{SURFACE_VERTEX}";

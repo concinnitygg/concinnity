@@ -59,7 +59,7 @@ impl Platform {
 /// compiles shaders for side by side.
 ///
 /// ```rust
-/// # use concinnity_engine::platform::{Platform, PlatformSet};
+/// # use concinnity_core::platform::{Platform, PlatformSet};
 /// let set: PlatformSet = [Platform::DirectX, Platform::Vulkan].into_iter().collect();
 /// assert!(set.contains(Platform::Vulkan));
 /// assert_eq!(set.key(), "directx+vulkan");

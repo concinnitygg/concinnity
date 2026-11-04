@@ -145,12 +145,14 @@ fn resolve_entry(
             ));
         }
         let args = entry.get("args").cloned().unwrap_or(serde_json::json!({}));
-        report.record_shadowed(&name, authored_type.as_str(), import_name, args);
+        report.record_shadowed(&name, authored_type, import_name, args);
         return Ok(false);
     }
 
-    if !name.is_empty() {
-        report.record_generated(&name, &type_of(entry), import_name);
+    if !name.is_empty()
+        && let Some(asset_type) = registered_type(entry)
+    {
+        report.record_generated(&name, asset_type, import_name);
     }
     Ok(true)
 }
@@ -485,7 +487,7 @@ mod tests {
         assert!(report.shadowed.is_empty());
         assert_eq!(report.generated.len(), 1);
         assert_eq!(report.generated[0].name, "bistro_mat_wood");
-        assert_eq!(report.generated[0].asset_type, "Material");
+        assert_eq!(report.generated[0].asset_type, RegisteredType::Material);
         assert_eq!(report.generated[0].generated_by, "bistro");
     }
 
@@ -501,7 +503,7 @@ mod tests {
         assert!(report.generated.is_empty());
         assert_eq!(report.shadowed.len(), 1);
         assert_eq!(report.shadowed[0].name, "bistro_mat_wood");
-        assert_eq!(report.shadowed[0].asset_type, "Material");
+        assert_eq!(report.shadowed[0].asset_type, RegisteredType::Material);
         assert_eq!(report.shadowed[0].generated_by, "bistro");
     }
 
@@ -514,7 +516,7 @@ mod tests {
         let mut report = ExpandReport::default();
         assert!(!resolve(&entry, &authored, &mut report).unwrap());
         assert_eq!(report.shadowed.len(), 1);
-        assert_eq!(report.shadowed[0].asset_type, "Camera3D");
+        assert_eq!(report.shadowed[0].asset_type, RegisteredType::Camera3D);
 
         let inexact = serde_json::json!({"type": "camera_3d", "args": {"$id": "bistro_cam"}});
         let mut report = ExpandReport::default();

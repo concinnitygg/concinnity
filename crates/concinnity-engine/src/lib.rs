@@ -70,7 +70,6 @@ pub mod input;
 pub mod launch;
 pub mod physics;
 pub mod planet;
-pub mod platform;
 pub mod profile;
 pub mod render;
 pub mod resource;

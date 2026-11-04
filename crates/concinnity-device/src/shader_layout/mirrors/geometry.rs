@@ -22,7 +22,7 @@ use concinnity_engine::render::uniforms::{
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 
 const METAL: &[Platform] = &[Platform::Metal];
 const VULKAN: &[Platform] = &[Platform::Vulkan];

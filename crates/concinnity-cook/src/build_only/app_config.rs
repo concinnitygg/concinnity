@@ -67,7 +67,7 @@ pub(crate) fn apply_app_config(
         if let Some(entry) = report
             .injected
             .iter_mut()
-            .find(|i| i.name == name && i.asset_type == "Window")
+            .find(|i| i.name == name && i.asset_type == RegisteredType::Window)
         {
             entry.args = v
                 .get("args")
@@ -170,12 +170,17 @@ mod tests {
     fn injected_window_args_are_synced_in_the_report() {
         let mut assets = vec![app("My Game"), window(serde_json::json!({}))];
         let mut report = ExpandReport::default();
-        report.record("w", "Window", serde_json::json!({}), "companion");
+        report.record(
+            "w",
+            RegisteredType::Window,
+            serde_json::json!({}),
+            "companion",
+        );
         apply_app_config(&mut assets, &mut report).unwrap();
         let entry = report
             .injected
             .iter()
-            .find(|i| i.name == "w" && i.asset_type == "Window")
+            .find(|i| i.name == "w" && i.asset_type == RegisteredType::Window)
             .unwrap();
         assert_eq!(entry.args["title"], serde_json::json!("My Game"));
     }

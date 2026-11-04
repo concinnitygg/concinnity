@@ -263,8 +263,8 @@ fn sync_prepass(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use concinnity_core::platform::Platform;
     use concinnity_engine::components::ShaderSource;
-    use concinnity_engine::platform::Platform;
     use concinnity_engine::render::shader::compiled::CompiledProgram;
     use concinnity_engine::render::shader::programs::surface;
     use concinnity_engine::render::shader::source;

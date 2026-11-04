@@ -6,7 +6,7 @@
 // part that needs a filesystem: under hot-reload a shader's checkout copy wins
 // over the embedded one, so an edit is picked up without a rebuild.
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::shader::programs::Variant;
 use concinnity_engine::render::shader::source::Splice;
 

@@ -41,7 +41,7 @@ fn declared_path(args: &serde_json::Value, stage: ShaderStage) -> Option<String>
 fn world_shader_programs(
     name: &str,
     sources: &Sources<'_>,
-    targets: concinnity_engine::platform::PlatformSet,
+    targets: concinnity_core::platform::PlatformSet,
     have_compiler: bool,
 ) -> std::io::Result<ShaderPrograms> {
     let owner = format!("Shader '{name}'");
@@ -132,8 +132,8 @@ mod tests {
     fn with_assets(assets_dir: Option<&std::path::Path>) -> BuildCtx<'_> {
         BuildCtx {
             name: "s",
-            targets: concinnity_engine::platform::PlatformSet::single(
-                concinnity_engine::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
             ),
             assets_dir,
             all_assets: &[],
@@ -162,7 +162,7 @@ mod tests {
         let err = world_shader_programs(
             "wall",
             &sources,
-            concinnity_engine::platform::Platform::Metal.into(),
+            concinnity_core::platform::Platform::Metal.into(),
             false,
         )
         .expect_err("no compiler is an error");
@@ -181,7 +181,7 @@ mod tests {
     // launch selects.
     #[test]
     fn a_shader_cooked_for_several_targets_carries_each_targets_programs() {
-        use concinnity_engine::platform::{Platform, PlatformSet};
+        use concinnity_core::platform::{Platform, PlatformSet};
         use concinnity_engine::render::shader::programs::surface;
         use concinnity_engine::render::shader::source::source_digest;
 

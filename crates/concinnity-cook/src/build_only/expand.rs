@@ -76,8 +76,8 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
 pub struct InjectedAsset {
     /// The injected asset's name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
     /// The args the injection supplied.
     pub args: serde_json::Value,
     /// The injection pass (an `EngineDefaults` flag name or "companion"), so
@@ -92,8 +92,8 @@ pub struct InjectedAsset {
 pub struct GeneratedAsset {
     /// The generated asset's name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
     /// The authored asset that generated it (a `SceneImport`'s name).
     pub generated_by: String,
 }
@@ -107,8 +107,8 @@ pub struct GeneratedAsset {
 pub struct ShadowedAsset {
     /// The shadowed asset's name.
     pub name: String,
-    /// The asset's registry type name.
-    pub asset_type: String,
+    /// The asset's registered type.
+    pub asset_type: RegisteredType,
     /// The authored asset whose expansion it patches.
     pub generated_by: String,
     /// The args the expansion produced before the authored patch was merged,
@@ -129,22 +129,27 @@ impl ExpandReport {
     pub(crate) fn record(
         &mut self,
         name: &str,
-        asset_type: &str,
+        asset_type: RegisteredType,
         args: serde_json::Value,
         injected_by: &'static str,
     ) {
         self.injected.push(InjectedAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             args: args_without_id(args),
             injected_by,
         });
     }
 
-    pub(crate) fn record_generated(&mut self, name: &str, asset_type: &str, generated_by: &str) {
+    pub(crate) fn record_generated(
+        &mut self,
+        name: &str,
+        asset_type: RegisteredType,
+        generated_by: &str,
+    ) {
         self.generated.push(GeneratedAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             generated_by: generated_by.to_string(),
         });
     }
@@ -155,7 +160,7 @@ impl ExpandReport {
     pub(crate) fn record_shadowed(
         &mut self,
         name: &str,
-        asset_type: &str,
+        asset_type: RegisteredType,
         generated_by: &str,
         args: serde_json::Value,
     ) {
@@ -164,7 +169,7 @@ impl ExpandReport {
         }
         self.shadowed.push(ShadowedAsset {
             name: name.to_string(),
-            asset_type: asset_type.to_string(),
+            asset_type,
             generated_by: generated_by.to_string(),
             args: args_without_id(args),
         });

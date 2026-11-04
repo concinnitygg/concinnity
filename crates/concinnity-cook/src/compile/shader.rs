@@ -10,8 +10,8 @@
 //! Shared by the payload build and by `cn run -f`'s hot reload, so an edit
 //! recompiles through exactly the path the cook took.
 
+use concinnity_core::platform::Platform;
 use concinnity_engine::components::{ShaderPrograms, ShaderSource};
-use concinnity_engine::platform::Platform;
 use concinnity_engine::render::shader::programs::surface::{self, Sources};
 use concinnity_engine::render::shader::source::SourceFile;
 use concinnity_shader::diagnostics::Diagnostic;

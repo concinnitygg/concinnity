@@ -9,7 +9,7 @@
 // compile of the same text under different flags would be a different shader
 // under the same name.
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_shader::HlslTarget;
 

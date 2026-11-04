@@ -6,7 +6,7 @@
 //! construction reports `Unsupported`, and a machine with no GPU is what the
 //! probe reports.
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::backend::{DeviceProbe, RenderBackend};

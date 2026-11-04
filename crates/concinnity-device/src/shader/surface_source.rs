@@ -12,8 +12,8 @@
 // machine with no compiler says so, naming the Shader, rather than drawing
 // nothing. The sibling of `raymarch_source`.
 
+use concinnity_core::platform::Platform;
 use concinnity_engine::components::ShaderPrograms;
-use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::surface::{self, Sources};
 use concinnity_engine::render::shader::source;

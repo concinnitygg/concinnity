@@ -3,32 +3,37 @@
 //! them is attacker-reachable and has to be range-checked before it is used as
 //! a length.
 
-use alloc::format;
-use alloc::string::String;
+use super::reader::DecodeError;
 
 /// Product of `factors`, or an error naming `label` if it overflows `usize`.
 ///
 /// # Errors
 ///
 /// Returns an error naming `label` if the product overflows `usize`.
-pub fn checked_product(label: &str, factors: &[usize]) -> Result<usize, String> {
+pub fn checked_product(label: &'static str, factors: &[usize]) -> Result<usize, DecodeError> {
     let mut acc: usize = 1;
     for f in factors {
         acc = acc
             .checked_mul(*f)
-            .ok_or_else(|| format!("{label} size overflow in {factors:?}"))?;
+            .ok_or_else(|| DecodeError::SizeOverflow {
+                what: label,
+                factors: factors.to_vec(),
+            })?;
     }
     Ok(acc)
 }
 
 // Sum of `terms`, or an error naming `label` if it overflows `usize`.
 #[cfg(test)]
-pub(crate) fn checked_sum(label: &str, terms: &[usize]) -> Result<usize, String> {
+pub(crate) fn checked_sum(label: &'static str, terms: &[usize]) -> Result<usize, DecodeError> {
     let mut acc: usize = 0;
     for t in terms {
         acc = acc
             .checked_add(*t)
-            .ok_or_else(|| format!("{label} offset overflow in {terms:?}"))?;
+            .ok_or_else(|| DecodeError::SizeOverflow {
+                what: label,
+                factors: terms.to_vec(),
+            })?;
     }
     Ok(acc)
 }
@@ -36,6 +41,7 @@ pub(crate) fn checked_sum(label: &str, terms: &[usize]) -> Result<usize, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn product_multiplies() {
@@ -55,8 +61,8 @@ mod tests {
     #[test]
     fn product_reports_overflow() {
         let err = checked_product("atlas", &[usize::MAX, 2]).unwrap_err();
-        assert!(err.contains("atlas"), "{}", err);
-        assert!(err.contains("overflow"), "{}", err);
+        assert!(err.to_string().contains("atlas"), "{}", err);
+        assert!(err.to_string().contains("overflow"), "{}", err);
     }
 
     // The concrete shape that broke font decoding: a 32-bit dimension pair
@@ -80,7 +86,7 @@ mod tests {
     #[test]
     fn sum_reports_overflow() {
         let err = checked_sum("payload", &[usize::MAX, 1]).unwrap_err();
-        assert!(err.contains("payload"), "{}", err);
-        assert!(err.contains("overflow"), "{}", err);
+        assert!(err.to_string().contains("payload"), "{}", err);
+        assert!(err.to_string().contains("overflow"), "{}", err);
     }
 }

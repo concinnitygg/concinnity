@@ -9,8 +9,8 @@
 //         --test-threads=1 bench_cook
 
 use concinnity_core::bench::{Pace, bench};
+use concinnity_core::platform::Platform;
 use concinnity_engine::blob::{BlobMeta, WorldManifest, encode_cnb, parse_cnb};
-use concinnity_engine::platform::Platform;
 use std::fmt;
 
 use crate::build_only::prepare_world;

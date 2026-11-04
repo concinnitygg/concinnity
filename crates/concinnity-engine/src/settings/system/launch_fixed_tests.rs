@@ -6,11 +6,11 @@ use crate::ecs::World;
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::reference::Ref;
 use crate::launch::{LaunchArgs, LaunchRequest};
-use crate::platform::Platform;
 use crate::render::output::dlss::DlssPreset;
 use crate::settings::{QualityPreset, SettingKey};
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use concinnity_core::platform::Platform;
 
 use super::init_tests::Launch;
 use super::rows::DISABLED_ROW_COLOR;

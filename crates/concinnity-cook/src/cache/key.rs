@@ -234,7 +234,7 @@ fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::platform::{Platform, PlatformSet};
+    use concinnity_core::platform::{Platform, PlatformSet};
     use serde_json::json;
 
     fn ctx() -> BuildCtx<'static> {

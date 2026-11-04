@@ -2,8 +2,8 @@
 //! only once that launch draws. A launch that dies before its first frame
 //! leaves the trial marked, and the next launch starts on the native API.
 
-use crate::platform::{GraphicsApiStatus, Platform};
 use crate::settings::{GraphicsApiTrial, UserGraphicsSettings};
+use concinnity_core::platform::{GraphicsApiStatus, Platform};
 
 /// What a launch does with the persisted choice before rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,15 +70,13 @@ pub fn apply(step: Step, graphics: &mut UserGraphicsSettings) {
     }
 }
 
-impl GraphicsApiStatus {
-    /// The status of a launch rendering with `current` that took `step` on
-    /// the persisted choice, if any.
-    pub fn from_launch(current: Platform, step: Option<Step>) -> Self {
-        Self {
-            current,
-            reverted: step.and_then(Step::reverted),
-            confirm_pending: step == Some(Step::MarkTrying),
-        }
+/// The status of a launch rendering with `current` that took `step` on the
+/// persisted choice, if any.
+pub fn launch_status(current: Platform, step: Option<Step>) -> GraphicsApiStatus {
+    GraphicsApiStatus {
+        current,
+        reverted: step.and_then(Step::reverted),
+        confirm_pending: step == Some(Step::MarkTrying),
     }
 }
 
@@ -147,13 +145,12 @@ mod tests {
 
     #[test]
     fn a_launch_status_reads_its_step() {
-        let trying = GraphicsApiStatus::from_launch(Platform::Vulkan, Some(Step::MarkTrying));
+        let trying = launch_status(Platform::Vulkan, Some(Step::MarkTrying));
         assert!(trying.confirm_pending && trying.reverted.is_none());
-        let reverted =
-            GraphicsApiStatus::from_launch(Platform::Metal, Some(Step::Revert(Platform::Vulkan)));
+        let reverted = launch_status(Platform::Metal, Some(Step::Revert(Platform::Vulkan)));
         assert_eq!(reverted.reverted, Some(Platform::Vulkan));
         assert!(!reverted.confirm_pending);
-        let settled = GraphicsApiStatus::from_launch(Platform::Metal, None);
+        let settled = launch_status(Platform::Metal, None);
         assert!(!settled.confirm_pending && settled.reverted.is_none());
     }
 }

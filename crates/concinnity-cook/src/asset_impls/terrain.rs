@@ -47,8 +47,8 @@ mod tests {
     fn ctx(assets: &[WorldJsonlAsset]) -> BuildCtx<'_> {
         BuildCtx {
             name: "hills",
-            targets: concinnity_engine::platform::PlatformSet::single(
-                concinnity_engine::platform::Platform::Metal,
+            targets: concinnity_core::platform::PlatformSet::single(
+                concinnity_core::platform::Platform::Metal,
             ),
             assets_dir: None,
             all_assets: assets,

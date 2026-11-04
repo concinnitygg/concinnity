@@ -94,7 +94,7 @@ fn inject_stat_hud(
         report,
         "hud",
         "stat_hud",
-        "StatHud",
+        RegisteredType::StatHud,
         serde_json::json!({}),
     );
     Ok(())
@@ -177,7 +177,14 @@ fn inject_story_pause_menu(
         "settings_back_action": NamedAction::Story(StoryCommand::CloseSettings),
         "items": items,
     });
-    inject(assets, report, "story_pause_menu", &name, "MainMenu", args);
+    inject(
+        assets,
+        report,
+        "story_pause_menu",
+        &name,
+        RegisteredType::MainMenu,
+        args,
+    );
 
     // Escape toggles the pause through the story system.
     inject(
@@ -185,7 +192,7 @@ fn inject_story_pause_menu(
         report,
         "story_pause_menu",
         &format!("{name}_key"),
-        "KeyBinding",
+        RegisteredType::KeyBinding,
         serde_json::json!({ "key": "Escape", "action": NamedAction::Story(StoryCommand::TogglePause) }),
     );
 
@@ -250,12 +257,7 @@ fn name_claimed(
             claim.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
         ));
     }
-    report.record_shadowed(
-        name,
-        asset_type.as_str(),
-        injected_by,
-        serde_json::json!({}),
-    );
+    report.record_shadowed(name, asset_type, injected_by, serde_json::json!({}));
     Ok(true)
 }
 
@@ -265,11 +267,11 @@ fn inject(
     report: &mut ExpandReport,
     injected_by: &'static str,
     name: &str,
-    asset_type: &str,
+    asset_type: RegisteredType,
     args: serde_json::Value,
 ) {
     assets.push(serde_json::json!({
-        "type": asset_type,
+        "type": asset_type.as_str(),
         "args": args_with_id(args.clone(), name),
     }));
     report.record(name, asset_type, args, injected_by);

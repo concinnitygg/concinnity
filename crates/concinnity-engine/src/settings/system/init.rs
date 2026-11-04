@@ -10,7 +10,6 @@ use alloc::vec::Vec;
 use crate::components::{HitRegion, ScrollPanel, TextLabel, UiAction, Window};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{DisplayModes, FrameRateCap, PipelineContext};
-use crate::platform::{CompiledPlatforms, GraphicsApiStatus};
 use crate::render::backend;
 use crate::settings::quality::{auto_upscaling, ceiling_preset, preset_label};
 use crate::settings::registry::{self, DEFAULT_VOLUME};
@@ -20,6 +19,7 @@ use crate::settings::{
     levels, options,
 };
 use crate::window::display_mode;
+use concinnity_core::platform::{CompiledPlatforms, GraphicsApiStatus};
 
 use super::SettingsState;
 use super::rows::{DISABLED_ROW_COLOR, expand_dim_set};
@@ -315,8 +315,8 @@ pub(super) fn disable_rows(
 mod tests {
     use super::*;
     use crate::ecs::{Ref, World};
-    use crate::platform::Platform;
     use alloc::string::ToString;
+    use concinnity_core::platform::Platform;
 
     fn region(key: &str, label: u32) -> HitRegion {
         HitRegion {

@@ -9,8 +9,8 @@
 // `QualityCeiling` tiers, so the page follows the engine without a hand-kept
 // list.
 
+use concinnity_core::platform::Platform;
 use concinnity_engine::ecs::schema::Documented;
-use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::{GpuProfile, GpuTier};
 use concinnity_engine::settings::quality::{AUTO_UPSCALE_PIXELS, preset_label};
 use concinnity_engine::settings::{

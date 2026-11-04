@@ -247,7 +247,7 @@ fn users() -> Vec<(&'static str, UserGraphicsSettings)> {
         show_vram: Some(true),
         window_mode: Some(WindowMode::Borderless),
         resolution: Some([1920, 1080, 60]),
-        graphics_api: Some(crate::platform::Platform::Vulkan),
+        graphics_api: Some(concinnity_core::platform::Platform::Vulkan),
         graphics_api_trial: Some(crate::settings::GraphicsApiTrial::Untried),
         render_scale: Some(UpscaleQuality::Balanced),
         upscale_backend: Some(UpscalerBackend::Fsr3),

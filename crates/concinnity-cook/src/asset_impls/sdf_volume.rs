@@ -1,7 +1,7 @@
-use concinnity_engine::components::SdfVolume;
 #[cfg(test)]
-use concinnity_engine::platform::Platform;
-use concinnity_engine::platform::PlatformSet;
+use concinnity_core::platform::Platform;
+use concinnity_core::platform::PlatformSet;
+use concinnity_engine::components::SdfVolume;
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::shader::source::SourceFile;
 

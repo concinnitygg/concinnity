@@ -11,8 +11,8 @@
 //! Shared by the payload build and by `cn run -f`'s hot reload, so an edit
 //! recompiles through exactly the path the cook took.
 
+use concinnity_core::platform::Platform;
 use concinnity_engine::components::ShaderSource;
-use concinnity_engine::platform::Platform;
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::shader::programs::raymarch::{self, Family};
 use concinnity_engine::render::shader::source::SourceFile;

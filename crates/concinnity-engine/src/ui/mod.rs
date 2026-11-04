@@ -38,7 +38,7 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
-use crate::platform::CompiledPlatforms;
+use concinnity_core::platform::CompiledPlatforms;
 use hashbrown::HashMap;
 use regions::RegionFrame;
 use screen::{ScreenMeta, ScreenRegistry};
@@ -1869,7 +1869,7 @@ mod tests {
     // row stays closed.
     #[test]
     fn graphics_api_dropdown_lists_the_compiled_platforms() {
-        use crate::platform::Platform;
+        use concinnity_core::platform::Platform;
 
         let screen = AssetId(9);
         let mut world = World::new();

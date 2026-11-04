@@ -18,9 +18,9 @@ use crate::benchmark::BenchmarkRun;
 use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::camera::track::CameraTrackStatus;
 use crate::components::{CameraProbe, Followed, RollingControl, TextLabel};
-use crate::platform::GraphicsApiStatus;
 use crate::profile::RenderResolution;
 use crate::render::streaming::pools::StreamingRuntime;
+use concinnity_core::platform::GraphicsApiStatus;
 
 use super::rate_window::RateWindow;
 

@@ -27,6 +27,7 @@ pub mod fanout;
 pub mod fnv;
 pub mod math;
 pub mod memory;
+pub mod platform;
 pub mod utc;
 
 // The test binary counts its own heap, so the allocation benchmarks and the

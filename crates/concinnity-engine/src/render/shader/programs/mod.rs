@@ -20,7 +20,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::platform::Platform;
+use concinnity_core::platform::Platform;
 
 pub mod dx;
 

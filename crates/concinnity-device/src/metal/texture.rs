@@ -155,8 +155,7 @@ pub(super) fn upload_cubemap(
     face_size: u32,
     bytes: &[u8],
 ) -> RenderResult<PooledTexture> {
-    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)
-        .map_err(RenderError::Other)?;
+    let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, 0)?;
     let face_bytes = needed / 6;
     if bytes.len() < needed {
         return Err(RenderError::Other(format!(
@@ -384,8 +383,7 @@ fn upload_prefilter_cube(
     let texture = alloc.alloc_texture(&desc)?;
     for (mip, bytes) in mip_bytes.iter().enumerate() {
         let mip_face_size = face_size >> mip;
-        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)
-            .map_err(RenderError::Other)?;
+        let needed = concinnity_engine::bake::environment_map::cube_mip_byte_len(face_size, mip)?;
         let face_bytes = needed / 6;
         if bytes.len() < needed {
             return Err(RenderError::Other(format!(

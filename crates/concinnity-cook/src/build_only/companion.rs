@@ -36,12 +36,7 @@ fn record_if_overridden(
     let claimed = claimed_names.contains(spec.name);
     let ours = report.injected.iter().any(|i| i.name == spec.name);
     if claimed && !ours {
-        report.record_shadowed(
-            spec.name,
-            spec.asset_type.as_str(),
-            "companion",
-            spec.args.clone(),
-        );
+        report.record_shadowed(spec.name, spec.asset_type, "companion", spec.args.clone());
         super::shadow::merge_into_authored(assets, spec.name, &spec.args);
     }
 }
@@ -95,7 +90,7 @@ pub(crate) fn inject_companions(assets: &mut Vec<serde_json::Value>, report: &mu
             });
             crate::authoring::world::set_entry_id(&mut entry, spec.name);
             assets.push(entry);
-            report.record(spec.name, spec.asset_type.as_str(), spec.args, "companion");
+            report.record(spec.name, spec.asset_type, spec.args, "companion");
         }
     }
 }
@@ -136,7 +131,7 @@ mod tests {
             .iter()
             .find(|s| s.name == "Window")
             .expect("the overridden companion is recorded");
-        assert_eq!(shadow.asset_type, "Window");
+        assert_eq!(shadow.asset_type, RegisteredType::Window);
         assert_eq!(shadow.generated_by, "companion");
     }
 

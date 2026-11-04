@@ -26,12 +26,12 @@ use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
 use crate::gfx::view_modes::ShowFlags;
-use crate::platform::Platform;
 use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::QualityPreset;
 use crate::window::WindowMode;
 use concinnity_core::math::{SaturatingFrom, round};
+use concinnity_core::platform::Platform;
 
 /// What a launch asks of the run. Each field left at its default leaves the
 /// run as the world and the saved settings make it.

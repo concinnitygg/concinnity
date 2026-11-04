@@ -23,11 +23,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_core::platform::Platform;
 use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::gfx::render_types::LightUniforms;
-use concinnity_engine::platform::Platform;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::sdf::volume::SdfVolume;

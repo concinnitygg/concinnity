@@ -16,8 +16,8 @@ pub(crate) mod device;
 
 use std::sync::OnceLock;
 
-use concinnity_engine::platform::select::{native_platform, resolve};
-use concinnity_engine::platform::{GraphicsApiStatus, Platform, PlatformSet};
+use concinnity_core::platform::select::{native_platform, resolve};
+use concinnity_core::platform::{GraphicsApiStatus, Platform, PlatformSet};
 use concinnity_engine::settings::api_trial::Step;
 use concinnity_host::store::paths::StateTree;
 
@@ -103,7 +103,7 @@ pub fn select(requested: Option<Platform>) -> Platform {
 
 /// Where this launch stands on the graphics API chosen in the settings menu.
 pub(crate) fn api_status() -> GraphicsApiStatus {
-    GraphicsApiStatus::from_launch(current(), LAUNCH_STEP.get().copied())
+    concinnity_engine::settings::api_trial::launch_status(current(), LAUNCH_STEP.get().copied())
 }
 
 /// Choose the graphics API from the settings-menu choice persisted in `tree`,

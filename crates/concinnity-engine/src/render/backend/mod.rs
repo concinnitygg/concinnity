@@ -523,7 +523,11 @@ mod tests {
     // default `reload_world`. Empty slices are `'static`; the only real borrow
     // is the window args.
     fn empty_backend_init(window: &crate::components::Window) -> BackendInit<'_> {
-        BackendInit::minimal(crate::platform::Platform::Metal, window, vec::Vec::new())
+        BackendInit::minimal(
+            concinnity_core::platform::Platform::Metal,
+            window,
+            vec::Vec::new(),
+        )
     }
 
     fn stub_decal() -> crate::render::decal::DecalRecord {

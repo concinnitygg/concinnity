@@ -12,7 +12,7 @@
 
 use std::borrow::Cow;
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 pub(super) use concinnity_engine::render::shader::programs::ShaderProgram;
 use concinnity_engine::render::shader::programs::Variant;

@@ -5,7 +5,7 @@
 //! client holds only a `Box<dyn RenderBackend>` and never names a concrete
 //! backend context.
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::{backend, backend::init};
 use concinnity_engine::window::display_mode::DisplayProbe;

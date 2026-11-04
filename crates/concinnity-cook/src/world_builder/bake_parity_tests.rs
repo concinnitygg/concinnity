@@ -13,12 +13,12 @@
 // are the same at any size.
 
 use concinnity_core::fanout::Inline;
+use concinnity_core::platform::Platform;
 use concinnity_engine::Driver;
 use concinnity_engine::bake::payload;
 use concinnity_engine::components::cook as authored;
 use concinnity_engine::components::{Camera3D, ProceduralMesh, Prop};
 use concinnity_engine::ecs::World;
-use concinnity_engine::platform::Platform;
 
 const PREFILTER_FACE: u32 = 32;
 const IRRADIANCE_FACE: u32 = 8;

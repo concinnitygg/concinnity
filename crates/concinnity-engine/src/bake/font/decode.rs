@@ -6,7 +6,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::bake::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, DecodeError, checked_product};
 use crate::render::overlay::text::{FontMetrics, LoadedFont, derive_cap_px};
 
 // Bytes each glyph's metrics occupy in the payload: char code, four atlas
@@ -23,8 +23,8 @@ pub(crate) type DecodedFont = (u32, u32, u32, u32, Vec<u8>, Vec<GlyphMetrics>);
 /// # Errors
 ///
 /// Returns an error if the payload is truncated or its sizes overflow.
-pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, String> {
-    let mut r = ByteReader::new(bytes, "font payload");
+pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, DecodeError> {
+    let mut r = ByteReader::new(bytes, "font");
     let atlas_w = r.u32()?;
     let atlas_h = r.u32()?;
     let supersample = r.u32()?;
@@ -39,10 +39,13 @@ pub fn deserialize(bytes: &[u8]) -> Result<DecodedFont, String> {
     let glyph_count = r.u32()? as usize;
     let metrics_bytes = checked_product("font metrics", &[glyph_count, GLYPH_STRIDE])?;
     if r.remaining() < metrics_bytes {
-        return Err(format!(
-            "font payload truncated: need {} metric bytes, have {}",
-            metrics_bytes,
-            r.remaining()
+        return Err(DecodeError::invalid(
+            "font",
+            format!(
+                "truncated: need {} metric bytes, have {}",
+                metrics_bytes,
+                r.remaining()
+            ),
         ));
     }
     let mut metrics = Vec::with_capacity(glyph_count);
@@ -89,6 +92,7 @@ pub fn load_face(slot: usize, bytes: &[u8]) -> Result<(LoadedFont, FontAtlas), S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
     use alloc::vec;
     use concinnity_core::math::SaturatingFrom;
 
@@ -181,7 +185,7 @@ mod tests {
         let mut bytes = payload(2, 2, &[glyph(u32::from(b'q')), glyph(u32::from(b'r'))]);
         bytes.truncate(bytes.len() - 5);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("truncated"), "{}", err);
+        assert!(err.to_string().contains("truncated"), "{}", err);
     }
 
     // Dimensions large enough that `w * h * 4` wraps: the product must be
@@ -194,7 +198,7 @@ mod tests {
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("overflow"), "{}", err);
+        assert!(err.to_string().contains("overflow"), "{}", err);
     }
 
     // A plausible-looking but oversized atlas must not be trusted into an
@@ -207,7 +211,7 @@ mod tests {
         bytes.extend_from_slice(&1u32.to_le_bytes());
         bytes.extend_from_slice(&[0u8; 64]);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("unexpected end"), "{}", err);
+        assert!(err.to_string().contains("unexpected end"), "{}", err);
     }
 
     // A glyph count near u32::MAX must be rejected on the declared size, not
@@ -218,7 +222,7 @@ mod tests {
         let count_at = bytes.len() - 4;
         bytes[count_at..].copy_from_slice(&u32::MAX.to_le_bytes());
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("truncated"), "{}", err);
+        assert!(err.to_string().contains("truncated"), "{}", err);
     }
 
     // The face keys its glyphs by code point, takes its slot, and reads the

@@ -108,7 +108,7 @@ pub const DEFAULT_DEBUG_PORT: u16 = 8777;
 pub const QUALITY_PRESET_VALUES: &[&str] = &["auto", "low", "medium", "high", "ultra", "custom"];
 
 /// The graphics APIs `--graphics-api` names, by
-/// [`Platform::key`](crate::platform::Platform::key).
+/// [`Platform::key`](concinnity_core::platform::Platform::key).
 pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
 
 /// The window modes `--window-mode` names, by their authored names.

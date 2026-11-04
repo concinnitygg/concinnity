@@ -25,7 +25,7 @@
 //! readers keep working unchanged. `deserialize_with_lods` reads the trailer
 //! when present and returns the additional LODs alongside LOD0.
 
-use crate::bake::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, DecodeError, checked_product};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -46,14 +46,18 @@ fn chunk_u16(chunk: &[u8], at: usize) -> u16 {
 }
 
 // Read a length-prefixed UTF-8 name, bounds-checking the whole block once.
-fn read_name(cur: &mut ByteReader<'_>, len: usize, what: &str) -> Result<String, String> {
+fn read_name(cur: &mut ByteReader<'_>, len: usize, what: &str) -> Result<String, DecodeError> {
     core::str::from_utf8(cur.take(len)?)
-        .map_err(|e| format!("{what} is not valid utf-8: {e}"))
+        .map_err(|e| DecodeError::invalid(cur.label(), format!("{what} is not valid utf-8: {e}")))
         .map(str::to_string)
 }
 
 // Read `n` little-endian u16 indices, bounds-checking the whole block once.
-fn read_indices(cur: &mut ByteReader<'_>, n: usize, what: &str) -> Result<Vec<u16>, String> {
+fn read_indices(
+    cur: &mut ByteReader<'_>,
+    n: usize,
+    what: &'static str,
+) -> Result<Vec<u16>, DecodeError> {
     let block = cur.take(checked_product(what, &[n, 2])?)?;
     Ok(block.chunks_exact(2).map(|c| chunk_u16(c, 0)).collect())
 }
@@ -360,7 +364,7 @@ pub fn serialize_skinned_with_lods(
 ///
 /// Returns an error if the payload is malformed (see
 /// [`deserialize_skinned_with_lods`]).
-pub fn deserialize_skinned(bytes: &[u8]) -> Result<DeserializedSkinned, String> {
+pub fn deserialize_skinned(bytes: &[u8]) -> Result<DeserializedSkinned, DecodeError> {
     let p = deserialize_skinned_with_lods(bytes)?;
     Ok((p.vertices, p.indices, p.joints))
 }
@@ -373,12 +377,16 @@ pub fn deserialize_skinned(bytes: &[u8]) -> Result<DeserializedSkinned, String> 
 /// # Errors
 ///
 /// Returns an error if the payload lacks its magic header or is truncated.
-pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, String> {
-    if bytes.len() < 8 || &bytes[0..4] != SKINNED_MAGIC {
-        return Err("skinned mesh payload missing SKMV magic header".to_string());
+pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, DecodeError> {
+    if bytes.len() < 8 {
+        return Err(DecodeError::ShortHeader {
+            payload: "skinned mesh",
+            len: bytes.len(),
+            need: 8,
+        });
     }
-    let mut cur = ByteReader::new(bytes, "skinned mesh payload");
-    cur.skip(4)?;
+    let mut cur = ByteReader::new(bytes, "skinned mesh");
+    cur.expect_tag(SKINNED_MAGIC)?;
 
     let vertex_count = cur.u32()? as usize;
     let vertices = read_skinned_vertices(&mut cur, vertex_count)?;
@@ -440,7 +448,7 @@ pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
         }));
         morphs
             .validate()
-            .map_err(|e| format!("skinned mesh payload morph block: {e}"))?;
+            .map_err(|e| DecodeError::invalid("skinned mesh", format!("morph block: {e}")))?;
     }
 
     // Optional LOD trailer (mirrors the static-mesh format): a payload
@@ -478,8 +486,8 @@ pub fn deserialize_skinned_with_lods(bytes: &[u8]) -> Result<SkinnedPayload, Str
 /// # Errors
 ///
 /// Returns an error if the payload is truncated.
-pub fn deserialize_with_lods(bytes: &[u8]) -> Result<DeserializedStatic, String> {
-    let mut cur = ByteReader::new(bytes, "mesh payload");
+pub fn deserialize_with_lods(bytes: &[u8]) -> Result<DeserializedStatic, DecodeError> {
+    let mut cur = ByteReader::new(bytes, "mesh");
 
     let vertex_count = cur.u32()? as usize;
     let vertices = read_vertices(&mut cur, vertex_count)?;
@@ -510,7 +518,7 @@ pub fn deserialize_with_lods(bytes: &[u8]) -> Result<DeserializedStatic, String>
 fn read_skinned_vertices(
     cur: &mut ByteReader<'_>,
     count: usize,
-) -> Result<Vec<SkinnedVertex>, String> {
+) -> Result<Vec<SkinnedVertex>, DecodeError> {
     let block = cur.take(checked_product("skinned vertices", &[count, 80])?)?;
     Ok(block
         .chunks_exact(80)
@@ -533,7 +541,7 @@ fn read_skinned_vertices(
 
 // Read `count` interleaved 14-float vertices, bounds-checking the whole block
 // once rather than per field.
-fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, String> {
+fn read_vertices(cur: &mut ByteReader<'_>, count: usize) -> Result<Vec<Vertex>, DecodeError> {
     let block = cur.take(checked_product("vertices", &[count, 56])?)?;
     Ok(block
         .chunks_exact(56)
@@ -751,7 +759,9 @@ mod tests {
             }],
         };
         let bytes = serialize_skinned_with_lods(&vertices, &[0, 0, 0], &[], &morphs, &[]).unwrap();
-        let err = deserialize_skinned_with_lods(&bytes).unwrap_err();
+        let err = deserialize_skinned_with_lods(&bytes)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("morph block"), "{err}");
         assert!(err.contains("target 3 of 1"), "{err}");
     }
@@ -837,5 +847,19 @@ mod tests {
         let err = count(past, "vertices").unwrap_err();
         assert!(err.contains("vertices"), "{err}");
         assert_eq!(count(3, "vertices"), Ok(3u32.to_le_bytes()));
+    }
+
+    // A short skinned payload says it is short, and only a real mismatch
+    // reports the tag.
+    #[test]
+    fn a_skinned_payload_reports_short_and_mistagged_apart() {
+        assert!(matches!(
+            deserialize_skinned_with_lods(b"SKMV"),
+            Err(DecodeError::ShortHeader { need: 8, .. })
+        ));
+        assert!(matches!(
+            deserialize_skinned_with_lods(b"NOPE\0\0\0\0"),
+            Err(DecodeError::BadTag { .. })
+        ));
     }
 }

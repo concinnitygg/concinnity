@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 
 use crate::shader::source;
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::shader::programs::{ShaderProgram, metal, shared};
 use concinnity_engine::render::shader::source::Splice;
 use concinnity_shader::layout::StructLayout;

@@ -415,6 +415,8 @@ name = "concinnity-core"
 version = "0.20.0"
 dependencies = [
  "libm",
+ "serde",
+ "serde_json",
  "spin",
 ]
 
@@ -578,7 +580,7 @@ dependencies = [
 name = "concinnity-shader"
 version = "0.20.0"
 dependencies = [
- "concinnity-engine",
+ "concinnity-core",
  "concinnity-testing",
  "spirv-cross2",
 ]

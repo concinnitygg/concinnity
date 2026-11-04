@@ -22,7 +22,7 @@
 //! upload it verbatim, since no runtime `BCn` encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
-use crate::bake::decode::{ByteReader, checked_product};
+use crate::bake::decode::{ByteReader, DecodeError, checked_product};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -94,7 +94,7 @@ impl TextureFormat {
     /// # Errors
     ///
     /// Returns an error if the footprint overflows `usize`.
-    pub fn mip_byte_len(self, width: u32, height: u32) -> Result<usize, String> {
+    pub fn mip_byte_len(self, width: u32, height: u32) -> Result<usize, DecodeError> {
         match self.block_bytes() {
             None => checked_product("texture mip", &[width as usize, height as usize, 4]),
             Some(block) => checked_product(
@@ -283,17 +283,18 @@ pub fn serialize(image: &TextureImage) -> Vec<u8> {
 ///
 /// Returns an error if `bytes` is not a texture payload, declares an unknown
 /// format or an invalid mip count, or is too short for its mips.
-pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
+pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, DecodeError> {
     let mut r = ByteReader::open_payload(bytes, TEXTURE_PAYLOAD_MAGIC, HEADER_BYTES, "texture")?;
     let format_id = r.u32()?;
     let format = TextureFormat::from_id(format_id)
-        .ok_or_else(|| format!("texture payload has unknown format_id {format_id}"))?;
+        .ok_or_else(|| DecodeError::invalid("texture", format!("unknown format_id {format_id}")))?;
     // Bounded before it reaches `with_capacity`: the count is payload-supplied
     // and reserving for a u32 of them would abort on the allocation alone.
     let mip_count = r.u32()? as usize;
     if mip_count == 0 || mip_count > MAX_MIP_LEVELS {
-        return Err(format!(
-            "texture payload declares {mip_count} mip levels (expected 1..={MAX_MIP_LEVELS})"
+        return Err(DecodeError::invalid(
+            "texture",
+            format!("declares {mip_count} mip levels (expected 1..={MAX_MIP_LEVELS})"),
         ));
     }
 
@@ -305,8 +306,11 @@ pub fn deserialize(bytes: &[u8]) -> Result<TextureImage, String> {
         let byte_len = r.u32()? as usize;
         let expected = format.mip_byte_len(width, height)?;
         if byte_len != expected {
-            return Err(format!(
-                "texture payload mip {level} ({width}x{height} {format:?}) declares {byte_len} bytes, format needs {expected}"
+            return Err(DecodeError::invalid(
+                "texture",
+                format!(
+                    "mip {level} ({width}x{height} {format:?}) declares {byte_len} bytes, format needs {expected}"
+                ),
             ));
         }
         mips.push(TextureMip {
@@ -371,6 +375,7 @@ pub fn downscale_rgba(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn validate_rejects_a_short_or_missing_level() {
@@ -458,7 +463,7 @@ mod tests {
         let mut bytes = serialize(&TextureImage::rgba8(1, 1, vec![0, 0, 0, 0]));
         bytes[0] ^= 0xFF;
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("magic"), "got: {err}");
+        assert!(err.to_string().contains("magic"), "got: {err}");
     }
 
     #[test]
@@ -466,7 +471,7 @@ mod tests {
         let mut bytes = serialize(&TextureImage::rgba8(1, 1, vec![0, 0, 0, 0]));
         bytes[4..8].copy_from_slice(&99u32.to_le_bytes());
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("unknown format_id"), "got: {err}");
+        assert!(err.to_string().contains("unknown format_id"), "got: {err}");
     }
 
     #[test]
@@ -481,7 +486,7 @@ mod tests {
         bytes.extend_from_slice(&8u32.to_le_bytes());
         bytes.extend_from_slice(&[0u8; 8]);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("format needs 16"), "got: {err}");
+        assert!(err.to_string().contains("format needs 16"), "got: {err}");
     }
 
     // A one-mip header with caller-chosen fields and no mip body behind it.
@@ -508,7 +513,7 @@ mod tests {
         let mut bytes = header(TextureFormat::Rgba8, 1, 2, 2, 16);
         bytes.truncate(HEADER_BYTES + 6);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("unexpected end"), "got: {err}");
+        assert!(err.to_string().contains("unexpected end"), "got: {err}");
     }
 
     #[test]
@@ -516,7 +521,7 @@ mod tests {
         let mut bytes = header(TextureFormat::Rgba8, 1, 2, 2, 16);
         bytes.extend_from_slice(&[0u8; 8]);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("unexpected end"), "got: {err}");
+        assert!(err.to_string().contains("unexpected end"), "got: {err}");
     }
 
     // `width * height * 4` wraps for these dimensions; the declared length
@@ -526,7 +531,7 @@ mod tests {
     fn deserialize_rejects_dimensions_that_overflow_the_footprint() {
         let bytes = header(TextureFormat::Rgba8, 1, u32::MAX, u32::MAX, 16);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("overflow"), "got: {err}");
+        assert!(err.to_string().contains("overflow"), "got: {err}");
     }
 
     // A mip count near u32::MAX must be rejected on the declared value, not
@@ -535,7 +540,7 @@ mod tests {
     fn deserialize_rejects_an_absurd_mip_count() {
         let bytes = header(TextureFormat::Rgba8, u32::MAX, 1, 1, 4);
         let err = deserialize(&bytes).unwrap_err();
-        assert!(err.contains("mip levels"), "got: {err}");
+        assert!(err.to_string().contains("mip levels"), "got: {err}");
     }
 
     #[test]

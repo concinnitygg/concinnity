@@ -51,7 +51,7 @@ impl TemplateIndex {
             map.insert(
                 s.name.clone(),
                 TemplateInfo {
-                    asset_type: s.asset_type.clone(),
+                    asset_type: s.asset_type.as_str().to_string(),
                     baseline: s.args.clone(),
                     generated_by: s.generated_by.clone(),
                 },
@@ -74,7 +74,7 @@ impl TemplateIndex {
             map.insert(
                 g.name.clone(),
                 TemplateInfo {
-                    asset_type: g.asset_type.clone(),
+                    asset_type: g.asset_type.as_str().to_string(),
                     baseline: args,
                     generated_by: g.generated_by.clone(),
                 },
@@ -87,7 +87,7 @@ impl TemplateIndex {
             map.insert(
                 i.name.clone(),
                 TemplateInfo {
-                    asset_type: i.asset_type.clone(),
+                    asset_type: i.asset_type.as_str().to_string(),
                     baseline: i.args.clone(),
                     generated_by: i.injected_by.to_string(),
                 },
@@ -443,18 +443,18 @@ mod tests {
             }],
             injected: vec![InjectedAsset {
                 name: "hud".into(),
-                asset_type: "DebugHud".into(),
+                asset_type: RegisteredType::DebugHud,
                 args: json!({"enabled": true}),
                 injected_by: "debug_hud",
             }],
             generated: vec![GeneratedAsset {
                 name: "i1_a".into(),
-                asset_type: "Prop".into(),
+                asset_type: RegisteredType::Prop,
                 generated_by: "i1".into(),
             }],
             shadowed: vec![ShadowedAsset {
                 name: "i1_b".into(),
-                asset_type: "Prop".into(),
+                asset_type: RegisteredType::Prop,
                 generated_by: "i1".into(),
                 args: json!({"mesh": "sphere"}),
             }],

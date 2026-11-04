@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use concinnity_engine::platform::Platform;
+use concinnity_core::platform::Platform;
 use concinnity_engine::render::shader::programs::{Table, Variant};
 use concinnity_engine::render::shader::source;
 use concinnity_shader::metallib;
