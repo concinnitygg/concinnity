@@ -16,7 +16,7 @@ pub(crate) fn explain(name: &str, json_path: Option<&str>) -> std::io::Result<()
     let source = concinnity_cook::WorldSource::file(&content, std::path::Path::new(&json_path));
 
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
-        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(errs.messages()))?;
 
     let Some(asset) = loaded.assets.iter().find(|a| a.id == name) else {
         let mut close: Vec<&str> = loaded

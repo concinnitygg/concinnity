@@ -21,8 +21,7 @@ use crate::pipeline::{PipelineResult, build_compiled, write_blobs_to};
 
 mod error;
 
-pub use error::WorldBuildError;
-use error::from_io;
+pub use error::{WorldBuildError, WorldValidationError};
 
 /// A world under construction: typed authored assets, compiled together into
 /// a runnable [`World`] or a blob file.
@@ -39,8 +38,8 @@ pub struct WorldBuilder {
     // without re-reading the entries.
     declared: Vec<(String, &'static str)>,
     // The first declaration failure, held as the kind and message a
-    // [`WorldBuildError::Build`] is rebuilt from at the compile, so the call
-    // chain stays borrow-friendly.
+    // [`WorldBuildError::Build`] is rebuilt from at each compile, since an io
+    // error cannot be cloned.
     error: Option<(std::io::ErrorKind, String)>,
 }
 
@@ -271,7 +270,7 @@ impl WorldBuilder {
     /// to compile, or a blob file cannot be written.
     pub fn write_blob(&self, path: impl AsRef<Path>) -> Result<(), WorldBuildError> {
         let result = self.build()?;
-        write_blobs_to(&result, path.as_ref()).map_err(|e| from_io(&e))?;
+        write_blobs_to(&result, path.as_ref()).map_err(WorldBuildError::Build)?;
         Ok(())
     }
 
@@ -280,20 +279,19 @@ impl WorldBuilder {
     // only in where the result lands.
     fn build(&self) -> Result<PipelineResult, WorldBuildError> {
         if let Some((kind, message)) = &self.error {
-            return Err(WorldBuildError::Build {
-                kind: *kind,
-                message: message.clone(),
-            });
+            return Err(WorldBuildError::Build(std::io::Error::new(
+                *kind,
+                message.clone(),
+            )));
         }
 
         // Bare `source` filenames resolve under the root the embedder named
         // (`assets_in`). Without one there is no tree to search, so only paths
         // that stand on their own resolve.
         let assets_dir = self.assets_dir.clone();
-        let text = write_world_jsonl(&self.entries).map_err(|e| from_io(&e))?;
-        let loaded: LoadedWorld =
-            prepare_world(&text, assets_dir.as_deref()).map_err(WorldBuildError::Validation)?;
-        build_compiled(loaded.assets, assets_dir.as_deref(), self.targets).map_err(|e| from_io(&e))
+        let text = write_world_jsonl(&self.entries).map_err(WorldBuildError::Build)?;
+        let loaded: LoadedWorld = prepare_world(&text, assets_dir.as_deref())?;
+        build_compiled(loaded.assets, assets_dir.as_deref(), self.targets)
     }
 }
 
@@ -388,7 +386,7 @@ mod tests {
             panic!("expected a validation failure, got {err:?}");
         };
         assert!(
-            errs.iter().any(|e| e.contains("no_such_body")),
+            errs.messages().iter().any(|e| e.contains("no_such_body")),
             "got: {errs:?}"
         );
     }
@@ -591,11 +589,8 @@ mod tests {
             .expect_err("nothing to reference");
         assert!(
             matches!(
-                err,
-                WorldBuildError::Build {
-                    kind: std::io::ErrorKind::InvalidInput,
-                    ..
-                }
+                &err,
+                WorldBuildError::Build(e) if e.kind() == std::io::ErrorKind::InvalidInput
             ),
             "{err:?}"
         );

@@ -991,7 +991,7 @@ pub(crate) fn validate(ty: &str, name: &str, args: &Map<String, Value>) -> Resul
     if ct.is_resource() {
         let args = Value::Object(args.clone());
         ct.normalized_args(&args).map_err(|e| e.to_string())?;
-        return concinnity_cook::validate_asset(ty, name, &args);
+        return concinnity_cook::validate_asset(ty, name, &args).map_err(|e| e.to_string());
     }
     ct.reserialize_args(&Value::Object(args.clone()))
         .map(|_| ())

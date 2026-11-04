@@ -13,7 +13,6 @@ use super::desugar::{
     desugar_animation_imports, desugar_fbx_meshes, desugar_fbx_skinned_meshes, desugar_gltf_meshes,
     desugar_gltf_skinned_meshes, desugar_root_motion, pending_imports,
 };
-use super::errors_to_io;
 use super::hot_reload_sources::hot_reload_sources;
 use super::lock_provenance::lock_provenance;
 use super::pack::{PackContext, compile_and_pack_payloads, probe_mesh_payload_cache};
@@ -21,6 +20,7 @@ use super::partition::{Partitioned, partition_components};
 use super::progress::{BuildStage, Progress, ProgressFn, StageProgress};
 use super::result::PipelineResult;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::world_builder::WorldBuildError;
 
 /// Build the world at `json_path` for `platform` into `tree` and write its
 /// blobs to disk: sources resolve under the tree's `assets/` and the blobs land
@@ -36,11 +36,10 @@ pub fn build_from_path(
     tree: &crate::paths::StateTree,
     json_path: &str,
     targets: PlatformSet,
-) -> std::io::Result<BuildReport> {
-    let content = std::fs::read_to_string(json_path)?;
+) -> Result<BuildReport, WorldBuildError> {
+    let content = std::fs::read_to_string(json_path).map_err(WorldBuildError::Build)?;
     let source = crate::authoring::world::WorldSource::file(&content, Path::new(json_path));
-    let loaded = crate::build_only::prepare_world(source, Some(&tree.assets_dir()))
-        .map_err(|errors| errors_to_io(&errors))?;
+    let loaded = crate::build_only::prepare_world(source, Some(&tree.assets_dir()))?;
     build_loaded(tree, loaded, targets, None)
 }
 
@@ -86,7 +85,7 @@ pub fn build_loaded(
     loaded: crate::build_only::LoadedWorld,
     targets: PlatformSet,
     progress: Option<ProgressFn<'_>>,
-) -> std::io::Result<BuildReport> {
+) -> Result<BuildReport, WorldBuildError> {
     let assets_dir = tree.assets_dir();
     let result = build_compiled_with_progress(loaded.assets, Some(&assets_dir), targets, progress)?;
     let mut report =
@@ -126,6 +125,16 @@ pub(crate) fn write_blobs_to(
 ///
 /// Returns an error if a blob or the lock file cannot be written.
 pub fn write_build_outputs(
+    tree: &crate::paths::StateTree,
+    result: &PipelineResult,
+    injected: &[crate::build_only::InjectedAsset],
+    shadowed: &[crate::build_only::ShadowedAsset],
+    progress: Option<ProgressFn<'_>>,
+) -> Result<BuildReport, WorldBuildError> {
+    write_outputs(tree, result, injected, shadowed, progress).map_err(WorldBuildError::Build)
+}
+
+fn write_outputs(
     tree: &crate::paths::StateTree,
     result: &PipelineResult,
     injected: &[crate::build_only::InjectedAsset],
@@ -192,9 +201,8 @@ pub fn build_pipeline_from_str(
     content: &str,
     assets_dir: Option<&Path>,
     targets: PlatformSet,
-) -> std::io::Result<PipelineResult> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir)
-        .map_err(|errors| errors_to_io(&errors))?;
+) -> Result<PipelineResult, WorldBuildError> {
+    let loaded = crate::build_only::prepare_world(content, assets_dir)?;
     build_compiled(loaded.assets, assets_dir, targets)
 }
 
@@ -211,7 +219,7 @@ pub fn build_compiled(
     assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
     targets: PlatformSet,
-) -> std::io::Result<PipelineResult> {
+) -> Result<PipelineResult, WorldBuildError> {
     build_compiled_with_progress(assets, assets_dir, targets, None)
 }
 
@@ -222,6 +230,15 @@ pub fn build_compiled(
 ///
 /// Returns an error if an asset fails to import or compile.
 pub fn build_compiled_with_progress(
+    assets: Vec<WorldJsonlAsset>,
+    assets_dir: Option<&Path>,
+    targets: PlatformSet,
+    progress: Option<ProgressFn<'_>>,
+) -> Result<PipelineResult, WorldBuildError> {
+    compile_world(assets, assets_dir, targets, progress).map_err(WorldBuildError::Build)
+}
+
+fn compile_world(
     mut assets: Vec<WorldJsonlAsset>,
     assets_dir: Option<&Path>,
     targets: PlatformSet,
@@ -578,7 +595,7 @@ mod tests {
         let tree = crate::paths::StateTree::at(dir.path());
         let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal.into())
             .expect_err("malformed world");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
     }
 
     // A library caller gets every validation message, not just a count.
@@ -599,7 +616,7 @@ mod tests {
         let tree = crate::paths::StateTree::at(dir.path());
         let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal.into())
             .expect_err("an invalid world");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
         let msg = err.to_string();
         assert!(msg.contains("bad_prop"), "got: {msg}");
         assert!(msg.contains("ghost"), "got: {msg}");
@@ -693,7 +710,7 @@ mod tests {
         let Err(err) = build_pipeline_from_str("{not json\n", None, Platform::Metal.into()) else {
             panic!("malformed line must not build");
         };
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
     }
 
     #[test]
@@ -720,7 +737,10 @@ mod tests {
         let Err(err) = build_compiled(assets, None, Platform::Metal.into()) else {
             panic!("unknown type must not compile");
         };
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(&err, WorldBuildError::Build(e) if e.kind() == std::io::ErrorKind::InvalidData),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("Asset 'mystery'"), "got: {err}");
     }
 
@@ -736,7 +756,10 @@ mod tests {
         let Err(err) = build_compiled(assets, None, Platform::Metal.into()) else {
             panic!("an uncompilable payload must not build");
         };
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(&err, WorldBuildError::Build(e) if e.kind() == std::io::ErrorKind::InvalidData),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("not_a_generator"), "got: {err}");
     }
 

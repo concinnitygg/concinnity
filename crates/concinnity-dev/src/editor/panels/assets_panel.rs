@@ -1914,8 +1914,8 @@ mod tests {
             &world,
             crate::project::assets_dir().as_deref(),
             crate::cook_platform().into(),
-        )
-        .map(|_| ())
+        )?;
+        Ok(())
     }
 
     // Every offered add-type is a real External type whose default args cook in a

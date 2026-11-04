@@ -26,7 +26,7 @@ use crate::build_status::{BuildStatus, Verbosity};
 // prepares through concinnity_cook directly and does not use this.
 pub(crate) fn prepare(source: WorldSource<'_>) -> std::io::Result<LoadedWorld> {
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
-        .map_err(|errs| crate::authoring::report_validation_errors(&errs))?;
+        .map_err(|errs| crate::authoring::report_validation_errors(errs.messages()))?;
 
     Ok(loaded)
 }
@@ -235,8 +235,8 @@ fn build_world(
     let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
         Ok(loaded) => loaded,
         Err(errs) => {
-            status.fail_validation(&errs);
-            return Err(crate::authoring::validation_failed(errs.len()));
+            status.fail_validation(errs.messages());
+            return Err(crate::authoring::validation_failed(errs.messages().len()));
         }
     };
     status.loaded(&loaded);
@@ -248,7 +248,7 @@ fn build_world(
         }
         Err(e) => {
             status.fail();
-            Err(e)
+            Err(e.into())
         }
     }
 }

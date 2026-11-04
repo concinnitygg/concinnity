@@ -78,4 +78,4 @@ pub use pipeline::{
     build_from_path, build_loaded, build_pipeline_from_str, validate_asset, validate_world_jsonl,
     write_build_outputs,
 };
-pub use world_builder::{WorldBuildError, WorldBuilder, world};
+pub use world_builder::{WorldBuildError, WorldBuilder, WorldValidationError, world};

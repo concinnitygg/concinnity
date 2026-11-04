@@ -4,9 +4,9 @@
 use concinnity_host::thread::asset_id;
 use std::path::Path;
 
-use super::errors_to_io;
 use crate::asset_api::{self, AssetRequest};
 use crate::authoring::registry::{AssetOrigin, RegisteredType};
+use crate::world_builder::WorldValidationError;
 
 /// Validate a single asset's type and generator without running the full build
 /// pipeline. Called by the server on each `world_add` so the LLM gets per-asset
@@ -27,7 +27,11 @@ pub fn validate_asset(
     asset_type: &str,
     name: &str,
     args: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), WorldValidationError> {
+    check_one(asset_type, name, args).map_err(|e| WorldValidationError::new(vec![e]))
+}
+
+fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
     // Single-asset validation has no surrounding world to intern against; the
     // resulting ids are throwaway. Reset so calls do not accumulate entries.
     // Clear the resource handle map too: with no world there are no handles, so
@@ -72,11 +76,13 @@ pub fn validate_asset(
 ///
 /// # Errors
 ///
-/// Returns an error if the world fails validation or an asset's args do not
-/// resolve, with every problem found joined one per line.
-pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io::Result<()> {
-    let loaded = crate::build_only::prepare_world(content, assets_dir)
-        .map_err(|errors| errors_to_io(&errors))?;
+/// Returns every problem found if the world fails validation or an asset's
+/// args do not resolve.
+pub fn validate_world_jsonl(
+    content: &str,
+    assets_dir: Option<&Path>,
+) -> Result<(), WorldValidationError> {
+    let loaded = crate::build_only::prepare_world(content, assets_dir)?;
 
     let mut errors: Vec<String> = Vec::new();
     for asset in &loaded.assets {
@@ -97,7 +103,7 @@ pub fn validate_world_jsonl(content: &str, assets_dir: Option<&Path>) -> std::io
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(errors_to_io(&errors))
+        Err(WorldValidationError::new(errors))
     }
 }
 
@@ -156,7 +162,7 @@ mod tests {
             .expect("a source-backed AudioClip validates");
         let err = validate_asset("Texture", "tex", &serde_json::json!({"generator": "nope"}))
             .expect_err("an unknown texture generator is rejected");
-        assert!(err.contains("nope"), "got: {err}");
+        assert!(err.to_string().contains("nope"), "got: {err}");
     }
 
     // A type that resolves through `create_asset_def` still has to satisfy its
@@ -167,14 +173,14 @@ mod tests {
         // A Prop resolves as a type but has no mesh source to render.
         let err = validate_asset("Prop", "empty_prop", &serde_json::json!({}))
             .expect_err("a source-less Prop is rejected");
-        assert!(err.contains("empty_prop"), "got: {err}");
+        assert!(err.to_string().contains("empty_prop"), "got: {err}");
     }
 
     #[test]
     fn validate_asset_unknown_type_mentions_the_asset_name() {
         let err =
             validate_asset("Bogus", "my_thing", &serde_json::json!({})).expect_err("unknown type");
-        assert!(err.contains("my_thing"), "got: {err}");
+        assert!(err.to_string().contains("my_thing"), "got: {err}");
     }
 
     #[test]
@@ -186,7 +192,7 @@ mod tests {
             &serde_json::json!({"generator": 5}),
         )
         .expect_err("bad args");
-        assert!(err.contains("bad_mesh"), "got: {err}");
+        assert!(err.to_string().contains("bad_mesh"), "got: {err}");
     }
 
     // The per-asset resolution pass reports every asset that fails, not just
@@ -223,7 +229,7 @@ mod tests {
             &serde_json::json!({"action": "teleport"}),
         )
         .expect_err("malformed action");
-        assert!(err.starts_with("Asset 'warp': "), "got: {err}");
+        assert!(err.to_string().starts_with("Asset 'warp': "), "got: {err}");
         validate_asset(
             "HitRegion",
             "go",

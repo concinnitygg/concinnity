@@ -5,6 +5,7 @@
 pub mod preset;
 
 use crate::authoring::world::{WorldJsonlAsset, WorldSource, load_world};
+use crate::world_builder::WorldValidationError;
 
 pub(crate) mod app_config;
 pub(crate) mod camera_shot;
@@ -75,8 +76,15 @@ pub struct LoadedWorld {
 pub fn prepare_world<'a>(
     source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&std::path::Path>,
+) -> Result<LoadedWorld, WorldValidationError> {
+    prepare(source.into(), assets_dir).map_err(WorldValidationError::new)
+}
+
+fn prepare(
+    source: WorldSource<'_>,
+    assets_dir: Option<&std::path::Path>,
 ) -> Result<LoadedWorld, Vec<String>> {
-    let mut expanded = load_world(source.into())?;
+    let mut expanded = load_world(source)?;
     let authored: Vec<String> = expanded
         .iter()
         .filter_map(crate::authoring::world::entry_id)
@@ -164,7 +172,10 @@ mod tests {
     #[test]
     fn prepare_world_reports_an_expansion_failure() {
         let content = r#"["Prop",{"$id":"p","prefab":"ghost"}]"#;
-        let errs = prepare_world(content, None).err().unwrap_or_default();
+        let errs = prepare_world(content, None)
+            .err()
+            .map(|e| e.messages().to_vec())
+            .unwrap_or_default();
         assert_eq!(errs.len(), 1);
         assert!(errs[0].contains("ghost"), "{errs:?}");
     }
@@ -174,7 +185,10 @@ mod tests {
     #[test]
     fn prepare_world_reports_semantic_errors() {
         let content = r#"["Prop",{"$id":"prop","mesh":"nope"}]"#;
-        let errs = prepare_world(content, None).err().unwrap_or_default();
+        let errs = prepare_world(content, None)
+            .err()
+            .map(|e| e.messages().to_vec())
+            .unwrap_or_default();
         assert!(!errs.is_empty());
         assert!(errs.iter().any(|e| e.contains("nope")), "{errs:?}");
     }

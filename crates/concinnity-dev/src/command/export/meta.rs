@@ -17,7 +17,7 @@ pub(super) fn world_app_meta(
     cli_version: Option<&str>,
 ) -> io::Result<AppMeta> {
     let invalid = |msg: String| io::Error::new(io::ErrorKind::InvalidData, msg);
-    let loaded = prepare_world(source, assets_dir).map_err(|errs| invalid(errs.join("\n")))?;
+    let loaded = prepare_world(source, assets_dir).map_err(|errs| invalid(errs.to_string()))?;
     let authored = load_world(source)
         .map_err(|errs| invalid(errs.join("\n")))?
         .iter()

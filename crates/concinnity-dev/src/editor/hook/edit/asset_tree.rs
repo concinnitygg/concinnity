@@ -70,7 +70,8 @@ impl EditorHook {
         let content = build_text(entries).map_err(|e| e.to_string())?;
         concinnity_cook::prepare_world(&content, crate::project::assets_dir().as_deref()).map_err(
             |errs| {
-                errs.first()
+                errs.messages()
+                    .first()
                     .cloned()
                     .unwrap_or_else(|| "the world does not build".to_string())
             },

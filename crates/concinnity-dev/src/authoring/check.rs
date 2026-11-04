@@ -21,7 +21,7 @@ fn check_source(source: concinnity_cook::WorldSource<'_>, label: &str) -> std::i
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())
         }
-        Err(errors) => Err(report_validation_errors(&errors)),
+        Err(errors) => Err(report_validation_errors(errors.messages())),
     }
 }
 
