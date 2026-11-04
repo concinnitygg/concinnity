@@ -723,7 +723,8 @@ impl VkAtmosphere {
                 extent: targets.extent,
                 msaa: targets.msaa,
             },
-            (&kernel_sets, tables[SKY_VIEW].view),
+            &kernel_sets,
+            tables[SKY_VIEW].view,
             hot_reload,
         )?;
 
@@ -868,7 +869,8 @@ fn build_clouds(
     gpu: &GpuUploadContext<'_>,
     settings: &AtmosphereSettings,
     inputs: CloudInputs<'_>,
-    (kernel_sets, sky_view): (&[[vk::DescriptorSet; KERNELS]], vk::ImageView),
+    kernel_sets: &[[vk::DescriptorSet; KERNELS]],
+    sky_view: vk::ImageView,
     hot_reload: bool,
 ) -> RenderResult<Option<VkClouds>> {
     let clouds = settings

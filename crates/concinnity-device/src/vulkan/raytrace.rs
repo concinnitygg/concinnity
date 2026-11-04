@@ -2653,10 +2653,7 @@ impl super::context::VkContext {
             transparent.wire_rt_geometry(&self.hw.device, vertex_buffer, index_buffer);
         }
         if let Some(grass) = self.grass.as_ref() {
-            grass.rewire_vertices(
-                &self.hw.device,
-                (vertex_buffer, self.geometry.vertex_buffer_bytes),
-            );
+            grass.rewire_vertices(&self.hw.device, self.geometry.vertex_range());
         }
         for &set in &self.cull.bindless_sets {
             SetWrites::new(set)

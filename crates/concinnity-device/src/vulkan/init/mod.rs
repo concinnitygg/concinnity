@@ -783,10 +783,7 @@ fn build_grass(
             shadow_bias_clamp: gpu.hw.device.depth_bias_clamp(),
         },
         gpu.frames,
-        (
-            geometry.vertex_buffer.buffer(),
-            geometry.vertex_buffer_bytes,
-        ),
+        geometry.vertex_range(),
         gpu.hot_reload,
     )
     .map(Some)

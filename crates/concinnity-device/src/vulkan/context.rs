@@ -246,6 +246,14 @@ pub(super) struct VkGeometry {
 }
 
 impl VkGeometry {
+    // The shared vertex stream over its current size.
+    pub(super) fn vertex_range(&self) -> super::set_writes::BufferRange {
+        super::set_writes::BufferRange {
+            buffer: self.vertex_buffer.buffer(),
+            bytes: self.vertex_buffer_bytes,
+        }
+    }
+
     // Drop the shared vertex/index buffers (they retire through the
     // allocator). The range allocators and byte counts are plain CPU state.
     pub(super) fn destroy(&mut self) {

@@ -25,7 +25,7 @@ use crate::vulkan::pipeline::{
 };
 use crate::vulkan::post::gbuffer::{PrepassLayout, build_prepass_layout};
 use crate::vulkan::resources::alloc_descriptor_sets;
-use crate::vulkan::set_writes::SetWrites;
+use crate::vulkan::set_writes::{BufferRange, SetWrites};
 
 // The bindless static pass; `None`/empty when the bindless path is inactive.
 pub(super) struct BindlessPass {
@@ -52,7 +52,7 @@ pub(super) struct BindlessInputs<'a> {
     pub(super) scene: &'a VkSceneAssets,
     pub(super) material_params: &'a [render_types::GpuMaterialParams],
     // The shared vertex stream and its size, which a planet tile's morph reads.
-    pub(super) vertices: (vk::Buffer, u64),
+    pub(super) vertices: BufferRange,
     pub(super) swapchain_format: vk::Format,
     // The G-buffer's render pass when the world starts with a G-buffer
     // consumer; the buckets' pre-pass pipelines build against it, and only
@@ -242,7 +242,7 @@ pub(super) fn build_bindless_pass(
                     params_info.buffer,
                     params_info.range,
                 )
-                .storage_buffer(MESH_VERTICES_BINDING, vertices.0, vertices.1)
+                .storage_buffer(MESH_VERTICES_BINDING, vertices.buffer, vertices.bytes)
                 .apply(device);
         }
 

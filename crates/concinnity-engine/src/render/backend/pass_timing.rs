@@ -58,19 +58,33 @@ pub fn pass_pair(frame: usize, timed: impl Into<TimingId>) -> (u32, u32) {
     (base, base + 1)
 }
 
-/// Decode one frame's block into the whole-frame micros and a per-pass table in
-/// [`TimingId`] order. `pair_micros(start_slot, end_slot)` is the backend's reading
-/// of one pair, with slots relative to the block; unused table entries keep the
-/// `("", 0)` sentinel.
-pub fn decode_frame_block(
-    pair_micros: impl Fn(usize, usize) -> u32,
-) -> (u32, [PassTiming; MAX_PASS_TIMINGS]) {
-    let frame_us = pair_micros(0, 1);
-    let mut passes = [("", 0u32); MAX_PASS_TIMINGS];
+/// One frame's GPU times, read back from its block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameGpuTimes {
+    /// The whole frame, in microseconds.
+    pub frame_us: u32,
+    /// Each timed pass in [`TimingId`] order; unused entries keep the `("", 0)`
+    /// sentinel.
+    pub passes: [PassTiming; MAX_PASS_TIMINGS],
+}
+
+impl FrameGpuTimes {
+    /// No times: what a backend reports before a block has been read back.
+    pub const NONE: Self = Self {
+        frame_us: 0,
+        passes: [("", 0); MAX_PASS_TIMINGS],
+    };
+}
+
+/// Decode one frame's block. `pair_micros(start_slot, end_slot)` is the
+/// backend's reading of one pair, with slots relative to the block.
+pub fn decode_frame_block(pair_micros: impl Fn(usize, usize) -> u32) -> FrameGpuTimes {
+    let mut times = FrameGpuTimes::NONE;
+    times.frame_us = pair_micros(0, 1);
     for (i, name) in TIMING_NAMES.iter().enumerate() {
-        passes[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
+        times.passes[i] = (*name, pair_micros(2 + 2 * i, 3 + 2 * i));
     }
-    (frame_us, passes)
+    times
 }
 
 /// One frame's GPU span on the queue that paces frames, split against the
@@ -222,7 +236,8 @@ mod tests {
     #[test]
     fn decode_frame_block_pairs_every_name_with_its_slots() {
         // Encodes both slots into the reading so a swapped or shifted pair shows.
-        let (frame_us, passes) = decode_frame_block(|s, e| u32::saturating_from(s * 1000 + e));
+        let FrameGpuTimes { frame_us, passes } =
+            decode_frame_block(|s, e| u32::saturating_from(s * 1000 + e));
         assert_eq!(frame_us, 1);
         for timed in TimingId::all() {
             let (s, e) = pass_pair(0, timed);

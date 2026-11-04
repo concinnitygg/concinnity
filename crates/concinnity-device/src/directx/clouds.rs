@@ -223,7 +223,8 @@ fn create_target(
     device: &ID3D12Device,
     size: [u32; 2],
     slots: &CloudSlots,
-    [srv, uav]: [usize; 2],
+    srv: usize,
+    uav: usize,
 ) -> RenderResult<ID3D12Resource> {
     let target = create_texture(
         device,
@@ -251,10 +252,11 @@ fn create_targets(
         device,
         cloud_march_size(size),
         slots,
-        [MARCHED_SRV, MARCHED_UAV],
+        MARCHED_SRV,
+        MARCHED_UAV,
     )?;
-    let a = create_target(device, size, slots, [TARGET_SRV[0], TARGET_UAV[0]])?;
-    let b = create_target(device, size, slots, [TARGET_SRV[1], TARGET_UAV[1]])?;
+    let a = create_target(device, size, slots, TARGET_SRV[0], TARGET_UAV[0])?;
+    let b = create_target(device, size, slots, TARGET_SRV[1], TARGET_UAV[1])?;
     Ok((marched, [a, b]))
 }
 

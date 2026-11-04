@@ -233,10 +233,13 @@ impl VkContext {
         self.targets.depth_images = depth_images;
         self.targets.hdr_resolve_images = hdr_resolve_images;
         self.targets.reactive_mask_images = crate::vulkan::reactive_mask::create_reactive_masks(
-            &self.hw.alloc,
-            &self.hw.device,
-            (self.commands.command_pool, self.hw.graphics_queue),
-            (render_ext.width, render_ext.height),
+            GpuUploadContext {
+                alloc: &self.hw.alloc,
+                device: &self.hw.device,
+                command_pool: self.commands.command_pool,
+                queue: self.hw.graphics_queue,
+            },
+            render_ext,
             self.frames_in_flight,
         )?;
         self.targets.framebuffers = create_main_framebuffers(

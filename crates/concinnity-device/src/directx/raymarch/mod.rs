@@ -273,7 +273,8 @@ fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12R
 fn create_raymarch_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    (vs, ps): (&[u8], &[u8]),
+    vs: &[u8],
+    ps: &[u8],
     faces: ProxyFaces,
     msaa_samples: u32,
 ) -> RenderResult<ID3D12PipelineState> {
@@ -321,7 +322,7 @@ fn compile_volume_pso(
         t.hot_reload,
         asset_label,
     )?;
-    create_raymarch_pso(t.device, t.root_sig, (&vs, &ps), faces, t.msaa_samples)
+    create_raymarch_pso(t.device, t.root_sig, &vs, &ps, faces, t.msaa_samples)
 }
 
 // Volumetric variant of the raymarch PSO: same root signature + same

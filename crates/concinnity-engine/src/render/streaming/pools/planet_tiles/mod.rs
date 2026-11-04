@@ -517,7 +517,7 @@ impl PlanetTiles {
             let occluder = HorizonOccluder::of(planet);
             ops.record(move |backend| backend.set_horizon_occluder(Some(occluder)));
         }
-        self.add_finished(planet, ops, slots, (frame, retire_frame));
+        self.add_finished(planet, ops, slots, frame, retire_frame);
 
         if camera.finest_cell_size != self.finest_cell_size {
             self.finest_cell_size = camera.finest_cell_size;
@@ -658,7 +658,8 @@ impl PlanetTiles {
         planet: &PlanetFrame,
         ops: &mut RenderOps,
         slots: &mut RenderSlots,
-        (frame, retire_frame): (u64, u64),
+        frame: u64,
+        retire_frame: u64,
     ) {
         for built in self.mail.take_results() {
             let (id, mesh) = (built.tile, built.mesh);

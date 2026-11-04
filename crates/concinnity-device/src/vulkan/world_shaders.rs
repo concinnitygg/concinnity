@@ -199,7 +199,8 @@ impl VkContext {
                         &device,
                         prepass,
                         bucket,
-                        (&engine.prepass_vert, &engine.prepass_frag),
+                        &engine.prepass_vert,
+                        &engine.prepass_frag,
                     ),
                 }
             };

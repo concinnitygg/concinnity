@@ -1523,7 +1523,8 @@ impl TransparentResources {
         let framebuffers = create_framebuffers(
             device,
             render_passes.compatible(),
-            (scene_views, reactive_mask_views),
+            scene_views,
+            reactive_mask_views,
             width,
             height,
         )?;
@@ -1855,7 +1856,8 @@ impl TransparentResources {
         self.framebuffers = create_framebuffers(
             device,
             self.render_passes.compatible(),
-            (scene_views, reactive_mask_views),
+            scene_views,
+            reactive_mask_views,
             width,
             height,
         )?;
@@ -1977,7 +1979,8 @@ impl TransparentResources {
 fn create_framebuffers(
     device: &VkDevice,
     render_pass: vk::RenderPass,
-    (scene_views, mask_views): (&[vk::ImageView], &[vk::ImageView]),
+    scene_views: &[vk::ImageView],
+    mask_views: &[vk::ImageView],
     width: u32,
     height: u32,
 ) -> RenderResult<Vec<OwnedFramebuffer>> {

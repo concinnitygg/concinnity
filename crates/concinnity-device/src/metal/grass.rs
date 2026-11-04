@@ -494,7 +494,7 @@ impl MtlContext {
             return Ok(());
         };
         let enc = self.grass_compute_encoder(cmd_buf, PassId::Grass)?;
-        self.place_blades(&enc, grass, &frame.view, [&grass.blades, &grass.args]);
+        self.place_blades(&enc, grass, &frame.view, &grass.blades, &grass.args);
         Ok(())
     }
 
@@ -509,12 +509,7 @@ impl MtlContext {
             return Ok(());
         };
         let enc = self.grass_compute_encoder(cmd_buf, PassId::GrassShadow)?;
-        self.place_blades(
-            &enc,
-            grass,
-            pass,
-            [&grass.shadow_blades, &grass.shadow_args],
-        );
+        self.place_blades(&enc, grass, pass, &grass.shadow_blades, &grass.shadow_args);
         Ok(())
     }
 
@@ -525,7 +520,8 @@ impl MtlContext {
         enc: &ProtocolObject<dyn objc2_metal::MTLComputeCommandEncoder>,
         grass: &GrassState,
         pass: &GrassPass,
-        [blades, args]: [&ProtocolObject<dyn MTLBuffer>; 2],
+        blades: &ProtocolObject<dyn MTLBuffer>,
+        args: &ProtocolObject<dyn MTLBuffer>,
     ) {
         enc.set_pipeline(&grass.pipelines.generate);
         enc.set_value(&pass.params, KERNEL_PARAMS_INDEX);

@@ -5,7 +5,6 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::jitter;
 use concinnity_engine::gfx::render_types::LineVertex;
 use concinnity_engine::profile;
-use concinnity_engine::profile::PassTiming;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::frame::plan::{
@@ -188,10 +187,7 @@ impl DxContext {
     }
 
     // Whole-frame and per-pass GPU times this slot's last submission resolved.
-    pub(in crate::directx) fn read_gpu_timings(
-        &self,
-        frame: usize,
-    ) -> (u32, [PassTiming; profile::MAX_PASS_TIMINGS]) {
+    pub(in crate::directx) fn read_gpu_timings(&self, frame: usize) -> pass_timing::FrameGpuTimes {
         // Pull the most recently completed GPU times for this slot. The fence
         // wait in `wait_frame_slot` already ensured the GPU work
         // that wrote this slot's readback bytes has retired, so the
@@ -234,7 +230,7 @@ impl DxContext {
                 }
             })
         } else {
-            (0, [("", 0); profile::MAX_PASS_TIMINGS])
+            pass_timing::FrameGpuTimes::NONE
         }
     }
 
@@ -284,7 +280,7 @@ impl DxContext {
     pub(in crate::directx) fn begin_frame_stats(
         &self,
         gpu_wait: GpuWait,
-        (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
+        gpu_times: &pass_timing::FrameGpuTimes,
         gpu_done: Option<profile::GpuDone>,
     ) {
         // Reset this frame's render stats. `record_frame` accumulates
@@ -308,13 +304,13 @@ impl DxContext {
             draw_calls: 0,
             objects: counts.objects,
             skinned_visible: counts.skinned_visible,
-            gpu_frame_us,
+            gpu_frame_us: gpu_times.frame_us,
             gpu_done,
             // The fence wait alone so far; `submit_and_present` adds the `Present`.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes: self.query_vram_bytes(),
             transient_pool_bytes: self.targets.transient_pool.allocated_bytes(),
-            pass_times_us,
+            pass_times_us: gpu_times.passes,
             // EMA-adapted exposure value, surfaced to the StatHud `EV ±X.XX`
             // chip. `None` when the world stayed on the authored static
             // exposure; the chip blanks itself in that case. Mirrors

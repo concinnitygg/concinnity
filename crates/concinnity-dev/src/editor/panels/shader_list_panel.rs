@@ -153,7 +153,7 @@ fn open_menu_rects(
     view: &ShadersView<'_>,
     o: [f32; 2],
     s: [f32; 2],
-) -> Option<(usize, [f32; 4], Vec<[f32; 4]>)> {
+) -> Option<(usize, widget_menu::MenuRects)> {
     let i = view.menu?;
     let window = rows_for_height(s[1]);
     let slot = i.checked_sub(first_shown(view, window))?;
@@ -162,8 +162,8 @@ fn open_menu_rects(
         return None;
     }
     let right = o[0] + s[0] - DOT_INSET;
-    let (bg, items) = widget_menu::menu_rects(row_rect(o, s[0], slot), right, count, o[1] + s[1]);
-    Some((slot, bg, items))
+    let rects = widget_menu::menu_rects(row_rect(o, s[0], slot), right, count, o[1] + s[1]);
+    Some((slot, rects))
 }
 
 pub(crate) fn cursor_over(mx: f32, my: f32, o: [f32; 2], s: [f32; 2]) -> bool {
@@ -185,9 +185,9 @@ pub(crate) fn hit_test(
     // An open menu is modal over the panel: its items pick, anything else
     // closes it.
     if view.menu.is_some() {
-        let item = open_menu_rects(view, o, s).and_then(|(_, _, rects)| {
+        let item = open_menu_rects(view, o, s).and_then(|(_, rects)| {
             let menu = view.rows[view.menu?].menu();
-            widget_menu::hit_item(mx, my, &rects).map(|k| menu[k])
+            widget_menu::hit_item(mx, my, &rects.items).map(|k| menu[k])
         });
         return Some(item.map_or(ShadersAction::CloseMenu, ShadersAction::Menu));
     }
@@ -264,7 +264,7 @@ fn place_menu(
         })
         .find(|&r| point_in(view.mouse[0], view.mouse[1], row_rect(o, s[0], r)));
     let open = open_menu_rects(view, o, s);
-    match open.as_ref().map(|(slot, _, _)| *slot).or(hovered) {
+    match open.as_ref().map(|(slot, _)| *slot).or(hovered) {
         Some(slot) => {
             let d = dot_rect(o, s[0], slot);
             let boxed = open.is_some() || point_in(view.mouse[0], view.mouse[1], d);
@@ -272,12 +272,13 @@ fn place_menu(
         }
         None => widget_menu::hide_dots(world, &MENU),
     }
-    let Some((slot, bg, rects)) = open else {
+    let Some((slot, rects)) = open else {
         widget_menu::hide_menu(world, &MENU);
         return;
     };
     // Every TextLabel draws after every Sprite, so the menu's backing cannot
     // cover the captions under it; they are blanked instead.
+    let bg = rects.bg;
     for covered in (0..window).filter(|&r| r != slot) {
         let r = row_rect(o, s[0], covered);
         if r[1] < bg[1] + bg[3] && r[1] + r[3] > bg[1] {
@@ -295,7 +296,7 @@ fn place_menu(
             danger: m.danger(),
         })
         .collect();
-    widget_menu::place_menu(world, &MENU, (&bg, &rects), &items, view.mouse);
+    widget_menu::place_menu(world, &MENU, &rects, &items, view.mouse);
 }
 
 fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [f32; 2]) {
@@ -474,7 +475,8 @@ mod tests {
             menu: Some(0),
             ..view
         };
-        let (_, _, items) = open_menu_rects(&open, o, s).unwrap();
+        let (_, menu) = open_menu_rects(&open, o, s).unwrap();
+        let items = menu.items;
         let at = |r: [f32; 4]| (r[0] + 2.0, r[1] + 2.0);
         let (x, y) = at(items[2]);
         assert_eq!(
@@ -492,7 +494,8 @@ mod tests {
             menu: Some(4),
             ..open
         };
-        let (_, _, items) = open_menu_rects(&vertex, o, s).unwrap();
+        let (_, menu) = open_menu_rects(&vertex, o, s).unwrap();
+        let items = menu.items;
         let (x, y) = at(items[0]);
         assert_eq!(
             hit_test(&vertex, x, y, o, s),

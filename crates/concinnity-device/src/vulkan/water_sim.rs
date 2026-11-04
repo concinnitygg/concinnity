@@ -150,7 +150,8 @@ impl OceanSim {
             Some(OceanKernels::new(
                 gpu,
                 plan,
-                [&displacement, &slopes],
+                &displacement,
+                &slopes,
                 hot_reload,
             )?)
         };
@@ -200,7 +201,8 @@ impl OceanKernels {
     fn new(
         gpu: &GpuUploadContext<'_>,
         plan: &OceanPlan,
-        [displacement, slopes]: [&CascadeArray; 2],
+        displacement: &CascadeArray,
+        slopes: &CascadeArray,
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let device = gpu.device;

@@ -589,7 +589,7 @@ impl FrameDevice for VkContext {
         let timings = self.read_gpu_timings(frame_idx);
         let gpu_done = self.read_gpu_done(frame_idx);
         self.frame_input_sampled_us[frame_idx] = params.input_sampled_us;
-        self.begin_frame_stats(gpu_wait, timings, gpu_done);
+        self.begin_frame_stats(gpu_wait, &timings, gpu_done);
         let Some(image_index) = self.acquire_frame(frame_idx, &mut gpu_wait)? else {
             return Ok(None);
         };

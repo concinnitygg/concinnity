@@ -49,15 +49,15 @@ pub(crate) fn dot_rect(row: [f32; 4], inset: f32) -> [f32; 4] {
     ]
 }
 
+// An open menu's backing and one rect per item.
+pub(crate) struct MenuRects {
+    pub(crate) bg: [f32; 4],
+    pub(crate) items: Vec<[f32; 4]>,
+}
+
 // The menu for `count` items off `row`, right-aligned to `right`: below the
-// row, or above it when that would pass `bottom`. Returns the backing and one
-// rect per item.
-pub(crate) fn menu_rects(
-    row: [f32; 4],
-    right: f32,
-    count: usize,
-    bottom: f32,
-) -> ([f32; 4], Vec<[f32; 4]>) {
+// row, or above it when that would pass `bottom`.
+pub(crate) fn menu_rects(row: [f32; 4], right: f32, count: usize, bottom: f32) -> MenuRects {
     let h = count as f32 * ITEM_H;
     let below = row[1] + row[3];
     let top = if below + h <= bottom {
@@ -69,7 +69,10 @@ pub(crate) fn menu_rects(
     let items = (0..count)
         .map(|i| [x, top + i as f32 * ITEM_H, MENU_W, ITEM_H])
         .collect();
-    ([x, top, MENU_W, h], items)
+    MenuRects {
+        bg: [x, top, MENU_W, h],
+        items,
+    }
 }
 
 // The item under `(mx, my)`.
@@ -106,15 +109,15 @@ pub(crate) fn hide_dots(world: &mut World, ids: &MenuIds) {
     }
 }
 
-// The open menu: its backing at `bg` and `items` at `rects`, the one under the
-// cursor highlighted.
+// The open menu laid out at `rects`, the item under the cursor highlighted.
 pub(crate) fn place_menu(
     world: &mut World,
     ids: &MenuIds,
-    (bg, rects): (&[f32; 4], &[[f32; 4]]),
+    rects: &MenuRects,
     items: &[Item],
     mouse: [f32; 2],
 ) {
+    let bg = rects.bg;
     if let Some(sprite) = widget::sprite_mut(world, ids.bg) {
         sprite.x = bg[0];
         sprite.y = bg[1];
@@ -128,7 +131,7 @@ pub(crate) fn place_menu(
     }
     for slot in 0..MAX_ITEMS {
         let (bg_id, label_id) = (ids.item_bgs[slot], ids.item_labels[slot]);
-        let (Some(item), Some(&r)) = (items.get(slot), rects.get(slot)) else {
+        let (Some(item), Some(&r)) = (items.get(slot), rects.items.get(slot)) else {
             widget::set_sprite_visible(world, bg_id, false);
             widget::set_label_visible(world, label_id, false);
             continue;
@@ -187,12 +190,12 @@ mod tests {
 
     #[test]
     fn the_menu_opens_below_the_row_unless_there_is_no_room() {
-        let (bg, items) = menu_rects(ROW, 395.0, 2, 1000.0);
+        let MenuRects { bg, items } = menu_rects(ROW, 395.0, 2, 1000.0);
         assert_eq!(bg[1], ROW[1] + ROW[3]);
         assert_eq!(bg[0] + bg[2], 395.0);
         assert_eq!(items.len(), 2);
         assert_eq!(items[1][1], items[0][1] + ITEM_H);
-        let (bg, _) = menu_rects(ROW, 395.0, 2, ROW[1] + ROW[3] + 10.0);
+        let bg = menu_rects(ROW, 395.0, 2, ROW[1] + ROW[3] + 10.0).bg;
         assert_eq!(bg[1] + bg[3], ROW[1], "above the row");
         let d = dot_rect(ROW, 8.0);
         assert_eq!(d[0] + d[2], ROW[0] + ROW[2] - 8.0);
@@ -200,7 +203,7 @@ mod tests {
 
     #[test]
     fn an_item_is_hit_by_its_own_rect() {
-        let (_, items) = menu_rects(ROW, 395.0, 2, 1000.0);
+        let items = menu_rects(ROW, 395.0, 2, 1000.0).items;
         assert_eq!(
             hit_item(items[1][0] + 2.0, items[1][1] + 2.0, &items),
             Some(1)
@@ -211,12 +214,12 @@ mod tests {
     #[test]
     fn place_draws_the_items_given_and_hides_the_rest() {
         let mut world = world();
-        let (bg, rects) = menu_rects(ROW, 395.0, 1, 1000.0);
+        let rects = menu_rects(ROW, 395.0, 1, 1000.0);
         let items = [Item {
             caption: "Remove",
             danger: true,
         }];
-        place_menu(&mut world, &IDS, (&bg, &rects), &items, [0.0, 0.0]);
+        place_menu(&mut world, &IDS, &rects, &items, [0.0, 0.0]);
         let first = world.get_by_id::<TextLabel>(IDS.item_labels[0]).unwrap();
         assert!(first.visible && first.content == "Remove");
         assert_eq!(first.color, DANGER_LABEL);

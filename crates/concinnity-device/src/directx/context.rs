@@ -1564,7 +1564,7 @@ impl FrameDevice for DxContext {
         let timings = self.read_gpu_timings(frame);
         let gpu_done = self.read_gpu_done(frame);
         self.timestamps.input_sampled_us[frame] = params.input_sampled_us;
-        self.begin_frame_stats(gpu_wait, timings, gpu_done);
+        self.begin_frame_stats(gpu_wait, &timings, gpu_done);
 
         // Flush any D3D12 validation messages from the previous frame.
         self.flush_validation();

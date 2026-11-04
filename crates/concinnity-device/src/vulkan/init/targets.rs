@@ -9,6 +9,7 @@ use super::{Features, InitGpu};
 use crate::vulkan::context::{HDR_FORMAT, SwapchainState, VkTargets};
 use crate::vulkan::render_pass::create_main_render_pass;
 use crate::vulkan::swapchain::{AttachmentDeviceCtx, create_attachments, create_main_framebuffers};
+use crate::vulkan::texture::GpuUploadContext;
 
 #[derive(Clone, Copy)]
 pub(super) struct TargetInputs<'a> {
@@ -83,10 +84,13 @@ pub(super) fn build_render_targets(
         )?,
     )?;
     let reactive_mask_images = crate::vulkan::reactive_mask::create_reactive_masks(
-        &hw.alloc,
-        device,
-        (command_pool, hw.graphics_queue),
-        (render_extent.width, render_extent.height),
+        GpuUploadContext {
+            alloc: &hw.alloc,
+            device,
+            command_pool,
+            queue: hw.graphics_queue,
+        },
+        render_extent,
         frames,
     )?;
     Ok(VkTargets {

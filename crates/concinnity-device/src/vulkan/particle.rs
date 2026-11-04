@@ -413,7 +413,8 @@ impl ParticleResources {
         &mut self,
         device: &VkDevice,
         frame: usize,
-        (scene, mask): (vk::ImageView, vk::ImageView),
+        scene: vk::ImageView,
+        mask: vk::ImageView,
         extent: vk::Extent2D,
     ) -> RenderResult<()> {
         let attachments = device.writer_targets().views(scene, mask);

@@ -295,7 +295,8 @@ impl PhysicsSystem {
             world,
             ctx,
             &self.props,
-            (timing.tick_start(tick), dt),
+            timing.tick_start(tick),
+            dt,
             &ticks.surroundings,
         );
 

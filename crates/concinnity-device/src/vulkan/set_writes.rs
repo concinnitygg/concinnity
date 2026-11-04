@@ -8,6 +8,13 @@ use concinnity_core::math::SaturatingFrom;
 
 use crate::vulkan::owned::VkDevice;
 
+// A buffer bound from its start over `bytes`.
+#[derive(Clone, Copy)]
+pub(in crate::vulkan) struct BufferRange {
+    pub(in crate::vulkan) buffer: vk::Buffer,
+    pub(in crate::vulkan) bytes: u64,
+}
+
 // Writes held without allocating; more spill to the heap.
 const INLINE: usize = 16;
 

@@ -542,8 +542,10 @@ impl DxContext {
         self.place_blades(
             cmd,
             grass,
-            (shadow, [frame.planet_tiles_gva, frame.tiles_gva]),
-            (&grass.shadow_blades, &grass.shadow_args),
+            frame,
+            shadow,
+            &grass.shadow_blades,
+            &grass.shadow_args,
         );
     }
 
@@ -603,23 +605,19 @@ impl DxContext {
         let Some(grass) = &self.grass else {
             return;
         };
-        self.place_blades(
-            cmd,
-            grass,
-            (&frame.view, [frame.planet_tiles_gva, frame.tiles_gva]),
-            (&grass.blades, &grass.args),
-        );
+        self.place_blades(cmd, grass, frame, &frame.view, &grass.blades, &grass.args);
     }
 
-    // One run of the blade kernel for `placement`, reading the planet tile
-    // and tile records at `planet_tiles_gva` and `tiles_gva`, appending to
-    // `blades` and filling `args`.
+    // One run of the blade kernel for `placement`, reading `frame`'s planet
+    // tile and tile records, appending to `blades` and filling `args`.
     fn place_blades(
         &self,
         cmd: &ID3D12GraphicsCommandList,
         grass: &GrassResources,
-        (placement, [planet_tiles_gva, tiles_gva]): (&GrassPlacement, [u64; 2]),
-        (blades, args): (&ID3D12Resource, &ID3D12Resource),
+        frame: &GrassFrame,
+        placement: &GrassPlacement,
+        blades: &ID3D12Resource,
+        args: &ID3D12Resource,
     ) {
         let [x, y, z] = placement.dispatch;
         // SAFETY: the command list is recording, and the generate root signature is owned by
@@ -644,12 +642,12 @@ impl DxContext {
         let bend_field_gva = com::gpu_va(&grass.bend_field);
         // SAFETY: the bend field is owned by `grass`, written by the bend pass ahead of this one.
         unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_BEND_PARAM, bend_field_gva) };
-        // SAFETY: `planet_tiles_gva` addresses this frame's live planet tile records.
+        // SAFETY: `frame.planet_tiles_gva` addresses this frame's live planet tile records.
         unsafe {
-            cmd.SetComputeRootShaderResourceView(KERNEL_PLANET_TILES_PARAM, planet_tiles_gva);
+            cmd.SetComputeRootShaderResourceView(KERNEL_PLANET_TILES_PARAM, frame.planet_tiles_gva);
         }
-        // SAFETY: `tiles_gva` addresses this frame's live tile records.
-        unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_TILES_PARAM, tiles_gva) };
+        // SAFETY: `frame.tiles_gva` addresses this frame's live tile records.
+        unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_TILES_PARAM, frame.tiles_gva) };
         let vertices_gva = com::gpu_va(&self.scene.geometry.vertex_buffer);
         // SAFETY: the shared vertex stream is owned by `self.scene` and outlives the frame.
         unsafe { cmd.SetComputeRootShaderResourceView(KERNEL_VERTICES_PARAM, vertices_gva) };

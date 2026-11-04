@@ -602,7 +602,8 @@ const fn cube_raster(faces: ProxyFaces) -> Raster {
 
 // A pipeline drawing the cube proxy's `faces` into `color_targets`.
 fn cube_proxy<'a>(
-    (vert_spv, frag_spv): (&'a [u8], &'a [u8]),
+    vert_spv: &'a [u8],
+    frag_spv: &'a [u8],
     faces: ProxyFaces,
     layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
@@ -624,13 +625,21 @@ fn cube_proxy<'a>(
 fn create_pipeline(
     device: &VkDevice,
     t: &VolumePipelineTargets,
-    spv: (&[u8], &[u8]),
+    vert_spv: &[u8],
+    frag_spv: &[u8],
     faces: ProxyFaces,
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
         depth: Depth::write_inclusive(),
         samples: t.msaa_samples,
-        ..cube_proxy(spv, faces, t.layout, t.render_pass, &[Blend::Opaque])
+        ..cube_proxy(
+            vert_spv,
+            frag_spv,
+            faces,
+            t.layout,
+            t.render_pass,
+            &[Blend::Opaque],
+        )
     }
     .build(device, "raymarch")
 }
@@ -718,7 +727,8 @@ fn create_shadow_pipeline(
     GraphicsPipelineDesc {
         depth: Depth::write(),
         ..cube_proxy(
-            (vert_spv, frag_spv),
+            vert_spv,
+            frag_spv,
             ProxyFaces::Back,
             layout,
             shadow_render_pass,
@@ -735,13 +745,15 @@ fn create_shadow_pipeline(
 fn create_prepass_pipeline(
     device: &VkDevice,
     t: &VolumePipelineTargets,
-    spv: (&[u8], &[u8]),
+    vert_spv: &[u8],
+    frag_spv: &[u8],
     faces: ProxyFaces,
 ) -> RenderResult<OwnedPipeline> {
     GraphicsPipelineDesc {
         depth: Depth::write_inclusive(),
         ..cube_proxy(
-            spv,
+            vert_spv,
+            frag_spv,
             faces,
             t.shadow_layout,
             t.prepass_render_pass,
@@ -858,7 +870,7 @@ pub(in crate::vulkan) fn build_volume_pipelines(
     };
     let surface = |faces| {
         let (vert, frag) = artifacts(Family::Surface, faces)?;
-        create_pipeline(device, t, (&vert, &frag), faces)
+        create_pipeline(device, t, &vert, &frag, faces)
     };
     let (pipeline, front_pipeline) = if flags.volumetric {
         let (vert, frag) = family_artifacts(
@@ -903,7 +915,7 @@ pub(in crate::vulkan) fn build_volume_pipelines(
     };
     let prepass = |faces| {
         let (vert, frag) = artifacts(Family::Prepass, faces)?;
-        create_prepass_pipeline(device, t, (&vert, &frag), faces)
+        create_prepass_pipeline(device, t, &vert, &frag, faces)
     };
     let prepass_pipelines = if flags.volumetric {
         None

@@ -488,7 +488,7 @@ pub(in crate::directx) fn create_transparent_pso(
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    transparent_pso(device, root_sig, (vs, ps), TransparentOutput::Scene)
+    transparent_pso(device, root_sig, vs, ps, TransparentOutput::Scene)
 }
 
 // The glass reflection pre-pass PSO: the transparent PSO's stages, overwriting
@@ -500,12 +500,7 @@ pub(in crate::directx) fn create_glass_reflection_pso(
     vs: &[u8],
     ps: &[u8],
 ) -> RenderResult<ID3D12PipelineState> {
-    transparent_pso(
-        device,
-        root_sig,
-        (vs, ps),
-        TransparentOutput::ReflectionLayer,
-    )
+    transparent_pso(device, root_sig, vs, ps, TransparentOutput::ReflectionLayer)
 }
 
 // What a transparent PSO draws into.
@@ -520,7 +515,8 @@ enum TransparentOutput {
 fn transparent_pso(
     device: &ID3D12Device,
     root_sig: &ID3D12RootSignature,
-    (vs, ps): (&[u8], &[u8]),
+    vs: &[u8],
+    ps: &[u8],
     output: TransparentOutput,
 ) -> RenderResult<ID3D12PipelineState> {
     let (blend, depth_format, depth) = match output {

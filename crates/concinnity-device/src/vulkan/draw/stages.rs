@@ -4,7 +4,6 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::profile;
-use concinnity_engine::profile::PassTiming;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::{backend::pass_timing, output::hdr};
 
@@ -175,10 +174,7 @@ impl VkContext {
         })
     }
 
-    pub(in crate::vulkan) fn read_gpu_timings(
-        &self,
-        frame: usize,
-    ) -> (u32, [PassTiming; profile::MAX_PASS_TIMINGS]) {
+    pub(in crate::vulkan) fn read_gpu_timings(&self, frame: usize) -> pass_timing::FrameGpuTimes {
         let device = &self.hw.device;
         // GPU timing for the most-recently completed block on this frame slot:
         // the whole-frame pair plus one (start, end) pair per render pass. The
@@ -187,7 +183,6 @@ impl VkContext {
         // `WITH_AVAILABILITY` so a pass that did not run this trip (its slots were
         // reset but never written) reads back unavailable -> 0, without stalling
         // the host (no `WAIT`). Zero before a slot has been visited a second time.
-        let empty_pass_times = [("", 0u32); profile::MAX_PASS_TIMINGS];
         if let Some(pool) = self.hw.timestamp_query_pool {
             // One [value, availability] pair per query slot (TYPE_64 +
             // WITH_AVAILABILITY -> two u64 per query; ash uses the element size as
@@ -219,10 +214,10 @@ impl VkContext {
                 };
                 pass_timing::decode_frame_block(pair_micros)
             } else {
-                (0, empty_pass_times)
+                pass_timing::FrameGpuTimes::NONE
             }
         } else {
-            (0, empty_pass_times)
+            pass_timing::FrameGpuTimes::NONE
         }
     }
 
@@ -230,7 +225,7 @@ impl VkContext {
     pub(in crate::vulkan) fn begin_frame_stats(
         &self,
         gpu_wait: GpuWait,
-        (gpu_frame_us, pass_times_us): (u32, [PassTiming; profile::MAX_PASS_TIMINGS]),
+        gpu_times: &pass_timing::FrameGpuTimes,
         gpu_done: Option<profile::GpuDone>,
     ) {
         // Reset this frame's render stats. `record_frame` accumulates
@@ -253,13 +248,13 @@ impl VkContext {
             draw_calls: 0,
             objects: counts.objects,
             skinned_visible: counts.skinned_visible,
-            gpu_frame_us,
+            gpu_frame_us: gpu_times.frame_us,
             gpu_done,
             // The fence wait alone so far; `acquire_frame` adds to it.
             gpu_wait_us: gpu_wait.micros(),
             vram_bytes,
             transient_pool_bytes,
-            pass_times_us,
+            pass_times_us: gpu_times.passes,
             // Adapted auto-exposure EV for the StatHud `EV` chip. `Some` only
             // when the world opted into auto-exposure (the EMA state is then
             // live); the static-exposure path leaves it `None` so the chip

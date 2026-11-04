@@ -328,11 +328,13 @@ pub(super) fn build_bucket_pipeline(
         let frag = engine_default.main_frag(source.variant);
         let main = create_bucket_main(device, targets, bucket, &engine_default.vert, frag)?;
         let prepass = targets.prepass.and_then(|prepass| {
-            let stages = (
-                &engine_default.prepass_vert[..],
-                &engine_default.prepass_frag[..],
-            );
-            build_bucket_prepass(device, prepass, bucket, stages)
+            build_bucket_prepass(
+                device,
+                prepass,
+                bucket,
+                &engine_default.prepass_vert,
+                &engine_default.prepass_frag,
+            )
         });
         Ok(BucketPipelines {
             main,
@@ -385,7 +387,7 @@ pub(super) fn build_world_prepass(
         world_entry(programs, &surface::PREPASS_FRAGMENT, hot_reload).map(|fs| (vs, fs))
     });
     match stages {
-        Ok((vs, fs)) => build_bucket_prepass(device, prepass, bucket, (&vs, &fs)),
+        Ok((vs, fs)) => build_bucket_prepass(device, prepass, bucket, &vs, &fs),
         Err(e) => {
             tracing::warn!("shader bucket {bucket}'s G-buffer pre-pass did not build: {e}");
             None
@@ -400,9 +402,9 @@ pub(super) fn build_bucket_prepass(
     device: &VkDevice,
     prepass: PrepassTargets,
     bucket: usize,
-    stages: (&[u8], &[u8]),
+    vert_spv: &[u8],
+    frag_spv: &[u8],
 ) -> Option<OwnedPipeline> {
-    let (vert_spv, frag_spv) = stages;
     let built = super::post::gbuffer::create_prepass_pipeline(
         device,
         MeshPipelineTargets {

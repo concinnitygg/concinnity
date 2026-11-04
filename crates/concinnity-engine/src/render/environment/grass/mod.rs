@@ -65,7 +65,10 @@ use lod::{
     CapacityBounds, CapacityField, CapacityViews, GRASS_LOD_COUNT, GRASS_MORPH_FRACTION,
     GRASS_SHRINK_BAND,
 };
-use planet::tiles::{MAX_PLANET_GRASS_REACH, PlanetGrassTiles, nested_planet_tiles, planet_center};
+use planet::tiles::{
+    BladeReach, DrawnTiles, GrassPlanet, MAX_PLANET_GRASS_REACH, PlanetGrassTiles, TileBlock,
+    nested_planet_tiles, planet_center,
+};
 use shadow::GRASS_SHADOW_DISTANCE;
 use tiles::{GRASS_GROUP_SIZE, GRASS_TILE_SIZE, GrassGrid, NestView, NestedTile, NestedTiles};
 
@@ -483,6 +486,34 @@ struct PlanetView<'a> {
     tile_morph: Option<&'a TileMorphFrame>,
 }
 
+impl PlanetView<'_> {
+    fn grass_planet(&self) -> GrassPlanet<'_> {
+        GrassPlanet {
+            shape: &self.grass.shape,
+            grid: &self.grass.grid,
+            center: self.center,
+        }
+    }
+
+    fn drawn(&self) -> DrawnTiles<'_> {
+        DrawnTiles {
+            tiles: self.tiles,
+            morph: self.tile_morph,
+        }
+    }
+}
+
+// What one grass run carries from the last: the crossfade phase, the bend
+// step, the indirect-args slot it writes, and the wind map and the bend map
+// of the step before.
+struct GrassRun<'a> {
+    phase: f32,
+    step: &'a BendStep,
+    args_slot: u32,
+    wind_map: [[f32; 4]; 2],
+    bend_prev_map: [[f32; 4]; 2],
+}
+
 impl GrassField {
     /// The grass `terrains` grow, swaying in `wind`. `None` when no visible
     /// layer places a blade.
@@ -610,11 +641,11 @@ impl GrassField {
         let mut regions = Vec::new();
         let mut shadow = 0u32;
         let mut tiles = Vec::new();
-        let mut add = |field: &CapacityField<'_>, tile: [f32; 2]| {
+        let mut add = |field: &CapacityField<'_>, [tile_size, reach]: [f32; 2]| {
             regions.push(lod::region_capacities(field, views));
             shadow =
                 shadow.saturating_add(lod::shadow_capacity(field, views, GRASS_SHADOW_DISTANCE));
-            tiles.push(lod::tile_capacity(field, views, tile));
+            tiles.push(lod::tile_capacity(field, views, tile_size, reach));
         };
         let wind = self.wind.strength;
         let limit = if let Some(planet) = &self.planet {
@@ -627,7 +658,11 @@ impl GrassField {
                 // margin for slopes holding more ground than their
                 // footprint.
                 if let Some(grid) = GrassGrid::for_density(layer.density * 1.15) {
-                    let reach = planet_layer_gpu(layer, wind, self.lod_height).reach;
+                    let shading = LayerShading {
+                        wind_speed: wind,
+                        lod_height: self.lod_height,
+                    };
+                    let reach = planet_layer_gpu(layer, shading).reach;
                     add(
                         &CapacityField {
                             ground: &ground,
@@ -685,38 +720,29 @@ impl GrassField {
         history.runs = history.runs.wrapping_add(1);
         let step = history.bend.advance(camera.position, inputs.elapsed);
         let prev_map = core::mem::replace(&mut history.prev_map, GRASS_IDENTITY_MAP);
-        let maps = [history.wind_map, prev_map];
+        let run = GrassRun {
+            phase,
+            step: &step,
+            args_slot,
+            wind_map: history.wind_map,
+            bend_prev_map: prev_map,
+        };
         let planet = self.planet_view(inputs.planet_tiles, inputs.tile_morph.as_ref());
         let lod = self.lod_view(camera.focal);
-        let params = self.view_params(
-            camera,
-            (&lod, phase),
-            &step,
-            args_slot,
-            maps,
-            planet.as_ref(),
-        );
+        let params = self.view_params(camera, &lod, &run, planet.as_ref());
         let scratch = &mut history.scratch;
         scratch.tiles.clear();
         scratch.planet_tiles.clear();
-        let mut limit = None;
-        let view = self.place(
-            planet.as_ref(),
-            camera.position,
-            params,
-            (scratch, &mut limit),
-        );
+        let (view, mut limit) = self.place(planet.as_ref(), camera.position, params, scratch);
         let shadow = inputs
             .shadow
             .filter(|_| self.shadow_capacity() > 0)
             .map(|light| {
                 let params = self.shadow_params(&light, inputs.elapsed, &params);
-                self.place(
-                    planet.as_ref(),
-                    camera.position,
-                    params,
-                    (scratch, &mut limit),
-                )
+                let (pass, shadow_limit) =
+                    self.place(planet.as_ref(), camera.position, params, scratch);
+                limit = limit.or(shadow_limit);
+                pass
             });
         let bend = self.bend_pass(
             &step,
@@ -761,12 +787,17 @@ impl GrassField {
     fn view_params(
         &self,
         camera: &GrassCamera,
-        (lod, phase): (&GrassLodView, f32),
-        step: &BendStep,
-        args_slot: u32,
-        [wind_map, bend_prev_map]: [[[f32; 4]; 2]; 2],
+        lod: &GrassLodView,
+        run: &GrassRun<'_>,
         planet: Option<&PlanetView<'_>>,
     ) -> GrassParams {
+        let GrassRun {
+            phase,
+            step,
+            args_slot,
+            wind_map,
+            bend_prev_map,
+        } = *run;
         let frustum = Frustum::from_camera(camera.vp, Some(lod.extent));
         let [wind, wind_gust] = self.wind.gpu_rows();
         let hiz = camera.hiz;
@@ -884,15 +915,16 @@ impl GrassField {
 
     // `params` with the layers in reach of `position` and the dispatch that
     // covers the tiles they visit, whose records are appended to the
-    // scratch's, nearest first, as many as a run holds; a limit reached is
-    // noted in `limit`.
+    // scratch's, nearest first, as many as a run holds; with the first limit
+    // reached, if any.
     fn place(
         &self,
         planet: Option<&PlanetView<'_>>,
         position: [f32; 3],
         mut params: GrassParams,
-        (scratch, limit): (&mut GrassScratch, &mut Option<GrassLimit>),
-    ) -> GrassPass {
+        scratch: &mut GrassScratch,
+    ) -> (GrassPass, Option<GrassLimit>) {
+        let mut limit = None;
         let planes = params.frustum;
         let view = NestView {
             camera: position,
@@ -902,23 +934,22 @@ impl GrassField {
         };
         scratch.found.clear();
         let groups = match (&self.planet, planet) {
-            (Some(grass), Some(p)) => {
-                scratch.reach.gather(
-                    (&grass.shape, &grass.grid),
-                    (p.tiles, p.tile_morph),
-                    p.center,
-                    position,
-                    params.cull_distance,
-                );
+            (Some(_), Some(p)) => {
+                scratch
+                    .reach
+                    .gather(p.grass_planet(), p.drawn(), position, params.cull_distance);
                 if scratch.reach.clipped {
                     limit.get_or_insert(GrassLimit::PlanetTiles);
                 }
                 params.planet_tile_base = u32::saturating_from(scratch.planet_tiles.len());
                 params.planet_tile_count = u32::saturating_from(scratch.reach.records.len());
                 let groups = place_planet(
-                    (grass, p),
+                    p,
                     &view,
-                    [self.wind.strength, self.lod_height],
+                    LayerShading {
+                        wind_speed: self.wind.strength,
+                        lod_height: self.lod_height,
+                    },
                     &mut params,
                     scratch,
                 );
@@ -939,10 +970,11 @@ impl GrassField {
         params.tile_base = u32::saturating_from(scratch.tiles.len());
         params.tile_count = u32::saturating_from(found.len());
         scratch.tiles.extend(found.iter().map(|&(_, _, t)| t));
-        GrassPass {
+        let pass = GrassPass {
             params,
             dispatch: [groups, params.tile_count.max(1), 1],
-        }
+        };
+        (pass, limit)
     }
 
     // The terrain layers' tiles in reach of `view`, each with its distance,
@@ -1075,12 +1107,13 @@ fn add_found(
 // scratch's drawn tiles in reach into its found tiles; returns the kernel
 // groups across the largest tile.
 fn place_planet(
-    (planet, frame): (&PlanetGrass, &PlanetView<'_>),
+    frame: &PlanetView<'_>,
     view: &NestView<'_>,
-    [wind_speed, lod_height]: [f32; 2],
+    shading: LayerShading,
     params: &mut GrassParams,
     scratch: &mut GrassScratch,
 ) -> u32 {
+    let planet = frame.grass;
     let GrassScratch {
         found,
         visited,
@@ -1094,7 +1127,7 @@ fn place_planet(
         planet.layers.len().min(MAX_GRASS_LAYERS)
     };
     for (slot, layer) in planet.layers.iter().take(layers).enumerate() {
-        let gpu = planet_layer_gpu(layer, wind_speed, lod_height);
+        let gpu = planet_layer_gpu(layer, shading);
         params.layers[slot] = gpu;
         params.planet_density[slot] = layer.density;
         params.planet_rules[slot] = layer.rule;
@@ -1103,10 +1136,13 @@ fn place_planet(
             visited.clear();
             nested_planet_tiles(
                 view,
-                (&planet.shape, &planet.grid, frame.center),
+                frame.grass_planet(),
                 &frame.tiles[index],
-                (origin, count),
-                [gpu.reach, gpu.width],
+                TileBlock { origin, count },
+                BladeReach {
+                    reach: gpu.reach,
+                    width: gpu.width,
+                },
                 visited,
             );
             add_found(found, &visited.tiles, slot, u32::saturating_from(record));
@@ -1117,11 +1153,18 @@ fn place_planet(
     groups
 }
 
-fn planet_layer_gpu(
-    layer: &planet::PlanetGrassLayer,
+// The wind and the level-of-detail height every planet layer is shaded with.
+#[derive(Clone, Copy)]
+struct LayerShading {
     wind_speed: f32,
     lod_height: f32,
-) -> GrassLayerGpu {
+}
+
+fn planet_layer_gpu(layer: &planet::PlanetGrassLayer, shading: LayerShading) -> GrassLayerGpu {
+    let LayerShading {
+        wind_speed,
+        lod_height,
+    } = shading;
     let look = &layer.look;
     GrassLayerGpu {
         seed: layer.seed,

@@ -496,7 +496,8 @@ pub fn shadow_capacity(
 pub fn tile_capacity(
     field: &CapacityField<'_>,
     views: &CapacityViews,
-    [tile_size, reach]: [f32; 2],
+    tile_size: f32,
+    reach: f32,
 ) -> u32 {
     let top = GRASS_NEST_LEVELS;
     let edge = |j: u32| tile_size.max(1e-3) * (1u32 << j) as f32;
@@ -1175,7 +1176,7 @@ mod tests {
         GrassSizing::new(size, &|v| CapacityBounds {
             layers: alloc::vec![region_capacities(&f, v)],
             shadow: shadow_capacity(&f, v, 24.0),
-            tiles: tile_capacity(&f, v, [GRASS_TILE_SIZE, REACH]),
+            tiles: tile_capacity(&f, v, GRASS_TILE_SIZE, REACH),
             reach: [GrassLodView::new(v.focal, HEIGHT).extent, f32::INFINITY],
         })
     }
@@ -1222,7 +1223,8 @@ mod tests {
             let cap = tile_capacity(
                 &field(&ground, &grid),
                 &views(size, sized),
-                [GRASS_TILE_SIZE, REACH],
+                GRASS_TILE_SIZE,
+                REACH,
             );
             let mut most = 0usize;
             for focal in [sized, 0.4 * sized] {

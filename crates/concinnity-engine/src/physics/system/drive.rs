@@ -217,7 +217,8 @@ impl Drives {
         world: &mut Simulation,
         ctx: &PipelineContext<'_>,
         props: &PropBodies,
-        (time, dt): (f64, f32),
+        time: f64,
+        dt: f32,
         around: &Surroundings<'_>,
     ) {
         let north = around.north;

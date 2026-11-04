@@ -47,7 +47,7 @@ use super::pipeline_desc::{
     Blend, Depth, DepthBias, GraphicsPipelineDesc, Raster, compute_pipeline,
 };
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
-use super::set_writes::SetWrites;
+use super::set_writes::{BufferRange, SetWrites};
 use super::texture::GpuUploadContext;
 
 // The grass block and the blades, which only the draws' vertex stage reads.
@@ -372,7 +372,7 @@ impl GrassResources {
         passes: GrassPassLayouts<'_>,
         targets: GrassTargets,
         frames: usize,
-        (vertices, vertex_bytes): (vk::Buffer, u64),
+        vertices: BufferRange,
         hot_reload: bool,
     ) -> RenderResult<Self> {
         let GpuUploadContext { alloc, device, .. } = gpu;
@@ -512,7 +512,7 @@ impl GrassResources {
                 .storage_buffer(4, masks.buffer(), masks_data.len() as u64)
                 .storage_buffer(5, bend_field.buffer(), bend_bytes)
                 .storage_buffer(KERNEL_PLANET_TILES_BINDING, planet.buffer(), planet_bytes)
-                .storage_buffer(KERNEL_VERTICES_BINDING, vertices, vertex_bytes)
+                .storage_buffer(KERNEL_VERTICES_BINDING, vertices.buffer, vertices.bytes)
                 .storage_buffer(KERNEL_TILES_BINDING, tiles.buffer(), tile_bytes)
                 .apply(device);
         };
@@ -620,14 +620,10 @@ impl GrassResources {
 
     // Point every kernel set at the shared vertex stream `vertices`, after it
     // was replaced. The device is idle whenever the stream is.
-    pub(in crate::vulkan) fn rewire_vertices(
-        &self,
-        device: &VkDevice,
-        (vertices, vertex_bytes): (vk::Buffer, u64),
-    ) {
+    pub(in crate::vulkan) fn rewire_vertices(&self, device: &VkDevice, vertices: BufferRange) {
         for &set in self.kernel_sets.iter().chain(&self.shadow_kernel_sets) {
             SetWrites::new(set)
-                .storage_buffer(KERNEL_VERTICES_BINDING, vertices, vertex_bytes)
+                .storage_buffer(KERNEL_VERTICES_BINDING, vertices.buffer, vertices.bytes)
                 .apply(device);
         }
     }
@@ -996,7 +992,8 @@ impl VkContext {
                 cmd,
                 grass,
                 frame,
-                (pipeline, grass.layouts.prepass.handle()),
+                pipeline,
+                grass.layouts.prepass.handle(),
                 &[
                     self.descriptors.global_sets[frame_idx],
                     self.cull.bindless_sets[frame_idx],
@@ -1023,7 +1020,8 @@ impl VkContext {
                 cmd,
                 grass,
                 frame,
-                (&grass.pipelines.main, grass.layouts.main.handle()),
+                &grass.pipelines.main,
+                grass.layouts.main.handle(),
                 &[
                     self.descriptors.global_sets[frame_idx],
                     self.cull.bindless_sets[frame_idx],
@@ -1040,7 +1038,8 @@ impl VkContext {
         cmd: vk::CommandBuffer,
         grass: &GrassResources,
         frame: &GrassFrame,
-        (pipelines, layout): (&GrassDrawPipelines, vk::PipelineLayout),
+        pipelines: &GrassDrawPipelines,
+        layout: vk::PipelineLayout,
         sets: &[vk::DescriptorSet],
     ) {
         let device = &self.hw.device;

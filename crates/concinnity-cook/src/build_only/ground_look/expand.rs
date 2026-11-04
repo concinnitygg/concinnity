@@ -17,7 +17,8 @@ pub(crate) fn expand_ground_looks(asset_values: &mut Vec<serde_json::Value>) -> 
                 let look = serde_json::to_value(sand.look).map_err(|e| e.to_string())?;
                 surface_entries(
                     &name,
-                    ("sand", look),
+                    "sand",
+                    &look,
                     sand.resolution,
                     sand_peak(&sand.look),
                     sand.look.roughness,
@@ -28,7 +29,8 @@ pub(crate) fn expand_ground_looks(asset_values: &mut Vec<serde_json::Value>) -> 
                 let look = serde_json::to_value(dirt.look).map_err(|e| e.to_string())?;
                 surface_entries(
                     &name,
-                    ("dirt", look),
+                    "dirt",
+                    &look,
                     dirt.resolution,
                     dirt_peak(&dirt.look),
                     dirt.look.roughness,
@@ -47,7 +49,8 @@ pub(crate) fn expand_ground_looks(asset_values: &mut Vec<serde_json::Value>) -> 
 // which the material's tint restores.
 fn surface_entries(
     name: &str,
-    (field, look): (&str, serde_json::Value),
+    field: &str,
+    look: &serde_json::Value,
     resolution: u32,
     peak: [f32; 3],
     roughness: f32,

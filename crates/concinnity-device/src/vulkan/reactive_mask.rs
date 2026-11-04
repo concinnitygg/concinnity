@@ -15,12 +15,11 @@ use ash::vk;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 
-use super::allocator::DeviceAllocator;
 use super::owned::{OwnedRenderPass, VkDevice};
 use super::pipeline_desc::Blend;
 use super::texture::{
-    GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
-    one_shot_submit, transition_image_layout_range,
+    GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
+    create_image_view, one_shot_submit, transition_image_layout_range,
 };
 
 pub(in crate::vulkan) const REACTIVE_MASK_FORMAT: vk::Format = vk::Format::R8_UNORM;
@@ -41,19 +40,23 @@ const RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
 
 // One mask per frame in flight, rested in SHADER_READ_ONLY_OPTIMAL.
 pub(in crate::vulkan) fn create_reactive_masks(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    (command_pool, queue): (vk::CommandPool, vk::Queue),
-    (width, height): (u32, u32),
+    gpu: GpuUploadContext<'_>,
+    extent: vk::Extent2D,
     count: usize,
 ) -> RenderResult<Vec<GpuImage>> {
+    let GpuUploadContext {
+        alloc,
+        device,
+        command_pool,
+        queue,
+    } = gpu;
     let mut masks = Vec::with_capacity(count);
     for _ in 0..count {
         let pooled = create_image(
             alloc,
             &ImageSpec {
-                width: width.max(1),
-                height: height.max(1),
+                width: extent.width.max(1),
+                height: extent.height.max(1),
                 format: REACTIVE_MASK_FORMAT,
                 tiling: vk::ImageTiling::OPTIMAL,
                 // TRANSFER_DST for the clear a frame with no writer gives a

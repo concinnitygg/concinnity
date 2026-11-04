@@ -128,7 +128,7 @@ impl VkContext {
         let extent = self.targets.render_extent;
         if self.feature_wires.post_scene.changed(frame, scene.0) {
             if let Some(p) = self.particle.resources.as_mut() {
-                p.rescene(&self.hw.device, frame, (scene.0, mask), extent)?;
+                p.rescene(&self.hw.device, frame, scene.0, mask, extent)?;
             }
             if let Some(t) = self.transparent.as_mut() {
                 t.rescene(&self.hw.device, frame, scene, mask, extent)?;

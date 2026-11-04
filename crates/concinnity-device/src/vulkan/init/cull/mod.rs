@@ -149,10 +149,7 @@ pub(super) fn build_cull(
             targets,
             scene,
             material_params: &world.material_params,
-            vertices: (
-                geometry.vertex_buffer.buffer(),
-                geometry.vertex_buffer_bytes,
-            ),
+            vertices: geometry.vertex_range(),
             swapchain_format,
             gbuffer_render_pass: gbuffer.map(|gb| gb.prepass_render_pass.handle()),
         },

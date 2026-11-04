@@ -248,7 +248,7 @@ fn a_reshape_drops_every_tile_and_discards_stale_meshes() {
         shape: reshaped,
         frame: frame.frame,
     };
-    tiles.add_finished(&moved, &mut ops, &mut slots, (0, 2));
+    tiles.add_finished(&moved, &mut ops, &mut slots, 0, 2);
     assert_eq!(
         tiles.tiles.get(&top),
         Some(&pending(top)),
