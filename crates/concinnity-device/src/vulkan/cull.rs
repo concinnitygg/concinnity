@@ -23,11 +23,10 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
 use concinnity_engine::render::uniforms::cull::{CullHiz, CullView};
 
-use crate::vulkan::record::cmd_push_constants;
-
 use super::allocator::PooledBuffer;
 use super::compact::{CompactPass, DrawLists};
 use super::context::VkContext;
+use crate::vulkan::record::Recorder;
 
 // Byte stride of one `VkDrawIndexedIndirectCommand` in the cull kernel's output.
 pub(in crate::vulkan) const INDIRECT_COMMAND_STRIDE: u32 =
@@ -127,7 +126,7 @@ impl VkContext {
     // command stream.
     pub(in crate::vulkan) fn encode_cull(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frustum: &Frustum,
         cam_pos: [f32; 3],
@@ -136,7 +135,6 @@ impl VkContext {
             return;
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
-        let device = &self.hw.device;
 
         // Pack the six already-normalized frustum planes for the kernel.
         let mut params = CullView {
@@ -149,21 +147,14 @@ impl VkContext {
             cam_pos,
         };
         params.planes = frustum.packed_planes();
-        // SAFETY: `cmd` is in the recording state, and the cull pipeline is owned by
-        // `self.cull.cull_kernels`, which outlives this recording.
-        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
-        // SAFETY: the frame's cull set is allocated from the live cull descriptor pool and matches
-        // the kernel layout bound with the pipeline above.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                0,
-                std::slice::from_ref(&self.cull.cull_sets[frame_idx]),
-                &[],
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&self.cull.cull_sets[frame_idx]),
+            &[],
+        );
         // Hi-Z occlusion set (set 1): the depth pyramid sampler + this
         // frame's CullHiz (previous-frame VP + pyramid dims +
         // validity gate). `Some` whenever the cull pipeline is (same
@@ -177,41 +168,25 @@ impl VkContext {
                 hiz_enabled: u32::from(self.state.planner.temporal().occlusion().valid()),
             };
             hiz.cull_ubos[frame_idx].write_val(0, &params);
-            // SAFETY: the Hi-Z read set is owned by `self.cull.hiz`, which lives for the frame,
-            // and its UBO was just written on the host before submission.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout.handle(),
-                    1,
-                    std::slice::from_ref(&hiz.read_sets[frame_idx]),
-                    &[],
-                );
-            }
-        }
-        // SAFETY: `layout` belongs to the same live kernel set as the bound pipeline, and `params`
-        // is borrowed for the call.
-        unsafe {
-            cmd_push_constants(
-                device,
-                cmd,
-                layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                &params,
+            // The Hi-Z read set's UBO was written on the host above, before submission.
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::COMPUTE,
+                layout,
+                1,
+                std::slice::from_ref(&hiz.read_sets[frame_idx]),
+                &[],
             );
         }
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
         // One invocation per build-time object, 64-wide local groups.
         let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
-        // SAFETY: the pipeline, both sets and the push constants above are bound on this recording
-        // command buffer.
-        unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        rec.dispatch(groups, 1, 1);
         if let (Some(&set), Some(lists)) = (
             self.cull.compact_sets.get(frame_idx),
             self.cull.indirect_buffers.get(frame_idx),
         ) {
             self.encode_compaction(
-                cmd,
+                rec,
                 CompactPass {
                     set,
                     lists: self.main_lists(lists.buffer()),
@@ -260,7 +235,7 @@ impl VkContext {
     // `directx/cull.rs::encode_shadow_culls`.
     pub(in crate::vulkan) fn encode_shadow_culls(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         render_mask: u32,
         cam_pos: [f32; 3],
@@ -278,7 +253,7 @@ impl VkContext {
             culls[kept] = Some((view, Frustum::from_shadow(light_vp)));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &culls[..kept], cam_pos);
+        self.encode_view_culls(rec, &culls[..kept], cam_pos);
     }
 
     // Per-slice GPU cull for the spot shadow pass: the same shadow kernel, each
@@ -287,7 +262,7 @@ impl VkContext {
     // camera-keyed LOD the frame's draw args already carry.
     pub(in crate::vulkan) fn encode_spot_culls(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
@@ -303,7 +278,7 @@ impl VkContext {
                 .map(|view| (view, self.spot_shadow.frusta[slice]));
             kept += 1;
         }
-        self.encode_view_culls(cmd, &culls[..kept], cam_pos);
+        self.encode_view_culls(rec, &culls[..kept], cam_pos);
     }
 
     // What a shadow view's cull and packing cover: this frame's records, at
@@ -324,7 +299,7 @@ impl VkContext {
     // `draw.record_count() == 0`, or no view asked for.
     fn encode_view_culls(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         views: &[Option<(&VkShadowView, Frustum)>],
         cam_pos: [f32; 3],
     ) {
@@ -337,11 +312,8 @@ impl VkContext {
         if self.state.draw.record_count() == 0 || views.is_empty() {
             return;
         }
-        let device = &self.hw.device;
 
-        // SAFETY: `cmd` is in the recording state, and the shadow cull pipeline is owned by
-        // `self.cull`, which outlives this recording.
-        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
         let mut passes = [CompactPass::default(); MAX_SHADOW_VIEWS];
         let mut packed_views = 0;
         for (pass, (view, frustum)) in passes.iter_mut().zip(views.iter().flatten()) {
@@ -356,31 +328,15 @@ impl VkContext {
                 cam_pos,
             };
             params.planes = frustum.packed_planes();
-            // SAFETY: the view's cull set was built against the shadow cull layout.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout.handle(),
-                    0,
-                    std::slice::from_ref(&view.cull_set),
-                    &[],
-                );
-            }
-            // SAFETY: `layout` is the live shadow cull layout bound with the pipeline above, and
-            // `params` is borrowed for the call.
-            unsafe {
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    layout.handle(),
-                    vk::ShaderStageFlags::COMPUTE,
-                    &params,
-                );
-            }
-            // SAFETY: the pipeline, this view's set and its push constants are bound on the
-            // recording command buffer.
-            unsafe { device.cmd_dispatch(cmd, packed.records.div_ceil(64), 1, 1) };
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::COMPUTE,
+                layout,
+                0,
+                std::slice::from_ref(&view.cull_set),
+                &[],
+            );
+            rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
+            rec.dispatch(packed.records.div_ceil(64), 1, 1);
             *pass = CompactPass {
                 set: view.compact_set,
                 lists: view.lists(),
@@ -394,23 +350,17 @@ impl VkContext {
             };
             packed_views += 1;
         }
-        self.encode_compactions(cmd, &passes[..packed_views]);
+        self.encode_compactions(rec, &passes[..packed_views]);
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-        // SAFETY: a global memory barrier on the recording command buffer; `barrier` is borrowed
-        // for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::DRAW_INDIRECT,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 
     // Dispatch the late pass (two-pass occlusion) cull for frame slot
@@ -423,7 +373,7 @@ impl VkContext {
     // `directx/cull.rs::encode_cull_late`.
     pub(in crate::vulkan) fn encode_cull_late(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frustum: &Frustum,
         cam_pos: [f32; 3],
@@ -440,7 +390,6 @@ impl VkContext {
         if self.cull.cull_sets_late.is_empty() || self.state.draw.record_count() == 0 {
             return;
         }
-        let device = &self.hw.device;
 
         // Frustum planes + camera position are unused by the late kernel
         // (candidates already passed those in the early pass) but the push-constant
@@ -468,54 +417,31 @@ impl VkContext {
         };
         hiz.cull_ubos_late[frame_idx].write_val(0, &hiz_params);
 
-        // SAFETY: `cmd` is in the recording state, and the cull pipeline is owned by `self.cull`,
-        // which outlives this recording.
-        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
-        // SAFETY: the second-pass cull set for this frame is allocated from the live cull pool and
-        // matches `layout`.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                0,
-                std::slice::from_ref(&self.cull.cull_sets_late[frame_idx]),
-                &[],
-            );
-        }
-        // SAFETY: the Hi-Z read set is owned by `hiz`, which outlives the frame, and its UBO was
-        // written on the host above.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                1,
-                std::slice::from_ref(&hiz.read_sets_late[frame_idx]),
-                &[],
-            );
-        }
-        // SAFETY: `layout` is the live kernel layout bound with the pipeline, and `params` is
-        // borrowed for the call.
-        unsafe {
-            cmd_push_constants(
-                device,
-                cmd,
-                layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                &params,
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&self.cull.cull_sets_late[frame_idx]),
+            &[],
+        );
+        // The Hi-Z read set's UBO was written on the host above, before submission.
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            1,
+            std::slice::from_ref(&hiz.read_sets_late[frame_idx]),
+            &[],
+        );
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
         let groups = u32::saturating_from(self.state.draw.record_count()).div_ceil(64);
-        // SAFETY: the pipeline, both sets and the push constants above are bound on this recording
-        // command buffer.
-        unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+        rec.dispatch(groups, 1, 1);
         if let (Some(&set), Some(lists)) = (
             self.cull.compact_sets_late.get(frame_idx),
             self.cull.indirect_buffers_late.get(frame_idx),
         ) {
             self.encode_compaction(
-                cmd,
+                rec,
                 CompactPass {
                     set,
                     lists: self.main_lists(lists.buffer()),

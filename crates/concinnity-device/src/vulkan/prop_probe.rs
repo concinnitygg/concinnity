@@ -37,6 +37,7 @@ use super::texture::{
     one_shot_submit, transition_image_layout_range,
 };
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use crate::vulkan::record::Recorder;
 
 const FACE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
@@ -240,7 +241,7 @@ impl VkContext {
     // capture into the probe's cube.
     pub(in crate::vulkan) fn encode_prop_probe(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
         let (Some(frame), Some(gpu)) = (self.probe.prop.frame, self.probe.prop.gpu.as_ref()) else {
@@ -286,10 +287,10 @@ impl VkContext {
             .with_stand_ins(frame.stand_ins());
             gpu.view_bufs[ring].write_val(0, &view);
             if face > 0 {
-                self.order_prop_face_cull(cmd);
+                Self::order_prop_face_cull(rec);
             }
             self.encode_probe_cull(
-                cmd,
+                rec.raw(),
                 gpu.cull_sets[f],
                 gpu.hiz_set,
                 packing,
@@ -300,9 +301,9 @@ impl VkContext {
                     capture_tiles: self.state.placement.capture_tiles,
                 },
             );
-            self.order_prop_face_render(cmd);
+            Self::order_prop_face_render(rec);
             self.encode_main_into_face(
-                cmd,
+                rec.raw(),
                 gpu.framebuffers[face].handle(),
                 FaceArea::whole(extent),
                 FaceView {
@@ -314,34 +315,28 @@ impl VkContext {
                 packing,
             );
         }
-        self.encode_probe_pyramid(cmd, &gpu.prefilter, &gpu.plan)?;
+        self.encode_probe_pyramid(rec.raw(), &gpu.prefilter, &gpu.plan)?;
         for mip in 1..gpu.plan.mips() {
-            self.encode_probe_ggx_mip(cmd, &gpu.prefilter, &gpu.plan, mip)?;
+            self.encode_probe_ggx_mip(rec.raw(), &gpu.prefilter, &gpu.plan, mip)?;
         }
-        self.encode_probe_cube_readable(cmd, &gpu.prefilter);
+        self.encode_probe_cube_readable(rec.raw(), &gpu.prefilter);
         Ok(())
     }
 
     // Order the next face's cull and packing, which rewrite the slot's status,
     // group counts and lists, after the previous face's packing wrote them and
     // its indirect draw read them.
-    fn order_prop_face_cull(&self, cmd: vk::CommandBuffer) {
+    fn order_prop_face_cull(rec: &Recorder<'_>) {
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::INDIRECT_COMMAND_READ)
             .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-        // SAFETY: `cmd` is the frame's command buffer, recording outside a
-        // render pass; the barrier names no resource.
-        unsafe {
-            self.hw.device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::DRAW_INDIRECT,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 
     // Order a face's render after the last writes to its attachments: the
@@ -349,7 +344,7 @@ impl VkContext {
     // capture layer the last convolution read. `main_render_pass` takes both
     // in `UNDEFINED` and its external dependency makes nothing available, so
     // this barrier is what orders them.
-    fn order_prop_face_render(&self, cmd: vk::CommandBuffer) {
+    fn order_prop_face_render(rec: &Recorder<'_>) {
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE
@@ -359,22 +354,16 @@ impl VkContext {
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                     | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             );
-        // SAFETY: `cmd` is the frame's command buffer, recording outside a
-        // render pass; the barrier names no resource.
-        unsafe {
-            self.hw.device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
-                    | vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS
+                | vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 }
 

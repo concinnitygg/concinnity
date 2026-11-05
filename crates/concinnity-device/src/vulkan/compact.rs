@@ -17,7 +17,7 @@ use super::cull::INDIRECT_COMMAND_STRIDE;
 use super::descriptor_layout::Binding;
 use super::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use super::pipeline_desc::compute_pipeline;
-use super::record::cmd_push_constants;
+use super::record::{BufferAt, Recorder};
 use super::resources::create_descriptor_set_layout;
 use super::set_writes::SetWrites;
 
@@ -164,160 +164,111 @@ pub(in crate::vulkan) struct CompactPass {
 }
 
 // Order a compute pass's writes before the next compute pass reads them.
-fn compute_barrier(device: &ash::Device, cmd: vk::CommandBuffer) {
+fn compute_barrier(rec: &Recorder<'_>) {
     let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-    // SAFETY: a global memory barrier on the recording command buffer; `barrier` is borrowed for
-    // the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::DependencyFlags::empty(),
-            std::slice::from_ref(&barrier),
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        std::slice::from_ref(&barrier),
+        &[],
+        &[],
+    );
 }
 
 impl VkContext {
     // Pack the cull just dispatched on `cmd`: scan its group counts, then
     // scatter its kept records' commands, each list in record order. The
     // caller orders the scatter's writes before the draws that read them.
-    pub(in crate::vulkan) fn encode_compaction(&self, cmd: vk::CommandBuffer, pass: CompactPass) {
-        self.encode_compactions(cmd, std::slice::from_ref(&pass));
+    pub(in crate::vulkan) fn encode_compaction(&self, rec: &Recorder<'_>, pass: CompactPass) {
+        self.encode_compactions(rec, std::slice::from_ref(&pass));
     }
 
     // Pack every cull of `passes` just dispatched on `cmd`, each into its own
     // lists: every scan, then every scatter, so the passes share their
     // barriers.
-    pub(in crate::vulkan) fn encode_compactions(
-        &self,
-        cmd: vk::CommandBuffer,
-        passes: &[CompactPass],
-    ) {
+    pub(in crate::vulkan) fn encode_compactions(&self, rec: &Recorder<'_>, passes: &[CompactPass]) {
         let Some(kernels) = self.cull.compact.as_ref() else {
             return;
         };
         if passes.is_empty() {
             return;
         }
-        let device = &self.hw.device;
-        compute_barrier(device, cmd);
+        compute_barrier(rec);
         if self.hw.draw_count.is_none() {
-            self.zero_lists(cmd, passes);
+            Self::zero_lists(rec, passes);
         }
-        let layout = kernels.layout.handle();
+        let layout = &kernels.layout;
         let bind = |pass: &CompactPass| {
-            // SAFETY: `pass.set` was written against `kernels.set_layout`, the layout's only set.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout,
-                    0,
-                    std::slice::from_ref(&pass.set),
-                    &[],
-                );
-            }
-            // SAFETY: `layout` is the bound kernels' layout, and the params are borrowed for the
-            // call.
-            unsafe {
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    &pass.params,
-                );
-            }
+            // `pass.set` was written against `kernels.set_layout`, the layout's only set.
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::COMPUTE,
+                layout,
+                0,
+                std::slice::from_ref(&pass.set),
+                &[],
+            );
+            rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &pass.params);
         };
-        // SAFETY: `cmd` is recording, and the scan pipeline is owned by `self.cull`.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, kernels.scan.handle());
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &kernels.scan);
         for pass in passes {
             bind(pass);
-            // SAFETY: the scan pipeline, this pass's set and push constants are bound above.
-            unsafe { device.cmd_dispatch(cmd, pass.params.bucket_count.clamp(1, 64) + 1, 1, 1) };
+            rec.dispatch(pass.params.bucket_count.clamp(1, 64) + 1, 1, 1);
         }
-        compute_barrier(device, cmd);
-        // SAFETY: the scatter pipeline is owned by `self.cull`, and shares the scan's layout.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                kernels.scatter.handle(),
-            );
-        }
+        compute_barrier(rec);
+        // The scatter pipeline shares the scan's layout, so each pass's set and
+        // push constants stay valid under it.
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &kernels.scatter);
         for pass in passes {
             // A lone pass's set and push constants stay bound from its scan.
             if passes.len() > 1 {
                 bind(pass);
             }
             let groups = pass.params.object_count.div_ceil(CULL_GROUP_RECORDS);
-            // SAFETY: the scatter pipeline, this pass's set and push constants are bound above.
-            unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+            rec.dispatch(groups, 1, 1);
         }
     }
 
     // Zero every list of `passes` ahead of their scatters, once the last draws
     // that read them finish, for a device that draws each list at its full
     // capacity.
-    fn zero_lists(&self, cmd: vk::CommandBuffer, passes: &[CompactPass]) {
-        let device = &self.hw.device;
+    fn zero_lists(rec: &Recorder<'_>, passes: &[CompactPass]) {
         let reads = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ)
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-        // SAFETY: a global memory barrier on the recording command buffer.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&reads),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::DRAW_INDIRECT,
+            vk::PipelineStageFlags::TRANSFER,
+            std::slice::from_ref(&reads),
+            &[],
+            &[],
+        );
         for pass in passes {
-            // SAFETY: `cmd` is recording outside a render pass, and the lists' buffer is live and
-            // was created with TRANSFER_DST.
-            unsafe {
-                device.cmd_fill_buffer(
-                    cmd,
-                    pass.lists.buffer,
-                    0,
-                    command_bytes(pass.lists.commands.max(1)),
-                    0,
-                );
-            }
+            // The lists' buffer was created with TRANSFER_DST.
+            rec.fill_buffer(
+                pass.lists.buffer,
+                0,
+                command_bytes(pass.lists.commands.max(1)),
+                0,
+            );
         }
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
-        // SAFETY: a global memory barrier on the recording command buffer.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 
     // Draw stream `stream`'s list of `lists`, whose commands sit at `slots`.
     pub(in crate::vulkan) fn draw_stream(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         lists: DrawLists,
         stream: u32,
         slots: StreamSlots,
@@ -330,30 +281,23 @@ impl VkContext {
         let count_offset =
             count_slot_offset(command_bytes(lists.commands.max(1))) + 4 * u64::from(stream);
         match &self.hw.draw_count {
-            // SAFETY: `cmd` is recording inside a render pass with a graphics pipeline bound; the
-            // list and its count slot lie inside `lists.buffer`, which outlives the frame.
-            Some(draw_count) => unsafe {
-                draw_count.cmd_draw_indexed_indirect_count(
-                    cmd,
-                    lists.buffer,
+            // The list and its count slot lie inside `lists.buffer`.
+            Some(draw_count) => rec.draw_indexed_indirect_count(
+                draw_count,
+                BufferAt {
+                    buffer: lists.buffer,
                     offset,
-                    lists.buffer,
-                    count_offset,
-                    slots.capacity,
-                    stride,
-                );
-            },
-            // SAFETY: as above; the commands past the list's count were zeroed before the scatter,
-            // so they draw nothing.
-            None => unsafe {
-                self.hw.device.cmd_draw_indexed_indirect(
-                    cmd,
-                    lists.buffer,
-                    offset,
-                    slots.capacity,
-                    stride,
-                );
-            },
+                },
+                BufferAt {
+                    buffer: lists.buffer,
+                    offset: count_offset,
+                },
+                slots.capacity,
+                stride,
+            ),
+            // The commands past the list's count were zeroed before the
+            // scatter, so they draw nothing.
+            None => rec.draw_indexed_indirect(lists.buffer, offset, slots.capacity, stride),
         }
     }
 }

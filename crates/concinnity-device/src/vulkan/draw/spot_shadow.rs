@@ -21,6 +21,7 @@ use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
 use crate::vulkan::context::{VkContext, VkSpotShadow};
 use crate::vulkan::descriptor_layout::{PoolSizes, shadow_global_set};
 use crate::vulkan::owned::VkDevice;
+use crate::vulkan::record::Recorder;
 use crate::vulkan::resources::alloc_descriptor_sets;
 use crate::vulkan::set_writes::SetWrites;
 use crate::vulkan::texture::GpuImage;
@@ -195,31 +196,29 @@ impl VkContext {
     // pub(in crate::vulkan) so the render-graph executor can dispatch it.
     pub(in crate::vulkan) fn encode_spot_shadow_pass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         cam_pos: [f32; 3],
     ) {
         if self.spot_shadow.count() == 0 {
             return;
         }
-        let device = &self.hw.device;
         let views = self.cull.spot_views.get(frame_idx);
         let gpu_driven = self.shadow_views_drawable() && views.is_some();
 
         // Cull every refreshed slice before opening any render pass (Vulkan
         // disallows compute inside one).
         if gpu_driven {
-            self.encode_spot_culls(cmd, frame_idx, cam_pos);
+            self.encode_spot_culls(rec, frame_idx, cam_pos);
         }
 
         let sz = self.spot_shadow.slice_size;
         for slice in self.spot_shadow.refreshed_slices() {
             let framebuffer = &self.spot_shadow.framebuffers[slice as usize];
-            self.begin_shadow_slice(cmd, framebuffer.handle(), sz);
+            self.begin_shadow_slice(rec, framebuffer, sz);
             if gpu_driven && let Some(view) = views.and_then(|v| v.get(slice as usize)) {
                 self.draw_shadow_view(
-                    device,
-                    cmd,
+                    rec,
                     frame_idx,
                     ShadowView {
                         uniforms_set: self.spot_shadow.sets[slice as usize],
@@ -229,9 +228,7 @@ impl VkContext {
                     },
                 );
             }
-            // SAFETY: `cmd` is a command buffer in the recording state inside the render pass
-            // `begin_shadow_slice` opened.
-            unsafe { device.cmd_end_render_pass(cmd) };
+            rec.end_render_pass();
         }
     }
 }

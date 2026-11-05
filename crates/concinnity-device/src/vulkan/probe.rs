@@ -49,6 +49,7 @@ use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
+use crate::vulkan::record::Recorder;
 use concinnity_engine::render::uniforms::cull::CullView;
 use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera};
 
@@ -593,8 +594,11 @@ impl VkContext {
         }
         // SAFETY: the cull pipeline, its sets and push constants are bound above.
         unsafe { device.cmd_dispatch(cmd, records.div_ceil(64), 1, 1) };
+        // SAFETY: `cmd` is recording and belongs to this device, and the recorder lives only for
+        // the packing below.
+        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
         self.encode_compaction(
-            cmd,
+            &rec,
             CompactPass {
                 set: packing.set,
                 lists: packing.lists,
@@ -720,7 +724,10 @@ impl VkContext {
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
             records,
         };
-        self.draw_stream(cmd, packing.lists, 0, face.slots(0));
+        // SAFETY: `cmd` is recording inside the face's render pass, and the recorder lives only
+        // for this draw.
+        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
+        self.draw_stream(&rec, packing.lists, 0, face.slots(0));
         // A face is always rendered lit, whatever the viewport shows.
         if background.draws_sky()
             && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)

@@ -47,6 +47,13 @@ pub(in crate::vulkan) unsafe fn cmd_push_constants<T: bytemuck::NoUninit>(
     unsafe { device.cmd_push_constants(cmd, layout, stages, 0, bytemuck::bytes_of(value)) };
 }
 
+// A buffer and a byte offset into it, where a command reads.
+#[derive(Copy, Clone)]
+pub(in crate::vulkan) struct BufferAt {
+    pub(in crate::vulkan) buffer: vk::Buffer,
+    pub(in crate::vulkan) offset: vk::DeviceSize,
+}
+
 // A command buffer in the recording state.
 //
 // Borrows the raw device rather than sharing the owning handle: recording never
@@ -80,7 +87,8 @@ impl<'a> Recorder<'a> {
     // # Safety
     // `cmd` must be in the recording state and must belong to `device`. Only
     // for the recording scopes whose `vkBeginCommandBuffer` sits in a caller
-    // that cannot hand the recorder down (the one-shot upload helpers).
+    // that cannot hand the recorder down: the one-shot upload helpers, and the
+    // probe bake, whose passes still record into a raw buffer.
     pub(in crate::vulkan) unsafe fn assume_recording(
         device: &'a ash::Device,
         cmd: vk::CommandBuffer,
@@ -266,6 +274,82 @@ impl<'a> Recorder<'a> {
                 vertex_offset,
                 first_instance,
             );
+        };
+    }
+
+    // `count` non-indexed draws whose arguments sit `stride` apart from `offset`
+    // in `args`.
+    pub(in crate::vulkan) fn draw_indirect(
+        &self,
+        args: vk::Buffer,
+        offset: vk::DeviceSize,
+        count: u32,
+        stride: u32,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the arguments buffer
+        // is live for the call.
+        unsafe {
+            self.device
+                .cmd_draw_indirect(self.cmd, args, offset, count, stride);
+        };
+    }
+
+    // `count` indexed draws whose arguments sit `stride` apart from `offset` in
+    // `args`.
+    pub(in crate::vulkan) fn draw_indexed_indirect(
+        &self,
+        args: vk::Buffer,
+        offset: vk::DeviceSize,
+        count: u32,
+        stride: u32,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the arguments buffer
+        // is live for the call.
+        unsafe {
+            self.device
+                .cmd_draw_indexed_indirect(self.cmd, args, offset, count, stride);
+        };
+    }
+
+    // Indexed draws from `args`, as many as the count at `count` says, at most
+    // `max_count`. Recorded through `loader`, the
+    // device's `VK_KHR_draw_indirect_count` entry points.
+    pub(in crate::vulkan) fn draw_indexed_indirect_count(
+        &self,
+        loader: &ash::khr::draw_indirect_count::Device,
+        args: BufferAt,
+        count: BufferAt,
+        max_count: u32,
+        stride: u32,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, the loader was created
+        // for this recorder's device, and both buffers are live for the call.
+        unsafe {
+            loader.cmd_draw_indexed_indirect_count(
+                self.cmd,
+                args.buffer,
+                args.offset,
+                count.buffer,
+                count.offset,
+                max_count,
+                stride,
+            );
+        };
+    }
+
+    // Fill `size` bytes of `buffer` from `offset` with `word`.
+    pub(in crate::vulkan) fn fill_buffer(
+        &self,
+        buffer: vk::Buffer,
+        offset: vk::DeviceSize,
+        size: vk::DeviceSize,
+        word: u32,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the buffer is live for
+        // the call.
+        unsafe {
+            self.device
+                .cmd_fill_buffer(self.cmd, buffer, offset, size, word);
         };
     }
 

@@ -42,6 +42,7 @@ use crate::vulkan::depth;
 use crate::vulkan::owned::{
     OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // Threads per group, matching `[numthreads(64, 1, 1)]` in model_history.hlsl.
 const MODEL_HISTORY_THREADGROUP: usize = 64;
@@ -831,7 +832,7 @@ impl VkContext {
     pub(in crate::vulkan) fn encode_gbuffer_prepass(
         &self,
         gb: &GbufferResources,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         view: GbufferPrepassView<'_>,
         // The frame's planned view block, collapsed onto this frame's own camera
@@ -842,7 +843,6 @@ impl VkContext {
         let Some(framebuffer) = gb.framebuffers.get(frame_idx) else {
             return;
         };
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
         let velocity_active = block.motion != 0;
         let view_uni = *block;
@@ -866,14 +866,12 @@ impl VkContext {
             },
             depth::CLEAR_VALUE,
         ];
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(gb.prepass_render_pass.handle())
-            .framebuffer(framebuffer.handle())
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(&clears);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        rec.begin_render_pass(
+            &gb.prepass_render_pass,
+            framebuffer,
+            vk::Rect2D::default().extent(extent),
+            &clears,
+        );
 
         // Negative-height viewport: matches the main pass so the G-buffer lines
         // up with the main pass at pixel coordinates; the fragment shader's
@@ -887,10 +885,8 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is recording inside the G-buffer render pass begun above.
-        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
-        // SAFETY: same recording `cmd`; `scissor` is a local that outlives the call.
-        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        rec.set_viewport(&vp);
+        rec.set_scissor(&scissor);
 
         // The pre-pass is GPU-driven: it reuses the main pass's per-frame indirect
         // buffer (same camera frustum + active LOD) with two
@@ -898,26 +894,24 @@ impl VkContext {
         // skinned tail over the deformed VB); streamed chunks and runtime clones
         // ride the cull records' runtime reserve. With nothing to draw the pass
         // is the clears above, which is what "no geometry" means to every reader.
-        self.encode_gbuffer_prepass_gpu_driven(cmd, frame_idx, velocity_active);
+        self.encode_gbuffer_prepass_gpu_driven(rec, frame_idx, velocity_active);
         if let Some(grass) = grass {
-            self.encode_grass_prepass(cmd, frame_idx, grass);
+            self.encode_grass_prepass(rec, frame_idx, grass);
         }
-        self.encode_raymarch_prepass(cmd, frame_idx, &view, &view_uni);
+        self.encode_raymarch_prepass(rec.raw(), frame_idx, &view, &view_uni);
         // The sky keeps the "no geometry" depth and roughness and adds the
         // camera's motion where nothing was drawn.
         if self.draws_sky(self.state.view.mode) {
-            gb.sky.encode(device, cmd, frame_idx);
+            gb.sky.encode(rec, frame_idx);
             self.inc_draw_calls(1);
         }
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
 
         // Snapshot this frame's models into this frame's history slot, AFTER the
         // pass above read the previous one -- which is what keeps a single frame
         // in flight (one slot, read then rewritten) correct.
-        self.encode_model_history(cmd, frame_idx);
+        self.encode_model_history(rec, frame_idx);
     }
 
     // Dispatch the model-history snapshot: one thread per cull record copying
@@ -925,7 +919,7 @@ impl VkContext {
     // pre-pass `frames_in_flight - 1` frames ago also read, and that frame may
     // still be in flight, so the write is fenced behind its vertex reads; the
     // matching release makes it visible to the next frame's pre-pass.
-    fn encode_model_history(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+    fn encode_model_history(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(history) = self.cull.model_history.as_ref() else {
             return;
         };
@@ -945,68 +939,47 @@ impl VkContext {
         } else {
             frame_idx..frame_idx + 1
         };
-        let device = &self.hw.device;
         let groups = u32::saturating_from(records.div_ceil(MODEL_HISTORY_THREADGROUP));
         for slot in slots {
             let Some(&set) = history.sets.get(frame_idx * frames + slot) else {
                 continue;
             };
-            // SAFETY: `cmd` is a command buffer in the recording state, as the barrier requires.
-            unsafe {
-                self.model_history_barrier(
-                    cmd,
-                    slot,
-                    (
-                        vk::AccessFlags::SHADER_READ,
-                        vk::AccessFlags::SHADER_WRITE,
-                        vk::PipelineStageFlags::VERTEX_SHADER,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                    ),
-                );
-            }
-            // SAFETY: `cmd` is recording and the history pipeline is owned by `self.cull`.
-            unsafe {
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    history.pipeline.handle(),
-                );
-            }
-            // SAFETY: `set` was allocated against the history layout and outlives the frame.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    history.pipeline_layout.handle(),
-                    0,
-                    &[set],
-                    &[],
-                );
-            }
-            // SAFETY: `cmd` is recording with the history pipeline and its set bound above.
-            unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
-            // SAFETY: `cmd` is still recording; this releases the slot written by the dispatch.
-            unsafe {
-                self.model_history_barrier(
-                    cmd,
-                    slot,
-                    (
-                        vk::AccessFlags::SHADER_WRITE,
-                        vk::AccessFlags::SHADER_READ,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::PipelineStageFlags::VERTEX_SHADER,
-                    ),
-                );
-            }
+            self.model_history_barrier(
+                rec,
+                slot,
+                (
+                    vk::AccessFlags::SHADER_READ,
+                    vk::AccessFlags::SHADER_WRITE,
+                    vk::PipelineStageFlags::VERTEX_SHADER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                ),
+            );
+            rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &history.pipeline);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::COMPUTE,
+                &history.pipeline_layout,
+                0,
+                &[set],
+                &[],
+            );
+            rec.dispatch(groups, 1, 1);
+            self.model_history_barrier(
+                rec,
+                slot,
+                (
+                    vk::AccessFlags::SHADER_WRITE,
+                    vk::AccessFlags::SHADER_READ,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::VERTEX_SHADER,
+                ),
+            );
         }
     }
 
     // One access/stage dependency over a whole model-history slot.
-    //
-    // SAFETY: the caller must pass a command buffer in the recording state.
-    unsafe fn model_history_barrier(
+    fn model_history_barrier(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         slot: usize,
         deps: (
             vk::AccessFlags,
@@ -1027,19 +1000,13 @@ impl VkContext {
             .size(vk::WHOLE_SIZE)
             .src_access_mask(src_access)
             .dst_access_mask(dst_access);
-        // SAFETY: the caller guarantees `cmd` is recording, and the barrier and the buffer it
-        // names are live for the call and belong to this device.
-        unsafe {
-            self.hw.device.cmd_pipeline_barrier(
-                cmd,
-                src_stage,
-                dst_stage,
-                vk::DependencyFlags::empty(),
-                &[],
-                std::slice::from_ref(&barrier),
-                &[],
-            );
-        };
+        rec.pipeline_barrier(
+            src_stage,
+            dst_stage,
+            &[],
+            std::slice::from_ref(&barrier),
+            &[],
+        );
     }
 
     // GPU-driven G-buffer pre-pass raster (inside the render pass the caller
@@ -1056,11 +1023,10 @@ impl VkContext {
     // walks the draw lists.
     fn encode_gbuffer_prepass_gpu_driven(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         velocity_active: bool,
     ) {
-        let device = &self.hw.device;
         // Bucket 0's pipeline is `None` when its pre-pass failed to build; the
         // other buckets still draw.
         let pipeline = self.cull.prepass_pipeline.as_ref();
@@ -1085,39 +1051,26 @@ impl VkContext {
             self.cull.bindless_sets[frame_idx],
             gset,
         ];
-        // SAFETY: `cmd` is recording inside the pre-pass render pass, and the three sets are
-        // this frame's, live until its fence signals.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                prepass.pipeline_layout.handle(),
-                0,
-                &sets,
-                &[],
-            );
-        }
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &prepass.pipeline_layout,
+            0,
+            &sets,
+            &[],
+        );
 
         // Static + instance prefix: the static VB bound to BOTH vertex bindings
         // (prev_pos == cur_pos) + the static u32 IB.
         let static_vb = self.geometry.vertex_buffer.buffer();
-        // SAFETY: the static vertex buffer is owned by `self.geometry` and outlives the frame.
-        unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[static_vb, static_vb], &[0, 0]) };
-        // SAFETY: the static index buffer is owned by `self.geometry` and outlives the frame.
-        unsafe {
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-        }
+        rec.bind_vertex_buffers(0, &[static_vb, static_vb], &[0, 0]);
+        rec.bind_index_buffer(
+            self.geometry.index_buffer.buffer(),
+            0,
+            vk::IndexType::UINT32,
+        );
         if let (true, Some(pipeline)) = (prefix > 0, pipeline) {
-            // SAFETY: bucket 0's pre-pass pipeline is owned by `self.cull` and outlives the frame.
-            unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-            }
-            self.draw_main_stream(cmd, indirect, 0);
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+            self.draw_main_stream(rec, indirect, 0);
             self.inc_draw_calls(1);
         }
         // The material-referenced shader buckets write their own regions of the
@@ -1125,7 +1078,7 @@ impl VkContext {
         // whose Shader is not resident is skipped, matching what the color pass
         // will draw.
         if prefix > 0 {
-            self.inc_draw_calls(self.draw_prepass_bucket_regions(cmd, indirect, frame_idx));
+            self.inc_draw_calls(self.draw_prepass_bucket_regions(rec, indirect, frame_idx));
         }
 
         // Skinned tail: the current deformed VB (binding 0) + the previous-frame
@@ -1151,23 +1104,11 @@ impl VkContext {
             };
             let prev = self.skinned.deformed.get(prev_idx).unwrap_or(cur);
             // Skinned records are always bucket 0.
-            // SAFETY: `cmd` is recording and bucket 0's pre-pass pipeline is owned by `self.cull`.
-            unsafe {
-                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-            }
-            // SAFETY: both deformed vertex buffers are owned by `self.skinned`'s ring.
-            unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[cur.buffer, prev.buffer], &[0, 0]) };
-            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
-            unsafe {
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    self.skinned.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-            }
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+            rec.bind_vertex_buffers(0, &[cur.buffer, prev.buffer], &[0, 0]);
+            rec.bind_index_buffer(self.skinned.index_buffer.buffer(), 0, vk::IndexType::UINT32);
             self.draw_main_stream(
-                cmd,
+                rec,
                 indirect,
                 concinnity_engine::gfx::render_types::SKINNED_STREAM,
             );

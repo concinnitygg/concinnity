@@ -26,8 +26,8 @@ use concinnity_engine::gfx::render_types::{self, SKINNED_STREAM, ShadowPassPush}
 
 use super::super::context::VkContext;
 use crate::vulkan::depth;
-use crate::vulkan::owned::VkDevice;
-use crate::vulkan::record::cmd_push_constants;
+use crate::vulkan::owned::OwnedFramebuffer;
+use crate::vulkan::record::Recorder;
 
 // One depth-only shadow view to draw from its packed lists: the set 0 holding
 // its `ShadowUniforms`, which of their `light_vps` the vertex shader projects
@@ -51,7 +51,7 @@ impl VkContext {
     // vertex shader sees the current cascade VPs.
     pub(in crate::vulkan) fn encode_shadow_pass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         cam_pos: [f32; 3],
         elapsed: f32,
@@ -67,8 +67,6 @@ impl VkContext {
         // frame's animation time once (no-op without casters) so the from-light
         // SDF march lines up with the lit-side surface.
         self.upload_raymarch_shadow_view(frame_idx, elapsed);
-        let device = self.hw.device.clone();
-        let device = &device;
 
         // Cascades to re-render this frame; draw_frame computed the mask from the
         // update policy. A skipped cascade's render pass is omitted entirely, so
@@ -91,14 +89,14 @@ impl VkContext {
         // before opening any render pass (Vulkan disallows compute inside a
         // render pass). Each packs that cascade's lists.
         if gpu_driven {
-            self.encode_shadow_culls(cmd, frame_idx, render_mask, cam_pos);
+            self.encode_shadow_culls(rec, frame_idx, render_mask, cam_pos);
         }
 
         for (cascade_idx, shadow_fb) in self.shadow.framebuffers.iter().enumerate() {
             if render_mask & (1u32 << cascade_idx) == 0 {
                 continue;
             }
-            self.begin_shadow_slice(cmd, shadow_fb.handle(), self.shadow.map_size);
+            self.begin_shadow_slice(rec, shadow_fb, self.shadow.map_size);
 
             if gpu_driven
                 && let Some(view) = self
@@ -108,8 +106,7 @@ impl VkContext {
                     .and_then(|c| c.get(cascade_idx))
             {
                 self.draw_shadow_view(
-                    device,
-                    cmd,
+                    rec,
                     frame_idx,
                     ShadowView {
                         uniforms_set: self.descriptors.shadow_global_sets[frame_idx],
@@ -122,15 +119,14 @@ impl VkContext {
             if cascade_idx == 0
                 && let Some(frame) = grass
             {
-                self.encode_grass_shadow_draw(cmd, frame_idx, frame);
+                self.encode_grass_shadow_draw(rec, frame_idx, frame);
             }
 
             // Raymarched SDF shadow casters into this cascade's DSV, after the
             // rasterized casters and within the same render pass (no re-clear);
             // the depth write test keeps the nearer occluder.
-            self.encode_sdf_shadow_cascade(cmd, frame_idx, cascade_idx);
-            // SAFETY: `cmd` is recording inside this cascade's render pass, begun above.
-            unsafe { device.cmd_end_render_pass(cmd) };
+            self.encode_sdf_shadow_cascade(rec.raw(), frame_idx, cascade_idx);
+            rec.end_render_pass();
         }
 
         // shadow_map's transitions are fully graph-driven (over every cascade
@@ -150,24 +146,21 @@ impl VkContext {
     // clears it, with the viewport and scissor over it.
     pub(in crate::vulkan) fn begin_shadow_slice(
         &self,
-        cmd: vk::CommandBuffer,
-        framebuffer: vk::Framebuffer,
+        rec: &Recorder<'_>,
+        framebuffer: &OwnedFramebuffer,
         size: u32,
     ) {
-        let device = &self.hw.device;
         let extent = vk::Extent2D {
             width: size,
             height: size,
         };
         let clear_depth = depth::CLEAR_VALUE;
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.shadow.render_pass.handle())
-            .framebuffer(framebuffer)
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(std::slice::from_ref(&clear_depth));
-        // SAFETY: `cmd` is recording outside a render pass, and the shadow render pass and the
-        // cascade's framebuffer are owned by `self.shadow`, which outlives the frame.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
+        rec.begin_render_pass(
+            &self.shadow.render_pass,
+            framebuffer,
+            vk::Rect2D::default().extent(extent),
+            std::slice::from_ref(&clear_depth),
+        );
         // Negative-height viewport: Y-flips NDC so Y-up matches Metal, and
         // matches the `-ndc.y` the forward sampler applies.
         let vp = vk::Viewport {
@@ -178,11 +171,9 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        // SAFETY: the shadow render pass is open on `cmd`; `vp` is borrowed for the call.
-        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
+        rec.set_viewport(&vp);
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: same open shadow pass; `scissor` is borrowed for the call.
-        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+        rec.set_scissor(&scissor);
     }
 
     // GPU-driven body of one shadow view (inside the render pass the caller
@@ -192,8 +183,7 @@ impl VkContext {
     // never walks the caster lists.
     pub(in crate::vulkan) fn draw_shadow_view(
         &self,
-        device: &VkDevice,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         view: ShadowView<'_>,
     ) {
@@ -206,57 +196,31 @@ impl VkContext {
         let layout = self.shadow_layout(view.view);
         let lists = view.view.lists();
 
-        // SAFETY: `cmd` is recording inside the caller's shadow render pass, and the depth-only
-        // bindless pipeline is owned by `self.cull`.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, sb_pipeline.handle());
-        }
-        // SAFETY: the view's uniforms set and this frame's bindless set are live descriptor-pool
-        // allocations matching `sb_layout`.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                sb_layout.handle(),
-                0,
-                &[view.uniforms_set, self.cull.bindless_sets[frame_idx]],
-                &[],
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, sb_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            sb_layout,
+            0,
+            &[view.uniforms_set, self.cull.bindless_sets[frame_idx]],
+            &[],
+        );
         let push = ShadowPassPush {
             cascade_idx: view.vp_index,
             _pad: [0; 3],
             tile_morph: self.state.tile_morph_view(),
         };
-        // SAFETY: `sb_layout` is the live layout of the pipeline bound above, whose push range
-        // holds a `ShadowPassPush`, and `push` is borrowed for the call.
-        unsafe {
-            cmd_push_constants(
-                device,
-                cmd,
-                sb_layout.handle(),
-                vk::ShaderStageFlags::VERTEX,
-                &push,
-            );
-        }
+        rec.push_constants(sb_layout, vk::ShaderStageFlags::VERTEX, 0, &push);
 
         // Static + instance prefix against the static VB/IB.
-        // SAFETY: the shared vertex buffer is owned by `self.geometry`, which outlives the frame.
-        unsafe {
-            device.cmd_bind_vertex_buffers(cmd, 0, &[self.geometry.vertex_buffer.buffer()], &[0]);
-        }
-        // SAFETY: the shared 32-bit index buffer is owned by `self.geometry` beside the vertices.
-        unsafe {
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-        }
+        rec.bind_vertex_buffers(0, &[self.geometry.vertex_buffer.buffer()], &[0]);
+        rec.bind_index_buffer(
+            self.geometry.index_buffer.buffer(),
+            0,
+            vk::IndexType::UINT32,
+        );
         let statics = layout.slots(0);
         if statics.capacity > 0 {
-            self.draw_stream(cmd, lists, 0, statics);
+            self.draw_stream(rec, lists, 0, statics);
             self.inc_draw_calls(1);
         }
 
@@ -265,26 +229,10 @@ impl VkContext {
         if skinned.capacity > 0
             && let Some(deformed) = self.skinned.deformed.get(frame_idx)
         {
-            // SAFETY: this frame's deformed vertex buffer is owned by `self.skinned` and was
-            // posed by the skin compute pass ahead of the shadow pass.
-            unsafe {
-                device.cmd_bind_vertex_buffers(
-                    cmd,
-                    0,
-                    std::slice::from_ref(&deformed.buffer),
-                    &[0],
-                );
-            }
-            // SAFETY: the skinned index buffer is owned by `self.skinned` and outlives the frame.
-            unsafe {
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    self.skinned.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-            }
-            self.draw_stream(cmd, lists, SKINNED_STREAM, skinned);
+            // The deformed VB was posed by the skin compute pass ahead of this one.
+            rec.bind_vertex_buffers(0, std::slice::from_ref(&deformed.buffer), &[0]);
+            rec.bind_index_buffer(self.skinned.index_buffer.buffer(), 0, vk::IndexType::UINT32);
+            self.draw_stream(rec, lists, SKINNED_STREAM, skinned);
             self.inc_draw_calls(1);
         }
     }

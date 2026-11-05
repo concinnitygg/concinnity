@@ -988,7 +988,7 @@ impl VkContext {
     ) -> RenderResult<()> {
         match pass_id {
             PassId::Cull => {
-                self.encode_cull(rec.raw(), params.frame_idx, params.frustum, params.cam_pos);
+                self.encode_cull(rec, params.frame_idx, params.frustum, params.cam_pos);
                 // Pose the skinned objects' deformed-vertex buffer for this frame
                 // (a no-op when no skinned mesh is folded in). Independent of the
                 // cull; both feed Main, which the toposort orders after Cull.
@@ -1011,17 +1011,17 @@ impl VkContext {
             }
             PassId::Grass => {
                 if let Some(frame) = grass_frame {
-                    self.encode_grass(rec.raw(), params.frame_idx, frame);
+                    self.encode_grass(rec, params.frame_idx, frame);
                 }
             }
             PassId::GrassBend => {
                 if let Some(frame) = grass_frame {
-                    self.encode_grass_bend(rec.raw(), params.frame_idx, frame);
+                    self.encode_grass_bend(rec, params.frame_idx, frame);
                 }
             }
             PassId::GrassShadow => {
                 if let Some(frame) = grass_frame {
-                    self.encode_grass_shadow(rec.raw(), params.frame_idx, frame);
+                    self.encode_grass_shadow(rec, params.frame_idx, frame);
                 }
             }
             PassId::SsrResolve => {
@@ -1055,7 +1055,7 @@ impl VkContext {
             }
             PassId::Shadow => {
                 self.encode_shadow_pass(
-                    rec.raw(),
+                    rec,
                     params.frame_idx,
                     params.cam_pos,
                     narrow_f32(params.elapsed),
@@ -1066,15 +1066,10 @@ impl VkContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(rec.raw(), params.frame_idx, params.cam_pos);
+                self.encode_spot_shadow_pass(rec, params.frame_idx, params.cam_pos);
             }
             PassId::Main => {
-                self.encode_main_pass(
-                    rec.raw(),
-                    params.frame_idx,
-                    params.world_hidden,
-                    grass_frame,
-                );
+                self.encode_main_pass(rec, params.frame_idx, params.world_hidden, grass_frame);
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
@@ -1168,13 +1163,13 @@ impl VkContext {
                 );
                 self.encode_raymarch(rec.raw(), params.frame_idx, &view, params.frustum)?;
             }
-            PassId::PropProbe => self.encode_prop_probe(rec.raw(), params)?,
+            PassId::PropProbe => self.encode_prop_probe(rec, params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
                 // Recorded ahead of `Transparent` in the frame's submission, and
                 // closed with the barrier that makes the targets readable there.
-                self.encode_planar_reflections(rec.raw(), params);
+                self.encode_planar_reflections(rec, params);
             }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
@@ -1213,7 +1208,7 @@ impl VkContext {
             }
             PassId::CullLate => {
                 self.encode_cull_late(
-                    rec.raw(),
+                    rec,
                     params.frame_idx,
                     params.frustum,
                     params.cam_pos,
@@ -1221,7 +1216,7 @@ impl VkContext {
                 );
             }
             PassId::MainLate => {
-                self.encode_main_pass_late(rec.raw(), params.frame_idx);
+                self.encode_main_pass_late(rec, params.frame_idx);
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes
@@ -1244,7 +1239,7 @@ impl VkContext {
                 })?;
                 self.encode_gbuffer_prepass(
                     gb,
-                    rec.raw(),
+                    rec,
                     params.frame_idx,
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,

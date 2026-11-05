@@ -158,8 +158,8 @@ const AUDITS: &[BackendAudit] = &[
                 4,
                 Reason::Ungraphed,
             ),
-            ("cull.rs", "cmd_pipeline_barrier", 1, Reason::Ungraphed),
-            ("compact.rs", "cmd_pipeline_barrier", 3, Reason::IntraPass),
+            ("cull.rs", "rec.pipeline_barrier(", 1, Reason::Ungraphed),
+            ("compact.rs", "rec.pipeline_barrier(", 3, Reason::IntraPass),
             (
                 "compact_tests.rs",
                 "cmd_pipeline_barrier",
@@ -173,17 +173,20 @@ const AUDITS: &[BackendAudit] = &[
             // bundled inside the G-buffer pre-pass node.
             (
                 "post/gbuffer.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 1,
                 Reason::Ungraphed,
             ),
-            // One orders each plane's mirror render behind the previous
-            // render's attachment writes, which the shared main render pass
-            // declares `UNDEFINED` and so transitions without a dependency;
-            // the other makes the finished targets visible to the transparent
-            // pass's sample. Neither the targets nor the shared mirror depth is a
-            // graph resource.
-            ("planar.rs", "cmd_pipeline_barrier", 2, Reason::Ungraphed),
+            // Two for the mirror targets: one orders each plane's render behind
+            // the previous render's attachment writes, which the shared main
+            // render pass declares `UNDEFINED` and so transitions without a
+            // dependency; the other makes the finished targets visible to the
+            // transparent pass's sample. Two for each plane's cluster lists,
+            // binned over its reflected view: one orders the binning after the
+            // plane's previous mirror render read them, the other before this
+            // render reads them. Neither the targets, the shared mirror depth
+            // nor the per-plane lists are graph resources.
+            ("planar.rs", "rec.pipeline_barrier(", 4, Reason::Ungraphed),
             // The prop probe's faces: one orders each face's cull and packing
             // after the previous face's packing and indirect draw used the
             // shared slot, the other each face's render after the previous
@@ -191,15 +194,10 @@ const AUDITS: &[BackendAudit] = &[
             // attachments. Neither the slot nor the capture is a graph resource.
             (
                 "prop_probe.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::Ungraphed,
             ),
-            // Each plane's cluster lists, binned over its reflected view: one
-            // orders the binning after the plane's previous mirror render read
-            // them, the other before this render reads them. Per-plane lists are
-            // not a graph resource.
-            ("planar.rs", "rec.pipeline_barrier(", 2, Reason::Ungraphed),
             // The refraction snapshot: both passes copy the scene image into a
             // private snapshot and sample that, because a fragment cannot read
             // the attachment it is blending into. The pair opens the copy and
@@ -219,7 +217,7 @@ const AUDITS: &[BackendAudit] = &[
                 2,
                 Reason::IntraPass,
             ),
-            ("draw/main.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
+            ("draw/main.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
             // SSGI's resolve output, written ahead of the main pass that samples
             // it: the graph models it, but the registry leaves it to the pass,
             // whose render pass rests it shader-readable.

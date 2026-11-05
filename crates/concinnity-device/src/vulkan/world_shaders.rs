@@ -25,6 +25,7 @@ use super::pipeline::{
     build_bucket_prepass, build_world_prepass, build_world_shader_pipeline,
 };
 use crate::vulkan::pipeline_builder::{VkPipelineBuilder, world_shader_for};
+use crate::vulkan::record::Recorder;
 use std::sync::Arc;
 
 impl VkContext {
@@ -282,7 +283,7 @@ impl VkContext {
     // indirect draws issued, and leaves the last bucket's pipeline bound.
     pub(in crate::vulkan) fn draw_bucket_regions(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         indirect: vk::Buffer,
         frame_idx: usize,
     ) -> u32 {
@@ -293,16 +294,8 @@ impl VkContext {
             // Every bucket shares the bindless layout, so the Wireframe twin
             // stands in for each one while that view mode is on.
             let pipeline = self.wireframe_or(&pipelines.main, self.wireframe.bindless.as_ref());
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                self.hw.device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline.handle(),
-                );
-            }
-            self.draw_main_stream(cmd, indirect, u32::saturating_from(bucket));
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+            self.draw_main_stream(rec, indirect, u32::saturating_from(bucket));
         })
     }
 
@@ -315,7 +308,7 @@ impl VkContext {
     // the last bucket's pipeline bound.
     pub(in crate::vulkan) fn draw_prepass_bucket_regions(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         indirect: vk::Buffer,
         frame_idx: usize,
     ) -> u32 {
@@ -329,16 +322,8 @@ impl VkContext {
             else {
                 continue;
             };
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                self.hw.device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    prepass.handle(),
-                );
-            }
-            self.draw_main_stream(cmd, indirect, u32::saturating_from(bucket));
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, prepass);
+            self.draw_main_stream(rec, indirect, u32::saturating_from(bucket));
             issued += 1;
         }
         issued
@@ -374,12 +359,12 @@ impl VkContext {
     // indirect buffers.
     pub(in crate::vulkan) fn draw_main_stream(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         indirect: vk::Buffer,
         stream: u32,
     ) {
         self.draw_stream(
-            cmd,
+            rec,
             self.main_lists(indirect),
             stream,
             self.stream_layout().slots(stream),

@@ -15,6 +15,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
 use crate::vulkan::pipeline_desc::{Depth, GraphicsPipelineDesc};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use crate::vulkan::set_writes::SetWrites;
 
@@ -104,32 +105,18 @@ impl GbufferSky {
     }
 
     // Draw the sky's motion inside the open pre-pass render pass.
-    pub(in crate::vulkan) fn encode(
-        &self,
-        device: &VkDevice,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-    ) {
+    pub(in crate::vulkan) fn encode(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(&set) = self.sets.get(frame_idx) else {
             return;
         };
-        // SAFETY: `cmd` is recording inside the pre-pass render pass the pipeline was built
-        // against, and `self` owns the pipeline.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.handle());
-        }
-        // SAFETY: `set` is this frame's set from `self.sets`, allocated against `self.layout`.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.layout.handle(),
-                0,
-                &[set],
-                &[],
-            );
-        }
-        // SAFETY: the sky pipeline and its set are bound above on the recording `cmd`.
-        unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &self.pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &self.layout,
+            0,
+            &[set],
+            &[],
+        );
+        rec.draw(3, 1, 0, 0);
     }
 }

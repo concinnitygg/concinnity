@@ -49,6 +49,7 @@ use super::pipeline_desc::{
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::{BufferRange, SetWrites};
 use super::texture::GpuUploadContext;
+use crate::vulkan::record::Recorder;
 
 // The grass block and the blades, which only the draws' vertex stage reads.
 fn draw_set_bindings() -> [Binding; 2] {
@@ -815,44 +816,30 @@ impl VkContext {
     // footprints into it.
     pub(in crate::vulkan) fn encode_grass_bend(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
     ) {
         let Some(grass) = &self.grass else {
             return;
         };
-        let device = &self.hw.device;
         let [x, y, z] = frame.bend_dispatch;
-        // SAFETY: `cmd` is recording outside a render pass, and the bend pipeline is owned by
-        // `self.grass`, which outlives the frame.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                grass.pipelines.bend.handle(),
-            );
-        }
-        // SAFETY: the frame's bend set is owned by `grass` and was written against its bend layout.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                grass.layouts.bend.handle(),
-                0,
-                &[grass.bend_sets[frame_idx]],
-                &[],
-            );
-        }
-        // SAFETY: the bend pipeline and its set are bound on this recording command buffer.
-        unsafe { device.cmd_dispatch(cmd, x, y, z) };
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &grass.pipelines.bend);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &grass.layouts.bend,
+            0,
+            &[grass.bend_sets[frame_idx]],
+            &[],
+        );
+        rec.dispatch(x, y, z);
     }
 
     // Encode the `GrassShadow` node: place the blades the nearest cascade
     // draws.
     pub(in crate::vulkan) fn encode_grass_shadow(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
     ) {
@@ -860,7 +847,7 @@ impl VkContext {
             return;
         };
         self.place_blades(
-            cmd,
+            rec,
             frame_idx,
             grass,
             shadow,
@@ -872,40 +859,25 @@ impl VkContext {
     // the coarsest strip.
     pub(in crate::vulkan) fn encode_grass_shadow_draw(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
     ) {
         let (Some(grass), Some(shadow)) = (&self.grass, frame.shadow.as_ref()) else {
             return;
         };
-        let device = &self.hw.device;
         let coarsest = shadow.args_offset + ((GRASS_LOD_COUNT - 1) * GRASS_ARGS_STRIDE) as u64;
-        self.timed(cmd, frame_idx, GpuSpan::GrassShadowDraw, || {
-            // SAFETY: `cmd` is recording inside the shadow render pass the pipeline was built
-            // against, and the pipeline is owned by `grass`.
-            unsafe {
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    grass.pipelines.shadow.handle(),
-                );
-            }
-            // SAFETY: the frame's shadow draw set is owned by `grass` and matches its shadow
-            // layout.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    grass.layouts.shadow.handle(),
-                    0,
-                    &[grass.shadow_draw_sets[frame_idx]],
-                    &[],
-                );
-            }
-            // SAFETY: the shadow args buffer is owned by `grass`, and `coarsest` names one whole
-            // record of it.
-            unsafe { device.cmd_draw_indirect(cmd, grass.shadow_args.buffer(), coarsest, 1, 0) };
+        self.timed(rec, frame_idx, GpuSpan::GrassShadowDraw, || {
+            rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &grass.pipelines.shadow);
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &grass.layouts.shadow,
+                0,
+                &[grass.shadow_draw_sets[frame_idx]],
+                &[],
+            );
+            // `coarsest` names one whole record of the shadow args buffer.
+            rec.draw_indirect(grass.shadow_args.buffer(), coarsest, 1, 0);
         });
         self.inc_draw_calls(1);
     }
@@ -913,7 +885,7 @@ impl VkContext {
     // Encode the `Grass` node: place, cull and append this frame's blades.
     pub(in crate::vulkan) fn encode_grass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
     ) {
@@ -921,7 +893,7 @@ impl VkContext {
             return;
         };
         self.place_blades(
-            cmd,
+            rec,
             frame_idx,
             grass,
             &frame.view,
@@ -932,7 +904,7 @@ impl VkContext {
     // One run of the blade kernel for `placement` over `kernel_set`.
     fn place_blades(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         grass: &GrassResources,
         placement: &GrassPlacement,
@@ -943,31 +915,16 @@ impl VkContext {
         let Some(hiz) = &self.cull.hiz else {
             return;
         };
-        let device = &self.hw.device;
         let [x, y, z] = placement.dispatch;
-        // SAFETY: `cmd` is recording outside a render pass, and the blade kernel is owned by
-        // `grass`, which outlives the frame.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                grass.pipelines.generate.handle(),
-            );
-        }
-        // SAFETY: `kernel_set` is one of `grass`'s live kernel sets, and the Hi-Z read set is
-        // owned by `self.cull.hiz`; both match the kernel layout.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                grass.layouts.kernel.handle(),
-                0,
-                &[kernel_set, hiz.read_sets[frame_idx]],
-                &[],
-            );
-        }
-        // SAFETY: the blade kernel and both of its sets are bound on this recording buffer.
-        unsafe { device.cmd_dispatch(cmd, x, y, z) };
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &grass.pipelines.generate);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &grass.layouts.kernel,
+            0,
+            &[kernel_set, hiz.read_sets[frame_idx]],
+            &[],
+        );
+        rec.dispatch(x, y, z);
     }
 
     // Draw the blades into the G-buffer pre-pass `cmd` has begun, over the
@@ -975,7 +932,7 @@ impl VkContext {
     // their motion.
     pub(in crate::vulkan) fn encode_grass_prepass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
     ) {
@@ -987,13 +944,13 @@ impl VkContext {
         let Some(pipeline) = &grass.prepass else {
             return;
         };
-        self.timed(cmd, frame_idx, GpuSpan::GrassPrepass, || {
+        self.timed(rec, frame_idx, GpuSpan::GrassPrepass, || {
             self.draw_grass(
-                cmd,
+                rec,
                 grass,
                 frame,
                 pipeline,
-                grass.layouts.prepass.handle(),
+                &grass.layouts.prepass,
                 &[
                     self.descriptors.global_sets[frame_idx],
                     self.cull.bindless_sets[frame_idx],
@@ -1008,20 +965,20 @@ impl VkContext {
     // pass's global and bindless sets.
     pub(in crate::vulkan) fn encode_grass_main(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: &GrassFrame,
     ) {
         let Some(grass) = &self.grass else {
             return;
         };
-        self.timed(cmd, frame_idx, GpuSpan::GrassDraw, || {
+        self.timed(rec, frame_idx, GpuSpan::GrassDraw, || {
             self.draw_grass(
-                cmd,
+                rec,
                 grass,
                 frame,
                 &grass.pipelines.main,
-                grass.layouts.main.handle(),
+                &grass.layouts.main,
                 &[
                     self.descriptors.global_sets[frame_idx],
                     self.cull.bindless_sets[frame_idx],
@@ -1035,85 +992,41 @@ impl VkContext {
     // the band's under the pipeline that discards the pixels the canopy shows.
     fn draw_grass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         grass: &GrassResources,
         frame: &GrassFrame,
         pipelines: &GrassDrawPipelines,
-        layout: vk::PipelineLayout,
+        layout: &OwnedPipelineLayout,
         sets: &[vk::DescriptorSet],
     ) {
-        let device = &self.hw.device;
-        // SAFETY: `cmd` is recording inside a render pass the level pipeline is compatible with,
-        // and the pipeline is owned by `self.grass`.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipelines.levels.handle(),
-            );
-        }
-        // SAFETY: the caller passes live sets built against `layout`, borrowed for the call.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                0,
-                sets,
-                &[],
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &pipelines.levels);
+        // The caller passes sets built against `layout`.
+        rec.bind_descriptor_sets(vk::PipelineBindPoint::GRAPHICS, layout, 0, sets, &[]);
         for region in 0..GRASS_REGION_COUNT {
             if region == GRASS_BAND_REGION {
-                // SAFETY: the band pipeline shares the level pipeline's layout and render pass, so
+                // The band pipeline shares the level pipeline's layout and render pass, so
                 // the sets bound above stay valid under it.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipelines.band.handle(),
-                    );
-                }
+                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &pipelines.band);
             }
             let offset = frame.view.args_offset + (region * GRASS_ARGS_STRIDE) as u64;
-            // SAFETY: the args buffer is owned by `grass`, and `offset` names one whole record
-            // of it.
-            unsafe { device.cmd_draw_indirect(cmd, grass.args.buffer(), offset, 1, 0) };
+            // `offset` names one whole record of the args buffer.
+            rec.draw_indirect(grass.args.buffer(), offset, 1, 0);
         }
         self.inc_draw_calls(u32::saturating_from(GRASS_REGION_COUNT));
     }
 
     // `record` bracketed by `pass`'s timestamps inside the enclosing pass.
-    fn timed(
-        &self,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-        pass: GpuSpan,
-        record: impl FnOnce(),
-    ) {
-        let device = &self.hw.device;
+    fn timed(&self, rec: &Recorder<'_>, frame_idx: usize, pass: GpuSpan, record: impl FnOnce()) {
         let stamps = self
             .hw
             .timestamp_query_pool
             .map(|pool| (pool, pass_timing::pass_pair(frame_idx, pass)));
         if let Some((pool, (start, _))) = stamps {
-            // SAFETY: `cmd` is a command buffer in the recording state and the query pool is live;
-            // the frame's query block was reset at the frame's start.
-            unsafe {
-                device.cmd_write_timestamp(
-                    cmd,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    pool,
-                    start,
-                );
-            };
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, start);
         }
         record();
         if let Some((pool, (_, end))) = stamps {
-            // SAFETY: as above.
-            unsafe {
-                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end);
-            };
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end);
         }
     }
 }

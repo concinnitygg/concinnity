@@ -791,7 +791,7 @@ impl VkContext {
     // the same submission.
     pub(in crate::vulkan) fn encode_planar_reflections(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
     ) {
         let Some(set) = self.planar_reflection.as_ref() else {
@@ -855,7 +855,7 @@ impl VkContext {
                 records: set.cull_count,
             };
             self.encode_probe_cull(
-                cmd,
+                rec.raw(),
                 set.cull_sets[ring],
                 set.hiz_set,
                 packing,
@@ -874,7 +874,7 @@ impl VkContext {
             );
             set.cluster_params_bufs[ring].write_val(0, &cluster_params);
             if cluster_params.use_clusters != 0 {
-                self.encode_mirror_light_cull(cmd, set, slot, ring);
+                self.encode_mirror_light_cull(rec, set, slot, ring);
             }
             // Order the previous mirror render's attachment writes before this one's
             // layout transition. `main_render_pass` declares both attachments
@@ -895,27 +895,17 @@ impl VkContext {
                     vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                         | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
-            // SAFETY: `cmd` is the frame's recording command buffer, inside a
-            // recording scope and outside a render pass, which is where
-            // `vkCmdPipelineBarrier` is legal; the barrier owns no resource
-            // handles (a global `VkMemoryBarrier`, no buffer or image references
-            // to outlive), and `from_ref` gives the one-element slice the count
-            // implies.
-            unsafe {
-                self.hw.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                    vk::DependencyFlags::empty(),
-                    std::slice::from_ref(&attachment_waw),
-                    &[],
-                    &[],
-                );
-            }
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                std::slice::from_ref(&attachment_waw),
+                &[],
+                &[],
+            );
             self.encode_main_into_face(
-                cmd,
+                rec.raw(),
                 set.framebuffers[slot].handle(),
                 FaceArea {
                     extent,
@@ -966,19 +956,13 @@ impl VkContext {
                     layer_count: 1,
                 });
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.hw.device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &barriers[..n],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            &[],
+            &[],
+            &barriers[..n],
+        );
     }
 }
 
@@ -990,7 +974,7 @@ impl VkContext {
     // render's.
     fn encode_mirror_light_cull(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         set: &PlanarReflectionSet,
         slot: usize,
         ring: usize,
@@ -1006,9 +990,6 @@ impl VkContext {
                 .offset(0)
                 .size(vk::WHOLE_SIZE)
         };
-        // SAFETY: `cmd` is the frame's command buffer, in the recording state
-        // and owned by this device, for the whole pass this is called from.
-        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
         rec.pipeline_barrier(
             vk::PipelineStageFlags::FRAGMENT_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -1019,7 +1000,7 @@ impl VkContext {
             )],
             &[],
         );
-        self.bin_clusters(&rec, set.cluster_sets[ring]);
+        self.bin_clusters(rec, set.cluster_sets[ring]);
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::FRAGMENT_SHADER,
