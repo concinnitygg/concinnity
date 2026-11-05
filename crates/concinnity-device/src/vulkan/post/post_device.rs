@@ -290,10 +290,9 @@ impl<'d> PostPassDevice for VkPostDevice<'d> {
             self.device,
             self.queue.command_pool,
             self.queue.queue,
-            |cmd| {
+            |rec| {
                 transition_image_layout_range(
-                    self.device,
-                    cmd,
+                    rec,
                     image,
                     LayoutTransition {
                         old_layout: vk::ImageLayout::UNDEFINED,

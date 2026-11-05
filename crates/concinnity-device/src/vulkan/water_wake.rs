@@ -92,10 +92,9 @@ impl WakeField {
             image.attach_view(view);
             views.push(view);
         }
-        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |rec| {
             transition_image_layout_range(
-                gpu.device,
-                cmd,
+                rec,
                 image.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,

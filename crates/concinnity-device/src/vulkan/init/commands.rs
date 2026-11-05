@@ -37,21 +37,13 @@ pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
     } = *gpu;
     let device = &hw.device;
     if let Some(pool) = hw.timestamp_query_pool {
-        crate::vulkan::texture::one_shot_submit(
-            device,
-            command_pool,
-            hw.graphics_queue,
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-            // slice these commands name is live for the call.
-            |cmd| unsafe {
-                device.cmd_reset_query_pool(
-                    cmd,
-                    pool,
-                    0,
-                    u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames),
-                );
-            },
-        )?;
+        crate::vulkan::texture::one_shot_submit(device, command_pool, hw.graphics_queue, |rec| {
+            rec.reset_query_pool(
+                pool,
+                0,
+                u32::saturating_from(pass_timing::SLOTS_PER_FRAME * frames),
+            );
+        })?;
     }
     Ok(())
 }

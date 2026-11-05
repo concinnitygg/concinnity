@@ -86,18 +86,9 @@ impl VkContext {
             &self.hw.device,
             self.commands.command_pool,
             self.hw.graphics_queue,
-            |cmd| {
+            |rec| {
                 let copy = vk::BufferCopy::default().dst_offset(offset).size(size);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    self.hw.device.cmd_copy_buffer(
-                        cmd,
-                        staging.buffer(),
-                        dest,
-                        std::slice::from_ref(&copy),
-                    );
-                };
+                rec.copy_buffer(staging.buffer(), dest, std::slice::from_ref(&copy));
             },
         )?;
         // The one-shot idled the queue; drop the staging buffer and retire it

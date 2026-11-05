@@ -352,10 +352,8 @@ fn zeroed_storage(
     )?;
     let handle = buffer.buffer();
     let device = gpu.device;
-    super::texture::one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
-        // SAFETY: `cmd` is a command buffer in the recording state, and the buffer is live and
-        // created with TRANSFER_DST.
-        unsafe { device.cmd_fill_buffer(cmd, handle, 0, bytes, 0) };
+    super::texture::one_shot_submit(device, gpu.command_pool, gpu.queue, |rec| {
+        rec.fill_buffer(handle, 0, bytes, 0);
     })?;
     Ok(buffer)
 }

@@ -42,29 +42,19 @@ impl VkContext {
             &self.hw.device,
             self.commands.command_pool,
             self.hw.graphics_queue,
-            |cmd| {
+            |rec| {
                 let vcopy = vk::BufferCopy::default().size(old_v);
                 let icopy = vk::BufferCopy::default().size(old_i);
-                // SAFETY: `cmd` is recording, and both vertex buffers are live: the old one is
-                // still owned by `self.geometry`, the new one by this function.
-                unsafe {
-                    self.hw.device.cmd_copy_buffer(
-                        cmd,
-                        self.geometry.vertex_buffer.buffer(),
-                        new_vbuf.buffer(),
-                        std::slice::from_ref(&vcopy),
-                    );
-                }
-                // SAFETY: as above for the index buffers; the old one is replaced only after the
-                // one-shot submit completes.
-                unsafe {
-                    self.hw.device.cmd_copy_buffer(
-                        cmd,
-                        self.geometry.index_buffer.buffer(),
-                        new_ibuf.buffer(),
-                        std::slice::from_ref(&icopy),
-                    );
-                }
+                rec.copy_buffer(
+                    self.geometry.vertex_buffer.buffer(),
+                    new_vbuf.buffer(),
+                    std::slice::from_ref(&vcopy),
+                );
+                rec.copy_buffer(
+                    self.geometry.index_buffer.buffer(),
+                    new_ibuf.buffer(),
+                    std::slice::from_ref(&icopy),
+                );
             },
         )?;
 

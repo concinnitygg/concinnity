@@ -183,13 +183,13 @@ impl NgxSession {
         // SAFETY: `self.params` is the live bag NGX returned.
         unsafe { set_create_parameters(self.params, extent, preset) };
         let mut create_rc = NVSDK_NGX_RESULT_FAIL;
-        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
-            // SAFETY: `cmd` is in the recording state, `self.params` is the live bag filled
-            // above, and `self.feature` is a live field NGX writes the new feature into.
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |rec| {
+            // SAFETY: `rec`'s buffer is in the recording state, `self.params` is the live bag
+            // filled above, and `self.feature` is a live field NGX writes the new feature into.
             create_rc = unsafe {
                 NVSDK_NGX_VULKAN_CreateFeature1(
                     gpu.device.handle(),
-                    cmd,
+                    rec.raw(),
                     NVSDK_NGX_FEATURE_SUPERSAMPLING,
                     self.params,
                     &raw mut self.feature,

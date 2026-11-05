@@ -240,21 +240,12 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
         &ctx.hw.device,
         ctx.commands.command_pool,
         ctx.hw.graphics_queue,
-        |cmd| {
+        |rec| {
             let copy = vk::BufferCopy::default()
                 .src_offset(0)
                 .dst_offset(0)
                 .size(bytes);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                ctx.hw.device.cmd_copy_buffer(
-                    cmd,
-                    src,
-                    staging.buffer(),
-                    std::slice::from_ref(&copy),
-                );
-            };
+            rec.copy_buffer(src, staging.buffer(), std::slice::from_ref(&copy));
         },
     )?;
 

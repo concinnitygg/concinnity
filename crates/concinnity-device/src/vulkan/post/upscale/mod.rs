@@ -33,6 +33,7 @@ use crate::vulkan::allocator::DeviceAllocator;
 use crate::vulkan::context::{HDR_FORMAT, VkContext};
 use crate::vulkan::graph_exec::GraphFrameParams;
 use crate::vulkan::owned::VkDevice;
+use crate::vulkan::record::Recorder;
 use crate::vulkan::texture::{
     GpuImage, ImageSpec, create_image, create_image_view, one_shot_submit,
 };
@@ -239,10 +240,9 @@ impl UpscaleOutput {
         )?;
         let image = pooled.image();
         let view = create_image_view(gpu.device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+        one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |rec| {
             image_barrier(
-                gpu.device,
-                cmd,
+                rec,
                 image,
                 vk::ImageAspectFlags::COLOR,
                 LayoutTransition {
@@ -305,8 +305,7 @@ struct BarrierSync {
 // inputs in the COMPUTE stage; the generic `transition_image_layout` helper
 // targets FRAGMENT, which would not synchronize the compute reads).
 fn image_barrier(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     image: vk::Image,
     aspect: vk::ImageAspectFlags,
     transition: LayoutTransition,
@@ -327,19 +326,13 @@ fn image_barrier(
         })
         .src_access_mask(sync.src_access)
         .dst_access_mask(sync.dst_access);
-    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
-    // commands name is live for the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            sync.src_stage,
-            sync.dst_stage,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            std::slice::from_ref(&barrier),
-        );
-    }
+    rec.pipeline_barrier(
+        sync.src_stage,
+        sync.dst_stage,
+        &[],
+        &[],
+        std::slice::from_ref(&barrier),
+    );
 }
 
 // The SDKs this build bundles. DLSS links NGX statically; XeSS and FFX are
@@ -618,7 +611,7 @@ impl VkContext {
     // the same for every backend; only the inner `dispatch` differs.
     pub(in crate::vulkan) fn encode_upscale(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
         let Some(upscaler) = &self.upscale else {
@@ -705,7 +698,7 @@ impl VkContext {
         let reactive = match mask {
             Some(m) if params.reactive.readable => Some(m),
             Some(m) if upscaler.reactive_reader().requires() => {
-                crate::vulkan::reactive_mask::clear_outside_pass(&self.hw.device, cmd, m.image);
+                crate::vulkan::reactive_mask::clear_outside_pass(rec, m.image);
                 Some(m)
             }
             _ => None,
@@ -724,8 +717,7 @@ impl VkContext {
             .map(|m| m.image);
         for image in [color.image, motion.image].into_iter().chain(written_mask) {
             image_barrier(
-                &self.hw.device,
-                cmd,
+                rec,
                 image,
                 vk::ImageAspectFlags::COLOR,
                 stay_read_only,
@@ -733,8 +725,7 @@ impl VkContext {
             );
         }
         image_barrier(
-            &self.hw.device,
-            cmd,
+            rec,
             depth_in.image,
             vk::ImageAspectFlags::DEPTH,
             LayoutTransition {
@@ -754,8 +745,7 @@ impl VkContext {
         let output = upscaler.output();
         if output.layout.get() != vk::ImageLayout::GENERAL {
             image_barrier(
-                &self.hw.device,
-                cmd,
+                rec,
                 output.image.image,
                 vk::ImageAspectFlags::COLOR,
                 LayoutTransition {
@@ -771,7 +761,7 @@ impl VkContext {
         }
 
         upscaler.dispatch(
-            cmd,
+            rec.raw(),
             UpscaleInputs {
                 color: &color,
                 depth: &depth_in,
@@ -791,8 +781,7 @@ impl VkContext {
         // sample it. (Inputs are left where the upscaler leaves them; the next
         // frame's render passes reset them.)
         image_barrier(
-            &self.hw.device,
-            cmd,
+            rec,
             output.image.image,
             vk::ImageAspectFlags::COLOR,
             LayoutTransition {

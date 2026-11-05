@@ -169,18 +169,9 @@ pub(in crate::vulkan) fn upload_geometry_buffer_raw(
     )?;
     staging.write_bytes(0, data);
     let buf = alloc.create_buffer(size, usage, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
-    texture::one_shot_submit(device, command_pool, queue, |cmd| {
+    texture::one_shot_submit(device, command_pool, queue, |rec| {
         let copy = vk::BufferCopy::default().size(size);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer(
-                cmd,
-                staging.buffer(),
-                buf.buffer(),
-                std::slice::from_ref(&copy),
-            );
-        };
+        rec.copy_buffer(staging.buffer(), buf.buffer(), std::slice::from_ref(&copy));
     })?;
     Ok(buf)
 }

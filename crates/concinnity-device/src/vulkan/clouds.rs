@@ -162,10 +162,9 @@ fn create_image_resting(
         .map_err(|e| super::error::map_vk_result(e, label))?;
     image.attach_view(view);
     let raw = image.image();
-    one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |cmd| {
+    one_shot_submit(gpu.device, gpu.command_pool, gpu.queue, |rec| {
         transition_image_layout_range(
-            gpu.device,
-            cmd,
+            rec,
             raw,
             LayoutTransition {
                 old_layout: vk::ImageLayout::UNDEFINED,

@@ -517,18 +517,13 @@ pub(in crate::vulkan) fn upload_static_buffer(
         usage | vk::BufferUsageFlags::TRANSFER_DST,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
+    super::texture::one_shot_submit(device, command_pool, queue, |rec| {
         let region = vk::BufferCopy::default().size(size);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer(
-                cmd,
-                staging.buffer(),
-                buf.buffer(),
-                std::slice::from_ref(&region),
-            );
-        };
+        rec.copy_buffer(
+            staging.buffer(),
+            buf.buffer(),
+            std::slice::from_ref(&region),
+        );
     })?;
     Ok(buf)
 }

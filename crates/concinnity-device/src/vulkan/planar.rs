@@ -269,11 +269,10 @@ fn create_targets(
     // Every target rests readable from the start: a reflector binds its mirror
     // on frames the plane is culled, and a plane culled since creation has not
     // been through the render pass that would otherwise leave it readable.
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         for target in &targets {
             transition_image_layout(
-                device,
-                cmd,
+                rec,
                 target.image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -855,7 +854,7 @@ impl VkContext {
                 records: set.cull_count,
             };
             self.encode_probe_cull(
-                rec.raw(),
+                rec,
                 set.cull_sets[ring],
                 set.hiz_set,
                 packing,
@@ -905,8 +904,8 @@ impl VkContext {
                 &[],
             );
             self.encode_main_into_face(
-                rec.raw(),
-                set.framebuffers[slot].handle(),
+                rec,
+                &set.framebuffers[slot],
                 FaceArea {
                     extent,
                     render_area: vk::Rect2D {

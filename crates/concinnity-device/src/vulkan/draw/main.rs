@@ -32,8 +32,6 @@ impl VkContext {
         world_hidden: bool,
         grass: Option<&crate::vulkan::grass::GrassFrame>,
     ) {
-        let device = self.hw.device.clone();
-        let device = &device;
         let extent = self.targets.render_extent;
 
         // Opaque menu backdrop, MSAA path: skip the main render pass entirely.
@@ -52,8 +50,7 @@ impl VkContext {
         // color attachment), so it keeps its cheap clear-only render pass.
         if world_hidden && self.targets.msaa_samples != vk::SampleCountFlags::TYPE_1 {
             super::super::texture::transition_image_layout(
-                device,
-                rec.raw(),
+                rec,
                 self.targets.hdr_resolve_images[frame_idx].image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -253,7 +250,7 @@ impl VkContext {
         // `MainLate` then draws the disoccluded rest over it, which wins the depth
         // test because the sky writes none.
         if self.draws_sky(self.state.view.mode) {
-            self.encode_main_sky(rec.raw(), frame_idx);
+            self.encode_main_sky(rec, frame_idx);
         }
 
         // End the main scene pass. The render pass leaves the HDR resolve

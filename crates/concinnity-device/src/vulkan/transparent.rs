@@ -62,6 +62,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // The live acceleration-structure handles wired into the transparent RT
 // descriptor ring. Passed once at init (`None` when RT is not live at launch)
@@ -1176,10 +1177,9 @@ fn create_snapshot(
         },
     )?;
     let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout_range(
-            device,
-            cmd,
+            rec,
             image,
             LayoutTransition {
                 old_layout: vk::ImageLayout::UNDEFINED,
@@ -2116,7 +2116,7 @@ impl VkContext {
     // downstream stack.
     pub(in crate::vulkan) fn encode_transparent(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         view: &TransparentView,
         // The frame's RT reflection block, which the per-pixel trace shares with
@@ -2164,7 +2164,6 @@ impl VkContext {
             .as_ref()
             .filter(|_| plan.reflection_prepass(true));
 
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
         let scene_image = *transparent
             .scene_images
@@ -2243,20 +2242,14 @@ impl VkContext {
             vk::AccessFlags::SHADER_READ,
             vk::AccessFlags::TRANSFER_WRITE,
         );
-        // SAFETY: `cmd` is recording outside a render pass, and the scene image and snapshot
-        // are live targets resting in SHADER_READ_ONLY_OPTIMAL.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[scene_to_src, snapshot_to_dst],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            &[],
+            &[],
+            &[scene_to_src, snapshot_to_dst],
+        );
         let region = vk::ImageCopy::default()
             .src_subresource(vk::ImageSubresourceLayers {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -2275,17 +2268,13 @@ impl VkContext {
                 height: extent.height,
                 depth: 1,
             });
-        // SAFETY: the barrier above moved both images into the transfer layouts this copy names.
-        unsafe {
-            device.cmd_copy_image(
-                cmd,
-                scene_image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                snapshot,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&region),
-            );
-        }
+        rec.copy_image(
+            scene_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            snapshot,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&region),
+        );
 
         // 2) Close the snapshot for the fragment read and restore the scene
         // image to SHADER_READ_ONLY, so the render pass's color LOAD matches
@@ -2305,20 +2294,14 @@ impl VkContext {
             vk::AccessFlags::TRANSFER_READ,
             vk::AccessFlags::COLOR_ATTACHMENT_READ,
         );
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[snapshot_to_read, scene_to_read],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER
+                | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            &[],
+            &[],
+            &[snapshot_to_read, scene_to_read],
+        );
 
         // Every producer shares every set layout, so one pipeline layout binds the
         // view / global / RT sets for the whole pass and only the pipeline changes
@@ -2327,13 +2310,12 @@ impl VkContext {
             (true, Some(r)) if textured => r
                 .layout_textured
                 .as_ref()
-                .expect("textured implies a textured layout")
-                .handle(),
-            (true, Some(r)) => r.layout_flat.handle(),
-            _ => transparent.pipeline_layout.handle(),
+                .expect("textured implies a textured layout"),
+            (true, Some(r)) => &r.layout_flat,
+            _ => &transparent.pipeline_layout,
         };
         let frame = TransparentFrame {
-            cmd,
+            rec,
             frame_idx,
             layout,
             rt_live,
@@ -2351,28 +2333,18 @@ impl VkContext {
         // pass so the manual depth test + refraction taps line up at pixel
         // coordinates.
         let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(transparent.render_passes.get(mask))
-            .framebuffer(transparent.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(&clears);
-        // SAFETY: `cmd` is recording outside a render pass, and the render pass and this frame's
-        // framebuffer are owned by `transparent`.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
-        set_flipped_viewport(device, cmd, extent);
+        rec.begin_render_pass(
+            transparent.render_passes.get(mask),
+            &transparent.framebuffers[frame_idx],
+            vk::Rect2D::default().extent(extent),
+            &clears,
+        );
+        set_flipped_viewport(rec, extent);
         self.bind_transparent_sets(transparent, &frame, transparent.view_sets[frame_idx].scene);
         let mut bound: Option<vk::Pipeline> = None;
         let mut bind = |pipeline: &OwnedPipeline| {
             if bound != Some(pipeline.handle()) {
-                // SAFETY: `cmd` is a command buffer in the recording state, and the pipeline is
-                // live for the call.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.handle(),
-                    );
-                }
+                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
                 bound = Some(pipeline.handle());
             }
         };
@@ -2404,9 +2376,7 @@ impl VkContext {
                 self.draw_transparent_entry(transparent, &frame, kind, i, Some(draw.indices));
             }
         }
-        // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
-        // above.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
 
         Ok(true)
     }
@@ -2421,7 +2391,6 @@ impl VkContext {
         layers: &GlassReflectionLayers,
         frame: &TransparentFrame<'_>,
     ) {
-        let device = &self.hw.device;
         let clears = [
             vk::ClearValue {
                 color: vk::ClearColorValue { float32: [0.0; 4] },
@@ -2429,17 +2398,13 @@ impl VkContext {
             depth::CLEAR_VALUE,
         ];
         for layer in 0..2 {
-            let rp_begin = vk::RenderPassBeginInfo::default()
-                .render_pass(transparent.reflection_render_pass.handle())
-                .framebuffer(layers.framebuffers[layer].handle())
-                .render_area(vk::Rect2D::default().extent(layers.extent))
-                .clear_values(&clears);
-            // SAFETY: `frame.cmd` is recording outside a render pass, and the reflection render
-            // pass and this layer's framebuffer are live for the call.
-            unsafe {
-                device.cmd_begin_render_pass(frame.cmd, &rp_begin, vk::SubpassContents::INLINE);
-            }
-            set_flipped_viewport(device, frame.cmd, layers.extent);
+            frame.rec.begin_render_pass(
+                &transparent.reflection_render_pass,
+                &layers.framebuffers[layer],
+                vk::Rect2D::default().extent(layers.extent),
+                &clears,
+            );
+            set_flipped_viewport(frame.rec, layers.extent);
             self.bind_transparent_sets(
                 transparent,
                 frame,
@@ -2458,20 +2423,12 @@ impl VkContext {
                 let Some(pipeline) = pipeline else {
                     continue;
                 };
-                // SAFETY: `frame.cmd` is a command buffer in the recording state, and the
-                // pipeline is live for the call.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        frame.cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.handle(),
-                    );
-                }
+                frame
+                    .rec
+                    .bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
                 self.draw_transparent_entry(transparent, frame, kind, i, None);
             }
-            // SAFETY: `frame.cmd` is a command buffer in the recording state inside the render
-            // pass begun above.
-            unsafe { device.cmd_end_render_pass(frame.cmd) };
+            frame.rec.end_render_pass();
         }
     }
 
@@ -2484,20 +2441,14 @@ impl VkContext {
         frame: &TransparentFrame<'_>,
         view_set: vk::DescriptorSet,
     ) {
-        let device = &self.hw.device;
         let bind = |index: u32, set: vk::DescriptorSet| {
-            // SAFETY: `frame.cmd` is a command buffer in the recording state, and the set and
-            // layout are live for the call.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    frame.cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    frame.layout,
-                    index,
-                    std::slice::from_ref(&set),
-                    &[],
-                );
-            }
+            frame.rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                frame.layout,
+                index,
+                std::slice::from_ref(&set),
+                &[],
+            );
         };
         bind(0, view_set);
         // The per-frame global set (set 2): the fragment shaders reflect its probe
@@ -2531,71 +2482,40 @@ impl VkContext {
         i: usize,
         indices: Option<std::ops::Range<u32>>,
     ) {
-        let device = &self.hw.device;
-        let cmd = frame.cmd;
+        let rec = frame.rec;
         if kind == Producer::GlassMesh {
             let d = &frame.mesh_draws[i];
-            // SAFETY: `cmd` is recording inside the transparent render pass, and the mesh's
-            // params set matches set 1 of `frame.layout`.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    frame.layout,
-                    1,
-                    std::slice::from_ref(&d.params_set),
-                    &[],
-                );
-            }
+            // The mesh's params set matches set 1 of `frame.layout`.
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                frame.layout,
+                1,
+                std::slice::from_ref(&d.params_set),
+                &[],
+            );
             let vertex_buffer = self.geometry.vertex_buffer.buffer();
-            // SAFETY: the scene vertex buffer is owned by `self.geometry` and outlives the frame.
-            unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
-            // SAFETY: the scene index buffer is owned by `self.geometry` and outlives the frame.
-            unsafe {
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    self.geometry.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-            }
-            // SAFETY: the mesh's set and the scene buffers are bound above, and `d` names its
-            // own slice of them.
-            unsafe {
-                device.cmd_draw_indexed(cmd, d.index_count, 1, d.index_offset, d.base_vertex, 0);
-            }
+            rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+            rec.bind_index_buffer(
+                self.geometry.index_buffer.buffer(),
+                0,
+                vk::IndexType::UINT32,
+            );
+            rec.draw_indexed(d.index_count, 1, d.index_offset, d.base_vertex, 0);
         } else {
             let r = &transparent.producer(kind).records[i];
-            // SAFETY: `cmd` is recording inside the transparent render pass, and the record's
-            // per-frame params set matches set 1 of `frame.layout`.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    frame.layout,
-                    1,
-                    std::slice::from_ref(&r.gpu.params_sets[frame.frame_idx]),
-                    &[],
-                );
-            }
+            // The record's per-frame params set matches set 1 of `frame.layout`.
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                frame.layout,
+                1,
+                std::slice::from_ref(&r.gpu.params_sets[frame.frame_idx]),
+                &[],
+            );
             let vertex_buffer = r.gpu.vertex_buffer.buffer();
-            // SAFETY: the record's vertex buffer is owned by its GPU state for the frame.
-            unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
-            // SAFETY: the record's index buffer is owned by its GPU state for the frame.
-            unsafe {
-                device.cmd_bind_index_buffer(
-                    cmd,
-                    r.gpu.index_buffer.buffer(),
-                    0,
-                    vk::IndexType::UINT16,
-                );
-            }
+            rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+            rec.bind_index_buffer(r.gpu.index_buffer.buffer(), 0, vk::IndexType::UINT16);
             let indices = indices.unwrap_or(0..r.gpu.index_count);
-            // SAFETY: the record's set and its own buffers are bound above, and `indices` lies
-            // within its index buffer.
-            unsafe {
-                device.cmd_draw_indexed(cmd, indices.end - indices.start, 1, indices.start, 0, 0);
-            }
+            rec.draw_indexed(indices.end - indices.start, 1, indices.start, 0, 0);
         }
         self.inc_draw_calls(1);
     }
@@ -2604,9 +2524,9 @@ impl VkContext {
 // One frame's transparent recording state, shared by the reflection pre-pass
 // and the scene pass.
 struct TransparentFrame<'a> {
-    cmd: vk::CommandBuffer,
+    rec: &'a Recorder<'a>,
     frame_idx: usize,
-    layout: vk::PipelineLayout,
+    layout: &'a OwnedPipelineLayout,
     rt_live: bool,
     textured: bool,
     order: &'a [(Producer, usize)],
@@ -2616,7 +2536,7 @@ struct TransparentFrame<'a> {
 // Set the negative-height viewport the main pass rasterizes with over `extent`,
 // so the fragment positions and the manual depth test line up at pixel
 // coordinates, plus a matching scissor.
-fn set_flipped_viewport(device: &VkDevice, cmd: vk::CommandBuffer, extent: vk::Extent2D) {
+fn set_flipped_viewport(rec: &Recorder<'_>, extent: vk::Extent2D) {
     let vp = vk::Viewport {
         x: 0.0,
         y: extent.height as f32,
@@ -2626,8 +2546,6 @@ fn set_flipped_viewport(device: &VkDevice, cmd: vk::CommandBuffer, extent: vk::E
         max_depth: 1.0,
     };
     let scissor = vk::Rect2D::default().extent(extent);
-    // SAFETY: `cmd` is a command buffer in the recording state, and `vp` is a live local.
-    unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
-    // SAFETY: same recording `cmd`; `scissor` is a live local.
-    unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
+    rec.set_viewport(&vp);
+    rec.set_scissor(&scissor);
 }

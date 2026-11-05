@@ -25,9 +25,9 @@ use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
-use super::owned::VkDevice;
 use super::texture::one_shot_submit;
 use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, PendingCapture};
+use crate::vulkan::record::Recorder;
 
 /// The Vulkan backend's frame captures, parked under the frame slot whose
 /// fence retires them.
@@ -74,7 +74,7 @@ impl VkContext {
             &device,
             self.commands.command_pool,
             self.hw.graphics_queue,
-            |cmd| encode_copy(&device, cmd, src_image, &readback, &image),
+            |rec| encode_copy(rec, src_image, &readback, &image),
         )?;
         // SAFETY: the buffer is `image.byte_len()` mapped bytes, and the copy into it completed
         // (one_shot_submit waits its fence).
@@ -97,7 +97,7 @@ impl VkContext {
     // buffer on `cmd`, leaving it in `PRESENT_SRC_KHR` for the present.
     pub(in crate::vulkan) fn record_frame_capture(
         &mut self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         image_index: u32,
     ) -> Option<PendingCapture> {
         let path = self.frame_capture.take_armed()?;
@@ -114,7 +114,7 @@ impl VkContext {
                 return None;
             }
         };
-        encode_copy(&self.hw.device, cmd, src_image, &readback, &image);
+        encode_copy(rec, src_image, &readback, &image);
         Some(pending)
     }
 
@@ -176,8 +176,7 @@ fn readback_buffer(alloc: &DeviceAllocator, len: usize) -> RenderResult<Mapped<P
 // before it are done, into `readback` laid out as `image`, return the image to
 // `PRESENT_SRC_KHR`, and make the copy visible to the host.
 fn encode_copy(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     src_image: vk::Image,
     readback: &PooledBuffer,
     image: &CaptureImage,
@@ -220,42 +219,26 @@ fn encode_copy(
         .buffer(readback.buffer())
         .offset(0)
         .size(vk::WHOLE_SIZE);
-    // SAFETY: `cmd` is a command buffer in the recording state, and the caller keeps the
-    // swapchain image alive until the buffer has executed.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &[to_src],
-        );
-    }
-    // SAFETY: the barrier above moved `src_image` to TRANSFER_SRC_OPTIMAL, and the caller keeps
-    // `readback` alive until the buffer has executed.
-    unsafe {
-        device.cmd_copy_image_to_buffer(
-            cmd,
-            src_image,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            readback.buffer(),
-            std::slice::from_ref(&region),
-        );
-    }
-    // SAFETY: same recording `cmd`; this returns the image to present and the copy to the host.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::BOTTOM_OF_PIPE | vk::PipelineStageFlags::HOST,
-            vk::DependencyFlags::empty(),
-            &[],
-            std::slice::from_ref(&to_host),
-            &[to_present],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        vk::PipelineStageFlags::TRANSFER,
+        &[],
+        &[],
+        &[to_src],
+    );
+    rec.copy_image_to_buffer(
+        src_image,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        readback.buffer(),
+        std::slice::from_ref(&region),
+    );
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::BOTTOM_OF_PIPE | vk::PipelineStageFlags::HOST,
+        &[],
+        std::slice::from_ref(&to_host),
+        &[to_present],
+    );
 }
 
 // A whole-image color barrier on a swapchain image, used to flip between

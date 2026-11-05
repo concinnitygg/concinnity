@@ -125,7 +125,7 @@ impl VkContext {
             // Raymarched SDF shadow casters into this cascade's DSV, after the
             // rasterized casters and within the same render pass (no re-clear);
             // the depth write test keeps the nearer occluder.
-            self.encode_sdf_shadow_cascade(rec.raw(), frame_idx, cascade_idx);
+            self.encode_sdf_shadow_cascade(rec, frame_idx, cascade_idx);
             rec.end_render_pass();
         }
 

@@ -41,11 +41,9 @@ pub(in crate::vulkan) fn zero_indirect_buffers<'a>(
     queue: vk::Queue,
     buffers: impl IntoIterator<Item = &'a super::allocator::PooledBuffer>,
 ) -> RenderResult<()> {
-    super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
+    super::texture::one_shot_submit(device, command_pool, queue, |rec| {
         for buffer in buffers {
-            // SAFETY: `cmd` is recording outside a render pass, and every indirect buffer is made
-            // with TRANSFER_DST and is not yet in use.
-            unsafe { device.cmd_fill_buffer(cmd, buffer.buffer(), 0, vk::WHOLE_SIZE, 0) };
+            rec.fill_buffer(buffer.buffer(), 0, vk::WHOLE_SIZE, 0);
         }
     })
 }

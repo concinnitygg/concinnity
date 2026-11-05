@@ -354,10 +354,9 @@ impl HiZResources {
         // Rest in SHADER_READ_ONLY so the cull-read descriptor's layout is
         // satisfied on the first frame (the cull kernel won't sample it -
         // `hiz_enabled` is 0 - but the descriptor layout must still match).
-        one_shot_submit(device, command_pool, queue, |cmd| {
+        one_shot_submit(device, command_pool, queue, |rec| {
             transition_image_layout_range(
-                device,
-                cmd,
+                rec,
                 pyramid.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,

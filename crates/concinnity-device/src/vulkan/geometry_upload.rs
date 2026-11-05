@@ -22,6 +22,7 @@ use concinnity_engine::render::buffers::retire_pool::RetirePool;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::error::map_vk_result;
+use crate::vulkan::record::Recorder;
 use concinnity_engine::render::buffers::staging_uploads::{StageError, StagingUploads};
 
 // Which shared buffer a staged write lands in.
@@ -159,19 +160,16 @@ impl GeometryUploads {
             unsafe { device.allocate_command_buffers(&info) }
                 .map_err(|e| map_vk_result(e, "geometry copy allocate"))?[0]
         };
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         // SAFETY: `cmd` came from a pool created with RESET_COMMAND_BUFFER, and its last submit
         // retired `depth` ticks ago, so it is not in flight and may be reset.
         unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
             .map_err(|e| map_vk_result(e, "geometry copy reset"))?;
-        // SAFETY: the reset above left `cmd` in the initial state, and `begin` is borrowed for
-        // the call; this puts it in the recording state.
-        unsafe { device.begin_command_buffer(cmd, &begin) }
+        // The reset above left `cmd` in the initial state.
+        let rec = Recorder::begin(device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .map_err(|e| map_vk_result(e, "geometry copy begin"))?;
-        record_copies(device, cmd, &self.queued, dest);
-        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe { device.end_command_buffer(cmd) }
+        record_copies(&rec, &self.queued, dest);
+        let cmd = rec
+            .end()
             .map_err(|e| map_vk_result(e, "geometry copy end"))?;
         let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
         // SAFETY: `cmd` was ended and belongs to this device, and `submit` borrows it for the call.
@@ -200,38 +198,23 @@ fn staging_buffer(alloc: &DeviceAllocator, capacity: u64) -> RenderResult<Pooled
     )
 }
 
-fn record_copies(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
-    queued: &[StagedCopy],
-    dest: GeometryDest,
-) {
+fn record_copies(rec: &Recorder<'_>, queued: &[StagedCopy], dest: GeometryDest) {
     // Write-after-read: the copies wait for every earlier read of the buffers,
     // so an in-place overwrite, or a region reused before the reads of its
     // last occupant retired, is safe.
-    // SAFETY: `cmd` is in the recording state, and the barrier names no resource.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::ALL_COMMANDS,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::ALL_COMMANDS,
+        vk::PipelineStageFlags::TRANSFER,
+        &[],
+        &[],
+        &[],
+    );
     for copy in queued {
-        // SAFETY: `cmd` is in the recording state, and both buffers are live for the call: the
-        // shared one through the caller's geometry, the source ring through its queued copy.
-        unsafe {
-            device.cmd_copy_buffer(
-                cmd,
-                copy.src.buffer(),
-                copy.target.pick(dest),
-                std::slice::from_ref(&copy.region),
-            );
-        }
+        rec.copy_buffer(
+            copy.src.buffer(),
+            copy.target.pick(dest),
+            std::slice::from_ref(&copy.region),
+        );
     }
     let visible = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
@@ -241,18 +224,13 @@ fn record_copies(
                 | vk::AccessFlags::SHADER_READ
                 | vk::AccessFlags::TRANSFER_READ,
         );
-    // SAFETY: `cmd` is in the recording state, and the barrier names no resource.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::ALL_COMMANDS,
-            vk::DependencyFlags::empty(),
-            std::slice::from_ref(&visible),
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::TRANSFER,
+        vk::PipelineStageFlags::ALL_COMMANDS,
+        std::slice::from_ref(&visible),
+        &[],
+        &[],
+    );
 }
 
 #[cfg(test)]

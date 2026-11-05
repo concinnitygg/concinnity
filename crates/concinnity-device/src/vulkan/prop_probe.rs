@@ -290,7 +290,7 @@ impl VkContext {
                 Self::order_prop_face_cull(rec);
             }
             self.encode_probe_cull(
-                rec.raw(),
+                rec,
                 gpu.cull_sets[f],
                 gpu.hiz_set,
                 packing,
@@ -303,8 +303,8 @@ impl VkContext {
             );
             Self::order_prop_face_render(rec);
             self.encode_main_into_face(
-                rec.raw(),
-                gpu.framebuffers[face].handle(),
+                rec,
+                &gpu.framebuffers[face],
                 FaceArea::whole(extent),
                 FaceView {
                     global_set: gpu.global_sets[ring],
@@ -315,11 +315,11 @@ impl VkContext {
                 packing,
             );
         }
-        self.encode_probe_pyramid(rec.raw(), &gpu.prefilter, &gpu.plan)?;
+        self.encode_probe_pyramid(rec, &gpu.prefilter, &gpu.plan)?;
         for mip in 1..gpu.plan.mips() {
-            self.encode_probe_ggx_mip(rec.raw(), &gpu.prefilter, &gpu.plan, mip)?;
+            self.encode_probe_ggx_mip(rec, &gpu.prefilter, &gpu.plan, mip)?;
         }
-        self.encode_probe_cube_readable(rec.raw(), &gpu.prefilter);
+        Self::encode_probe_cube_readable(rec, &gpu.prefilter);
         Ok(())
     }
 
@@ -413,10 +413,9 @@ impl PropProbeGpu {
             device,
             ctx.commands.command_pool,
             ctx.hw.graphics_queue,
-            |cmd| {
+            |rec| {
                 transition_image_layout_range(
-                    device,
-                    cmd,
+                    rec,
                     prefilter.capture_image(),
                     LayoutTransition {
                         old_layout: vk::ImageLayout::UNDEFINED,

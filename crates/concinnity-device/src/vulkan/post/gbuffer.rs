@@ -898,7 +898,7 @@ impl VkContext {
         if let Some(grass) = grass {
             self.encode_grass_prepass(rec, frame_idx, grass);
         }
-        self.encode_raymarch_prepass(rec.raw(), frame_idx, &view, &view_uni);
+        self.encode_raymarch_prepass(rec, frame_idx, &view, &view_uni);
         // The sky keeps the "no geometry" depth and roughness and adds the
         // camera's motion where nothing was drawn.
         if self.draws_sky(self.state.view.mode) {

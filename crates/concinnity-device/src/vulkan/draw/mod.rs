@@ -32,6 +32,7 @@ pub(in crate::vulkan) use concinnity_engine::render::uniforms::ViewUniforms;
 
 use super::context::VkContext;
 use super::graph_exec::GraphFrameParams;
+use crate::vulkan::record::Recorder;
 
 impl VkContext {
     // Write this frame's variant block into frame `frame_idx`'s buffer: the
@@ -295,12 +296,13 @@ impl VkContext {
         // it is not in flight and may be reset.
         unsafe { device.reset_command_buffer(start_cmd, vk::CommandBufferResetFlags::empty()) }
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "reset start cmd buf"))?;
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        // SAFETY: the reset above left `start_cmd` in the initial state, and `begin_info` is
-        // borrowed for the call; this puts it in the recording state the code below relies on.
-        unsafe { device.begin_command_buffer(start_cmd, &begin_info) }
-            .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin start cmd buf"))?;
+        // The reset above left `start_cmd` in the initial state.
+        let rec = Recorder::begin(
+            device,
+            start_cmd,
+            vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+        )
+        .map_err(|e| crate::vulkan::error::map_vk_result(e, "begin start cmd buf"))?;
         if let Some(pool) = self.hw.timestamp_query_pool {
             // Reset this frame's whole timestamp block (whole-frame pair + every
             // per-pass pair) here, before any per-pass buffer writes into it.
@@ -310,25 +312,12 @@ impl VkContext {
             // is the block's second slot, written in the end buffer below.
             let block_base = pass_timing::frame_block_base(frame_idx);
             let (wf_start, _) = pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `start_cmd` is recording, and the timestamp pool is owned by `self.hw`;
-            // the block for this frame slot is in range of the pool's slots.
-            unsafe {
-                device.cmd_reset_query_pool(
-                    start_cmd,
-                    pool,
-                    block_base,
-                    u32::saturating_from(pass_timing::SLOTS_PER_FRAME),
-                );
-            }
-            // SAFETY: `wf_start` lies inside the block just reset on the same recording buffer.
-            unsafe {
-                device.cmd_write_timestamp(
-                    start_cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    pool,
-                    wf_start,
-                );
-            }
+            rec.reset_query_pool(
+                pool,
+                block_base,
+                u32::saturating_from(pass_timing::SLOTS_PER_FRAME),
+            );
+            rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, wf_start);
         }
         // Hardware ray-traced reflections: rebuild the TLAS for moved props (when
         // the dynamic mode + dirty gate call for it) onto the start buffer, which
@@ -340,19 +329,14 @@ impl VkContext {
         // change stays owed to the next frame that draws it.
         if !world_hidden {
             let rt_started = std::time::Instant::now();
-            self.rt_dynamic_update(start_cmd, frame_idx);
+            self.rt_dynamic_update(&rec, frame_idx);
             self.state.spans.set(FrameSpans {
                 rt_accel_us: concinnity_host::clock::micros_since(rt_started),
                 ..self.state.spans.get()
             });
         }
-        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe {
-            device
-                .end_command_buffer(start_cmd)
-                .map_err(|e| crate::vulkan::error::map_vk_result(e, "end start cmd buf"))?;
-        }
-        Ok(start_cmd)
+        rec.end()
+            .map_err(|e| crate::vulkan::error::map_vk_result(e, "end start cmd buf"))
     }
 
     // What this backend has built, for the frame's graph gates.
@@ -802,26 +786,20 @@ impl FrameDevice for VkContext {
 
         self.finish_frame_stats();
 
+        // SAFETY: `begin` began `cmd`, and nothing has ended it: the graph's
+        // arms recorded into it through `GraphFrameParams::cmd`.
+        let rec = unsafe { Recorder::assume_recording(device, cmd) };
         // End-of-frame timestamp for the profiler overlay. Pairs with the
         // TOP_OF_PIPE write in the start buffer (the block's first pair).
         if let Some(pool) = self.hw.timestamp_query_pool {
             let (_, wf_end) = pass_timing::whole_frame_pair(frame_idx);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_write_timestamp(
-                    cmd,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    pool,
-                    wf_end,
-                );
-            }
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, wf_end);
         }
 
-        let capture = self.record_frame_capture(cmd, image_index);
+        let capture = self.record_frame_capture(&rec, image_index);
 
-        // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-        unsafe { device.end_command_buffer(cmd) }
+        let cmd = rec
+            .end()
             .map_err(|e| crate::vulkan::error::map_vk_result(e, "end cmd buf"))?;
         // The outer "end" buffer (Composite + post-graph work + trailing
         // timestamp) submits last, after every per-pass buffer.

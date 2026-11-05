@@ -160,15 +160,9 @@ impl PassRecorder for VkPassRecorder<'_, '_> {
             let (ts_start, _) = pass_timing::pass_pair(frame_idx, pass_id);
             rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, ts_start);
         }
-        emit_pass_prologue(
-            self.device,
-            buf,
-            self.registry,
-            self.alias.for_pass(index),
-            pass,
-        );
+        emit_pass_prologue(&rec, self.registry, self.alias.for_pass(index), pass);
         ctx.encode_pass_into(pass_id, &rec, self.params, self.particle, self.grass)?;
-        emit_pass_epilogue(self.device, buf, self.registry, pass);
+        emit_pass_epilogue(&rec, self.registry, pass);
         if let Some(pool) = ctx.hw.timestamp_query_pool {
             let (_, ts_end) = pass_timing::pass_pair(frame_idx, pass_id);
             rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, ts_end);
@@ -186,12 +180,7 @@ impl PassRecorder for VkPassRecorder<'_, '_> {
 // producer's no-op Undefined -> Write) is skipped too. Takes `&ash::Device`, not
 // `&VkContext`: the field-to-image mapping was already resolved into the
 // registry, so this parallel path is field-agnostic.
-fn emit_graph_barriers(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    ops: &[BarrierOp],
-) {
+fn emit_graph_barriers(rec: &Recorder<'_>, registry: &VkBarrierRegistry, ops: &[BarrierOp]) {
     for op in ops {
         let Some(target) = registry.target(op.resource_index()) else {
             continue;
@@ -205,7 +194,7 @@ fn emit_graph_barriers(
         ) else {
             continue;
         };
-        emit_one(device, cmd, registry, target, transition);
+        emit_one(rec, registry, target, transition);
     }
 }
 
@@ -216,8 +205,7 @@ const BUFFER_BARRIER_BATCH: usize = 16;
 // barrier over the whole range, or an image memory barrier over every mip and
 // array layer the target declares.
 fn emit_one(
-    device: &Device,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     registry: &VkBarrierRegistry,
     target: &VkBarrierTarget,
     transition: (
@@ -245,19 +233,13 @@ fn emit_one(
     match target.object {
         VkTargetObject::Buffer { buffer } => {
             let barrier = buffer_barrier(buffer);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    src_stage,
-                    dst_stage,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    std::slice::from_ref(&barrier),
-                    &[],
-                );
-            }
+            rec.pipeline_barrier(
+                src_stage,
+                dst_stage,
+                &[],
+                std::slice::from_ref(&barrier),
+                &[],
+            );
         }
         VkTargetObject::BufferSet { first, count } => {
             // The members share a transition, so they go out in batches of one
@@ -268,19 +250,7 @@ fn emit_one(
                 for (barrier, &buffer) in barriers.iter_mut().zip(chunk) {
                     *barrier = buffer_barrier(buffer);
                 }
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        cmd,
-                        src_stage,
-                        dst_stage,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &barriers[..chunk.len()],
-                        &[],
-                    );
-                }
+                rec.pipeline_barrier(src_stage, dst_stage, &[], &barriers[..chunk.len()], &[]);
             }
         }
         VkTargetObject::Image {
@@ -307,19 +277,13 @@ fn emit_one(
                 })
                 .src_access_mask(src_access)
                 .dst_access_mask(dst_access);
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    src_stage,
-                    dst_stage,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    std::slice::from_ref(&barrier),
-                );
-            }
+            rec.pipeline_barrier(
+                src_stage,
+                dst_stage,
+                &[],
+                &[],
+                std::slice::from_ref(&barrier),
+            );
         }
     }
 }
@@ -329,12 +293,7 @@ fn emit_one(
 // Recorded into the frame's outer "end" command buffer, which is submitted after
 // every pass buffer, so these run last. A frame that ends every resource at rest
 // (the common case: nothing needs one) emits nothing.
-fn emit_graph_restores(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    graph: &CompiledGraph,
-) {
+fn emit_graph_restores(rec: &Recorder<'_>, registry: &VkBarrierRegistry, graph: &CompiledGraph) {
     for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
@@ -342,7 +301,7 @@ fn emit_graph_restores(
         let Some(transition) = vk_restore(target.class, target.resting, state, stages) else {
             continue;
         };
-        emit_one(device, cmd, registry, target, transition);
+        emit_one(rec, registry, target, transition);
     }
 }
 
@@ -356,7 +315,7 @@ fn emit_graph_restores(
 // discards the predecessor's contents in the shared memory (the member is fully
 // rewritten before it is read). Per-resource stage derivation can refine this
 // when a non-color member is aliased.
-fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Image]) {
+fn emit_alias_barriers(rec: &Recorder<'_>, images: &[vk::Image]) {
     for &image in images {
         let barrier = vk::ImageMemoryBarrier::default()
             .old_layout(vk::ImageLayout::UNDEFINED)
@@ -373,20 +332,14 @@ fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Im
             })
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE | vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                std::slice::from_ref(&barrier),
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            &[],
+            &[],
+            std::slice::from_ref(&barrier),
+        );
     }
 }
 
@@ -408,14 +361,13 @@ fn emit_alias_barriers(device: &Device, cmd: vk::CommandBuffer, images: &[vk::Im
 // DirectX executor came to record no graph barriers for Composite at all,
 // silently dropping any a driven resource declared there.
 fn emit_pass_prologue(
-    device: &Device,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     registry: &VkBarrierRegistry,
     alias: &[vk::Image],
     pass: &CompiledPass,
 ) {
-    emit_alias_barriers(device, cmd, alias);
-    emit_graph_barriers(device, cmd, registry, &pass.barriers_before);
+    emit_alias_barriers(rec, alias);
+    emit_graph_barriers(rec, registry, &pass.barriers_before);
 }
 
 // The one thing a pass owes its command buffer after its body: the transitions
@@ -424,13 +376,8 @@ fn emit_pass_prologue(
 // pass it follows, so the flattened serial stream is command-for-command what a
 // transition on the run's first reader produced. A queue-family release barrier
 // belongs here too once a compute queue exists; nothing emits one yet.
-fn emit_pass_epilogue(
-    device: &Device,
-    cmd: vk::CommandBuffer,
-    registry: &VkBarrierRegistry,
-    pass: &CompiledPass,
-) {
-    emit_graph_barriers(device, cmd, registry, &pass.barriers_after);
+fn emit_pass_epilogue(rec: &Recorder<'_>, registry: &VkBarrierRegistry, pass: &CompiledPass) {
+    emit_graph_barriers(rec, registry, &pass.barriers_after);
 }
 
 // Check the graph's barrier coverage and cross-frame layout contract for every
@@ -701,32 +648,17 @@ impl VkContext {
         // Composite on the main thread, into the outer "end" buffer. Bracket it
         // with its own per-pass timestamp pair (in the end buffer, which also
         // carries the whole-frame end timestamp written later in `record_frame`).
+        // The outer "end" buffer was begun by `draw_frame` before it called
+        // `record_frame`, so these scopes adopt it rather than beginning it.
+        // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and it
+        // belongs to this device.
+        let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
         if let Some(idx) = executed.presenter {
             if let Some(pool) = self.hw.timestamp_query_pool {
                 let (ts_start, _) = pass_timing::pass_pair(frame_idx, PassId::Composite);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    self.hw.device.cmd_write_timestamp(
-                        params.cmd,
-                        vk::PipelineStageFlags::TOP_OF_PIPE,
-                        pool,
-                        ts_start,
-                    );
-                }
+                rec.write_timestamp(vk::PipelineStageFlags::TOP_OF_PIPE, pool, ts_start);
             }
-            emit_pass_prologue(
-                &self.hw.device,
-                params.cmd,
-                registry,
-                alias.for_pass(idx),
-                &graph.passes[idx],
-            );
-            // The outer "end" buffer was begun by `draw_frame` before it called
-            // `record_frame`, so this scope adopts it rather than beginning it.
-            // SAFETY: `params.cmd` is the buffer `draw_frame` reset and began above this call, and
-            // it belongs to this device.
-            let rec = unsafe { Recorder::assume_recording(&self.hw.device, params.cmd) };
+            emit_pass_prologue(&rec, registry, alias.for_pass(idx), &graph.passes[idx]);
             self.encode_pass_into(
                 PassId::Composite,
                 &rec,
@@ -734,26 +666,17 @@ impl VkContext {
                 particle_frame.as_ref(),
                 None,
             )?;
-            emit_pass_epilogue(&self.hw.device, params.cmd, registry, &graph.passes[idx]);
+            emit_pass_epilogue(&rec, registry, &graph.passes[idx]);
             if let Some(pool) = self.hw.timestamp_query_pool {
                 let (_, ts_end) = pass_timing::pass_pair(frame_idx, PassId::Composite);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    self.hw.device.cmd_write_timestamp(
-                        params.cmd,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        pool,
-                        ts_end,
-                    );
-                }
+                rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, ts_end);
             }
         }
 
         // Return every driven resource the frame left off its resting layout.
         // Recorded last into the outer "end" buffer, which is submitted after
         // every pass buffer.
-        emit_graph_restores(&self.hw.device, params.cmd, registry, graph);
+        emit_graph_restores(&rec, registry, graph);
 
         // Hand the tables' allocations back for the next frame to refill. An
         // error path above skips this and the next frame allocates fresh, which
@@ -975,9 +898,7 @@ impl VkContext {
     // Record one render-graph pass into `rec`. Shared by the serial driver and
     // the parallel fan-out: takes `&self` so it can run on a worker thread.
     // `particle_frame` is the per-frame particle state from
-    // `prepare_particle_pass`. An arm whose pass still records through the raw
-    // command buffer asks for it with `rec.raw()`, so what is left to convert
-    // is visible here.
+    // `prepare_particle_pass`.
     pub(in crate::vulkan) fn encode_pass_into(
         &self,
         pass_id: PassId,
@@ -992,7 +913,7 @@ impl VkContext {
                 // Pose the skinned objects' deformed-vertex buffer for this frame
                 // (a no-op when no skinned mesh is folded in). Independent of the
                 // cull; both feed Main, which the toposort orders after Cull.
-                self.encode_skin(rec.raw(), params.frame_idx);
+                self.encode_skin(rec, params.frame_idx);
             }
             PassId::LightCull => {
                 // Bins the local lights and probes into per-cluster light lists
@@ -1048,7 +969,7 @@ impl VkContext {
                 self.encode_taa(rec, params.frame_idx, params.reactive.readable);
             }
             PassId::Upscale => {
-                self.encode_upscale(rec.raw(), params)?;
+                self.encode_upscale(rec, params)?;
             }
             PassId::Bloom => {
                 self.encode_bloom(rec, params.frame_idx)?;
@@ -1115,14 +1036,14 @@ impl VkContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(rec.raw(), params.frame_idx, *frame);
+                    self.encode_particles_sim(rec, params.frame_idx, *frame);
                 }
             }
             PassId::ParticlesDraw => {
                 let write = params.reactive.particles;
                 let drew = particle_frame.is_some_and(|frame| {
                     self.encode_particles_draw(
-                        rec.raw(),
+                        rec,
                         params.frame_idx,
                         *frame,
                         params.frustum,
@@ -1135,13 +1056,13 @@ impl VkContext {
                 // The pass that was to clear the mask drew nothing to clear it
                 // with.
                 if !drew && write == ReactiveWrite::Clear {
-                    self.clear_reactive_mask(rec.raw(), params.frame_idx);
+                    self.clear_reactive_mask(rec, params.frame_idx);
                 }
             }
             PassId::ParticlesLateDraw => {
                 if let Some(frame) = particle_frame {
                     self.encode_particles_draw(
-                        rec.raw(),
+                        rec,
                         params.frame_idx,
                         *frame,
                         params.frustum,
@@ -1161,7 +1082,7 @@ impl VkContext {
                     params.cam_pos,
                     narrow_f32(params.elapsed),
                 );
-                self.encode_raymarch(rec.raw(), params.frame_idx, &view, params.frustum)?;
+                self.encode_raymarch(rec, params.frame_idx, &view, params.frustum)?;
             }
             PassId::PropProbe => self.encode_prop_probe(rec, params)?,
             PassId::PlanarReflection => {
@@ -1188,14 +1109,14 @@ impl VkContext {
                 let write = params.reactive.transparent;
                 self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
                 let drew = self.encode_transparent(
-                    rec.raw(),
+                    rec,
                     params.frame_idx,
                     &view,
                     params.effects.rt.as_ref(),
                     write,
                 )?;
                 if !drew && write == ReactiveWrite::Clear {
-                    self.clear_reactive_mask(rec.raw(), params.frame_idx);
+                    self.clear_reactive_mask(rec, params.frame_idx);
                 }
             }
             PassId::HizEarly | PassId::HizFinal => {

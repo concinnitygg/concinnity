@@ -18,6 +18,7 @@ use super::builtin_shaders::CompileProgram;
 use super::context::VkContext;
 use super::owned::{OwnedPipeline, OwnedPipelineLayout, VkDevice};
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc};
+use crate::vulkan::record::Recorder;
 
 pub(in crate::vulkan) struct VkSky {
     // Set 0 only: the global set layout every scene pass binds.
@@ -89,21 +90,15 @@ pub(in crate::vulkan) fn build_sky_pipeline(
 // Draw the fullscreen sky triangle under `pipeline` with `sets` bound from set 0, inside an open
 // render pass the pipeline is compatible with on a recording `cmd`.
 fn draw_sky_triangle(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
+    rec: &Recorder<'_>,
+    pipeline: &OwnedPipeline,
+    layout: &OwnedPipelineLayout,
     sets: &[vk::DescriptorSet],
 ) {
-    // SAFETY: `cmd` is recording inside a render pass the sky pipeline is compatible with, and
-    // the pipeline is owned by the context for the frame.
-    unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
-    // SAFETY: `sets` are live and match `layout` from set 0, as each caller pairs them.
-    unsafe {
-        device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::GRAPHICS, layout, 0, sets, &[]);
-    }
-    // SAFETY: the sky pipeline and its sets are bound above; the vertex id builds the triangle.
-    unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
+    rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+    // `sets` match `layout` from set 0, as each caller pairs them.
+    rec.bind_descriptor_sets(vk::PipelineBindPoint::GRAPHICS, layout, 0, sets, &[]);
+    rec.draw(3, 1, 0, 0);
 }
 
 impl VkContext {
@@ -125,49 +120,34 @@ impl VkContext {
     // `global_set` describes. `frame_idx` picks the atmosphere's constants.
     pub(in crate::vulkan) fn encode_sky(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         global_set: vk::DescriptorSet,
         frame_idx: usize,
     ) {
-        let device = &self.hw.device;
         if let Some((pipeline, layout, atmosphere_set)) = self.atmosphere_sky(frame_idx) {
             // The atmosphere's sky layout takes the global set and the atmosphere's set.
-            draw_sky_triangle(device, cmd, pipeline, layout, &[global_set, atmosphere_set]);
+            draw_sky_triangle(rec, pipeline, layout, &[global_set, atmosphere_set]);
             self.inc_draw_calls(1);
             return;
         }
-        let pipeline = self.sky.pipeline.handle();
-        draw_sky_triangle(device, cmd, pipeline, self.sky.layout(), &[global_set]);
+        draw_sky_triangle(rec, &self.sky.pipeline, &self.sky.layout, &[global_set]);
         self.inc_draw_calls(1);
     }
 
     // The main camera's sky, bracketed by its own timestamps inside the main
     // pass. The draw is the last in the pass, so the bottom-of-pipe stamp
     // before it lands when the opaque geometry finishes.
-    pub(in crate::vulkan) fn encode_main_sky(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
-        let device = &self.hw.device;
+    pub(in crate::vulkan) fn encode_main_sky(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let stamps = self
             .hw
             .timestamp_query_pool
             .map(|pool| (pool, pass_timing::pass_pair(frame_idx, GpuSpan::Sky)));
         if let Some((pool, (start, _))) = stamps {
-            // SAFETY: `cmd` is a command buffer in the recording state and the query pool is live;
-            // the frame's query block was reset at the frame's start.
-            unsafe {
-                device.cmd_write_timestamp(
-                    cmd,
-                    vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    pool,
-                    start,
-                );
-            };
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, start);
         }
-        self.encode_sky(cmd, self.descriptors.global_sets[frame_idx], frame_idx);
+        self.encode_sky(rec, self.descriptors.global_sets[frame_idx], frame_idx);
         if let Some((pool, (_, end))) = stamps {
-            // SAFETY: as above.
-            unsafe {
-                device.cmd_write_timestamp(cmd, vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end);
-            };
+            rec.write_timestamp(vk::PipelineStageFlags::BOTTOM_OF_PIPE, pool, end);
         }
     }
 }

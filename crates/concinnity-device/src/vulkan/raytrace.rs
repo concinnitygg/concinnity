@@ -76,13 +76,13 @@ use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkGeometry;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::compute_pipeline;
-use super::record::cmd_push_constants;
 use super::resources::create_descriptor_set_layout;
 use super::set_writes::SetWrites;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // Byte stride of a `Vertex` in the shared vertex buffer (pos + normal + tangent
 // + color + uv = 14 floats). The BLAS reads positions at this stride and the
@@ -331,7 +331,7 @@ pub(super) struct SkinnedRtInputs<'a> {
 // the slot it writes without running past the argument limit.
 struct SkinnedRebuild<'a> {
     ctx: RtDeviceCtx<'a>,
-    cmd: vk::CommandBuffer,
+    rec: &'a Recorder<'a>,
     draw_objects: &'a [DrawObject],
     skinned: SkinnedRtInputs<'a>,
     frame_idx: usize,
@@ -860,7 +860,7 @@ fn build_range(
 // Record one acceleration-structure build onto `cmd`.
 fn record_build(
     as_loader: &ash::khr::acceleration_structure::Device,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     info: vk::AccelerationStructureBuildGeometryInfoKHR<'_>,
     range: vk::AccelerationStructureBuildRangeInfoKHR,
 ) {
@@ -868,7 +868,7 @@ fn record_build(
     // these commands name is live for the call.
     unsafe {
         as_loader.cmd_build_acceleration_structures(
-            cmd,
+            rec.raw(),
             std::slice::from_ref(&info),
             &[std::slice::from_ref(&range)],
         );
@@ -879,28 +879,22 @@ fn record_build(
 // params, one thread per vertex. The caller has bound the skin pipeline on a
 // recording `cmd`.
 fn dispatch_skin(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
-    layout: vk::PipelineLayout,
+    rec: &Recorder<'_>,
+    layout: &OwnedPipelineLayout,
     set: vk::DescriptorSet,
     params: &SkinParams,
 ) {
-    // SAFETY: `cmd` is recording and `set` is the object's skin set, allocated against `layout`.
-    unsafe {
-        device.cmd_bind_descriptor_sets(
-            cmd,
-            vk::PipelineBindPoint::COMPUTE,
-            layout,
-            0,
-            std::slice::from_ref(&set),
-            &[],
-        );
-    }
-    // SAFETY: the skin layout declares the compute `SkinParams` push range.
-    unsafe { cmd_push_constants(device, cmd, layout, vk::ShaderStageFlags::COMPUTE, params) };
+    // `set` is the object's skin set, allocated against `layout`.
+    rec.bind_descriptor_sets(
+        vk::PipelineBindPoint::COMPUTE,
+        layout,
+        0,
+        std::slice::from_ref(&set),
+        &[],
+    );
+    rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, params);
     let groups = params.vertex_count.div_ceil(64);
-    // SAFETY: the skin pipeline, this object's set and its params are bound on `cmd`.
-    unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+    rec.dispatch(groups, 1, 1);
 }
 
 // Device address of a buffer (core in Vulkan 1.2; the device enables
@@ -1188,26 +1182,20 @@ pub(super) fn build_skin_pipeline(
 // before whatever `dst_stages` names next reads or writes them -- the scratch
 // slot the next build rewrites and the BLAS the TLAS build reads. Mirrors the
 // DXR UAV barrier between builds.
-fn build_barrier(device: &VkDevice, cmd: vk::CommandBuffer, dst_stages: vk::PipelineStageFlags) {
+fn build_barrier(rec: &Recorder<'_>, dst_stages: vk::PipelineStageFlags) {
     let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
         .dst_access_mask(
             vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR
                 | vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
         );
-    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
-    // commands name is live for the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-            dst_stages,
-            vk::DependencyFlags::empty(),
-            std::slice::from_ref(&barrier),
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+        dst_stages,
+        std::slice::from_ref(&barrier),
+        &[],
+        &[],
+    );
 }
 
 // The dst stages between two builds: the scratch slot they share is rewritten by
@@ -1388,12 +1376,12 @@ pub(super) fn build_rt_accel(
     // Record every BLAS build (build-barrier-serialized over the one scratch slot
     // they share), then the TLAS build, on a one-shot command buffer; fence-wait so the BVH is
     // ready before the first trace.
-    super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
+    super::texture::one_shot_submit(device, command_pool, queue, |rec| {
         for (dst, p) in book.head().iter().zip(&params) {
             let geo = blas_geometry(p, ibuf_addr);
             record_build(
                 &as_loader,
-                cmd,
+                rec,
                 build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, &geo)
                     .dst_acceleration_structure(dst.accel)
                     .scratch_data(vk::DeviceOrHostAddressKHR {
@@ -1401,12 +1389,12 @@ pub(super) fn build_rt_accel(
                     }),
                 build_range(p.primitive_count, p.index_byte_offset),
             );
-            build_barrier(device, cmd, BUILD_TO_BUILD);
+            build_barrier(rec, BUILD_TO_BUILD);
         }
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer.buffer));
         record_build(
             &as_loader,
-            cmd,
+            rec,
             build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
                 .dst_acceleration_structure(tlas.accel)
                 .scratch_data(vk::DeviceOrHostAddressKHR {
@@ -1545,7 +1533,7 @@ impl RtAccelData {
     pub(super) fn dynamic_update(
         &mut self,
         ctx: RtDeviceCtx<'_>,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         draw_objects: &[DrawObject],
         inputs: RtDynamicInputs<'_>,
     ) -> RenderResult<RtUpdate> {
@@ -1574,7 +1562,7 @@ impl RtAccelData {
         let mut steps = VkRtSteps {
             accel: self,
             ctx,
-            cmd,
+            rec,
             draw_objects,
             frame_idx,
             shared,
@@ -1627,7 +1615,7 @@ impl RtAccelData {
     fn refresh_topology(
         &mut self,
         ctx: RtDeviceCtx<'_>,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         draw_objects: &[DrawObject],
         req: TopologyRefresh,
         if_empty: EmptyHead,
@@ -1653,7 +1641,7 @@ impl RtAccelData {
             fresh: (0..refresh.indices().len()).map(|_| None).collect(),
             refresh,
         };
-        let recorded = self.record_refresh(ctx, cmd, draw_objects, &mut pending, req, &mut slot);
+        let recorded = self.record_refresh(ctx, rec, draw_objects, &mut pending, req, &mut slot);
         match recorded {
             Ok((tlas_sizes, built)) => {
                 self.commit_refresh(pending, draw_objects, built, tlas_sizes);
@@ -1685,7 +1673,7 @@ impl RtAccelData {
     fn record_refresh(
         &mut self,
         ctx: RtDeviceCtx<'_>,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         draw_objects: &[DrawObject],
         pending: &mut PendingRefresh,
         req: TopologyRefresh,
@@ -1797,7 +1785,7 @@ impl RtAccelData {
             let geo = blas_geometry(p, shared.index);
             record_build(
                 &self.as_loader,
-                cmd,
+                rec,
                 build_info(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL, &geo)
                     .dst_acceleration_structure(dst.accel)
                     .scratch_data(vk::DeviceOrHostAddressKHR {
@@ -1807,17 +1795,17 @@ impl RtAccelData {
             );
         }
         if !fresh_params.is_empty() {
-            build_barrier(device, cmd, BUILD_TO_BUILD);
+            build_barrier(rec, BUILD_TO_BUILD);
         }
         record_build(
             &self.as_loader,
-            cmd,
+            rec,
             build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
                 .dst_acceleration_structure(tlas)
                 .scratch_data(scratch),
             build_range(instance_count, 0),
         );
-        build_barrier(device, cmd, BUILD_TO_TRACE);
+        build_barrier(rec, BUILD_TO_TRACE);
         Ok((tlas_sizes, built))
     }
 
@@ -1881,14 +1869,14 @@ impl RtAccelData {
     fn rebuild_tlas(
         &mut self,
         ctx: RtDeviceCtx<'_>,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         draw_objects: &[DrawObject],
         frame_idx: usize,
     ) -> RenderResult<()> {
         // Take the slot after the live one out (see `refresh_topology`); it is put
         // back on every exit path and becomes live only on success.
         let (next, mut slot) = self.static_ring.take_next();
-        let result = self.rebuild_tlas_into(ctx, cmd, draw_objects, frame_idx, &mut slot);
+        let result = self.rebuild_tlas_into(ctx, rec, draw_objects, frame_idx, &mut slot);
         if result.is_ok() {
             self.static_ring.publish(next, slot);
         } else {
@@ -1900,7 +1888,7 @@ impl RtAccelData {
     fn rebuild_tlas_into(
         &mut self,
         ctx: RtDeviceCtx<'_>,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         draw_objects: &[DrawObject],
         frame_idx: usize,
         slot: &mut StaticFrameRing,
@@ -1962,7 +1950,7 @@ impl RtAccelData {
         let tlas_geo = tlas_geometry(buffer_address(device, instance_buffer));
         record_build(
             &self.as_loader,
-            cmd,
+            rec,
             tlas_update_info(&tlas_geo, update, built.tlas)
                 .dst_acceleration_structure(built.tlas)
                 .scratch_data(vk::DeviceOrHostAddressKHR {
@@ -1970,7 +1958,7 @@ impl RtAccelData {
                 }),
             build_range(instance_count, 0),
         );
-        build_barrier(device, cmd, BUILD_TO_TRACE);
+        build_barrier(rec, BUILD_TO_TRACE);
 
         self.publish_static(built);
         // If skinned instances were still live (the last skinned object just turned
@@ -2040,7 +2028,7 @@ impl RtAccelData {
     ) -> RenderResult<()> {
         let SkinnedRebuild {
             ctx,
-            cmd,
+            rec,
             draw_objects,
             skinned,
             frame_idx,
@@ -2050,8 +2038,6 @@ impl RtAccelData {
         let RtDeviceCtx { alloc, device, .. } = ctx;
         let now = self.book.clock();
         let frames = self.frames_in_flight_usize;
-        let pipeline = skin.pipeline.handle();
-        let pipeline_layout = skin.pipeline_layout.handle();
 
         // Deformed-vertex buffer: the skin pass writes posed `Vertex`s here,
         // mirroring the skinned VB's indexing so the index buffer addresses it
@@ -2081,6 +2067,8 @@ impl RtAccelData {
         // (binding 0), each object's current-frame joint buffer (binding 1), and
         // the fresh deformed buffer (binding 2).
         ensure_skin_sets(device, skin, frames, skinned.objects.len())?;
+        let pipeline = &skin.pipeline;
+        let pipeline_layout = &skin.pipeline_layout;
         let visible = self.book.visible_skinned();
         let frame_sets = &skin.sets[frame_idx];
         let frame_wired = &mut skin.wired[frame_idx];
@@ -2116,12 +2104,8 @@ impl RtAccelData {
                 .apply(device);
         }
 
-        // Stage 1: skin dispatch per visible skinned object onto `cmd`.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
-        }
+        // Stage 1: skin dispatch per visible skinned object.
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
         for &obj_idx in visible {
             let obj = &skinned.objects[obj_idx];
             let joint_buffer = skinned
@@ -2137,7 +2121,7 @@ impl RtAccelData {
                 joint_count: u32::saturating_from(obj.joint_count.max(1)),
                 target_count: 0,
             };
-            dispatch_skin(device, cmd, pipeline_layout, frame_sets[obj_idx], &params);
+            dispatch_skin(rec, pipeline_layout, frame_sets[obj_idx], &params);
         }
 
         // Order the skin writes before the BLAS build (AS-build input geometry)
@@ -2151,19 +2135,14 @@ impl RtAccelData {
             .dst_access_mask(
                 vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR | vk::AccessFlags::SHADER_READ,
             );
-        // SAFETY: `cmd` is recording, and the barrier is a global memory barrier naming no resource.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                | vk::PipelineStageFlags::FRAGMENT_SHADER,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
 
         // Stage 2: one BLAS per skinned object over the deformed buffer.
         let skinned_idx_addr = buffer_address(device, skinned.index_buffer);
@@ -2312,21 +2291,21 @@ impl RtAccelData {
             }
             record_build(
                 &self.as_loader,
-                cmd,
+                rec,
                 bi,
                 build_range(p.primitive_count, p.index_byte_offset),
             );
-            build_barrier(device, cmd, BUILD_TO_BUILD);
+            build_barrier(rec, BUILD_TO_BUILD);
         }
         record_build(
             &self.as_loader,
-            cmd,
+            rec,
             build_info(vk::AccelerationStructureTypeKHR::TOP_LEVEL, &tlas_geo)
                 .dst_acceleration_structure(tlas)
                 .scratch_data(scratch),
             build_range(instance_count, 0),
         );
-        build_barrier(device, cmd, BUILD_TO_TRACE);
+        build_barrier(rec, BUILD_TO_TRACE);
 
         // Publish this slot's resources as the live BVH. The slot keeps owning
         // everything it just built into, so the handles it hands out are the same
@@ -2457,7 +2436,7 @@ pub(super) fn create_main_deformed_buffer(
 struct VkRtSteps<'a> {
     accel: &'a mut RtAccelData,
     ctx: RtDeviceCtx<'a>,
-    cmd: vk::CommandBuffer,
+    rec: &'a Recorder<'a>,
     draw_objects: &'a [DrawObject],
     frame_idx: usize,
     shared: SharedGeometry,
@@ -2482,7 +2461,7 @@ impl RtAccelSteps for VkRtSteps<'_> {
         };
         self.accel.refresh_topology(
             self.ctx,
-            self.cmd,
+            self.rec,
             self.draw_objects,
             req,
             refresh.if_empty(),
@@ -2491,7 +2470,7 @@ impl RtAccelSteps for VkRtSteps<'_> {
 
     fn rebuild_tlas(&mut self) -> RenderResult<()> {
         self.accel
-            .rebuild_tlas(self.ctx, self.cmd, self.draw_objects, self.frame_idx)
+            .rebuild_tlas(self.ctx, self.rec, self.draw_objects, self.frame_idx)
     }
 
     fn release_skinned(&mut self) {
@@ -2504,7 +2483,7 @@ impl RtAccelSteps for VkRtSteps<'_> {
         };
         self.accel.rebuild_skinned(SkinnedRebuild {
             ctx: self.ctx,
-            cmd: self.cmd,
+            rec: self.rec,
             draw_objects: self.draw_objects,
             skinned,
             frame_idx: self.frame_idx,
@@ -2771,20 +2750,15 @@ impl super::context::VkContext {
     // arm after `encode_cull`, before Main; mirrors the stage-1 skin dispatch in
     // `rebuild_skinned` but targets a per-frame vertex buffer and barriers to
     // VERTEX_ATTRIBUTE_READ instead of the RT BLAS-build read. Independent of RT.
-    pub(in crate::vulkan) fn encode_skin(&self, cmd: vk::CommandBuffer, frame_idx: usize) {
+    pub(in crate::vulkan) fn encode_skin(&self, rec: &Recorder<'_>, frame_idx: usize) {
         let Some(skin) = self.skinned.skin.as_ref() else {
             return;
         };
         if self.state.draw.n_skinned == 0 || self.skinned.deformed.len() <= frame_idx {
             return;
         }
-        let device = &self.hw.device;
         let frame_sets = &skin.sets[frame_idx];
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, skin.pipeline.handle());
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &skin.pipeline);
         for (o, obj) in self
             .state
             .skinned
@@ -2804,32 +2778,20 @@ impl super::context::VkContext {
                     .copied()
                     .unwrap_or(0),
             };
-            dispatch_skin(
-                device,
-                cmd,
-                skin.pipeline_layout.handle(),
-                frame_sets[o],
-                &params,
-            );
+            dispatch_skin(rec, &skin.pipeline_layout, frame_sets[o], &params);
         }
         // Order the skin writes before the main pass's vertex fetch of the
         // deformed buffer.
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::VERTEX_ATTRIBUTE_READ);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::VERTEX_INPUT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::VERTEX_INPUT,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 }
 

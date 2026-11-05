@@ -40,7 +40,6 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline::GraphicsStages;
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, Raster};
-use super::record::cmd_push_constants;
 use super::render_pass::{create_main_render_pass_two_pass, main_framebuffer_dependency};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
@@ -70,6 +69,7 @@ pub(in crate::vulkan) use concinnity_engine::render::uniforms::{
 // 16-byte block is declared, not just the live `u32`: the shared source spells
 // it out to the padding the other two hosts allocate, and a range narrower than
 // what the shader declares is a validation finding.
+use crate::vulkan::record::Recorder;
 use concinnity_engine::render::uniforms::{GBufferView, PassCamera, RaymarchShadowCascade};
 
 mod swap;
@@ -92,8 +92,7 @@ pub(in crate::vulkan) fn volume_uniforms_from(v: &SdfVolume) -> RaymarchVolumeUn
 // the transfer and leaving the source in TRANSFER_SRC for the caller's step-2
 // barrier to close. Only a frame drawing a volume that taps the scene runs it.
 fn copy_scene_snapshot(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     hdr_resolve: vk::Image,
     snapshot: vk::Image,
     extent: vk::Extent2D,
@@ -142,66 +141,46 @@ fn copy_scene_snapshot(
             vk::AccessFlags::TRANSFER_WRITE,
         ),
     ];
-    // SAFETY: `cmd` is a command buffer in the recording state, and both images are the
-    // caller's live resolve and snapshot targets.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &barriers,
-        );
-    }
-    // SAFETY: the barrier above moved both images into the transfer layouts this copy names.
-    unsafe {
-        device.cmd_copy_image(
-            cmd,
-            hdr_resolve,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            snapshot,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            std::slice::from_ref(&region),
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::FRAGMENT_SHADER,
+        vk::PipelineStageFlags::TRANSFER,
+        &[],
+        &[],
+        &barriers,
+    );
+    rec.copy_image(
+        hdr_resolve,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        snapshot,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        std::slice::from_ref(&region),
+    );
 }
 
 // Bind the shared proxy cube's vertex and index buffers on a recording `cmd`.
-fn bind_cube(device: &ash::Device, cmd: vk::CommandBuffer, rm: &RaymarchResources) {
+fn bind_cube(rec: &Recorder<'_>, rm: &RaymarchResources) {
     let vertex_buffer = rm.cube_vb.buffer();
-    // SAFETY: `cmd` is recording and the cube vertex buffer is owned by `rm` for its lifetime.
-    unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
-    // SAFETY: `cmd` is recording and the cube index buffer is owned by `rm` for its lifetime.
-    unsafe { device.cmd_bind_index_buffer(cmd, rm.cube_ib.buffer(), 0, vk::IndexType::UINT16) };
+    rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+    rec.bind_index_buffer(rm.cube_ib.buffer(), 0, vk::IndexType::UINT16);
 }
 
 // Draw one volume's proxy cube under `pipeline` with its set bound at set 1. The
 // caller has bound the cube buffers, set 0 and the push constants on a recording `cmd`.
 fn draw_volume(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
-    layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
+    rec: &Recorder<'_>,
+    layout: &OwnedPipelineLayout,
+    pipeline: &OwnedPipeline,
     volume_set: vk::DescriptorSet,
 ) {
-    // SAFETY: `cmd` is recording inside the caller's render pass, and `pipeline` is a live
-    // volume pipeline built against it.
-    unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline) };
-    // SAFETY: `volume_set` is the volume's own set, allocated against set 1 of `layout`.
-    unsafe {
-        device.cmd_bind_descriptor_sets(
-            cmd,
-            vk::PipelineBindPoint::GRAPHICS,
-            layout,
-            1,
-            std::slice::from_ref(&volume_set),
-            &[],
-        );
-    }
-    // SAFETY: the cube buffers, both sets and the pipeline are bound on `cmd`.
-    unsafe { device.cmd_draw_indexed(cmd, CUBE_INDEX_COUNT, 1, 0, 0, 0) };
+    rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+    rec.bind_descriptor_sets(
+        vk::PipelineBindPoint::GRAPHICS,
+        layout,
+        1,
+        std::slice::from_ref(&volume_set),
+        &[],
+    );
+    rec.draw_indexed(CUBE_INDEX_COUNT, 1, 0, 0, 0);
 }
 
 // Per-`SdfVolume` GPU state: the compiled render pipeline, the static per-volume
@@ -257,10 +236,10 @@ impl RaymarchVolumeRecord {
     }
 
     // The pipeline the volume's own draw takes from `view`.
-    fn draw_pipeline(&self, view: &RaymarchView) -> vk::Pipeline {
+    fn draw_pipeline(&self, view: &RaymarchView) -> &OwnedPipeline {
         match (self.faces(view), &self.front_pipeline) {
-            (ProxyFaces::Front, Some(front)) => front.handle(),
-            _ => self.pipeline.handle(),
+            (ProxyFaces::Front, Some(front)) => front,
+            _ => &self.pipeline,
         }
     }
 }
@@ -787,10 +766,9 @@ fn create_snapshot(
         },
     )?;
     let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout_range(
-            device,
-            cmd,
+            rec,
             image,
             LayoutTransition {
                 old_layout: vk::ImageLayout::UNDEFINED,
@@ -829,10 +807,10 @@ pub(in crate::vulkan) struct FacePipelines {
 }
 
 impl FacePipelines {
-    fn get(&self, faces: ProxyFaces) -> vk::Pipeline {
+    fn get(&self, faces: ProxyFaces) -> &OwnedPipeline {
         match faces {
-            ProxyFaces::Front => self.front.handle(),
-            ProxyFaces::Back => self.back.handle(),
+            ProxyFaces::Front => &self.front,
+            ProxyFaces::Back => &self.back,
         }
     }
 }
@@ -1405,7 +1383,7 @@ impl VkContext {
     // cascade push constant. A no-op when no volume casts shadows.
     pub(in crate::vulkan) fn encode_sdf_shadow_cascade(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         cascade_idx: usize,
     ) {
@@ -1415,35 +1393,25 @@ impl VkContext {
         if !rm.any_shadow_casters() || rm.shadow_view_sets.is_empty() {
             return;
         }
-        let device = &self.hw.device;
         let push = RaymarchShadowCascade {
             cascade_idx: u32::saturating_from(cascade_idx),
             _pad: [0; 3],
         };
-        let layout = rm.shadow_pipeline_layout.handle();
-        bind_cube(device, cmd, rm);
-        // SAFETY: `cmd` is recording inside the cascade's render pass, and this frame's shadow
-        // view set is owned by `rm`.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                0,
-                std::slice::from_ref(&rm.shadow_view_sets[frame_idx]),
-                &[],
-            );
-        }
-        // SAFETY: the shadow layout declares the vertex + fragment cascade push range.
-        unsafe {
-            cmd_push_constants(
-                device,
-                cmd,
-                layout,
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                &push,
-            );
-        }
+        let layout = &rm.shadow_pipeline_layout;
+        bind_cube(rec, rm);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            std::slice::from_ref(&rm.shadow_view_sets[frame_idx]),
+            &[],
+        );
+        rec.push_constants(
+            layout,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            0,
+            &push,
+        );
         for vol in &rm.volumes {
             let Some(shadow_pipeline) = vol.shadow_pipeline.as_ref() else {
                 continue;
@@ -1451,13 +1419,7 @@ impl VkContext {
             if !vol.visible {
                 continue;
             }
-            draw_volume(
-                device,
-                cmd,
-                layout,
-                shadow_pipeline.handle(),
-                vol.volume_set,
-            );
+            draw_volume(rec, layout, shadow_pipeline, vol.volume_set);
             self.inc_draw_calls(1);
         }
     }
@@ -1471,7 +1433,7 @@ impl VkContext {
     // scissor are the pre-pass's.
     pub(in crate::vulkan) fn encode_raymarch_prepass(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         prepass: &GbufferPrepassView<'_>,
         gbuffer: &GBufferView,
@@ -1498,37 +1460,27 @@ impl VkContext {
         let view = RaymarchView::for_gbuffer(&camera, gbuffer);
         ubo.write_val(0, &view);
         let draws = surfaces().map(|(v, p)| (p.get(v.faces(&view)), v.volume_set));
-        let device = &self.hw.device;
-        let layout = rm.shadow_pipeline_layout.handle();
+        let layout = &rm.shadow_pipeline_layout;
         let push = RaymarchShadowCascade {
             cascade_idx: 0,
             _pad: [0; 3],
         };
-        bind_cube(device, cmd, rm);
-        // SAFETY: `cmd` is recording inside the G-buffer pre-pass's render pass, and `set` is
-        // this frame's pre-pass view set owned by `rm`.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                0,
-                std::slice::from_ref(&set),
-                &[],
-            );
-        }
-        // SAFETY: the shadow layout the pre-pass shares declares this vertex + fragment range.
-        unsafe {
-            cmd_push_constants(
-                device,
-                cmd,
-                layout,
-                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                &push,
-            );
-        }
+        bind_cube(rec, rm);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            std::slice::from_ref(&set),
+            &[],
+        );
+        rec.push_constants(
+            layout,
+            vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            0,
+            &push,
+        );
         for (pipeline, volume_set) in draws {
-            draw_volume(device, cmd, layout, pipeline, volume_set);
+            draw_volume(rec, layout, pipeline, volume_set);
             self.inc_draw_calls(1);
         }
     }
@@ -1542,7 +1494,7 @@ impl VkContext {
     // and depth DEPTH_STENCIL_ATTACHMENT_OPTIMAL for the downstream stack.
     pub(in crate::vulkan) fn encode_raymarch(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         view: &RaymarchView,
         frustum: &Frustum,
@@ -1553,7 +1505,6 @@ impl VkContext {
         if !rm.volumes.iter().any(|v| v.drawn(frustum)) {
             return Ok(());
         }
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
         let hdr_resolve = self
             .targets
@@ -1600,7 +1551,7 @@ impl VkContext {
         // order AutoExposure's compute read + the previous frame's fragment
         // read ahead of the transfer.
         if refract {
-            copy_scene_snapshot(device, cmd, hdr_resolve, snapshot, extent);
+            copy_scene_snapshot(rec, hdr_resolve, snapshot, extent);
         }
 
         // 2) Close the snapshot for the fragment read, order the main pass's
@@ -1645,30 +1596,20 @@ impl VkContext {
             (true, true) => &image_barriers[..1],
             (true, false) => &image_barriers[..],
         };
-        // SAFETY: `cmd` is recording outside a render pass, and the barriers name this frame's
-        // resolve image and `rm`'s snapshot.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::TRANSFER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&load_barrier),
-                &[],
-                image_barriers,
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::TRANSFER
+                | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+            vk::PipelineStageFlags::FRAGMENT_SHADER
+                | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            std::slice::from_ref(&load_barrier),
+            &[],
+            image_barriers,
+        );
 
         // 3) The render pass: LOAD the scene color + depth, draw each visible
         // volume, then resolve (MSAA) / store (single-sample) into hdr_resolve.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(rm.render_pass.handle())
-            .framebuffer(self.targets.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
         // Negative-height viewport: matches the main pass so the proxy rasterizes
         // into identical pixels and the reprojected hit depth shares its space.
         let vp = vk::Viewport {
@@ -1680,35 +1621,31 @@ impl VkContext {
             max_depth: 1.0,
         };
         let scissor = vk::Rect2D::default().extent(extent);
-        // SAFETY: `cmd` is recording outside a render pass, and `rm`'s render pass and this
-        // frame's framebuffer are live for the call.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
-        // SAFETY: `cmd` is recording inside the render pass begun above.
-        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
-        // SAFETY: same recording `cmd`; `scissor` is a local that outlives the call.
-        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
-        bind_cube(device, cmd, rm);
-        let layout = rm.pipeline_layout.handle();
-        // SAFETY: this frame's view set is owned by `rm` and matches set 0 of `layout`.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout,
-                0,
-                std::slice::from_ref(&rm.view_sets[frame_idx]),
-                &[],
-            );
-        }
+        rec.begin_render_pass(
+            &rm.render_pass,
+            &self.targets.framebuffers[frame_idx],
+            scissor,
+            &[],
+        );
+        rec.set_viewport(&vp);
+        rec.set_scissor(&scissor);
+        bind_cube(rec, rm);
+        let layout = &rm.pipeline_layout;
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            std::slice::from_ref(&rm.view_sets[frame_idx]),
+            &[],
+        );
         for vol in &rm.volumes {
             if !vol.drawn(frustum) {
                 continue;
             }
-            draw_volume(device, cmd, layout, vol.draw_pipeline(view), vol.volume_set);
+            draw_volume(rec, layout, vol.draw_pipeline(view), vol.volume_set);
             self.inc_draw_calls(1);
         }
-        // SAFETY: closes the render pass begun above on the same `cmd`.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
         Ok(())
     }
 }

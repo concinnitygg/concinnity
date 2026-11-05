@@ -67,13 +67,9 @@ impl VkContext {
             &device,
             self.commands.command_pool,
             self.hw.graphics_queue,
-            |cmd| {
+            |rec| {
                 let region = vk::BufferCopy::default().size(byte_size);
-                // SAFETY: `cmd` is a command buffer in the recording state, and every handle and
-                // slice these commands name is live for the call.
-                unsafe {
-                    device.cmd_copy_buffer(cmd, src, readback.buffer(), &[region]);
-                }
+                rec.copy_buffer(src, readback.buffer(), &[region]);
             },
         )?;
 

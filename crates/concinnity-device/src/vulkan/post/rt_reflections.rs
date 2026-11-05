@@ -711,11 +711,7 @@ impl VkContext {
     // nothing left to trace and nothing that could rejoin it is dropped
     // (`is_spent`), held until the frames in flight have finished tracing it.
     // The trace skips while there is none.
-    pub(in crate::vulkan) fn rt_dynamic_update(
-        &mut self,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-    ) {
+    pub(in crate::vulkan) fn rt_dynamic_update(&mut self, rec: &Recorder<'_>, frame_idx: usize) {
         // Consumed by the accel's `dynamic_update`, which folds a runtime draw-set
         // change (cloned prop, streamed chunk added/removed) into the BLAS head,
         // or by the seed of a scene that had nothing to trace.
@@ -743,7 +739,7 @@ impl VkContext {
             // The seed already covers this frame's draw set.
             topology_dirty = false;
         }
-        self.update_live_accel(cmd, frame_idx, topology_dirty);
+        self.update_live_accel(rec, frame_idx, topology_dirty);
 
         let Some(accel) = self.rt.accel.as_ref() else {
             return;
@@ -800,12 +796,7 @@ impl VkContext {
 
     // Run the live BVH's dynamic update, then drop it when nothing is left to
     // trace and no skinned geometry can rejoin it.
-    fn update_live_accel(
-        &mut self,
-        cmd: vk::CommandBuffer,
-        frame_idx: usize,
-        topology_dirty: bool,
-    ) {
+    fn update_live_accel(&mut self, rec: &Recorder<'_>, frame_idx: usize, topology_dirty: bool) {
         // Assemble this frame's skinned-geometry inputs while `self` is still
         // fully borrowable: the shared skinned VB/IB handles. `None` when skinned
         // geometry cannot join (the static path runs).
@@ -844,7 +835,7 @@ impl VkContext {
                 device: &self.hw.device,
                 pd: self.hw.physical_device,
             },
-            cmd,
+            rec,
             &self.state.draw.objects,
             super::super::raytrace::RtDynamicInputs {
                 policy: super::super::raytrace::RtRebuildPolicy {

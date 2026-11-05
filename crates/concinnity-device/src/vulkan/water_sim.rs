@@ -123,11 +123,10 @@ impl OceanSim {
         };
         let displacement = cascade_array(gpu, size, layers, mips, "displacement")?;
         let slopes = cascade_array(gpu, size, layers, mips, "slopes")?;
-        one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
+        one_shot_submit(device, gpu.command_pool, gpu.queue, |rec| {
             for array in [&displacement, &slopes] {
                 transition_image_layout_range(
-                    device,
-                    cmd,
+                    rec,
                     array.image.image(),
                     LayoutTransition {
                         old_layout: vk::ImageLayout::UNDEFINED,

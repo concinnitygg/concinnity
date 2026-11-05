@@ -38,7 +38,6 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::{GraphicsPipelineDesc, compute_pipeline};
 use super::reactive_mask::{self, WriterRenderPasses};
-use super::record::cmd_push_constants;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::GpuUploadContext;
@@ -47,6 +46,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSampler, OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // The per-emitter descriptor pool reserves a fixed block of `2 * MAX_EMITTERS`
 // sets at init (one compute set + one render set per emitter).
@@ -802,10 +802,8 @@ fn zero_device_buffer(
         queue,
         ..
     } = gpu;
-    super::texture::one_shot_submit(device, command_pool, queue, |cmd| {
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe { device.cmd_fill_buffer(cmd, target, 0, bytes, 0) };
+    super::texture::one_shot_submit(device, command_pool, queue, |rec| {
+        rec.fill_buffer(target, 0, bytes, 0);
     })
 }
 
@@ -855,7 +853,7 @@ impl VkContext {
     // pool's carried resting state.
     pub(in crate::vulkan) fn encode_particles_sim(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: ParticleFrame,
     ) {
@@ -865,62 +863,37 @@ impl VkContext {
         if self.particle.system.is_empty() {
             return;
         }
-        let device = &self.hw.device;
 
         // One dispatch per live emitter; resources are disjoint between
         // emitters so no inter-dispatch barrier is needed.
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                resources.compute_pipeline.handle(),
-            );
-        }
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &resources.compute_pipeline);
         let Some(&rows_set) = resources.rows_sets.get(frame_idx) else {
             return;
         };
-        // SAFETY: `cmd` is recording, and the frame's rows set is owned by `resources` and
-        // matches set 1 of the compute layout.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            &resources.compute_pipeline_layout,
+            1,
+            std::slice::from_ref(&rows_set),
+            &[],
+        );
+        for emitter in self.particle.system.emitters(&frame) {
+            let (record, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
-                resources.compute_pipeline_layout.handle(),
-                1,
-                std::slice::from_ref(&rows_set),
+                &resources.compute_pipeline_layout,
+                0,
+                std::slice::from_ref(&gpu.compute_set),
                 &[],
             );
-        }
-        for emitter in self.particle.system.emitters(&frame) {
-            let (rec, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
-            // SAFETY: `cmd` is recording, and the emitter's compute set is owned by its GPU slot
-            // and matches the compute layout.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    resources.compute_pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&gpu.compute_set),
-                    &[],
-                );
-            }
-            // SAFETY: the compute layout is owned by `resources` and matches the bound pipeline;
-            // `params` is borrowed for the call.
-            unsafe {
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    resources.compute_pipeline_layout.handle(),
-                    vk::ShaderStageFlags::COMPUTE,
-                    params,
-                );
-            }
-            let groups = rec.max_particles.div_ceil(64);
-            // SAFETY: the sim pipeline, this emitter's set and its push constants are bound.
-            unsafe { device.cmd_dispatch(cmd, groups, 1, 1) };
+            rec.push_constants(
+                &resources.compute_pipeline_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                params,
+            );
+            let groups = record.max_particles.div_ceil(64);
+            rec.dispatch(groups, 1, 1);
         }
     }
 
@@ -931,7 +904,7 @@ impl VkContext {
     // nothing here transitions the pool.
     pub(in crate::vulkan) fn encode_particles_draw(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         frame: ParticleFrame,
         frustum: &Frustum,
@@ -941,7 +914,6 @@ impl VkContext {
             return false;
         };
         let ParticleStage { mask, late } = stage;
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
         // Visibility-cull per emitter, for the draw alone: the simulation ticked
@@ -964,18 +936,11 @@ impl VkContext {
         // via its subpass dependencies, so no explicit image barrier is
         // needed here.
         let clears = [reactive_mask::REACTIVE_MASK_CLEAR; 2];
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(resources.render_passes.get(mask))
-            .framebuffer(
-                if late {
-                    &resources.late_framebuffers
-                } else {
-                    &resources.framebuffers
-                }[frame_idx]
-                    .handle(),
-            )
-            .render_area(vk::Rect2D::default().extent(extent))
-            .clear_values(&clears);
+        let framebuffers = if late {
+            &resources.late_framebuffers
+        } else {
+            &resources.framebuffers
+        };
         // Negative-height viewport flips clip-space Y to match the main +
         // shadow + decal passes (the engine's `camera_projection()` produces +Y-up
         // clip coords, OpenGL-style; the Vulkan framebuffer has +Y down, so
@@ -993,87 +958,52 @@ impl VkContext {
         };
         let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is recording outside a render pass, and the particle render pass and
-        // framebuffer named by `rp_begin` are owned by `resources`.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
-        // SAFETY: the particle render pass is open on `cmd`; `viewport` is borrowed for the call.
-        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&viewport)) };
-        // SAFETY: same open render pass; `scissor` is borrowed for the call.
-        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
-        // SAFETY: the particle render pipeline is owned by `resources` and was built against
-        // this render pass.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                resources.render_pipeline.handle(),
-            );
-        }
-        // SAFETY: the frame's view set is owned by `resources` and matches the render layout.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                resources.render_pipeline_layout.handle(),
-                0,
-                std::slice::from_ref(&resources.view_sets[frame_idx]),
-                &[],
-            );
-        }
+        rec.begin_render_pass(
+            resources.render_passes.get(mask),
+            &framebuffers[frame_idx],
+            scissor,
+            &clears,
+        );
+        rec.set_viewport(&viewport);
+        rec.set_scissor(&scissor);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &resources.render_pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            &resources.render_pipeline_layout,
+            0,
+            std::slice::from_ref(&resources.view_sets[frame_idx]),
+            &[],
+        );
 
         let mut lit = false;
         for emitter in visible {
-            let (rec, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
-            if rec.lit != lit {
-                lit = rec.lit;
+            let (record, gpu, params) = (emitter.record, emitter.gpu, &emitter.params);
+            if record.lit != lit {
+                lit = record.lit;
                 let pipeline = if lit {
                     &resources.render_pipeline_lit
                 } else {
                     &resources.render_pipeline
                 };
-                // SAFETY: both render pipelines are owned by `resources`, built against this
-                // render pass and the one render layout, so the bound sets stay valid.
-                unsafe {
-                    device.cmd_bind_pipeline(
-                        cmd,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.handle(),
-                    );
-                }
+                rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
             }
-            // SAFETY: the emitter's render set is owned by its GPU slot and reads the pool the
-            // sim pass wrote; it matches set 1 of the render layout.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    resources.render_pipeline_layout.handle(),
-                    1,
-                    std::slice::from_ref(&gpu.render_set),
-                    &[],
-                );
-            }
-            // SAFETY: the render layout is owned by `resources` and matches the bound pipeline;
-            // `params` is borrowed for the call.
-            unsafe {
-                cmd_push_constants(
-                    device,
-                    cmd,
-                    resources.render_pipeline_layout.handle(),
-                    vk::ShaderStageFlags::VERTEX,
-                    params,
-                );
-            }
-            // SAFETY: pipeline, both sets and push constants are bound inside the open pass; one
-            // instance per pool slot of `rec.max_particles`.
-            unsafe { device.cmd_draw(cmd, 4, rec.max_particles, 0, 0) };
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &resources.render_pipeline_layout,
+                1,
+                std::slice::from_ref(&gpu.render_set),
+                &[],
+            );
+            rec.push_constants(
+                &resources.render_pipeline_layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                params,
+            );
+            rec.draw(4, record.max_particles, 0, 0);
             self.inc_draw_calls(1);
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_end_render_pass(cmd);
-        }
+        rec.end_render_pass();
         true
     }
 }

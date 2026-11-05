@@ -236,10 +236,9 @@ impl VkContext {
         };
         let eye = capture.eye;
         let b = &capture.bake;
-        let (cull_set, hiz_set, framebuffer, global_set, bindless_set, copy_src) = (
+        let (cull_set, hiz_set, global_set, bindless_set, copy_src) = (
             b.cull_set,
             b.hiz_set,
-            b.framebuffer.handle(),
             b.global_sets[face],
             b.bindless_sets[face],
             b.copy_source(),
@@ -295,11 +294,8 @@ impl VkContext {
         capture.face_cmds.push(cmd);
         capture.face_fences.push(fence);
 
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence
-        // was waited on), so it is in the initial state that `begin` requires.
-        unsafe { device.begin_command_buffer(cmd, &begin) }
+        // Allocated from this device's pool and not in flight: its face fence was waited on.
+        let rec = Recorder::begin(&device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .map_err(|e| super::error::map_vk_result(e, "probe face begin"))?;
         // Order the previous face's cube copy + indirect-draw read (a prior
         // frame's submit) before this face's cull (rewrites the shared indirect
@@ -326,24 +322,18 @@ impl VkContext {
                         | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
                         | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 );
-            // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-            // these commands name is live for the call.
-            unsafe {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TRANSFER
-                        | vk::PipelineStageFlags::DRAW_INDIRECT
-                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                    vk::PipelineStageFlags::COMPUTE_SHADER
-                        | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                    vk::DependencyFlags::empty(),
-                    std::slice::from_ref(&barrier),
-                    &[],
-                    &[],
-                );
-            }
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::TRANSFER
+                    | vk::PipelineStageFlags::DRAW_INDIRECT
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                vk::PipelineStageFlags::COMPUTE_SHADER
+                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                std::slice::from_ref(&barrier),
+                &[],
+                &[],
+            );
         }
         let frustum = capture::face_frustum(eye, face, capture.capture_distance);
         let view = CaptureCull {
@@ -352,10 +342,10 @@ impl VkContext {
             exclude: [0, 0],
             capture_tiles: None,
         };
-        self.encode_probe_cull(cmd, cull_set, hiz_set, packing, view);
+        self.encode_probe_cull(&rec, cull_set, hiz_set, packing, view);
         self.encode_main_into_face(
-            cmd,
-            framebuffer,
+            &rec,
+            &capture.bake.framebuffer,
             FaceArea::whole(extent),
             FaceView {
                 global_set,
@@ -429,34 +419,22 @@ impl VkContext {
         } else {
             &all_barriers[..1]
         };
-        // SAFETY: `cmd` is recording this face, and the barriers name the face color and the
-        // capture cube, both live until the bake's fences signal.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                barriers,
-            );
-        }
-        // SAFETY: the barrier above moved the face color to TRANSFER_SRC; the capture cube
-        // went to TRANSFER_DST on face 0 and stays there for the later faces.
-        unsafe {
-            device.cmd_copy_image(
-                cmd,
-                copy_src,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                capture_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&copy),
-            );
-        }
-        // SAFETY: `cmd` is in the recording state begun for this face.
-        unsafe { device.end_command_buffer(cmd) }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            &[],
+            &[],
+            barriers,
+        );
+        rec.copy_image(
+            copy_src,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            capture_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&copy),
+        );
+        let cmd = rec
+            .end()
             .map_err(|e| super::error::map_vk_result(e, "probe face end"))?;
         let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
         // SAFETY: `cmd` was ended above, and `fence` is the face's fresh, unsignaled fence.
@@ -502,24 +480,16 @@ impl VkContext {
         };
         bake.cmds.push(cmd);
         bake.fences.push(fence);
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        // SAFETY: `cmd` was allocated from this device's pool moments ago and has never been
-        // submitted, so it is in the initial state that `begin` requires.
-        unsafe { device.begin_command_buffer(cmd, &begin) }
-            .map_err(|e| super::error::map_vk_result(e, "probe convolve begin"))?;
         Ok((cmd, fence))
     }
 
+    // Submit `cmd`, whose recording has ended, to signal `fence`.
     fn submit_prefilter_command(
         &self,
         cmd: vk::CommandBuffer,
         fence: vk::Fence,
     ) -> RenderResult<()> {
         let device = &self.hw.device;
-        // SAFETY: `cmd` is in the recording state and belongs to this device.
-        unsafe { device.end_command_buffer(cmd) }
-            .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
         let submit = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
         // SAFETY: `cmd` was ended above; the fence is unsignaled and not already in use.
         unsafe { device.queue_submit(self.hw.graphics_queue, std::slice::from_ref(&submit), fence) }
@@ -541,7 +511,7 @@ impl VkContext {
     // draw appears in the capture with default shading rather than not at all.
     pub(in crate::vulkan) fn encode_probe_cull(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         cull_set: vk::DescriptorSet,
         hiz_set: Option<vk::DescriptorSet>,
         packing: FacePacking,
@@ -551,54 +521,30 @@ impl VkContext {
             return;
         };
         let (pipeline, layout) = (&kernels.pipeline, &kernels.pipeline_layout);
-        let device = &self.hw.device;
         let records = packing.culled(self.state.draw.record_count());
         let skinned_base = u32::saturating_from(self.state.draw.skinned_record_base());
         let params = capture_cull_params(view, records, skinned_base);
-        // SAFETY: `cmd` is recording outside a render pass, and the cull kernel pipeline is owned
-        // by `self.cull`.
-        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.handle()) };
-        // SAFETY: the caller's `cull_set` was written against the cull layout's set 0.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&cull_set),
+            &[],
+        );
+        if let Some(hs) = hiz_set {
+            rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
-                layout.handle(),
-                0,
-                std::slice::from_ref(&cull_set),
+                layout,
+                1,
+                std::slice::from_ref(&hs),
                 &[],
             );
         }
-        if let Some(hs) = hiz_set {
-            // SAFETY: the caller's Hi-Z set matches set 1, which the cull layout references.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::COMPUTE,
-                    layout.handle(),
-                    1,
-                    std::slice::from_ref(&hs),
-                    &[],
-                );
-            }
-        }
-        // SAFETY: `cmd` is recording and `layout` is the bound cull kernel's layout.
-        unsafe {
-            crate::vulkan::record::cmd_push_constants(
-                device,
-                cmd,
-                layout.handle(),
-                vk::ShaderStageFlags::COMPUTE,
-                &params,
-            );
-        }
-        // SAFETY: the cull pipeline, its sets and push constants are bound above.
-        unsafe { device.cmd_dispatch(cmd, records.div_ceil(64), 1, 1) };
-        // SAFETY: `cmd` is recording and belongs to this device, and the recorder lives only for
-        // the packing below.
-        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, &params);
+        rec.dispatch(records.div_ceil(64), 1, 1);
         self.encode_compaction(
-            &rec,
+            rec,
             CompactPass {
                 set: packing.set,
                 lists: packing.lists,
@@ -609,18 +555,13 @@ impl VkContext {
         let barrier = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ);
-        // SAFETY: `cmd` is still recording; this orders the cull's writes before the draw's read.
-        unsafe {
-            device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::DRAW_INDIRECT,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&barrier),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::DRAW_INDIRECT,
+            std::slice::from_ref(&barrier),
+            &[],
+            &[],
+        );
     }
 
     // Render the bindless static + instance + chunk prefix into a probe face (or a
@@ -632,8 +573,8 @@ impl VkContext {
     // is omitted (V1). Shared by the probe bake + the planar reflection render.
     pub(in crate::vulkan) fn encode_main_into_face(
         &self,
-        cmd: vk::CommandBuffer,
-        framebuffer: vk::Framebuffer,
+        rec: &Recorder<'_>,
+        framebuffer: &OwnedFramebuffer,
         area: FaceArea,
         view: FaceView,
         bindless_set: vk::DescriptorSet,
@@ -650,7 +591,6 @@ impl VkContext {
         ) else {
             return;
         };
-        let device = &self.hw.device;
         let [r, g, b, a] = background.clear_color(storage, self.state.view.clear_color);
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
@@ -668,11 +608,6 @@ impl VkContext {
             extent,
             render_area,
         } = area;
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(self.targets.main_render_pass.handle())
-            .framebuffer(framebuffer)
-            .render_area(render_area)
-            .clear_values(clears);
         // Negative-height viewport (Y flip), matching the main pass so the captured
         // faces share the cube convention `face_view_projection` was built against.
         let vp = vk::Viewport {
@@ -683,40 +618,29 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        // SAFETY: `cmd` is recording outside a render pass, and the main render pass and the
-        // caller's `framebuffer` are live for the call.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
-        // SAFETY: `cmd` is recording inside the render pass begun above.
-        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp)) };
-        // SAFETY: same recording `cmd`; `render_area` is a local that outlives the call.
-        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&render_area)) };
+        rec.begin_render_pass(
+            &self.targets.main_render_pass,
+            framebuffer,
+            render_area,
+            clears,
+        );
+        rec.set_viewport(&vp);
+        rec.set_scissor(&render_area);
         let vertex_buffer = self.geometry.vertex_buffer.buffer();
-        // SAFETY: the static vertex buffer is owned by `self.geometry` and outlives the bake.
-        unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[vertex_buffer], &[0]) };
-        // SAFETY: the static index buffer is owned by `self.geometry` and outlives the bake.
-        unsafe {
-            device.cmd_bind_index_buffer(
-                cmd,
-                self.geometry.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT32,
-            );
-        }
-        // SAFETY: the face's bindless pipeline is compatible with the main render pass.
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.handle());
-        }
-        // SAFETY: the face's global and bindless sets match sets 0 and 1 of the bindless layout.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                layout.handle(),
-                0,
-                &[global_set, bindless_set],
-                &[],
-            );
-        }
+        rec.bind_vertex_buffers(0, &[vertex_buffer], &[0]);
+        rec.bind_index_buffer(
+            self.geometry.index_buffer.buffer(),
+            0,
+            vk::IndexType::UINT32,
+        );
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::GRAPHICS,
+            layout,
+            0,
+            &[global_set, bindless_set],
+            &[],
+        );
         let records = packing.culled(self.state.draw.record_count());
         let face = StreamLayout {
             regions: &self.cull.variants.regions,
@@ -724,19 +648,14 @@ impl VkContext {
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
             records,
         };
-        // SAFETY: `cmd` is recording inside the face's render pass, and the recorder lives only
-        // for this draw.
-        let rec = unsafe { Recorder::assume_recording(&self.hw.device, cmd) };
-        self.draw_stream(&rec, packing.lists, 0, face.slots(0));
+        self.draw_stream(rec, packing.lists, 0, face.slots(0));
         // A face is always rendered lit, whatever the viewport shows.
         if background.draws_sky()
             && self.draws_sky(concinnity_engine::gfx::view_modes::ViewMode::Lit)
         {
-            self.encode_sky(cmd, global_set, self.current_frame);
+            self.encode_sky(rec, global_set, self.current_frame);
         }
-        // SAFETY: `cmd` is a command buffer in the recording state inside the render pass begun
-        // above.
-        unsafe { device.cmd_end_render_pass(cmd) };
+        rec.end_render_pass();
     }
 }
 
@@ -892,14 +811,21 @@ impl ProbeBakeDevice for VkContext {
     // install has nothing left to submit.
     fn prefilter_mip(&mut self, prefilter: &mut PrefilteringBake, mip: u32) -> RenderResult<()> {
         let (cmd, fence) = self.begin_prefilter_command(prefilter)?;
+        let device = self.hw.device.clone();
+        // Allocated moments ago and never submitted.
+        let rec = Recorder::begin(&device, cmd, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve begin"))?;
         if mip == 0 {
-            self.encode_probe_pyramid(cmd, &prefilter.gpu, &PLAN)?;
+            self.encode_probe_pyramid(&rec, &prefilter.gpu, &PLAN)?;
         } else {
-            self.encode_probe_ggx_mip(cmd, &prefilter.gpu, &PLAN, mip)?;
+            self.encode_probe_ggx_mip(&rec, &prefilter.gpu, &PLAN, mip)?;
             if mip + 1 == PLAN.mips() {
-                self.encode_probe_cube_readable(cmd, &prefilter.gpu);
+                Self::encode_probe_cube_readable(&rec, &prefilter.gpu);
             }
         }
+        let cmd = rec
+            .end()
+            .map_err(|e| super::error::map_vk_result(e, "probe convolve end"))?;
         self.submit_prefilter_command(cmd, fence)
     }
 

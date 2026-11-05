@@ -11,41 +11,23 @@
 //! wrappers from `owned.rs` by reference, so a pipeline or layout cannot be bound
 //! unless its owner is alive at the call.
 //!
-//! Passes convert to this surface one at a time: `encode_pass_into` hands each
-//! arm the recorder, and an arm that has not converted reads the raw buffer back
-//! out with [`Recorder::raw`]. Growing the surface is what converting the next
-//! pass costs; it carries only the commands its callers use.
+//! Every pass, upload and frame scope records through it. What is left raw is
+//! stated rather than hidden:
 //!
-//! What is left raw is stated rather than hidden: descriptor sets, buffers and
-//! image views are still `vk::*` handles here, because they are owned by a
-//! descriptor pool, the device allocator or a swapchain rather than by a wrapper
-//! of their own. Those keep the liveness argument they always had, and
-//! [`Recorder::raw`] exists for the commands this surface does not cover (the
-//! extension loaders: acceleration-structure builds and the upscaler SDKs), so a
-//! pass that needs one does not have to abandon the type.
+//! - Descriptor sets, buffers and image views are `vk::*` handles here, because
+//!   they are owned by a descriptor pool, the device allocator or a swapchain
+//!   rather than by a wrapper of their own. They keep the liveness argument they
+//!   always had.
+//! - [`Recorder::raw`] hands the buffer to the commands this surface does not
+//!   cover: the acceleration-structure builds, recorded through the
+//!   `VK_KHR_acceleration_structure` loader, and the DLSS, FSR and XeSS
+//!   dispatches, whose SDKs record into a raw command buffer themselves.
+//! - The cull and compaction kernel tests drive the kernels with raw handles of
+//!   their own, outside any pass.
 
 use ash::vk;
 
 use super::owned::{OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass};
-
-// Push one `#[repr(C)]` block at offset 0 onto a raw command buffer. Typed, so
-// the byte length comes from the value rather than from a pointer cast beside a
-// hand-written size.
-//
-// # Safety
-// `cmd` must be in the recording state, and `cmd` and `layout` must belong to
-// `device` and be live for the call.
-pub(in crate::vulkan) unsafe fn cmd_push_constants<T: bytemuck::NoUninit>(
-    device: &ash::Device,
-    cmd: vk::CommandBuffer,
-    layout: vk::PipelineLayout,
-    stages: vk::ShaderStageFlags,
-    value: &T,
-) {
-    // SAFETY: the caller upholds the recording state and handle liveness, and the bytes are
-    // `value`'s own, borrowed for the call.
-    unsafe { device.cmd_push_constants(cmd, layout, stages, 0, bytemuck::bytes_of(value)) };
-}
 
 // A buffer and a byte offset into it, where a command reads.
 #[derive(Copy, Clone)]
@@ -86,9 +68,9 @@ impl<'a> Recorder<'a> {
     //
     // # Safety
     // `cmd` must be in the recording state and must belong to `device`. Only
-    // for the recording scopes whose `vkBeginCommandBuffer` sits in a caller
-    // that cannot hand the recorder down: the one-shot upload helpers, and the
-    // probe bake, whose passes still record into a raw buffer.
+    // for the frame's outer "end" buffer, which `begin` begins and the frame
+    // carries as a raw handle (a recorder would borrow the context it is stored
+    // beside) until the graph executor and `draw_frame` record into it.
     pub(in crate::vulkan) unsafe fn assume_recording(
         device: &'a ash::Device,
         cmd: vk::CommandBuffer,
@@ -443,6 +425,81 @@ impl<'a> Recorder<'a> {
         // SAFETY: `self.cmd` is in the recording state by construction, and the buffers and the
         // region slice are live for the call.
         unsafe { self.device.cmd_copy_buffer(self.cmd, src, dst, regions) };
+    }
+
+    // Copy `regions` of `buffer` into `image`, which is in `layout`.
+    pub(in crate::vulkan) fn copy_buffer_to_image(
+        &self,
+        buffer: vk::Buffer,
+        image: vk::Image,
+        layout: vk::ImageLayout,
+        regions: &[vk::BufferImageCopy],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the buffer, the image
+        // and the region slice are live for the call.
+        unsafe {
+            self.device
+                .cmd_copy_buffer_to_image(self.cmd, buffer, image, layout, regions);
+        };
+    }
+
+    // Copy `regions` of `image`, which is in `layout`, into `buffer`.
+    pub(in crate::vulkan) fn copy_image_to_buffer(
+        &self,
+        image: vk::Image,
+        layout: vk::ImageLayout,
+        buffer: vk::Buffer,
+        regions: &[vk::BufferImageCopy],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the image, the buffer
+        // and the region slice are live for the call.
+        unsafe {
+            self.device
+                .cmd_copy_image_to_buffer(self.cmd, image, layout, buffer, regions);
+        };
+    }
+
+    // Copy `regions` from `src`, in `src_layout`, to `dst`, in `dst_layout`.
+    pub(in crate::vulkan) fn copy_image(
+        &self,
+        src: vk::Image,
+        src_layout: vk::ImageLayout,
+        dst: vk::Image,
+        dst_layout: vk::ImageLayout,
+        regions: &[vk::ImageCopy],
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and both images and the
+        // region slice are live for the call.
+        unsafe {
+            self.device
+                .cmd_copy_image(self.cmd, src, src_layout, dst, dst_layout, regions);
+        };
+    }
+
+    // Clear `range` of the depth image `image`, which is in `layout`.
+    pub(in crate::vulkan) fn clear_depth_stencil_image(
+        &self,
+        image: vk::Image,
+        layout: vk::ImageLayout,
+        value: vk::ClearDepthStencilValue,
+        range: vk::ImageSubresourceRange,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the image is live for
+        // the call.
+        unsafe {
+            self.device
+                .cmd_clear_depth_stencil_image(self.cmd, image, layout, &value, &[range]);
+        };
+    }
+
+    // Reset `count` queries of `pool` from `first`.
+    pub(in crate::vulkan) fn reset_query_pool(&self, pool: vk::QueryPool, first: u32, count: u32) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the query pool is live
+        // for the call.
+        unsafe {
+            self.device
+                .cmd_reset_query_pool(self.cmd, pool, first, count);
+        };
     }
 
     pub(in crate::vulkan) fn write_timestamp(

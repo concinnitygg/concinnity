@@ -83,7 +83,7 @@ impl ProbeCubeArray {
             .map(|cube| mip_storage_views(upload.device, &image, cube, mips))
             .collect::<RenderResult<Vec<_>>>()?;
         let handle = image.image();
-        super::texture::one_shot_submit(upload.device, upload.command_pool, upload.queue, |cmd| {
+        super::texture::one_shot_submit(upload.device, upload.command_pool, upload.queue, |rec| {
             let barrier = vk::ImageMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::empty())
                 .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
@@ -93,19 +93,13 @@ impl ProbeCubeArray {
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(handle)
                 .subresource_range(range(0, mips, 0, layers));
-            // SAFETY: `cmd` is in the recording state, the barrier it borrows is
-            // live for the call, and the image belongs to this device.
-            unsafe {
-                upload.device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    std::slice::from_ref(&barrier),
-                );
-            }
+            rec.pipeline_barrier(
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                &[],
+                &[],
+                std::slice::from_ref(&barrier),
+            );
         })?;
         Ok(Self {
             image,

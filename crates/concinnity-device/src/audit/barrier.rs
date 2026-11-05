@@ -103,7 +103,7 @@ const AUDITS: &[BackendAudit] = &[
         sites: &[
             (
                 "graph_exec.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 4,
                 Reason::GraphDriven,
             ),
@@ -120,35 +120,40 @@ const AUDITS: &[BackendAudit] = &[
             // layout to a transfer and back, inside the node.
             (
                 "reactive_mask.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::IntraPass,
             ),
-            ("texture.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
+            ("texture.rs", "rec.pipeline_barrier(", 1, Reason::Upload),
             // The staged geometry copies' submit: a write-after-read barrier
             // ahead of the copies and a visibility barrier after them.
             (
                 "geometry_upload.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::Upload,
             ),
             // The probe cube array's one transition into the layout it keeps,
             // on a one-shot submit when the array is allocated.
-            ("probe_set.rs", "cmd_pipeline_barrier", 1, Reason::Upload),
-            ("probe.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
+            ("probe_set.rs", "rec.pipeline_barrier(", 1, Reason::Upload),
+            ("probe.rs", "rec.pipeline_barrier(", 3, Reason::OutOfFrame),
             (
                 "probe_prefilter.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::OutOfFrame,
             ),
             // One shared `build_barrier` for every acceleration-structure build
             // sequence, plus the two around the skin dispatch.
-            ("raytrace.rs", "cmd_pipeline_barrier", 3, Reason::OutOfFrame),
+            (
+                "raytrace.rs",
+                "rec.pipeline_barrier(",
+                3,
+                Reason::OutOfFrame,
+            ),
             (
                 "screenshot.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::OutOfFrame,
             ),
@@ -207,13 +212,13 @@ const AUDITS: &[BackendAudit] = &[
             // snapshot itself is not a graph resource.
             (
                 "transparent.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::IntraPass,
             ),
             (
                 "raymarch/mod.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 2,
                 Reason::IntraPass,
             ),
@@ -224,7 +229,7 @@ const AUDITS: &[BackendAudit] = &[
             ("post/ssgi.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
             (
                 "post/upscale/mod.rs",
-                "cmd_pipeline_barrier",
+                "rec.pipeline_barrier(",
                 1,
                 Reason::Inline,
             ),

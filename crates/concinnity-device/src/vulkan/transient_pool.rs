@@ -188,11 +188,10 @@ impl TransientImagePool {
             }
         }
         if !images.is_empty() {
-            one_shot_submit(device, command_pool, queue, |cmd| {
+            one_shot_submit(device, command_pool, queue, |rec| {
                 for p in &images {
                     transition_image_layout(
-                        device,
-                        cmd,
+                        rec,
                         p.image,
                         vk::ImageLayout::UNDEFINED,
                         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,

@@ -14,6 +14,7 @@ use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
 use super::depth::SHADOW_SAMPLE_COMPARE;
 use super::error::map_vk_result;
 use crate::vulkan::owned::{OwnedSampler, VkDevice};
+use crate::vulkan::record::Recorder;
 
 // Opaque handle to a GPU image: cached raw handles for the bind sites, backed
 // by a pooled allocation that owns the image, its memory, and every view.
@@ -158,7 +159,7 @@ pub(super) fn one_shot_submit_nowait<F>(
     f: F,
 ) -> RenderResult<vk::CommandBuffer>
 where
-    F: FnOnce(vk::CommandBuffer),
+    F: FnOnce(&Recorder<'_>),
 {
     let alloc_info = vk::CommandBufferAllocateInfo::default()
         .command_pool(command_pool)
@@ -166,28 +167,22 @@ where
         .command_buffer_count(1);
     // SAFETY: the create-info and every slice it borrows are live for the call, and each handle it
     // names belongs to this device.
-    let cmd = unsafe { device.allocate_command_buffers(&alloc_info) }
+    let rec = unsafe { device.allocate_command_buffers(&alloc_info) }
         .map_err(|e| map_vk_result(e, "one_shot allocate"))?[0];
 
-    let begin_info =
-        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-    // SAFETY: `cmd` was allocated from this device's pool and is not in flight (its face fence was
-    // waited on), so it is in the initial state that `begin` requires.
-    unsafe { device.begin_command_buffer(cmd, &begin_info) }
+    // Freshly allocated, so not in flight.
+    let rec = Recorder::begin(device, rec, vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
         .map_err(|e| map_vk_result(e, "one_shot begin"))?;
+    f(&rec);
+    let rec = rec.end().map_err(|e| map_vk_result(e, "one_shot end"))?;
 
-    f(cmd);
-
-    // SAFETY: `cmd` is in the recording state, which is what `end_command_buffer` requires.
-    unsafe { device.end_command_buffer(cmd) }.map_err(|e| map_vk_result(e, "one_shot end"))?;
-
-    let submit_info = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&cmd));
+    let submit_info = vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&rec));
     // SAFETY: every command buffer in `submit_bufs` was ended and belongs to this frame slot, the
     // semaphores and fence were created from this device, and `submit_info` borrows all of them for
     // the call.
     unsafe { device.queue_submit(queue, std::slice::from_ref(&submit_info), vk::Fence::null()) }
         .map_err(|e| map_vk_result(e, "one_shot submit"))?;
-    Ok(cmd)
+    Ok(rec)
 }
 
 // Execute a short-lived command buffer and wait for it to complete.
@@ -198,7 +193,7 @@ pub(super) fn one_shot_submit<F>(
     f: F,
 ) -> RenderResult<()>
 where
-    F: FnOnce(vk::CommandBuffer),
+    F: FnOnce(&Recorder<'_>),
 {
     let cmd = one_shot_submit_nowait(device, command_pool, queue, f)?;
     // SAFETY: `queue` belongs to this device; the wait takes no borrowed state.
@@ -229,8 +224,7 @@ pub(super) struct SubresourceRange {
 // Transition `layer_count` layers of an image from one layout to another via
 // a pipeline barrier. Used by the array shadow map and cube uploads.
 pub(super) fn transition_image_layout_range(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     image: vk::Image,
     transition: LayoutTransition,
     range: SubresourceRange,
@@ -266,19 +260,13 @@ pub(super) fn transition_image_layout_range(
         .src_access_mask(src_access)
         .dst_access_mask(dst_access);
 
-    // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice these
-    // commands name is live for the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            src_stage,
-            dst_stage,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            std::slice::from_ref(&barrier),
-        );
-    }
+    rec.pipeline_barrier(
+        src_stage,
+        dst_stage,
+        &[],
+        &[],
+        std::slice::from_ref(&barrier),
+    );
 }
 
 fn layout_transition_access(
@@ -351,16 +339,14 @@ fn layout_transition_access(
 
 // Transition an image from one layout to another via a pipeline barrier.
 pub(super) fn transition_image_layout(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     image: vk::Image,
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
     aspect: vk::ImageAspectFlags,
 ) {
     transition_image_layout_range(
-        device,
-        cmd,
+        rec,
         image,
         LayoutTransition {
             old_layout,
@@ -379,8 +365,7 @@ pub(super) fn transition_image_layout(
 // Variant of `transition_image_layout` that covers every layer of an array
 // image (e.g. the 4-layer shadow array).
 pub(super) fn transition_image_layout_array(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     image: vk::Image,
     old_layout: vk::ImageLayout,
     new_layout: vk::ImageLayout,
@@ -388,8 +373,7 @@ pub(super) fn transition_image_layout_array(
     layer_count: u32,
 ) {
     transition_image_layout_range(
-        device,
-        cmd,
+        rec,
         image,
         LayoutTransition {
             old_layout,
@@ -613,10 +597,9 @@ fn upload_texture_levels_deferred(
     let pooled = alloc.create_image(&img_info, vk::MemoryPropertyFlags::DEVICE_LOCAL)?;
     let image = pooled.image();
 
-    let cmd = one_shot_submit_nowait(device, command_pool, queue, |cmd| {
+    let cmd = one_shot_submit_nowait(device, command_pool, queue, |rec| {
         transition_image_layout_range(
-            device,
-            cmd,
+            rec,
             image,
             LayoutTransition {
                 old_layout: vk::ImageLayout::UNDEFINED,
@@ -654,20 +637,14 @@ fn upload_texture_levels_deferred(
             );
             off += level.data.len() as u64;
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer_to_image(
-                cmd,
-                staging.buffer(),
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &regions,
-            );
-        }
+        rec.copy_buffer_to_image(
+            staging.buffer(),
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        );
         transition_image_layout_range(
-            device,
-            cmd,
+            rec,
             image,
             LayoutTransition {
                 old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -790,10 +767,9 @@ pub(super) fn upload_color_lut(
         .map_err(|e| e.context("create_image (LUT)"))?;
     let image = pooled.image();
 
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout(
-            device,
-            cmd,
+            rec,
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -816,20 +792,14 @@ pub(super) fn upload_color_lut(
                 height: size,
                 depth: size,
             });
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer_to_image(
-                cmd,
-                staging.buffer(),
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&copy_region),
-            );
-        }
+        rec.copy_buffer_to_image(
+            staging.buffer(),
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&copy_region),
+        );
         transition_image_layout(
-            device,
-            cmd,
+            rec,
             image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -918,10 +888,9 @@ pub(super) fn upload_float_lut(
         .map_err(|e| e.context("create_image (float LUT)"))?;
     let image = pooled.image();
 
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout(
-            device,
-            cmd,
+            rec,
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -944,20 +913,14 @@ pub(super) fn upload_float_lut(
                 height: size,
                 depth: 1,
             });
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer_to_image(
-                cmd,
-                staging.buffer(),
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                std::slice::from_ref(&copy_region),
-            );
-        }
+        rec.copy_buffer_to_image(
+            staging.buffer(),
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            std::slice::from_ref(&copy_region),
+        );
         transition_image_layout(
-            device,
-            cmd,
+            rec,
             image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -993,15 +956,9 @@ pub(super) fn create_fallback_color_lut(ctx: &GpuUploadContext<'_>) -> RenderRes
 
 // Clear the 1x1 fallback array to the depth clear value and rest it sampled. No
 // pass ever renders the fallback, so this is the only write it gets.
-fn clear_shadow_fallback(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
-    image: vk::Image,
-    layer_count: u32,
-) {
+fn clear_shadow_fallback(rec: &Recorder<'_>, image: vk::Image, layer_count: u32) {
     transition_image_layout_array(
-        device,
-        cmd,
+        rec,
         image,
         vk::ImageLayout::UNDEFINED,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -1012,24 +969,17 @@ fn clear_shadow_fallback(
         .aspect_mask(vk::ImageAspectFlags::DEPTH)
         .level_count(1)
         .layer_count(layer_count);
-    // SAFETY: `cmd` is a command buffer in the recording state, and `image` is live, was moved
-    // to TRANSFER_DST_OPTIMAL just above, and was created with TRANSFER_DST usage by
-    // `create_shadow_map_array`, the only caller.
-    unsafe {
-        device.cmd_clear_depth_stencil_image(
-            cmd,
-            image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            &vk::ClearDepthStencilValue {
-                depth: DEPTH_CLEAR,
-                stencil: 0,
-            },
-            &[range],
-        );
-    }
+    rec.clear_depth_stencil_image(
+        image,
+        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        vk::ClearDepthStencilValue {
+            depth: DEPTH_CLEAR,
+            stencil: 0,
+        },
+        range,
+    );
     transition_image_layout_array(
-        device,
-        cmd,
+        rec,
         image,
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1098,13 +1048,12 @@ pub(super) fn create_shadow_map_array(
     // not an inline end-of-frame transition. Initializing sampled makes frame 0's
     // producer barrier (SHADER_READ_ONLY -> DEPTH_STENCIL_ATTACHMENT) start from
     // the image's real layout.
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         if fallback {
-            clear_shadow_fallback(device, cmd, image, layer_count);
+            clear_shadow_fallback(rec, image, layer_count);
         } else {
             transition_image_layout_array(
-                device,
-                cmd,
+                rec,
                 image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1194,10 +1143,9 @@ pub(super) fn create_depth_image(
         },
     )?;
     let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout(
-            device,
-            cmd,
+            rec,
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -1241,10 +1189,9 @@ pub(super) fn create_msaa_color_image(
         },
     )?;
     let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout(
-            device,
-            cmd,
+            rec,
             image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -1441,10 +1388,9 @@ fn create_cube_image(
 
     // Transition all 6 layers / N mips to TRANSFER_DST, copy each face per mip,
     // then transition to SHADER_READ_ONLY_OPTIMAL.
-    one_shot_submit(device, command_pool, queue, |cmd| {
+    one_shot_submit(device, command_pool, queue, |rec| {
         transition_image_layout_range(
-            device,
-            cmd,
+            rec,
             image,
             LayoutTransition {
                 old_layout: vk::ImageLayout::UNDEFINED,
@@ -1488,21 +1434,15 @@ fn create_cube_image(
                 off += face_bytes;
             }
         }
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_copy_buffer_to_image(
-                cmd,
-                staging.buffer(),
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &regions,
-            );
-        }
+        rec.copy_buffer_to_image(
+            staging.buffer(),
+            image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        );
 
         transition_image_layout_range(
-            device,
-            cmd,
+            rec,
             image,
             LayoutTransition {
                 old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,

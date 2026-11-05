@@ -501,13 +501,12 @@ impl VkAtmosphere {
             },
             CaptureFaces::Copied,
         )?;
-        one_shot_submit(device, gpu.command_pool, gpu.queue, |cmd| {
+        one_shot_submit(device, gpu.command_pool, gpu.queue, |rec| {
             // The sky cube and its capture rest sampled from the start, the
             // state every frame's steps open them from.
             for image in [sky_image, sky_gpu.capture_image()] {
                 transition_image_layout_range(
-                    device,
-                    cmd,
+                    rec,
                     image,
                     LayoutTransition {
                         old_layout: vk::ImageLayout::UNDEFINED,
@@ -524,8 +523,7 @@ impl VkAtmosphere {
             }
             for table in &tables {
                 transition_image_layout_range(
-                    device,
-                    cmd,
+                    rec,
                     table.image.image(),
                     LayoutTransition {
                         old_layout: vk::ImageLayout::UNDEFINED,
@@ -541,8 +539,7 @@ impl VkAtmosphere {
                 );
             }
             transition_image_layout_range(
-                device,
-                cmd,
+                rec,
                 irradiance_image,
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
@@ -1101,7 +1098,7 @@ impl VkContext {
                 ],
             );
             kernel_step(rec);
-            self.record_prefilter_pyramid(rec.raw(), &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
+            Self::record_prefilter_pyramid(rec, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
             rec.pipeline_barrier(
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -1124,7 +1121,7 @@ impl VkContext {
             );
         }
         for mip in work.ggx_mips() {
-            self.record_prefilter_ggx(rec.raw(), &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN, mip)?;
+            Self::record_prefilter_ggx(rec, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN, mip)?;
         }
         // Every table is read by fragment shaders from here on: the sky, the
         // haze, and the surfaces' ambient light and reflections through the
@@ -1219,11 +1216,11 @@ impl VkContext {
     pub(in crate::vulkan) fn atmosphere_sky(
         &self,
         frame_idx: usize,
-    ) -> Option<(vk::Pipeline, vk::PipelineLayout, vk::DescriptorSet)> {
+    ) -> Option<(&OwnedPipeline, &OwnedPipelineLayout, vk::DescriptorSet)> {
         let atmo = self.atmosphere.as_ref()?;
         atmo.params?;
         let set = *atmo.sky_sets.get(frame_idx)?;
-        Some((atmo.sky_pipeline.handle(), atmo.sky_layout.handle(), set))
+        Some((&atmo.sky_pipeline, &atmo.sky_layout, set))
     }
 
     // The view block's `irradiance` lane.

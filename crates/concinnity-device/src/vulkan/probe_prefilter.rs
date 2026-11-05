@@ -36,9 +36,9 @@ use super::owned::{
 };
 use super::pipeline_desc::compute_pipeline;
 use super::probe_set::{self, CubeImage};
-use super::record::cmd_push_constants;
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
+use crate::vulkan::record::Recorder;
 
 // Color format of the capture and the probe cube array.
 pub(super) const PROBE_CUBE_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
@@ -362,7 +362,7 @@ impl super::context::VkContext {
     /// would only lengthen the bake.
     pub(in crate::vulkan) fn encode_probe_pyramid(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
     ) -> RenderResult<()> {
@@ -370,11 +370,9 @@ impl super::context::VkContext {
             self.probe.prefilter.as_ref().ok_or_else(|| {
                 RenderError::Other("probe: prefilter pipelines missing".to_string())
             })?;
-        let device = &self.hw.device;
 
         transition(
-            device,
-            cmd,
+            rec,
             gpu.capture.image(),
             cube_range(0, gpu.mips),
             gpu.faces.arrival(),
@@ -390,8 +388,7 @@ impl super::context::VkContext {
         // The cube may hold a probe that earlier passes sampled; this orders
         // the writes after those reads.
         transition(
-            device,
-            cmd,
+            rec,
             gpu.probe_image,
             gpu.probe_range,
             LayoutSide {
@@ -406,11 +403,10 @@ impl super::context::VkContext {
             },
         );
 
-        self.record_prefilter_pyramid(cmd, pipelines, gpu, plan);
+        Self::record_prefilter_pyramid(rec, pipelines, gpu, plan);
 
         transition(
-            device,
-            cmd,
+            rec,
             gpu.capture.image(),
             cube_range(0, gpu.mips),
             LayoutSide {
@@ -432,7 +428,7 @@ impl super::context::VkContext {
     /// read-only from here on, so consecutive mips need no barrier between them.
     pub(in crate::vulkan) fn encode_probe_ggx_mip(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
         dst_mip: u32,
@@ -441,22 +437,21 @@ impl super::context::VkContext {
             self.probe.prefilter.as_ref().ok_or_else(|| {
                 RenderError::Other("probe: prefilter pipelines missing".to_string())
             })?;
-        self.record_prefilter_ggx(cmd, pipelines, gpu, plan, dst_mip)
+        Self::record_prefilter_ggx(rec, pipelines, gpu, plan, dst_mip)
     }
 
     /// Record the mirror-mip copy and the pyramid reduction, the capture and
     /// the destination both in GENERAL and ordered after their last access.
     pub(in crate::vulkan) fn record_prefilter_pyramid(
-        &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         pipelines: &ProbePrefilterPipelines,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
     ) {
-        self.dispatch_prefilter(
-            cmd,
-            pipelines.mip_pipeline_layout.handle(),
-            pipelines.mip0.handle(),
+        Self::dispatch_prefilter(
+            rec,
+            &pipelines.mip_pipeline_layout,
+            &pipelines.mip0,
             gpu.mip0_set,
             &plan.mip0_params(),
             plan.face_size(),
@@ -464,11 +459,11 @@ impl super::context::VkContext {
         for (step, &set) in gpu.downsample_sets.iter().enumerate() {
             let dst = u32::saturating_from(step) + 1;
             // Each level reads the one the previous dispatch wrote.
-            storage_barrier(&self.hw.device, cmd);
-            self.dispatch_prefilter(
-                cmd,
-                pipelines.mip_pipeline_layout.handle(),
-                pipelines.downsample.handle(),
+            storage_barrier(rec);
+            Self::dispatch_prefilter(
+                rec,
+                &pipelines.mip_pipeline_layout,
+                &pipelines.downsample,
                 set,
                 &plan.downsample_params(dst),
                 plan.mip_face_size(dst),
@@ -479,8 +474,7 @@ impl super::context::VkContext {
     /// Record the GGX convolution producing destination mip `dst_mip`, the
     /// capture in `SHADER_READ_ONLY_OPTIMAL` and the destination in GENERAL.
     pub(in crate::vulkan) fn record_prefilter_ggx(
-        &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         pipelines: &ProbePrefilterPipelines,
         gpu: &PrefilterGpu,
         plan: &PrefilterPlan,
@@ -489,10 +483,10 @@ impl super::context::VkContext {
         let set = *gpu.ggx_sets.get(dst_mip as usize - 1).ok_or_else(|| {
             RenderError::Other("prefilter: convolution mip out of range".to_string())
         })?;
-        self.dispatch_prefilter(
-            cmd,
-            pipelines.ggx_pipeline_layout.handle(),
-            pipelines.ggx.handle(),
+        Self::dispatch_prefilter(
+            rec,
+            &pipelines.ggx_pipeline_layout,
+            &pipelines.ggx,
             set,
             &plan.ggx_params(dst_mip),
             plan.mip_face_size(dst_mip),
@@ -502,14 +496,9 @@ impl super::context::VkContext {
 
     /// Make a finished probe cube's writes visible to the forward, SSR,
     /// ray-traced and transparent passes that sample it.
-    pub(in crate::vulkan) fn encode_probe_cube_readable(
-        &self,
-        cmd: vk::CommandBuffer,
-        gpu: &PrefilterGpu,
-    ) {
+    pub(in crate::vulkan) fn encode_probe_cube_readable(rec: &Recorder<'_>, gpu: &PrefilterGpu) {
         transition(
-            &self.hw.device,
-            cmd,
+            rec,
             gpu.probe_image,
             gpu.probe_range,
             LayoutSide {
@@ -529,33 +518,24 @@ impl super::context::VkContext {
     // six faces deep. The kernels bounds-guard against `dst_size`, so the
     // rounded-up remainder returns early.
     fn dispatch_prefilter(
-        &self,
-        cmd: vk::CommandBuffer,
-        layout: vk::PipelineLayout,
-        pipeline: vk::Pipeline,
+        rec: &Recorder<'_>,
+        layout: &OwnedPipelineLayout,
+        pipeline: &OwnedPipeline,
         set: vk::DescriptorSet,
         params: &ProbePrefilterParams,
         size: u32,
     ) {
         let groups = size.div_ceil(PREFILTER_TILE).max(1);
-        let device = &self.hw.device;
-        // SAFETY: `cmd` is in the recording state and `pipeline` belongs to this device.
-        unsafe { device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline) };
-        // SAFETY: `set` was allocated against `layout` on this device.
-        unsafe {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                layout,
-                0,
-                std::slice::from_ref(&set),
-                &[],
-            );
-        }
-        // SAFETY: the push range matches the layout's, declared from the same type.
-        unsafe { cmd_push_constants(device, cmd, layout, vk::ShaderStageFlags::COMPUTE, params) };
-        // SAFETY: the kernel, its set and its constants are bound above on the recording `cmd`.
-        unsafe { device.cmd_dispatch(cmd, groups, groups, 6) };
+        rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, pipeline);
+        rec.bind_descriptor_sets(
+            vk::PipelineBindPoint::COMPUTE,
+            layout,
+            0,
+            std::slice::from_ref(&set),
+            &[],
+        );
+        rec.push_constants(layout, vk::ShaderStageFlags::COMPUTE, 0, params);
+        rec.dispatch(groups, groups, 6);
     }
 }
 
@@ -616,22 +596,17 @@ fn create_pool(device: &VkDevice, steps: usize) -> RenderResult<OwnedDescriptorP
 // Order one storage-image write before the next dispatch's read of it. The next
 // dispatch also writes the following mip, so its writes join the destination
 // scope to keep the chained dependency a memory one for them too.
-fn storage_barrier(device: &VkDevice, cmd: vk::CommandBuffer) {
+fn storage_barrier(rec: &Recorder<'_>) {
     let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE);
-    // SAFETY: `cmd` is in the recording state and the barrier it borrows is live for the call.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::DependencyFlags::empty(),
-            std::slice::from_ref(&barrier),
-            &[],
-            &[],
-        );
-    }
+    rec.pipeline_barrier(
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        std::slice::from_ref(&barrier),
+        &[],
+        &[],
+    );
 }
 
 // One side of a layout transition: the layout the image is in, the accesses that
@@ -650,8 +625,7 @@ struct LayoutSide {
 // Layout transition (or, between two equal layouts, a memory barrier) over
 // `range` of `image`.
 fn transition(
-    device: &VkDevice,
-    cmd: vk::CommandBuffer,
+    rec: &Recorder<'_>,
     image: vk::Image,
     range: vk::ImageSubresourceRange,
     from: LayoutSide,
@@ -666,17 +640,11 @@ fn transition(
         .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
         .image(image)
         .subresource_range(range);
-    // SAFETY: `cmd` is in the recording state, the barrier it borrows is live for the call, and the
-    // image belongs to this device.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            cmd,
-            from.stage,
-            to.stage,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            std::slice::from_ref(&barrier),
-        );
-    }
+    rec.pipeline_barrier(
+        from.stage,
+        to.stage,
+        &[],
+        &[],
+        std::slice::from_ref(&barrier),
+    );
 }

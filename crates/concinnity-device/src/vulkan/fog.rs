@@ -187,10 +187,9 @@ impl FogResources {
         // (fragment read) views. Rest it in SHADER_READ_ONLY so the first
         // froxel build's opening barrier (SHADER_READ_ONLY -> GENERAL) matches.
         let volume = create_volume_image(alloc)?;
-        one_shot_submit(device, command_pool, queue, |cmd| {
+        one_shot_submit(device, command_pool, queue, |rec| {
             transition_image_layout_range(
-                device,
-                cmd,
+                rec,
                 volume.image(),
                 LayoutTransition {
                     old_layout: vk::ImageLayout::UNDEFINED,
