@@ -110,7 +110,7 @@ impl EditorHook {
             self.go_to_world(target, world);
             return;
         }
-        let name = session_store::world_key(&self.world_path);
+        let name = session_store::world_key(Path::new(&self.world_path));
         self.open_modal(
             &format!("'{name}' has unsaved changes. Save them before switching worlds?"),
             vec![
@@ -267,7 +267,7 @@ impl EditorHook {
             self.worlds.status = Some(format!("Delete failed: {e}"));
             return;
         }
-        let key = session_store::world_key(path);
+        let key = session_store::world_key(Path::new(path));
         if let Some(store) = session_store::default_path()
             && let Err(e) = session_store::forget(&store, &key)
         {
@@ -302,7 +302,7 @@ impl EditorHook {
             .and_then(|store| {
                 session_store::load(&store)
                     .worlds
-                    .get(&session_store::world_key(&path))
+                    .get(&session_store::world_key(Path::new(&path)))
                     .map(|w| w.bookmarks)
             })
             .unwrap_or_default();

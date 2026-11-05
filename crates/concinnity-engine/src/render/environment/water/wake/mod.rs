@@ -218,7 +218,7 @@ impl WakeHistory {
     /// the floating bodies' `stirs`. Unless [`Self::ran`] marked the last
     /// frame run, its state never reached the GPU and this one starts cold.
     /// `None` while the water is calm: nothing has pushed it, or not for
-    /// [`WAKE_SETTLE_SECONDS`], so there is no wake to run or draw.
+    /// `WAKE_SETTLE_SECONDS`, so there is no wake to run or draw.
     pub fn advance(
         &mut self,
         camera: [f32; 3],

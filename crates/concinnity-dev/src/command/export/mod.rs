@@ -112,7 +112,7 @@ pub(crate) fn export(options: &ExportOptions) -> io::Result<()> {
 
     let content = fs::read_to_string(&world_path)?;
     let meta = world_app_meta(
-        WorldSource::file(&content, Path::new(&world_path)),
+        WorldSource::file(&content, &world_path),
         crate::project::assets_dir().as_deref(),
         name,
         version,

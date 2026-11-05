@@ -19,7 +19,7 @@ use super::watch_dirs::WatchDirs;
 // modify/create/remove events fire the flag, only relevant extensions count.
 pub(super) fn spawn_watcher(
     sources: &HotReloadSources,
-    world_jsonl_path: Option<&str>,
+    world_jsonl_path: Option<&Path>,
     signals: Arc<ReloadSignals>,
 ) -> Option<notify::RecommendedWatcher> {
     // Procedural meshes are generated, not sourced from a file, so they have no
@@ -229,7 +229,7 @@ pub(super) fn signal(kind: ReloadKind, signals: &ReloadSignals) {
 // The parent directories of every StoryImport source declared in the world
 // file or a file it includes, so the watcher hears `.md` saves. A malformed
 // line is skipped like the build would reject it later.
-pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
+pub(super) fn story_source_dirs(world_jsonl_path: &Path) -> BTreeSet<PathBuf> {
     let mut dirs = BTreeSet::new();
     let Ok(content) = std::fs::read_to_string(world_jsonl_path) else {
         return dirs;
@@ -238,7 +238,7 @@ pub(super) fn story_source_dirs(world_jsonl_path: &str) -> BTreeSet<PathBuf> {
         .lines()
         .filter_map(|line| parse_entry(line.trim()).ok())
         .collect();
-    let world_file = Some(Path::new(world_jsonl_path));
+    let world_file = Some(world_jsonl_path);
     let entries = resolve_includes(lines.clone(), world_file).unwrap_or(lines);
     for entry in entries {
         if entry.get("type").and_then(|t| t.as_str()) != Some("StoryImport") {

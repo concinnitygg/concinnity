@@ -67,7 +67,7 @@ impl OceanQuality {
         wake: true,
     };
     /// The smallest cascade side: the first cascade then holds every wave of
-    /// the band the CPU reads ([`band::BAND_REACH`] of its steps).
+    /// the band the CPU reads (`band::BAND_REACH` of its steps).
     pub const MIN_SIZE: u32 = 128;
     /// The largest cascade side. Mirrors `WATER_FFT_MAX_SIZE` in
     /// `shaders/water_fft.hlsl`.

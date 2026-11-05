@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The world source file's conventional name.
 pub const WORLD_JSONL: &str = "world.jsonl";
@@ -10,18 +10,17 @@ pub const WORLD_JSONL: &str = "world.jsonl";
 ///
 /// Returns an error if the working directory cannot be read, or no world is
 /// found by the search.
-pub fn find_world_jsonl() -> std::io::Result<String> {
+pub fn find_world_jsonl() -> std::io::Result<PathBuf> {
     find_world_from(&std::env::current_dir()?)
 }
 
 // The nearest `world.jsonl` at `dir` or above it. Split from the working
 // directory lookup so the walk is testable without moving the process cwd,
 // which every other test in this binary shares.
-fn find_world_from(dir: &Path) -> std::io::Result<String> {
+fn find_world_from(dir: &Path) -> std::io::Result<PathBuf> {
     dir.ancestors()
         .map(|d| d.join(WORLD_JSONL))
         .find(|p| p.exists())
-        .map(|p| p.to_string_lossy().into_owned())
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -41,7 +40,7 @@ mod tests {
         std::fs::write(&world, "").unwrap();
 
         let found = find_world_from(tree.path()).unwrap();
-        assert_eq!(Path::new(&found), world);
+        assert_eq!(found, world);
     }
 
     // Running from inside a project's subdirectory still finds the project's
@@ -56,7 +55,7 @@ mod tests {
         std::fs::write(project.join(WORLD_JSONL), "").unwrap();
 
         let found = find_world_from(&nested).unwrap();
-        assert_eq!(Path::new(&found), project.join(WORLD_JSONL));
+        assert_eq!(found, project.join(WORLD_JSONL));
     }
 
     // Only `world.jsonl` is discovered: any other world file is named with

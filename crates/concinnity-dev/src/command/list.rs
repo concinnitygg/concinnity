@@ -26,11 +26,11 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
     let json_path = resolve_world_path(json_path)?;
 
     let content = std::fs::read_to_string(&json_path).map_err(|e| {
-        tracing::error!("Could not read {}: {}", json_path, e);
+        tracing::error!("Could not read {}: {}", json_path.display(), e);
         e
     })?;
 
-    let source = WorldSource::file(&content, Path::new(&json_path));
+    let source = WorldSource::file(&content, &json_path);
     if systems {
         return list_systems(source, &json_path);
     }
@@ -41,7 +41,7 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
     let assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Failed to parse {json_path}: {e}"),
+            format!("Failed to parse {}: {e}", json_path.display()),
         )
     })?;
 
@@ -49,7 +49,7 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     if raw.is_empty() {
-        println!("{json_path} has no assets.");
+        println!("{} has no assets.", json_path.display());
         return Ok(());
     }
 
@@ -126,19 +126,19 @@ pub(crate) fn list(json_path: Option<&str>, expanded: bool, systems: bool) -> st
         );
     }
 
-    println!("\n{} asset(s) in {}", rows.len(), json_path);
+    println!("\n{} asset(s) in {}", rows.len(), json_path.display());
     Ok(())
 }
 
 // The expanded world: every asset the build produces, with its provenance.
 // Runs the same front half as `cn cook` (expansion passes, injection,
 // semantic validation), so the listing is exactly what lands in the blob.
-fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
+fn list_expanded(source: WorldSource<'_>, json_path: &Path) -> std::io::Result<()> {
     let loaded = concinnity_cook::prepare_world(source, crate::project::assets_dir().as_deref())
         .map_err(|errs| crate::authoring::report_validation_errors(errs.messages()))?;
 
     if loaded.assets.is_empty() {
-        println!("{json_path} expands to no assets.");
+        println!("{} expands to no assets.", json_path.display());
         return Ok(());
     }
 
@@ -175,7 +175,7 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
         "\n{} asset(s) after expansion ({} injected) in {}",
         rows.len(),
         injected,
-        json_path
+        json_path.display()
     );
     println!("Use `concinnity explain <id>` to print an entry for overriding.");
     Ok(())
@@ -188,17 +188,21 @@ fn list_expanded(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()
 //
 // The render band gates on the published run mode, which `manifest_lines`
 // supplies from the world's content alone.
-fn list_systems(source: WorldSource<'_>, json_path: &str) -> std::io::Result<()> {
+fn list_systems(source: WorldSource<'_>, json_path: &Path) -> std::io::Result<()> {
     let mut world = crate::authoring::build_world_from_str(source)?;
     complete(&mut world)?;
     let lines = manifest_lines(&mut world);
 
     if lines.is_empty() {
-        println!("{json_path} runs no systems.");
+        println!("{} runs no systems.", json_path.display());
         return Ok(());
     }
 
-    println!("{} runs {} system(s), in order:", json_path, lines.len());
+    println!(
+        "{} runs {} system(s), in order:",
+        json_path.display(),
+        lines.len()
+    );
     for line in &lines {
         println!("  {line}");
     }

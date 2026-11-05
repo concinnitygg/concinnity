@@ -3,7 +3,7 @@
 //!
 //! Each bound of a rule is a ramp over its measure, from 0 outside it to 1
 //! inside, eased and multiplied with the others. One planet-fixed edge noise
-//! ([`edge_noise`]) moves every bound the same way along its measure, so a
+//! (`edge_noise`) moves every bound the same way along its measure, so a
 //! boundary wanders along the ground instead of following a contour, and two
 //! rules meeting at one bound with one edge width stay complementary: the
 //! ramp rising there gains what the one falling there loses. The weight and

@@ -191,23 +191,23 @@ pub(crate) fn build_world_and_shadows<'a>(
 /// returning a ready-to-run World. The interpreted `run` (in the CLI crate)
 /// loads its world through here; it is the file-backed counterpart of `prepare`
 /// + `world_from_loaded`.
-pub(crate) fn build_world_from_path(world_path: &str) -> std::io::Result<World> {
+pub(crate) fn build_world_from_path(world_path: &Path) -> std::io::Result<World> {
     let content = std::fs::read_to_string(world_path)?;
-    build_world_from_str(WorldSource::file(&content, Path::new(world_path)))
+    build_world_from_str(WorldSource::file(&content, world_path))
 }
 
 // Compile the world file at `json_path` into the project's state tree, showing
 // the build's status as it runs and printing every validation error before
 // failing. The CLI commands that rebuild a world file go through here.
-pub(crate) fn build_world_file(json_path: &str) -> std::io::Result<()> {
+pub(crate) fn build_world_file(json_path: &Path) -> std::io::Result<()> {
     build_world_file_as(json_path, json_path, Verbosity::Normal)
 }
 
 // `build_world_file` with the world named `shown` in the status, for a build
 // of a staged copy that stands in for it.
 pub(crate) fn build_world_file_as(
-    json_path: &str,
-    shown: &str,
+    json_path: &Path,
+    shown: &Path,
     verbosity: Verbosity,
 ) -> std::io::Result<()> {
     build_world(json_path, shown, verbosity, crate::cook_targets())
@@ -216,22 +216,22 @@ pub(crate) fn build_world_file_as(
 // `build_world_file` for only `targets`, for an export whose player carries
 // fewer backends than this `cn`.
 pub(crate) fn build_world_file_for(
-    json_path: &str,
+    json_path: &Path,
     targets: concinnity_core::platform::PlatformSet,
 ) -> std::io::Result<()> {
     build_world(json_path, json_path, Verbosity::Normal, targets)
 }
 
 fn build_world(
-    json_path: &str,
-    shown: &str,
+    json_path: &Path,
+    shown: &Path,
     verbosity: Verbosity,
     targets: concinnity_core::platform::PlatformSet,
 ) -> std::io::Result<()> {
     let tree = crate::project::require()?;
     let content = std::fs::read_to_string(json_path)?;
-    let status = BuildStatus::start(shown, targets, verbosity);
-    let source = WorldSource::file(&content, Path::new(json_path));
+    let status = BuildStatus::start(&shown.display().to_string(), targets, verbosity);
+    let source = WorldSource::file(&content, json_path);
     let loaded = match concinnity_cook::prepare_world(source, Some(&tree.assets_dir())) {
         Ok(loaded) => loaded,
         Err(errs) => {
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn build_world_from_missing_path_is_not_found() {
-        let err = build_world_from_path("/no/such/concinnity-world-xyz.jsonl")
+        let err = build_world_from_path(Path::new("/no/such/concinnity-world-xyz.jsonl"))
             .expect_err("a missing world path must error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }

@@ -47,7 +47,7 @@ pub struct SeaShoreMotion {
     /// axis wrapped into one [`SURF_LACE_PERIOD`] centered on zero.
     pub lace_origin: [f32; 3],
     /// Where the anchor's direction lies in each noise octave the shore
-    /// reads ([`ShoreWaves::lattice_at`]).
+    /// reads ([`ShoreWaves::lattice_at`](crate::water::sea::shore::ShoreWaves::lattice_at)).
     pub lattice: [LatticePlace; SHORE_OCTAVES],
 }
 

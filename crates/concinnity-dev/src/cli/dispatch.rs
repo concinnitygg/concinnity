@@ -8,6 +8,7 @@ use crate::command;
 use crate::command::export::ExportOptions;
 use concinnity_engine::launch::LaunchArgs;
 use concinnity_host::store::paths::StateTree;
+use std::path::Path;
 
 pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     // A command that launches a world installs its own logging as it starts.
@@ -20,7 +21,7 @@ pub(super) fn dispatch(cli: &Cli, tree: &StateTree) -> std::io::Result<()> {
     };
     match &cli.command {
         Commands::Init => command::init(),
-        Commands::New(args) => command::new(&args.path),
+        Commands::New(args) => command::new(Path::new(&args.path)),
         Commands::Cook(args) => command::cook(
             args.world.file(),
             if args.verbose {

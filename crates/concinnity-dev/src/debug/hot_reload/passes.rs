@@ -10,6 +10,7 @@ use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::world_load::source_maps::ProceduralMeshSourceMap;
 use concinnity_engine::render::{backend, environment::volumetric_fog};
 use concinnity_host::thread::asset_id;
+use std::path::Path;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
 // so a single info! line per asset class keeps the log readable.
@@ -33,7 +34,7 @@ pub(crate) struct FogReloadResult {
 // rides on the `update_fog_settings` trait, which has a default no-op on
 // backends that have not yet implemented runtime fog mutation.
 pub(super) fn reload_volumetric_fog(
-    path: &str,
+    path: &Path,
     last_pushed: &mut Option<volumetric_fog::FogSettings>,
     backend: &mut dyn backend::RenderBackend,
 ) -> FogReloadResult {
@@ -44,21 +45,21 @@ pub(super) fn reload_volumetric_fog(
         Err(e) => {
             tracing::error!(
                 "VolumetricFog hot-reload: failed to read '{}': {} (no update)",
-                path,
+                path.display(),
                 e,
             );
             return result;
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
+        concinnity_cook::WorldSource::file(&content, path),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
                 "VolumetricFog hot-reload: failed to parse '{}': {} (no update)",
-                path,
+                path.display(),
                 e,
             );
             return result;
@@ -128,7 +129,7 @@ pub(crate) struct ProceduralMeshReloadResult {
 // Backend-agnostic: rides on the existing `update_mesh_geometry` /
 // `rebuild_static_geometry` trait surface, implemented on all three backends.
 pub(super) fn reload_procedural_meshes(
-    path: &str,
+    path: &Path,
     procedural_meshes: &mut ProceduralMeshSourceMap,
     backend: &mut dyn backend::LiveEdit,
 ) -> ProceduralMeshReloadResult {
@@ -142,7 +143,7 @@ pub(super) fn reload_procedural_meshes(
         Err(e) => {
             tracing::error!(
                 "ProceduralMesh hot-reload: failed to read '{}': {} (no regen)",
-                path,
+                path.display(),
                 e
             );
             return result;
@@ -152,14 +153,14 @@ pub(super) fn reload_procedural_meshes(
     // init-time captured set; otherwise an unchanged entry shows up as
     // "missing from JSONL" every reload.
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
+        concinnity_cook::WorldSource::file(&content, path),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
                 "ProceduralMesh hot-reload: failed to parse '{}': {} (no regen)",
-                path,
+                path.display(),
                 e
             );
             return result;
@@ -360,7 +361,7 @@ pub(super) fn reload_procedural_meshes(
 // audio file needs a restart (the sprite atlas pool and clip cache are
 // init-time; a swapped-in id that was never pooled falls back with a warn).
 pub(super) fn reload_stories(
-    path: &str,
+    path: &Path,
     snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
 ) -> Vec<Story> {
     // Each expanded Story deserializes its scaffold name-references, so the
@@ -373,21 +374,21 @@ pub(super) fn reload_stories(
         Err(e) => {
             tracing::error!(
                 "story hot-reload: failed to read '{}': {} (no update)",
-                path,
+                path.display(),
                 e
             );
             return Vec::new();
         }
     };
     let entries = match concinnity_cook::build_only::expand_world_from_str(
-        concinnity_cook::WorldSource::file(&content, std::path::Path::new(path)),
+        concinnity_cook::WorldSource::file(&content, path),
         crate::project::assets_dir().as_deref(),
     ) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(
                 "story hot-reload: failed to expand '{}': {} (kept the running story)",
-                path,
+                path.display(),
                 e,
             );
             return Vec::new();

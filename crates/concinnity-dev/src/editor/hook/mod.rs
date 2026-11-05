@@ -78,6 +78,7 @@ use edit::templates_state::TemplatesState;
 use edit::variables_state::VariablesState;
 use edit::worlds_state::WorldsState;
 use form_state::{FormState, FormTarget, FormTemplate};
+use std::path::Path;
 
 // Draw layer for the top bar: far above the floating panels' layers (which are a
 // small 1..=6 rank), so the bar always sits on top even under a dragged panel.
@@ -442,7 +443,7 @@ impl EditorHook {
             .and_then(|path| {
                 session_store::load(&path)
                     .worlds
-                    .get(&session_store::world_key(&world_path))
+                    .get(&session_store::world_key(Path::new(&world_path)))
                     .map(|w| w.bookmarks)
             })
             .unwrap_or_default();

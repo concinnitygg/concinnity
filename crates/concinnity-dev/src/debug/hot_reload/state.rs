@@ -133,7 +133,7 @@ pub(crate) struct AssetHotReloadState {
     // the texture / model / HDRI / LUT dirs) and as the file the
     // `world.jsonl` reload pass re-reads from disk. `None` when init came
     // from a stream / blob and no on-disk path exists to watch.
-    pub world_jsonl_path: Option<String>,
+    pub world_jsonl_path: Option<std::path::PathBuf>,
     // The driver's reload signals, raised by the `notify` watcher and the
     // `reload-assets` debug tool call and taken by [`run_frame`].
     pub signals: Arc<ReloadSignals>,
@@ -226,7 +226,7 @@ impl AssetHotReloadState {
     // sources.
     pub(crate) fn from_sources(
         sources: HotReloadSources,
-        world_jsonl_path: Option<String>,
+        world_jsonl_path: Option<std::path::PathBuf>,
         signals: Arc<ReloadSignals>,
     ) -> Self {
         let watcher = if sources.is_empty() && world_jsonl_path.is_none() {

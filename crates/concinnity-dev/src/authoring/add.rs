@@ -23,6 +23,7 @@ use concinnity_cook::authoring::world::{
     WORLD_JSONL, args_with_id, entry_errors, entry_handle, entry_id, entry_type_name, parse_entry,
     patch_world_jsonl_to, set_entry_id, take_entry_id,
 };
+use std::path::{Path, PathBuf};
 
 /// Add an asset to `world_path` and rebuild. See module docs.
 ///
@@ -36,7 +37,7 @@ use concinnity_cook::authoring::world::{
     reason = "the build or rename error is what the caller needs; removing the temp is best effort"
 )]
 pub(crate) fn add_to_path(
-    world_path: &str,
+    world_path: &Path,
     id: Option<&str>,
     target: &str,
     template: Option<&str>,
@@ -56,64 +57,61 @@ pub(crate) fn add_to_path(
         .map(str::to_string)
         .collect();
 
-    let tmp_path = format!("{world_path}.tmp");
+    let mut tmp_path = world_path.as_os_str().to_owned();
+    tmp_path.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_path);
 
-    patch_world_jsonl_to(
-        std::path::Path::new(world_path),
-        std::path::Path::new(&tmp_path),
-        |assets| {
-            // Re-adding a text file (or any other single-entry TextLabel target)
-            // refreshes the existing same-name TextLabel's `content` in place
-            // instead of erroring. Drag-dropping the same `.txt` twice (or
-            // editing its body and re-adding) should "just work". Other args
-            // (font, x/y, color, scale, centered, ...) are left alone so any
-            // hand edits to the TextLabel survive the refresh.
-            if let Some(refreshed) = try_refresh_text_label(assets, &entries) {
-                tracing::info!("refreshed TextLabel '{}' content", refreshed);
-                return Ok(());
-            }
+    patch_world_jsonl_to(world_path, &tmp_path, |assets| {
+        // Re-adding a text file (or any other single-entry TextLabel target)
+        // refreshes the existing same-name TextLabel's `content` in place
+        // instead of erroring. Drag-dropping the same `.txt` twice (or
+        // editing its body and re-adding) should "just work". Other args
+        // (font, x/y, color, scale, centered, ...) are left alone so any
+        // hand edits to the TextLabel survive the refresh.
+        if let Some(refreshed) = try_refresh_text_label(assets, &entries) {
+            tracing::info!("refreshed TextLabel '{}' content", refreshed);
+            return Ok(());
+        }
 
-            // Likewise for an `.hdr`: a world binds one lighting environment, so a
-            // second EnvironmentMap would never render. Point the existing one at
-            // the new source instead of appending.
-            if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
-                // Printed, not just traced: this edits an asset the user already
-                // authored, so it must not look like a plain append.
-                println!("Pointed existing EnvironmentMap '{retargeted}' at {source}");
-                return Ok(());
-            }
+        // Likewise for an `.hdr`: a world binds one lighting environment, so a
+        // second EnvironmentMap would never render. Point the existing one at
+        // the new source instead of appending.
+        if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
+            // Printed, not just traced: this edits an asset the user already
+            // authored, so it must not look like a plain append.
+            println!("Pointed existing EnvironmentMap '{retargeted}' at {source}");
+            return Ok(());
+        }
 
-            for entry_name in &entry_names {
-                if let Some(existing) = assets
-                    .iter()
-                    .find(|a| entry_id(a) == Some(entry_name.as_str()))
-                {
-                    let existing_type =
-                        existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::AlreadyExists,
-                        format!(
-                            "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
+        for entry_name in &entry_names {
+            if let Some(existing) = assets
+                .iter()
+                .find(|a| entry_id(a) == Some(entry_name.as_str()))
+            {
+                let existing_type = existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    format!(
+                        "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
                          remove it first with `concinnity rm {entry_name}`"
-                        ),
-                    ));
-                }
+                    ),
+                ));
             }
-            // Append template entries first so the new asset's own systems (e.g.
-            // a glTF's Camera3D) run alongside the template's setup. Any template
-            // entry whose id already exists in the world is skipped to avoid
-            // clobbering user-authored assets that happen to share it.
-            for entry in scaffold {
-                let taken =
-                    entry_id(&entry).is_some_and(|n| assets.iter().any(|a| entry_id(a) == Some(n)));
-                if !taken {
-                    assets.push(entry);
-                }
+        }
+        // Append template entries first so the new asset's own systems (e.g.
+        // a glTF's Camera3D) run alongside the template's setup. Any template
+        // entry whose id already exists in the world is skipped to avoid
+        // clobbering user-authored assets that happen to share it.
+        for entry in scaffold {
+            let taken =
+                entry_id(&entry).is_some_and(|n| assets.iter().any(|a| entry_id(a) == Some(n)));
+            if !taken {
+                assets.push(entry);
             }
-            assets.extend(entries);
-            Ok(())
-        },
-    )?;
+        }
+        assets.extend(entries);
+        Ok(())
+    })?;
 
     let built = super::build_world_file_as(&tmp_path, world_path, Verbosity::Normal);
     match built {
@@ -233,20 +231,21 @@ pub(crate) fn try_retarget_environment_map(
 // `--template foo` would mask the typo. `--template` is GLB-only: passing
 // it with a text target is also rejected so the typo doesn't survive.
 fn scaffold_to_inject(
-    world_path: &str,
+    world_path: &Path,
     target: &str,
     template: Option<&str>,
 ) -> std::io::Result<Vec<serde_json::Value>> {
     let template_entries = resolve_template(template)?;
 
-    let world_exists = std::path::Path::new(world_path).exists();
+    let world_exists = world_path.exists();
     let bootstrap = target_bootstrap_kind(target);
 
     if !world_exists && matches!(bootstrap, BootstrapKind::None) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(
-                "no world found at '{world_path}': create one with `concinnity init` or `concinnity new`"
+                "no world found at '{}': create one with `concinnity init` or `concinnity new`",
+                world_path.display()
             ),
         ));
     }
@@ -310,7 +309,7 @@ fn available_templates() -> String {
 // GraphicsSystem without any scaffold. Malformed lines are skipped silently:
 // the regular load path will surface any parse problems with full
 // diagnostics.
-fn has_renderer_trigger(world_path: &str) -> std::io::Result<bool> {
+fn has_renderer_trigger(world_path: &Path) -> std::io::Result<bool> {
     let content = std::fs::read_to_string(world_path)?;
     Ok(jsonl_has_renderer_trigger(&content))
 }
@@ -333,17 +332,17 @@ fn jsonl_has_renderer_trigger(content: &str) -> bool {
 // Make sure `world_path` (and its parent directory) exists so
 // `patch_world_jsonl_to` can read from it. Creates an empty file when missing;
 // no-op when the file already exists.
-fn ensure_world_file_exists(world_path: &str) -> std::io::Result<()> {
-    if std::path::Path::new(world_path).exists() {
+fn ensure_world_file_exists(world_path: &Path) -> std::io::Result<()> {
+    if world_path.exists() {
         return Ok(());
     }
-    if let Some(parent) = std::path::Path::new(world_path).parent()
+    if let Some(parent) = world_path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(world_path, "")?;
-    tracing::info!("created empty world file at {}", world_path);
+    tracing::info!("created empty world file at {}", world_path.display());
     Ok(())
 }
 
@@ -359,7 +358,7 @@ pub(crate) enum BootstrapKind {
 }
 
 pub(crate) fn target_bootstrap_kind(target: &str) -> BootstrapKind {
-    let ext = std::path::Path::new(target)
+    let ext = Path::new(target)
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
@@ -488,7 +487,7 @@ pub(crate) const IMPORT_EXTENSION_GROUPS: &[(&str, &[&str])] = &[
 // add flow above and the editor's Import panel, so both produce identical
 // entries for the same file.
 pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json::Value>> {
-    let path = std::path::Path::new(path_str);
+    let path = Path::new(path_str);
 
     let ext = path
         .extension()
@@ -614,7 +613,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 // (see `concinnity_cook::import::panorama`) and scene geometry otherwise. The choice
 // is logged because the same extension lands two different asset types.
 fn scene_or_panorama_entry(stem: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
-    if concinnity_cook::import::panorama::file_is_panorama_sphere(std::path::Path::new(path_str)) {
+    if concinnity_cook::import::panorama::file_is_panorama_sphere(Path::new(path_str)) {
         tracing::info!(
             "'{}' is a panorama sphere: importing it as an EnvironmentMap (sky \
              and image-based lighting) rather than scene geometry",
@@ -729,10 +728,7 @@ fn md_has_frontmatter(path_str: &str) -> std::io::Result<bool> {
     Ok(first.trim_start_matches('\u{feff}').trim_end() == "---")
 }
 
-fn entry_from_json_file(
-    path: &std::path::Path,
-    stem_name: &str,
-) -> std::io::Result<serde_json::Value> {
+fn entry_from_json_file(path: &Path, stem_name: &str) -> std::io::Result<serde_json::Value> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         std::io::Error::new(
             e.kind(),
@@ -828,7 +824,7 @@ pub(crate) fn resolve_add_target(target: &str) -> std::io::Result<Vec<serde_json
         return entry_from_type_name(target).map(|e| vec![e]);
     }
 
-    let as_path = std::path::Path::new(target);
+    let as_path = Path::new(target);
     if as_path.exists() && as_path.is_file() {
         let name = as_path
             .file_name()
@@ -930,7 +926,7 @@ mod tests {
 
     #[test]
     fn font_name_uses_stem_only() {
-        let path = std::path::Path::new("fonts/JetBrainsMono-Regular.ttf");
+        let path = Path::new("fonts/JetBrainsMono-Regular.ttf");
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -1074,7 +1070,7 @@ mod tests {
         )
         .unwrap();
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1084,7 +1080,7 @@ mod tests {
         let world = dir.join("world.jsonl");
         std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1096,7 +1092,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "scene.glb", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1105,7 +1101,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "Logger", None)
+        let err = scaffold_to_inject(&world, "Logger", None)
             .expect_err("missing world + non-scene target must error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
@@ -1118,7 +1114,7 @@ mod tests {
 
         // Non-scene target shouldn't trigger scaffolding even when the world
         // has no renderer: we don't try to guess intent for shaders/fonts.
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "Logger", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "Logger", None).unwrap();
         assert!(scaffold.is_empty());
     }
 
@@ -1130,7 +1126,7 @@ mod tests {
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some(name))
+        let scaffold = scaffold_to_inject(&world, "scene.glb", Some(name))
             .expect("a named template should apply for a renderer-less glb add");
         let expected = concinnity_cook::authoring::template::by_name(name)
             .unwrap()
@@ -1173,7 +1169,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
+        let err = scaffold_to_inject(&world, "scene.glb", Some("nope"))
             .expect_err("unknown template name must surface as InvalidInput");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(
@@ -1192,7 +1188,7 @@ mod tests {
         // Existing world with a renderer trigger: scaffolding wouldn't fire.
         std::fs::write(&world, r#"["Window",{"$id":"gfx"}]"#).unwrap();
 
-        let err = scaffold_to_inject(world.to_str().unwrap(), "scene.glb", Some("nope"))
+        let err = scaffold_to_inject(&world, "scene.glb", Some("nope"))
             .expect_err("unknown template should fail fast regardless of scaffold path");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1434,7 +1430,7 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("world.jsonl");
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "notes.txt", None).unwrap();
         assert!(scaffold.is_empty(), "text target should emit no scaffold");
     }
 
@@ -1444,7 +1440,7 @@ mod tests {
         let world = dir.join("world.jsonl");
         std::fs::write(&world, r#"["Texture",{"$id":"tex"}]"#).unwrap();
 
-        let scaffold = scaffold_to_inject(world.to_str().unwrap(), "notes.md", None).unwrap();
+        let scaffold = scaffold_to_inject(&world, "notes.md", None).unwrap();
         assert!(
             scaffold.is_empty(),
             "text target never injects GLB scaffold"
@@ -1556,7 +1552,7 @@ mod tests {
         let world = dir.join("world.jsonl");
 
         let name = concinnity_cook::authoring::template::TEMPLATES[0].name;
-        let err = scaffold_to_inject(world.to_str().unwrap(), "notes.txt", Some(name))
+        let err = scaffold_to_inject(&world, "notes.txt", Some(name))
             .expect_err("--template should only apply to scene targets");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
@@ -1821,13 +1817,13 @@ mod tests {
         let dir = concinnity_testing::TempTree::new();
         let world = dir.join("nested").join("deeper").join("world.jsonl");
 
-        ensure_world_file_exists(world.to_str().unwrap()).unwrap();
+        ensure_world_file_exists(&world).unwrap();
         assert!(world.exists());
         assert_eq!(std::fs::read_to_string(&world).unwrap(), "");
 
         // A second call leaves the existing file alone.
         std::fs::write(&world, "content").unwrap();
-        ensure_world_file_exists(world.to_str().unwrap()).unwrap();
+        ensure_world_file_exists(&world).unwrap();
         assert_eq!(std::fs::read_to_string(&world).unwrap(), "content");
     }
 

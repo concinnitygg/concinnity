@@ -263,15 +263,13 @@ fn state_with_only_skinned_still_spawns_a_watcher() {
 fn state_with_only_world_jsonl_still_spawns_a_watcher() {
     // World-only worlds (no Texture/LUT/EnvMap/Mesh/Skinned) still want
     // their world.jsonl watched so Prop transform edits propagate.
-    let world_path = concinnity_host::scratch::path("world_only.jsonl")
-        .to_string_lossy()
-        .into_owned();
+    let world_path = concinnity_host::scratch::path("world_only.jsonl");
     let state = AssetHotReloadState::from_sources(
         HotReloadSources::default(),
         Some(world_path.clone()),
         Arc::default(),
     );
-    assert_eq!(state.world_jsonl_path.as_deref(), Some(world_path.as_str()));
+    assert_eq!(state.world_jsonl_path, Some(world_path));
 }
 
 #[test]
@@ -309,14 +307,14 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
     .unwrap();
 
     let mut snapshots = std::collections::HashMap::new();
-    let stories = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let stories = reload_stories(&world, &mut snapshots);
     assert_eq!(stories.len(), 1);
     assert_eq!(stories[0].title, "Tale");
     assert_eq!(stories[0].nodes[0].pages[0].text, "Hello there.");
     assert!(stories[0].scaffold.screen.is_some());
 
     // Unchanged source: the snapshot filters it out.
-    let unchanged = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let unchanged = reload_stories(&world, &mut snapshots);
     assert!(unchanged.is_empty());
 
     // Edited dialogue comes back exactly once.
@@ -325,13 +323,13 @@ fn reload_stories_re_expands_and_dedupes_by_snapshot() {
         "---\ntitle: Tale\ncharacters:\n  a: Ana\n---\n\n# start\n\nHello again.\n",
     )
     .unwrap();
-    let edited = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let edited = reload_stories(&world, &mut snapshots);
     assert_eq!(edited.len(), 1);
     assert_eq!(edited[0].nodes[0].pages[0].text, "Hello again.");
 
     // A broken edit keeps the running story (and the snapshot state).
     std::fs::write(&md, "---\ntitle: Broken\n").unwrap();
-    let broken = reload_stories(world.to_str().unwrap(), &mut snapshots);
+    let broken = reload_stories(&world, &mut snapshots);
     assert!(broken.is_empty());
 }
 
@@ -511,9 +509,7 @@ fn state_with_only_procedural_meshes_still_spawns_a_watcher() {
     // need to keep the watcher alive: their trigger is the world.jsonl reload
     // signal the watcher raises. Without a world_jsonl_path
     // there is nothing to subscribe to, so we declare one here.
-    let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl")
-        .to_string_lossy()
-        .into_owned();
+    let world_path = concinnity_host::scratch::path("asset_hot_reload_proc_only_world.jsonl");
     let mut proc = ProceduralMeshSourceMap::new();
     proc.entries.push(ProceduralMeshSourceEntry {
         name: "box_mesh".to_string(),
@@ -1676,10 +1672,10 @@ fn poll_pending_assets_survives_a_skinned_in_place_rejection() {
 
 // reload_volumetric_fog
 
-fn write_world_line(dir: &std::path::Path, line: &str) -> String {
+fn write_world_line(dir: &std::path::Path, line: &str) -> PathBuf {
     let path = dir.join("world.jsonl");
     std::fs::write(&path, format!("{line}\n")).unwrap();
-    path.to_string_lossy().into_owned()
+    path
 }
 
 #[test]
@@ -1688,7 +1684,7 @@ fn reload_volumetric_fog_missing_file_is_a_no_op() {
     let path = dir.path().join("gone.jsonl");
     let mut last = None;
     let mut backend = RecordingBackend::default();
-    let r = reload_volumetric_fog(path.to_str().unwrap(), &mut last, &mut backend);
+    let r = reload_volumetric_fog(&path, &mut last, &mut backend);
     assert!(!r.updated);
     assert!(last.is_none());
     assert_eq!(backend.fog_updates, 0);
@@ -1808,7 +1804,11 @@ fn box_world_line(name: &str, half: f32) -> String {
 fn reload_procedural_meshes_with_an_empty_map_short_circuits() {
     let mut map = ProceduralMeshSourceMap::new();
     let mut backend = RecordingBackend::default();
-    let r = reload_procedural_meshes("does_not_matter.jsonl", &mut map, &mut backend);
+    let r = reload_procedural_meshes(
+        std::path::Path::new("does_not_matter.jsonl"),
+        &mut map,
+        &mut backend,
+    );
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
 }
 
@@ -1817,11 +1817,7 @@ fn reload_procedural_meshes_missing_file_regenerates_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut map = one_proc_mesh_map("box_mesh", normalized_box_args(0.5));
     let mut backend = RecordingBackend::default();
-    let r = reload_procedural_meshes(
-        dir.path().join("gone.jsonl").to_str().unwrap(),
-        &mut map,
-        &mut backend,
-    );
+    let r = reload_procedural_meshes(&dir.path().join("gone.jsonl"), &mut map, &mut backend);
     assert_eq!((r.regenerated, r.unchanged, r.failed), (0, 0, 0));
     assert!(backend.mesh_updates.is_empty());
 }
@@ -1929,10 +1925,7 @@ fn reload_procedural_meshes_failed_rebuild_keeps_captured_args() {
 fn reload_stories_missing_world_file_returns_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let mut snapshots = std::collections::HashMap::new();
-    let stories = reload_stories(
-        dir.path().join("gone.jsonl").to_str().unwrap(),
-        &mut snapshots,
-    );
+    let stories = reload_stories(&dir.path().join("gone.jsonl"), &mut snapshots);
     assert!(stories.is_empty());
     assert!(snapshots.is_empty());
 }
@@ -2089,7 +2082,7 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
         "not json at all",
     ];
     std::fs::write(&world, lines.join("\n")).unwrap();
-    let dirs = story_source_dirs(world.to_str().unwrap());
+    let dirs = story_source_dirs(&world);
     assert_eq!(dirs.len(), 2);
     assert!(dirs.contains(&PathBuf::from(".")));
     assert!(dirs.contains(&PathBuf::from("stories")));
@@ -2098,7 +2091,7 @@ fn story_source_dirs_collects_unique_parents_from_story_imports() {
 #[test]
 fn story_source_dirs_of_a_missing_world_is_empty() {
     let dir = tempfile::tempdir().unwrap();
-    let dirs = story_source_dirs(dir.path().join("gone.jsonl").to_str().unwrap());
+    let dirs = story_source_dirs(&dir.path().join("gone.jsonl"));
     assert!(dirs.is_empty());
 }
 
@@ -2266,11 +2259,8 @@ fn run_frame_reloads_stories_when_the_story_flag_is_set() {
         ),
     )
     .unwrap();
-    let mut state = AssetHotReloadState::from_sources(
-        HotReloadSources::default(),
-        Some(world.to_string_lossy().into_owned()),
-        Arc::default(),
-    );
+    let mut state =
+        AssetHotReloadState::from_sources(HotReloadSources::default(), Some(world), Arc::default());
     state.signals.request_stories();
     let (effects, _backend, _last_fog) = drive_run_frame(&mut state);
     assert_eq!(effects.story_updates.len(), 1);
@@ -2325,19 +2315,15 @@ fn driver_rearm_keeps_its_signals() {
     assert!(Arc::ptr_eq(&first, &driver.state.as_ref().unwrap().signals));
 }
 
-fn armed_world_path(driver: &HotReloadDriver) -> Option<String> {
+fn armed_world_path(driver: &HotReloadDriver) -> Option<PathBuf> {
     driver.state.as_ref()?.world_jsonl_path.clone()
 }
 
 #[test]
 fn driver_arms_with_the_handle_path() {
     let dir = tempfile::tempdir().unwrap();
-    let world = dir
-        .path()
-        .join("world.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let mut driver = HotReloadDriver::new().with_world_path(WorldPathHandle::new(world.as_str()));
+    let world = dir.path().join("world.jsonl");
+    let mut driver = HotReloadDriver::new().with_world_path(WorldPathHandle::new(world.clone()));
     driver.arm(HotReloadSources::default());
     assert_eq!(armed_world_path(&driver), Some(world));
 }
@@ -2345,21 +2331,13 @@ fn driver_arms_with_the_handle_path() {
 #[test]
 fn driver_rearm_follows_a_set_on_a_cloned_handle() {
     let dir = tempfile::tempdir().unwrap();
-    let first = dir
-        .path()
-        .join("first.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let second = dir
-        .path()
-        .join("second.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    let handle = WorldPathHandle::new(first.as_str());
+    let first = dir.path().join("first.jsonl");
+    let second = dir.path().join("second.jsonl");
+    let handle = WorldPathHandle::new(first.clone());
     let mut driver = HotReloadDriver::new().with_world_path(handle.clone());
     driver.arm(HotReloadSources::default());
     assert_eq!(armed_world_path(&driver), Some(first));
-    handle.set(second.as_str());
+    handle.set(second.clone());
     driver.arm(HotReloadSources::default());
     assert_eq!(armed_world_path(&driver), Some(second));
 }

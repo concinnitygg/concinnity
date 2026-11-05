@@ -15,7 +15,7 @@
 //! the canopy for those wholly nearer and for a planet's ground growing no
 //! grass, and on a planet each of those with and without the planet's own sky.
 //! The draw cull picks each draw's variant (see
-//! [`GpuCullVariants`](crate::gfx::render_types::GpuCullVariants)).
+//! [`GpuCullVariants`]).
 
 use alloc::string::ToString;
 use alloc::vec::Vec;

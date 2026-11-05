@@ -10,6 +10,7 @@ use concinnity_runtime::Runtime;
 use crate::command::{Verbosity, discover_world_path, resolve_world_path};
 use crate::debug::hot_reload::WorldPathHandle;
 use crate::frame_hook::FrameHook;
+use std::path::Path;
 
 // Where a run's world comes from.
 #[derive(Debug, PartialEq, Eq)]
@@ -102,7 +103,7 @@ fn play_cooked(launch: LaunchRequest, tree: &StateTree) -> std::io::Result<()> {
 // when there is one. `None` for a launch that names no port.
 fn debug_hook(
     port: Option<u16>,
-    world_path: Option<&str>,
+    world_path: Option<&Path>,
 ) -> std::io::Result<Option<Box<dyn FrameHook>>> {
     let Some(port) = port else {
         return Ok(None);
@@ -122,12 +123,12 @@ fn debug_hook(
 // or writing any binary blob files.
 pub(crate) fn run_interpreted(
     launch: LaunchRequest,
-    json_path: &str,
+    json_path: &Path,
     hook: Option<Box<dyn FrameHook>>,
 ) -> std::io::Result<()> {
     let mut runtime = crate::project::runtime().with_launch(launch);
     *runtime.world_mut() = crate::authoring::build_world_from_path(json_path).map_err(|e| {
-        tracing::error!("Could not build world from {json_path}: {e}");
+        tracing::error!("Could not build world from {}: {e}", json_path.display());
         e
     })?;
 
@@ -226,6 +227,10 @@ mod tests {
 
     #[test]
     fn no_port_starts_no_debug_server() {
-        assert!(debug_hook(None, Some("w.jsonl")).unwrap().is_none());
+        assert!(
+            debug_hook(None, Some(Path::new("w.jsonl")))
+                .unwrap()
+                .is_none()
+        );
     }
 }

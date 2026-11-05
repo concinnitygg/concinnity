@@ -31,9 +31,9 @@ pub(crate) fn default_path() -> Option<PathBuf> {
 
 // The store key for a world file: its stem, so `world.jsonl` and a sibling
 // `arena.jsonl` don't share bookmarks.
-pub(crate) fn world_key(world_path: &str) -> String {
-    Path::new(world_path).file_stem().map_or_else(
-        || world_path.to_string(),
+pub(crate) fn world_key(world_path: &Path) -> String {
+    world_path.file_stem().map_or_else(
+        || world_path.to_string_lossy().into_owned(),
         |s| s.to_string_lossy().into_owned(),
     )
 }
@@ -112,7 +112,7 @@ mod tests {
 
     #[test]
     fn world_key_uses_the_stem() {
-        assert_eq!(world_key("some/dir/world.jsonl"), "world");
-        assert_eq!(world_key("arena.jsonl"), "arena");
+        assert_eq!(world_key(Path::new("some/dir/world.jsonl")), "world");
+        assert_eq!(world_key(Path::new("arena.jsonl")), "arena");
     }
 }

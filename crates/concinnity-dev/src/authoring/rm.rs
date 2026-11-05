@@ -13,11 +13,11 @@ use concinnity_cook::build_only::include::with_includes;
 /// Errors if `name` is not present. When it isn't, the error message includes
 /// the known handles from the world so the caller can suggest a fix. An entry
 /// that an `Include` brings in is refused: its line is in the included file.
-pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
+pub(crate) fn rm_at_path(world_path: &Path, name: &str) -> std::io::Result<()> {
     let mut removed = false;
 
-    patch_world_jsonl_to(Path::new(world_path), Path::new(world_path), |assets| {
-        let found = line_index(assets, Path::new(world_path), name)
+    patch_world_jsonl_to(world_path, world_path, |assets| {
+        let found = line_index(assets, world_path, name)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         if let Some(i) = found {
             let asset = assets.remove(i);
@@ -32,7 +32,7 @@ pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
     })?;
 
     if !removed {
-        let known = known_names(Path::new(world_path)).unwrap_or_default();
+        let known = known_names(world_path).unwrap_or_default();
         if known.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -91,7 +91,7 @@ mod tests {
     fn rm_of_a_missing_world_file_errors() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.jsonl");
-        assert!(rm_at_path(path.to_str().unwrap(), "anything").is_err());
+        assert!(rm_at_path(&path, "anything").is_err());
     }
 
     #[test]
@@ -107,7 +107,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = rm_at_path(path.to_str().unwrap(), "ghost").unwrap_err();
+        let err = rm_at_path(&path, "ghost").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         let msg = err.to_string();
         assert!(msg.contains("no asset named 'ghost'"), "got: {msg}");
@@ -124,7 +124,7 @@ mod tests {
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "").unwrap();
 
-        let err = rm_at_path(path.to_str().unwrap(), "ghost").unwrap_err();
+        let err = rm_at_path(&path, "ghost").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("no assets declared"), "got: {err}");
     }

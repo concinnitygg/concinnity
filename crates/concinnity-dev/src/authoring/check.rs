@@ -4,13 +4,15 @@
 //! the semantic checks in `crate::check`) and reports the outcome. Used by
 //! `cn check`.
 
+use std::path::Path;
+
 /// Read `world_path`, run validation, and report results. Returns Ok if every
 /// asset passes; otherwise an error whose Display contains a human-readable
 /// summary of every failure (one per asset).
-pub(crate) fn check_at_path(world_path: &str) -> std::io::Result<()> {
+pub(crate) fn check_at_path(world_path: &Path) -> std::io::Result<()> {
     let content = std::fs::read_to_string(world_path)?;
-    let source = concinnity_cook::WorldSource::file(&content, std::path::Path::new(world_path));
-    check_source(source, world_path)
+    let source = concinnity_cook::WorldSource::file(&content, world_path);
+    check_source(source, &world_path.display().to_string())
 }
 
 /// Run validation against world text. `label` is the origin used in messages
@@ -73,7 +75,7 @@ mod tests {
     fn check_at_path_reports_a_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing.jsonl");
-        assert!(check_at_path(path.to_str().unwrap()).is_err());
+        assert!(check_at_path(&path).is_err());
     }
 
     #[test]
@@ -81,6 +83,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"PhysicsConfig\",{\"$id\":\"phys\"}]\n").unwrap();
-        check_at_path(path.to_str().unwrap()).unwrap();
+        check_at_path(&path).unwrap();
     }
 }

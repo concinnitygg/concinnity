@@ -129,7 +129,7 @@ impl EditorHook {
             .start_preview
             .as_deref()
             .or(self.worlds.preview.as_deref())?;
-        Some(session_store::world_key(path))
+        Some(session_store::world_key(Path::new(path)))
     }
 
     // Compile the world at `path` into the background. The rebuild request is a
