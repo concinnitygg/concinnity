@@ -82,7 +82,6 @@ impl Default for CharacterModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_core::math::SaturatingFrom;
 
     #[test]
     fn a_blank_model_names_the_builtin_schema_and_no_source() {
@@ -94,24 +93,10 @@ mod tests {
         assert!(m.capsule.is_none());
     }
 
-    // The resolver seam is process-global and install-once, so the stand-in goes
-    // in behind a `Once`: a name resolves to its own byte length, which is what
-    // lets a named reference deserialize to a predictable handle.
-    fn install_len_resolvers() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            concinnity_engine::ecs::set_handle_resolver(
-                concinnity_engine::ecs::HandleKind::Material,
-                |_, n| Some(u32::saturating_from(n.len())),
-            );
-        });
-    }
-
     #[test]
     fn a_model_round_trips_through_postcard() {
-        install_len_resolvers();
         let m: CharacterModel = serde_json::from_str(
-            r#"{"schema":"humanoid","material":"skin","source":"hero.glb","skin_index":1,
+            r#"{"schema":"humanoid","material":4,"source":"hero.glb","skin_index":1,
                 "position":[0,0.1,0],"lod_levels":3,"lod_distances":[6,12],"max_instances":2,
                 "capsule":{"half_height":0.9,"radius":0.3}}"#,
         )

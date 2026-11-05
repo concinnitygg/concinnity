@@ -118,10 +118,6 @@ handle_spaces! {
 }
 
 impl HandleKind {
-    pub(crate) const fn index(self) -> usize {
-        self as usize
-    }
-
     /// The resource kind whose table this space indexes, or `None` for a space
     /// a component owns (shaders).
     pub fn resource_kind(self) -> Option<crate::blob::ResourceKind> {
@@ -312,13 +308,10 @@ mod tests {
 
     #[test]
     fn a_name_resolves_through_its_own_space() {
-        install_resolvers();
         fn only_shaders(kind: HandleKind, name: &str) -> Option<u32> {
             (kind == HandleKind::Shader).then_some(u32::saturating_from(name.len()) + 100)
         }
-        for kind in HandleKind::ALL {
-            crate::ecs::resolver::set_handle_resolver(*kind, only_shaders);
-        }
+        crate::test_support::install_handle_resolver(only_shaders);
         let shader: ShaderHandle = serde_json::from_str("\"water\"").unwrap();
         assert_eq!(shader, ShaderHandle::new(105));
         // The texture space declares no "water", so the interner answers.
@@ -423,9 +416,6 @@ mod tests {
             );
         }
         assert_eq!(HandleKind::ALL.len(), HandleKind::COUNT);
-        for (i, kind) in HandleKind::ALL.iter().enumerate() {
-            assert_eq!(kind.index(), i);
-        }
     }
 
     #[test]

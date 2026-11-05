@@ -43,10 +43,46 @@ fn resolve(name: &str) -> u32 {
     })
 }
 
+// The stand-in resolvers this thread's tests read names and handles through.
+// The seam holds one resolver for the process, installed once; it answers by
+// whatever the calling thread chose, so parallel tests keep their own.
+std::thread_local! {
+    static NAME_POLICY: core::cell::Cell<fn(&str) -> u32> = const { core::cell::Cell::new(resolve) };
+    static HANDLE_POLICY: core::cell::Cell<HandlePolicy> =
+        const { core::cell::Cell::new(len_handle_resolver) };
+}
+
+type HandlePolicy = fn(crate::ecs::handle::HandleKind, &str) -> Option<u32>;
+
+struct ThreadResolver;
+
+impl crate::ecs::resolver::NameResolver for ThreadResolver {
+    fn resolve(&self, name: &str) -> u32 {
+        NAME_POLICY.with(core::cell::Cell::get)(name)
+    }
+}
+
+impl crate::ecs::resolver::HandleResolver for ThreadResolver {
+    fn resolve(&self, kind: crate::ecs::handle::HandleKind, name: &str) -> Option<u32> {
+        HANDLE_POLICY.with(core::cell::Cell::get)(kind, name)
+    }
+}
+
+// Put the stand-in behind the seam, answering names by `names` and handles by
+// `handles` on this thread.
+fn install_policies(names: fn(&str) -> u32, handles: HandlePolicy) {
+    static RESOLVER: ThreadResolver = ThreadResolver;
+    crate::ecs::resolver::install_name_resolver(&RESOLVER);
+    crate::ecs::resolver::install_handle_resolver(&RESOLVER);
+    NAME_POLICY.with(|p| p.set(names));
+    HANDLE_POLICY.with(|p| p.set(handles));
+}
+
 // Install this thread's interner behind the resolver seam, keeping what it
-// already holds.
+// already holds. No handle space declares anything, so a handle reference
+// falls back to the interned id.
 pub(crate) fn install_interner() {
-    crate::ecs::resolver::set_name_resolver(resolve);
+    install_policies(resolve, |_, _| None);
 }
 
 // The id `name` interns to on this thread, with the interner installed.
@@ -55,10 +91,10 @@ pub(crate) fn intern(name: &str) -> crate::ecs::asset_id::AssetId {
     crate::ecs::asset_id::AssetId(resolve(name))
 }
 
-// Empty this thread's interner and install it behind the resolver seam. Call first in any test that interns or deserializes a named
-// reference.
+// Empty this thread's interner and install it behind the resolver seam. Call
+// first in any test that interns or deserializes a named reference.
 pub(crate) fn reset_interner() {
-    crate::ecs::resolver::set_name_resolver(resolve);
+    install_interner();
     NAMES.with(|names| names.borrow_mut().clear());
 }
 
@@ -157,10 +193,12 @@ pub(crate) fn len_name_resolver(name: &str) -> u32 {
 
 // Installs every seam with the stand-ins above.
 pub(crate) fn install_resolvers() {
-    crate::ecs::resolver::set_name_resolver(len_name_resolver);
-    for kind in crate::ecs::handle::HandleKind::ALL {
-        crate::ecs::resolver::set_handle_resolver(*kind, len_handle_resolver);
-    }
+    install_policies(len_name_resolver, len_handle_resolver);
+}
+
+// Answer this thread's handle lookups by `handles`, names by their length.
+pub(crate) fn install_handle_resolver(handles: HandlePolicy) {
+    install_policies(len_name_resolver, handles);
 }
 
 /// Deserialize `json` with the test resolvers installed.

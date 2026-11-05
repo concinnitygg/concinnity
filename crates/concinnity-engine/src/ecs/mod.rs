@@ -181,7 +181,7 @@ pub use handle::{
     Handle, HandleKind, HandleSpace, MaterialHandle, MeshHandle, ShaderHandle, SingleTypeSpace,
     SkinnedMeshHandle, TextureHandle,
 };
-pub use resolver::set_handle_resolver;
+pub use resolver::{HandleResolver, NameResolver, install_handle_resolver, install_name_resolver};
 
 // The blob record schema (the component defs stream + the resource stream) is
 // owned by the `blob` format module; re-exported here so the runtime, cook, and

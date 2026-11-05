@@ -10,13 +10,12 @@
 //! per-type compile dispatch.
 
 use concinnity_engine::components::{Material, SkeletonJoint, SkinnedMesh};
-use concinnity_engine::ecs::{HandleKind, set_handle_resolver};
+use concinnity_engine::ecs::{HandleKind, HandleResolver};
 use concinnity_engine::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::path::Path;
-use std::sync::Once;
 
 use crate::authoring::registry::RegisteredType;
 
@@ -288,25 +287,24 @@ thread_local! {
     static RESOURCE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());
 }
 
-// Install a resource-handle resolver for every handle space, so a reference
-// name deserializes to its dense handle value. The resolver is a plain `fn`
-// (the map is a thread-local static): it resolves a name to its `AssetId`
-// through the shared build interner, then looks up that resource's handle in
-// the requested space. An unknown name yields `None`, letting the deserializer
-// fall back or fail as its context requires. Idempotent and cheap after the
-// first call.
-pub(crate) fn ensure_resource_handle_resolvers() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        for kind in HandleKind::ALL {
-            set_handle_resolver(*kind, resolve_resource_handle);
-        }
-    });
+// The seam's view of the calling thread's handle map: a name resolves to its
+// `AssetId` through the shared build interner, then to that resource's handle
+// in the requested space. An unknown name yields `None`, letting the
+// deserializer fall back or fail as its context requires.
+struct ThreadHandles;
+
+impl HandleResolver for ThreadHandles {
+    fn resolve(&self, kind: HandleKind, name: &str) -> Option<u32> {
+        let id = asset_id::intern(name);
+        RESOURCE_HANDLES.with(|h| h.borrow().handle(kind, id))
+    }
 }
 
-fn resolve_resource_handle(kind: HandleKind, name: &str) -> Option<u32> {
-    let id = asset_id::intern(name);
-    RESOURCE_HANDLES.with(|h| h.borrow().handle(kind, id))
+// Install the resource-handle resolver, so a reference name deserializes to
+// its dense handle value. Idempotent and cheap after the first call.
+pub(crate) fn ensure_resource_handle_resolvers() {
+    static RESOLVER: ThreadHandles = ThreadHandles;
+    concinnity_engine::ecs::install_handle_resolver(&RESOLVER);
 }
 
 // Install this build's handle map so resource references resolve to handles

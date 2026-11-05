@@ -2,14 +2,14 @@
 //! interned to an `AssetId` in declaration order; the blob and the runtime carry
 //! only the integer, so every cross-reference lookup is an integer compare.
 //!
-//! This module owns the interner and installs it into the runtime crate's
-//! resolver seam (`concinnity_engine::ecs::resolver::set_name_resolver`) so a name-string
+//! This module owns the interner and installs it into the engine's resolver
+//! seam (`concinnity_engine::ecs::install_name_resolver`) so a name-string
 //! reference deserializes to a dense id during a build. At runtime references
 //! are already integers, so the seam is never consulted.
 
 use std::cell::RefCell;
-use std::sync::Once;
 
+use concinnity_engine::ecs::NameResolver;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::name_interner::NameInterner;
@@ -18,18 +18,21 @@ thread_local! {
     static INTERNER: RefCell<NameInterner> = RefCell::new(NameInterner::default());
 }
 
-/// Install the resolver seam so a name-string reference
-/// deserializes through this interner. The closure is non-capturing (the
-/// interner is a thread-local static), so it coerces to the plain `fn` pointer
-/// the seam holds; per-thread interner state stays isolated. Idempotent and cheap
-/// after the first call.
+// The seam's view of the calling thread's interner, so per-thread interner
+// state stays isolated.
+struct ThreadInterner;
+
+impl NameResolver for ThreadInterner {
+    fn resolve(&self, name: &str) -> u32 {
+        INTERNER.with(|i| i.borrow_mut().intern(name))
+    }
+}
+
+/// Install the resolver seam so a name-string reference deserializes through
+/// this interner. Idempotent and cheap after the first call.
 pub fn ensure_name_resolver() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        concinnity_engine::ecs::resolver::set_name_resolver(|name| {
-            INTERNER.with(|i| i.borrow_mut().intern(name))
-        });
-    });
+    static RESOLVER: ThreadInterner = ThreadInterner;
+    concinnity_engine::ecs::install_name_resolver(&RESOLVER);
 }
 
 /// Intern a name into the current thread's interner, returning its id. If the
