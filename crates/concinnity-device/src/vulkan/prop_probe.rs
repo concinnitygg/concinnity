@@ -18,6 +18,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
 use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::prop_schedule::PropProbeSchedule;
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::uniforms::FaceCamera;
 
@@ -45,11 +46,9 @@ const FACE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::vulkan) struct PropProbe {
-    // Where this frame captures.
-    frame: Option<PropProbeFrame>,
+    // Where this frame captures, and whether building the capture failed.
+    pub(in crate::vulkan) schedule: PropProbeSchedule,
     gpu: Option<PropProbeGpu>,
-    // Set once building the capture failed, which is not retried.
-    failed: bool,
 }
 
 // What the capture is built against; a change rebuilds it.
@@ -164,14 +163,13 @@ impl VkContext {
     // Whether this backend can capture the world's prop probe: the bindless
     // cull and packing it draws through, the convolution kernels, and a cube
     // for it.
-    fn prop_probe_supported(&self) -> bool {
+    pub(in crate::vulkan) fn prop_probe_supported(&self) -> bool {
         self.cull.cull_kernels.is_some()
             && self.cull.compact.is_some()
             && self.cull.bindless_pipeline_layout.is_some()
             && self.probe.prefilter.is_some()
             && self.probe.gpu.cubes.is_some()
-            && self.probe.book.prop_cube().is_some()
-            && !self.probe.prop.failed
+            && self.probe.prop.schedule.available(&self.probe.book)
     }
 
     // This frame's prop probe, ahead of the probe records and the graph: where
@@ -183,22 +181,16 @@ impl VkContext {
         frame: Option<PropProbeFrame>,
         enabled: bool,
     ) {
-        let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
-            self.probe.prop.frame = None;
-            self.probe.book.set_prop_probe(None);
+        let ready = enabled && self.prop_probe_supported();
+        let schedule = &mut self.probe.prop.schedule;
+        let Some(frame) = schedule.admit(&mut self.probe.book, frame, ready) else {
             return;
         };
-        if let Err(e) = self.ensure_prop_capture(frame.resolution) {
-            tracing::error!("reflection probes: the prop probe could not be built: {e}");
-            self.probe.prop = PropProbe {
-                failed: true,
-                ..PropProbe::default()
-            };
-            self.probe.book.set_prop_probe(None);
-            return;
+        let built = self.ensure_prop_capture(frame.resolution);
+        let schedule = &mut self.probe.prop.schedule;
+        if !schedule.settle(&mut self.probe.book, frame, built) {
+            self.probe.prop.gpu = None;
         }
-        self.probe.prop.frame = Some(frame);
-        self.probe.book.set_prop_probe(Some(&frame));
     }
 
     // What a capture of `resolution`-texel faces is built against this frame.
@@ -230,7 +222,6 @@ impl VkContext {
             return Ok(());
         }
         self.probe.prop.gpu = None;
-        self.probe.prop.frame = None;
         self.probe.prop.gpu = Some(PropProbeGpu::new(self, key)?);
         Ok(())
     }
@@ -244,7 +235,10 @@ impl VkContext {
         rec: &Recorder<'_>,
         params: &GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some(frame), Some(gpu)) = (self.probe.prop.frame, self.probe.prop.gpu.as_ref()) else {
+        let (Some(frame), Some(gpu)) = (
+            self.probe.prop.schedule.frame(),
+            self.probe.prop.gpu.as_ref(),
+        ) else {
             return Ok(());
         };
         let Some(&bindless_set) = self.cull.bindless_sets.get(params.frame_idx) else {

@@ -1,13 +1,12 @@
 //! The stages `MtlContext::draw_frame` runs in order around its render-graph
 //! dispatch.
 
-use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::LineVertex;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
-use concinnity_engine::render::backend::error;
+use concinnity_engine::render::backend::{FrameParams, error};
 use concinnity_engine::render::frame::plan::{
-    CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
+    EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
 use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use concinnity_engine::render::temporal::model_history::HistoryMode;
@@ -26,18 +25,6 @@ pub(super) struct AcquiredFrame {
     pub(super) drawable: Retained<ProtocolObject<dyn CAMetalDrawable>>,
     pub(super) frame_id: u64,
     pub(super) ring_slot: usize,
-}
-
-// The per-frame inputs `plan_frame` plans from.
-#[derive(Clone, Copy)]
-pub(super) struct PlanArgs<'a> {
-    pub(super) camera: CameraInputs,
-    pub(super) elapsed: f32,
-    pub(super) render_size: [u32; 2],
-    pub(super) lines: &'a [LineVertex],
-    pub(super) world_hidden: bool,
-    // The world's prop probe rides this frame.
-    pub(super) prop_probe: bool,
 }
 
 // The recorded frame's presenting command buffer and its completion join.
@@ -282,14 +269,9 @@ impl MtlContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    pub(super) fn frame_content(
-        &self,
-        world_hidden: bool,
-        lines: &[LineVertex],
-        prop_probe: bool,
-    ) -> FrameContent {
+    pub(super) fn frame_content(&self, params: &FrameParams<'_>) -> FrameContent {
         FrameContent {
-            world_hidden,
+            world_hidden: params.world_hidden,
             cull_records: self.cull_count(),
             shadowed_spot_count: self.spot_shadow.count,
             bloom_intensity: self.post_process.bloom_intensity,
@@ -307,7 +289,7 @@ impl MtlContext {
                 .as_ref()
                 .is_some_and(|s| !s.targets.is_empty()),
             water_planar_slot: self.water_planar_slot_live(),
-            lines: !lines.is_empty(),
+            lines: !params.lines.is_empty(),
             visible_volumes: self.raymarch.volumes.iter().any(|v| v.visible),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.params.is_some()),
             clouds: self
@@ -319,24 +301,20 @@ impl MtlContext {
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.pass.is_some()
                 && self.ssgi.settings.is_some_and(|s| s.contributes()),
-            prop_probe: prop_probe && self.prop_probe_supported(),
+            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
         }
     }
 
     // Plan this frame in the engine over what this backend holds, then put what the
     // encoders read from `&self` in place: the spot slices, the cull's view and
     // the cluster grid, and the jitter MetalFX is dispatched with.
-    pub(super) fn plan_frame(&mut self, args: PlanArgs<'_>) -> error::RenderResult<FramePlan> {
-        let PlanArgs {
-            camera,
-            elapsed,
-            render_size,
-            lines,
-            world_hidden,
-            prop_probe,
-        } = args;
+    pub(super) fn plan_frame(
+        &mut self,
+        params: &FrameParams<'_>,
+        render_size: [u32; 2],
+    ) -> error::RenderResult<FramePlan> {
         let resident = self.resident_features();
-        let content = self.frame_content(world_hidden, lines, prop_probe);
+        let content = self.frame_content(params);
         // MetalFX takes the 16-frame Halton cycle, which covers its output
         // pixels better than the TAA cycle.
         let upscaler_jitter = self
@@ -350,8 +328,8 @@ impl MtlContext {
             screen_bounce: self.screen_bounce(),
         };
         let inputs = PlanInputs {
-            camera,
-            elapsed,
+            camera: camera_inputs(&self.state, params),
+            elapsed: narrow_f32(params.elapsed),
             render_size,
             resident,
             content,
@@ -359,11 +337,8 @@ impl MtlContext {
             lights: &self.lights,
             probes: self.probe.book.records(),
             fog: self.fog.settings,
-            pre_exposure: self.pre_exposure.value(),
-            eye_gain: self.auto_exposure.adaptation.as_ref().map_or(
-                1.0,
-                concinnity_engine::gfx::auto_exposure::ExposureAdaptation::eye_gain,
-            ),
+            pre_exposure: self.pre_exposure,
+            adaptation: self.auto_exposure.adaptation.as_ref(),
             surface,
             effects: EffectInputs {
                 ssao: self.ssao.settings,
@@ -375,7 +350,6 @@ impl MtlContext {
                         .map(concinnity_engine::render::post::ssgi::SsgiPass::frame),
                 ),
                 rt: self.rt.settings,
-                history_scale: self.pre_exposure.history_scale(),
             },
         };
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;
@@ -599,7 +573,7 @@ impl MtlContext {
                 // the world has no planar set (RT on, or no flat reflectors).
                 // The prop probe culls into one more slot after the planes'.
                 let mirror_slots =
-                    self.prop_probe_cull_slot() + usize::from(self.probe.prop.capturing());
+                    self.prop_probe_cull_slot() + usize::from(self.probe.prop.schedule.capturing());
                 self.ensure_mirror_icb_capacity(mirror_slots, self.cull_count())?;
             }
             let cull_draw_args = draw_args;

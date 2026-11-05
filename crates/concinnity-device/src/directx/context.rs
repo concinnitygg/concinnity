@@ -11,7 +11,7 @@ use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
@@ -1507,16 +1507,6 @@ impl FrameDevice for DxContext {
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = params.atmosphere;
         }
-        self.state.planner.shadow.set_clouds(
-            params
-                .atmosphere
-                .as_ref()
-                .and_then(|f| f.clouds.as_ref())
-                .map_or(
-                    concinnity_engine::gfx::render_types::CloudShadowLanes::OFF,
-                    |c| c.shadow_lanes,
-                ),
-        );
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.
@@ -1596,17 +1586,11 @@ impl FrameDevice for DxContext {
     }
 
     fn plan(&mut self, _: &DxFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
-        self.plan_frame(crate::directx::draw::PlanArgs {
-            camera: camera_inputs(&self.state, params),
-            elapsed: narrow_f32(params.elapsed),
-            render_size: [
-                self.targets.extent.render_width.max(1),
-                self.targets.extent.render_height.max(1),
-            ],
-            lines: params.lines,
-            world_hidden: params.world_hidden,
-            prop_probe: params.prop_probe.is_some(),
-        })
+        let render_size = [
+            self.targets.extent.render_width.max(1),
+            self.targets.extent.render_height.max(1),
+        ];
+        self.plan_frame(params, render_size)
     }
 
     fn execute(

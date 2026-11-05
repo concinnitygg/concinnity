@@ -18,6 +18,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};
 use concinnity_engine::render::probe::prop::{PropProbeFrame, prop_probe_plan};
+use concinnity_engine::render::probe::prop_schedule::PropProbeSchedule;
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
 use concinnity_engine::render::render_graph::PassId;
 use objc2::rc::Retained;
@@ -40,11 +41,9 @@ const PROP_PROBE_ENCODERS: usize = 2 * CAPTURE_FACES + 1;
 // renders into. `None` capture until the first frame that rides one.
 #[derive(Default)]
 pub(in crate::metal) struct PropProbe {
-    // Where this frame captures.
-    frame: Option<PropProbeFrame>,
+    // Where this frame captures, and whether building the capture failed.
+    pub(in crate::metal) schedule: PropProbeSchedule,
     capture: Option<PropCapture>,
-    // Set once building the capture failed, which is not retried.
-    failed: bool,
 }
 
 // The targets the faces render into and the convolution from the capture into
@@ -60,21 +59,13 @@ struct PropCapture {
     cubes: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
-impl PropProbe {
-    // Whether this frame captures the probe.
-    pub(in crate::metal) fn capturing(&self) -> bool {
-        self.frame.is_some()
-    }
-}
-
 impl MtlContext {
     // Whether this backend can capture the world's prop probe: the bindless
     // cull it draws through, the convolution kernels, and a cube for it.
     pub(in crate::metal) fn prop_probe_supported(&self) -> bool {
         self.cull.bindless
             && self.probe.prefilter.is_some()
-            && self.probe.book.prop_cube().is_some()
-            && !self.probe.prop.failed
+            && self.probe.prop.schedule.available(&self.probe.book)
     }
 
     // The mirror slot the prop probe culls into: the one after the planar
@@ -94,22 +85,16 @@ impl MtlContext {
         frame: Option<PropProbeFrame>,
         enabled: bool,
     ) {
-        let Some(frame) = frame.filter(|_| enabled && self.prop_probe_supported()) else {
-            self.probe.prop.frame = None;
-            self.probe.book.set_prop_probe(None);
+        let ready = enabled && self.prop_probe_supported();
+        let schedule = &mut self.probe.prop.schedule;
+        let Some(frame) = schedule.admit(&mut self.probe.book, frame, ready) else {
             return;
         };
-        if let Err(e) = self.ensure_prop_capture(frame.resolution) {
-            tracing::error!("reflection probes: the prop probe could not be built: {e}");
-            self.probe.prop = PropProbe {
-                failed: true,
-                ..PropProbe::default()
-            };
-            self.probe.book.set_prop_probe(None);
-            return;
+        let built = self.ensure_prop_capture(frame.resolution);
+        let schedule = &mut self.probe.prop.schedule;
+        if !schedule.settle(&mut self.probe.book, frame, built) {
+            self.probe.prop.capture = None;
         }
-        self.probe.prop.frame = Some(frame);
-        self.probe.book.set_prop_probe(Some(&frame));
     }
 
     // Build the capture for faces of `resolution` texels into the current
@@ -144,7 +129,6 @@ impl MtlContext {
             gpu,
             cubes: objc2::Message::retain(cubes),
         });
-        self.probe.prop.frame = None;
         Ok(())
     }
 
@@ -158,9 +142,10 @@ impl MtlContext {
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         params: &super::graph_exec::GraphFrameParams<'_>,
     ) -> RenderResult<()> {
-        let (Some(frame), Some(capture)) =
-            (self.probe.prop.frame, self.probe.prop.capture.as_ref())
-        else {
+        let (Some(frame), Some(capture)) = (
+            self.probe.prop.schedule.frame(),
+            self.probe.prop.capture.as_ref(),
+        ) else {
             return Ok(());
         };
         let (Some(object_buffer), Some(draw_args_buffer)) =

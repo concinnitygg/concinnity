@@ -17,6 +17,7 @@ pub use drive::{FrameDevice, camera_inputs, drive_frame};
 pub use shadow::ShadowPlan;
 pub use temporal::TemporalState;
 
+use crate::gfx::auto_exposure::{ExposureAdaptation, PreExposure};
 use crate::gfx::render_types::{
     ClusterCamera, ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams,
     SsrParams,
@@ -69,9 +70,6 @@ pub struct EffectInputs {
     pub ssgi: Option<(SsgiSettings, SsgiFrame)>,
     /// Ray-traced reflections.
     pub rt: Option<RtReflectionSettings>,
-    /// The factor that rescales last frame's accumulations to this frame's
-    /// pre-exposure.
-    pub history_scale: f32,
 }
 
 /// The screen-space effects' blocks, built once for every pass that binds
@@ -109,12 +107,11 @@ pub struct PlanInputs<'a> {
     pub probes: &'a [ProbeUniforms],
     /// The live fog settings.
     pub fog: Option<FogSettings>,
-    /// The scale the HDR chain is written at this frame.
-    pub pre_exposure: f32,
-    /// How many times brighter than the exposure shows them the eye sees
-    /// faint sources against the dark (`ExposureAdaptation::eye_gain`), 1
-    /// without auto-exposure.
-    pub eye_gain: f32,
+    /// The scale the HDR chain is written at this frame, and the one last
+    /// frame's history was written at.
+    pub pre_exposure: PreExposure,
+    /// The auto-exposure's adaptation, `None` without auto-exposure.
+    pub adaptation: Option<&'a ExposureAdaptation>,
     /// What the surfaces sample.
     pub surface: SurfaceInputs,
     /// The screen-space effects' settings.
@@ -302,7 +299,7 @@ impl FramePlanner {
                 ambient_occlusion: 1.0,
                 sky_rot: view.sky_rot,
                 irradiance: inputs.surface.irradiance,
-                pre_exposure: inputs.pre_exposure,
+                pre_exposure: inputs.pre_exposure.value(),
                 screen_bounce: f32::from(u8::from(inputs.surface.screen_bounce)),
                 stand_ins: 0.0,
                 daylight: view.daylight,
@@ -339,7 +336,7 @@ impl FramePlanner {
                         sun.direction,
                         sun.color,
                         viewport,
-                        inputs.pre_exposure,
+                        inputs.pre_exposure.value(),
                     ),
                     froxel: fog.froxel_params(cam.view, cam.near),
                 }),
@@ -357,8 +354,8 @@ impl FramePlanner {
                 cam_pos: cam.position,
                 viewport,
                 sky_rot: view.sky_rot,
-                pre_exposure: inputs.pre_exposure,
-                eye_gain: inputs.eye_gain,
+                pre_exposure: inputs.pre_exposure.value(),
+                eye_gain: inputs.adaptation.map_or(1.0, ExposureAdaptation::eye_gain),
             },
             records,
             reactive: ReactiveMaskPlan::of(&graph_inputs),
@@ -429,12 +426,17 @@ fn effect_blocks(
                 cam_pos: cam.position,
                 prefilter_mip_count,
                 sky_rot,
-                pre_exposure: inputs.pre_exposure,
+                pre_exposure: inputs.pre_exposure.value(),
             })
         }),
-        ssgi: fx
-            .ssgi
-            .map(|(s, frame)| s.params(cam.fov_y_radians, camera.aspect, frame, fx.history_scale)),
+        ssgi: fx.ssgi.map(|(s, frame)| {
+            s.params(
+                cam.fov_y_radians,
+                camera.aspect,
+                frame,
+                inputs.pre_exposure.history_scale(),
+            )
+        }),
         rt: fx.rt.filter(|_| frame.bvh_live).map(|s| {
             s.params(RtParamsInputs {
                 fov_y_radians: cam.fov_y_radians,
@@ -445,7 +447,7 @@ fn effect_blocks(
                 sun_color: sun.color,
                 prefilter_mip_count,
                 sky_rot,
-                pre_exposure: inputs.pre_exposure,
+                pre_exposure: inputs.pre_exposure.value(),
                 screen_levels,
             })
         }),

@@ -3,6 +3,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 
+use crate::gfx::render_types::CloudShadowLanes;
 use crate::profile::FrameSpans;
 use crate::render::backend::FrameParams;
 use crate::render::backend::error::RenderResult;
@@ -105,6 +106,12 @@ pub fn drive_frame<D: FrameDevice>(
 
     let prepared = now_us();
     device.prepare(&params)?;
+    let clouds = params
+        .atmosphere
+        .as_ref()
+        .and_then(|a| a.clouds.as_ref())
+        .map_or(CloudShadowLanes::OFF, |c| c.shadow_lanes);
+    device.frame_scene().planner.shadow.set_clouds(clouds);
     let prepare_us = since(prepared);
     let spans = &device.frame_scene().spans;
     spans.set(FrameSpans {
@@ -138,6 +145,7 @@ pub fn drive_frame<D: FrameDevice>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gfx::auto_exposure::PreExposure;
     use crate::gfx::render_types::LightUniforms;
     use crate::gfx::view_modes::{ShowFlags, ViewMode};
     use crate::render::frame::plan::{EffectInputs, PlanInputs, SurfaceInputs};
@@ -217,8 +225,8 @@ mod tests {
                 lights: &self.lights,
                 probes: &[],
                 fog: None,
-                pre_exposure: 1.0,
-                eye_gain: 1.0,
+                pre_exposure: PreExposure::UNIT,
+                adaptation: None,
                 surface: SurfaceInputs::default(),
                 effects: EffectInputs::default(),
             };
@@ -291,6 +299,22 @@ mod tests {
         assert_eq!(device.scene.view.sunlight, 3.0);
         assert_eq!(device.scene.spans.get().prepare_us, 1_000);
         assert_eq!(device.scene.spans.get().plan_us, 1_000);
+    }
+
+    // The shadow schedule takes the clouds' shadow lanes from each frame, so a
+    // frame without clouds turns the last frame's off.
+    #[test]
+    fn a_frame_without_clouds_turns_their_shadows_off() {
+        let mut device = Recorder::new(true);
+        device.scene.planner.shadow.uniforms.clouds = CloudShadowLanes {
+            north: [0.0, 0.0, 1.0, 1.0],
+            ..CloudShadowLanes::OFF
+        };
+        drive_frame(&mut device, params(false), || 0).unwrap();
+        assert_eq!(
+            device.scene.planner.shadow.uniforms.clouds,
+            CloudShadowLanes::OFF
+        );
     }
 
     #[test]

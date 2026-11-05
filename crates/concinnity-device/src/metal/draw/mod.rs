@@ -24,7 +24,7 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::environment::grass::lod as grass_lod;
-use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, camera_inputs, drive_frame};
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::rt_accel::RtUpdate;
 use concinnity_engine::render::scene_state::SceneState;
@@ -34,9 +34,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLCommandBuffer, MTLCommandQueue as _};
 
 use self::scene_textures::SceneTextures;
-use self::stages::{
-    AcquiredFrame, HistoryBuffers, PlanArgs, PresentFrame, SceneBufferArgs, SceneBuffers,
-};
+use self::stages::{AcquiredFrame, HistoryBuffers, PresentFrame, SceneBufferArgs, SceneBuffers};
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 
@@ -182,14 +180,7 @@ impl FrameDevice for MtlContext {
         frame: &MtlFrame,
         params: &FrameParams<'_>,
     ) -> error::RenderResult<FramePlan> {
-        self.plan_frame(PlanArgs {
-            camera: camera_inputs(&self.state, params),
-            elapsed: narrow_f32(params.elapsed),
-            render_size: frame.render_size,
-            lines: params.lines,
-            world_hidden: params.world_hidden,
-            prop_probe: params.prop_probe.is_some(),
-        })
+        self.plan_frame(params, frame.render_size)
     }
 
     fn execute(

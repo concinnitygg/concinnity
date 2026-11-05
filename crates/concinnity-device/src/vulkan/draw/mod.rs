@@ -20,7 +20,7 @@ use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::frame::plan::{
-    CameraInputs, EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
+    EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
 use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use concinnity_engine::render::scene_state::SceneState;
@@ -372,14 +372,9 @@ impl VkContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    fn frame_content(
-        &self,
-        lines_published: bool,
-        world_hidden: bool,
-        prop_probe: bool,
-    ) -> FrameContent {
+    fn frame_content(&self, params: &FrameParams<'_>) -> FrameContent {
         FrameContent {
-            world_hidden,
+            world_hidden: params.world_hidden,
             cull_records: self.state.draw.record_count(),
             shadowed_spot_count: self.spot_shadow.count(),
             bloom_intensity: self.post_process.bloom_intensity,
@@ -401,7 +396,7 @@ impl VkContext {
                 .transparent
                 .as_ref()
                 .is_some_and(super::transparent::TransparentResources::water_planar_slot_live),
-            lines: lines_published,
+            lines: !params.lines.is_empty(),
             visible_volumes: self
                 .raymarch
                 .as_ref()
@@ -415,24 +410,20 @@ impl VkContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            prop_probe,
+            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
         }
     }
 
     // Plan this frame in the engine over what this backend holds, then put what the
     // encoders read from `&self` in place: the spot slices and the jitter the
     // upscaler is dispatched with.
-    fn plan_frame(&mut self, args: PlanArgs) -> RenderResult<FramePlan> {
-        let PlanArgs {
-            camera,
-            elapsed,
-            render_size,
-            lines_published,
-            world_hidden,
-            prop_probe,
-        } = args;
+    fn plan_frame(
+        &mut self,
+        params: &FrameParams<'_>,
+        render_size: [u32; 2],
+    ) -> RenderResult<FramePlan> {
         let resident = self.resident_features(render_size);
-        let content = self.frame_content(lines_published, world_hidden, prop_probe);
+        let content = self.frame_content(params);
         // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
         // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
         let phase = self.state.planner.jitter_phase();
@@ -443,8 +434,8 @@ impl VkContext {
             screen_bounce: self.screen_bounce(),
         };
         let inputs = PlanInputs {
-            camera,
-            elapsed,
+            camera: camera_inputs(&self.state, params),
+            elapsed: narrow_f32(params.elapsed),
             render_size,
             resident,
             content,
@@ -452,18 +443,14 @@ impl VkContext {
             lights: &self.uniforms.lights,
             probes: self.probe.book.records(),
             fog: self.fog.settings,
-            pre_exposure: self.pre_exposure.value(),
-            eye_gain: self.auto_exposure.adaptation.as_ref().map_or(
-                1.0,
-                concinnity_engine::gfx::auto_exposure::ExposureAdaptation::eye_gain,
-            ),
+            pre_exposure: self.pre_exposure,
+            adaptation: self.auto_exposure.adaptation.as_ref(),
             surface,
             effects: EffectInputs {
                 ssao: self.ssao.as_ref().map(|s| s.settings),
                 ssr: self.ssr.as_ref().and_then(|s| s.settings),
                 ssgi: self.ssgi.as_ref().map(|s| (s.settings, s.frame())),
                 rt: self.rt_reflections.as_ref().map(|r| r.settings),
-                history_scale: self.pre_exposure.history_scale(),
             },
         };
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;
@@ -474,18 +461,6 @@ impl VkContext {
         }
         Ok(plan)
     }
-}
-
-// The per-frame inputs `plan_frame` plans from.
-#[derive(Clone, Copy)]
-struct PlanArgs {
-    camera: CameraInputs,
-    elapsed: f32,
-    render_size: [u32; 2],
-    lines_published: bool,
-    world_hidden: bool,
-    // The world's prop probe rides this frame.
-    prop_probe: bool,
 }
 
 // What `begin` acquired for a frame: its in-flight slot, the swapchain image,
@@ -515,16 +490,6 @@ impl FrameDevice for VkContext {
         if let Some(atmo) = self.atmosphere.as_mut() {
             atmo.frame = params.atmosphere;
         }
-        self.state.planner.shadow.set_clouds(
-            params
-                .atmosphere
-                .as_ref()
-                .and_then(|f| f.clouds.as_ref())
-                .map_or(
-                    concinnity_engine::gfx::render_types::CloudShadowLanes::OFF,
-                    |c| c.shadow_lanes,
-                ),
-        );
         self.apply_pending_rebuilds()?;
         // A moved world's decals and grass move with it whatever happens to
         // history.
@@ -644,14 +609,7 @@ impl FrameDevice for VkContext {
     }
 
     fn plan(&mut self, frame: &VkFrame, params: &FrameParams<'_>) -> RenderResult<FramePlan> {
-        self.plan_frame(PlanArgs {
-            camera: camera_inputs(&self.state, params),
-            elapsed: narrow_f32(params.elapsed),
-            render_size: [frame.extent.width, frame.extent.height],
-            lines_published: !params.lines.is_empty(),
-            world_hidden: params.world_hidden,
-            prop_probe: params.prop_probe.is_some(),
-        })
+        self.plan_frame(params, [frame.extent.width, frame.extent.height])
     }
 
     fn execute(

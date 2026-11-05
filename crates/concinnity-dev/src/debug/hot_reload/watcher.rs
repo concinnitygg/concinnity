@@ -125,7 +125,7 @@ pub(super) fn spawn_watcher(
         dirs.insert(dir);
     }
     if let Some(path) = world_jsonl_path {
-        if let Some(parent) = Path::new(path).parent() {
+        if let Some(parent) = path.parent() {
             // An empty parent means the path was already a bare filename in
             // CWD; subscribe to "." in that case so the same `notify` events
             // fire as for any directoried path.

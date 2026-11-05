@@ -1,14 +1,14 @@
 //! The stages `DxContext::draw_frame` runs in order around `record_frame`, and
 //! the per-frame inputs `record_frame` derives before its graph dispatch.
 
-use concinnity_core::math::SaturatingFrom;
+use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::jitter;
-use concinnity_engine::gfx::render_types::LineVertex;
 use concinnity_engine::profile;
+use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
 use concinnity_engine::render::frame::plan::{
-    CameraInputs, EffectInputs, FramePlan, PlanInputs, SurfaceInputs,
+    EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
 use concinnity_engine::render::render_graph::{FrameContent, ResidentFeatures, ResidentUpscaler};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -22,18 +22,6 @@ use crate::directx::context::DxContext;
 const FRAME_LATENCY_TIMEOUT_MS: u32 = 1000;
 use crate::directx::error::{self, map_hresult};
 use crate::gpu_wait::GpuWait;
-
-// The per-frame inputs `plan_frame` plans from.
-#[derive(Clone, Copy)]
-pub(in crate::directx) struct PlanArgs<'a> {
-    pub(in crate::directx) camera: CameraInputs,
-    pub(in crate::directx) elapsed: f32,
-    pub(in crate::directx) render_size: [u32; 2],
-    pub(in crate::directx) lines: &'a [LineVertex],
-    pub(in crate::directx) world_hidden: bool,
-    // The world's prop probe rides this frame.
-    pub(in crate::directx) prop_probe: bool,
-}
 
 impl DxContext {
     // Rebuilds requested since last frame: wireframe PSOs, hot-reloaded shaders, resize.
@@ -520,14 +508,9 @@ impl DxContext {
     }
 
     // What the world puts on screen this frame, for the frame's graph gates.
-    fn frame_content(
-        &self,
-        lines: &[LineVertex],
-        world_hidden: bool,
-        prop_probe: bool,
-    ) -> FrameContent {
+    fn frame_content(&self, params: &FrameParams<'_>) -> FrameContent {
         FrameContent {
-            world_hidden,
+            world_hidden: params.world_hidden,
             cull_records: self.state.draw.record_count(),
             shadowed_spot_count: self.spot_shadow.count(),
             bloom_intensity: self.post_process.bloom_intensity,
@@ -548,7 +531,7 @@ impl DxContext {
             water_planar_slot: self.transparent.as_ref().is_some_and(
                 super::super::transparent::TransparentResources::water_planar_slot_live,
             ),
-            lines: !lines.is_empty(),
+            lines: !params.lines.is_empty(),
             visible_volumes: self.raymarch_enabled(),
             atmosphere: self.atmosphere.as_ref().is_some_and(|a| a.frame.is_some()),
             clouds: self
@@ -559,24 +542,20 @@ impl DxContext {
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),
-            prop_probe,
+            prop_probe: params.prop_probe.is_some() && self.prop_probe_supported(),
         }
     }
 
     // Plan this frame in the engine over what this backend holds, then put what the
     // encoders read from `&self` in place: the spot slices and the jitter the
     // upscaler is dispatched with.
-    pub(in crate::directx) fn plan_frame(&mut self, args: PlanArgs<'_>) -> RenderResult<FramePlan> {
-        let PlanArgs {
-            camera,
-            elapsed,
-            render_size,
-            lines,
-            world_hidden,
-            prop_probe,
-        } = args;
+    pub(in crate::directx) fn plan_frame(
+        &mut self,
+        params: &FrameParams<'_>,
+        render_size: [u32; 2],
+    ) -> RenderResult<FramePlan> {
         let resident = self.resident_features(render_size);
-        let content = self.frame_content(lines, world_hidden, prop_probe);
+        let content = self.frame_content(params);
         // The upscaler prescribes its jitter sequence (FSR queries its FFX-tuned
         // offsets; DLSS / XeSS use the shared Halton-2/3) at the plan's phase.
         // FFX returns it in input-pixel coordinates, the Halton path's units.
@@ -592,8 +571,8 @@ impl DxContext {
             screen_bounce: self.screen_bounce(),
         };
         let inputs = PlanInputs {
-            camera,
-            elapsed,
+            camera: camera_inputs(&self.state, params),
+            elapsed: narrow_f32(params.elapsed),
             render_size,
             resident,
             content,
@@ -601,11 +580,8 @@ impl DxContext {
             lights: &self.uniforms.lights,
             probes: self.probe.book.records(),
             fog: self.fog.settings,
-            pre_exposure: self.pre_exposure.value(),
-            eye_gain: self.auto_exposure.adaptation.as_ref().map_or(
-                1.0,
-                concinnity_engine::gfx::auto_exposure::ExposureAdaptation::eye_gain,
-            ),
+            pre_exposure: self.pre_exposure,
+            adaptation: self.auto_exposure.adaptation.as_ref(),
             surface,
             effects: EffectInputs {
                 ssao: self.ssao.resources.as_ref().map(|s| s.settings),
@@ -620,7 +596,6 @@ impl DxContext {
                     .map(|s| s.settings)
                     .zip(self.ssgi_frame()),
                 rt: self.rt_reflections.as_ref().map(|r| r.settings),
-                history_scale: self.pre_exposure.history_scale(),
             },
         };
         let plan = self.state.planner.plan(&self.state.view, &inputs)?;

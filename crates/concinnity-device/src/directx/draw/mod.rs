@@ -23,7 +23,6 @@ use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
-pub(super) use stages::PlanArgs;
 
 pub(in crate::directx) mod composite;
 pub(in crate::directx) mod main;

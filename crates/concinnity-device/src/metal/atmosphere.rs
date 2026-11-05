@@ -7,7 +7,6 @@
 //! reflections from the environment takes the atmosphere's.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use concinnity_engine::gfx::render_types::CloudShadowLanes;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
@@ -454,10 +453,6 @@ impl MtlContext {
             if let Some(clouds) = atmo.clouds.as_mut() {
                 clouds.prepare(&self.hw.device, &atmo.settings, frame, &view)?;
             }
-            let lanes = frame
-                .and_then(|f| f.clouds.as_ref())
-                .map_or(CloudShadowLanes::OFF, |c| c.shadow_lanes);
-            self.state.planner.shadow.set_clouds(lanes);
             atmo.params = frame.map(|f| AtmosphereParams::new(&atmo.settings, f, &view));
             atmo.sky_cube.work = match frame {
                 Some(f) => {

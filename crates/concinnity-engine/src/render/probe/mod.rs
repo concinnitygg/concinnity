@@ -6,6 +6,7 @@ pub mod book;
 pub mod capture;
 pub mod prop;
 pub(crate) mod prop_reflection_probe;
+pub mod prop_schedule;
 pub mod radiance;
 pub(crate) mod reflection_probe;
 pub mod seed;

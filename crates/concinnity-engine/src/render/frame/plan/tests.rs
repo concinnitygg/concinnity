@@ -45,8 +45,8 @@ fn inputs(lights: &LightState, resident: ResidentFeatures) -> PlanInputs<'_> {
         lights,
         probes: &[],
         fog: None,
-        pre_exposure: 1.0,
-        eye_gain: 1.0,
+        pre_exposure: PreExposure::UNIT,
+        adaptation: None,
         surface: SurfaceInputs::default(),
         effects: EffectInputs::default(),
     }
@@ -239,4 +239,31 @@ fn the_traced_reflection_block_walks_the_pyramid_only_when_ssgi_builds_it() {
     assert_eq!(levels(&mut planner), 0.0);
     planner.gates.ssgi = true;
     assert_eq!(levels(&mut planner), 6.0);
+}
+
+// The pre-exposure reaches every block written at it, last frame's history
+// is rescaled to it, and the eye sees no gain without auto-exposure.
+#[test]
+fn the_frame_is_planned_at_the_pre_exposure_it_is_written_at() {
+    use crate::render::post::ssgi::settings::{SsgiFrame, SsgiSettings};
+    let lights = lights();
+    let mut planner = FramePlanner::default();
+    let view = SceneView::new([0.0; 4]);
+    let mut pre_exposure = PreExposure::new(2.0);
+    pre_exposure.advance(8.0);
+    let mut frame = inputs(&lights, resident());
+    frame.pre_exposure = pre_exposure;
+    frame.effects.ssgi = Some((
+        SsgiSettings::resolve(1.0, 8.0, 1, 1),
+        SsgiFrame {
+            frame: 1,
+            history_valid: true,
+            levels: 6,
+        },
+    ));
+    let plan = planner.plan(&view, &frame).unwrap();
+    assert_eq!(plan.view.pre_exposure, 8.0);
+    assert_eq!(plan.atmosphere.pre_exposure, 8.0);
+    assert_eq!(plan.atmosphere.eye_gain, 1.0);
+    assert_eq!(plan.effects.ssgi.unwrap().history_scale, 4.0);
 }
