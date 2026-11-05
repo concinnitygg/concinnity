@@ -280,23 +280,27 @@ impl Runtime {
     /// How this world resolved, including a world with something to draw that
     /// this build or machine cannot draw, which [`start`](Runtime::start)
     /// refuses. Cached with [`render_mode`](Runtime::render_mode).
+    ///
+    /// The first resolution probes the GPU, so it chooses the graphics API the
+    /// process renders with first.
     pub fn render_resolution(&mut self) -> Resolution {
-        if self.render_mode.is_none() {
-            // Before the first probe, which runs on the graphics API this
-            // process renders with: the launch's, else the player's choice
-            // from the settings the world's home holds.
-            match self.launch_graphics_api() {
-                Some(api) => {
-                    crate::platform::select(Some(api));
-                }
-                None => {
-                    crate::platform::select_persisted(self.writable_tree().as_ref());
-                }
-            }
+        if let Some(resolution) = self.render_mode {
+            return resolution;
         }
+        self.choose_graphics_api();
         *self
             .render_mode
-            .get_or_insert_with(|| render_mode::resolve_and_report(&self.world))
+            .insert(render_mode::resolve_and_report(&self.world))
+    }
+
+    // Choose the graphics API this process renders with: the launch's, else the
+    // player's choice from the settings the world's home holds. A process that
+    // already chose keeps its choice.
+    fn choose_graphics_api(&self) -> Platform {
+        match self.launch_graphics_api() {
+            Some(api) => crate::platform::select(Some(api)),
+            None => crate::platform::select_persisted(self.writable_tree().as_ref()),
+        }
     }
 
     // The graphics API the launch asks for.

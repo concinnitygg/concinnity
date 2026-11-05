@@ -6,12 +6,14 @@
 //! rather than resolving a backend of their own.
 //!
 //! A build compiles in the target's native backend and, with the `vulkan`
-//! feature, Vulkan beside it. One of them is chosen per process, before
-//! anything cooks or renders: [`select`] takes an explicit request,
-//! [`select_persisted`] the player's settings-menu choice, and the first read of
-//! [`current`] without either fixes the native backend. The runtime, the editor
-//! and the cook all read [`current`], so a world built in a process plays in it.
+//! feature, Vulkan beside it. One of them is chosen once per process, before
+//! anything cooks or renders: [`select`] takes an explicit request and
+//! [`select_persisted`] the player's settings-menu choice. Reading [`current`]
+//! chooses nothing; a read before the choice answers the native backend and is
+//! reported. The runtime, the editor and the cook all read [`current`], so a
+//! world built in a process plays in it.
 
+mod choice;
 pub(crate) mod device;
 
 use std::sync::OnceLock;
@@ -21,11 +23,7 @@ use concinnity_core::platform::{GraphicsApiStatus, Platform, PlatformSet};
 use concinnity_engine::settings::api_trial::Step;
 use concinnity_host::store::paths::StateTree;
 
-static SELECTED: OnceLock<Platform> = OnceLock::new();
-
-// What the call that chose `SELECTED` asked for, so a later call repeating it
-// passes quietly.
-static REQUESTED: OnceLock<Option<Platform>> = OnceLock::new();
+static CHOICE: choice::ApiChoice = choice::ApiChoice::new();
 
 // The step this process's launch took on the persisted graphics API trial. The
 // first launch decision of a process is the one that stands.
@@ -54,13 +52,13 @@ pub fn compiled_set() -> PlatformSet {
 }
 
 /// The graphics API this process renders with: the one [`select`] chose, else
-/// the native one.
+/// the native one, which a read before the choice is told and warned about.
 ///
 /// A build with no backend runs nothing that consumes bytecode, but the cook
 /// still needs a language to produce; the one this target renders with is the
 /// useful answer.
 pub fn current() -> Platform {
-    *SELECTED.get_or_init(native)
+    CHOICE.current(native())
 }
 
 /// Choose the graphics API this process renders with, from `requested` (the
@@ -69,36 +67,19 @@ pub fn current() -> Platform {
 /// warning. Returns what the process renders with.
 ///
 /// The choice is made once per process: call this before anything cooks or
-/// renders. A later call, or one after [`current`] was read, keeps the earlier
-/// answer without probing again, and warns when it asks for another API.
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "the first call of a process is the one that stands"
-)]
+/// renders. A later call keeps the first answer without probing again, and
+/// warns when it asks for another API.
 pub fn select(requested: Option<Platform>) -> Platform {
-    if let Some(&chosen) = SELECTED.get() {
-        if let Some(asked) = requested
-            && asked != chosen
-            && REQUESTED.get() != Some(&requested)
-        {
-            tracing::warn!(
-                "graphics API {} was already fixed for this process; keeping it over {}",
-                chosen.key(),
-                asked.key()
-            );
+    CHOICE.select(requested, |requested| {
+        let selection = resolve(requested, native(), compiled(), |platform| {
+            device::probe_device_on(platform).is_some()
+        });
+        if let Some(fallback) = selection.fallback {
+            tracing::warn!("{fallback}; rendering with {}", selection.platform.key());
         }
-        return chosen;
-    }
-    let selection = resolve(requested, native(), compiled(), |platform| {
-        device::probe_device_on(platform).is_some()
-    });
-    if let Some(fallback) = selection.fallback {
-        tracing::warn!("{fallback}; rendering with {}", selection.platform.key());
-    }
-    let chosen = *SELECTED.get_or_init(|| selection.platform);
-    let _ = REQUESTED.set(requested);
-    crate::crash::note("backend", chosen.key());
-    chosen
+        crate::crash::note("backend", selection.platform.key());
+        selection.platform
+    })
 }
 
 /// Where this launch stands on the graphics API chosen in the settings menu.
@@ -114,8 +95,8 @@ pub(crate) fn api_status() -> GraphicsApiStatus {
 /// it; when the last launch on it never did, this launch starts on the native
 /// API and drops the choice.
 pub fn select_persisted(tree: Option<&StateTree>) -> Platform {
-    if let Some(&chosen) = SELECTED.get() {
-        return chosen;
+    if CHOICE.is_chosen() {
+        return current();
     }
     select(persisted_request(tree))
 }

@@ -9,8 +9,8 @@
 //! The pool wraps a dedicated `rayon::ThreadPool` rather than rayon's global
 //! pool so the worker count, thread names and scheduling are controlled: every
 //! worker runs as a [`ThreadRole::FrameWorker`] thread at the pool's
-//! [`FramePriority`]. It is process-wide and built once, by whichever of
-//! `configure` and `pool()` is reached first.
+//! [`FramePriority`]. It is process-wide and built once, by `configure` at
+//! runtime start; a use before that builds it at the defaults and is reported.
 
 use concinnity_core::fanout::FanOut;
 use concinnity_engine::components::FramePriority;
@@ -114,8 +114,8 @@ pub fn pool_for(mode: ScheduleMode) -> &'static JobPool {
     }
 }
 
-// The process-wide pool, built by whichever of `configure` and `pool` gets
-// there first.
+// The process-wide pool, built by `configure`, or at the defaults by a `pool`
+// call that comes first.
 static POOL: OnceLock<JobPool> = OnceLock::new();
 
 /// Worker count when nothing configures the pool: one per logical core, less
@@ -144,10 +144,17 @@ fn size_pool(cell: &OnceLock<JobPool>, threads: usize, priority: FramePriority) 
     cell.set(JobPool::new(threads.max(1), priority)).is_ok()
 }
 
-/// The process-wide job pool, built at the auto default worker count and the
-/// default priority if `configure` has not already built it.
+/// The process-wide job pool. A call before `configure` builds it at the auto
+/// default worker count and the default priority, which no later `configure`
+/// can change, and warns.
 pub fn pool() -> &'static JobPool {
-    POOL.get_or_init(|| JobPool::new(default_threads(), FramePriority::default()))
+    POOL.get_or_init(|| {
+        let threads = default_threads();
+        tracing::warn!(
+            "job pool used before it was configured; building it at {threads} worker(s) and the default priority"
+        );
+        JobPool::new(threads, FramePriority::default())
+    })
 }
 
 /// A single-worker pool: the same execution shape as `pool()` with the jobs
