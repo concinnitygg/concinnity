@@ -26,7 +26,7 @@ use concinnity_engine::gfx::render_types::{
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
-use concinnity_engine::render::uniforms::directx::CullParams;
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use crate::directx::allocator::PooledBuffer;
@@ -620,19 +620,23 @@ impl DxContext {
             None => ([1.0, 1.0], 1, None, 0u32),
         };
         let mut cull_params = CullParams {
-            planes: [[0.0; 4]; 6],
-            cam_pos,
-            object_count: u32::saturating_from(self.state.draw.record_count()),
-            prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
-            hiz_size,
-            hiz_mip_count,
-            hiz_enabled,
-            bucket_count: u32::saturating_from(self.shader_bucket_count()),
-            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-            exclude_first: 0,
-            exclude_end: 0,
+            view: CullView {
+                planes: [[0.0; 4]; 6],
+                object_count: u32::saturating_from(self.state.draw.record_count()),
+                bucket_count: u32::saturating_from(self.shader_bucket_count()),
+                skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                exclude_first: 0,
+                exclude_end: 0,
+                cam_pos,
+            },
+            hiz: CullHiz {
+                prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
+                hiz_size,
+                hiz_mip_count,
+                hiz_enabled,
+            },
         };
-        cull_params.planes = frustum.packed_planes();
+        cull_params.view.planes = frustum.packed_planes();
 
         // SAFETY: the command list is recording, and the cull root signature is owned by
         // `self.cull` for the context's lifetime.
@@ -767,22 +771,26 @@ impl DxContext {
         // frustum, occluded or not.
         let hiz_srv = self.cull.hiz.as_ref().map(|h| h.srv_gpu);
         let mut cull_params = CullParams {
-            planes: [[0.0; 4]; 6],
-            cam_pos,
-            object_count: u32::saturating_from(self.state.draw.record_count()),
-            prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
-            hiz_size: [1.0, 1.0],
-            hiz_mip_count: 1,
-            hiz_enabled: 0,
-            // The bake renders one command stream under the default bindless
-            // pipeline, so every record is routed into region 0: a bucketed draw
-            // is captured into the probe cube with default shading.
-            bucket_count: 1,
-            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-            exclude_first: 0,
-            exclude_end: 0,
+            view: CullView {
+                planes: [[0.0; 4]; 6],
+                object_count: u32::saturating_from(self.state.draw.record_count()),
+                // The bake renders one command stream under the default bindless
+                // pipeline, so every record is routed into region 0: a bucketed draw
+                // is captured into the probe cube with default shading.
+                bucket_count: 1,
+                skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                exclude_first: 0,
+                exclude_end: 0,
+                cam_pos,
+            },
+            hiz: CullHiz {
+                prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
+                hiz_size: [1.0, 1.0],
+                hiz_mip_count: 1,
+                hiz_enabled: 0,
+            },
         };
-        cull_params.planes = frustum.packed_planes();
+        cull_params.view.planes = frustum.packed_planes();
 
         let to_uav = transition_barrier(
             indirect,
@@ -1087,20 +1095,24 @@ impl DxContext {
                 bind();
             }
             let mut cull_params = CullParams {
-                planes: [[0.0; 4]; 6],
-                cam_pos: r.eye,
-                object_count: n_cull,
-                // Unused with Hi-Z disabled (the reprojection is never taken).
-                prev_view_proj: [[0.0; 4]; 4],
-                hiz_size,
-                hiz_mip_count,
-                hiz_enabled: 0,
-                bucket_count: 1,
-                skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-                exclude_first: r.exclude[0],
-                exclude_end: r.exclude[1],
+                view: CullView {
+                    planes: [[0.0; 4]; 6],
+                    object_count: n_cull,
+                    bucket_count: 1,
+                    skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                    exclude_first: r.exclude[0],
+                    exclude_end: r.exclude[1],
+                    cam_pos: r.eye,
+                },
+                hiz: CullHiz {
+                    // Unused with Hi-Z disabled (the reprojection is never taken).
+                    prev_view_proj: [[0.0; 4]; 4],
+                    hiz_size,
+                    hiz_mip_count,
+                    hiz_enabled: 0,
+                },
             };
-            cull_params.planes = r.frustum.packed_planes();
+            cull_params.view.planes = r.frustum.packed_planes();
             // SAFETY: parameter 0 of the cull root signature holds `CullParams`-sized root
             // constants.
             unsafe { cmd.set_compute_root_constants(0, &cull_params) };
@@ -1215,19 +1227,23 @@ impl DxContext {
         // unused by the late kernel (candidates already passed the frustum
         // test in the early pass) but the cbuffer layout is shared, so pack them anyway.
         let mut cull_params = CullParams {
-            planes: [[0.0; 4]; 6],
-            cam_pos: [0.0; 3],
-            object_count: u32::saturating_from(self.state.draw.record_count()),
-            prev_view_proj: cur_vp,
-            hiz_size: [hiz.width as f32, hiz.height as f32],
-            hiz_mip_count: hiz.mip_count,
-            hiz_enabled: 1,
-            bucket_count: u32::saturating_from(self.shader_bucket_count()),
-            skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
-            exclude_first: 0,
-            exclude_end: 0,
+            view: CullView {
+                planes: [[0.0; 4]; 6],
+                object_count: u32::saturating_from(self.state.draw.record_count()),
+                bucket_count: u32::saturating_from(self.shader_bucket_count()),
+                skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
+                exclude_first: 0,
+                exclude_end: 0,
+                cam_pos: [0.0; 3],
+            },
+            hiz: CullHiz {
+                prev_view_proj: cur_vp,
+                hiz_size: [hiz.width as f32, hiz.height as f32],
+                hiz_mip_count: hiz.mip_count,
+                hiz_enabled: 1,
+            },
         };
-        cull_params.planes = frustum.packed_planes();
+        cull_params.view.planes = frustum.packed_planes();
 
         // SAFETY: the command list is recording, and the cull root signature is owned by
         // `self.cull` for the context's lifetime.

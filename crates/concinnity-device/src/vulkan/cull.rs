@@ -21,7 +21,7 @@ use concinnity_core::math::{SaturatingFrom, saturating_u32};
 use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
-use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams};
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullView};
 
 use crate::vulkan::record::cmd_push_constants;
 
@@ -139,14 +139,14 @@ impl VkContext {
         let device = &self.hw.device;
 
         // Pack the six already-normalized frustum planes for the kernel.
-        let mut params = CullParams {
+        let mut params = CullView {
             planes: [[0.0; 4]; 6],
-            cam_pos,
             object_count: u32::saturating_from(self.state.draw.record_count()),
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
             exclude_first: 0,
             exclude_end: 0,
+            cam_pos,
         };
         params.planes = frustum.packed_planes();
         // SAFETY: `cmd` is in the recording state, and the cull pipeline is owned by
@@ -165,12 +165,12 @@ impl VkContext {
             );
         }
         // Hi-Z occlusion set (set 1): the depth pyramid sampler + this
-        // frame's CullHizParams (previous-frame VP + pyramid dims +
+        // frame's CullHiz (previous-frame VP + pyramid dims +
         // validity gate). `Some` whenever the cull pipeline is (same
         // gating). `hiz_enabled` is 0 until a pyramid at the current
         // resolution exists, so the kernel falls back to frustum + distance.
         if let Some(hiz) = self.cull.hiz.as_ref() {
-            let params = CullHizParams {
+            let params = CullHiz {
                 prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
                 hiz_size: [hiz.width as f32, hiz.height as f32],
                 hiz_mip_count: hiz.mip_count,
@@ -346,14 +346,14 @@ impl VkContext {
         let mut packed_views = 0;
         for (pass, (view, frustum)) in passes.iter_mut().zip(views.iter().flatten()) {
             let packed = self.shadow_layout(view);
-            let mut params = CullParams {
+            let mut params = CullView {
                 planes: [[0.0; 4]; 6],
-                cam_pos,
                 object_count: packed.records,
                 bucket_count: 1,
                 skinned_base: packed.skinned_base,
                 exclude_first: 0,
                 exclude_end: 0,
+                cam_pos,
             };
             params.planes = frustum.packed_planes();
             // SAFETY: the view's cull set was built against the shadow cull layout.
@@ -445,14 +445,14 @@ impl VkContext {
         // Frustum planes + camera position are unused by the late kernel
         // (candidates already passed those in the early pass) but the push-constant
         // block layout is shared with the early pass, so pack them anyway.
-        let mut params = CullParams {
+        let mut params = CullView {
             planes: [[0.0; 4]; 6],
-            cam_pos,
             object_count: u32::saturating_from(self.state.draw.record_count()),
             bucket_count: u32::saturating_from(self.shader_bucket_count()),
             skinned_base: u32::saturating_from(self.state.draw.skinned_record_base()),
             exclude_first: 0,
             exclude_end: 0,
+            cam_pos,
         };
         params.planes = frustum.packed_planes();
 
@@ -460,7 +460,7 @@ impl VkContext {
         // `HizEarly` just rebuilt from this frame's depth. `hiz_enabled = 1`:
         // HizEarly always precedes this dispatch, so a valid pyramid is
         // guaranteed (the kernel still guards defensively).
-        let hiz_params = CullHizParams {
+        let hiz_params = CullHiz {
             prev_view_proj: cur_vp,
             hiz_size: [hiz.width as f32, hiz.height as f32],
             hiz_mip_count: hiz.mip_count,
@@ -529,13 +529,12 @@ impl VkContext {
 #[cfg(test)]
 mod tests {
     use concinnity_core::math::SaturatingFrom;
-    // The `CullParams` layout test lives with the struct in
-    // `concinnity_engine::render::uniforms::vulkan`. The struct-size == push-range
-    // cross-check stays here, where `CULL_PUSH_CONSTANT_BYTES` is defined.
+    // The push range is the view half, whose layout test lives with the struct
+    // in `concinnity_engine::render::uniforms::cull`.
     #[test]
-    fn cull_params_size_matches_push_range() {
+    fn cull_view_size_matches_push_range() {
         assert_eq!(
-            u32::saturating_from(size_of::<super::CullParams>()),
+            u32::saturating_from(size_of::<super::CullView>()),
             super::super::pipeline::CULL_PUSH_CONSTANT_BYTES
         );
     }

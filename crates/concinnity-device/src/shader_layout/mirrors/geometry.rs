@@ -9,13 +9,11 @@
 use concinnity_engine::gfx::render_types::{
     ParticleParams, ShadowPassPush, ShadowUniforms, TextUniforms,
 };
-use concinnity_engine::render::uniforms::directx::CullParams as DxCullParams;
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
 use concinnity_engine::render::uniforms::grass::{
     GpuGrassBlade, GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, PlanetGrassTileGpu,
 };
-use concinnity_engine::render::uniforms::metal::CullUniforms as MetalCullParams;
 use concinnity_engine::render::uniforms::ocean::OceanFftParams;
-use concinnity_engine::render::uniforms::vulkan::{CullHizParams, CullParams as VkCullParams};
 use concinnity_engine::render::uniforms::wake::{WaterWakeParams, WaterWakeStirGpu};
 use concinnity_engine::render::uniforms::{
     DecalParams, DecalView, GBufferView, GpuParticle, LineView, ParticleView, SkinParams,
@@ -24,9 +22,6 @@ use concinnity_engine::render::uniforms::{
 use crate::shader_layout::mirror::{Case, everywhere, mirror, on};
 use concinnity_core::platform::Platform;
 
-const METAL: &[Platform] = &[Platform::Metal];
-const VULKAN: &[Platform] = &[Platform::Vulkan];
-const DIRECTX: &[Platform] = &[Platform::DirectX];
 const METAL_AND_DIRECTX: &[Platform] = &[Platform::Metal, Platform::DirectX];
 
 pub(in crate::shader_layout) fn gbuffer_vertex() -> Vec<Case> {
@@ -284,59 +279,24 @@ pub(in crate::shader_layout) fn rt_skin() -> Vec<Case> {
 // own host binds.
 pub(in crate::shader_layout) fn cull() -> Vec<Case> {
     vec![
+        everywhere(mirror!(CullView => "CullView" {
+            planes,
+            object_count,
+            bucket_count,
+            skinned_base,
+            exclude_first,
+            exclude_end,
+            [cam_pos] => ["cam_x", "cam_y", "cam_z"],
+        })),
+        everywhere(mirror!(CullHiz => "CullHiz" {
+            prev_view_proj,
+            hiz_size,
+            hiz_mip_count,
+            hiz_enabled,
+        })),
         on(
-            METAL,
-            mirror!(MetalCullParams => "CullParams" {
-                planes,
-                cam_pos,
-                prev_view_proj,
-                hiz_size,
-                hiz_mip_count,
-                hiz_enabled,
-                object_count,
-                skinned_base,
-                exclude_first,
-                bucket_count,
-                exclude_end,
-                [_pad] => ["_pad0", "_pad1", "_pad2"],
-            }),
-        ),
-        on(
-            VULKAN,
-            mirror!(VkCullParams => "CullParams" {
-                planes,
-                cam_pos,
-                object_count,
-                bucket_count,
-                skinned_base,
-                exclude_first,
-                exclude_end,
-            }),
-        ),
-        on(
-            VULKAN,
-            mirror!(CullHizParams => "CullHizParams" {
-                prev_view_proj,
-                hiz_size,
-                hiz_mip_count,
-                hiz_enabled,
-            }),
-        ),
-        on(
-            DIRECTX,
-            mirror!(DxCullParams => "CullParams" {
-                planes,
-                cam_pos,
-                object_count,
-                prev_view_proj,
-                hiz_size,
-                hiz_mip_count,
-                hiz_enabled,
-                bucket_count,
-                skinned_base,
-                exclude_first,
-                exclude_end,
-            }),
+            METAL_AND_DIRECTX,
+            mirror!(CullParams => "CullParams" { view, hiz, }),
         ),
     ]
 }

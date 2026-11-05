@@ -1,9 +1,8 @@
 //! The `#[repr(C)]` blocks the CPU uploads into a single-source shader,
 //! declared once for every backend.
 //!
-//! The `metal`, `directx` and `vulkan` children are the exception: a block only
-//! one backend binds, or one whose single-source shader still declares a
-//! layout per backend (the cull kernel).
+//! The `metal` and `vulkan` children are the exception: blocks only one backend
+//! binds.
 //!
 //! Binding slots are not part of these declarations: the same block lands at a
 //! different index on each backend, so where it binds belongs to the backend
@@ -11,8 +10,8 @@
 
 pub mod bindless;
 pub mod canopy;
+pub mod cull;
 pub mod daylight;
-pub mod directx;
 pub mod geometry;
 pub mod grass;
 pub mod ground;

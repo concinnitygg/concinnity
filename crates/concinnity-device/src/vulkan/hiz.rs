@@ -58,7 +58,7 @@ use crate::vulkan::record::Recorder;
 use crate::vulkan::builtin_shaders::CompileProgram;
 use concinnity_engine::render::hiz::spd::{self, Plan};
 use concinnity_engine::render::uniforms::HizSpdParams;
-use concinnity_engine::render::uniforms::vulkan::CullHizParams;
+use concinnity_engine::render::uniforms::cull::CullHiz;
 
 // Compute pipelines + image + per-mip views + descriptor sets for the Hi-Z
 // build, plus the cull-read set (set 1 of the cull pipeline) and its per-frame
@@ -75,7 +75,7 @@ pub(super) struct HiZResources {
     spd_tail_set_layout: OwnedSetLayout,
 
     // Cull-read set layout (set 1 of the cull pipeline): the Hi-Z sampled image
-    // + CullHizParams UBO. Held here because `init.rs` threads it into the cull
+    // + CullHiz UBO. Held here because `init.rs` threads it into the cull
     // pipeline layout, and the layout survives a resize.
     pub(super) read_set_layout: OwnedSetLayout,
 
@@ -99,7 +99,7 @@ pub(super) struct HiZResources {
     spd_tail_sets: Vec<vk::DescriptorSet>,
     // Cull-read sets, one per frame (the UBO differs per frame slot).
     pub(super) read_sets: Vec<vk::DescriptorSet>,
-    // Per-frame CullHizParams uniform buffers (host-mapped), bound in
+    // Per-frame CullHiz uniform buffers (host-mapped), bound in
     // `read_sets[i]` binding 1 and written by `encode_cull`.
     pub(super) cull_ubos: Vec<PooledBuffer>,
 
@@ -286,7 +286,7 @@ impl HiZResources {
 
         // Per-frame cull-read uniform buffers (host-mapped). The phase-2 set
         // gets its own ring (`cull_ubos_late`) when two-pass occlusion is active.
-        let ubo_size = size_of::<CullHizParams>() as u64;
+        let ubo_size = size_of::<CullHiz>() as u64;
         let alloc_ubo_ring = |count: usize| -> RenderResult<Vec<PooledBuffer>> {
             (0..count)
                 .map(|_| {
@@ -441,7 +441,7 @@ impl HiZResources {
         }
         // Read sets: the all-mips Hi-Z view and the per-frame cull UBO; the
         // phase-2 sets bind the phase-2 ring.
-        let ubo_size = size_of::<CullHizParams>() as u64;
+        let ubo_size = size_of::<CullHiz>() as u64;
         for (&set, ubo) in read_sets.iter().zip(&self.cull_ubos) {
             write_read_set(device, set, sampled_view, ubo.buffer(), ubo_size);
         }
@@ -672,13 +672,13 @@ pub(super) fn off_camera_read_set(
     layout: vk::DescriptorSetLayout,
     view: vk::ImageView,
 ) -> RenderResult<(vk::DescriptorSet, PooledBuffer)> {
-    let params = CullHizParams {
+    let params = CullHiz {
         prev_view_proj: [[0.0; 4]; 4],
         hiz_size: [1.0, 1.0],
         hiz_mip_count: 1,
         hiz_enabled: 0,
     };
-    let size = size_of::<CullHizParams>() as u64;
+    let size = size_of::<CullHiz>() as u64;
     let ubo = alloc.create_buffer(
         size,
         vk::BufferUsageFlags::UNIFORM_BUFFER,

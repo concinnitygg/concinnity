@@ -20,94 +20,39 @@
 // since its ICB encoding (`render_command`, `array<command_buffer, N>`) is a
 // declaration HLSL cannot express.
 //
-// The backend define selects the host's constant shape, and here it is a
-// difference in shape rather than in slot numbers, so all three arms stay. Vulkan hands the kernel
-// a push constant for the frustum and bucket routing plus a set-1 uniform
-// buffer for the Hi-Z reprojection, because the Hi-Z half changes on a
-// different schedule and is owned by `vulkan/hiz.rs`. DirectX fuses both into
-// one b0 root-constant block (directx/cull.rs) and Metal into one inline block
-// at buffer(2) (metal/cull.rs), so the same fields arrive as one struct on
-// either. The accessor defines below are what let the body read them without
-// caring.
+// The inputs are one declaration for all three hosts, in two halves:
+// `CullView` (the frustum, camera and record counts) and `CullHiz` (the Hi-Z
+// reprojection). Vulkan pushes the view half as a push constant and binds the
+// Hi-Z half as a set-1 uniform buffer, because the Hi-Z half changes on a
+// different schedule and is owned by `vulkan/hiz.rs`; DirectX (b0 root
+// constants, directx/cull.rs) and Metal (inline at buffer(2), metal/cull.rs)
+// bind both as one `CullParams`. `CULL_VIEW` and `CULL_HIZ` name the halves
+// wherever they arrive.
 //
 {OBJECT_COMMON}
 {DEPTH_CONVENTION}
 {CULL_COMMON}
 
-// ---- Per-host constants ----
+// ---- Constants ----
 
-#if defined(CN_BACKEND_METAL)
-
-// Layout matches `metal::uniforms::CullUniforms` (224 B), the inline constant
-// block at buffer(2). `cam_pos` is a whole float4 lane (w unused): MSL sizes a
-// constant-buffer float3 at 16 bytes, so a scalar after it would not pack.
-struct CullParams
-{
-    float4   planes[6];
-    float4   cam_pos;
-    float4x4 prev_view_proj;
-    float2   hiz_size;
-    uint     hiz_mip_count;
-    uint     hiz_enabled;
-    uint     object_count;
-    uint     skinned_base;
-    uint     exclude_first;
-    uint     bucket_count;
-    uint     exclude_end;
-    uint     _pad0;
-    uint     _pad1;
-    uint     _pad2;
-};
-
-[[vk::push_constant]] ConstantBuffer<CullParams> cull : register(b2);
-
-#define CULL_PREV_VP      cull.prev_view_proj
-#define CULL_HIZ_SIZE     cull.hiz_size
-#define CULL_HIZ_MIPS     cull.hiz_mip_count
-#define CULL_HIZ_ENABLED  cull.hiz_enabled
-
-#elif defined(CN_BACKEND_DIRECTX)
-
-// Layout matches `directx::uniforms::CullParams` (208 B), the b0 root
-// constants. `cam_pos` shares its 16-byte row with `object_count`.
-struct CullParams
-{
-    float4   planes[6];
-    float3   cam_pos;
-    uint     object_count;
-    float4x4 prev_view_proj;
-    float2   hiz_size;
-    uint     hiz_mip_count;
-    uint     hiz_enabled;
-    uint     bucket_count;
-    uint     skinned_base;
-    uint     exclude_first;
-    uint     exclude_end;
-};
-
-ConstantBuffer<CullParams> cull : register(b0);
-
-#define CULL_PREV_VP      cull.prev_view_proj
-#define CULL_HIZ_SIZE     cull.hiz_size
-#define CULL_HIZ_MIPS     cull.hiz_mip_count
-#define CULL_HIZ_ENABLED  cull.hiz_enabled
-
-#else
-
-// Layout matches `vulkan::uniforms::CullParams` (128 B), the push constant.
-struct CullParams
+// Layout matches `uniforms::cull::CullView` (128 B, the push-constant size
+// every Vulkan device guarantees). The camera position is three scalars: a
+// float3 takes 16 bytes on Metal, which would not fit beside the five counts.
+struct CullView
 {
     float4 planes[6];
-    float3 cam_pos;
     uint   object_count;
     uint   bucket_count;
     uint   skinned_base;
     uint   exclude_first;
     uint   exclude_end;
+    float  cam_x;
+    float  cam_y;
+    float  cam_z;
 };
 
-// Layout matches `vulkan::uniforms::CullHizParams` (80 B), set 1 binding 1.
-struct CullHizParams
+// Layout matches `uniforms::cull::CullHiz` (80 B).
+struct CullHiz
 {
     float4x4 prev_view_proj;
     float2   hiz_size;
@@ -115,18 +60,38 @@ struct CullHizParams
     uint     hiz_enabled;
 };
 
-[[vk::push_constant]] ConstantBuffer<CullParams> cull : register(b0);
+#if defined(CN_BACKEND_METAL) || defined(CN_BACKEND_DIRECTX)
+
+// Layout matches `uniforms::cull::CullParams` (208 B).
+struct CullParams
+{
+    CullView view;
+    CullHiz  hiz;
+};
+
+#if defined(CN_BACKEND_METAL)
+[[vk::push_constant]] ConstantBuffer<CullParams> cull : register(b2);
+#else
+ConstantBuffer<CullParams> cull : register(b0);
+#endif
+
+#define CULL_VIEW cull.view
+#define CULL_HIZ  cull.hiz
+
+#else
+
+[[vk::push_constant]] ConstantBuffer<CullView> cull : register(b0);
 
 #ifndef SHADOW_CULL
-[[vk::binding(1, 1)]] ConstantBuffer<CullHizParams> hiz : register(b1, space1);
+[[vk::binding(1, 1)]] ConstantBuffer<CullHiz> hiz : register(b1, space1);
 #endif
 
-#define CULL_PREV_VP      hiz.prev_view_proj
-#define CULL_HIZ_SIZE     hiz.hiz_size
-#define CULL_HIZ_MIPS     hiz.hiz_mip_count
-#define CULL_HIZ_ENABLED  hiz.hiz_enabled
+#define CULL_VIEW cull
+#define CULL_HIZ  hiz
 
 #endif
+
+#define CULL_CAM_POS float3(CULL_VIEW.cam_x, CULL_VIEW.cam_y, CULL_VIEW.cam_z)
 
 // ---- Buffers ----
 //
@@ -198,12 +163,12 @@ bool frustum_culled(float3 bb_min, float3 bb_max)
 {
     [unroll] for (uint i = 0u; i < 6u; ++i)
     {
-        float3 n = cull.planes[i].xyz;
+        float3 n = CULL_VIEW.planes[i].xyz;
         float3 farthest = float3(
             n.x >= 0.0 ? bb_max.x : bb_min.x,
             n.y >= 0.0 ? bb_max.y : bb_min.y,
             n.z >= 0.0 ? bb_max.z : bb_min.z);
-        if (dot(n, farthest) + cull.planes[i].w < 0.0)
+        if (dot(n, farthest) + CULL_VIEW.planes[i].w < 0.0)
         {
             return true;
         }
@@ -215,7 +180,7 @@ bool frustum_culled(float3 bb_min, float3 bb_max)
 // camera is inside. Mirrors gfx::frustum::aabb_distance_sq.
 float aabb_distance_sq(float3 bb_min, float3 bb_max)
 {
-    float3 d = max(max(bb_min - cull.cam_pos.xyz, cull.cam_pos.xyz - bb_max), float3(0.0, 0.0, 0.0));
+    float3 d = max(max(bb_min - CULL_CAM_POS, CULL_CAM_POS - bb_max), float3(0.0, 0.0, 0.0));
     return dot(d, d);
 }
 
@@ -241,7 +206,7 @@ bool project_aabb(
             (i & 1u) != 0u ? bb_max.x : bb_min.x,
             (i & 2u) != 0u ? bb_max.y : bb_min.y,
             (i & 4u) != 0u ? bb_max.z : bb_min.z);
-        float4 clip = mul(CULL_PREV_VP, float4(corner, 1.0));
+        float4 clip = mul(CULL_HIZ.prev_view_proj, float4(corner, 1.0));
         if (clip.w <= 0.0)
         {
             return false;
@@ -281,13 +246,13 @@ bool hiz_occluded(float3 bb_min, float3 bb_max)
     {
         return false;
     }
-    return hiz_rect_occluded(ndc_min, ndc_max, aabb_nearest_depth, CULL_HIZ_SIZE, CULL_HIZ_MIPS);
+    return hiz_rect_occluded(ndc_min, ndc_max, aabb_nearest_depth, CULL_HIZ.hiz_size, CULL_HIZ.hiz_mip_count);
 }
 
 // Whether the farthest corner of the box lies past `start` from the eye.
 bool reaches_far(float3 bb_min, float3 bb_max, float start)
 {
-    float3 d = max(abs(cull.cam_pos.xyz - bb_min), abs(bb_max - cull.cam_pos.xyz));
+    float3 d = max(abs(CULL_CAM_POS - bb_min), abs(bb_max - CULL_CAM_POS));
     return dot(d, d) > start * start;
 }
 
@@ -352,24 +317,24 @@ uint variant_features(uint4 route, GpuDrawArgs a, uint i)
 uint record_bucket(GpuDrawArgs a, uint i)
 {
     uint route = (a.flags >> DRAW_ROUTE_SHIFT) & DRAW_ROUTE_MASK;
-    if (cull.bucket_count <= 1u)
+    if (CULL_VIEW.bucket_count <= 1u)
     {
         return 0u;
     }
     if (route == 0u || route > MAX_VARIANT_ROUTES)
     {
-        return min((a.flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK, cull.bucket_count - 1u);
+        return min((a.flags >> DRAW_BUCKET_SHIFT) & DRAW_BUCKET_MASK, CULL_VIEW.bucket_count - 1u);
     }
     uint4 r = CULL_VARIANTS[CULL_VARIANT_ROUTE_ROW + route - 1u];
     uint features = variant_features(r, a, i);
-    return min((r.x >> (8u * features)) & 0xFFu, cull.bucket_count - 1u);
+    return min((r.x >> (8u * features)) & 0xFFu, CULL_VIEW.bucket_count - 1u);
 }
 
 // The stream record `i`, kept with status `word`, draws in.
 uint kept_stream(uint i, uint word)
 {
     uint bucket = min(word >> CULL_BUCKET_SHIFT, MAX_SHADER_BUCKETS - 1u);
-    return record_stream(i, bucket, cull.bucket_count, cull.skinned_base,
+    return record_stream(i, bucket, CULL_VIEW.bucket_count, CULL_VIEW.skinned_base,
         CULL_REGION_SPANS(CULL_VARIANTS, bucket));
 }
 
@@ -392,10 +357,10 @@ void count_streams(uint gi, uint group, uint stream)
         InterlockedAdd(group_stream_counts[stream], 1u);
     }
     GroupMemoryBarrierWithGroupSync();
-    uint groups = (cull.object_count + CULL_GROUP_RECORDS - 1u) / CULL_GROUP_RECORDS;
+    uint groups = (CULL_VIEW.object_count + CULL_GROUP_RECORDS - 1u) / CULL_GROUP_RECORDS;
     // One thread a bucket, at most one bucket a thread, and the first the
     // skinned tail too.
-    if (gi < cull.bucket_count)
+    if (gi < CULL_VIEW.bucket_count)
     {
         group_counts[gi * groups + group] = group_stream_counts[gi];
     }
@@ -413,7 +378,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
 
     // Every thread of the group reaches the count, past the last record too.
     uint stream = NO_STREAM;
-    if (i < cull.object_count)
+    if (i < CULL_VIEW.object_count)
     {
 #if defined(SHADOW_CULL)
         GpuDrawArgs a = draw_args[i];
@@ -432,7 +397,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         cull_status[i] = draw ? STATUS_DRAWN : STATUS_CULLED;
         if (draw)
         {
-            stream = i >= cull.skinned_base ? SKINNED_STREAM : 0u;
+            stream = i >= CULL_VIEW.skinned_base ? SKINNED_STREAM : 0u;
         }
 #elif defined(CULL_LATE)
         // Runs after the pyramid was rebuilt from this frame's early depth.
@@ -446,7 +411,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         if ((word & CULL_OUTCOME_MASK) == STATUS_HIZ_CANDIDATE)
         {
             GpuObjectData obj = objects[i];
-            bool redraw = CULL_HIZ_ENABLED == 0u
+            bool redraw = CULL_HIZ.hiz_enabled == 0u
                 || !hiz_occluded(obj.bb_min_cull_distance.xyz, obj.bb_max_alpha_cutoff.xyz);
             cull_status[i] = (redraw ? STATUS_REDRAW : STATUS_HIZ_CULLED)
                 | (word & ~CULL_OUTCOME_MASK);
@@ -463,7 +428,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
         uint status = STATUS_DRAWN;
         // A view may leave out one run of records: a prop's own capture
         // leaves out the prop.
-        if ((a.flags & DRAW_ENABLED) == 0u || (i >= cull.exclude_first && i < cull.exclude_end))
+        if ((a.flags & DRAW_ENABLED) == 0u || (i >= CULL_VIEW.exclude_first && i < CULL_VIEW.exclude_end))
         {
             status = STATUS_CULLED;
         }
@@ -482,7 +447,7 @@ void cull_kernel(uint3 tid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint g
             {
                 status = STATUS_CULLED;
             }
-            else if (CULL_HIZ_ENABLED != 0u && hiz_occluded(bb_min, bb_max))
+            else if (CULL_HIZ.hiz_enabled != 0u && hiz_occluded(bb_min, bb_max))
             {
                 // Cull when the AABB is fully behind the previous frame's
                 // depth pyramid. Skipped on the first frame and after a resize

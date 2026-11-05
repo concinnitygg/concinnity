@@ -27,7 +27,8 @@ use super::init::pipelines::BucketPipelines;
 use super::pipeline::{cull_encode_library, ns_str};
 use super::scoped_encoder::ScopedEncoder;
 use concinnity_engine::render::uniforms::DaylightBlock;
-use concinnity_engine::render::uniforms::metal::{CullUniforms, ScatterParams};
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView as CullViewParams};
+use concinnity_engine::render::uniforms::metal::ScatterParams;
 
 // One shadow pass's GPU-driven views: a cull slot per view, its lists packed
 // by that view's cull, and the status scratch every view's cull writes in
@@ -877,19 +878,22 @@ impl MtlContext {
             ),
             None => (None, [1.0, 1.0], 1, 0u32),
         };
-        let cull_uniforms = CullUniforms {
-            planes,
-            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
-            prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
-            hiz_size,
-            hiz_mip_count,
-            hiz_enabled,
-            object_count: u32::saturating_from(object_count),
-            skinned_base: u32::saturating_from(counts.skinned_base),
-            exclude_first,
-            bucket_count: u32::saturating_from(icbs.len()),
-            exclude_end,
-            _pad: [0; 3],
+        let cull_uniforms = CullParams {
+            view: CullViewParams {
+                planes,
+                object_count: u32::saturating_from(object_count),
+                bucket_count: u32::saturating_from(icbs.len()),
+                skinned_base: u32::saturating_from(counts.skinned_base),
+                exclude_first,
+                exclude_end,
+                cam_pos,
+            },
+            hiz: CullHiz {
+                prev_view_proj: self.state.planner.temporal().occlusion().prev_view_proj(),
+                hiz_size,
+                hiz_mip_count,
+                hiz_enabled,
+            },
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -1059,19 +1063,22 @@ impl MtlContext {
         // the `HizEarly` pass always precedes this dispatch in the graph, so a
         // valid pyramid is guaranteed (the kernel still guards defensively).
         let skinned_base = u32::saturating_from(self.skinned_record_base());
-        let cull_uniforms = CullUniforms {
-            planes,
-            cam_pos: [cam_pos[0], cam_pos[1], cam_pos[2], 0.0],
-            prev_view_proj: self.cull.cur_view_proj,
-            hiz_size: [hiz.width as f32, hiz.height as f32],
-            hiz_mip_count: hiz.mip_count,
-            hiz_enabled: 1,
-            object_count: u32::saturating_from(object_count),
-            skinned_base,
-            exclude_first: 0,
-            bucket_count: u32::saturating_from(self.cull.icbs_late.len()),
-            exclude_end: 0,
-            _pad: [0; 3],
+        let cull_uniforms = CullParams {
+            view: CullViewParams {
+                planes,
+                object_count: u32::saturating_from(object_count),
+                bucket_count: u32::saturating_from(self.cull.icbs_late.len()),
+                skinned_base,
+                exclude_first: 0,
+                exclude_end: 0,
+                cam_pos,
+            },
+            hiz: CullHiz {
+                prev_view_proj: self.cull.cur_view_proj,
+                hiz_size: [hiz.width as f32, hiz.height as f32],
+                hiz_mip_count: hiz.mip_count,
+                hiz_enabled: 1,
+            },
         };
 
         let cull_pass_desc = MTLComputePassDescriptor::new();
@@ -1249,23 +1256,26 @@ impl MtlContext {
                 ProtocolObject::from_ref(&*slot.icb),
                 MTLResourceUsage::Write,
             );
-            let cull_uniforms = CullUniforms {
-                planes: frustum.packed_planes(),
-                // Unused by the shadow kernel (no distance cull); kept zero.
-                cam_pos: [0.0; 4],
-                // Unused (Hi-Z disabled); identity keeps the struct clean.
-                prev_view_proj: IDENTITY,
-                hiz_size: [1.0, 1.0],
-                hiz_mip_count: 1,
-                hiz_enabled: 0,
-                object_count: u32::saturating_from(object_count),
-                skinned_base: u32::saturating_from(skinned_base),
-                exclude_first: 0,
-                // The shadow cull writes one depth-only stream and the skinned
-                // tail.
-                bucket_count: 1,
-                exclude_end: 0,
-                _pad: [0; 3],
+            let cull_uniforms = CullParams {
+                view: CullViewParams {
+                    planes: frustum.packed_planes(),
+                    object_count: u32::saturating_from(object_count),
+                    // The shadow cull writes one depth-only stream and the skinned
+                    // tail.
+                    bucket_count: 1,
+                    skinned_base: u32::saturating_from(skinned_base),
+                    exclude_first: 0,
+                    exclude_end: 0,
+                    // Unused by the shadow kernel (no distance cull); kept zero.
+                    cam_pos: [0.0; 3],
+                },
+                hiz: CullHiz {
+                    // Unused (Hi-Z disabled); identity keeps the struct clean.
+                    prev_view_proj: IDENTITY,
+                    hiz_size: [1.0, 1.0],
+                    hiz_mip_count: 1,
+                    hiz_enabled: 0,
+                },
             };
             enc.set_value(&cull_uniforms, 2);
             dispatch_groups(

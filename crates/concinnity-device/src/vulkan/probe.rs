@@ -49,7 +49,7 @@ use super::set_writes::SetWrites;
 use super::texture::{GpuImage, ImageSpec, create_image, create_image_view};
 use crate::vulkan::depth;
 use crate::vulkan::owned::{OwnedDescriptorPool, OwnedFramebuffer, VkDevice};
-use concinnity_engine::render::uniforms::vulkan::CullParams;
+use concinnity_engine::render::uniforms::cull::CullView;
 use concinnity_engine::render::uniforms::{DaylightBlock, FaceCamera};
 
 // What a runtime capture bakes: face size, mip count, GGX sample count and firefly
@@ -69,21 +69,21 @@ const PROBE_DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 // with the one default bindless pipeline, so a bucketed record must land in
 // region 0 to appear at all -- with default shading, which is the documented
 // trade the DirectX and Metal capture paths make too.
-fn capture_cull_params(view: CaptureCull<'_>, n_cull: u32, skinned_base: u32) -> CullParams {
+fn capture_cull_params(view: CaptureCull<'_>, n_cull: u32, skinned_base: u32) -> CullView {
     let CaptureCull {
         frustum,
         eye: cam_pos,
         exclude: [exclude_first, exclude_end],
         ..
     } = view;
-    let mut params = CullParams {
+    let mut params = CullView {
         planes: [[0.0; 4]; 6],
-        cam_pos,
         object_count: n_cull,
         bucket_count: 1,
         skinned_base,
         exclude_first,
         exclude_end,
+        cam_pos,
     };
     params.planes = frustum.packed_planes();
     params
@@ -1559,24 +1559,14 @@ mod tests {
         let p = capture_cull_params(view, 4, 3);
         let bytes = bytemuck::bytes_of(&p);
         assert_eq!(bytes.len(), 128, "cull.hlsl's push_constant block is 128 B");
-        // The two routing fields live in the last 8 bytes: the exact span a
-        // 112-byte push left undefined.
-        assert_eq!(
-            &bytes[112..116],
-            &1u32.to_le_bytes(),
-            "bucket_count written"
-        );
-        assert_eq!(
-            &bytes[116..120],
-            &3u32.to_le_bytes(),
-            "skinned_base written"
-        );
-        assert_eq!(
-            &bytes[120..124],
-            &5u32.to_le_bytes(),
-            "exclude_first written"
-        );
-        assert_eq!(&bytes[124..128], &7u32.to_le_bytes(), "exclude_end written");
+        let word = |at: usize| &bytes[at..at + 4];
+        assert_eq!(word(100), &1u32.to_le_bytes(), "bucket_count written");
+        assert_eq!(word(104), &3u32.to_le_bytes(), "skinned_base written");
+        assert_eq!(word(108), &5u32.to_le_bytes(), "exclude_first written");
+        assert_eq!(word(112), &7u32.to_le_bytes(), "exclude_end written");
+        // The camera fills the block's last 12 bytes, the span a short push
+        // would leave undefined.
+        assert_eq!(word(124), &3.0f32.to_le_bytes(), "cam_pos written");
     }
 
     const IDENTITY: [[f32; 4]; 4] = [

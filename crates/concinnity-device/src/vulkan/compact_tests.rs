@@ -14,7 +14,7 @@ use concinnity_engine::gfx::render_types::{
     MAX_SHADER_BUCKETS, StreamLayout, bucket_regions, compact, count_slot_offset, draw_args_flags,
     group_count_words, group_counts, scan_group_counts,
 };
-use concinnity_engine::render::uniforms::vulkan::CullParams;
+use concinnity_engine::render::uniforms::cull::CullView;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::builtin_shaders::{CULL_SCAN, CULL_SCATTER, CULL_SHADOW, CompileProgram as _};
@@ -524,7 +524,7 @@ fn the_shadow_cull_counts_what_it_keeps_as_the_spec_does() {
     .expect("set layout");
     let push = vk::PushConstantRange::default()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        .size(u32::try_from(size_of::<CullParams>()).expect("push bytes"));
+        .size(u32::try_from(size_of::<CullView>()).expect("push bytes"));
     // SAFETY: as above.
     let pipeline_layout = unsafe {
         device.create_pipeline_layout(
@@ -584,7 +584,7 @@ fn the_shadow_cull_counts_what_it_keeps_as_the_spec_does() {
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 
     let wide = |n: [f32; 3]| [n[0], n[1], n[2], 1.0e6];
-    let params = CullParams {
+    let params = CullView {
         planes: [
             [1.0, 0.0, 0.0, 50.0],
             [-1.0, 0.0, 0.0, 50.0],
@@ -593,12 +593,12 @@ fn the_shadow_cull_counts_what_it_keeps_as_the_spec_does() {
             wide([0.0, 0.0, 1.0]),
             wide([0.0, 0.0, -1.0]),
         ],
-        cam_pos: [0.0; 3],
         object_count: records,
         bucket_count: 1,
         skinned_base: skinned_base(records),
         exclude_first: 0,
         exclude_end: 0,
+        cam_pos: [0.0; 3],
     };
     // SAFETY: family 0 is the one queue family `test_gpu` created a queue in.
     let cmd_pool = unsafe {

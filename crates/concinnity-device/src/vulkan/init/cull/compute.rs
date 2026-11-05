@@ -153,7 +153,7 @@ pub(super) fn build_compute_cull(
 
             // Hi-Z occlusion resources. Built under the same gating as the cull
             // pipeline; its `read_set_layout` becomes set 1 of the cull
-            // pipeline (the Hi-Z image + per-frame CullHizParams UBO).
+            // pipeline (the Hi-Z image + per-frame CullHiz UBO).
             let depth_views: Vec<vk::ImageView> =
                 targets.depth_images.iter().map(|img| img.view).collect();
             let hiz = crate::vulkan::hiz::HiZResources::new(

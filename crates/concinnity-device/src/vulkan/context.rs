@@ -414,7 +414,7 @@ pub(super) struct VkCull {
     pub(super) main_render_pass_late: Option<OwnedRenderPass>,
     // Hi-Z occlusion culling. The depth-mip pyramid (built at end of frame
     // from this frame's main depth) + its build pipelines + the cull pipeline's
-    // set 1 (the Hi-Z image + per-frame `CullHizParams` UBO). `Some` exactly
+    // set 1 (the Hi-Z image + per-frame `CullHiz` UBO). `Some` exactly
     // when the GPU-cull pipeline is active (same gating as `cull_kernels`):
     // the next frame's `Cull` kernel projects each AABB through the previous
     // frame's un-jittered VP and discards objects fully behind the pyramid.

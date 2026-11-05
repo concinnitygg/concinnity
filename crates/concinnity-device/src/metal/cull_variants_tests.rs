@@ -13,7 +13,7 @@ use concinnity_engine::gfx::render_types::{
     scan_group_counts,
 };
 use concinnity_engine::render::uniforms::DaylightBlock;
-use concinnity_engine::render::uniforms::metal::CullUniforms;
+use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
     MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _, MTLCommandQueue as _,
@@ -186,19 +186,22 @@ fn run(
     // SAFETY: as for the width.
     unsafe { desc.setHeight(1) };
     let hiz = device.newTextureWithDescriptor(&desc).expect("texture");
-    let uniforms = CullUniforms {
-        planes: [[0.0; 4]; 6],
-        cam_pos: [eye[0], eye[1], eye[2], 0.0],
-        prev_view_proj: [[0.0; 4]; 4],
-        hiz_size: [1.0, 1.0],
-        hiz_mip_count: 1,
-        hiz_enabled: 0,
-        object_count: u32::try_from(records.len()).expect("records"),
-        skinned_base: SKINNED_BASE,
-        exclude_first: 0,
-        bucket_count: BUCKETS,
-        exclude_end: 0,
-        _pad: [0; 3],
+    let uniforms = CullParams {
+        view: CullView {
+            planes: [[0.0; 4]; 6],
+            object_count: u32::try_from(records.len()).expect("records"),
+            bucket_count: BUCKETS,
+            skinned_base: SKINNED_BASE,
+            exclude_first: 0,
+            exclude_end: 0,
+            cam_pos: [eye[0], eye[1], eye[2]],
+        },
+        hiz: CullHiz {
+            prev_view_proj: [[0.0; 4]; 4],
+            hiz_size: [1.0, 1.0],
+            hiz_mip_count: 1,
+            hiz_enabled: 0,
+        },
     };
     let queue = device.newCommandQueue().expect("queue");
     let cmd = queue.commandBuffer().expect("command buffer");
@@ -216,7 +219,7 @@ fn run(
     enc.set_pipeline(&scan);
     enc.set_value(
         &GpuCompactParams {
-            object_count: uniforms.object_count,
+            object_count: uniforms.view.object_count,
             bucket_count: BUCKETS,
             skinned_base: SKINNED_BASE,
             drawn: CullStatus::DRAWN,

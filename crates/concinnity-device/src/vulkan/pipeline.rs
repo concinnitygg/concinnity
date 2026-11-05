@@ -88,11 +88,8 @@ pub(super) fn compile_bindless_shaders(hot_reload: bool) -> RenderResult<Bindles
 // `VkDrawIndexedIndirectCommand`. The object id rides `first_instance` (the
 // bindless vertex shader reads it as `gl_InstanceIndex`).
 
-// Byte size of the cull kernel's `CullParams` push-constant block: six
-// `vec4` planes (96) + `vec3 cam_pos` + `uint object_count` (the trailing
-// scalar shares the camera position's 16-byte std430 slot) + the shader-bucket
-// routing pair (8) + the excluded record range (8): exactly the 128-byte
-// minimum guaranteed push-constant range.
+// Byte size of the cull kernel's `CullView` push-constant block: exactly the
+// 128-byte push-constant range every device guarantees.
 pub(super) const CULL_PUSH_CONSTANT_BYTES: u32 = 128;
 
 // A shader module scoped to pipeline creation: destroyed on drop, so the

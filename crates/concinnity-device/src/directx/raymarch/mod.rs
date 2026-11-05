@@ -1580,4 +1580,4 @@ fn draw_volume_cube(cmd: &ID3D12GraphicsCommandList, pso: &ID3D12PipelineState, 
 const _LIGHT_LAYOUT_REF: usize = size_of::<LightUniforms>();
 
 // The `RaymarchView` / `RaymarchVolumeUniforms` layout tests live with the
-// structs in `concinnity_engine::render::uniforms::directx`.
+// structs in `concinnity_engine::render::uniforms::raymarch`.
