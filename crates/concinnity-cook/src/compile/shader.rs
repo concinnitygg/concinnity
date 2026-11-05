@@ -101,11 +101,14 @@ fn hook_hint(diagnostic: &str) -> &'static str {
 /// # Errors
 ///
 /// Returns an error if the file cannot be read.
-pub fn read_shader_source(source_path: &str) -> Result<String, std::io::Error> {
+pub fn read_shader_source(source_path: &std::path::Path) -> Result<String, std::io::Error> {
     std::fs::read_to_string(source_path).map_err(|e| {
         std::io::Error::new(
             e.kind(),
-            format!("Failed to read shader source '{source_path}': {e}"),
+            format!(
+                "Failed to read shader source '{}': {e}",
+                source_path.display()
+            ),
         )
     })
 }
@@ -123,7 +126,7 @@ mod tests {
 
     #[test]
     fn a_read_error_reports_the_path_and_keeps_the_io_error_kind() {
-        let err = read_shader_source("/no/such/user.hlsl").unwrap_err();
+        let err = read_shader_source(std::path::Path::new("/no/such/user.hlsl")).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(
             err.to_string()

@@ -13,7 +13,7 @@
 use concinnity_host::store::source::find_in;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use crate::asset::{BuildCtx, CacheInputs, SourceFiles};
@@ -25,8 +25,9 @@ use crate::file_stamp::FileStamp;
 // dominates the build; the memo reads + hashes each unique file once. Keyed by
 // `FileStamp` so a file edited between in-process rebuilds (the `cn run -f`
 // hot-reload path) is re-hashed rather than served stale.
-fn file_content_hash(path: &str) -> Option<[u8; 32]> {
-    type HashMemo = Mutex<HashMap<String, (FileStamp, [u8; 32])>>;
+fn file_content_hash(path: impl AsRef<Path>) -> Option<[u8; 32]> {
+    let path = path.as_ref();
+    type HashMemo = Mutex<HashMap<PathBuf, (FileStamp, [u8; 32])>>;
     static MEMO: OnceLock<HashMemo> = OnceLock::new();
     let stamp = FileStamp::read(path)?;
     // Decided before the read, so a write racing it lands on a later mtime and
@@ -48,7 +49,7 @@ fn file_content_hash(path: &str) -> Option<[u8; 32]> {
     if memoizable {
         memo.lock()
             .expect("file-stamp memo lock is not poisoned")
-            .insert(path.to_string(), (stamp, hash));
+            .insert(path.to_path_buf(), (stamp, hash));
     }
     Some(hash)
 }
@@ -138,12 +139,23 @@ pub(crate) fn bake_key(payload_key: &str) -> String {
     format!("{payload_key}-bake")
 }
 
+// Order by the path's bytes rather than its components, so the key matches
+// the order of the text the paths were written as.
+fn sort_by_path_bytes(files: &mut [(PathBuf, [u8; 32])]) {
+    files.sort_by(|a, b| {
+        a.0.as_os_str()
+            .as_encoded_bytes()
+            .cmp(b.0.as_os_str().as_encoded_bytes())
+            .then(a.1.cmp(&b.1))
+    });
+}
+
 // Hash the fixed parts of a key. Split out from `payload_key` so tests can
 // supply file contents directly without touching the filesystem.
 fn key_from_parts(
     discriminant: u8,
     args: &serde_json::Value,
-    files: &[(String, [u8; 32])],
+    files: &[(PathBuf, [u8; 32])],
     target: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
@@ -169,12 +181,13 @@ fn key_from_parts(
         None => hasher.update([0u8]),
     }
 
-    // Sort so the key does not depend on JSON traversal order.
+    // Sorted so the key does not depend on JSON traversal order.
     let mut files = files.to_vec();
-    files.sort();
+    sort_by_path_bytes(&mut files);
     for (path, content_hash) in &files {
+        let path = path.as_os_str().as_encoded_bytes();
         hasher.update((path.len() as u64).to_le_bytes());
-        hasher.update(path.as_bytes());
+        hasher.update(path);
         hasher.update(content_hash);
     }
     hex::encode(hasher.finalize())
@@ -187,7 +200,7 @@ fn key_from_parts(
 // directly. Strings that do not
 // resolve to a file (asset names, generator keywords, colors) contribute
 // nothing.
-fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(String, [u8; 32])> {
+fn referenced_files(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> Vec<(PathBuf, [u8; 32])> {
     let mut strings = Vec::new();
     collect_strings(args, &mut strings);
 
@@ -215,20 +228,17 @@ fn collect_strings(v: &serde_json::Value, out: &mut Vec<String>) {
 // Resolve a single args string to an existing file path, or None. Only strings
 // that look like filenames (have an extension or a path separator) are probed,
 // so the common case of short keyword args costs nothing.
-fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<String> {
+fn resolve_source(s: &str, ctx: &BuildCtx<'_>) -> Option<PathBuf> {
     let looks_like_file = s.contains('/') || s.contains('\\') || Path::new(s).extension().is_some();
     if !looks_like_file {
         return None;
     }
     // Direct path (absolute, or relative to the build working directory).
     if Path::new(s).is_file() {
-        return Some(s.to_string());
+        return Some(PathBuf::from(s));
     }
     // Bare filename searched recursively under the asset search root.
-    if let Some(p) = ctx.assets_dir.and_then(|dir| find_in(dir, s)) {
-        return Some(p);
-    }
-    None
+    ctx.assets_dir.and_then(|dir| find_in(dir, s))
 }
 
 #[cfg(test)]
@@ -280,12 +290,25 @@ mod tests {
     #[test]
     fn key_ignores_referenced_file_order() {
         let a = json!({});
-        let f1 = ("a.hdr".to_string(), [1u8; 32]);
-        let f2 = ("b.hdr".to_string(), [2u8; 32]);
+        let f1 = (PathBuf::from("a.hdr"), [1u8; 32]);
+        let f2 = (PathBuf::from("b.hdr"), [2u8; 32]);
         assert_eq!(
             key_from_parts(0, &a, &[f1.clone(), f2.clone()], None),
             key_from_parts(0, &a, &[f2, f1], None),
         );
+    }
+
+    // A file sorts before a directory of the same stem, as its text does;
+    // component order would put the directory first.
+    #[test]
+    fn referenced_files_sort_by_path_bytes() {
+        let mut files = [
+            (PathBuf::from("assets/rock/normal.png"), [2u8; 32]),
+            (PathBuf::from("assets/rock.png"), [1u8; 32]),
+        ];
+        sort_by_path_bytes(&mut files);
+        assert_eq!(files[0].0, PathBuf::from("assets/rock.png"));
+        assert_eq!(files[1].0, PathBuf::from("assets/rock/normal.png"));
     }
 
     // The compile target separates payloads that share every other input.
@@ -354,7 +377,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("shader.metal");
         std::fs::write(&file, b"void shade() {}").unwrap();
-        let path = file.to_str().unwrap().to_string();
+        let path = file.clone();
         // Args reference the file by a bare token the cache cannot resolve on
         // its own (no extension, no separator), so only `extra_source_files`
         // can contribute the content hash.
@@ -375,7 +398,7 @@ mod tests {
         // the rest of the cache layer). A missing file produces the same key
         // as no extra files at all.
         let args = json!({ "fragment_shader": "chrome" });
-        let missing = "/definitely/not/a/real/path.metal".to_string();
+        let missing = PathBuf::from("/definitely/not/a/real/path.metal");
         assert_eq!(
             payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![])),
             payload_key(11, &args, &ctx(), &CacheInputs::extra(vec![missing])),
@@ -405,7 +428,7 @@ mod tests {
         }});
         let only = |inputs: &CacheInputs| payload_key(9, &args, &ctx(), inputs);
         let reported = CacheInputs {
-            sources: SourceFiles::Only(vec![used.to_str().unwrap().to_string()]),
+            sources: SourceFiles::Only(vec![used.clone()]),
             target_dependent: false,
             dependencies: Vec::new(),
         };
@@ -594,7 +617,7 @@ mod tests {
         };
 
         let found = resolve_source("sky.hdr", &assets_ctx).expect("bare filename resolves");
-        assert!(found.ends_with("sky.hdr"), "got: {found}");
+        assert!(found.ends_with("sky.hdr"), "got: {}", found.display());
         assert_eq!(resolve_source("missing.hdr", &assets_ctx), None);
         // Without a search root the same bare filename resolves nothing.
         assert_eq!(resolve_source("sky.hdr", &ctx()), None);

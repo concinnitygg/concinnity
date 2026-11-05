@@ -42,20 +42,21 @@ pub(crate) fn stage_name(stage: ShaderStage) -> &'static str {
 // matches them against what this returns.
 pub(crate) fn resolve_path(declared: &str, assets_dir: Option<&Path>) -> String {
     concinnity_host::store::source::resolve_source_path(declared, assets_dir)
+        .to_string_lossy()
+        .into_owned()
 }
 
 // The on-disk path of a declared distance field, as the renderer's catalog and
 // the cook find it; a file not written yet is where a new one under the assets
 // directory would go.
 pub(crate) fn resolve_field_path(declared: &str, assets_dir: Option<&Path>) -> String {
-    concinnity_host::store::source::find_existing(declared, assets_dir).unwrap_or_else(|| {
-        match assets_dir {
-            Some(dir) if !Path::new(declared).is_absolute() => {
-                dir.join(declared).to_string_lossy().into_owned()
-            }
-            _ => declared.to_string(),
-        }
-    })
+    concinnity_host::store::source::find_existing(declared, assets_dir)
+        .unwrap_or_else(|| match assets_dir {
+            Some(dir) if !Path::new(declared).is_absolute() => dir.join(declared),
+            _ => declared.into(),
+        })
+        .to_string_lossy()
+        .into_owned()
 }
 
 // Whether two spellings name one file: the same text, or the same file once

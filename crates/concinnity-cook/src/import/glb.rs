@@ -291,7 +291,7 @@ pub(crate) fn split_into_u16_chunks(
 // that root (the same resolution `ColorLut` and `EnvironmentMap` sources use)
 // while a path with a directory component is taken as-is, so a relative or
 // absolute path still works for local test worlds.
-pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> String {
+pub(crate) fn resolve_source(source: &str, assets_dir: Option<&Path>) -> std::path::PathBuf {
     resolve_source_path(source, assets_dir)
 }
 
@@ -2077,9 +2077,12 @@ mod tests {
     fn resolve_source_keeps_paths_with_a_directory_component() {
         let dir = tempfile::tempdir().expect("tempdir");
         let assets = Some(dir.path());
-        assert_eq!(resolve_source("sub/f.glb", assets), "sub/f.glb");
-        assert_eq!(resolve_source("./f.glb", assets), "./f.glb");
-        assert_eq!(resolve_source("/abs/f.glb", assets), "/abs/f.glb");
+        assert_eq!(resolve_source("sub/f.glb", assets), Path::new("sub/f.glb"));
+        assert_eq!(resolve_source("./f.glb", assets), Path::new("./f.glb"));
+        assert_eq!(
+            resolve_source("/abs/f.glb", assets),
+            Path::new("/abs/f.glb")
+        );
     }
 
     #[test]
@@ -2089,9 +2092,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             resolve_source("cn_test_no_such_model.glb", Some(dir.path())),
-            dir.path()
-                .join("cn_test_no_such_model.glb")
-                .to_string_lossy()
+            dir.path().join("cn_test_no_such_model.glb")
         );
     }
 
@@ -2101,7 +2102,7 @@ mod tests {
     fn resolve_source_without_an_assets_dir_returns_the_bare_name() {
         assert_eq!(
             resolve_source("cn_test_no_such_model.glb", None),
-            "cn_test_no_such_model.glb"
+            Path::new("cn_test_no_such_model.glb")
         );
     }
 

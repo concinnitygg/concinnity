@@ -140,7 +140,7 @@ fn spawn_envmap_worker(state: &AssetHotReloadState) {
             set_current_thread_role(ThreadRole::Background);
             let result = pool().scope(|| {
                 concinnity_cook::compile::environment_map::decode_source(
-                    &env_map_copy.resolved_path,
+                    std::path::Path::new(&env_map_copy.resolved_path),
                     env_map_copy.prefilter_face_size,
                     env_map_copy.irradiance_face_size,
                     env_map_copy.prefilter_samples,
@@ -271,7 +271,9 @@ pub(super) fn decode_asset_batch(
 
     // ColorLut: single source, decoded serially.
     if let Some(lut) = color_lut {
-        match concinnity_cook::compile::color_lut::decode_source(&lut.resolved_path) {
+        match concinnity_cook::compile::color_lut::decode_source(std::path::Path::new(
+            &lut.resolved_path,
+        )) {
             Ok((size, data)) => {
                 batch.color_lut = Some(DecodedColorLut {
                     size,

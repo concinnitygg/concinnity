@@ -58,57 +58,62 @@ pub(crate) fn add_to_path(
 
     let tmp_path = format!("{world_path}.tmp");
 
-    patch_world_jsonl_to(world_path, &tmp_path, |assets| {
-        // Re-adding a text file (or any other single-entry TextLabel target)
-        // refreshes the existing same-name TextLabel's `content` in place
-        // instead of erroring. Drag-dropping the same `.txt` twice (or
-        // editing its body and re-adding) should "just work". Other args
-        // (font, x/y, color, scale, centered, ...) are left alone so any
-        // hand edits to the TextLabel survive the refresh.
-        if let Some(refreshed) = try_refresh_text_label(assets, &entries) {
-            tracing::info!("refreshed TextLabel '{}' content", refreshed);
-            return Ok(());
-        }
+    patch_world_jsonl_to(
+        std::path::Path::new(world_path),
+        std::path::Path::new(&tmp_path),
+        |assets| {
+            // Re-adding a text file (or any other single-entry TextLabel target)
+            // refreshes the existing same-name TextLabel's `content` in place
+            // instead of erroring. Drag-dropping the same `.txt` twice (or
+            // editing its body and re-adding) should "just work". Other args
+            // (font, x/y, color, scale, centered, ...) are left alone so any
+            // hand edits to the TextLabel survive the refresh.
+            if let Some(refreshed) = try_refresh_text_label(assets, &entries) {
+                tracing::info!("refreshed TextLabel '{}' content", refreshed);
+                return Ok(());
+            }
 
-        // Likewise for an `.hdr`: a world binds one lighting environment, so a
-        // second EnvironmentMap would never render. Point the existing one at
-        // the new source instead of appending.
-        if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
-            // Printed, not just traced: this edits an asset the user already
-            // authored, so it must not look like a plain append.
-            println!("Pointed existing EnvironmentMap '{retargeted}' at {source}");
-            return Ok(());
-        }
+            // Likewise for an `.hdr`: a world binds one lighting environment, so a
+            // second EnvironmentMap would never render. Point the existing one at
+            // the new source instead of appending.
+            if let Some((retargeted, source)) = try_retarget_environment_map(assets, &entries) {
+                // Printed, not just traced: this edits an asset the user already
+                // authored, so it must not look like a plain append.
+                println!("Pointed existing EnvironmentMap '{retargeted}' at {source}");
+                return Ok(());
+            }
 
-        for entry_name in &entry_names {
-            if let Some(existing) = assets
-                .iter()
-                .find(|a| entry_id(a) == Some(entry_name.as_str()))
-            {
-                let existing_type = existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::AlreadyExists,
-                    format!(
-                        "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
+            for entry_name in &entry_names {
+                if let Some(existing) = assets
+                    .iter()
+                    .find(|a| entry_id(a) == Some(entry_name.as_str()))
+                {
+                    let existing_type =
+                        existing.get("type").and_then(|v| v.as_str()).unwrap_or("?");
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!(
+                            "an asset with `$id` '{entry_name}' (type: {existing_type}) already exists in {WORLD_JSONL}; \
                          remove it first with `concinnity rm {entry_name}`"
-                    ),
-                ));
+                        ),
+                    ));
+                }
             }
-        }
-        // Append template entries first so the new asset's own systems (e.g.
-        // a glTF's Camera3D) run alongside the template's setup. Any template
-        // entry whose id already exists in the world is skipped to avoid
-        // clobbering user-authored assets that happen to share it.
-        for entry in scaffold {
-            let taken =
-                entry_id(&entry).is_some_and(|n| assets.iter().any(|a| entry_id(a) == Some(n)));
-            if !taken {
-                assets.push(entry);
+            // Append template entries first so the new asset's own systems (e.g.
+            // a glTF's Camera3D) run alongside the template's setup. Any template
+            // entry whose id already exists in the world is skipped to avoid
+            // clobbering user-authored assets that happen to share it.
+            for entry in scaffold {
+                let taken =
+                    entry_id(&entry).is_some_and(|n| assets.iter().any(|a| entry_id(a) == Some(n)));
+                if !taken {
+                    assets.push(entry);
+                }
             }
-        }
-        assets.extend(entries);
-        Ok(())
-    })?;
+            assets.extend(entries);
+            Ok(())
+        },
+    )?;
 
     let built = super::build_world_file_as(&tmp_path, world_path, Verbosity::Normal);
     match built {
@@ -609,7 +614,7 @@ pub(crate) fn entry_from_path(path_str: &str) -> std::io::Result<Vec<serde_json:
 // (see `concinnity_cook::import::panorama`) and scene geometry otherwise. The choice
 // is logged because the same extension lands two different asset types.
 fn scene_or_panorama_entry(stem: &str, path_str: &str) -> std::io::Result<serde_json::Value> {
-    if concinnity_cook::import::panorama::file_is_panorama_sphere(path_str) {
+    if concinnity_cook::import::panorama::file_is_panorama_sphere(std::path::Path::new(path_str)) {
         tracing::info!(
             "'{}' is a panorama sphere: importing it as an EnvironmentMap (sky \
              and image-based lighting) rather than scene geometry",

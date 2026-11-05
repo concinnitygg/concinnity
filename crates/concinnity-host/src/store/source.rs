@@ -16,25 +16,22 @@ use std::path::{Path, PathBuf};
 
 /// Recursively search `assets_dir` for a file matching the given bare
 /// filename, returning the first match.
-pub fn find_in(assets_dir: &Path, filename: &str) -> Option<String> {
-    walk(assets_dir, filename).map(|p| p.to_string_lossy().into_owned())
+pub fn find_in(assets_dir: &Path, filename: &str) -> Option<PathBuf> {
+    walk(assets_dir, filename)
 }
 
 /// Resolve a source string into a filesystem path: bare filenames are searched
 /// for under `assets_dir` and fall back to sitting directly in it, so a miss
 /// still names the file the read error will report. With no assets dir the
 /// source is returned verbatim, which is again the path the read error names.
-pub fn resolve_source_path(source: &str, assets_dir: Option<&Path>) -> String {
+pub fn resolve_source_path(source: &str, assets_dir: Option<&Path>) -> PathBuf {
     let Some(assets_dir) = assets_dir else {
-        return source.to_string();
+        return PathBuf::from(source);
     };
     if !is_bare(source) {
-        return source.to_string();
+        return PathBuf::from(source);
     }
-    walk(assets_dir, source)
-        .unwrap_or_else(|| assets_dir.join(source))
-        .to_string_lossy()
-        .into_owned()
+    walk(assets_dir, source).unwrap_or_else(|| assets_dir.join(source))
 }
 
 /// The first file that exists among the places a source string can name, in
@@ -43,23 +40,23 @@ pub fn resolve_source_path(source: &str, assets_dir: Option<&Path>) -> String {
 /// checkout's asset tree; and `source` itself, relative to the working
 /// directory. An absolute `source` names only itself. `None` when nothing
 /// exists, so the caller's read error names the path it tried.
-pub fn find_existing(source: &str, assets_dir: Option<&Path>) -> Option<String> {
-    let mut candidates: Vec<String> = Vec::new();
+pub fn find_existing(source: &str, assets_dir: Option<&Path>) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if Path::new(source).is_absolute() {
-        candidates.push(source.to_string());
+        candidates.push(PathBuf::from(source));
     } else {
         if let Some(assets) = assets_dir {
-            candidates.push(assets.join(source).to_string_lossy().into_owned());
+            candidates.push(assets.join(source));
         }
         if is_bare(source)
             && let Some(found) = assets_dir.and_then(|dir| find_in(dir, source))
         {
             candidates.push(found);
         }
-        candidates.push(format!("assets/{source}"));
-        candidates.push(source.to_string());
+        candidates.push(Path::new("assets").join(source));
+        candidates.push(PathBuf::from(source));
     }
-    candidates.into_iter().find(|p| Path::new(p).exists())
+    candidates.into_iter().find(|p| p.exists())
 }
 
 // True when `source` names a file with no directory component.
@@ -106,11 +103,11 @@ mod tests {
         // a path, so no search applies.
         assert_eq!(
             resolve_source_path("hdri/sky.hdr", Some(dir.path())),
-            "hdri/sky.hdr"
+            Path::new("hdri/sky.hdr")
         );
         assert_eq!(
             resolve_source_path("/abs/sky.hdr", Some(dir.path())),
-            "/abs/sky.hdr"
+            Path::new("/abs/sky.hdr")
         );
     }
 
@@ -122,10 +119,7 @@ mod tests {
         let target = nested.join("sky.hdr");
         std::fs::write(&target, b"x").unwrap();
 
-        assert_eq!(
-            resolve_source_path("sky.hdr", Some(dir.path())),
-            target.to_string_lossy().into_owned()
-        );
+        assert_eq!(resolve_source_path("sky.hdr", Some(dir.path())), target);
     }
 
     #[test]
@@ -133,10 +127,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             resolve_source_path("cn_no_such_asset.hdr", Some(dir.path())),
-            dir.path()
-                .join("cn_no_such_asset.hdr")
-                .to_string_lossy()
-                .into_owned()
+            dir.path().join("cn_no_such_asset.hdr")
         );
     }
 
@@ -144,8 +135,11 @@ mod tests {
     // back untouched rather than anchored to a guessed root.
     #[test]
     fn resolving_without_an_assets_dir_returns_the_source_verbatim() {
-        assert_eq!(resolve_source_path("sky.hdr", None), "sky.hdr");
-        assert_eq!(resolve_source_path("hdri/sky.hdr", None), "hdri/sky.hdr");
+        assert_eq!(resolve_source_path("sky.hdr", None), Path::new("sky.hdr"));
+        assert_eq!(
+            resolve_source_path("hdri/sky.hdr", None),
+            Path::new("hdri/sky.hdr")
+        );
     }
 
     #[test]
@@ -155,7 +149,7 @@ mod tests {
         let missing = Path::new("/nonexistent/cn/assets");
         assert_eq!(
             resolve_source_path("sky.hdr", Some(missing)),
-            missing.join("sky.hdr").to_string_lossy().into_owned()
+            missing.join("sky.hdr")
         );
     }
 
@@ -166,21 +160,10 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(assets.path().join("shaders")).unwrap();
         std::fs::write(assets.path().join("shaders/blob.hlsl"), b"x").unwrap();
-        let nested = assets
-            .path()
-            .join("shaders")
-            .join("blob.hlsl")
-            .to_string_lossy()
-            .into_owned();
+        let nested = assets.path().join("shaders").join("blob.hlsl");
         assert_eq!(
             find_existing("shaders/blob.hlsl", Some(assets.path())),
-            Some(
-                assets
-                    .path()
-                    .join("shaders/blob.hlsl")
-                    .to_string_lossy()
-                    .into_owned()
-            )
+            Some(assets.path().join("shaders/blob.hlsl"))
         );
         assert_eq!(
             find_existing("blob.hlsl", Some(assets.path())),
@@ -204,10 +187,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("sky.hdr"), b"x").unwrap();
 
-        assert_eq!(
-            find_in(dir.path(), "sky.hdr").as_deref(),
-            nested.join("sky.hdr").to_str()
-        );
+        assert_eq!(find_in(dir.path(), "sky.hdr"), Some(nested.join("sky.hdr")));
         assert_eq!(find_in(dir.path(), "cn_test_no_such_asset.json"), None);
     }
 }

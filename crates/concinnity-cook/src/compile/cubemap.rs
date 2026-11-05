@@ -66,7 +66,7 @@ pub(crate) fn compile_cubemap_payload(args: &serde_json::Value) -> Result<Vec<u8
             .unwrap_or(256),
     );
 
-    let hdr = crate::codec::hdr::load_file(source)?;
+    let hdr = crate::codec::hdr::load_file(std::path::Path::new(source))?;
     let faces = equirect_to_cube(&hdr, face_size);
     Ok(serialize_faces(face_size, &faces))
 }

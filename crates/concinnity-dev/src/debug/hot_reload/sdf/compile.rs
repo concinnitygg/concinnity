@@ -42,7 +42,7 @@ impl FieldKey {
 // Read the field at `path`, under that path, which is the path its diagnostics
 // then name. The error names the file.
 pub(in crate::debug::hot_reload) fn read_field(path: &str) -> Result<ShaderSource, String> {
-    concinnity_cook::compile::shader::read_shader_source(path)
+    concinnity_cook::compile::shader::read_shader_source(std::path::Path::new(path))
         .map(|text| ShaderSource {
             path: path.to_string(),
             text,

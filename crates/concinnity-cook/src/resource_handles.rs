@@ -89,7 +89,7 @@ impl RegisteredType {
         self,
         args: &serde_json::Value,
         assets_dir: Option<&Path>,
-    ) -> Vec<String> {
+    ) -> Vec<std::path::PathBuf> {
         match self {
             Self::AudioClip
             | Self::Texture
@@ -98,21 +98,20 @@ impl RegisteredType {
             | Self::ColorLut
             | Self::Mesh
             | Self::SkinnedMesh => {
-                let mut files: Vec<String> = args
+                let source = args
                     .get("source")
                     .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .into_iter()
-                    .collect();
+                    .filter(|s| !s.is_empty());
+                let mut files: Vec<std::path::PathBuf> =
+                    source.map(std::path::PathBuf::from).into_iter().collect();
                 // A text `.gltf` reads sibling files (external buffers /
                 // images) the args never name; fold them into the cache key
                 // so editing one recompiles the payload.
-                if let Some(src) = files.first().cloned()
+                if let Some(src) = source
                     && src.to_lowercase().ends_with(".gltf")
                 {
                     files.extend(crate::import::gltf_source::referenced_files(
-                        &src, assets_dir,
+                        src, assets_dir,
                     ));
                 }
                 // A character model reads its source file.
@@ -131,7 +130,7 @@ impl RegisteredType {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
-                .map(str::to_string)
+                .map(std::path::PathBuf::from)
                 .into_iter()
                 .collect(),
             // A Material bakes only its authored args (texture refs are already

@@ -18,7 +18,11 @@ pub(crate) enum ShaderPayloadSource {
     // RAM-backed world (`cn run -f`, `cn edit`): the payload bytes.
     Bytes(Vec<u8>),
     // Disk-backed world (`cn run`): the payload's absolute range in its blob.
-    Disk { path: String, offset: u64, len: u64 },
+    Disk {
+        path: std::path::PathBuf,
+        offset: u64,
+        len: u64,
+    },
 }
 
 impl ShaderPayloadSource {

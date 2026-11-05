@@ -12,6 +12,7 @@ use concinnity_engine::render::streaming::pools::{
 };
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 
 use concinnity_host::thread::worker::Worker;
@@ -69,7 +70,7 @@ impl MeshPayloadSource for DiskMeshSource {
             .locators
             .get(id)
             .ok_or_else(|| format!("no disk locator for streamed mesh {id}"))?;
-        let bytes = super::file_range::read_at(&self.path, loc.file_offset, loc.len)?;
+        let bytes = super::file_range::read_at(Path::new(&self.path), loc.file_offset, loc.len)?;
         Ok(decode_mesh(&bytes)?)
     }
 }
@@ -107,7 +108,7 @@ impl MeshPayloadSource for SceneDeferredMeshSource {
             None => self.base.fetch(id),
             Some(DeferredMeshPayload::Bytes(bytes)) => Ok(decode_deferred_payload(bytes)?),
             Some(DeferredMeshPayload::Disk { path, offset, len }) => {
-                let bytes = super::file_range::read_at(path, *offset, *len)?;
+                let bytes = super::file_range::read_at(Path::new(path), *offset, *len)?;
                 Ok(decode_deferred_payload(&bytes)?)
             }
         }
@@ -228,9 +229,9 @@ mod tests {
             }],
         )
         .expect("write scratch");
-        assert!(std::path::Path::new(&path).exists());
+        assert!(Path::new(&path).exists());
         drop(source);
-        assert!(!std::path::Path::new(&path).exists());
+        assert!(!Path::new(&path).exists());
     }
 
     #[test]

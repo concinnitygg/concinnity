@@ -175,14 +175,14 @@ pub(crate) struct LockedMeshSource {
 /// The result of a build pack: the blobs written and the path of each
 pub(crate) struct PackResult {
     /// Path of each blob file written.
-    pub blob_paths: Vec<String>,
+    pub blob_paths: Vec<std::path::PathBuf>,
 }
 
 // Encode one blob image and write it out. The format crate performs no I/O, so
 // the write lives here alongside the rest of the build's file output.
-fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &str) -> std::io::Result<()> {
+fn write_cnb(meta: &BlobMeta, payload: &[u8], path: &Path) -> std::io::Result<()> {
     let image = encode_cnb(concinnity_engine::SCHEMA_VERSION, meta, payload)
-        .map_err(|e| std::io::Error::other(format!("encoding {path}: {e:?}")))?;
+        .map_err(|e| std::io::Error::other(format!("encoding {}: {e:?}", path.display())))?;
     fs::write(path, image)
 }
 
@@ -212,15 +212,14 @@ pub(crate) fn write_blobs(
     // Blob 0 is the file named; every overflow blob is its sibling named by
     // index, which is the layout the runtime reads back.
     let blob_file = |index: u32| {
-        let path = if index == 0 {
+        if index == 0 {
             primary.to_path_buf()
         } else {
             primary
                 .parent()
                 .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf)
                 .join(index.to_string())
-        };
-        path.to_string_lossy().into_owned()
+        }
     };
 
     // The manifest is derived from the very streams it summarizes, so the
@@ -331,14 +330,14 @@ pub(crate) fn write_lock(
     resources: &[LockedResource],
     injected: &[crate::build_only::InjectedAsset],
     shadowed: &[crate::build_only::ShadowedAsset],
-    blob_paths: &[String],
+    blob_paths: &[std::path::PathBuf],
 ) -> std::io::Result<()> {
     let mut blobs = Vec::new();
     for path in blob_paths {
         let data = fs::read(path)?;
         let payload_bytes = payload_section(&data).len() as u64;
         blobs.push(BlobEntry {
-            path: path.clone(),
+            path: path.to_string_lossy().into_owned(),
             checksum: checksum(&data),
             payload_bytes,
         });
@@ -502,8 +501,8 @@ mod tests {
             .expect("write_blobs")
             .blob_paths;
         assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0], data_dir.join("0").to_string_lossy());
-        assert_eq!(paths[1], data_dir.join("1").to_string_lossy());
+        assert_eq!(paths[0], data_dir.join("0"));
+        assert_eq!(paths[1], data_dir.join("1"));
 
         // Blob 0 carries the whole metadata block plus its own payload section.
         let (meta, payload_start) = read_cnb(&paths[0]).expect("blob 0 parses");
@@ -626,8 +625,8 @@ mod tests {
             .expect("write_blobs")
             .blob_paths;
 
-        assert_eq!(paths[0], primary.to_string_lossy());
-        assert_eq!(paths[1], primary.with_file_name("1").to_string_lossy());
+        assert_eq!(paths[0], primary);
+        assert_eq!(paths[1], primary.with_file_name("1"));
         let (meta, _) = read_cnb(&paths[0]).expect("the named blob parses");
         assert_eq!(meta.defs.len(), 1);
     }
@@ -727,7 +726,7 @@ mod tests {
     fn write_lock_reports_an_unreadable_blob_file() {
         let output = Output::new();
 
-        let paths = vec!["/no/such/data/0".to_string()];
+        let paths = vec![std::path::PathBuf::from("/no/such/data/0")];
         let err = write_lock(output.tree(), &[], &[], &[], &[], &paths)
             .expect_err("an unreadable blob fails the lock");
 

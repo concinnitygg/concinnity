@@ -26,7 +26,7 @@ impl ShaderTexts {
             entry
                 .path(stage)
                 .map(|path| {
-                    concinnity_cook::compile::shader::read_shader_source(path)
+                    concinnity_cook::compile::shader::read_shader_source(std::path::Path::new(path))
                         .map(|text| ShaderSource {
                             path: path.to_string(),
                             text,

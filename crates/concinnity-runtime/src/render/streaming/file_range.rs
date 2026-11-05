@@ -7,18 +7,20 @@
 use concinnity_core::math::SaturatingFrom;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 // Read `len` bytes from `path` starting at absolute `file_offset`.
 //
 // Errors are human-readable strings: they reach the renderer through the
 // background worker, which has nothing to act on a typed error with.
-pub(super) fn read_at(path: &str, file_offset: u64, len: u64) -> Result<Vec<u8>, String> {
-    let mut file = File::open(path).map_err(|e| format!("open {path}: {e}"))?;
+pub(super) fn read_at(path: &Path, file_offset: u64, len: u64) -> Result<Vec<u8>, String> {
+    let shown = path.display();
+    let mut file = File::open(path).map_err(|e| format!("open {shown}: {e}"))?;
     file.seek(SeekFrom::Start(file_offset))
-        .map_err(|e| format!("seek {file_offset} in {path}: {e}"))?;
+        .map_err(|e| format!("seek {file_offset} in {shown}: {e}"))?;
     let mut bytes = vec![0u8; usize::saturating_from(len)];
     file.read_exact(&mut bytes)
-        .map_err(|e| format!("read {len} bytes from {path}: {e}"))?;
+        .map_err(|e| format!("read {len} bytes from {shown}: {e}"))?;
     Ok(bytes)
 }
 
@@ -27,9 +29,9 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn scratch(bytes: &[u8]) -> (tempfile::TempDir, String) {
+    fn scratch(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("payload").to_string_lossy().into_owned();
+        let path = dir.path().join("payload");
         File::create(&path).unwrap().write_all(bytes).unwrap();
         (dir, path)
     }
@@ -61,7 +63,7 @@ mod tests {
 
     #[test]
     fn errors_on_a_missing_file() {
-        let e = read_at("/nonexistent/cn/payload", 0, 1).unwrap_err();
+        let e = read_at(Path::new("/nonexistent/cn/payload"), 0, 1).unwrap_err();
         assert!(e.starts_with("open /nonexistent/cn/payload: "), "{}", e);
     }
 }

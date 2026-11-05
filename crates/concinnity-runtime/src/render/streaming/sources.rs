@@ -19,7 +19,9 @@ pub(crate) struct PayloadSectionError {
 
 // Blob `blob_index`'s file and where its payload section starts in it, so a
 // locator's payload-section offset becomes an absolute file offset.
-pub(crate) fn blob_payload_section(blob_index: u32) -> Result<(String, u64), PayloadSectionError> {
+pub(crate) fn blob_payload_section(
+    blob_index: u32,
+) -> Result<(std::path::PathBuf, u64), PayloadSectionError> {
     let error = |source| PayloadSectionError { blob_index, source };
     let path = blob_path(blob_index).ok_or_else(|| error(BlobLoadError::NoStateRoot))?;
     let start = payload_section_start(&path).map_err(error)?;
@@ -43,7 +45,7 @@ pub(crate) fn build_texture_payload_source(
             payloads,
         )));
     }
-    let mut sections: HashMap<u32, (String, u64)> = HashMap::new();
+    let mut sections: HashMap<u32, (std::path::PathBuf, u64)> = HashMap::new();
     let mut disk_locators = Vec::with_capacity(locators.len());
     for loc in locators {
         let (path, start) = if let Some(section) = sections.get(&loc.blob_index) {
@@ -69,7 +71,7 @@ pub(crate) fn build_texture_payload_source(
 pub(crate) fn disk_mesh_payload(locator: &PayloadLocator) -> Option<DeferredMeshPayload> {
     match blob_payload_section(locator.blob_index) {
         Ok((path, start)) => Some(DeferredMeshPayload::Disk {
-            path,
+            path: path.to_string_lossy().into_owned(),
             offset: start + locator.offset,
             len: locator.len,
         }),
@@ -91,7 +93,7 @@ mod tests {
         let error = PayloadSectionError {
             blob_index: 3,
             source: BlobLoadError::Io {
-                path: "data/3".to_string(),
+                path: "data/3".into(),
                 source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
             },
         };
@@ -100,7 +102,7 @@ mod tests {
         let error = PayloadSectionError {
             blob_index: 1,
             source: BlobLoadError::Format {
-                path: "data/1".to_string(),
+                path: "data/1".into(),
                 source: concinnity_engine::blob::BlobError::ValidityMismatch(7),
             },
         };

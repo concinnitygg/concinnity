@@ -34,11 +34,11 @@ use crate::world_builder::WorldBuildError;
 /// compiling or writing it fails.
 pub fn build_from_path(
     tree: &crate::paths::StateTree,
-    json_path: &str,
+    json_path: &Path,
     targets: PlatformSet,
 ) -> Result<BuildReport, WorldBuildError> {
     let content = std::fs::read_to_string(json_path).map_err(WorldBuildError::Build)?;
-    let source = crate::authoring::world::WorldSource::file(&content, Path::new(json_path));
+    let source = crate::authoring::world::WorldSource::file(&content, json_path);
     let loaded = crate::build_only::prepare_world(source, Some(&tree.assets_dir()))?;
     build_loaded(tree, loaded, targets, None)
 }
@@ -151,7 +151,7 @@ fn write_outputs(
         &concinnity_host::store::blob::primary_in(&tree.data_dir()),
     )?;
     for path in &pack_result.blob_paths {
-        stage.end(path, false);
+        stage.end(&path.to_string_lossy(), false);
     }
     let named_refs: Vec<(&str, &BlobAssetDef)> = result
         .names
@@ -172,7 +172,7 @@ fn write_outputs(
         .iter()
         .map(|path| {
             let size = std::fs::metadata(path).map_or(0, |m| m.len());
-            (std::path::PathBuf::from(path), size)
+            (path.clone(), size)
         })
         .collect();
     // Thumbnails are a best-effort side product: they are rendered after the
@@ -584,7 +584,14 @@ mod tests {
     #[test]
     fn build_from_path_missing_world_file_errors() {
         let tree = crate::paths::StateTree::at(concinnity_testing::TempTree::new().path());
-        assert!(build_from_path(&tree, "/no/such/world.jsonl", Platform::Metal.into()).is_err());
+        assert!(
+            build_from_path(
+                &tree,
+                Path::new("/no/such/world.jsonl"),
+                Platform::Metal.into()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -593,8 +600,8 @@ mod tests {
         let world = dir.path().join("world.jsonl");
         std::fs::write(&world, "{not json\n").expect("write world");
         let tree = crate::paths::StateTree::at(dir.path());
-        let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal.into())
-            .expect_err("malformed world");
+        let err =
+            build_from_path(&tree, &world, Platform::Metal.into()).expect_err("malformed world");
         assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
     }
 
@@ -614,8 +621,8 @@ mod tests {
         )
         .expect("write world");
         let tree = crate::paths::StateTree::at(dir.path());
-        let err = build_from_path(&tree, world.to_str().unwrap(), Platform::Metal.into())
-            .expect_err("an invalid world");
+        let err =
+            build_from_path(&tree, &world, Platform::Metal.into()).expect_err("an invalid world");
         assert!(matches!(err, WorldBuildError::Validation(_)), "{err:?}");
         let msg = err.to_string();
         assert!(msg.contains("bad_prop"), "got: {msg}");
@@ -672,18 +679,14 @@ mod tests {
         )
         .expect("write world");
 
-        build_from_path(
-            output.tree(),
-            world_path.to_str().unwrap(),
-            Platform::Metal.into(),
-        )
-        .expect("build");
+        build_from_path(output.tree(), &world_path, Platform::Metal.into()).expect("build");
 
         let raw = std::fs::read_to_string(output.lock_path()).expect("lock written");
         let lock: crate::blob::BlobLock = serde_json::from_str(&raw).expect("lock is valid json");
         assert_eq!(lock.blobs.len(), 1);
 
-        let (meta, _) = crate::blob::read_cnb(&lock.blobs[0].path).expect("blob 0 parses");
+        let (meta, _) =
+            crate::blob::read_cnb(Path::new(&lock.blobs[0].path)).expect("blob 0 parses");
         assert_eq!(
             meta.defs.len(),
             lock.assets.len(),

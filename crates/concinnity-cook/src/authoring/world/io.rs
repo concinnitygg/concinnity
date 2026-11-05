@@ -6,6 +6,7 @@
 use super::identity::{ID_KEY, entry_handles, is_label_of};
 use super::line::{parse_world_jsonl, write_world_jsonl};
 use crate::authoring::registry::RegisteredType;
+use std::path::Path;
 
 /// An asset entry after include resolution and type parsing.
 #[derive(Clone, Debug)]
@@ -85,7 +86,7 @@ fn take_entry_id_from_args(args: &mut serde_json::Value) -> Option<String> {
 ///
 /// Returns an error if `src_path` cannot be read or parsed, `f` fails, or the
 /// result cannot be written to `dst_path`.
-pub fn patch_world_jsonl_to<F>(src_path: &str, dst_path: &str, f: F) -> std::io::Result<()>
+pub fn patch_world_jsonl_to<F>(src_path: &Path, dst_path: &Path, f: F) -> std::io::Result<()>
 where
     F: FnOnce(&mut Vec<serde_json::Value>) -> std::io::Result<()>,
 {
@@ -94,14 +95,14 @@ where
     let mut assets = parse_world_jsonl(&content).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Failed to parse {src_path}: {e}"),
+            format!("Failed to parse {}: {e}", src_path.display()),
         )
     })?;
 
     f(&mut assets)?;
 
     let text = write_world_jsonl(&assets)?;
-    concinnity_host::store::atomic::replace(std::path::Path::new(dst_path), |out| {
+    concinnity_host::store::atomic::replace(dst_path, |out| {
         std::io::Write::write_all(out, text.as_bytes())
     })
 }
@@ -114,13 +115,12 @@ where
 ///
 /// Returns an error if the file cannot be read or parsed, or an include does
 /// not resolve.
-pub fn known_names(json_path: &str) -> std::io::Result<Vec<String>> {
+pub fn known_names(json_path: &Path) -> std::io::Result<Vec<String>> {
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let content = std::fs::read_to_string(json_path)?;
     let assets = parse_world_jsonl(&content).map_err(|e| invalid(e.to_string()))?;
     let assets =
-        crate::build_only::include::resolve_includes(assets, Some(std::path::Path::new(json_path)))
-            .map_err(invalid)?;
+        crate::build_only::include::resolve_includes(assets, Some(json_path)).map_err(invalid)?;
     Ok(entry_handles(&assets).into_iter().flatten().collect())
 }
 
@@ -230,7 +230,7 @@ mod tests {
         let dst = dir.path().join("out.jsonl");
         std::fs::write(&src, "[\"Logger\",{\"$id\":\"a\"}]\n").unwrap();
 
-        patch_world_jsonl_to(src.to_str().unwrap(), dst.to_str().unwrap(), |assets| {
+        patch_world_jsonl_to(&src, &dst, |assets| {
             assets.push(serde_json::json!({"type":"Window","args":{"$id":"b"}}));
             Ok(())
         })
@@ -248,10 +248,7 @@ mod tests {
         let src = dir.path().join("world.jsonl");
         std::fs::write(&src, "[\"Logger\",{\"$id\":\"a\"}]\n").unwrap();
 
-        let result =
-            patch_world_jsonl_to(src.to_str().unwrap(), src.to_str().unwrap(), |_assets| {
-                Err(std::io::Error::other("boom"))
-            });
+        let result = patch_world_jsonl_to(&src, &src, |_assets| Err(std::io::Error::other("boom")));
         assert!(result.is_err());
     }
 
@@ -260,7 +257,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "[\"Logger\",{\"$id\":\"a\"}]\n[\"Window\"]\n").unwrap();
-        let names = known_names(path.to_str().unwrap()).unwrap();
+        let names = known_names(&path).unwrap();
         assert_eq!(names, vec!["a", "Window#0"]);
     }
 
@@ -269,7 +266,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("world.jsonl");
         std::fs::write(&path, "").unwrap();
-        let names = known_names(path.to_str().unwrap()).unwrap();
+        let names = known_names(&path).unwrap();
         assert!(names.is_empty());
     }
 }

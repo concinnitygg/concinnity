@@ -54,7 +54,7 @@ pub fn primary_in(data_dir: &Path) -> PathBuf {
 /// The format crate is path-agnostic; this layout knowledge stays here.
 ///
 /// `None` before any load, so there is no layout to resolve against.
-pub fn blob_path(index: u32) -> Option<String> {
+pub fn blob_path(index: u32) -> Option<PathBuf> {
     let primary = anchored_primary()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -64,17 +64,16 @@ pub fn blob_path(index: u32) -> Option<String> {
 
 // Pure resolution split out so the sibling naming is unit-testable without the
 // process-global anchor.
-fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
+fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<PathBuf> {
     let primary = primary?;
-    let path = if index == PRIMARY_INDEX {
+    Some(if index == PRIMARY_INDEX {
         primary.to_path_buf()
     } else {
         primary
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
             .join(index.to_string())
-    };
-    Some(path.to_string_lossy().into_owned())
+    })
 }
 
 /// Read and deserialize a blob's metadata section (component defs + resource
@@ -84,7 +83,7 @@ fn resolve_blob_path(primary: Option<&Path>, index: u32) -> Option<String> {
 ///
 /// Returns an error if the file cannot be read or its header and metadata do
 /// not parse.
-pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
+pub fn read_cnb(path: &Path) -> Result<(BlobMeta, usize), BlobLoadError> {
     let data = read_file(path)?;
     parse_cnb::<BlobMeta>(SCHEMA_VERSION, &data)
         .map_err(|source| BlobLoadError::format(path, source))
@@ -98,7 +97,7 @@ pub fn read_cnb(path: &str) -> Result<(BlobMeta, usize), BlobLoadError> {
 ///
 /// Returns an error if the file cannot be opened, or its header cannot be read
 /// or does not parse.
-pub fn payload_section_start(path: &str) -> Result<u64, BlobLoadError> {
+pub fn payload_section_start(path: &Path) -> Result<u64, BlobLoadError> {
     let mut file = fs::File::open(path).map_err(|source| BlobLoadError::io(path, source))?;
     let mut header = [0u8; HEADER_SIZE];
     file.read_exact(&mut header)
@@ -108,12 +107,12 @@ pub fn payload_section_start(path: &str) -> Result<u64, BlobLoadError> {
 }
 
 // Read just the payload section of a blob file into memory.
-fn read_payload_section(path: &str) -> Result<Vec<u8>, BlobLoadError> {
+fn read_payload_section(path: &Path) -> Result<Vec<u8>, BlobLoadError> {
     let data = read_file(path)?;
     Ok(payload_section(&data).to_vec())
 }
 
-fn read_file(path: &str) -> Result<Vec<u8>, BlobLoadError> {
+fn read_file(path: &Path) -> Result<Vec<u8>, BlobLoadError> {
     fs::read(path).map_err(|source| BlobLoadError::io(path, source))
 }
 
@@ -140,7 +139,7 @@ pub fn load_raw_at(primary: &Path) -> Result<(BlobMeta, BlobData), BlobLoadError
 // `load_raw_at` against an injected layout, so the eager/deferred split can be
 // exercised without the process-global data-dir anchor.
 fn load_raw_from(
-    blob_path: impl Fn(u32) -> Option<String>,
+    blob_path: impl Fn(u32) -> Option<PathBuf>,
 ) -> Result<(BlobMeta, BlobData), BlobLoadError> {
     let (meta, _payload_start) = read_cnb(&blob_path(0).ok_or(BlobLoadError::NoStateRoot)?)?;
 
@@ -176,23 +175,17 @@ mod tests {
         let primary = Path::new("out").join("blobs").join("0");
         assert_eq!(
             resolve_blob_path(Some(&primary), 0).as_deref(),
-            Some(&*primary.to_string_lossy())
+            Some(primary.as_path())
         );
         assert_eq!(
             resolve_blob_path(Some(&primary), 2),
-            Some(
-                Path::new("out")
-                    .join("blobs")
-                    .join("2")
-                    .to_string_lossy()
-                    .into_owned()
-            )
+            Some(Path::new("out").join("blobs").join("2"))
         );
 
         // A bare file name hangs its siblings off the working directory.
         assert_eq!(
             resolve_blob_path(Some(Path::new("0")), 1).as_deref(),
-            Some("1")
+            Some(Path::new("1"))
         );
 
         // A state tree's `data/` is just a primary named `<tree>/data/0`, so
@@ -201,7 +194,7 @@ mod tests {
         let data = tree.data_dir().join("0");
         assert_eq!(
             resolve_blob_path(Some(&data), 3),
-            Some(tree.data_dir().join("3").to_string_lossy().into_owned())
+            Some(tree.data_dir().join("3"))
         );
     }
 
@@ -220,7 +213,7 @@ mod tests {
     #[test]
     fn a_format_failure_names_the_file_and_keeps_its_cause() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("0").to_string_lossy().into_owned();
+        let path = dir.path().join("0");
         fs::write(&path, vec![0xabu8; HEADER_SIZE * 2]).unwrap();
 
         let error = read_cnb(&path).unwrap_err();
@@ -234,7 +227,10 @@ mod tests {
             ),
             "{error:?}"
         );
-        assert!(error.to_string().contains(&path), "{error}");
+        assert!(
+            error.to_string().contains(&*path.to_string_lossy()),
+            "{error}"
+        );
         assert!(
             std::error::Error::source(&error).is_some(),
             "the format error stays reachable"
@@ -245,7 +241,7 @@ mod tests {
     // was never read at all.
     #[test]
     fn a_missing_file_reports_the_io_failure_that_found_it() {
-        let error = read_cnb("/nonexistent/cn/blob/path.cnb").unwrap_err();
+        let error = read_cnb(Path::new("/nonexistent/cn/blob/path.cnb")).unwrap_err();
         let BlobLoadError::Io { source, .. } = &error else {
             panic!("expected an io failure, got {error:?}");
         };
@@ -255,7 +251,7 @@ mod tests {
     #[test]
     fn read_payload_section_returns_empty_for_a_short_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("short").to_string_lossy().into_owned();
+        let path = dir.path().join("short");
         fs::write(&path, vec![0u8; HEADER_SIZE - 1]).unwrap();
         assert!(read_payload_section(&path).unwrap().is_empty());
     }
@@ -263,7 +259,7 @@ mod tests {
     #[test]
     fn payload_section_start_skips_header_and_meta() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("0").to_string_lossy().into_owned();
+        let path = dir.path().join("0");
         let image = encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"payloadbytes").unwrap();
         fs::write(&path, &image).unwrap();
 
@@ -274,7 +270,7 @@ mod tests {
     #[test]
     fn payload_section_start_rejects_bad_magic() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bad").to_string_lossy().into_owned();
+        let path = dir.path().join("bad");
         fs::write(&path, vec![0u8; HEADER_SIZE]).unwrap();
         assert!(matches!(
             payload_section_start(&path),
@@ -290,14 +286,7 @@ mod tests {
         use concinnity_engine::ecs::PayloadLocator;
 
         let dir = tempfile::tempdir().unwrap();
-        let path_for = |idx: u32| {
-            Some(
-                dir.path()
-                    .join(idx.to_string())
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-        };
+        let path_for = |idx: u32| Some(dir.path().join(idx.to_string()));
 
         // Blob 0: one def whose payload lives in overflow blob 1. The manifest
         // is derived exactly as cook derives it; `load_raw_from` trusts its

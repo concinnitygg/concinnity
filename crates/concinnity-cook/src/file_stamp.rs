@@ -31,7 +31,7 @@ pub(crate) struct FileStamp {
 
 impl FileStamp {
     // Stat `path`, or `None` when it cannot be read.
-    pub(crate) fn read(path: &str) -> Option<Self> {
+    pub(crate) fn read(path: &std::path::Path) -> Option<Self> {
         let meta = std::fs::metadata(path).ok()?;
         Some(Self {
             mtime_nanos: meta
@@ -72,9 +72,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.bin");
         std::fs::write(&path, b"12345").unwrap();
-        let s = FileStamp::read(path.to_str().unwrap()).expect("stat");
+        let s = FileStamp::read(&path).expect("stat");
         assert_eq!(s.len, 5);
-        assert!(FileStamp::read("/no/such/file.bin").is_none());
+        assert!(FileStamp::read(std::path::Path::new("/no/such/file.bin")).is_none());
     }
 
     #[test]
@@ -109,7 +109,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.bin");
         std::fs::write(&path, b"12345").unwrap();
-        let s = FileStamp::read(path.to_str().unwrap()).expect("stat");
+        let s = FileStamp::read(&path).expect("stat");
         assert!(!s.settled(), "a file written just now is unsettled");
         std::thread::sleep(SETTLE_WINDOW + Duration::from_millis(50));
         assert!(s.settled(), "the same stamp settles once the window passes");

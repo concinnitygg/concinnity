@@ -31,13 +31,14 @@ impl GltfDoc {
     // Parse a `.glb` or `.gltf` at `path`, which is read as given. A caller
     // holding an authored `source` string resolves it against the build's
     // asset search root first (see `crate::import::glb::resolve_source`).
-    pub(crate) fn parse_file(path: &str) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("failed to read '{path}': {e}"))?;
-        let base_dir = Path::new(path)
+    pub(crate) fn parse_file(path: &Path) -> Result<Self, String> {
+        let shown = path.display();
+        let bytes = std::fs::read(path).map_err(|e| format!("failed to read '{shown}': {e}"))?;
+        let base_dir = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .map(PathBuf::from);
-        Self::from_slice(&bytes, base_dir, path)
+        Self::from_slice(&bytes, base_dir, &shown.to_string())
     }
 
     /// Parse from bytes already in memory. `base_dir` anchors external URIs;
@@ -166,12 +167,12 @@ fn mime_from_uri(uri: &str) -> Option<String> {
 // missing or fails to parse contributes nothing (the compile will surface the
 // real error). Memoized by `FileStamp` like `cache::file_content_hash`, since
 // cache-key computation calls this once per asset sharing the file.
-pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<String> {
+pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<PathBuf> {
     use crate::file_stamp::FileStamp;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    type Memo = Mutex<HashMap<String, (FileStamp, Vec<String>)>>;
+    type Memo = Mutex<HashMap<PathBuf, (FileStamp, Vec<PathBuf>)>>;
     static MEMO: OnceLock<Memo> = OnceLock::new();
 
     let path = crate::import::glb::resolve_source(source, assets_dir);
@@ -200,17 +201,14 @@ pub(crate) fn referenced_files(source: &str, assets_dir: Option<&Path>) -> Vec<S
     files
 }
 
-fn scan_referenced_files(path: &str) -> Vec<String> {
+fn scan_referenced_files(path: &Path) -> Vec<PathBuf> {
     let Ok(bytes) = std::fs::read(path) else {
         return Vec::new();
     };
     let Ok(doc) = gltf::Gltf::from_slice(&bytes) else {
         return Vec::new();
     };
-    let Some(base) = Path::new(path)
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-    else {
+    let Some(base) = path.parent().filter(|p| !p.as_os_str().is_empty()) else {
         return Vec::new();
     };
 
@@ -229,7 +227,7 @@ fn scan_referenced_files(path: &str) -> Vec<String> {
             continue;
         }
         if let Ok(rel) = safe_relative_path(&uri) {
-            out.push(base.join(rel).to_string_lossy().into_owned());
+            out.push(base.join(rel));
         }
     }
     out.sort();
@@ -577,7 +575,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = GltfDoc::parse_file(gltf_path.to_str().unwrap()).expect("parse");
+        let doc = GltfDoc::parse_file(&gltf_path).expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
         assert_eq!(doc.buffer_bytes(&buffer), Some(bin.as_slice()));
     }
@@ -598,7 +596,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = GltfDoc::parse_file(gltf_path.to_str().unwrap()).expect("parse");
+        let doc = GltfDoc::parse_file(&gltf_path).expect("parse");
         let buffer = doc.doc.document.buffers().next().unwrap();
         assert_eq!(doc.buffer_bytes(&buffer), Some(bin.as_slice()));
     }
@@ -612,7 +610,7 @@ mod tests {
             serde_json::to_vec(&triangle_gltf_json("missing.bin")).unwrap(),
         )
         .unwrap();
-        let err = GltfDoc::parse_file(gltf_path.to_str().unwrap()).unwrap_err();
+        let err = GltfDoc::parse_file(&gltf_path).unwrap_err();
         assert!(err.contains("missing.bin"), "got: {err}");
         assert!(err.contains("buffer 0"), "got: {err}");
     }
@@ -705,11 +703,11 @@ mod tests {
     #[test]
     fn scan_referenced_files_tolerates_unreadable_and_unparseable_sources() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(scan_referenced_files("/no/such/file.gltf").is_empty());
+        assert!(scan_referenced_files(Path::new("/no/such/file.gltf")).is_empty());
 
         let junk = dir.path().join("junk.gltf");
         std::fs::write(&junk, b"{ not glTF at all").unwrap();
-        assert!(scan_referenced_files(junk.to_str().unwrap()).is_empty());
+        assert!(scan_referenced_files(&junk).is_empty());
     }
 
     #[test]

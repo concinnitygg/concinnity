@@ -13,7 +13,7 @@ use crate::compile::sdf_field::compile_sdf_field;
 // among the build's asset root, the checkout's `assets/` and the working
 // directory. `None` when nothing exists; `compile_payload`
 // falls back to the raw path then, so the read error names it.
-pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<String> {
+pub(super) fn resolve_source_path(raw: &str, ctx: &BuildCtx<'_>) -> Option<std::path::PathBuf> {
     concinnity_host::store::source::find_existing(raw, ctx.assets_dir)
 }
 
@@ -49,13 +49,16 @@ impl crate::asset::BuildAsset for SdfVolume {
             )
         })?;
 
-        let source_path = resolve_source_path(&raw, ctx).unwrap_or_else(|| raw.clone());
+        let source_path =
+            resolve_source_path(&raw, ctx).unwrap_or_else(|| std::path::PathBuf::from(&raw));
         let field = std::fs::read_to_string(&source_path).map_err(|e| {
             std::io::Error::new(
                 e.kind(),
                 format!(
                     "SdfVolume '{}': failed to read distance field '{}': {}",
-                    ctx.name, source_path, e
+                    ctx.name,
+                    source_path.display(),
+                    e
                 ),
             )
         })?;
@@ -164,7 +167,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
         let path = dir.path().join("chrome.hlsl");
         std::fs::write(&path, FIELD).unwrap();
         let raw = path.to_string_lossy().into_owned();
-        assert_eq!(resolve_source_path(&raw, &ctx(None)), Some(raw.clone()));
+        assert_eq!(resolve_source_path(&raw, &ctx(None)), Some(path));
 
         let missing = dir
             .path()
@@ -181,12 +184,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
         std::fs::write(dir.path().join("shaders/chrome.hlsl"), FIELD).unwrap();
         assert_eq!(
             resolve_source_path("shaders/chrome.hlsl", &ctx(Some(dir.path()))),
-            Some(
-                dir.path()
-                    .join("shaders/chrome.hlsl")
-                    .to_string_lossy()
-                    .into_owned()
-            )
+            Some(dir.path().join("shaders/chrome.hlsl"))
         );
     }
 
@@ -197,13 +195,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
         std::fs::write(dir.path().join("fields/chrome.hlsl"), FIELD).unwrap();
         assert_eq!(
             resolve_source_path("chrome.hlsl", &ctx(Some(dir.path()))),
-            Some(
-                dir.path()
-                    .join("fields")
-                    .join("chrome.hlsl")
-                    .to_string_lossy()
-                    .into_owned()
-            )
+            Some(dir.path().join("fields").join("chrome.hlsl"))
         );
     }
 
@@ -250,7 +242,7 @@ SdfSurface shade(float3 p, float3 n, SdfParams params, float time, float2 uv) {
         let raw = path.to_string_lossy().into_owned();
         assert_eq!(
             SdfVolume::source_files(&args(&raw), &ctx(None)),
-            SourceFiles::Only(vec![raw])
+            SourceFiles::Only(vec![path])
         );
         // Nothing declared and nothing resolvable both report an empty set.
         assert_eq!(

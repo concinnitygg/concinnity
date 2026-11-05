@@ -5,12 +5,12 @@
 #[derive(Debug, thiserror::Error)]
 pub enum CompileError {
     /// A source file the compile reads could not be read.
-    #[error("{context} '{path}': {source}")]
+    #[error("{context} '{}': {source}", path.display())]
     Source {
         /// What the compile was doing, such as "failed to open DDS texture".
         context: String,
         /// The path as the compile was handed it.
-        path: String,
+        path: std::path::PathBuf,
         /// The read's own failure, whose kind tells a missing file apart.
         #[source]
         source: std::io::Error,
@@ -23,13 +23,18 @@ pub enum CompileError {
 impl CompileError {
     /// The bytes of `path`, or a [`Source`](Self::Source) error naming what the
     /// compile was doing.
-    pub(crate) fn read(path: &str, context: &str) -> Result<Vec<u8>, Self> {
+    pub(crate) fn read(path: impl AsRef<std::path::Path>, context: &str) -> Result<Vec<u8>, Self> {
+        let path = path.as_ref();
         std::fs::read(path).map_err(|source| Self::source(path, context, source))
     }
 
     /// The text of `path`, or a [`Source`](Self::Source) error naming what the
     /// compile was doing.
-    pub(crate) fn read_text(path: &str, context: &str) -> Result<String, Self> {
+    pub(crate) fn read_text(
+        path: impl AsRef<std::path::Path>,
+        context: &str,
+    ) -> Result<String, Self> {
+        let path = path.as_ref();
         std::fs::read_to_string(path).map_err(|source| Self::source(path, context, source))
     }
 
@@ -51,10 +56,14 @@ impl CompileError {
     }
 
     /// A [`Source`](Self::Source) error for a read of `path` that failed.
-    pub(crate) fn source(path: &str, context: &str, source: std::io::Error) -> Self {
+    pub(crate) fn source(
+        path: impl AsRef<std::path::Path>,
+        context: &str,
+        source: std::io::Error,
+    ) -> Self {
         Self::Source {
             context: context.to_string(),
-            path: path.to_string(),
+            path: path.as_ref().to_path_buf(),
             source,
         }
     }

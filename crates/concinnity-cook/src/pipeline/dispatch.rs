@@ -499,7 +499,7 @@ mod tests {
         // different artifact per backend, so the target is an input too.
         let sdf_args = serde_json::json!({ "fragment_shader": path });
         let sdf = (entry("SdfVolume").cache_inputs)(&sdf_args, &ctx());
-        assert_eq!(sdf.sources, SourceFiles::Only(vec![path.to_string()]));
+        assert_eq!(sdf.sources, SourceFiles::Only(vec![shader.clone()]));
         assert!(sdf.target_dependent);
         assert_eq!(
             (entry("SdfVolume").cache_inputs)(&serde_json::json!({}), &ctx()).sources,

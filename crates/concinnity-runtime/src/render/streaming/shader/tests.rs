@@ -349,7 +349,7 @@ fn an_unknown_bucket_is_ignored() {
 #[test]
 fn a_disk_backed_payload_is_read_from_its_range() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("blob").to_string_lossy().into_owned();
+    let path = dir.path().join("blob");
     let bytes = payload_bytes();
     let mut file = std::fs::File::create(&path).unwrap();
     file.write_all(b"header").unwrap();

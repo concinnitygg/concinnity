@@ -617,8 +617,8 @@ mod tests {
             .write_blob(&primary)
             .expect("the world is written");
 
-        let (meta, _) = concinnity_host::store::blob::read_cnb(&primary.to_string_lossy())
-            .expect("the written blob parses");
+        let (meta, _) =
+            concinnity_host::store::blob::read_cnb(&primary).expect("the written blob parses");
         assert!(
             meta.defs
                 .iter()

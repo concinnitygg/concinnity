@@ -80,11 +80,11 @@ impl CharacterModelArg {
     }
 
     // The file the model reads.
-    pub(crate) fn source_files(&self) -> Vec<String> {
+    pub(crate) fn source_files(&self) -> Vec<std::path::PathBuf> {
         if self.model.source.is_empty() {
             Vec::new()
         } else {
-            vec![self.model.source.clone()]
+            vec![std::path::PathBuf::from(&self.model.source)]
         }
     }
 }
@@ -138,7 +138,7 @@ mod tests {
         };
         let arg = CharacterModelArg::resolve("body", model.clone(), &[]).unwrap();
         assert_eq!(arg.schema.joints.len(), 25);
-        assert_eq!(arg.source_files(), ["hero.glb"]);
+        assert_eq!(arg.source_files(), [std::path::PathBuf::from("hero.glb")]);
         let bad = CharacterModel {
             schema: "mine".into(),
             ..model

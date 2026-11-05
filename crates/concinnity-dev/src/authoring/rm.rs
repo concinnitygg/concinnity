@@ -16,7 +16,7 @@ use concinnity_cook::build_only::include::with_includes;
 pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
     let mut removed = false;
 
-    patch_world_jsonl_to(world_path, world_path, |assets| {
+    patch_world_jsonl_to(Path::new(world_path), Path::new(world_path), |assets| {
         let found = line_index(assets, Path::new(world_path), name)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
         if let Some(i) = found {
@@ -32,7 +32,7 @@ pub(crate) fn rm_at_path(world_path: &str, name: &str) -> std::io::Result<()> {
     })?;
 
     if !removed {
-        let known = known_names(world_path).unwrap_or_default();
+        let known = known_names(Path::new(world_path)).unwrap_or_default();
         if known.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

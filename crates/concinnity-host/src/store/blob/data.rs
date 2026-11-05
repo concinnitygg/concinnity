@@ -15,8 +15,8 @@ use concinnity_engine::error::PayloadError;
 // system deliberately freed the payload after consuming it -- reads then error
 // rather than reload, since the data is known to be no longer needed.
 enum BlobSlot {
-    // overflow blob not yet read; the String is its file path
-    Unloaded(String),
+    // overflow blob not yet read, at this file path
+    Unloaded(std::path::PathBuf),
     // payload section resident in memory
     Loaded(Vec<u8>),
     // payload deliberately released after use; reads error, no reload
@@ -74,7 +74,10 @@ impl BlobData {
 
     // Build a disk-backed store: blob 0's section is already resident, each
     // overflow path stays `Unloaded` until a locator first reaches it.
-    pub(super) fn from_blob_files(blob0_payload: Vec<u8>, overflow_paths: Vec<String>) -> Self {
+    pub(super) fn from_blob_files(
+        blob0_payload: Vec<u8>,
+        overflow_paths: Vec<std::path::PathBuf>,
+    ) -> Self {
         let mut slots = Vec::with_capacity(overflow_paths.len() + 1);
         slots.push(BlobSlot::Loaded(blob0_payload));
         slots.extend(overflow_paths.into_iter().map(BlobSlot::Unloaded));
@@ -105,11 +108,9 @@ impl BlobData {
             .ok_or(PayloadError::NoSuchBlob { index, count })?;
         if let BlobSlot::Unloaded(path) = slot {
             tracing::debug!("BlobData: lazily loading overflow blob {}", index);
-            let bytes = super::read_payload_section(&path.clone()).map_err(|source| {
-                PayloadError::Load {
-                    index,
-                    source: Box::new(source),
-                }
+            let bytes = super::read_payload_section(path).map_err(|source| PayloadError::Load {
+                index,
+                source: Box::new(source),
             })?;
             *slot = BlobSlot::Loaded(bytes);
         }
@@ -231,7 +232,7 @@ mod tests {
     #[test]
     fn read_lazily_loads_an_unloaded_overflow_blob() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("1").to_string_lossy().into_owned();
+        let path = dir.path().join("1");
         let image = encode_cnb(SCHEMA_VERSION, &BlobMeta::default(), b"hello world").unwrap();
         std::fs::write(&path, image).expect("write blob");
 

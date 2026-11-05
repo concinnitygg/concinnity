@@ -47,7 +47,7 @@ impl PayloadSource for MemPayloadSource {
 // already folded in, so the load thread only seeks and reads.
 #[derive(Clone)]
 pub(crate) struct DiskTextureLocator {
-    pub path: String,
+    pub path: std::path::PathBuf,
     pub(crate) file_offset: u64,
     pub len: u64,
 }
@@ -119,7 +119,7 @@ mod tests {
         bytes.extend_from_slice(&payload);
         let path = tree.write("payload.bin", &bytes);
         let source = DiskPayloadSource::new(vec![DiskTextureLocator {
-            path: path.to_string_lossy().into_owned(),
+            path,
             file_offset: prefix.len() as u64,
             len: payload.len() as u64,
         }]);
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn disk_payload_source_errors_on_missing_file() {
         let source = DiskPayloadSource::new(vec![DiskTextureLocator {
-            path: "/nonexistent/cn_disk_payload_missing.bin".to_string(),
+            path: "/nonexistent/cn_disk_payload_missing.bin".into(),
             file_offset: 0,
             len: 4,
         }]);

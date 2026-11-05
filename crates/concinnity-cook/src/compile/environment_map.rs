@@ -132,14 +132,10 @@ fn is_supported_source(source: &str) -> bool {
 // linear radiance; a `.glb` carries a display-encoded panorama on a sphere,
 // which `crate::import::panorama` unwraps and linearizes (see that module
 // for the range an LDR panorama implies for the baked lighting).
-fn load_equirect_source(resolved: &str) -> Result<HdrImage, CompileError> {
-    let lower = resolved.to_ascii_lowercase();
-    if Path::new(&lower)
+fn load_equirect_source(resolved: &Path) -> Result<HdrImage, CompileError> {
+    if resolved
         .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb"))
-        || Path::new(&lower)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("glb") || ext.eq_ignore_ascii_case("gltf"))
     {
         crate::import::panorama::load_panorama_file(resolved).map_err(CompileError::from)
     } else {
@@ -202,7 +198,7 @@ pub(crate) fn compile_environment_map_payload(
 /// Returns an error if the source cannot be read or decoded as an
 /// equirectangular image.
 pub fn decode_source(
-    path: &str,
+    path: &Path,
     prefilter_face: u32,
     irradiance_face: u32,
     prefilter_samples: u32,
@@ -466,7 +462,7 @@ mod tests {
 
     #[test]
     fn decode_source_missing_file_errors() {
-        let err = decode_source("/definitely/does/not/exist.hdr", 16, 8, 16, 0.0)
+        let err = decode_source(Path::new("/definitely/does/not/exist.hdr"), 16, 8, 16, 0.0)
             .expect_err("should fail");
         assert!(
             err.to_string().contains("failed to open") || err.to_string().contains("No such file"),
@@ -480,7 +476,7 @@ mod tests {
         // cube; only the alpha channel carries a value.
         let tree = concinnity_testing::TempTree::new();
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.0, 0.0, 0.0]));
-        let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
+        let payload = decode_source(Path::new(&src), 16, 8, 16, 0.0).expect("decode");
         let view = deserialize(&payload).expect("deserialize");
         for (i, texel) in view.irradiance_bytes.chunks_exact(4).enumerate() {
             if i % 4 == 3 {
@@ -497,7 +493,7 @@ mod tests {
         // the resulting payload deserializes with the requested sizes.
         let tree = concinnity_testing::TempTree::new();
         let src = tree.write_path("source.hdr", raw_hdr_blob(16, 8, [0.6, 0.3, 0.15]));
-        let payload = decode_source(&src, 16, 8, 16, 0.0).expect("decode");
+        let payload = decode_source(Path::new(&src), 16, 8, 16, 0.0).expect("decode");
         let view = deserialize(&payload).expect("deserialize");
         assert_eq!(view.irradiance_face, 8);
         assert_eq!(view.prefilter_face, 16);

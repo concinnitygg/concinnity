@@ -32,8 +32,8 @@ use crate::authoring::world::WorldJsonlAsset;
 // each `Only` impl with a test asserting the set it reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SourceFiles {
-    Extra(Vec<String>),
-    Only(Vec<String>),
+    Extra(Vec<std::path::PathBuf>),
+    Only(Vec<std::path::PathBuf>),
 }
 
 // Build-time context handed to each `BuildAsset` impl.
@@ -110,7 +110,7 @@ pub(crate) struct CacheInputs {
 impl CacheInputs {
     // Inputs for an asset whose compile is platform-independent and whose
     // source paths the cache's generic args walk resolves on its own.
-    pub(crate) fn extra(paths: Vec<String>) -> Self {
+    pub(crate) fn extra(paths: Vec<std::path::PathBuf>) -> Self {
         Self {
             sources: SourceFiles::Extra(paths),
             target_dependent: false,

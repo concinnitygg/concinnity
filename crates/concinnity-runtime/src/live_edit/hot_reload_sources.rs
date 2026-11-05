@@ -80,6 +80,7 @@ pub(crate) fn resolve_sdf_fields(
 ) -> SdfFieldMap {
     SdfFieldMap::build(volumes, |raw| {
         concinnity_host::store::source::find_existing(raw, assets_dir)
+            .map(|path| path.to_string_lossy().into_owned())
     })
 }
 

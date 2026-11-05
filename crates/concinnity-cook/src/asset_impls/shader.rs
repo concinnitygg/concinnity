@@ -9,7 +9,7 @@ use crate::compile::shader::{compile_world_shader, read_shader_source};
 // bare filename is looked up recursively under the build's asset search root,
 // then falls back to `<assets>/<raw>`. A path with a directory component is
 // used verbatim.
-pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
+pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> std::path::PathBuf {
     let p = std::path::Path::new(raw);
     if p.parent().is_none_or(|d| d.as_os_str().is_empty()) {
         if let Some(path) = ctx
@@ -19,10 +19,10 @@ pub(super) fn resolve_source_path_for(raw: &str, ctx: &BuildCtx<'_>) -> String {
             return path;
         }
         if let Some(assets) = ctx.assets_dir {
-            return assets.join(raw).to_string_lossy().into_owned();
+            return assets.join(raw);
         }
     }
-    raw.to_string()
+    std::path::PathBuf::from(raw)
 }
 
 // The declared path of one of the Shader's files, straight from the args.
@@ -112,7 +112,7 @@ impl crate::asset::BuildAsset for Shader {
                 continue;
             };
             let path = resolve_source_path_for(&raw, ctx);
-            if std::path::Path::new(&path).exists() {
+            if path.exists() {
                 inputs.push(path);
             }
         }
@@ -217,11 +217,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
             resolve_source_path_for("shaders/x.hlsl", &ctx()),
-            "shaders/x.hlsl"
+            std::path::Path::new("shaders/x.hlsl")
         );
         assert_eq!(
             resolve_source_path_for("shaders/x.hlsl", &with_assets(Some(dir.path()))),
-            "shaders/x.hlsl"
+            std::path::Path::new("shaders/x.hlsl")
         );
     }
 
@@ -234,7 +234,7 @@ mod tests {
         std::fs::write(nested.join("user.hlsl"), "// hlsl").unwrap();
         assert_eq!(
             resolve_source_path_for("user.hlsl", &with_assets(Some(assets.path()))),
-            nested.join("user.hlsl").to_string_lossy()
+            nested.join("user.hlsl")
         );
     }
 
@@ -243,12 +243,12 @@ mod tests {
         let assets = tempfile::tempdir().unwrap();
         assert_eq!(
             resolve_source_path_for("cn_no_such.hlsl", &with_assets(Some(assets.path()))),
-            assets.path().join("cn_no_such.hlsl").to_string_lossy()
+            assets.path().join("cn_no_such.hlsl")
         );
         // With no search root at all the bare name is left as it was authored.
         assert_eq!(
             resolve_source_path_for("cn_no_such.hlsl", &ctx()),
-            "cn_no_such.hlsl"
+            std::path::Path::new("cn_no_such.hlsl")
         );
     }
 
@@ -303,12 +303,12 @@ mod tests {
         std::fs::write(&frag, "// f").unwrap();
         assert_eq!(
             Shader::source_files(&both, &ctx()),
-            SourceFiles::Only(vec![raw_f.clone()])
+            SourceFiles::Only(vec![frag.clone()])
         );
         std::fs::write(&vert, "// v").unwrap();
         assert_eq!(
             Shader::source_files(&both, &ctx()),
-            SourceFiles::Only(vec![raw_v, raw_f])
+            SourceFiles::Only(vec![vert, frag])
         );
         // A Shader declaring nothing hashes nothing.
         assert_eq!(
