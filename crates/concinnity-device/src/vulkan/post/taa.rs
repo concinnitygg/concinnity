@@ -16,6 +16,7 @@ use concinnity_engine::render::post::taa::{TaaInputs, TaaPass, TaaRing};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The shared temporal resolve, holding Vulkan's own pipeline and target types.
 pub(in crate::vulkan) type VkTaaPass = TaaPass<PostPipeline, PostTarget>;
@@ -73,7 +74,7 @@ impl VkContext {
     // when TAA is on.
     pub(in crate::vulkan) fn encode_taa(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         reactive_written: bool,
     ) {
@@ -85,7 +86,7 @@ impl VkContext {
         let device = self.post_device(frame_idx);
         if let Err(e) = taa.pass.encode(
             &device,
-            &cmd,
+            rec,
             frame_idx,
             &TaaInputs {
                 scene: self.post_scene_image(frame_idx).view,

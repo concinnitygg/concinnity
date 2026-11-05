@@ -14,6 +14,7 @@ use concinnity_engine::render::post::ssr::{SsrInputs, SsrPass, target_desc};
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The reflection target's graph label, carried into debug naming.
 const TARGET_LABEL: &str = "ssr_reflection";
@@ -74,7 +75,7 @@ impl VkContext {
     // the post stack consumes. No-op unless SSR is authored.
     pub(in crate::vulkan) fn encode_ssr_resolve(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&SsrParams>,
     ) {
@@ -89,7 +90,7 @@ impl VkContext {
             &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];
         if let Err(e) = ssr.pass.encode(
             &device,
-            &cmd,
+            rec,
             &SsrInputs {
                 target: device.target_attachment(&ssr.output),
                 scene: scene.view,
@@ -102,6 +103,6 @@ impl VkContext {
             tracing::error!("SSR resolve: {e}");
             return;
         }
-        self.encode_reflection_composite(cmd, ssr.output.view(), frame_idx);
+        self.encode_reflection_composite(rec, ssr.output.view(), frame_idx);
     }
 }

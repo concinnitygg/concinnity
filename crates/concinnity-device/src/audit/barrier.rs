@@ -223,7 +223,7 @@ const AUDITS: &[BackendAudit] = &[
             // SSGI's resolve output, written ahead of the main pass that samples
             // it: the graph models it, but the registry leaves it to the pass,
             // whose render pass rests it shader-readable.
-            ("post/ssgi.rs", "cmd_pipeline_barrier", 1, Reason::Inline),
+            ("post/ssgi.rs", "rec.pipeline_barrier(", 1, Reason::Inline),
             (
                 "post/upscale/mod.rs",
                 "cmd_pipeline_barrier",

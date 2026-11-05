@@ -14,6 +14,7 @@ use concinnity_engine::render::post::ssgi::{
 
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::texture::GpuImage;
 
 // SSGI resources held by `VkContext` when `IndirectLighting.technique`
@@ -93,7 +94,7 @@ impl VkContext {
     // reprojected onto this frame's G-buffer, folded with the occlusion.
     pub(in crate::vulkan) fn encode_ssgi_resolve(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&SsgiParams>,
     ) {
@@ -110,7 +111,7 @@ impl VkContext {
             .unwrap_or(self.scene.ssao_white.view);
         if let Err(e) = ssgi.pass.encode_resolve(
             &self.post_device(frame_idx),
-            &cmd,
+            rec,
             &SsgiResolveInputs {
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,
@@ -127,26 +128,20 @@ impl VkContext {
         let visible = vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_READ);
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            self.hw.device.cmd_pipeline_barrier(
-                cmd,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                std::slice::from_ref(&visible),
-                &[],
-                &[],
-            );
-        }
+        rec.pipeline_barrier(
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            std::slice::from_ref(&visible),
+            &[],
+            &[],
+        );
     }
 
     // Encode SSGI after the main pass: the depth pyramid, the age, the trace
     // over the G-buffer and the accumulation the next frame's resolve reads.
     pub(in crate::vulkan) fn encode_ssgi(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&SsgiParams>,
     ) {
@@ -160,7 +155,7 @@ impl VkContext {
         };
         if let Err(e) = ssgi.pass.encode(
             &self.post_device(frame_idx),
-            &cmd,
+            rec,
             &SsgiTraceInputs {
                 scene: self.hdr_scene_attachment(frame_idx).view,
                 normal_depth: gbuffer.normal_depth,

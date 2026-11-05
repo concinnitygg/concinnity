@@ -233,6 +233,42 @@ impl<'a> Recorder<'a> {
         };
     }
 
+    // Bind the index buffer `buffer` from `offset`.
+    pub(in crate::vulkan) fn bind_index_buffer(
+        &self,
+        buffer: vk::Buffer,
+        offset: vk::DeviceSize,
+        index_type: vk::IndexType,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction, and the buffer is live for
+        // the call.
+        unsafe {
+            self.device
+                .cmd_bind_index_buffer(self.cmd, buffer, offset, index_type);
+        };
+    }
+
+    pub(in crate::vulkan) fn draw_indexed(
+        &self,
+        index_count: u32,
+        instance_count: u32,
+        first_index: u32,
+        vertex_offset: i32,
+        first_instance: u32,
+    ) {
+        // SAFETY: `self.cmd` is in the recording state by construction.
+        unsafe {
+            self.device.cmd_draw_indexed(
+                self.cmd,
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+            );
+        };
+    }
+
     pub(in crate::vulkan) fn dispatch(&self, x: u32, y: u32, z: u32) {
         // SAFETY: `self.cmd` is in the recording state by construction.
         unsafe { self.device.cmd_dispatch(self.cmd, x, y, z) };

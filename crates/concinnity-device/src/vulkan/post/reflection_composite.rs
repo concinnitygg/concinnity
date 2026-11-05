@@ -21,6 +21,7 @@ use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use super::super::context::VkContext;
 use super::super::texture::GpuImage;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkPostDevice, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The shared composite, holding Vulkan's own pipeline and target types.
 pub(in crate::vulkan) type VkReflectionCompositePass =
@@ -109,7 +110,7 @@ impl VkContext {
     // composite is absent (no reflection path active).
     pub(in crate::vulkan) fn encode_reflection_composite(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         reflection_view: vk::ImageView,
         frame_idx: usize,
     ) {
@@ -123,7 +124,7 @@ impl VkContext {
             &self.targets.hdr_resolve_images[frame_idx % self.targets.hdr_resolve_images.len()];
         if let Err(e) = rc.encode(
             &self.post_device(frame_idx),
-            &cmd,
+            rec,
             &ReflectionCompositeInputs {
                 reflection: reflection_view,
                 scene: scene.view,

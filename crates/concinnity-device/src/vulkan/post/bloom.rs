@@ -12,6 +12,7 @@ use concinnity_engine::render::render_graph::PixelFormat;
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::pass_cache::AttachmentRest;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkAttachment, post_extent};
+use crate::vulkan::record::Recorder;
 use crate::vulkan::transient_pool::TransientImagePool;
 
 // The shared chain, holding Vulkan's own pipeline and target types.
@@ -34,7 +35,7 @@ impl VkContext {
     // Called only when `post_process.bloom_intensity > 0`.
     pub(in crate::vulkan) fn encode_bloom(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
     ) -> RenderResult<()> {
         let Some(bloom) = &self.bloom else {
@@ -57,7 +58,7 @@ impl VkContext {
         };
         bloom.encode(
             &self.post_device(frame_idx),
-            &cmd,
+            rec,
             &BloomInputs {
                 scene: self.scene_color_view(frame_idx),
                 top,

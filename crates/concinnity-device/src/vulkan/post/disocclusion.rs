@@ -12,6 +12,7 @@ use concinnity_engine::render::post::disocclusion::{
 use crate::vulkan::context::VkContext;
 use crate::vulkan::post::pass_cache::AttachmentRest;
 use crate::vulkan::post::post_device::{PostPipeline, PostTarget, VkAttachment, post_extent};
+use crate::vulkan::record::Recorder;
 
 // The shared pass, holding Vulkan's own pipeline and target handles.
 pub(in crate::vulkan) type VkDisocclusionPass = DisocclusionPass<PostPipeline, PostTarget>;
@@ -46,7 +47,7 @@ impl VkContext {
     // frame's snapshot.
     pub(in crate::vulkan) fn encode_disocclusion(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
     ) -> RenderResult<()> {
         let missing = |what: &str| RenderError::Other(format!("disocclusion: no {what}"));
@@ -60,7 +61,7 @@ impl VkContext {
             .ok_or_else(|| missing("reactive mask"))?;
         pass.encode(
             &self.post_device(frame_idx),
-            &cmd,
+            rec,
             &DisocclusionInputs {
                 normal_depth: gbuffer.normal_depth,
                 velocity: gbuffer.velocity,

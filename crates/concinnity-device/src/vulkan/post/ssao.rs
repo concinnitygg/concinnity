@@ -21,6 +21,7 @@ use crate::vulkan::post::pass_cache::AttachmentRest;
 use crate::vulkan::post::post_device::{
     PostPipeline, PostTarget, VkAttachment, VkPostDevice, post_extent,
 };
+use crate::vulkan::record::Recorder;
 
 // SSAO resources held by `VkContext` when `AmbientOcclusion.enabled` is on.
 pub(in crate::vulkan) struct SsaoResources {
@@ -67,7 +68,7 @@ impl VkContext {
     // disabled.
     pub(in crate::vulkan) fn encode_ssao(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         params: Option<&SsaoParams>,
     ) -> RenderResult<()> {
@@ -84,7 +85,7 @@ impl VkContext {
             .ok_or_else(|| RenderError::Other("ao_output missing from transient pool".into()))?;
         ssao.pass.encode(
             &self.post_device(frame_idx),
-            &cmd,
+            rec,
             &SsaoInputs {
                 normal_depth: gbuffer.normal_depth,
                 output: VkAttachment {

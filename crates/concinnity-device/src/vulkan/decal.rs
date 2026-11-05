@@ -35,6 +35,7 @@ use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedFramebuffer, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass,
     OwnedSetLayout, VkDevice,
 };
+use crate::vulkan::record::Recorder;
 
 // The descriptor pool reserves a fixed block of `MAX_DECALS` per-decal albedo
 // sets at init.
@@ -548,7 +549,7 @@ impl VkContext {
     // in the fragment shader.
     pub(in crate::vulkan) fn encode_decals(
         &self,
-        cmd: vk::CommandBuffer,
+        rec: &Recorder<'_>,
         frame_idx: usize,
         vp: [[f32; 4]; 4],
         frustum: &Frustum,
@@ -564,7 +565,6 @@ impl VkContext {
             return;
         }
 
-        let device = &self.hw.device;
         let extent = self.targets.render_extent;
 
         // Upload this frame's view UBO.
@@ -582,10 +582,7 @@ impl VkContext {
         // Main depth is already in SHADER_READ_ONLY for the fragment's sample:
         // the graph declares this pass's depth read and the executor emits the
         // transition ahead of this command buffer.
-        let rp_begin = vk::RenderPassBeginInfo::default()
-            .render_pass(decals.render_pass.handle())
-            .framebuffer(decals.framebuffers[frame_idx].handle())
-            .render_area(vk::Rect2D::default().extent(extent));
+        let area = vk::Rect2D::default().extent(extent);
 
         // Negative-height viewport matches the main pass so the
         // rasterized pixel grid lines up with the depth attachment we're
@@ -599,34 +596,18 @@ impl VkContext {
             min_depth: 0.0,
             max_depth: 1.0,
         };
-        let scissor = vk::Rect2D::default().extent(extent);
 
-        // SAFETY: `cmd` is recording outside any render pass, and the decal render pass and this
-        // frame's framebuffer are owned by `decals`, which outlives the frame.
-        unsafe { device.cmd_begin_render_pass(cmd, &rp_begin, vk::SubpassContents::INLINE) };
-        // SAFETY: the decal render pass just began on `cmd`; `vp_state` is borrowed for the call.
-        unsafe { device.cmd_set_viewport(cmd, 0, std::slice::from_ref(&vp_state)) };
-        // SAFETY: same open render pass; `scissor` is borrowed for the call.
-        unsafe { device.cmd_set_scissor(cmd, 0, std::slice::from_ref(&scissor)) };
-        // SAFETY: the decal pipeline is owned by `decals` and was built against this render pass.
-        unsafe {
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                decals.pipeline.handle(),
-            );
-        }
-        // SAFETY: the unit-cube vertex buffer is owned by `decals` and outlives the frame.
-        unsafe { device.cmd_bind_vertex_buffers(cmd, 0, &[decals.vertex_buffer.buffer()], &[0]) };
-        // SAFETY: the cube's 16-bit index buffer is owned by `decals` alongside the vertices.
-        unsafe {
-            device.cmd_bind_index_buffer(
-                cmd,
-                decals.index_buffer.buffer(),
-                0,
-                vk::IndexType::UINT16,
-            );
-        }
+        rec.begin_render_pass(
+            &decals.render_pass,
+            &decals.framebuffers[frame_idx],
+            area,
+            &[],
+        );
+        rec.set_viewport(&vp_state);
+        rec.set_scissor(&area);
+        rec.bind_pipeline(vk::PipelineBindPoint::GRAPHICS, &decals.pipeline);
+        rec.bind_vertex_buffers(0, &[decals.vertex_buffer.buffer()], &[0]);
+        rec.bind_index_buffer(decals.index_buffer.buffer(), 0, vk::IndexType::UINT16);
 
         for decal in visible {
             // This frame's ring slot keeps what an earlier frame wrote, so a
@@ -637,42 +618,28 @@ impl VkContext {
                     decal.params,
                 );
             }
+            // Selects this decal's record inside the params UBO written above.
             let dynamic_offset = u32::saturating_from(decal.id as u64 * PARAMS_STRIDE);
-            // SAFETY: the frame's view set is owned by `decals`, and `dynamic_offset` selects
-            // this decal's record inside its params UBO, written above.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    decals.pipeline_layout.handle(),
-                    0,
-                    std::slice::from_ref(&decals.view_sets[frame_idx]),
-                    std::slice::from_ref(&dynamic_offset),
-                );
-            }
-            // SAFETY: the decal's albedo set is owned by `decals` and points at a live scene
-            // texture view.
-            unsafe {
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    decals.pipeline_layout.handle(),
-                    1,
-                    std::slice::from_ref(&decals.albedo_sets[decal.id]),
-                    &[],
-                );
-            }
-            // SAFETY: the pipeline, cube buffers and both sets are bound inside the open render
-            // pass; 36 indices is the cube's full index count.
-            unsafe { device.cmd_draw_indexed(cmd, 36, 1, 0, 0, 0) };
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &decals.pipeline_layout,
+                0,
+                std::slice::from_ref(&decals.view_sets[frame_idx]),
+                std::slice::from_ref(&dynamic_offset),
+            );
+            rec.bind_descriptor_sets(
+                vk::PipelineBindPoint::GRAPHICS,
+                &decals.pipeline_layout,
+                1,
+                std::slice::from_ref(&decals.albedo_sets[decal.id]),
+                &[],
+            );
+            // 36 indices is the cube's full index count.
+            rec.draw_indexed(36, 1, 0, 0, 0);
             self.inc_draw_calls(1);
         }
 
-        // SAFETY: `cmd` is a command buffer in the recording state, and every handle and slice
-        // these commands name is live for the call.
-        unsafe {
-            device.cmd_end_render_pass(cmd);
-        }
+        rec.end_render_pass();
     }
 }
 

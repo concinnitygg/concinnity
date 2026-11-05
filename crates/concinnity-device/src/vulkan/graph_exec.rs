@@ -972,14 +972,12 @@ impl VkContext {
         }
     }
 
-    // Record a single render-graph pass into `cmd`. Shared by the (current)
-    // serial driver and the parallel fan-out: takes `&self` so it can run on a
-    // worker thread. `particle_frame` is the precomputed per-frame particle
-    // state from `prepare_particle_pass` (the only pass needing pre-advanced
-    // state).
-    // Dispatch one graph pass into `rec`. A pass that still records through the
-    // raw command buffer reads it back with `rec.raw()`; converting a pass to
-    // the safe surface is a local change to that pass and its arm here.
+    // Record one render-graph pass into `rec`. Shared by the serial driver and
+    // the parallel fan-out: takes `&self` so it can run on a worker thread.
+    // `particle_frame` is the per-frame particle state from
+    // `prepare_particle_pass`. An arm whose pass still records through the raw
+    // command buffer asks for it with `rec.raw()`, so what is left to convert
+    // is visible here.
     pub(in crate::vulkan) fn encode_pass_into(
         &self,
         pass_id: PassId,
@@ -988,14 +986,13 @@ impl VkContext {
         particle_frame: Option<&ParticleFrame>,
         grass_frame: Option<&super::grass::GrassFrame>,
     ) -> RenderResult<()> {
-        let cmd = rec.raw();
         match pass_id {
             PassId::Cull => {
-                self.encode_cull(cmd, params.frame_idx, params.frustum, params.cam_pos);
+                self.encode_cull(rec.raw(), params.frame_idx, params.frustum, params.cam_pos);
                 // Pose the skinned objects' deformed-vertex buffer for this frame
                 // (a no-op when no skinned mesh is folded in). Independent of the
                 // cull; both feed Main, which the toposort orders after Cull.
-                self.encode_skin(cmd, params.frame_idx);
+                self.encode_skin(rec.raw(), params.frame_idx);
             }
             PassId::LightCull => {
                 // Bins the local lights and probes into per-cluster light lists
@@ -1010,33 +1007,33 @@ impl VkContext {
                 // The single graph node for the bundled `encode_ssao`
                 // dispatch: encodes the GTAO depth copy, kernel + depth-aware
                 // blur over the unified pre-pass's normal+depth.
-                self.encode_ssao(cmd, params.frame_idx, params.effects.ssao.as_ref())?;
+                self.encode_ssao(rec, params.frame_idx, params.effects.ssao.as_ref())?;
             }
             PassId::Grass => {
                 if let Some(frame) = grass_frame {
-                    self.encode_grass(cmd, params.frame_idx, frame);
+                    self.encode_grass(rec.raw(), params.frame_idx, frame);
                 }
             }
             PassId::GrassBend => {
                 if let Some(frame) = grass_frame {
-                    self.encode_grass_bend(cmd, params.frame_idx, frame);
+                    self.encode_grass_bend(rec.raw(), params.frame_idx, frame);
                 }
             }
             PassId::GrassShadow => {
                 if let Some(frame) = grass_frame {
-                    self.encode_grass_shadow(cmd, params.frame_idx, frame);
+                    self.encode_grass_shadow(rec.raw(), params.frame_idx, frame);
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(cmd, params.frame_idx, params.effects.ssr.as_ref());
+                self.encode_ssr_resolve(rec, params.frame_idx, params.effects.ssr.as_ref());
             }
             PassId::Ssgi => {
-                self.encode_ssgi(cmd, params.frame_idx, params.effects.ssgi.as_ref());
+                self.encode_ssgi(rec, params.frame_idx, params.effects.ssgi.as_ref());
             }
             PassId::SsgiResolve => {
-                self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
+                self.encode_ssgi_resolve(rec, params.frame_idx, params.effects.ssgi.as_ref());
             }
-            PassId::Disocclusion => self.encode_disocclusion(cmd, params.frame_idx)?,
+            PassId::Disocclusion => self.encode_disocclusion(rec, params.frame_idx)?,
             PassId::RtReflections => {
                 // Hardware ray-traced reflections (inline `rayQueryEXT`). Traces a
                 // reflection ray per glossy pixel against the scene TLAS and
@@ -1048,17 +1045,17 @@ impl VkContext {
                 self.encode_rt_reflections(rec, params.frame_idx, params.effects.rt.as_ref());
             }
             PassId::TaaResolve => {
-                self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
+                self.encode_taa(rec, params.frame_idx, params.reactive.readable);
             }
             PassId::Upscale => {
-                self.encode_upscale(cmd, params)?;
+                self.encode_upscale(rec.raw(), params)?;
             }
             PassId::Bloom => {
-                self.encode_bloom(cmd, params.frame_idx)?;
+                self.encode_bloom(rec, params.frame_idx)?;
             }
             PassId::Shadow => {
                 self.encode_shadow_pass(
-                    cmd,
+                    rec.raw(),
                     params.frame_idx,
                     params.cam_pos,
                     narrow_f32(params.elapsed),
@@ -1069,14 +1066,19 @@ impl VkContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
+                self.encode_spot_shadow_pass(rec.raw(), params.frame_idx, params.cam_pos);
             }
             PassId::Main => {
-                self.encode_main_pass(cmd, params.frame_idx, params.world_hidden, grass_frame);
+                self.encode_main_pass(
+                    rec.raw(),
+                    params.frame_idx,
+                    params.world_hidden,
+                    grass_frame,
+                );
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
-                    cmd,
+                    rec,
                     params.image_index,
                     params.frame_idx,
                     params.text_calls,
@@ -1084,7 +1086,7 @@ impl VkContext {
                 )?;
             }
             PassId::Decals => {
-                self.encode_decals(cmd, params.frame_idx, params.vp_mat, params.frustum);
+                self.encode_decals(rec, params.frame_idx, params.vp_mat, params.frustum);
             }
             PassId::Lines => {
                 self.encode_lines(rec, params.frame_idx, params.vp_mat, params.lines);
@@ -1118,14 +1120,14 @@ impl VkContext {
                 // still records it in the compiled order. The per-frame particle
                 // state was advanced on `&mut self` before the fan-out by `prepare_particle_pass`.
                 if let Some(frame) = particle_frame {
-                    self.encode_particles_sim(cmd, params.frame_idx, *frame);
+                    self.encode_particles_sim(rec.raw(), params.frame_idx, *frame);
                 }
             }
             PassId::ParticlesDraw => {
                 let write = params.reactive.particles;
                 let drew = particle_frame.is_some_and(|frame| {
                     self.encode_particles_draw(
-                        cmd,
+                        rec.raw(),
                         params.frame_idx,
                         *frame,
                         params.frustum,
@@ -1138,13 +1140,13 @@ impl VkContext {
                 // The pass that was to clear the mask drew nothing to clear it
                 // with.
                 if !drew && write == ReactiveWrite::Clear {
-                    self.clear_reactive_mask(cmd, params.frame_idx);
+                    self.clear_reactive_mask(rec.raw(), params.frame_idx);
                 }
             }
             PassId::ParticlesLateDraw => {
                 if let Some(frame) = particle_frame {
                     self.encode_particles_draw(
-                        cmd,
+                        rec.raw(),
                         params.frame_idx,
                         *frame,
                         params.frustum,
@@ -1164,15 +1166,15 @@ impl VkContext {
                     params.cam_pos,
                     narrow_f32(params.elapsed),
                 );
-                self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
+                self.encode_raymarch(rec.raw(), params.frame_idx, &view, params.frustum)?;
             }
-            PassId::PropProbe => self.encode_prop_probe(cmd, params)?,
+            PassId::PropProbe => self.encode_prop_probe(rec.raw(), params)?,
             PassId::PlanarReflection => {
                 // Mirror renders for the flat reflectors in view, each cropped to
                 // the screen rectangle its reflectors cover (see `planar.rs`).
                 // Recorded ahead of `Transparent` in the frame's submission, and
                 // closed with the barrier that makes the targets readable there.
-                self.encode_planar_reflections(cmd, params);
+                self.encode_planar_reflections(rec.raw(), params);
             }
             PassId::Transparent => {
                 // Generic translucent pass: draws the world's glass panes and
@@ -1191,14 +1193,14 @@ impl VkContext {
                 let write = params.reactive.transparent;
                 self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
                 let drew = self.encode_transparent(
-                    cmd,
+                    rec.raw(),
                     params.frame_idx,
                     &view,
                     params.effects.rt.as_ref(),
                     write,
                 )?;
                 if !drew && write == ReactiveWrite::Clear {
-                    self.clear_reactive_mask(cmd, params.frame_idx);
+                    self.clear_reactive_mask(rec.raw(), params.frame_idx);
                 }
             }
             PassId::HizEarly | PassId::HizFinal => {
@@ -1211,7 +1213,7 @@ impl VkContext {
             }
             PassId::CullLate => {
                 self.encode_cull_late(
-                    cmd,
+                    rec.raw(),
                     params.frame_idx,
                     params.frustum,
                     params.cam_pos,
@@ -1219,7 +1221,7 @@ impl VkContext {
                 );
             }
             PassId::MainLate => {
-                self.encode_main_pass_late(cmd, params.frame_idx);
+                self.encode_main_pass_late(rec.raw(), params.frame_idx);
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes
@@ -1242,7 +1244,7 @@ impl VkContext {
                 })?;
                 self.encode_gbuffer_prepass(
                     gb,
-                    cmd,
+                    rec.raw(),
                     params.frame_idx,
                     GbufferPrepassView {
                         jittered_vp: params.vp_mat,

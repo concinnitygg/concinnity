@@ -919,7 +919,7 @@ impl VkContext {
                 &[],
                 &[to_sampled.src_access_mask(vk::AccessFlags::TRANSFER_WRITE)],
             );
-            self.encode_reflection_composite(rec.raw(), rt.output.view, frame_idx);
+            self.encode_reflection_composite(rec, rt.output.view, frame_idx);
             return;
         };
         rt.params_buffers[frame_idx].write_val(0, params);
@@ -1015,7 +1015,7 @@ impl VkContext {
         // Blur the output's radiance+weight by roughness and composite it over
         // the scene into the reflection composite's output (the scene image the
         // post stack consumes). No-op when the composite is absent.
-        self.encode_reflection_composite(rec.raw(), rt.output.view, frame_idx);
+        self.encode_reflection_composite(rec, rt.output.view, frame_idx);
     }
 }
 
