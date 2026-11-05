@@ -11,8 +11,8 @@ use super::shader_fixtures::{
 use crate::editor::hook::tests::fixtures::{
     hook, press_modal, press_modal_check, world_with_name_field,
 };
-use crate::editor::panels::shader_list::{MenuItem, RowKind};
-use crate::editor::panels::shader_templates;
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::list::{MenuItem, RowKind};
 
 // A heading's Duplicate copies the Shader under a fresh name with its own
 // copies of its files, in one undo step that leaves the copies on disk.
@@ -71,7 +71,7 @@ fn a_vertex_file_is_added_and_removed() {
         let path = root.join(&declared);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            shader_templates::VERTEX[0].text
+            shader::templates::VERTEX[0].text
         );
         let vertex = key("lit", ShaderStage::Vertex);
         assert_eq!(h.shaders.source.as_ref().unwrap().key, vertex);

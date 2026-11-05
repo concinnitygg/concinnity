@@ -13,9 +13,9 @@ use crate::editor::hook::tests::fixtures::{set_field, world_with_fields};
 use crate::editor::modal;
 use crate::editor::panels::form_extras::{ExtraControl, ExtraRow};
 use crate::editor::panels::form_panel::{self, FormAction};
-use crate::editor::panels::shader_list::{MenuItem, RowKind};
-use crate::editor::panels::shader_list_panel::ShadersAction;
-use crate::editor::panels::shader_source::SourceKey;
+use crate::editor::panels::shader::list::{MenuItem, RowKind};
+use crate::editor::panels::shader::list_panel::ShadersAction;
+use crate::editor::panels::shader::source::SourceKey;
 
 pub(super) fn shader(name: &str, fragment: &Path) -> serde_json::Value {
     serde_json::json!({"type": "Shader", "args": {

@@ -2,10 +2,10 @@
 //! its volumes the editor removes, what the dialog says, whether the file can
 //! go too, and the toast after.
 
-use super::sdf_field_list::FieldDecl;
-use super::shader_edit::file_name;
-use super::shader_list::ShaderDecl;
-use super::shader_source::same_file;
+use super::super::shader::edit::file_name;
+use super::super::shader::list::ShaderDecl;
+use super::super::shader::source::same_file;
+use super::field_list::FieldDecl;
 use crate::editor::widget_check::Check;
 
 // What deleting a field does: the volumes removed, and who still reads its
@@ -108,8 +108,8 @@ pub(crate) fn deleted_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::panels::sdf_field_list::FieldVolume;
-    use crate::editor::panels::shader_list::declared;
+    use crate::editor::panels::sdf::field_list::FieldVolume;
+    use crate::editor::panels::shader::list::declared;
     use serde_json::json;
 
     fn field(names: &[&str]) -> FieldDecl {

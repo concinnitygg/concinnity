@@ -17,9 +17,9 @@ use crate::editor::hook::tests::fixtures::{VP, hook, pick_world};
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::panels::form_extras::ExtraControl;
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::sdf_templates;
-use crate::editor::panels::shader_list::RowKind;
-use crate::editor::panels::shader_source::SourceKey;
+use crate::editor::panels::sdf;
+use crate::editor::panels::shader::list::RowKind;
+use crate::editor::panels::shader::source::SourceKey;
 use crate::editor::widget;
 
 fn kind(h: &EditorHook, world: &World) -> usize {
@@ -76,11 +76,11 @@ fn a_field_kind_creates_a_volume_with_its_starter_file() {
         let file = root.join("assets/shaders/blob.hlsl");
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            sdf_templates::SURFACE[0].text
+            sdf::templates::SURFACE[0].text
         );
         let src = h.shaders.source.as_ref().expect("the file is open");
         assert!(matches!(&src.key, SourceKey::Field { path } if Path::new(path) == file));
-        assert_eq!(src.area.text(), sdf_templates::SURFACE[0].text);
+        assert_eq!(src.area.text(), sdf::templates::SURFACE[0].text);
         assert!(
             toasts(&h)
                 .iter()
@@ -112,7 +112,7 @@ fn the_kinds_cycle_through_volumetric_and_back_to_a_shader() {
         assert_eq!(args(&h, "fog")["volumetric"], true);
         assert_eq!(
             std::fs::read_to_string(root.join("assets/shaders/fog.hlsl")).unwrap(),
-            sdf_templates::VOLUMETRIC[1].text
+            sdf::templates::VOLUMETRIC[1].text
         );
 
         click(&mut h, &mut world, &RowKind::New);

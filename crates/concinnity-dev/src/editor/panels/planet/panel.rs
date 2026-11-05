@@ -1,6 +1,6 @@
 //! The Planet panel's layout half: a floating panel over the world's `Planet`
-//! (see `planet.rs` for its rows) with a status line and Apply button in its
-//! header row, the tool strip under it (`planet_tool_strip.rs`), and a scrolling
+//! (see `mod.rs` for its rows) with a status line and Apply button in its
+//! header row, the tool strip under it (`tool_strip.rs`), and a scrolling
 //! window of rows below. A row is a caption plus a
 //! text input, a reference picker cycled by clicking, or an add row, with up to
 //! two buttons at its right end. Every number row keeps its own text input, so
@@ -9,10 +9,10 @@
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
 
-use super::form::FieldKind;
-use super::planet::{self, Button, Row, RowKind};
-use super::planet_tool_strip::{self, StripAction, StripView};
-use super::registry::PanelKey;
+use super::super::form::FieldKind;
+use super::super::registry::PanelKey;
+use super::tool_strip::{self, StripAction, StripView};
+use super::{Button, Row, RowKind};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::icons;
 use crate::editor::theme;
@@ -33,11 +33,11 @@ hud_ids! {
         pub(crate) row_bg[VISIBLE_ROWS],
         pub(crate) picker_bg[VISIBLE_ROWS],
         pub(crate) button_bg[VISIBLE_ROWS * ROW_BUTTONS],
-        pub(crate) tool_bg[planet_tool_strip::TOOLS],
-        pub(crate) tool_part[planet_tool_strip::TOOLS * icons::MAX_PARTS],
-        pub(crate) slider_track[planet_tool_strip::SETTINGS],
-        pub(crate) slider_fill[planet_tool_strip::SETTINGS],
-        pub(crate) slider_handle[planet_tool_strip::SETTINGS],
+        pub(crate) tool_bg[tool_strip::TOOLS],
+        pub(crate) tool_part[tool_strip::TOOLS * icons::MAX_PARTS],
+        pub(crate) slider_track[tool_strip::SETTINGS],
+        pub(crate) slider_fill[tool_strip::SETTINGS],
+        pub(crate) slider_handle[tool_strip::SETTINGS],
         pub(crate) PICK_BG,
     ];
     labels: [
@@ -50,12 +50,12 @@ hud_ids! {
         pub(crate) button_label[VISIBLE_ROWS * ROW_BUTTONS],
         pub(crate) TOOL_CAPTION,
         pub(crate) TOOL_HINT,
-        pub(crate) setting_label[planet_tool_strip::SETTINGS],
-        pub(crate) setting_value[planet_tool_strip::SETTINGS],
+        pub(crate) setting_label[tool_strip::SETTINGS],
+        pub(crate) setting_value[tool_strip::SETTINGS],
         pub(crate) PICK_CAPTION,
         pub(crate) PICK_LABEL,
     ];
-    fields: [pub(crate) input[planet::MAX_ROWS] = ""];
+    fields: [pub(crate) input[super::MAX_ROWS] = ""];
 }
 
 // Geometry, in window pixels, every rect from the panel origin `o`.
@@ -97,7 +97,7 @@ pub(crate) struct PlanetView<'a> {
 impl PlanetView<'_> {
     // The tool strip's height.
     fn strip(&self) -> f32 {
-        planet_tool_strip::height(self.strip.tools)
+        tool_strip::height(self.strip.tools)
     }
 }
 
@@ -200,8 +200,7 @@ fn button_count(row: &Row) -> usize {
 // Whether a row sits under a list entry's heading.
 fn indented(row: &Row) -> bool {
     row.field().is_some_and(|f| {
-        f.key.starts_with(planet::List::Covers.key())
-            || f.key.starts_with(planet::List::Layers.key())
+        f.key.starts_with(super::List::Covers.key()) || f.key.starts_with(super::List::Layers.key())
     })
 }
 
@@ -218,7 +217,7 @@ pub(crate) fn hit_test(
     if point_in(mx, my, apply_rect(o, w)) {
         return Some(PlanetAction::Apply);
     }
-    if let Some(a) = planet_tool_strip::hit_test(&view.strip, mx, my, o, strip_top(o), w) {
+    if let Some(a) = tool_strip::hit_test(&view.strip, mx, my, o, strip_top(o), w) {
         return Some(PlanetAction::Strip(a));
     }
     let strip = view.strip();
@@ -265,10 +264,10 @@ pub(crate) fn place(world: &mut World, view: &PlanetView<'_>, o: [f32; 2], s: [f
     let close_hover = point_in(view.mouse[0], view.mouse[1], widget::close_rect(title));
     widget::place_close(world, CLOSE_BG, CLOSE_LABEL, title, close_hover);
     place_header(world, view, o, w);
-    planet_tool_strip::place(world, &view.strip, o, strip_top(o), w);
+    tool_strip::place(world, &view.strip, o, strip_top(o), w);
     let strip = view.strip();
 
-    for r in 0..planet::MAX_ROWS {
+    for r in 0..super::MAX_ROWS {
         widget::hide_field(world, input(r));
     }
     for j in 0..VISIBLE_ROWS {

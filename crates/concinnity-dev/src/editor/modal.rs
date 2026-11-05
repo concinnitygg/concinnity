@@ -68,7 +68,7 @@ pub(crate) enum Action {
     // `save`.
     LeaveShaderSource {
         save: bool,
-        then: super::panels::shader_source::Leave,
+        then: super::panels::shader::source::Leave,
     },
     // Delete the Shader of this name, and its files when the dialog's box is
     // checked.

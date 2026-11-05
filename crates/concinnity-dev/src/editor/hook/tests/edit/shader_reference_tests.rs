@@ -10,9 +10,10 @@ use std::path::Path;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::shader_reference::RefRow;
-use crate::editor::panels::shader_source::SourceKey;
-use crate::editor::panels::shader_source_panel::{self, SourceAction};
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::reference::RefRow;
+use crate::editor::panels::shader::source::SourceKey;
+use crate::editor::panels::shader::source_panel::SourceAction;
 
 // A hook with one Shader open in the source panel, its file holding "lit".
 fn session(dir: &Path) -> EditorHook {
@@ -91,7 +92,7 @@ fn the_wheel_over_the_column_scrolls_its_rows_not_the_text() {
     h.viewport = [1600.0, 900.0];
     let o = h.origin(PanelKey::ShaderSource, h.viewport);
     let s = h.effective_size(PanelKey::ShaderSource);
-    let column = shader_source_panel::reference_rect(o, s);
+    let column = shader::source_panel::reference_rect(o, s);
     let (mx, my) = (column[0] + 5.0, column[1] + 5.0);
     let panel = registry::panel(PanelKey::ShaderSource);
     assert!(panel.wheel_over(&h, &World::new(), mx, my, o));

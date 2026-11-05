@@ -18,8 +18,7 @@ use crate::editor::panels::template::{self, TemplatesAction};
 use crate::editor::panels::view::{self, ViewAction};
 use crate::editor::panels::{
     assets_panel, character_shape_panel, console_panel, content_panel, health_panel, import_panel,
-    lighting, lighting_panel, planet_panel, shader_list_panel, shader_source_panel, story_panel,
-    template_panel, variables_panel,
+    lighting, lighting_panel, planet, shader, story_panel, template_panel, variables_panel,
 };
 use crate::editor::text_area::layout::Metrics;
 use crate::editor::viewport::snap;
@@ -551,7 +550,7 @@ impl Panel for PlanetPanel {
         PanelKey::Planet
     }
     fn ids(&self) -> &'static HudIds {
-        planet_panel::ids()
+        planet::panel::ids()
     }
     fn on_open(&self, hook: &mut EditorHook, world: &mut World) {
         hook.planet.focus = None;
@@ -562,10 +561,10 @@ impl Panel for PlanetPanel {
         hook.planet_tool.put_down();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        planet_panel::size(hook.planet_rows().len(), hook.planet_strip())
+        planet::panel::size(hook.planet_rows().len(), hook.planet_strip())
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        planet_panel::default_origin(vp)
+        planet::panel::default_origin(vp)
     }
     fn press(
         &self,
@@ -579,7 +578,7 @@ impl Panel for PlanetPanel {
         let action = {
             let rows = hook.planet_rows();
             let view = hook.make_planet_view(&rows, "", [mx, my]);
-            planet_panel::hit_test(&view, mx, my, o, s)
+            planet::panel::hit_test(&view, mx, my, o, s)
         };
         handled(action, |a| hook.apply_planet_action(a, world))
     }
@@ -587,7 +586,7 @@ impl Panel for PlanetPanel {
         let s = hook.effective_size(PanelKey::Planet);
         let rows = hook.planet_rows().len();
         let strip = hook.planet_strip();
-        widget::point_in(mx, my, planet_panel::body_rect(o, s[0], strip, rows))
+        widget::point_in(mx, my, planet::panel::body_rect(o, s[0], strip, rows))
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_planet(delta);
@@ -600,7 +599,7 @@ impl Panel for PlanetPanel {
         let rows = hook.planet_rows();
         let pick = hook.planet_pick_label();
         let view = hook.make_planet_view(&rows, &pick, mouse);
-        planet_panel::place(world, &view, o, s);
+        planet::panel::place(world, &view, o, s);
     }
 }
 
@@ -742,23 +741,23 @@ impl Panel for ShadersPanel {
         PanelKey::Shaders
     }
     fn ids(&self) -> &'static HudIds {
-        shader_list_panel::ids()
+        shader::list_panel::ids()
     }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader_list_panel::max_size(Self::row_count(hook))
+        shader::list_panel::max_size(Self::row_count(hook))
     }
     // Opening builds the rows before the panel's first draw.
     fn on_open(&self, hook: &mut EditorHook, _world: &mut World) {
         hook.shader_rows();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader_list_panel::size(Self::row_count(hook))
+        shader::list_panel::size(Self::row_count(hook))
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        shader_list_panel::default_origin(vp[0])
+        shader::list_panel::default_origin(vp[0])
     }
     fn press(
         &self,
@@ -772,7 +771,7 @@ impl Panel for ShadersPanel {
         let rows = hook.shader_rows().to_vec();
         let action = {
             let view = hook.make_shaders_view(&rows, [mx, my]);
-            shader_list_panel::hit_test(&view, mx, my, o, s)
+            shader::list_panel::hit_test(&view, mx, my, o, s)
         };
         // A press anywhere else closes the row menu without being taken.
         if action.is_none() {
@@ -782,7 +781,7 @@ impl Panel for ShadersPanel {
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::Shaders);
-        shader_list_panel::cursor_over(mx, my, o, s)
+        shader::list_panel::cursor_over(mx, my, o, s)
     }
     fn scroll(&self, hook: &mut EditorHook, _world: &mut World, delta: f32) {
         hook.scroll_shaders(delta);
@@ -790,7 +789,7 @@ impl Panel for ShadersPanel {
     fn draw(&self, hook: &EditorHook, world: &mut World, o: [f32; 2], mouse: [f32; 2]) {
         let s = hook.effective_size(PanelKey::Shaders);
         let view = hook.make_shaders_view(&hook.shaders.rows, mouse);
-        shader_list_panel::place(world, Some(&view), o, s);
+        shader::list_panel::place(world, Some(&view), o, s);
     }
 }
 
@@ -801,13 +800,13 @@ impl Panel for ShaderSourcePanel {
         PanelKey::ShaderSource
     }
     fn ids(&self) -> &'static HudIds {
-        shader_source_panel::ids()
+        shader::source_panel::ids()
     }
     fn resizable(&self) -> bool {
         true
     }
     fn max_size(&self, _hook: &EditorHook) -> [f32; 2] {
-        shader_source_panel::max_size()
+        shader::source_panel::max_size()
     }
     // Opened from the Shaders list, on one file.
     fn is_open(&self, hook: &EditorHook) -> bool {
@@ -817,10 +816,10 @@ impl Panel for ShaderSourcePanel {
         hook.close_shader_source();
     }
     fn size(&self, hook: &EditorHook) -> [f32; 2] {
-        shader_source_panel::size(hook.shaders.reference.open)
+        shader::source_panel::size(hook.shaders.reference.open)
     }
     fn default_origin(&self, vp: [f32; 2]) -> [f32; 2] {
-        shader_source_panel::default_origin(vp[0])
+        shader::source_panel::default_origin(vp[0])
     }
     fn press(
         &self,
@@ -831,14 +830,14 @@ impl Panel for ShaderSourcePanel {
         o: [f32; 2],
     ) -> bool {
         let s = hook.effective_size(PanelKey::ShaderSource);
-        let action = shader_source_panel::hit_test(mx, my, o, s, hook.shaders.reference.open);
+        let action = shader::source_panel::hit_test(mx, my, o, s, hook.shaders.reference.open);
         handled(action, |a| hook.apply_source_action(a, mx, my))
     }
     fn wheel_over(&self, hook: &EditorHook, _world: &World, mx: f32, my: f32, o: [f32; 2]) -> bool {
         let s = hook.effective_size(PanelKey::ShaderSource);
         let reference = hook.shaders.reference.open;
-        shader_source_panel::cursor_over_area(mx, my, o, s, reference)
-            || (reference && shader_source_panel::cursor_over_reference(mx, my, o, s))
+        shader::source_panel::cursor_over_area(mx, my, o, s, reference)
+            || (reference && shader::source_panel::cursor_over_reference(mx, my, o, s))
     }
     fn scroll_at(&self, hook: &mut EditorHook, _world: &mut World, delta: f32, mx: f32, my: f32) {
         hook.scroll_shader_source(delta, mx, my);

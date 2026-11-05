@@ -1,4 +1,4 @@
-//! `EditorHook`: the Shader form's extras (`panels/shader_form.rs`) on the
+//! `EditorHook`: the Shader form's extras (`panels/shader/form.rs`) on the
 //! generic add / edit form. Creating writes each file from its starter once
 //! the entry edit is known to stand; editing adds or drops the vertex file,
 //! renames with every reference following, and in both the Materials and the
@@ -14,10 +14,10 @@ use crate::editor::hook::edits::references_note;
 use crate::editor::hook::form_extras::{Committed, ExtrasCx, FormExtras, NewFile};
 use crate::editor::hook::form_state::FormTarget;
 use crate::editor::panels::form_extras::ExtraRow;
-use crate::editor::panels::shader_edit::{file_stem, vertex_stem};
-use crate::editor::panels::shader_form::{Mode, Paths, ShaderForm};
-use crate::editor::panels::shader_source::{self, Leave, SourceKey};
-use crate::editor::panels::shader_templates;
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::edit::{file_stem, vertex_stem};
+use crate::editor::panels::shader::form::{Mode, Paths, ShaderForm};
+use crate::editor::panels::shader::source::{Leave, SourceKey};
 
 const SHADER: &str = "Shader";
 
@@ -48,7 +48,7 @@ impl ShaderExtras {
             .and_then(|e| e.get("args"));
         let declared = |stage: ShaderStage| {
             edited
-                .and_then(|a| a.get(shader_source::stage_name(stage)))
+                .and_then(|a| a.get(shader::source::stage_name(stage)))
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
         };
@@ -57,7 +57,7 @@ impl ShaderExtras {
             let (path, declared) = new_shader_file(&stem);
             files.push(NewFile {
                 path,
-                text: shader_templates::text(stage, starter).to_string(),
+                text: shader::templates::text(stage, starter).to_string(),
             });
             declared
         };
@@ -141,7 +141,7 @@ impl FormExtras for ShaderExtras {
         args: &mut serde_json::Map<String, serde_json::Value>,
     ) -> Vec<NewFile> {
         let (paths, files) = self.paths(cx);
-        let stage = shader_source::stage_name;
+        let stage = shader::source::stage_name;
         args.insert(
             stage(ShaderStage::Fragment).to_string(),
             paths.fragment.into(),
@@ -167,8 +167,8 @@ impl FormExtras for ShaderExtras {
             hook.shaders.source = None;
             return false;
         }
-        let prompt = shader_source::leave_prompt(src.file_name());
-        hook.open_modal(&prompt, shader_source::leave_buttons(Leave::ConfirmForm));
+        let prompt = shader::source::leave_prompt(src.file_name());
+        hook.open_modal(&prompt, shader::source::leave_buttons(Leave::ConfirmForm));
         true
     }
 
@@ -191,7 +191,7 @@ impl FormExtras for ShaderExtras {
                 .by_key(c.key)
                 .and_then(|e| {
                     e.get("args")?
-                        .get(shader_source::stage_name(stage))?
+                        .get(shader::source::stage_name(stage))?
                         .as_str()
                 })
                 .unwrap_or_default()

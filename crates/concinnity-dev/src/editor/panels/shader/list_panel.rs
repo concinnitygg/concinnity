@@ -1,10 +1,10 @@
 //! The Shaders panel's layout half: a floating, scrollable list of the rows
-//! `shader_list` builds. Each Shader is a heading row (badged "default" on the
+//! `list` builds. Each Shader is a heading row (badged "default" on the
 //! first), the Materials naming it, and a row per file with that file's last
 //! reload status on the right, then "+ Add vertex file" for a Shader without
 //! one; the SDF fields follow under their own heading, each file with the
 //! volumes reading it, and "+ New Shader" ends the list. Clicking a file opens
-//! it in the Shader source panel (`shader_source_panel.rs`), clicking a
+//! it in the Shader source panel (`source_panel.rs`), clicking a
 //! heading opens its Shader's form and clicking a volume its volume's form. A
 //! heading's "..." menu edits, duplicates or deletes its Shader, a vertex
 //! file's removes that file, and a field's opens it, selects its volumes or
@@ -14,10 +14,10 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
 
-use super::asset_list::{self, ROW_H};
-use super::registry::PanelKey;
-use super::shader_diagnostics::Tone;
-use super::shader_list::{MenuItem, Row, RowKind};
+use super::super::asset_list::{self, ROW_H};
+use super::super::registry::PanelKey;
+use super::diagnostics::Tone;
+use super::list::{MenuItem, Row, RowKind};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::theme;
 use crate::editor::widget::{self, place_rounded, point_in};
@@ -356,7 +356,7 @@ fn place_row(world: &mut World, slot: usize, row: &Row, rect: [f32; 4], mouse: [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::panels::shader_source::SourceKey;
+    use crate::editor::panels::shader::source::SourceKey;
     use crate::test_support::label;
     use concinnity_engine::components::ShaderStage;
 

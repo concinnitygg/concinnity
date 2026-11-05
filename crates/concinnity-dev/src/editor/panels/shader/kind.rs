@@ -3,7 +3,7 @@
 //! one type's form, so choosing a kind of another type turns the form into
 //! that type's.
 
-use super::form_extras::{ExtraControl, ExtraRow};
+use super::super::form_extras::{ExtraControl, ExtraRow};
 
 // The kind row's id; the Shader and SdfVolume forms both leave it free.
 pub(crate) const KIND_ROW: usize = 5;

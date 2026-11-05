@@ -11,9 +11,10 @@ use super::shader_edits::{button, cancel};
 use crate::editor::hook::{EditorHook, FormTarget};
 use crate::editor::modal::Action;
 use crate::editor::notify;
-use crate::editor::panels::sdf_field_edit::{self, FieldDelete};
-use crate::editor::panels::sdf_field_list::FieldDecl;
-use crate::editor::panels::shader_edit::ShaderEdit;
+use crate::editor::panels::sdf;
+use crate::editor::panels::sdf::field_edit::FieldDelete;
+use crate::editor::panels::sdf::field_list::FieldDecl;
+use crate::editor::panels::shader::edit::ShaderEdit;
 
 impl EditorHook {
     // Field `i`'s Delete: say which volumes go, with the file box.
@@ -32,10 +33,10 @@ impl EditorHook {
             );
             return;
         }
-        let check = sdf_field_edit::files_check(&field, &delete);
+        let check = sdf::field_edit::files_check(&field, &delete);
         let action = Action::DeleteSdfField(field.path.clone());
         self.open_modal_with_check(
-            &sdf_field_edit::delete_message(&field, &delete),
+            &sdf::field_edit::delete_message(&field, &delete),
             vec![cancel(), button("Delete", true, action)],
             check,
         );
@@ -54,7 +55,7 @@ impl EditorHook {
         let entries = &self.entries;
         let read_only =
             |name: &str| find_entry(entries, name).is_some_and(|i| entries.is_read_only(i));
-        sdf_field_edit::plan(field, read_only, &shaders)
+        sdf::field_edit::plan(field, read_only, &shaders)
     }
 
     // Remove the volumes reading the field at `path` in one edit, then, with
@@ -90,7 +91,7 @@ impl EditorHook {
         let file = (files && delete.readers.is_empty())
             .then(|| std::fs::remove_file(&field.path).map_err(|e| e.to_string()));
         let failed = matches!(file, Some(Err(_)));
-        let message = sdf_field_edit::deleted_message(&field, &delete.removed, file);
+        let message = sdf::field_edit::deleted_message(&field, &delete.removed, file);
         if failed {
             self.notifier
                 .error_with(&message, notify::Action::OpenConsole);

@@ -1,5 +1,5 @@
 //! `EditorHook`: the Planet panel's actions. The panel edits the world's first
-//! `Planet` entry (`planet.rs` lays out its rows); every commit is validated
+//! `Planet` entry (`panels/planet/` lays out its rows); every commit is validated
 //! through `form::validate` first, so nothing invalid reaches the entries. A
 //! reference picker, a button or an add row commits on the click; typed boxes
 //! commit together on Apply.
@@ -10,9 +10,9 @@ use serde_json::{Map, Value, json};
 
 use crate::editor::hook::{EditorHook, declared_id, names_of_types, short_status};
 use crate::editor::panels::form::FieldKind;
+use crate::editor::panels::planet::panel::{PlanetAction, PlanetView};
+use crate::editor::panels::planet::tool_strip::StripView;
 use crate::editor::panels::planet::{self, Button, List, Row, RowKind};
-use crate::editor::panels::planet_panel::{self, PlanetAction, PlanetView};
-use crate::editor::panels::planet_tool_strip::{self, StripView};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::widget;
 
@@ -43,7 +43,7 @@ impl EditorHook {
 
     // The tool strip's height.
     pub(in crate::editor::hook) fn planet_strip(&self) -> f32 {
-        planet_tool_strip::height(&self.planet_tool.tools)
+        planet::tool_strip::height(&self.planet_tool.tools)
     }
 
     pub(in crate::editor::hook) fn make_planet_view<'a>(
@@ -54,7 +54,10 @@ impl EditorHook {
     ) -> PlanetView<'a> {
         PlanetView {
             rows,
-            scroll: self.planet.scroll.min(planet_panel::max_scroll(rows.len())),
+            scroll: self
+                .planet
+                .scroll
+                .min(planet::panel::max_scroll(rows.len())),
             // Focus only while frontmost, so the inputs never fight another
             // panel's focused field for typed keys.
             focus: self
@@ -82,13 +85,13 @@ impl EditorHook {
             if let Some(f) = row.field()
                 && f.kind.has_text_input()
             {
-                widget::seed_field(world, planet_panel::input(r), &f.initial);
+                widget::seed_field(world, planet::panel::input(r), &f.initial);
             }
         }
     }
 
     pub(in crate::editor::hook) fn scroll_planet(&mut self, delta: f32) {
-        let max = planet_panel::max_scroll(self.planet_rows().len());
+        let max = planet::panel::max_scroll(self.planet_rows().len());
         let cur = self.planet.scroll.min(max);
         self.planet.scroll = super::super::scroll_step(cur, delta, max);
     }
@@ -142,7 +145,7 @@ impl EditorHook {
         };
         let rows = planet::rows(Some(&args));
         let texts: Vec<String> = (0..rows.len())
-            .map(|r| widget::field_text(world, planet_panel::input(r)))
+            .map(|r| widget::field_text(world, planet::panel::input(r)))
             .collect();
         if self.commit_planet(&planet::assemble(&args, &rows, &texts)) {
             self.seed_planet(world);

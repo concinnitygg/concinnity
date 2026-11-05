@@ -3,7 +3,7 @@
 //! for its kind, grouped by kind under headings that fold. Clicking a name
 //! inserts it at the caret, a helper as a call naming its parameters and a
 //! function to define as its prototype. Its layout is
-//! `shader_reference_panel.rs`.
+//! `reference_panel.rs`.
 
 use concinnity_engine::render::shader::programs::vocabulary::{Entry, Kind};
 

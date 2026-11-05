@@ -8,8 +8,8 @@ use std::fmt::Write as _;
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
 
-use super::planet::List;
-use super::planet_panel::{
+use super::List;
+use super::panel::{
     PICK_BG, PICK_CAPTION, PICK_LABEL, TOOL_CAPTION, TOOL_HINT, setting_label, setting_value,
     slider_fill, slider_handle, slider_track, tool_bg, tool_part,
 };

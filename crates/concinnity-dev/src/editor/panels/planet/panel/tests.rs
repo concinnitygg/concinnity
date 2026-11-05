@@ -2,6 +2,7 @@ use super::*;
 use concinnity_engine::components::{Sprite, TextInput, TextLabel};
 use serde_json::json;
 
+use crate::editor::panels::planet;
 use crate::editor::planet_tools::{Brush, Tools};
 
 const IDLE: Tools = Tools {
@@ -16,7 +17,7 @@ const IDLE: Tools = Tools {
 };
 
 fn strip() -> f32 {
-    planet_tool_strip::height(&IDLE)
+    tool_strip::height(&IDLE)
 }
 
 fn planet_rows() -> Vec<Row> {

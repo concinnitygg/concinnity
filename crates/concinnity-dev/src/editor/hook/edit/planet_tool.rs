@@ -14,9 +14,8 @@ use super::planet_tool_state::Stroke;
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::pick::camera_ray;
 use crate::editor::hud;
-use crate::editor::panels::planet::List;
-use crate::editor::panels::planet_panel;
-use crate::editor::panels::planet_tool_strip::{self, StripAction};
+use crate::editor::panels::planet::tool_strip::StripAction;
+use crate::editor::panels::planet::{self, List};
 use crate::editor::panels::registry::{self, PanelKey};
 use crate::editor::planet_tools::ring::{self, RING_POINTS};
 use crate::editor::planet_tools::stroke::{SPACING, Spacer};
@@ -195,8 +194,8 @@ impl EditorHook {
         }
         let o = self.origin(PanelKey::Planet, vp);
         let w = self.effective_size(PanelKey::Planet)[0];
-        let top = planet_panel::strip_top(o);
-        let t = planet_tool_strip::slide_to(o, top, w, setting, input.mouse_x);
+        let top = planet::panel::strip_top(o);
+        let t = planet::tool_strip::slide_to(o, top, w, setting, input.mouse_x);
         self.planet_tool.tools.brush.set_position(setting, t);
     }
 
@@ -235,7 +234,7 @@ impl EditorHook {
 
     // The entries of the planet's `list`.
     fn planet_list(&self, list: List) -> Option<Vec<Value>> {
-        let idx = self.entry_index_of(crate::editor::panels::planet::TY)?;
+        let idx = self.entry_index_of(planet::TY)?;
         self.entry_args(idx)
             .get(list.key())
             .and_then(Value::as_array)

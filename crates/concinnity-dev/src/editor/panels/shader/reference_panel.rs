@@ -1,4 +1,4 @@
-//! The reference column's layout half (see `shader_reference.rs` for the
+//! The reference column's layout half (see `reference.rs` for the
 //! rows): a well at the right of the Shader source panel, one row per group
 //! heading or name, names in the code face, the hovered row highlighted.
 
@@ -6,7 +6,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
 
-use super::shader_reference::RefRow;
+use super::reference::RefRow;
 use crate::editor::hud_ids::hud_ids;
 use crate::editor::text_area::layout::Metrics;
 use crate::editor::theme;
@@ -17,7 +17,7 @@ const POOL: usize = 48;
 // Drawn inside the Shader source panel, in the block it reserves. The names are
 // in the code face.
 hud_ids! {
-    base: super::shader_source_panel::REFERENCE_BASE;
+    base: super::source_panel::REFERENCE_BASE;
     sprites: [COLUMN_BG, row_bg[POOL]];
     labels: [heading_label[POOL]];
     code_labels: [name_label[POOL]];
@@ -124,7 +124,7 @@ pub(crate) fn place(world: &mut World, view: Option<&RefView<'_>>, rect: [f32; 4
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::panels::shader_reference::Reference;
+    use crate::editor::panels::shader::reference::Reference;
     use crate::test_support::label;
     use concinnity_engine::components::Sprite;
     use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;

@@ -2,13 +2,13 @@
 //! Shader's, or an `SdfVolume`'s distance field), where that file is on disk and
 //! where a new one goes, and the rules for leaving a file with unsaved edits
 //! and for a file that changed on disk while open. What a reload outcome shows
-//! is `shader_diagnostics`; what a new file starts as is `shader_templates`
-//! and `sdf_templates`.
+//! is `diagnostics`; what a new file starts as is `templates`
+//! and `sdf::templates`.
 
 use concinnity_engine::components::ShaderStage;
 use std::path::{Path, PathBuf};
 
-use super::shader_edit::ShaderEdit;
+use super::edit::ShaderEdit;
 use crate::editor::modal;
 
 // The file the panel edits: one of a Shader's, by the Shader's name and which

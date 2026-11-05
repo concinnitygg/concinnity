@@ -6,6 +6,9 @@
 //! same `FormField`. Every edit lands on a working copy of the args the hook
 //! validates through `form::validate` before committing. Pure and world-free.
 
+pub(crate) mod panel;
+pub(crate) mod tool_strip;
+
 use serde_json::{Map, Value, json};
 
 use super::form::{self, FieldKind, FormField};

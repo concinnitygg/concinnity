@@ -1,13 +1,13 @@
 //! The data half of the Shaders panel's edits: whether a typed name can name
 //! a Shader or a volume, the file name a name becomes, what a delete says it
 //! will do, and which of a Shader's files no other Shader reads. Deleting a
-//! distance field is `sdf_field_edit`.
+//! distance field is `sdf::field_edit`.
 
 use concinnity_cook::authoring::world::is_label_of;
 use std::fmt;
 
-use super::shader_list::ShaderDecl;
-use super::shader_source::{SourceKey, same_file, stage_name};
+use super::list::ShaderDecl;
+use super::source::{SourceKey, same_file, stage_name};
 use crate::editor::widget_check::Check;
 use concinnity_engine::components::ShaderStage;
 
@@ -202,7 +202,7 @@ pub(crate) fn removed_vertex_message(name: &str, declared: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::panels::shader_list::declared;
+    use crate::editor::panels::shader::list::declared;
     use serde_json::json;
 
     fn shader(name: &str, fragment: &str) -> serde_json::Value {

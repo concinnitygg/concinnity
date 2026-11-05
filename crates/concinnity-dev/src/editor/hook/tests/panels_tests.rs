@@ -19,7 +19,7 @@ use crate::editor::hook::EditorHook;
 use crate::editor::hook::edit::shaders_state::SourceState;
 use crate::editor::hud::{self, HudAction};
 use crate::editor::panels::registry::{self, Panel, PanelKey};
-use crate::editor::panels::shader_source::SourceKey;
+use crate::editor::panels::shader::source::SourceKey;
 use crate::editor::panels::template_panel::{self, TemplateAction};
 use crate::editor::panels::{row_list, template, view};
 use crate::editor::{inject, widget};

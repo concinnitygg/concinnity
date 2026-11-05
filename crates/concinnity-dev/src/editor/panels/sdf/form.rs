@@ -4,11 +4,11 @@
 //! volumes reading the same file. Every other flag is a plain field of the
 //! volume's form.
 
-use super::form_extras::{ExtraControl, ExtraRow};
-use super::sdf_field_list::declared_fields;
-use super::sdf_templates;
-use super::shader_edit::check_name;
-use super::shader_kind::{KIND_ROW, ShaderKind};
+use super::super::form_extras::{ExtraControl, ExtraRow};
+use super::super::shader::edit::check_name;
+use super::super::shader::kind::{KIND_ROW, ShaderKind};
+use super::field_list::declared_fields;
+use super::templates;
 
 const STARTER: usize = 6;
 
@@ -81,7 +81,7 @@ impl SdfForm {
     // The new field file's text.
     pub(crate) fn starter_text(&self) -> Option<&'static str> {
         match self.mode {
-            SdfMode::New { kind, starter } => Some(sdf_templates::text(kind.volumetric(), starter)),
+            SdfMode::New { kind, starter } => Some(templates::text(kind.volumetric(), starter)),
             SdfMode::Edit { .. } => None,
         }
     }
@@ -95,7 +95,7 @@ impl SdfForm {
                 *kind = kind.next();
                 *starter = 0;
             }
-            STARTER => *starter = (*starter + 1) % sdf_templates::of(kind.volumetric()).len(),
+            STARTER => *starter = (*starter + 1) % templates::of(kind.volumetric()).len(),
             _ => {}
         }
     }
@@ -103,7 +103,7 @@ impl SdfForm {
     // The type the form should become, after a press chose a kind of another.
     pub(crate) fn switch_type(&self) -> Option<&'static str> {
         match self.mode {
-            SdfMode::New { kind, .. } => kind.switch_from(super::sdf_field_list::SDF_VOLUME),
+            SdfMode::New { kind, .. } => kind.switch_from(super::field_list::SDF_VOLUME),
             SdfMode::Edit { .. } => None,
         }
     }
@@ -126,7 +126,7 @@ impl SdfForm {
                     caption: "Starter".to_string(),
                     indent: false,
                     control: ExtraControl::Choice {
-                        options: sdf_templates::of(kind.volumetric())
+                        options: templates::of(kind.volumetric())
                             .iter()
                             .map(|t| t.name.to_string())
                             .collect(),
@@ -187,15 +187,15 @@ mod tests {
         let rows = form.rows("shaders/blob.hlsl");
         assert_eq!(captions(&rows), ["Kind", "Starter", "Field file"]);
         assert_eq!(rows[2].detail.as_deref(), Some("shaders/blob.hlsl"));
-        assert_eq!(form.starter_text(), Some(sdf_templates::SURFACE[0].text));
+        assert_eq!(form.starter_text(), Some(templates::SURFACE[0].text));
 
         form.press(STARTER);
-        assert_eq!(form.starter_text(), Some(sdf_templates::SURFACE[1].text));
+        assert_eq!(form.starter_text(), Some(templates::SURFACE[1].text));
         form.press(KIND_ROW);
         assert!(form.volumetric());
         assert_eq!(
             form.starter_text(),
-            Some(sdf_templates::VOLUMETRIC[0].text),
+            Some(templates::VOLUMETRIC[0].text),
             "a new kind starts from its first starter"
         );
         assert_eq!(form.switch_type(), None);

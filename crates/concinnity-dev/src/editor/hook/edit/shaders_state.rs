@@ -8,12 +8,13 @@ use concinnity_engine::render::shader::programs::vocabulary::{self, Entry};
 
 use super::path_cache::PathCache;
 use crate::debug::hot_reload::{Latest, ReloadOutcome, ReloadReports, ReloadSubject, ReportBoard};
-use crate::editor::panels::sdf_field_list::FieldDecl;
-use crate::editor::panels::shader_diagnostics::{self, Status, Tone};
-use crate::editor::panels::shader_edit::file_name;
-use crate::editor::panels::shader_list::{Row, RowKind, ShaderDecl};
-use crate::editor::panels::shader_reference::Reference;
-use crate::editor::panels::shader_source::{self, DiskChange, SourceKey};
+use crate::editor::panels::sdf::field_list::FieldDecl;
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::diagnostics::{Status, Tone};
+use crate::editor::panels::shader::edit::file_name;
+use crate::editor::panels::shader::list::{Row, RowKind, ShaderDecl};
+use crate::editor::panels::shader::reference::Reference;
+use crate::editor::panels::shader::source::{DiskChange, SourceKey};
 use crate::editor::text_area::TextArea;
 use crate::editor::text_area::highlight::{HLSL, SDF_HLSL};
 use crate::editor::text_area::markers::GutterMarker;
@@ -67,8 +68,8 @@ impl Default for ShadersState {
             field_paths: PathCache::default(),
             paths_dir: None,
             retry_at: 0.0,
-            resolve: shader_source::resolve_path,
-            resolve_field: shader_source::resolve_field_path,
+            resolve: shader::source::resolve_path,
+            resolve_field: shader::source::resolve_field_path,
             rows: Vec::new(),
             rows_key: None,
             reference: Reference::default(),
@@ -223,7 +224,7 @@ impl SourceState {
     pub(in crate::editor::hook) fn title(&self) -> String {
         match &self.key {
             SourceKey::Shader { name, stage } => {
-                format!("{name} {}", shader_source::stage_name(*stage))
+                format!("{name} {}", shader::source::stage_name(*stage))
             }
             SourceKey::Field { path } => format!("{} SDF field", file_name(path)),
         }
@@ -266,7 +267,7 @@ impl SourceState {
             .collect();
         if let Some(latest) = shown(&newer) {
             self.seen = newer.iter().map(|l| l.seq).max().unwrap_or(latest.seq);
-            let view = shader_diagnostics::report_view(&latest.outcome, &self.path);
+            let view = shader::diagnostics::report_view(&latest.outcome, &self.path);
             let answered = std::mem::take(&mut self.compiling);
             self.markers = view.markers;
             self.status = Some(view.status);
@@ -323,7 +324,7 @@ impl SourceState {
         let Ok(disk) = std::fs::read_to_string(&self.path) else {
             return;
         };
-        match shader_source::disk_change(
+        match shader::source::disk_change(
             &self.known,
             &disk,
             self.area.is_dirty(),

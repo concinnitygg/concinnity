@@ -15,8 +15,8 @@ use super::shader_fixtures::{
 use crate::editor::hook::FormTarget;
 use crate::editor::hook::tests::fixtures::{hook, press_modal};
 use crate::editor::panels::registry::PanelKey;
-use crate::editor::panels::shader_list::{self, RowKind};
-use crate::editor::panels::{form_panel, shader_templates};
+use crate::editor::panels::shader::list::RowKind;
+use crate::editor::panels::{form_panel, shader};
 
 // "+ New Shader" opens the form empty; a blank name blocks it, and Create
 // writes each file from its starter, assigns the Materials picked, and opens
@@ -68,11 +68,11 @@ fn a_new_shader_is_created_through_its_form() {
         let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
         assert_eq!(
             read("assets/shaders/water_1.hlsl"),
-            shader_templates::FRAGMENT[1].text
+            shader::templates::FRAGMENT[1].text
         );
         assert_eq!(
             read("assets/shaders/water_vertex.hlsl"),
-            shader_templates::VERTEX[1].text
+            shader::templates::VERTEX[1].text
         );
         assert_eq!(read("assets/shaders/water.hlsl"), "someone else's");
         assert_eq!(args(&h, "sea")["shader"], "water");
@@ -127,7 +127,7 @@ fn a_taken_name_or_the_limit_blocks_the_form() {
     type_name(&mut world, "more");
     assert!(blocked(&h, &world).unwrap().contains("No room"));
     confirm(&mut h, &mut world);
-    assert_eq!(shader_list::shader_count(&h.entries), MAX_SHADER_BUCKETS);
+    assert_eq!(shader::list::shader_count(&h.entries), MAX_SHADER_BUCKETS);
     assert!(!h.dirty);
 }
 
@@ -212,7 +212,7 @@ fn stages_add_and_drop_the_vertex_file() {
         let path = root.join(&declared);
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
-            shader_templates::VERTEX[0].text
+            shader::templates::VERTEX[0].text
         );
         let vertex = key("lit", ShaderStage::Vertex);
         assert_eq!(h.shaders.source.as_ref().unwrap().key, vertex);

@@ -7,12 +7,12 @@ use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::{entry_handles, entry_type, find_entry};
 use concinnity_engine::components::ShaderStage;
 
-use super::form_extras::{ExtraControl, ExtraRow};
-use super::shader_edit::check_name;
-use super::shader_kind::{KIND_ROW, ShaderKind};
-use super::shader_list::{can_add_shader, limit_reason};
-use super::shader_source::stage_name;
-use super::shader_templates;
+use super::super::form_extras::{ExtraControl, ExtraRow};
+use super::edit::check_name;
+use super::kind::{KIND_ROW, ShaderKind};
+use super::list::{can_add_shader, limit_reason};
+use super::source::stage_name;
+use super::templates;
 use crate::editor::entry_list::EntryList;
 
 const SHADER: &str = "Shader";
@@ -147,11 +147,10 @@ impl ShaderForm {
             KIND_ROW if self.is_new() => self.kind = self.kind.next(),
             VERTEX => self.vertex = !self.vertex,
             FRAGMENT_STARTER => {
-                self.fragment_starter =
-                    (self.fragment_starter + 1) % shader_templates::FRAGMENT.len();
+                self.fragment_starter = (self.fragment_starter + 1) % templates::FRAGMENT.len();
             }
             VERTEX_STARTER => {
-                self.vertex_starter = (self.vertex_starter + 1) % shader_templates::VERTEX.len();
+                self.vertex_starter = (self.vertex_starter + 1) % templates::VERTEX.len();
             }
             DEFAULT => self.default = !self.default,
             _ => {
@@ -306,7 +305,7 @@ fn params_summary(entry: &serde_json::Value) -> Option<String> {
     let shown: Vec<String> = params[..=last]
         .iter()
         .map(|v| match v {
-            serde_json::Value::Number(n) => super::form::number_text(n),
+            serde_json::Value::Number(n) => super::super::form::number_text(n),
             other => other.to_string(),
         })
         .collect();
@@ -329,7 +328,7 @@ fn choice(id: usize, stage: ShaderStage, selected: usize) -> ExtraRow {
         caption: stage_name(stage).to_string(),
         indent: true,
         control: ExtraControl::Choice {
-            options: shader_templates::of(stage)
+            options: templates::of(stage)
                 .iter()
                 .map(|t| t.name.to_string())
                 .collect(),
@@ -591,7 +590,7 @@ mod tests {
             std::path::Path::new("world.jsonl"),
         );
         let mut form = ShaderForm::open(&entries, None);
-        for _ in 0..=shader_templates::FRAGMENT.len() {
+        for _ in 0..=templates::FRAGMENT.len() {
             form.press(FRAGMENT_STARTER);
         }
         assert_eq!(form.fragment_starter, 1);

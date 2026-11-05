@@ -1,6 +1,6 @@
 //! The data half of the Shaders panel: every `Shader` the world declares, in
 //! declaration order, with the Materials that name it and its files, then the
-//! `SdfVolume` distance fields (`sdf_field_list`), and the rows the panel lists
+//! `SdfVolume` distance fields (`sdf::field_list`), and the rows the panel lists
 //! them as, with the actions each row's menu offers. A file's status is its
 //! Shader's latest reload outcome as it bears on that file.
 
@@ -9,9 +9,9 @@ use concinnity_cook::authoring::world::{entry_handles, entry_type};
 use concinnity_engine::components::ShaderStage;
 use concinnity_engine::gfx::render_types::MAX_SHADER_BUCKETS;
 
-use super::sdf_field_list::{FieldDecl, field_rows};
-use super::shader_diagnostics::Tone;
-use super::shader_source::{self, SourceKey, same_file};
+use super::super::sdf::field_list::{FieldDecl, field_rows};
+use super::diagnostics::Tone;
+use super::source::{self, SourceKey, same_file};
 use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome, ReloadSubject, ReportBoard};
 use crate::editor::select_related;
 
@@ -21,7 +21,7 @@ pub(crate) struct DeclaredFile {
     pub(crate) stage: ShaderStage,
     // As the world line spells it.
     pub(crate) declared: String,
-    // Where it is on disk (`shader_source::resolve_path`).
+    // Where it is on disk (`source::resolve_path`).
     pub(crate) path: String,
 }
 
@@ -43,7 +43,7 @@ impl ShaderDecl {
 }
 
 // Every Shader the entries declare, in order, each file's on-disk path from
-// `resolve` (`shader_source::resolve_path`, which can walk the assets tree, so
+// `resolve` (`source::resolve_path`, which can walk the assets tree, so
 // the caller keeps its answers).
 pub(crate) fn declared(
     entries: &[serde_json::Value],
@@ -59,7 +59,7 @@ pub(crate) fn declared(
             let name = names[i].clone()?;
             let args = e.get("args");
             let file = |stage: ShaderStage| {
-                let declared = args?.get(shader_source::stage_name(stage))?.as_str()?;
+                let declared = args?.get(source::stage_name(stage))?.as_str()?;
                 Some(DeclaredFile {
                     stage,
                     declared: declared.to_string(),
@@ -297,11 +297,7 @@ pub(crate) fn rows(
             out.push(Row {
                 selected: open == Some(&key),
                 kind: RowKind::File(key),
-                text: format!(
-                    "{}  {}",
-                    shader_source::stage_name(file.stage),
-                    file.declared
-                ),
+                text: format!("{}  {}", source::stage_name(file.stage), file.declared),
                 badge: Some((status.label(), status.tone())),
                 indent: true,
             });

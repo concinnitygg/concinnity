@@ -15,9 +15,10 @@ use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;
 use crate::editor::modal;
 use crate::editor::panels::registry::{self, PanelKey};
-use crate::editor::panels::shader_list::RowKind;
-use crate::editor::panels::shader_list_panel::ShadersAction;
-use crate::editor::panels::shader_source::{self, Leave, SourceKey};
+use crate::editor::panels::shader;
+use crate::editor::panels::shader::list::RowKind;
+use crate::editor::panels::shader::list_panel::ShadersAction;
+use crate::editor::panels::shader::source::{Leave, SourceKey};
 
 fn shader(name: &str, fragment: &Path) -> serde_json::Value {
     serde_json::json!({"type": "Shader", "args": {
@@ -201,7 +202,7 @@ thread_local! {
 
 fn counting_resolve(declared: &str, dir: Option<&Path>) -> String {
     RESOLVED.with(|n| n.set(n.get() + 1));
-    shader_source::resolve_path(declared, dir)
+    shader::source::resolve_path(declared, dir)
 }
 
 // The list resolves each declared file once, however many frames ask for its

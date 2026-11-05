@@ -1,18 +1,18 @@
 //! The Shader source panel's layout half: one of a Shader's `.hlsl` files in a
-//! code text area (see `shader_source.rs` and `shader_diagnostics.rs` for the
+//! code text area (see `source.rs` and `diagnostics.rs` for the
 //! data, `hook/edit/shader_source.rs` for the actions). The title names the
 //! Shader and the file's stage, the header carries the path, an unsaved-edits
 //! mark, the reference toggle and Save, a status line reports the last compile,
 //! and the gutter marks the lines its diagnostics name. The reference column
-//! (`shader_reference_panel.rs`) sits at the right, beside the text.
+//! (`reference_panel.rs`) sits at the right, beside the text.
 
 use concinnity_engine::components::TextAlign;
 use concinnity_engine::ecs::World;
 
-use super::registry::PanelKey;
-use super::shader_diagnostics::{Status, Tone};
-use super::shader_list_panel::tone_color;
-use super::shader_reference_panel::{self as reference, COLUMN_W, RefView};
+use super::super::registry::PanelKey;
+use super::diagnostics::{Status, Tone};
+use super::list_panel::tone_color;
+use super::reference_panel::{self as reference, COLUMN_W, RefView};
 use crate::editor::hud_ids::{hud_ids, panel_base};
 use crate::editor::text_area::TextArea;
 use crate::editor::text_area::layout::{self, Geometry, Metrics, TextAreaIds, TextAreaView};
@@ -240,7 +240,7 @@ fn status_line(view: &SourceView<'_>, g: &Geometry, reference: [f32; 4]) -> Opti
             .reference
             .as_ref()
             .and_then(|r| reference::hovered(r, reference))
-            .and_then(super::shader_reference::RefRow::describe)
+            .and_then(super::reference::RefRow::describe)
             .map(|text| Status::new(text, Tone::Info))
             .or_else(|| view.status.cloned()),
     }
@@ -364,7 +364,7 @@ fn place_header(world: &mut World, view: &SourceView<'_>, o: [f32; 2], w: f32, d
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::panels::shader_reference::{RefRow, Reference};
+    use crate::editor::panels::shader::reference::{RefRow, Reference};
     use crate::test_support::label;
     use concinnity_engine::render::shader::programs::vocabulary::ENTRIES;
 

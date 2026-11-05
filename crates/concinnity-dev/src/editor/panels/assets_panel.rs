@@ -104,8 +104,8 @@ pub(crate) fn is_singleton(ty: &str) -> bool {
 pub(crate) fn add_refused(ty: &str, entries: &[serde_json::Value]) -> Option<String> {
     match ty {
         "Shader" => {
-            let count = super::shader_list::shader_count(entries);
-            (!super::shader_list::can_add_shader(count)).then(super::shader_list::limit_reason)
+            let count = super::shader::list::shader_count(entries);
+            (!super::shader::list::can_add_shader(count)).then(super::shader::list::limit_reason)
         }
         _ => None,
     }

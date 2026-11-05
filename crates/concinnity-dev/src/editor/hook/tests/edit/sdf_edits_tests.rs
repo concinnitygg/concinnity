@@ -14,9 +14,9 @@ use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::{
     hook, press_modal, press_modal_check, selected, world_with_name_field,
 };
-use crate::editor::panels::shader_list::{MenuItem, RowKind};
-use crate::editor::panels::shader_source::SourceKey;
-use crate::editor::panels::shader_source_panel::SourceAction;
+use crate::editor::panels::shader::list::{MenuItem, RowKind};
+use crate::editor::panels::shader::source::SourceKey;
+use crate::editor::panels::shader::source_panel::SourceAction;
 
 fn volume(name: &str, file: &Path) -> serde_json::Value {
     serde_json::json!({"type": "SdfVolume", "args": {

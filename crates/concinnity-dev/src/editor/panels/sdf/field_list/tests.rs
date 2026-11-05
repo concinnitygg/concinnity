@@ -1,7 +1,7 @@
 use super::*;
 use crate::debug::hot_reload::{ReloadFailure, ReloadReport, ReloadReports};
-use crate::editor::panels::shader_diagnostics::Tone;
-use crate::editor::panels::shader_list::MenuItem;
+use crate::editor::panels::shader::diagnostics::Tone;
+use crate::editor::panels::shader::list::MenuItem;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity};
 use serde_json::json;
 

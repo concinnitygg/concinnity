@@ -5,8 +5,8 @@
 
 use concinnity_cook::authoring::world::entry_handles;
 
-use super::shader_list::{FileStatus, Row, RowKind};
-use super::shader_source::{SourceKey, same_file};
+use super::super::shader::list::{FileStatus, Row, RowKind};
+use super::super::shader::source::{SourceKey, same_file};
 use crate::debug::hot_reload::{ReloadOutcome, ReloadSubject, ReportBoard};
 
 pub(crate) const SDF_VOLUME: &str = "SdfVolume";
@@ -33,7 +33,7 @@ impl FieldVolume {
 pub(crate) struct FieldDecl {
     // As the first volume reading it spells it.
     pub(crate) declared: String,
-    // Where it is on disk (`shader_source::resolve_field_path`).
+    // Where it is on disk (`shader::source::resolve_field_path`).
     pub(crate) path: String,
     pub(crate) volumes: Vec<FieldVolume>,
 }
@@ -46,7 +46,7 @@ impl FieldDecl {
 
 // Every field file the entries' SdfVolumes declare, in the order a volume
 // first reads it, grouped by on-disk path from `resolve`
-// (`shader_source::resolve_field_path`) as the hot-reload catalog groups them.
+// (`shader::source::resolve_field_path`) as the hot-reload catalog groups them.
 // A volume declaring no file reads no field.
 pub(crate) fn declared_fields(
     entries: &[serde_json::Value],

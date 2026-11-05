@@ -3,7 +3,7 @@
 //! shows in whichever volume reads it. Every starter is pinned compilable by
 //! test.
 
-use super::shader_templates::Template;
+use super::super::shader::templates::Template;
 
 pub(crate) const SURFACE: [Template; 3] = [
     Template {

@@ -3,14 +3,14 @@
 //! status line, and where a click on the status jumps.
 //!
 //! A diagnostic belongs to the open file when its path is the file's resolved
-//! path (see `shader_source::resolve_path`). An error located elsewhere, in the
+//! path (see `source::resolve_path`). An error located elsewhere, in the
 //! engine template when `shade` has the wrong signature, has no line here: it
 //! reaches the status line with the compile's hint, and a `note:` in its
 //! context naming a line of this file marks that line instead.
 
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, Severity as DxcSeverity};
 
-use super::shader_source::same_file;
+use super::source::same_file;
 use crate::debug::hot_reload::{ReloadFailure, ReloadOutcome};
 use crate::editor::text_area::markers::{GutterMarker, Severity};
 
