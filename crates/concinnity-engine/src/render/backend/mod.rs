@@ -10,10 +10,21 @@
 //! is how a backend says it does not have that path, and the grouping is what
 //! tells a new backend author which subset is which.
 //!
-//! A fallible default returns [`RenderError::Unsupported`](crate::render::backend::error::RenderError::Unsupported),
-//! never a silent `Ok`, unless doing nothing is the complete answer: a backend
-//! without a morph path has no morph data to attach. An infallible setter
-//! defaults to a no-op; a caller that must know whether one lands gates on
+//! A default describes a backend without the feature the operation serves,
+//! by one rule:
+//!
+//! - A feed hands the backend state it draws from: lights, fog, probes,
+//!   morph targets, a world shader's pipeline, the planet's shape. Without
+//!   the feature there is nothing to draw it into, so the default does
+//!   nothing and succeeds.
+//! - A request asks for an outcome the caller reports or builds on: an id, a
+//!   screenshot, readback, a geometry edit, a pipeline swap, a reload. Its
+//!   default returns [`RenderError::Unsupported`](crate::render::backend::error::RenderError::Unsupported),
+//!   so "not done" is never mistaken for "done".
+//! - A window hint (cursor, menu mode, vsync, window mode) returns nothing and
+//!   defaults to doing nothing: the platform may refuse it anyway.
+//!
+//! A caller that must know whether a feed lands gates on
 //! [`DeviceCapabilities`] first.
 //!
 //! Operations that only edit the CPU-side scene are defaulted over
@@ -172,7 +183,8 @@ pub struct FrameParams<'a> {
 /// The window, input and frame are required, so a backend missing one fails
 /// to compile rather than silently drawing nothing. The scene pushes are
 /// defaulted over [`SceneHost`]. The optional operation families are the
-/// supertraits, each grouped by domain in its own module.
+/// supertraits, each grouped by domain in its own module; the module docs give
+/// the rule their defaults follow.
 pub trait RenderBackend:
     SceneHost
     + BackendProbe
@@ -370,7 +382,7 @@ mod tests {
         assert!(backend.upload_skinned_morphs(&[]).is_ok());
 
         // Streaming + cursor + capture no-ops.
-        backend.seed_mesh_streaming(0, 0, 0, 0);
+        assert!(backend.seed_mesh_streaming(0, 0, 0, 0).is_ok());
         backend.set_ui_cursor_hidden(true);
         backend.set_menu_mode(true);
         backend.set_camera_capture(true);
@@ -405,6 +417,15 @@ mod tests {
         ));
         backend.update_fog_settings(None);
         backend.update_directional_lights(&[]);
+        // Moving local lights is a feed like the directional push beside it.
+        let lights = crate::render::light::lights::build_light_data(&[], &[], &[]);
+        let uniforms = crate::render::light::lights::build_light_uniforms(
+            &[],
+            vec::Vec::new(),
+            &lights.lights,
+            1.0,
+        );
+        assert!(backend.move_local_lights(&lights, &uniforms).is_ok());
         backend.set_draw_material(DrawIndex(0), MaterialUniforms::DEFAULT, 0, 0);
         backend.set_draw_cull_distance(DrawIndex(0), 50.0);
 

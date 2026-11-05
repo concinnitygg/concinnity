@@ -295,7 +295,14 @@ impl GraphicsSystem {
         // draw). Otherwise free each streamed draw's build-time region.
         match seed_region {
             Some(r) => {
-                backend.seed_mesh_streaming(r.vtx_offset, r.vtx_bytes, r.idx_offset, r.idx_bytes);
+                if let Err(e) = backend.seed_mesh_streaming(
+                    r.vtx_offset,
+                    r.vtx_bytes,
+                    r.idx_offset,
+                    r.idx_bytes,
+                ) {
+                    tracing::warn!("GraphicsSystem: mesh streaming seed: {}", e);
+                }
             }
             None => {
                 for &draw_idx in &draw_indices {

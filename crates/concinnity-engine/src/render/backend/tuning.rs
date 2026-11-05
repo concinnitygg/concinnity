@@ -37,7 +37,7 @@ pub trait RenderTuning {
     /// a uniform. `graphics` is the full resolved snapshot the plan moves to.
     /// Default: a plan with nothing to reallocate is a no-op, and one with
     /// something is [`RenderError::Unsupported`], for a backend with no live
-    /// rebuild path.
+    /// rebuild path. The live values are a feed; a rebuild is a request.
     ///
     /// # Errors
     ///
@@ -89,20 +89,19 @@ pub trait RenderTuning {
     /// moves to another simulated frame carries its lights. The spot shadow
     /// slices re-render from their first refresh.
     ///
+    /// Default no-op, for a backend that draws no local lights.
+    ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Unsupported`] on a backend that cannot move
-    /// lights in place, or an error if the light count does not match the
-    /// lights built at init.
+    /// Returns an error if the light count does not match the lights built at
+    /// init.
     fn move_local_lights(
         &mut self,
         lights: &crate::render::light::lights::LightData,
         uniforms: &crate::gfx::render_types::LightUniforms,
     ) -> RenderResult<()> {
         let _ = (lights, uniforms);
-        Err(RenderError::Unsupported {
-            op: "move_local_lights",
-        })
+        Ok(())
     }
 
     /// Replace the live volumetric-fog settings, or disable the fog pass when

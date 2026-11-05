@@ -128,19 +128,25 @@ pub trait DrawStreaming: SceneHost {
     /// per-mesh build-time regions. Used by the shrinkable-seed path: the
     /// streamed geometry is no longer baked into the buffers at build time, so
     /// the renderer hands the allocators one contiguous block sized to the
-    /// cap-many resident meshes rather than the whole streamed set. Without a
-    /// scene there are no allocators to seed, and this does nothing.
+    /// cap-many resident meshes rather than the whole streamed set. A setup
+    /// feed: without a scene there are no allocators to seed, and this
+    /// succeeds doing nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the geometry edit that seeds the allocators fails.
     fn seed_mesh_streaming(
         &mut self,
         vtx_offset: u64,
         vtx_bytes: u64,
         idx_offset: u64,
         idx_bytes: u64,
-    ) {
-        let _ = self.edit_geometry(&mut |scene, writer| {
+    ) -> RenderResult<()> {
+        self.edit_geometry(&mut |scene, writer| {
             scene.seed_mesh_streaming(vtx_offset, vtx_bytes, idx_offset, idx_bytes, writer);
             Ok(())
-        });
+        })
+        .unwrap_or(Ok(()))
     }
 
     /// Voxel-world chunk streaming: grow the shared geometry buffers by the

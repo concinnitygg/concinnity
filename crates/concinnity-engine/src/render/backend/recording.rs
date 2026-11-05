@@ -593,8 +593,9 @@ impl DrawStreaming for RecordingBackend {
         _vtx_bytes: u64,
         _idx_offset: u64,
         _idx_bytes: u64,
-    ) {
+    ) -> RenderResult<()> {
         self.record(Call::SeedMeshStreaming);
+        Ok(())
     }
 
     fn setup_chunk_streaming(

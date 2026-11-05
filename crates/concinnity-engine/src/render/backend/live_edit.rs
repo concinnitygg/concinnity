@@ -103,7 +103,8 @@ pub trait LiveEdit: SceneHost {
     }
 
     /// Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
-    /// Driven by asset hot-reload (`cn run -f` only).
+    /// Driven by asset hot-reload (`cn run -f` only). A request, not a feed:
+    /// the reload reports whether the replacement landed.
     ///
     /// # Errors
     ///
@@ -289,7 +290,8 @@ pub trait LiveEdit: SceneHost {
     /// `crate::bake::environment_map::compile_environment_map_payload`
     /// (header + irradiance cube + prefilter mip chain), so init and hot-reload
     /// share a single byte format. Driven by asset hot-reload (`cn run -f`
-    /// only).
+    /// only). A request, not a feed: the reload reports whether the
+    /// replacement landed.
     ///
     /// # Errors
     ///

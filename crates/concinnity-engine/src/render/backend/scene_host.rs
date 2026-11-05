@@ -213,7 +213,8 @@ mod tests {
     #[test]
     fn streaming_writes_through_the_lent_writer() {
         let mut b = Hosted::new();
-        b.seed_mesh_streaming(0, 3 * size_of::<Vertex>() as u64, 0, 12);
+        b.seed_mesh_streaming(0, 3 * size_of::<Vertex>() as u64, 0, 12)
+            .expect("seed");
         b.upload_mesh(DrawIndex(0), &vertices(), &[0, 1, 2], 0)
             .expect("room for the mesh");
         assert_eq!(
