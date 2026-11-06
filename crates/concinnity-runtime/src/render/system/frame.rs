@@ -37,6 +37,7 @@ impl GraphicsSystem {
         let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
             return StepResult::Done;
         };
+        backend.assert_owner_thread();
 
         // Fill the frame snapshot from world state, then submit it. The
         // snapshot's buffers ride along and keep their capacity.

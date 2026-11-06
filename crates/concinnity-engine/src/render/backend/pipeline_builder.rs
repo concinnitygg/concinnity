@@ -4,9 +4,9 @@
 //! code, which costs tens to hundreds of milliseconds for a world Shader. A
 //! [`PipelineBuilder`] does that on whichever thread calls it, against the live
 //! device, and hands back [`PreparedPipelines`] for
-//! [`DrawStreaming::install_world_shader`](super::DrawStreaming::install_world_shader),
-//! [`LiveEdit::update_world_shader`](super::LiveEdit::update_world_shader) or
-//! [`LiveEdit::replace_sdf_volume_pipelines`](super::LiveEdit::replace_sdf_volume_pipelines)
+//! [`WorldShaders::install_world_shader`](super::WorldShaders::install_world_shader),
+//! [`WorldShaders::update_world_shader`](super::WorldShaders::update_world_shader) or
+//! [`SdfVolumeShaders::replace_sdf_volume_pipelines`](super::SdfVolumeShaders::replace_sdf_volume_pipelines)
 //! to install without building.
 
 use alloc::boxed::Box;
@@ -44,7 +44,7 @@ impl fmt::Debug for PreparedPipelines {
 /// from any thread.
 ///
 /// A builder captures what pipeline creation reads when
-/// [`DrawStreaming::pipeline_builder`](super::DrawStreaming::pipeline_builder) hands it
+/// [`WorldShaders::pipeline_builder`](super::WorldShaders::pipeline_builder) hands it
 /// out. The backend checks what it built against at swap time, and builds the
 /// pipeline itself when the two no longer match.
 pub trait PipelineBuilder: Send + Sync {

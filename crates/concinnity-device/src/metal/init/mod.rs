@@ -27,13 +27,17 @@ use concinnity_engine::gfx::render_types::{ClusterParams, PostProcessParams};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
 use concinnity_engine::render::backend::init::BackendInit;
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::settings::ResolvedGraphics;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use self::effects::EffectSettings;
-use super::context::{MtlContext, MtlHardware, debug_assert_main_thread};
+use super::context::{MtlContext, MtlHardware};
 use super::frame_pacing::FrameInFlight;
 use super::line::LineState;
 use super::post::UpscaleState;
@@ -415,6 +419,20 @@ impl MtlContext {
         crate::shader::runtime_cache::checkpoint();
         Ok(ctx)
     }
+}
+
+impl WorldReload for MtlContext {
+    fn shader_reload_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.hot_reload.flag()
+    }
+
+    // The swapchain config this live context can hot-swap a new world onto: the
+    // ring depth plus the HDR-output request it was built with. A live `cn edit`
+    // reload reuses this backend (via `reload_world`) only when the new world's
+    // `swapchain_config` matches; otherwise the swap does a full rebuild.
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        Some(self.hw.swapchain_config)
+    }
 
     // Re-upload a new world's GPU content onto this live context, reusing the
     // retained device + command queue + window instead of recreating them.
@@ -430,8 +448,7 @@ impl MtlContext {
     // the frames-in-flight and HDR request still match. On a build failure the
     // handed-over window closes with the dropped hardware, and the caller drops
     // this backend.
-    pub(super) fn apply_world_reload(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
-        debug_assert_main_thread("apply_world_reload");
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let reuse = self.hw.hand_over()?;
         *self = Self::build(init, Some(reuse))?;

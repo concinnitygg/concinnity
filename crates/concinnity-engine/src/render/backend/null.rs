@@ -4,11 +4,14 @@
 //! be exercised without a GPU.
 
 use super::{
-    BackendProbe, DeviceCapabilities, DrawStreaming, FrameParams, GeometryEdit, InputSnapshot,
-    LiveEdit, RenderBackend, RenderResult, RenderTuning, SceneEffects, SceneHost, SkinnedDraws,
-    WindowControl,
+    BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
+    FrameParams, GeometryEdit, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
+    RenderBackend, RenderResult, RenderTuning, RuntimeDecals, RuntimeEmitters, SceneHost,
+    SceneLights, SdfVolumeShaders, SkinnedDraws, TextureUploads, WindowControl, WorldReload,
+    WorldShaders,
 };
 use crate::gfx::render_types::TextureSlot;
+use crate::input::snapshot::InputSnapshot;
 
 /// A `RenderBackend` that accepts every call and draws nothing.
 pub struct NullBackend;
@@ -26,17 +29,21 @@ impl SceneHost for NullBackend {
 }
 
 impl RenderBackend for NullBackend {
-    fn window_closed(&mut self) -> bool {
-        false
-    }
-    fn request_cursor_capture(&mut self) {}
-    fn take_input(&mut self) -> InputSnapshot {
-        InputSnapshot::default()
-    }
+    fn assert_owner_thread(&self) {}
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
         Ok(())
     }
+}
+
+impl WindowControl for NullBackend {
+    fn window_closed(&mut self) -> bool {
+        false
+    }
+    fn take_input(&mut self) -> InputSnapshot {
+        InputSnapshot::default()
+    }
+    fn request_cursor_capture(&mut self) {}
 }
 
 impl SkinnedDraws for NullBackend {
@@ -50,7 +57,7 @@ impl SkinnedDraws for NullBackend {
     }
 }
 
-impl DrawStreaming for NullBackend {
+impl TextureUploads for NullBackend {
     fn evict_texture_slot(&mut self, _slot: TextureSlot) -> RenderResult<()> {
         Ok(())
     }
@@ -61,6 +68,9 @@ impl DrawStreaming for NullBackend {
     ) -> RenderResult<()> {
         Ok(())
     }
+}
+
+impl DrawStreaming for NullBackend {
     fn setup_chunk_streaming(
         &mut self,
         _chunk_vtx_bytes: usize,
@@ -75,7 +85,17 @@ impl BackendProbe for NullBackend {
         DeviceCapabilities::ALL
     }
 }
-impl LiveEdit for NullBackend {}
+impl CullReadback for NullBackend {}
+impl FogControl for NullBackend {}
+impl FrameCapture for NullBackend {}
+impl GeometryRebuild for NullBackend {}
+impl MaterialParamRows for NullBackend {}
+impl PlanetReshape for NullBackend {}
+impl ReflectionProbes for NullBackend {}
 impl RenderTuning for NullBackend {}
-impl SceneEffects for NullBackend {}
-impl WindowControl for NullBackend {}
+impl RuntimeDecals for NullBackend {}
+impl RuntimeEmitters for NullBackend {}
+impl SceneLights for NullBackend {}
+impl SdfVolumeShaders for NullBackend {}
+impl WorldReload for NullBackend {}
+impl WorldShaders for NullBackend {}

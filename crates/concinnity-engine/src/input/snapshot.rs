@@ -1,4 +1,4 @@
-//! Backend-agnostic input snapshot returned by `RenderBackend::take_input`.
+//! Backend-agnostic input snapshot returned by `WindowControl::take_input`.
 
 use alloc::vec::Vec;
 

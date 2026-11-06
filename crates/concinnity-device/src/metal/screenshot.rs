@@ -20,6 +20,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::image_decode::PixelLayout;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{FrameCapture, RenderBackend};
 use concinnity_engine::render::output::hdr::HdrEncoding;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -41,11 +42,134 @@ type MtlBuffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 pub(in crate::metal) type MtlFrameCaptures = FrameCaptures<MtlBuffer, ()>;
 
 impl MtlContext {
+    // Keep a read-back buffer the size of `drawable` ready, so the frame that
+    // captures allocates nothing.
+    pub(in crate::metal) fn reserve_frame_capture(
+        &mut self,
+        drawable: &ProtocolObject<dyn MTLTexture>,
+    ) {
+        let image = self.capture_image(drawable);
+        let device = &self.hw.device;
+        self.frame_capture
+            .reserve(image.byte_len(), |len| shared_buffer(device, len));
+    }
+
+    // Record this frame's capture, if one is armed: blit `drawable` into a
+    // read-back buffer on `cmd_buf`, ahead of its present, and hand the bytes
+    // to the writer from the buffer's completion handler.
+    pub(in crate::metal) fn record_frame_capture(
+        &mut self,
+        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
+        drawable: &ProtocolObject<dyn MTLTexture>,
+    ) {
+        let Some(path) = self.frame_capture.take_armed() else {
+            return;
+        };
+        if !self.frame_capture.enabled() {
+            tracing::warn!("frame capture {path} skipped: frame capture is not enabled");
+            return;
+        }
+        let image = self.capture_image(drawable);
+        let device = &self.hw.device;
+        let (buffer, pending) = match self
+            .frame_capture
+            .begin(path.clone(), image, |len| shared_buffer(device, len))
+        {
+            Ok(lent) => lent,
+            Err(e) => {
+                tracing::warn!("frame capture {path} failed: {e}");
+                return;
+            }
+        };
+        let Some(blit) = cmd_buf.blitCommandEncoder() else {
+            pending.abandon("no blit encoder");
+            return;
+        };
+        // SAFETY: `buffer` holds `image.byte_len()` bytes, exactly `height` rows
+        // of `row_pitch` texels of the drawable's format, and the region is slice
+        // 0, mip 0 of `drawable`, whose size `image` was taken from.
+        unsafe {
+            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                drawable,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize {
+                    width: image.width as usize,
+                    height: image.height as usize,
+                    depth: 1,
+                },
+                &buffer,
+                0,
+                image.row_pitch,
+                image.byte_len(),
+            );
+        }
+        blit.endEncoding();
+
+        let sender = self.frame_capture.sender();
+        let pending = std::sync::Mutex::new(Some(pending));
+        let handler = block2::RcBlock::new(
+            move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                let Some(pending) = pending.lock().ok().and_then(|mut p| p.take()) else {
+                    return;
+                };
+                // SAFETY: Metal hands the completion handler a live command
+                // buffer, and the borrow does not escape the block.
+                let cb = unsafe { cb.as_ref() };
+                if cb.status() == MTLCommandBufferStatus::Error {
+                    pending.abandon("its frame faulted on the GPU");
+                } else {
+                    // SAFETY: the handler runs once the command buffer holding
+                    // the blit has completed.
+                    sender.send(unsafe { RetiredCapture::new(pending) });
+                }
+            },
+        );
+        // SAFETY: addCompletedHandler copies the block (Block_copy), so the
+        // RcBlock is free to drop when this scope ends.
+        unsafe { cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&handler)) };
+    }
+
+    fn capture_image(&self, drawable: &ProtocolObject<dyn MTLTexture>) -> CaptureImage {
+        CaptureImage::tight(
+            u32::saturating_from(drawable.width()),
+            u32::saturating_from(drawable.height()),
+            classify(self.hw.swap_pixel_format, self.hw.hdr_encoding()),
+        )
+    }
+}
+
+// A host-visible buffer of `len` bytes and where its contents are mapped.
+fn shared_buffer(
+    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
+    len: usize,
+) -> RenderResult<Mapped<MtlBuffer>> {
+    let buffer = device
+        .newBufferWithLength_options(len.max(1), MTLResourceOptions::StorageModeShared)
+        .ok_or_else(|| allocation_failed("frame capture read-back buffer"))?;
+    let mapped = buffer.contents().as_ptr() as *const u8;
+    Ok(Mapped { buffer, mapped })
+}
+
+// Classify the swapchain color format (+ resolved HDR encoding) into the
+// backend-free `PixelLayout` the shared decoder understands. The MTKView only
+// presents `BGRA8Unorm`/`_sRGB` for SDR or `RGBA16Float` for the HDR EDR path;
+// `encoding` (None on SDR) only matters for the float swapchain.
+fn classify(format: MTLPixelFormat, encoding: Option<HdrEncoding>) -> PixelLayout {
+    match format {
+        MTLPixelFormat::RGBA16Float => PixelLayout::Rgba16F {
+            scrgb: !matches!(encoding, Some(HdrEncoding::Pq)),
+        },
+        MTLPixelFormat::BGRA8Unorm | MTLPixelFormat::BGRA8Unorm_sRGB => PixelLayout::Bgra8,
+        _ => PixelLayout::Rgba8,
+    }
+}
+
+impl FrameCapture for MtlContext {
     // Capture the last presented frame to a PNG at `path`. Returns the path on
-    // success. Distinct name from the `RenderBackend::screenshot` trait method
-    // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn run -f`).
-    pub(in crate::metal) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
+    // success.
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
         // `None` both before the first present and in production (capture is a
         // `cn run -f`-only feature; see `last_present_texture`). The retained
         // texture keeps the drawable's color surface alive for the read-back.
@@ -146,134 +270,11 @@ impl MtlContext {
         Ok(path.to_string())
     }
 
-    // Keep a read-back buffer the size of `drawable` ready, so the frame that
-    // captures allocates nothing.
-    pub(in crate::metal) fn reserve_frame_capture(
-        &mut self,
-        drawable: &ProtocolObject<dyn MTLTexture>,
-    ) {
-        let image = self.capture_image(drawable);
-        let device = &self.hw.device;
-        self.frame_capture
-            .reserve(image.byte_len(), |len| shared_buffer(device, len));
-    }
-
-    // Record this frame's capture, if one is armed: blit `drawable` into a
-    // read-back buffer on `cmd_buf`, ahead of its present, and hand the bytes
-    // to the writer from the buffer's completion handler.
-    pub(in crate::metal) fn record_frame_capture(
-        &mut self,
-        cmd_buf: &ProtocolObject<dyn MTLCommandBuffer>,
-        drawable: &ProtocolObject<dyn MTLTexture>,
-    ) {
-        let Some(path) = self.frame_capture.take_armed() else {
-            return;
-        };
-        if !self.frame_capture.enabled() {
-            tracing::warn!("frame capture {path} skipped: frame capture is not enabled");
-            return;
-        }
-        let image = self.capture_image(drawable);
-        let device = &self.hw.device;
-        let (buffer, pending) = match self
-            .frame_capture
-            .begin(path.clone(), image, |len| shared_buffer(device, len))
-        {
-            Ok(lent) => lent,
-            Err(e) => {
-                tracing::warn!("frame capture {path} failed: {e}");
-                return;
-            }
-        };
-        let Some(blit) = cmd_buf.blitCommandEncoder() else {
-            pending.abandon("no blit encoder");
-            return;
-        };
-        // SAFETY: `buffer` holds `image.byte_len()` bytes, exactly `height` rows
-        // of `row_pitch` texels of the drawable's format, and the region is slice
-        // 0, mip 0 of `drawable`, whose size `image` was taken from.
-        unsafe {
-            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
-                drawable,
-                0,
-                0,
-                MTLOrigin { x: 0, y: 0, z: 0 },
-                MTLSize {
-                    width: image.width as usize,
-                    height: image.height as usize,
-                    depth: 1,
-                },
-                &buffer,
-                0,
-                image.row_pitch,
-                image.byte_len(),
-            );
-        }
-        blit.endEncoding();
-
-        let sender = self.frame_capture.sender();
-        let pending = std::sync::Mutex::new(Some(pending));
-        let handler = block2::RcBlock::new(
-            move |cb: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
-                let Some(pending) = pending.lock().ok().and_then(|mut p| p.take()) else {
-                    return;
-                };
-                // SAFETY: Metal hands the completion handler a live command
-                // buffer, and the borrow does not escape the block.
-                let cb = unsafe { cb.as_ref() };
-                if cb.status() == MTLCommandBufferStatus::Error {
-                    pending.abandon("its frame faulted on the GPU");
-                } else {
-                    // SAFETY: the handler runs once the command buffer holding
-                    // the blit has completed.
-                    sender.send(unsafe { RetiredCapture::new(pending) });
-                }
-            },
-        );
-        // SAFETY: addCompletedHandler copies the block (Block_copy), so the
-        // RcBlock is free to drop when this scope ends.
-        unsafe { cmd_buf.addCompletedHandler(block2::RcBlock::as_ptr(&handler)) };
-    }
-
     // Write every capture recorded so far, once the GPU has finished them.
-    pub(in crate::metal) fn finish_frame_captures(&mut self) {
+    fn finish_captures(&mut self) {
         self.wait_idle();
         // SAFETY: the queue is idle, and nothing is parked by token on Metal.
         unsafe { self.frame_capture.finish() };
-    }
-
-    fn capture_image(&self, drawable: &ProtocolObject<dyn MTLTexture>) -> CaptureImage {
-        CaptureImage::tight(
-            u32::saturating_from(drawable.width()),
-            u32::saturating_from(drawable.height()),
-            classify(self.hw.swap_pixel_format, self.hw.hdr_encoding()),
-        )
-    }
-}
-
-// A host-visible buffer of `len` bytes and where its contents are mapped.
-fn shared_buffer(
-    device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
-    len: usize,
-) -> RenderResult<Mapped<MtlBuffer>> {
-    let buffer = device
-        .newBufferWithLength_options(len.max(1), MTLResourceOptions::StorageModeShared)
-        .ok_or_else(|| allocation_failed("frame capture read-back buffer"))?;
-    let mapped = buffer.contents().as_ptr() as *const u8;
-    Ok(Mapped { buffer, mapped })
-}
-
-// Classify the swapchain color format (+ resolved HDR encoding) into the
-// backend-free `PixelLayout` the shared decoder understands. The MTKView only
-// presents `BGRA8Unorm`/`_sRGB` for SDR or `RGBA16Float` for the HDR EDR path;
-// `encoding` (None on SDR) only matters for the float swapchain.
-fn classify(format: MTLPixelFormat, encoding: Option<HdrEncoding>) -> PixelLayout {
-    match format {
-        MTLPixelFormat::RGBA16Float => PixelLayout::Rgba16F {
-            scrgb: !matches!(encoding, Some(HdrEncoding::Pq)),
-        },
-        MTLPixelFormat::BGRA8Unorm | MTLPixelFormat::BGRA8Unorm_sRGB => PixelLayout::Bgra8,
-        _ => PixelLayout::Rgba8,
     }
 }
 

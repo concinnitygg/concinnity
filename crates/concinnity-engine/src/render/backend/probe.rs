@@ -1,17 +1,13 @@
 //! What a backend reports about itself and its device.
 //!
 //! The capability flags and the coarse GPU class the settings resolver reads
-//! once at init, the per-frame counters the profiler reads, and the two
-//! readbacks (`screenshot`, `read_cull_status`) that pull a rendered result
-//! back to the CPU. The classification rule itself is here, shared by all
-//! three backends so they agree on the same GPU, and unit-testable without
-//! one.
+//! once at init and the per-frame counters the profiler reads. The
+//! classification rule itself is here, shared by all three backends so they
+//! agree on the same GPU, and unit-testable without one.
 
 use crate::profile::RenderStats;
-use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::output::upscaler::UpscalerAvailability;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 /// GPU/device capability flags, queried from the backend once it is built.
 /// Surfaced so the settings menu can gray out (and make inert) toggles the
@@ -45,8 +41,8 @@ pub struct DeviceCapabilities {
     /// region recycles there. Read by the engine's draw-slot allocator.
     pub reuses_build_slots: bool,
     /// Whether a built draw slot's material and cull distance may be rewritten
-    /// in place ([`LiveEdit::set_draw_material`](super::LiveEdit::set_draw_material) /
-    /// [`LiveEdit::set_draw_cull_distance`](super::LiveEdit::set_draw_cull_distance)). Metal rebuilds its per-object
+    /// in place ([`RenderBackend::set_draw_material`](super::RenderBackend::set_draw_material) /
+    /// [`RenderBackend::set_draw_cull_distance`](super::RenderBackend::set_draw_cull_distance)). Metal rebuilds its per-object
     /// buffer from the draw list every frame, so a rewritten slot draws with the
     /// new material next frame; DirectX / Vulkan bake per-object material state
     /// at build time and would keep drawing the old one. Read by the editor's
@@ -293,13 +289,13 @@ pub fn classify_tier(input: &GpuClassInput) -> GpuTier {
     }
 }
 
-/// The backend's own report: device capabilities, GPU class, frame counters,
-/// and the CPU-side readbacks.
+/// The backend's own report: device capabilities, GPU class and frame
+/// counters.
 ///
 /// Capabilities are required: an overclaimed flag sends a live edit down a
 /// path the backend does not honor. The rest default to the conservative
-/// answer (`Unknown` tier, zeroed counters, an unsupported readback), so a
-/// query never has to ask whether the backend implements it.
+/// answer (`Unknown` tier, zeroed counters), so a query never has to ask
+/// whether the backend implements it.
 pub trait BackendProbe {
     /// Device capability flags, queried from the GPU once the backend is built.
     /// Read by the renderer to gray out + disable settings rows the device
@@ -319,42 +315,6 @@ pub trait BackendProbe {
     /// override it.
     fn render_stats(&self) -> RenderStats {
         RenderStats::default()
-    }
-
-    /// Capture the last presented frame to a PNG at `path` and return the saved
-    /// path. Driven by the `screenshot` debug tool call for headless
-    /// on-GPU render verification. Default [`RenderError::Unsupported`]; all
-    /// current backends override this.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RenderError::Unsupported`] on a backend without capture, or an
-    /// error if no frame was presented or the PNG cannot be written.
-    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
-        let _ = path;
-        Err(RenderError::Unsupported { op: "screenshot" })
-    }
-
-    /// Read the GPU-driven cull's per-object status buffer back to the host,
-    /// one [`crate::gfx::cull_status::CullStatus`] value per live cull record,
-    /// for the most recently submitted frame.
-    ///
-    /// The submitted draw-call count is a CPU-side number that does not move
-    /// when the GPU rejects an object, and an object the Hi-Z test correctly
-    /// occluded leaves no trace in the presented pixels, so this buffer is the
-    /// only observable record of what the cull decided. Driven by the
-    /// `cull-status` debug tool call; synchronous (it idles the device).
-    ///
-    /// Default [`RenderError::Unsupported`]: a backend with no GPU-driven cull.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RenderError::Unsupported`] on a backend without a GPU-driven
-    /// cull, or an error if the readback fails.
-    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
-        Err(RenderError::Unsupported {
-            op: "read_cull_status",
-        })
     }
 }
 

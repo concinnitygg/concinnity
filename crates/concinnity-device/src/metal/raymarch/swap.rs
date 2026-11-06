@@ -4,6 +4,7 @@
 // pipelines can drop the moment the new ones are in place: a frame still in
 // flight keeps drawing with what it encoded.
 
+use concinnity_engine::render::backend::SdfVolumeShaders;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{PipelineSwap, PreparedPipelines};
 use concinnity_engine::render::sdf::programs::SdfPrograms;
@@ -14,12 +15,12 @@ use super::super::pipeline_builder::{VolumeBuild, volume_for};
 use super::{VolumePipelines, build_volume_pipelines};
 use crate::shader::raymarch_source;
 
-impl MtlContext {
+impl SdfVolumeShaders for MtlContext {
     // Rebuild every pipeline volume `volume` draws with from `programs`, or
     // swap in `prepared` when it was built for this volume's flags. Both are
     // built before either replaces the live one, so a failed build leaves the
     // volume drawing as it was.
-    pub(in crate::metal) fn replace_sdf_volume_pipelines(
+    fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
         programs: &SdfPrograms,

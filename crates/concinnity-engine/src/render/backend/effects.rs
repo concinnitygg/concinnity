@@ -6,12 +6,12 @@
 
 use crate::render::backend::error::{RenderError, RenderResult};
 
-/// The projected-decal and particle-emitter slot tables.
+/// The projected-decal slot table.
 ///
-/// All defaulted to [`RenderError::Unsupported`], so a backend without the
-/// pass reports the failure to whoever asked rather than silently accepting a
+/// Defaulted to [`RenderError::Unsupported`], so a backend without the pass
+/// reports the failure to whoever asked rather than silently accepting a
 /// record it will never draw.
-pub trait SceneEffects {
+pub trait RuntimeDecals {
     /// Append a projected-decal record at runtime, returning a stable slot
     /// index the caller hands to [`Self::remove_decal`] later. Lets a
     /// gameplay system stamp bullet holes, footprints, or other ad-hoc
@@ -37,7 +37,13 @@ pub trait SceneEffects {
         let _ = decal_id;
         Err(RenderError::Unsupported { op: "remove_decal" })
     }
+}
 
+/// The particle-emitter slot table.
+///
+/// Defaulted to [`RenderError::Unsupported`], for the same reason as
+/// [`RuntimeDecals`].
+pub trait RuntimeEmitters {
     /// Append a particle-emitter record at runtime, returning a stable slot
     /// index. The backend allocates the per-emitter GPU pool + atomic
     /// spawn counter (matching the init-time path) so the compute kernel

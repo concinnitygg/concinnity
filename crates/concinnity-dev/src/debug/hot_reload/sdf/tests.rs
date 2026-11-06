@@ -3,9 +3,8 @@ use crate::debug::hot_reload::report::SubjectKind;
 use concinnity_cook::compile::program::{CompileFailure, Diagnostic, EntryFailure, Severity};
 use concinnity_cook::compile::sdf_field::CompiledField;
 use concinnity_engine::components::ShaderPrograms;
+use concinnity_engine::render::backend::SdfVolumeShaders;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
-use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::shader::programs::raymarch::VolumeFlags;
 use std::collections::BTreeSet;
@@ -23,19 +22,7 @@ struct VolumeBackend {
     prepared: Vec<(usize, Option<FakePipelines>)>,
 }
 
-impl SceneHost for VolumeBackend {
-    fn scene(&self) -> Option<&SceneState> {
-        None
-    }
-    fn scene_mut(&mut self) -> Option<&mut SceneState> {
-        None
-    }
-    fn edit_geometry(&mut self, _: GeometryEdit<'_>) -> Option<RenderResult<()>> {
-        None
-    }
-}
-
-impl LiveEdit for VolumeBackend {
+impl SdfVolumeShaders for VolumeBackend {
     fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,

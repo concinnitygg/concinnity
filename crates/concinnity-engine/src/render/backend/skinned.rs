@@ -1,16 +1,19 @@
 //! The skinned draw path: what a backend is handed for an animated mesh.
 //!
 //! One upload at load time, then per-frame joint palettes and morph weights,
-//! and the reveal / retire pair that hands a pre-reserved instance to a
-//! runtime spawn. The static equivalents live on [`RenderBackend`] itself,
-//! since a world with no skinning still needs them.
+//! the reveal / retire pair that hands a pre-reserved instance to a runtime
+//! spawn, and the in-place geometry and skeleton writes an asset hot-reload
+//! makes. The static draws' per-frame pushes live on [`RenderBackend`], and
+//! their hot-reload rewrites, with the skinned buffer repack, on
+//! [`GeometryRebuild`].
 //!
 //! [`RenderBackend`]: crate::render::backend::RenderBackend
+//! [`GeometryRebuild`]: crate::render::backend::GeometryRebuild
 
 use super::SceneHost;
 use crate::gfx::mesh_payload::SkinnedVertex;
 use crate::gfx::render_types::{SkinnedDrawObject, SkinnedIndex};
-use crate::render::backend::error::RenderResult;
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::frame::snapshot::SpanBuffer;
 use crate::transform::Mat4;
 use alloc::vec::Vec;
@@ -29,11 +32,12 @@ pub struct SkinnedFrame<'a> {
 /// The animated half of the draw set: skinned upload, pose, morph and
 /// instance reveal.
 ///
-/// The upload is required. The per-frame pose, weight and model pushes and the
-/// instance reveal and retire only edit the scene's
-/// `SkinnedSlots`, so they are
-/// defaulted over [`SceneHost`]; without a scene they do nothing, and a skinned
-/// spawn finds nothing to claim.
+/// The upload is required. The per-frame pose, weight and model pushes, the
+/// instance reveal and retire, and a skeleton resize only edit the scene's
+/// `SkinnedSlots`, so they are defaulted over [`SceneHost`]; without a scene
+/// they do nothing, and a skinned spawn finds nothing to claim. The in-place
+/// geometry write a hot reload makes defaults to
+/// [`RenderError::Unsupported`].
 pub trait SkinnedDraws: SceneHost {
     /// Upload the world's skinned geometry and draw objects, once at load. The
     /// skinned pipelines pair the world default Shader's programs where the
@@ -100,6 +104,63 @@ pub trait SkinnedDraws: SceneHost {
     fn retire_skinned_draw_object(&mut self, skinned_index: SkinnedIndex) {
         if let Some(scene) = self.scene_mut() {
             scene.skinned.retire(skinned_index);
+        }
+    }
+
+    /// Replace a `SkinnedMesh` draw slot's vertex + index data in place.
+    /// Driven by asset hot-reload (`cn run -f` only). Reuses the slot's
+    /// existing vertex region + index region in the shared skinned vertex /
+    /// index buffers (created once by [`Self::upload_skinned`]), so the new
+    /// geometry must match the slot's init-time vertex count + index count
+    /// and the new skeleton must keep the same joint count; pipelines stay
+    /// untouched, only the bytes change. `vertex_base` is the init-time
+    /// vertex offset (in vertex units) into the shared buffer; indices are
+    /// rebased onto it before writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without in-place
+    /// skinned writes, or an error if the slot is unknown or the new geometry
+    /// does not match its layout.
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        vertex_base: u32,
+        verts: &[SkinnedVertex],
+        idxs: &[u16],
+    ) -> RenderResult<()> {
+        let _ = (skinned_index, vertex_base, verts, idxs);
+        Err(RenderError::Unsupported {
+            op: "update_skinned_mesh_geometry",
+        })
+    }
+
+    /// Update a skinned slot's joint count and resize the backend's per-slot
+    /// joint-matrix buffers to match. Driven by asset hot-reload (`cn run -f`
+    /// only) when a re-imported `.glb`'s skeleton has a different joint
+    /// count than the slot was initialized with. Shrinking truncates the
+    /// per-slot Vec; growing seeds the new entries to identity so the slot
+    /// renders undeformed on the next `update_skinned_pose`. The skinned
+    /// shaders consume the joints buffer through a pointer (not a fixed-
+    /// size array) and use vertex-attribute-encoded joint indices, so no
+    /// pipeline or shader rebuild is required for a joint-count change;
+    /// only the CPU-side per-slot buffer and `SkinnedDrawObject.joint_count`
+    /// change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `skinned_index` names no slot.
+    fn update_skinned_skeleton(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        new_joint_count: usize,
+    ) -> RenderResult<()> {
+        match self.scene_mut() {
+            Some(scene) => scene.update_skinned_skeleton(skinned_index, new_joint_count),
+            None => Err(RenderError::Unsupported {
+                op: "update_skinned_skeleton",
+            }),
         }
     }
 }

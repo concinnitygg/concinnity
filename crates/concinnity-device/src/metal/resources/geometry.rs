@@ -10,9 +10,7 @@ use concinnity_engine::render::backend::{GeometryEdit, SceneHost};
 use concinnity_engine::render::scene_state::{GeometryBuffer, GeometryWriter, SceneState};
 
 use crate::metal::allocator::PooledBuffer;
-use crate::metal::context::{
-    MtlContext, debug_assert_main_thread, write_buffer_region, zero_buffer_region,
-};
+use crate::metal::context::{MtlContext, write_buffer_region, zero_buffer_region};
 
 // The shared geometry buffers, written in place.
 struct SharedBufferWriter<'a> {
@@ -45,12 +43,10 @@ impl SceneHost for MtlContext {
     }
 
     fn scene_mut(&mut self) -> Option<&mut SceneState> {
-        debug_assert_main_thread("scene_mut");
         Some(&mut self.state)
     }
 
     fn edit_geometry(&mut self, edit: GeometryEdit<'_>) -> Option<RenderResult<()>> {
-        debug_assert_main_thread("edit_geometry");
         let mut writer = SharedBufferWriter {
             vertex: &self.scene.vertex_buffer,
             index: &self.scene.index_buffer,

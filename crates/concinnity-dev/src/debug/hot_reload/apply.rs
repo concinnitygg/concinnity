@@ -8,7 +8,7 @@ use concinnity_engine::components::build_skeleton_from_joint_defs;
 use concinnity_engine::gfx::render_types::{self, TextureSlot};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{
-    self, DrawGeometryUpdate, LiveEdit, SkinnedDrawGeometryUpdate,
+    DrawGeometryUpdate, GeometryRebuild, RenderBackend, SkinnedDrawGeometryUpdate, TextureUploads,
 };
 use concinnity_engine::render::world_load::source_maps::MeshSourceEntry;
 
@@ -46,7 +46,7 @@ impl Tally {
 }
 
 pub(super) fn textures(
-    backend: &mut dyn backend::RenderBackend,
+    backend: &mut dyn TextureUploads,
     textures: &[DecodedTexture],
     tally: &mut Tally,
 ) {
@@ -61,7 +61,11 @@ pub(super) fn textures(
     }
 }
 
-pub(super) fn color_lut(backend: &mut dyn LiveEdit, lut: &DecodedColorLut, tally: &mut Tally) {
+pub(super) fn color_lut(
+    backend: &mut dyn TextureUploads,
+    lut: &DecodedColorLut,
+    tally: &mut Tally,
+) {
     let result = backend.update_color_lut(lut.size, &lut.data);
     tally.record(1, result, || {
         format!("backend rejected ColorLut update for '{}'", lut.source)
@@ -70,7 +74,11 @@ pub(super) fn color_lut(backend: &mut dyn LiveEdit, lut: &DecodedColorLut, tally
 
 // Whether `mesh` no longer fits the slots `entry` draws into, base geometry
 // or any LOD, so its draws need the shared buffers rebuilt.
-fn mesh_size_changed(backend: &dyn LiveEdit, entry: &MeshSourceEntry, mesh: &DecodedMesh) -> bool {
+fn mesh_size_changed(
+    backend: &dyn GeometryRebuild,
+    entry: &MeshSourceEntry,
+    mesh: &DecodedMesh,
+) -> bool {
     entry.draw_indices.iter().any(|&draw_idx| {
         let base_changed = backend
             .draw_geometry_size(draw_idx)
@@ -91,7 +99,7 @@ fn mesh_size_changed(backend: &dyn LiveEdit, entry: &MeshSourceEntry, mesh: &Dec
 // Static meshes: rewritten in place per draw slot while their sizes still
 // fit; the entries that no longer fit are rebuilt together in one pass.
 pub(super) fn static_meshes(
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn GeometryRebuild,
     entries: &[MeshSourceEntry],
     meshes: &[DecodedMesh],
     tally: &mut Tally,
@@ -181,7 +189,7 @@ struct SkinnedPlan {
 // independently, so either or both may fire for one entry.
 pub(super) fn skinned_meshes(
     state: &mut AssetHotReloadState,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn RenderBackend,
     meshes: &[DecodedSkinnedMesh],
     tally: &mut Tally,
 ) {
@@ -197,7 +205,7 @@ pub(super) fn skinned_meshes(
 // joint-count change.
 fn rewrite_skinned(
     state: &mut AssetHotReloadState,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn RenderBackend,
     mesh: &DecodedSkinnedMesh,
     plan: &mut SkinnedPlan,
     tally: &mut Tally,
@@ -254,7 +262,7 @@ fn rewrite_skinned(
 // nothing runs ahead of the geometry they kept.
 fn rebuild_skinned(
     state: &mut AssetHotReloadState,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn RenderBackend,
     plan: &mut SkinnedPlan,
     tally: &mut Tally,
 ) {
@@ -304,7 +312,7 @@ fn rebuild_skinned(
 // dropped so the pose stays in step with the buffers.
 fn resize_joints(
     state: &mut AssetHotReloadState,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn RenderBackend,
     joint_counts: &[(usize, usize)],
     tally: &mut Tally,
 ) {

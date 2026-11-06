@@ -1,19 +1,31 @@
 //! The window a backend renders into, as the settings menu sees it.
 //!
-//! Vsync, window mode and size, the display-mode list, the overlay's logical
-//! size, the cursor state the UI drives, and the system clipboard. Every method here is about the
-//! surface and its input, never about the scene drawn on it.
+//! The close request and the input sampled from the window, vsync, window
+//! mode and size, the display-mode list, the overlay's logical size, the
+//! cursor state the UI drives, and the system clipboard. Every method here is
+//! about the surface and its input, never about the scene drawn on it.
 
+use crate::input::snapshot::InputSnapshot;
 use crate::window::clipboard::Clipboard;
 use alloc::vec::Vec;
 
-/// The presentation surface and its input: vsync, window mode and size, the
-/// display modes the target supports, and the cursor.
+/// The presentation surface and its input: the close request, input, vsync,
+/// window mode and size, the display modes the target supports, and the
+/// cursor.
 ///
-/// All defaulted. A backend on a fixed surface (an embedded view, a headless
-/// target) reports the conservative values and ignores the mutators, which is
-/// what lets the settings menu ask any backend these questions.
+/// The close request and the input are required, so a backend missing one
+/// fails to compile rather than ignoring the user. The rest are defaulted. A
+/// backend on a fixed surface (an embedded view, a headless target) reports the
+/// conservative values and ignores the mutators, which is what lets the
+/// settings menu ask any backend these questions.
 pub trait WindowControl {
+    /// Whether the window has been asked to close, polled once a frame.
+    fn window_closed(&mut self) -> bool;
+    /// Take the input sampled since the last call.
+    fn take_input(&mut self) -> InputSnapshot;
+    /// Ask the window to capture the cursor; a backend may defer until the first content click.
+    fn request_cursor_capture(&mut self);
+
     /// The overlay coordinate space: the window's content size in logical,
     /// DPI-independent units (points on macOS, client pixels on Windows, window
     /// coordinates on Linux). Every backend reports the cursor in these same

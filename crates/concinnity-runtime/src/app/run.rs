@@ -215,6 +215,7 @@ fn finish_frame_captures(runtime: &mut Runtime) {
         .resource_mut::<concinnity_engine::ecs::ActiveRenderBackend>()
         .and_then(|slot| slot.0.as_mut())
     {
+        backend.assert_owner_thread();
         backend.finish_captures();
     }
 }

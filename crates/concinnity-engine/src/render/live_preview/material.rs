@@ -42,9 +42,7 @@ pub fn apply_params(world: &mut World, name: AssetId, params: [f32; MATERIAL_PAR
     let row = material_params::row_of(Some(handle));
     with_ops(world, |ops| {
         ops.record(move |backend| {
-            if let Some(edit) = backend.live_edit() {
-                edit.set_material_params(row, params);
-            }
+            backend.set_material_params(row, params);
         });
     })
     .is_some()

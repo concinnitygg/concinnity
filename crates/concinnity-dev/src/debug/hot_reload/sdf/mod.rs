@@ -14,7 +14,7 @@ mod tests;
 
 use concinnity_engine::components::ShaderSource;
 use concinnity_engine::render::backend::{
-    LiveEdit, PipelineBuilder, PipelineSwap, PreparedPipelines,
+    PipelineBuilder, PipelineSwap, PreparedPipelines, SdfVolumeShaders,
 };
 use concinnity_engine::render::world_load::source_maps::{SdfFieldEntry, SdfFieldMap};
 use std::collections::BTreeMap;
@@ -105,7 +105,7 @@ impl SdfReload {
 
     // Swap every compile that finished since the last call into each volume
     // it was compiled for.
-    pub(crate) fn poll(&self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
+    pub(crate) fn poll(&self, backend: &mut dyn SdfVolumeShaders) -> Vec<ReloadReport> {
         let mut reports = Vec::new();
         for (key, result) in self.compiles.drain() {
             let volumes = self
@@ -158,7 +158,7 @@ fn apply(
     entry: &SdfFieldEntry,
     rebuilt: &Rebuilt,
     prepared: Option<PreparedPipelines>,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn SdfVolumeShaders,
 ) -> ReloadOutcome {
     let warnings = &rebuilt.compiled.warnings;
     let started = Instant::now();

@@ -11,6 +11,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::RuntimeDecals;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::decal::DecalSet;
 use concinnity_engine::render::uniforms::DecalView;
@@ -231,4 +232,46 @@ pub(super) fn build_decal_pipeline(
     device
         .newRenderPipelineStateWithDescriptor_error(&desc)
         .map_err(|e| RenderError::ShaderCompile(format!("decal pipeline state: {e:?}")))
+}
+
+impl RuntimeDecals for MtlContext {
+    // Append a projected-decal record at runtime, returning a stable slot
+    // index the caller hands to [`Self::remove_decal`] later. Builds the
+    // decal pipeline + unit-cube buffers on first use so a world that never
+    // declared a decal still pays zero pipeline cost until the first add.
+    // A vacated slot from [`Self::remove_decal`] is reused before growing
+    // the slot table so a steady-state spawn/despawn pattern (bullet holes,
+    // footprints) stays bounded.
+    fn add_decal(
+        &mut self,
+        record: concinnity_engine::render::decal::DecalRecord,
+    ) -> RenderResult<usize> {
+        if self.decal.pipeline.is_none() {
+            let (ps, vbuf, ibuf, samp) =
+                super::init::effects::world::build_decal_resources_for_runtime(
+                    &self.hw.device,
+                    self.hot_reload.enabled,
+                )?;
+            self.decal.pipeline = Some(ps);
+            self.decal.cube_vertex_buffer = Some(vbuf);
+            self.decal.cube_index_buffer = Some(ibuf);
+            self.decal.sampler = Some(samp);
+        }
+        self.decal
+            .set
+            .insert(record)
+            .map_err(|_| RenderError::Other("add_decal: decal set is full".to_string()))
+    }
+
+    // Tombstone a runtime decal slot. The slot index returned by
+    // [`Self::add_decal`] becomes invalid; the next add may reuse it.
+    // Returns an error when the index is out of range or already tombstoned.
+    // The decal pipeline + unit-cube buffers are kept around so a later add
+    // does not pay the rebuild cost.
+    fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
+        self.decal
+            .set
+            .remove(decal_id)
+            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
+    }
 }

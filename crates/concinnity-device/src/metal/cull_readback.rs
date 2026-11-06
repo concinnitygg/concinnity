@@ -1,6 +1,6 @@
 //! Per-object cull-status readback for the Metal backend. The `cull-status`
 //! debug tool call routes here (via
-//! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
+//! `CullReadback::read_cull_status`) to copy the GPU-driven cull's status
 //! buffer into a host-readable buffer and hand back one `CullStatus` value per
 //! live cull record.
 //!
@@ -19,6 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::gfx::cull_status;
+use concinnity_engine::render::backend::CullReadback;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use objc2_metal::{
     MTLBlitCommandEncoder as _, MTLBuffer as _, MTLCommandBuffer as _, MTLCommandEncoder as _,
@@ -28,11 +29,10 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::error::{allocation_failed, completed_command_buffer};
 
-impl MtlContext {
+impl CullReadback for MtlContext {
     // Read the cull-status buffer back to the host, one u32 per live cull
-    // record. Distinct name from the `RenderBackend::read_cull_status` trait
-    // method so the backend forwarder is unambiguous.
-    pub(in crate::metal) fn read_cull_status_buffer(&self) -> RenderResult<Vec<u32>> {
+    // record.
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         // `None` both on a non-bindless world (no cull pipeline, so
         // `ensure_icb_capacity` allocates nothing) and before the first frame.
         let src = self.cull.status_buffer.clone().ok_or_else(|| {

@@ -25,8 +25,12 @@ pub(crate) fn render_handoff(world: &mut World) -> RenderHandoff<'_> {
     let (_, resources) = world.systems_and_resources();
     let (backend, fog, texture_slots) =
         resources.get_disjoint_mut::<ActiveRenderBackend, PushedFogSettings, TextureNameSlots>();
+    let backend = backend.and_then(|slot| slot.0.as_deref_mut());
+    if let Some(backend) = &backend {
+        backend.assert_owner_thread();
+    }
     RenderHandoff {
-        backend: backend.and_then(|slot| slot.0.as_deref_mut()),
+        backend,
         fog,
         texture_slots: texture_slots.map(|slots| &*slots),
     }
@@ -39,7 +43,7 @@ pub(crate) fn shader_reload_flag(world: &World) -> Option<Arc<AtomicBool>> {
     world
         .resource::<ActiveRenderBackend>()
         .and_then(|slot| slot.0.as_ref())
-        .and_then(|backend| backend.live_edit_ref()?.shader_reload_flag())
+        .and_then(|backend| backend.shader_reload_flag())
 }
 
 #[cfg(test)]

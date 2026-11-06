@@ -3,7 +3,6 @@
 //! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
-use crate::debug::hot_reload::passes::ProceduralMeshReloadResult;
 use concinnity_engine::animation::skeleton;
 use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::components::{SkeletonJoint, Story};
@@ -315,9 +314,7 @@ pub(crate) fn run_frame(
     // Asset-payload poll. Pick up any completed off-thread work first so a
     // fresh `reload_assets` below finds the in-flight slots empty. Cheap when
     // nothing is in flight (a Mutex lock + `None` check).
-    if let Some(edit) = backend.live_edit() {
-        poll_pending_envmap(state, edit);
-    }
+    poll_pending_envmap(state, backend);
     poll_pending_assets(state, backend);
     // Skeleton-shape changes queued by `poll_pending_assets` are applied to the
     // ECS-owned `SkeletonPose` components by the caller.
@@ -350,10 +347,8 @@ pub(crate) fn run_frame(
                 .request(&pending_volumes, backend.pipeline_builder().as_ref()),
         );
     }
-    if let Some(edit) = backend.live_edit() {
-        reload_reports.extend(state.shaders.poll(edit));
-        reload_reports.extend(state.sdf_fields.poll(edit));
-    }
+    reload_reports.extend(state.shaders.poll(backend));
+    reload_reports.extend(state.sdf_fields.poll(backend));
     super::report::report(&reload_reports, notify);
     effects.reload_reports = reload_reports;
 
@@ -386,10 +381,7 @@ pub(crate) fn run_frame(
     if state.signals.take_world() {
         let path = state.world_jsonl_path.clone();
         if let Some(path) = path {
-            let pm_result = match backend.live_edit() {
-                Some(edit) => reload_procedural_meshes(&path, &mut state.procedural_meshes, edit),
-                None => ProceduralMeshReloadResult::default(),
-            };
+            let pm_result = reload_procedural_meshes(&path, &mut state.procedural_meshes, backend);
             if pm_result.regenerated > 0 || pm_result.failed > 0 {
                 tracing::info!(
                     "ProceduralMesh hot-reload: regenerated={} unchanged={} failed={}",

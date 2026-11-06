@@ -733,21 +733,7 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl backend::RenderBackend for RecordingBackend {
-    fn live_edit(&mut self) -> Option<&mut dyn backend::LiveEdit> {
-        Some(self)
-    }
-
-    fn live_edit_ref(&self) -> Option<&dyn backend::LiveEdit> {
-        Some(self)
-    }
-
-    fn window_closed(&mut self) -> bool {
-        false
-    }
-    fn request_cursor_capture(&mut self) {}
-    fn take_input(&mut self) -> InputSnapshot {
-        InputSnapshot::default()
-    }
+    fn assert_owner_thread(&self) {}
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {
         Ok(())
@@ -755,6 +741,22 @@ impl backend::RenderBackend for RecordingBackend {
     fn update_view(&mut self, _: [[f32; 4]; 4]) {}
     fn update_models(&mut self, _: &[(DrawIndex, [[f32; 4]; 4])]) {}
     fn retire_draw_object(&mut self, _: DrawIndex) {}
+}
+
+impl backend::WindowControl for RecordingBackend {
+    fn window_closed(&mut self) -> bool {
+        false
+    }
+    fn take_input(&mut self) -> InputSnapshot {
+        InputSnapshot::default()
+    }
+    fn request_cursor_capture(&mut self) {}
+}
+
+impl backend::BackendProbe for RecordingBackend {
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        backend::DeviceCapabilities::ALL
+    }
 }
 
 impl backend::SkinnedDraws for RecordingBackend {
@@ -766,9 +768,33 @@ impl backend::SkinnedDraws for RecordingBackend {
     ) -> error::RenderResult<()> {
         Ok(())
     }
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        _: u32,
+        _: &[mesh_payload::SkinnedVertex],
+        _: &[u16],
+    ) -> error::RenderResult<()> {
+        self.skinned_updates.push(skinned_index);
+        if self.fail_skinned_updates {
+            return Err(error::RenderError::Other("skinned update rejected".into()));
+        }
+        Ok(())
+    }
+    fn update_skinned_skeleton(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        new_joint_count: usize,
+    ) -> error::RenderResult<()> {
+        self.skeleton_updates.push((skinned_index, new_joint_count));
+        if self.fail_skeleton_update {
+            return Err(error::RenderError::Other("skeleton update rejected".into()));
+        }
+        Ok(())
+    }
 }
 
-impl backend::DrawStreaming for RecordingBackend {
+impl backend::TextureUploads for RecordingBackend {
     fn evict_texture_slot(&mut self, _: TextureSlot) -> error::RenderResult<()> {
         Ok(())
     }
@@ -784,6 +810,25 @@ impl backend::DrawStreaming for RecordingBackend {
         }
         Ok(())
     }
+    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> error::RenderResult<()> {
+        self.lut_updates.push(size);
+        if self.fail_lut_updates {
+            return Err(error::RenderError::Other("lut update rejected".into()));
+        }
+        Ok(())
+    }
+    fn update_environment_map(&mut self, _: &[u8]) -> error::RenderResult<()> {
+        self.env_updates += 1;
+        if self.fail_env_updates {
+            return Err(error::RenderError::Other(
+                "environment map update rejected".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl backend::DrawStreaming for RecordingBackend {
     fn evict_mesh(&mut self, _: DrawIndex, _: u64) -> error::RenderResult<()> {
         Ok(())
     }
@@ -814,40 +859,12 @@ impl backend::DrawStreaming for RecordingBackend {
     }
 }
 
-impl backend::WindowControl for RecordingBackend {}
-
-impl backend::RenderTuning for RecordingBackend {
-    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
-        self.fog_updates += 1;
-    }
-}
-
-impl backend::LiveEdit for RecordingBackend {
-    fn update_color_lut(&mut self, size: u32, _: &[u8]) -> error::RenderResult<()> {
-        self.lut_updates.push(size);
-        if self.fail_lut_updates {
-            return Err(error::RenderError::Other("lut update rejected".into()));
-        }
-        Ok(())
-    }
+impl backend::GeometryRebuild for RecordingBackend {
     fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
         self.geometry_sizes.get(&draw_idx).copied()
     }
     fn draw_lod_index_counts(&self, draw_idx: DrawIndex) -> Option<Vec<usize>> {
         self.lod_counts.get(&draw_idx).cloned()
-    }
-    fn update_mesh_geometry(
-        &mut self,
-        draw_idx: DrawIndex,
-        _: &[mesh_payload::Vertex],
-        _: &[u16],
-        _: &[(f32, Vec<u16>)],
-    ) -> error::RenderResult<()> {
-        self.mesh_updates.push(draw_idx);
-        if self.fail_mesh_updates {
-            return Err(error::RenderError::Other("mesh update rejected".into()));
-        }
-        Ok(())
     }
     fn rebuild_static_geometry(
         &mut self,
@@ -856,19 +873,6 @@ impl backend::LiveEdit for RecordingBackend {
         self.static_rebuild_change_counts.push(changes.len());
         if self.fail_static_rebuild {
             return Err(error::RenderError::Other("static rebuild rejected".into()));
-        }
-        Ok(())
-    }
-    fn update_skinned_mesh_geometry(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        _: u32,
-        _: &[mesh_payload::SkinnedVertex],
-        _: &[u16],
-    ) -> error::RenderResult<()> {
-        self.skinned_updates.push(skinned_index);
-        if self.fail_skinned_updates {
-            return Err(error::RenderError::Other("skinned update rejected".into()));
         }
         Ok(())
     }
@@ -893,35 +897,39 @@ impl backend::LiveEdit for RecordingBackend {
             })
             .collect())
     }
-    fn update_skinned_skeleton(
+    fn update_mesh_geometry(
         &mut self,
-        skinned_index: SkinnedIndex,
-        new_joint_count: usize,
+        draw_idx: DrawIndex,
+        _: &[mesh_payload::Vertex],
+        _: &[u16],
+        _: &[(f32, Vec<u16>)],
     ) -> error::RenderResult<()> {
-        self.skeleton_updates.push((skinned_index, new_joint_count));
-        if self.fail_skeleton_update {
-            return Err(error::RenderError::Other("skeleton update rejected".into()));
-        }
-        Ok(())
-    }
-    fn update_environment_map(&mut self, _: &[u8]) -> error::RenderResult<()> {
-        self.env_updates += 1;
-        if self.fail_env_updates {
-            return Err(error::RenderError::Other(
-                "environment map update rejected".into(),
-            ));
+        self.mesh_updates.push(draw_idx);
+        if self.fail_mesh_updates {
+            return Err(error::RenderError::Other("mesh update rejected".into()));
         }
         Ok(())
     }
 }
 
-impl backend::SceneEffects for RecordingBackend {}
-
-impl backend::BackendProbe for RecordingBackend {
-    fn capabilities(&self) -> backend::DeviceCapabilities {
-        backend::DeviceCapabilities::ALL
+impl backend::FogControl for RecordingBackend {
+    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
+        self.fog_updates += 1;
     }
 }
+
+impl backend::FrameCapture for RecordingBackend {}
+impl backend::CullReadback for RecordingBackend {}
+impl backend::WorldShaders for RecordingBackend {}
+impl backend::SdfVolumeShaders for RecordingBackend {}
+impl backend::RenderTuning for RecordingBackend {}
+impl backend::SceneLights for RecordingBackend {}
+impl backend::ReflectionProbes for RecordingBackend {}
+impl backend::MaterialParamRows for RecordingBackend {}
+impl backend::PlanetReshape for RecordingBackend {}
+impl backend::RuntimeDecals for RecordingBackend {}
+impl backend::RuntimeEmitters for RecordingBackend {}
+impl backend::WorldReload for RecordingBackend {}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.
 fn write_tiny_png(path: &std::path::Path) {

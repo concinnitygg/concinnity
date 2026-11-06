@@ -4,20 +4,20 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_SHADOW_CASCADES};
 use concinnity_engine::profile;
+use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
-    backend, backend::error, backend::init, decal, output::hdr, particles, shadow::spot,
+    backend, backend::error, backend::init, output::hdr, shadow::spot,
 };
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLArgumentEncoder as _, MTLBuffer, MTLCommandBuffer as _, MTLCommandQueue,
-    MTLDepthStencilState, MTLDevice as _, MTLIndirectCommandBuffer,
-    MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType, MTLPixelFormat,
-    MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
+    MTLArgumentEncoder as _, MTLBuffer, MTLCommandQueue, MTLDepthStencilState, MTLDevice as _,
+    MTLIndirectCommandBuffer, MTLIndirectCommandBufferDescriptor, MTLIndirectCommandType,
+    MTLPixelFormat, MTLRenderPipelineState, MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
 use objc2_metal_kit::MTKView;
 
@@ -405,7 +405,7 @@ impl MtlHardware {
     pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
         Ok(Self {
             window: Some(self.window.take().ok_or_else(|| {
-                error::RenderError::Other("apply_world_reload: window already taken".to_string())
+                error::RenderError::Other("reload_world: window already taken".to_string())
             })?),
             graph_queues: self.graph_queues.take(),
             allocator: DeviceAllocator::new(&self.device, self.swapchain_config.frames_in_flight),
@@ -748,31 +748,11 @@ pub(crate) struct MtlContext {
 }
 
 // SAFETY: MtlContext is only ever accessed from the main thread (as documented
-// on the struct). The Retained<ProtocolObject<...>> Metal handles aren't Send by
-// default, but `RenderBackend: Send` requires it so GraphicsSystem can box
-// the backend behind a trait object. Mirrors DxContext / VkContext.
+// on the struct), which `RenderBackend::assert_owner_thread` checks each time
+// the runtime takes it. The Retained<ProtocolObject<...>> Metal handles aren't
+// Send by default, but `RenderBackend: Send` requires it so GraphicsSystem can
+// box the backend behind a trait object. Mirrors DxContext / VkContext.
 unsafe impl Send for MtlContext {}
-
-// Debug-only guard that the caller is on the main thread.
-//
-// The `unsafe impl Send for MtlContext` above is sound only because the
-// context is touched from the main thread alone: AppKit and Metal command
-// submission are both main-thread-affine. `draw_frame` proves this with a
-// `MainThreadMarker`, but the `RenderBackend` mutation entry points (reached
-// through the boxed trait object) did not, so scheduling `GraphicsSystem`
-// off the main thread would silently race AppKit/Metal instead of failing.
-// This makes that mistake panic loudly in debug builds and compiles to
-// nothing in release. `entry` is the offending method name, for the message.
-#[inline]
-#[track_caller]
-pub(super) fn debug_assert_main_thread(entry: &str) {
-    debug_assert!(
-        objc2::MainThreadMarker::new().is_some(),
-        "{entry} must be called from the main thread: MtlContext is main-thread-only \
-         (see `unsafe impl Send for MtlContext`); driving GraphicsSystem off the main \
-         thread races AppKit/Metal",
-    );
-}
 
 // The cull-record set one GPU-driven encode covers: `total` command slots, of
 // which the folded skinned tail starts at `skinned_base`. Cull dispatches and
@@ -1164,187 +1144,6 @@ impl MtlContext {
         .ok_or_else(|| super::error::allocation_failed("indirect command buffer"))
     }
 
-    // Device capability flags, the same answer the pre-backend probe gave.
-    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        super::gpu_profile::device_capabilities(&self.hw.device)
-    }
-
-    // Coarse GPU performance profile for default-quality selection, read live
-    // from the MTLDevice (cheap; the same kind of device query as capabilities).
-    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        super::gpu_profile::device_profile(&self.hw.device)
-    }
-
-    // Render statistics for the most recent `draw_frame`, for the profiler
-    // overlay. The GPU frame time is the last value reported by a completed
-    // command buffer, so it may lag the draw counts by a frame or two.
-    pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        let mut stats = self.diagnostics.frame_stats;
-        // `gpu_wait_us` was written by `draw_frame` itself and rides along in
-        // `frame_stats`.
-        stats.spans = self.state.spans.get();
-        stats.gpu_frame_us = self
-            .diagnostics
-            .gpu_time_us
-            .load(std::sync::atomic::Ordering::Relaxed);
-        // Per-pass timings are filled in pass-index order with their stable
-        // names, leaving slots past TIMING_COUNT at the default ("", 0).
-        // Reports zero for any pass that did not write its sample slot this
-        // frame (e.g. SSR when disabled, or any pass not yet wired up).
-        for (i, name) in super::pass_timing::TIMING_NAMES.iter().enumerate() {
-            let micros =
-                self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
-            stats.pass_times_us[i] = (*name, micros);
-        }
-        stats.gpu_overlap_us = self
-            .diagnostics
-            .gpu_overlap_us
-            .load(std::sync::atomic::Ordering::Relaxed);
-        stats.gpu_gap_beside_async_us = self
-            .diagnostics
-            .gpu_gap_beside_async_us
-            .load(std::sync::atomic::Ordering::Relaxed);
-        stats.gpu_done = self.diagnostics.gpu_done.lock().ok().and_then(|done| *done);
-        stats.async_pass_mask = self
-            .diagnostics
-            .pass_async_mask
-            .load(std::sync::atomic::Ordering::Relaxed);
-        // Surface the auto-exposure EMA state. `None` when the world did not
-        // opt in to auto-exposure (the static-exposure path leaves the field
-        // empty so the StatHud chip stays blank).
-        stats.auto_exposure_ev = self
-            .auto_exposure
-            .adaptation
-            .as_ref()
-            .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev);
-        // Surface the active panel's EDR headroom. `None` on SDR: both the
-        // world-opt-out case and the request-on-an-SDR-display fallback case
-        // map to the same blank chip.
-        stats.max_edr = self.hw.max_edr();
-        let render = [self.targets.hdr.width, self.targets.hdr.height];
-        stats.resolution = match &self.upscale.scaler {
-            Some(s) => profile::RenderResolution {
-                render,
-                output: [s.output_width, s.output_height],
-                upscaler: Some("MetalFX"),
-            },
-            None => profile::RenderResolution {
-                render,
-                output: render,
-                upscaler: None,
-            },
-        };
-        stats
-    }
-
-    // Replace one row of the material parameter table; every ring slot is
-    // rewritten as the frames come round to it.
-    pub(crate) fn set_material_params(
-        &mut self,
-        row: u32,
-        params: [f32; render_types::MATERIAL_PARAM_COUNT],
-    ) {
-        self.rings.material_params.set(row, params);
-    }
-
-    // Append a projected-decal record at runtime, returning a stable slot
-    // index the caller hands to [`Self::remove_decal`] later. Builds the
-    // decal pipeline + unit-cube buffers on first use so a world that never
-    // declared a decal still pays zero pipeline cost until the first add.
-    // A vacated slot from [`Self::remove_decal`] is reused before growing
-    // the slot table so a steady-state spawn/despawn pattern (bullet holes,
-    // footprints) stays bounded.
-    pub(crate) fn add_decal(&mut self, record: decal::DecalRecord) -> error::RenderResult<usize> {
-        if self.decal.pipeline.is_none() {
-            let (ps, vbuf, ibuf, samp) =
-                super::init::effects::world::build_decal_resources_for_runtime(
-                    &self.hw.device,
-                    self.hot_reload.enabled,
-                )?;
-            self.decal.pipeline = Some(ps);
-            self.decal.cube_vertex_buffer = Some(vbuf);
-            self.decal.cube_index_buffer = Some(ibuf);
-            self.decal.sampler = Some(samp);
-        }
-        self.decal
-            .set
-            .insert(record)
-            .map_err(|_| error::RenderError::Other("add_decal: decal set is full".to_string()))
-    }
-
-    // Tombstone a runtime decal slot. The slot index returned by
-    // [`Self::add_decal`] becomes invalid; the next add may reuse it.
-    // Returns an error when the index is out of range or already tombstoned.
-    // The decal pipeline + unit-cube buffers are kept around so a later add
-    // does not pay the rebuild cost.
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> error::RenderResult<()> {
-        self.decal
-            .set
-            .remove(decal_id)
-            .map_err(|e| error::RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
-    }
-
-    // Append a particle-emitter record at runtime, returning a stable slot
-    // index. Allocates the per-emitter GPU pool + atomic counter buffer
-    // (matching the init-time path) and builds the compute + render
-    // pipelines on first use so a world that never declared an emitter
-    // pays zero pipeline cost until the first add. Tombstoned slots from
-    // [`Self::remove_emitter`] are reused before growing the vec.
-    pub(crate) fn add_emitter(
-        &mut self,
-        record: particles::ParticleEmitterRecord,
-    ) -> error::RenderResult<usize> {
-        if self.particle.pipelines.is_none() {
-            let pipelines = super::particle::build_particle_pipelines(
-                &self.hw.device,
-                self.hot_reload.enabled,
-                self.frames_in_flight + 1,
-            )?;
-            self.particle.pipelines = Some(pipelines);
-        }
-        let max = particles::MAX_EMITTERS;
-        if !self.particle.system.has_room() {
-            return Err(error::RenderError::Other(format!(
-                "add_emitter: MAX_EMITTERS ({max}) exceeded"
-            )));
-        }
-        let gpu_state = super::particle::build_emitter_gpu_state(&self.hw.device, &record)?;
-        let idx = self
-            .particle
-            .system
-            .insert(record, gpu_state)
-            .map_err(|_| {
-                error::RenderError::Other(format!("add_emitter: MAX_EMITTERS ({max}) exceeded"))
-            })?;
-        Ok(idx)
-    }
-
-    // Tombstone a runtime emitter slot. Drops the `ParticleEmitterGpuState`:
-    // Metal keeps the underlying pool + counter buffers alive until any
-    // in-flight command buffer referencing them completes, so this is safe
-    // to call mid-frame between encode passes (a debug tool call runs in
-    // the per-frame hook window before the world step). Returns an error
-    // when the index is out of range or already tombstoned.
-    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> error::RenderResult<()> {
-        self.particle.system.remove(emitter_id).map_err(|e| {
-            error::RenderError::Other(format!("remove_emitter: id {emitter_id} {e}"))
-        })?;
-        Ok(())
-    }
-
-    // Returns true if the window has been closed by the user.
-    pub(crate) fn window_closed(&self) -> bool {
-        self.window().appkit.closed()
-    }
-
-    // Block until the GPU has finished all in-flight work.
-    pub(crate) fn wait_idle(&self) {
-        if let Some(cmd_buf) = self.hw.command_queue.commandBuffer() {
-            cmd_buf.commit();
-            cmd_buf.waitUntilCompleted();
-        }
-    }
-
     // Drain the classified GPU failure a completion handler parked, if any.
     pub(super) fn take_device_error(&self) -> Option<error::RenderError> {
         self.diagnostics
@@ -1484,6 +1283,81 @@ pub(super) fn zero_buffer_region(
     // proved `offset + len` fits, so all `len` bytes are writable.
     unsafe { std::ptr::write_bytes(dst, 0, len) };
     Ok(())
+}
+
+impl BackendProbe for MtlContext {
+    // Device capability flags, the same answer the pre-backend probe gave.
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        super::gpu_profile::device_capabilities(&self.hw.device)
+    }
+
+    // Coarse GPU performance profile for default-quality selection, read live
+    // from the MTLDevice (cheap; the same kind of device query as capabilities).
+    fn gpu_profile(&self) -> backend::GpuProfile {
+        super::gpu_profile::device_profile(&self.hw.device)
+    }
+
+    // Render statistics for the most recent `draw_frame`, for the profiler
+    // overlay. The GPU frame time is the last value reported by a completed
+    // command buffer, so it may lag the draw counts by a frame or two.
+    fn render_stats(&self) -> profile::RenderStats {
+        let mut stats = self.diagnostics.frame_stats;
+        // `gpu_wait_us` was written by `draw_frame` itself and rides along in
+        // `frame_stats`.
+        stats.spans = self.state.spans.get();
+        stats.gpu_frame_us = self
+            .diagnostics
+            .gpu_time_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Per-pass timings are filled in pass-index order with their stable
+        // names, leaving slots past TIMING_COUNT at the default ("", 0).
+        // Reports zero for any pass that did not write its sample slot this
+        // frame (e.g. SSR when disabled, or any pass not yet wired up).
+        for (i, name) in super::pass_timing::TIMING_NAMES.iter().enumerate() {
+            let micros =
+                self.diagnostics.pass_times_us[i].load(std::sync::atomic::Ordering::Relaxed);
+            stats.pass_times_us[i] = (*name, micros);
+        }
+        stats.gpu_overlap_us = self
+            .diagnostics
+            .gpu_overlap_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stats.gpu_gap_beside_async_us = self
+            .diagnostics
+            .gpu_gap_beside_async_us
+            .load(std::sync::atomic::Ordering::Relaxed);
+        stats.gpu_done = self.diagnostics.gpu_done.lock().ok().and_then(|done| *done);
+        stats.async_pass_mask = self
+            .diagnostics
+            .pass_async_mask
+            .load(std::sync::atomic::Ordering::Relaxed);
+        // Surface the auto-exposure EMA state. `None` when the world did not
+        // opt in to auto-exposure (the static-exposure path leaves the field
+        // empty so the StatHud chip stays blank).
+        stats.auto_exposure_ev = self
+            .auto_exposure
+            .adaptation
+            .as_ref()
+            .map(concinnity_engine::gfx::auto_exposure::ExposureAdaptation::current_ev);
+        // Surface the active panel's EDR headroom. `None` on SDR: both the
+        // world-opt-out case and the request-on-an-SDR-display fallback case
+        // map to the same blank chip.
+        stats.max_edr = self.hw.max_edr();
+        let render = [self.targets.hdr.width, self.targets.hdr.height];
+        stats.resolution = match &self.upscale.scaler {
+            Some(s) => profile::RenderResolution {
+                render,
+                output: [s.output_width, s.output_height],
+                upscaler: Some("MetalFX"),
+            },
+            None => profile::RenderResolution {
+                render,
+                output: render,
+                upscaler: None,
+            },
+        };
+        stats
+    }
 }
 
 #[cfg(test)]

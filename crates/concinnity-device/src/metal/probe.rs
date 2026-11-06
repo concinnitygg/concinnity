@@ -56,6 +56,7 @@
 //!     direct + ambient lighting without contact shadows.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_engine::render::backend::ReflectionProbes;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::{
     CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
@@ -161,21 +162,6 @@ pub(in crate::metal) struct BakeGpu {
 }
 
 impl MtlContext {
-    // Set the reflection-probe placements the graphics system resolved
-    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
-    // scene); an empty list bakes none. Resets the staggered bake so the next
-    // eligible frames re-bake from scratch, and grows the cube array when the
-    // list outgrows it; a world whose array cannot grow keeps the sky.
-    pub(in crate::metal) fn set_reflection_probes(
-        &mut self,
-        placements: &[ProbePlacement],
-        prop_probe: bool,
-    ) {
-        let placements = placements.to_vec();
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
-        crate::probe_report::report_probe_placement(placed);
-    }
-
     // The reserved transient-ring slot the asynchronous bake builds its bindless
     // buffers into: one past the frame's range `[0, frames_in_flight)`. The frame
     // never writes this slot, so the bake's CPU-written buffers stay valid across
@@ -589,4 +575,17 @@ pub(in crate::metal) fn make_face_depth(
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| allocation_failed("probe depth face"))
+}
+
+impl ReflectionProbes for MtlContext {
+    // Set the reflection-probe placements the graphics system resolved
+    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
+    // scene); an empty list bakes none. Resets the staggered bake so the next
+    // eligible frames re-bake from scratch, and grows the cube array when the
+    // list outgrows it; a world whose array cannot grow keeps the sky.
+    fn set_reflection_probes(&mut self, placements: &[ProbePlacement], prop_probe: bool) {
+        let placements = placements.to_vec();
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
+        crate::probe_report::report_probe_placement(placed);
+    }
 }

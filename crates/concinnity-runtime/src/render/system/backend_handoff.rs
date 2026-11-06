@@ -4,7 +4,9 @@
 use concinnity_engine::ecs::PipelineContext;
 use concinnity_engine::gfx::render_types::SkinnedIndex;
 use concinnity_engine::render::backend::RenderBackend;
-use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+#[cfg(test)]
+use concinnity_engine::render::backend::error::RenderError;
+use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::environment::volumetric_fog::{FogSettings, PushedFogSettings};
 use concinnity_engine::render::frame::queues::{ActiveRenderQueues, RenderQueues};
@@ -60,10 +62,8 @@ impl GraphicsSystem {
             None => None,
         };
         if let Some(mut backend) = reuse_backend {
-            backend
-                .live_edit()
-                .ok_or(RenderError::Unsupported { op: "reload_world" })?
-                .reload_world(backend_init)?;
+            backend.assert_owner_thread();
+            backend.reload_world(backend_init)?;
             tracing::info!(
                 "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
             );

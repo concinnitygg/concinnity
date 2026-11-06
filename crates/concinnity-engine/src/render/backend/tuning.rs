@@ -1,35 +1,20 @@
 //! The render settings a running world can change.
 //!
 //! The resolved graphics settings, applied through one plan per change, plus
-//! the lights and the fog the editor moves live.
+//! the lights, reflection probes and fog the world feeds the backend.
 
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::environment::volumetric_fog::FogSettings;
 use crate::settings::ResolvedGraphics;
 use crate::settings::apply::ApplyPlan;
 
-/// Live render settings: quality, shadows, post-process and lighting.
+/// Live render settings: quality, shadows and post-process.
 ///
-/// All defaulted. The infallible setters default to a no-op, so a backend that
-/// reads a setting only at init keeps its init-time value.
+/// Defaulted. A plan with nothing to reallocate is a no-op, so a backend that
+/// reads a setting only at init keeps its init-time value;
 /// [`apply_settings`](Self::apply_settings) reports a rebuild it cannot make as
 /// [`RenderError::Unsupported`], so the caller learns it did not happen.
 pub trait RenderTuning {
-    /// Supply the reflection-probe placements: declared `ReflectionProbe`
-    /// assets, or a grid the caller auto-seeded over the scene. An empty list
-    /// bakes none. The backend bakes a cube per placement and samples the
-    /// nearest for the specular reflection, and keeps a cube after theirs for
-    /// the world's prop probe when `prop_probe`.
-    /// Pushed once after construction. Default no-op: a backend without probe
-    /// support keeps the sky reflection.
-    fn set_reflection_probes(
-        &mut self,
-        probes: &[crate::render::probe::capture::ProbePlacement],
-        prop_probe: bool,
-    ) {
-        let _ = (probes, prop_probe);
-    }
-
     /// Apply a settings change: push the live values the plan names, and
     /// reallocate the runtime-switched features it names (TAA, SSAO, SSR,
     /// ray-traced reflections, SSGI, auto-exposure, their G-buffer), whose
@@ -58,7 +43,13 @@ pub trait RenderTuning {
             })
         }
     }
+}
 
+/// The lights the backend shades with, replaced or moved in place.
+///
+/// Defaulted to a no-op: a backend that only reads the lights at init keeps
+/// its init-time lights.
+pub trait SceneLights {
     /// Replace the live directional-light set (the sun). Unlike the local
     /// lights, which ride a per-scene storage buffer sized once at init, the
     /// directional slots are a fixed-size array in the shared `LightUniforms`,
@@ -103,7 +94,28 @@ pub trait RenderTuning {
         let _ = (lights, uniforms);
         Ok(())
     }
+}
 
+/// The reflection-probe placements the backend bakes.
+pub trait ReflectionProbes {
+    /// Supply the reflection-probe placements: declared `ReflectionProbe`
+    /// assets, or a grid the caller auto-seeded over the scene. An empty list
+    /// bakes none. The backend bakes a cube per placement and samples the
+    /// nearest for the specular reflection, and keeps a cube after theirs for
+    /// the world's prop probe when `prop_probe`.
+    /// Pushed once after construction. Default no-op: a backend without probe
+    /// support keeps the sky reflection.
+    fn set_reflection_probes(
+        &mut self,
+        probes: &[crate::render::probe::capture::ProbePlacement],
+        prop_probe: bool,
+    ) {
+        let _ = (probes, prop_probe);
+    }
+}
+
+/// The live volumetric-fog settings.
+pub trait FogControl {
     /// Replace the live volumetric-fog settings, or disable the fog pass when
     /// `None`. Default no-op: the fog pass keeps its init-time settings.
     ///

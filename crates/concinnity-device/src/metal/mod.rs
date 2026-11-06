@@ -4,7 +4,6 @@
 mod allocator;
 mod atmosphere;
 mod auto_exposure;
-mod backend;
 mod bindless_args;
 mod bucket_pipelines;
 mod canopy;
@@ -71,6 +70,7 @@ mod transparent;
 mod water;
 mod water_sim;
 mod water_wake;
+mod window;
 mod world_shaders;
 
 pub(crate) use context::MtlContext;

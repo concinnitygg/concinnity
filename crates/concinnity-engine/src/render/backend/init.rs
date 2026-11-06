@@ -323,7 +323,7 @@ impl PlanarBudget {
 /// The swapchain-level configuration a backend bakes into its window / surface
 /// at construction: the ring depth and the HDR-output request that together fix
 /// the drawable pixel format and frames-in-flight sizing. A live world swap
-/// (`RenderBackend::reload_world`) can only reuse the existing window when these
+/// (`WorldReload::reload_world`) can only reuse the existing window when these
 /// are unchanged; a difference forces a full backend rebuild (a new window).
 /// Kept small + `Eq` so the swap decision is one comparison.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -451,14 +451,11 @@ impl<'a> BackendInit<'a> {
     /// place, keeping its window: only when it hot-swaps onto exactly this
     /// world's swapchain configuration. Otherwise it is rebuilt.
     pub fn reloads_into(&self, backend: &dyn RenderBackend) -> bool {
-        backend
-            .live_edit_ref()
-            .and_then(crate::render::backend::LiveEdit::hot_swap_config)
-            == Some(self.swapchain_config())
+        backend.hot_swap_config() == Some(self.swapchain_config())
     }
 
     /// The swapchain-level configuration this world needs. Compared against a
-    /// transplanted backend's `RenderBackend::hot_swap_config` to decide whether
+    /// transplanted backend's `WorldReload::hot_swap_config` to decide whether
     /// a live SAVE can reuse the existing window (`reload_world`) or must rebuild.
     pub fn swapchain_config(&self) -> SwapchainConfig {
         SwapchainConfig {

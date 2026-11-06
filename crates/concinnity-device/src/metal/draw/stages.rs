@@ -4,6 +4,7 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::profile;
 use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::{FrameParams, error};
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
@@ -120,22 +121,6 @@ impl MtlContext {
         // when nothing changed.
         self.window_mut().appkit.reconcile_display_mode();
         true
-    }
-
-    // Reserve the next frame's slot ahead of its draw: blocks until the GPU
-    // retires an older frame. A minimized window draws nothing, so it reserves
-    // nothing; a slot already reserved is kept.
-    pub(crate) fn prepare_frame(&mut self) {
-        if self.prepared_slot.is_none() && !self.window().appkit.window_minimized() {
-            self.prepared_slot = Some(self.frame_pacing.acquire());
-        }
-    }
-
-    // Pump the window's pending events outside the draw.
-    pub(crate) fn pump_events(&mut self) {
-        if let Some(mtm) = objc2::MainThreadMarker::new() {
-            self.pump_window_events(mtm);
-        }
     }
 
     // None when no drawable is ready, which skips the frame.

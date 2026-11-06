@@ -41,8 +41,10 @@ mod tests {
     use crate::gfx::render_types::{DrawIndex, MaterialUniforms, SkinnedDrawObject, SkinnedIndex};
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
-        BackendProbe, DeviceCapabilities, DrawStreaming, FrameParams, LiveEdit, RenderBackend,
-        RenderTuning, SceneEffects, SkinnedDraws, SkinnedFrame, WindowControl,
+        BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
+        FrameParams, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
+        RenderBackend, RenderTuning, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders,
+        SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
     };
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
@@ -113,24 +115,20 @@ mod tests {
     }
 
     impl RenderBackend for Hosted {
-        fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
-            Some(self)
+        fn assert_owner_thread(&self) {}
+        fn wait_idle(&self) {}
+        fn draw_frame(&mut self, _: FrameParams<'_>) -> RenderResult<()> {
+            Ok(())
         }
+    }
 
-        fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
-            Some(self)
-        }
-
+    impl WindowControl for Hosted {
         fn window_closed(&mut self) -> bool {
             false
         }
         fn request_cursor_capture(&mut self) {}
         fn take_input(&mut self) -> InputSnapshot {
             InputSnapshot::default()
-        }
-        fn wait_idle(&self) {}
-        fn draw_frame(&mut self, _: FrameParams<'_>) -> RenderResult<()> {
-            Ok(())
         }
     }
 
@@ -145,7 +143,7 @@ mod tests {
         }
     }
 
-    impl DrawStreaming for Hosted {
+    impl TextureUploads for Hosted {
         fn evict_texture_slot(
             &mut self,
             _: crate::gfx::render_types::TextureSlot,
@@ -159,6 +157,9 @@ mod tests {
         ) -> RenderResult<()> {
             Ok(())
         }
+    }
+
+    impl DrawStreaming for Hosted {
         fn setup_chunk_streaming(&mut self, _: usize, _: usize) -> RenderResult<()> {
             Ok(())
         }
@@ -169,10 +170,20 @@ mod tests {
             DeviceCapabilities::ALL
         }
     }
-    impl LiveEdit for Hosted {}
+    impl CullReadback for Hosted {}
+    impl FogControl for Hosted {}
+    impl FrameCapture for Hosted {}
+    impl GeometryRebuild for Hosted {}
+    impl MaterialParamRows for Hosted {}
+    impl PlanetReshape for Hosted {}
+    impl ReflectionProbes for Hosted {}
     impl RenderTuning for Hosted {}
-    impl SceneEffects for Hosted {}
-    impl WindowControl for Hosted {}
+    impl RuntimeDecals for Hosted {}
+    impl RuntimeEmitters for Hosted {}
+    impl SceneLights for Hosted {}
+    impl SdfVolumeShaders for Hosted {}
+    impl WorldReload for Hosted {}
+    impl WorldShaders for Hosted {}
 
     fn vertices() -> Vec<Vertex> {
         vec![crate::test_support::vertex(); 3]

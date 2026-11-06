@@ -22,6 +22,6 @@ pub mod shader_overrides;
 
 /// A render backend transplanted out of a previous world, inserted into a
 /// freshly built world so its graphics init reuses the live GPU device and
-/// window. Init calls `RenderBackend::reload_world` on it when the swapchain
+/// window. Init calls `WorldReload::reload_world` on it when the swapchain
 /// config is unchanged, and otherwise idles and drops it and builds a new one.
 pub struct PendingBackend(pub Box<dyn RenderBackend>);

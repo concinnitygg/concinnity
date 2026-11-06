@@ -1,21 +1,14 @@
 //! What the streamer moves in and out of a live backend's slots.
 //!
-//! Mesh and texture residency, the chunk pool a streamed world places
-//! geometry into, and the world-shader buckets a pinned scene installs. Every
-//! entry point here is addressed by a draw slot or a pool index the engine's
-//! allocators own, so the backend never decides where something lands.
-//!
-//! Albedo and normal maps share one handle-indexed texture pool, so every
-//! streamed texture flows through the same slot pair whatever its role. The
-//! image carries its GPU format and mip chain: RGBA8 regenerates mips on
-//! upload, block-compressed formats upload their chain verbatim.
+//! Mesh residency and the chunk pool a streamed world places geometry into.
+//! Every entry point here is addressed by a draw slot or a pool index the
+//! engine's allocators own, so the backend never decides where something
+//! lands.
 
-use crate::components::ShaderPrograms;
 use crate::gfx::mesh_payload::Vertex;
-use crate::gfx::render_types::{DrawIndex, MaterialUniforms, TextureSlot};
+use crate::gfx::render_types::{DrawIndex, MaterialUniforms};
+use crate::render::backend::SceneHost;
 use crate::render::backend::error::{RenderError, RenderResult};
-use crate::render::backend::{PipelineBuilder, PreparedPipelines, SceneHost};
-use alloc::sync::Arc;
 
 /// One streamed chunk's geometry plus placement, supplied to
 /// [`DrawStreaming::add_chunk_mesh`]. `frame` reclaims retired deferred frees
@@ -61,36 +54,15 @@ pub struct PlanetChunk {
     pub origin_altitude: f32,
 }
 
-/// Slot residency: the mesh, texture and chunk uploads and evictions a
-/// streaming world drives, plus the world-shader buckets a scene pins.
+/// Draw-slot residency: the mesh and chunk uploads and evictions a streaming
+/// world drives.
 ///
-/// The texture slots and the chunk headroom are required: a backend that
-/// cannot fill a slot cannot draw a streamed world at all. Placing, evicting,
-/// moving and cloning draws only edit the scene and write geometry bytes, so
-/// they are defaulted over [`SceneHost`] and report
-/// [`RenderError::Unsupported`] without a scene. The world-shader buckets
-/// default to success, since a backend without per-bucket pipelines has
-/// nothing to install.
+/// The chunk headroom is required: a backend that cannot grow its geometry
+/// buffers cannot draw a streamed world at all. Placing, evicting, moving and
+/// cloning draws only edit the scene and write geometry bytes, so they are
+/// defaulted over [`SceneHost`] and report [`RenderError::Unsupported`]
+/// without a scene.
 pub trait DrawStreaming: SceneHost {
-    /// Release a texture slot's image, leaving a 1x1 placeholder in the slot so
-    /// a draw still holding the handle has something to sample.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the slot is out of range.
-    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()>;
-    /// Replace a texture slot's image after a streaming upload.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the slot is out of range or the image cannot be
-    /// uploaded.
-    fn update_texture_slot(
-        &mut self,
-        slot: TextureSlot,
-        image: &crate::bake::texture::TextureImage,
-    ) -> RenderResult<()>;
-
     /// Return a streamed mesh's vertex / index regions to the sub-allocators
     /// and mark the draw slot non-resident. The regions are held against
     /// `retire_frame`, so a frame still in flight cannot have them reused
@@ -238,48 +210,5 @@ pub trait DrawStreaming: SceneHost {
                 op: "clone_static_draw_object",
             }),
         }
-    }
-
-    /// Make one shader bucket's draws renderable by installing its main-pass
-    /// pipeline, built from `programs`. Called by the streaming pump when a
-    /// scene that exclusively owns the bucket's `Shader` pins; init skipped the
-    /// build. `prepared` is the pipeline a [`Self::pipeline_builder`] already
-    /// built from `programs` on a worker: the backend installs it as is, or
-    /// builds on the calling thread when there is none or it was built against
-    /// targets the backend no longer draws into. Replaces whatever the bucket
-    /// holds. Bucket 0 is the world default program and is never installed this
-    /// way.
-    ///
-    /// Default no-op-with-Ok: a backend that renders every draw with the world
-    /// default program has no per-bucket pipeline to build, and the bucket is
-    /// resident as far as scene loading is concerned.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the pipeline fails to build.
-    fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        programs: &ShaderPrograms,
-        prepared: Option<PreparedPipelines>,
-    ) -> RenderResult<()> {
-        let _ = (bucket, programs, prepared);
-        Ok(())
-    }
-
-    /// Release one shader bucket's render pipeline, undoing
-    /// [`Self::install_world_shader`]. Called when the owning scene unpins;
-    /// draws carrying the bucket stop rendering until it is installed again.
-    /// Default no-op, for the same reason as above.
-    fn evict_world_shader(&mut self, bucket: u32) {
-        let _ = bucket;
-    }
-
-    /// A builder that creates world Shader and `SdfVolume` pipelines against this
-    /// backend's device on another thread, so a scene's bucket install and a
-    /// hot reload's swap receive a finished pipeline instead of building one on
-    /// the frame thread. Default `None`: the install builds for itself.
-    fn pipeline_builder(&self) -> Option<Arc<dyn PipelineBuilder>> {
-        None
     }
 }

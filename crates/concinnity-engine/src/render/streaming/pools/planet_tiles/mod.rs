@@ -577,9 +577,7 @@ impl PlanetTiles {
         self.morph_sent = None;
         self.any_stale = false;
         ops.record(move |backend| {
-            if let Some(live) = backend.live_edit() {
-                live.reshape_planet(&shape);
-            }
+            backend.reshape_planet(&shape);
         });
     }
 

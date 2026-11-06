@@ -163,6 +163,7 @@ fn render_half(
     let mut submitted = 0u64;
     // The step's go-ahead already went, ahead of its snapshot.
     let mut went = false;
+    backend.assert_owner_thread();
     loop {
         if shutdown.is_canceled() {
             return RenderHalfOutcome::stopped(submitted);

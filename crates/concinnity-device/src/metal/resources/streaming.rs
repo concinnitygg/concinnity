@@ -3,12 +3,13 @@
 //! removing chunks is scene bookkeeping, done in `SceneState`.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use concinnity_engine::render::backend::DrawStreaming;
 use concinnity_engine::render::backend::error::RenderResult;
 use objc2_metal::{MTLBuffer, MTLResourceOptions};
 
 use crate::metal::context::{MtlContext, copy_buffer_prefix};
 
-impl MtlContext {
+impl DrawStreaming for MtlContext {
     // `VoxelWorld` chunks and seed the chunk sub-allocators with it.
     //
     // Called once at init by `GraphicsSystem` when a `VoxelWorld` is present.
@@ -16,7 +17,7 @@ impl MtlContext {
     // (larger) buffers; chunks are placed in the appended headroom by
     // `add_chunk_mesh`. This runs before the first frame, so no in-flight
     // command buffer references the replaced buffers.
-    pub(crate) fn setup_chunk_streaming(
+    fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,

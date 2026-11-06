@@ -13,6 +13,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
+use concinnity_engine::render::backend::FogControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
 use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
@@ -49,27 +50,6 @@ pub(crate) struct FogState {
 }
 
 impl MtlContext {
-    // Hot-reload entry point for the volumetric-fog tunables. Writes the new
-    // `Option<FogSettings>` into `self.fog.settings`; the next `draw_frame`
-    // then re-builds `FogParams` from it. `None` disables the pass even if
-    // the pipeline is live (the guard in [`MtlContext::draw_frame`] needs
-    // both fog_pipeline and fog_settings).
-    //
-    // If the world started with no `VolumetricFog` (so `fog_pipeline` is
-    // `None`), a `Some` update logs once and is dropped: re-enabling fog
-    // mid-run requires a relaunch.
-    pub(crate) fn update_fog_settings(&mut self, settings: Option<FogSettings>) {
-        if settings.is_some() && self.fog.pipeline.is_none() {
-            tracing::warn!(
-                "VolumetricFog hot-reload: world started without fog, so the fog \
-                 pipeline was never built: re-enabling fog mid-run is not \
-                 supported (relaunch required). Ignoring update."
-            );
-            return;
-        }
-        self.fog.settings = settings;
-    }
-
     // Encode the volumetric-fog pass. Caller has already ended the main HDR
     // pass (and the decal pass, if any), so `targets.hdr.depth` (MSAA) holds
     // the scene depth and `targets.hdr.hdr_resolve` holds the resolved
@@ -247,4 +227,27 @@ pub(super) fn build_fog_froxel_volume(
     device
         .newTextureWithDescriptor(&desc)
         .ok_or_else(|| allocation_failed("the fog froxel volume texture"))
+}
+
+impl FogControl for MtlContext {
+    // Hot-reload entry point for the volumetric-fog tunables. Writes the new
+    // `Option<FogSettings>` into `self.fog.settings`; the next `draw_frame`
+    // then re-builds `FogParams` from it. `None` disables the pass even if
+    // the pipeline is live (the guard in [`MtlContext::draw_frame`] needs
+    // both fog_pipeline and fog_settings).
+    //
+    // If the world started with no `VolumetricFog` (so `fog_pipeline` is
+    // `None`), a `Some` update logs once and is dropped: re-enabling fog
+    // mid-run requires a relaunch.
+    fn update_fog_settings(&mut self, settings: Option<FogSettings>) {
+        if settings.is_some() && self.fog.pipeline.is_none() {
+            tracing::warn!(
+                "VolumetricFog hot-reload: world started without fog, so the fog \
+                 pipeline was never built: re-enabling fog mid-run is not \
+                 supported (relaunch required). Ignoring update."
+            );
+            return;
+        }
+        self.fog.settings = settings;
+    }
 }

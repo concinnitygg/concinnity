@@ -32,6 +32,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::planet::Rebase;
+use concinnity_engine::render::backend::PlanetReshape;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
@@ -178,20 +179,6 @@ impl MtlContext {
             surface.motion.rebase(rebase);
         }
         self.water.wake.rebase(rebase);
-    }
-
-    // Bring the planet's sea, grass and ground's far field to its reshaped
-    // `shape`.
-    pub(in crate::metal) fn reshape_planet(
-        &mut self,
-        shape: &concinnity_engine::planet::PlanetShape,
-    ) {
-        concinnity_engine::render::environment::reshape::reshape_planet(
-            shape,
-            self.water.surfaces.iter_mut().map(|s| &mut s.motion),
-            self.grass.as_mut().map(|g| &mut g.field),
-            self.canopy_field.as_mut(),
-        );
     }
 
     // Advance the wake to this frame when a sea runs one and the `WaterSim`
@@ -440,4 +427,17 @@ fn build_water_pipeline_with(
     let vert_fn = builtin_shaders::entry_function(device, vertex, hot_reload)?;
     let frag_fn = builtin_shaders::entry_function(device, fragment, hot_reload)?;
     build_transparent_pipeline_stages(device, &vert_fn, &frag_fn)
+}
+
+impl PlanetReshape for MtlContext {
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape) {
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            self.water.surfaces.iter_mut().map(|s| &mut s.motion),
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
+    }
 }

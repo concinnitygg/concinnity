@@ -1,4 +1,4 @@
-//! `MtlContext::draw_frame` -- the per-frame orchestration. The per-pass GPU
+//! `RenderBackend` for `MtlContext`: the per-frame orchestration. The per-pass GPU
 //! encoders live in sibling files:
 //!
 //!   shadow.rs    cascaded shadow map (depth-only, one render pass per cascade)
@@ -22,7 +22,7 @@ mod stages;
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::profile::FrameSpans;
-use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::{FrameParams, RenderBackend};
 use concinnity_engine::render::environment::grass::lod as grass_lod;
 use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
 use concinnity_engine::render::post::device::PostExtent;
@@ -38,8 +38,45 @@ use self::stages::{AcquiredFrame, HistoryBuffers, PresentFrame, SceneBufferArgs,
 use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 
-impl MtlContext {
-    // Pump the NSEvent queue and encode one frame to the GPU.
+impl RenderBackend for MtlContext {
+    // AppKit and Metal command submission are both main-thread-affine, which
+    // is what the `unsafe impl Send for MtlContext` rests on.
+    #[track_caller]
+    fn assert_owner_thread(&self) {
+        debug_assert!(
+            objc2::MainThreadMarker::new().is_some(),
+            "MtlContext is main-thread-only (see `unsafe impl Send for MtlContext`); \
+             driving it off the main thread races AppKit/Metal",
+        );
+    }
+
+    // Block until the GPU has finished all in-flight work.
+    fn wait_idle(&self) {
+        if let Some(cmd_buf) = self.hw.command_queue.commandBuffer() {
+            cmd_buf.commit();
+            cmd_buf.waitUntilCompleted();
+        }
+    }
+
+    // Reserve the next frame's slot ahead of its draw: blocks until the GPU
+    // retires an older frame. A minimized window draws nothing, so it reserves
+    // nothing; a slot already reserved is kept.
+    fn prepare_frame(&mut self) {
+        if self.prepared_slot.is_none() && !self.window().appkit.window_minimized() {
+            self.prepared_slot = Some(self.frame_pacing.acquire());
+        }
+    }
+
+    // Pump the window's pending events outside the draw.
+    fn pump_events(&mut self) {
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            self.pump_window_events(mtm);
+        }
+    }
+
+    // Pump the NSEvent queue and encode one frame to the GPU. A GPU-side
+    // failure surfaces asynchronously on a completed command buffer, so a
+    // frame's error is reported here on a later call.
     //
     // NSEvent processing must happen here rather than in the run loop because
     // window close, resize, and key events are only delivered after NSApp
@@ -56,11 +93,10 @@ impl MtlContext {
     // until unified memory is exhausted and the GPU faults / the host panics.
     // Draining per frame frees each frame's command buffers once the GPU
     // retires them, bounding VRAM to the work actually in flight.
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
-    )]
-    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
+        if let Some(e) = self.take_device_error() {
+            return Err(e);
+        }
         objc2::rc::autoreleasepool(|_| {
             drive_frame(self, params, concinnity_host::clock::monotonic_micros)
         })

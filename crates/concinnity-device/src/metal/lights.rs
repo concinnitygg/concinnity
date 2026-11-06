@@ -7,21 +7,22 @@
 use concinnity_engine::components::DirectionalLight;
 use concinnity_engine::gfx::render_types::LightUniforms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, SceneLights};
 use concinnity_engine::render::light::lights::LightData;
 use concinnity_engine::render::light::sky_occluders::SkyOccluders;
 use concinnity_engine::render::shadow::spot;
 
 use super::context::{MtlContext, write_buffer_slice};
 
-impl MtlContext {
+impl SceneLights for MtlContext {
     // Replace the live directional lights. Every reader, the shadow cascades
     // included, reads the sun from the light state each frame.
-    pub(crate) fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
+    fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
         self.lights.set_directional(lights);
     }
 
     // Replace the sky-occluding spheres the light block carries.
-    pub(crate) fn update_sky_occluders(&mut self, occluders: &SkyOccluders) {
+    fn update_sky_occluders(&mut self, occluders: &SkyOccluders) {
         self.lights.set_sky_occluders(occluders);
     }
 
@@ -29,7 +30,7 @@ impl MtlContext {
     // single shared-storage buffers the in-flight frames read, so the GPU is
     // drained before they are rewritten; the light-cluster reach, the spot
     // frusta and the spot refresh schedule are re-derived from the new data.
-    pub(crate) fn move_local_lights(
+    fn move_local_lights(
         &mut self,
         data: &LightData,
         uniforms: &LightUniforms,

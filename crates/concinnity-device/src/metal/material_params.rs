@@ -3,13 +3,14 @@
 //! slot's copy rewritten only when it is fresh or behind a change.
 
 use concinnity_engine::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
+use concinnity_engine::render::backend::MaterialParamRows;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice};
 
-use super::context::{bytes_of_slice, write_buffer_region};
+use super::context::{MtlContext, bytes_of_slice, write_buffer_region};
 use super::frame_rings::TransientRing;
 
 // The Metal buffer index the main pass reads the table from, on both stages.
@@ -46,5 +47,13 @@ impl MaterialParamRing {
             write_buffer_region(&buf, 0, bytes_of_slice(self.table.rows()))?;
         }
         Ok(buf)
+    }
+}
+
+impl MaterialParamRows for MtlContext {
+    // Replace one row of the material parameter table; every ring slot is
+    // rewritten as the frames come round to it.
+    fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
+        self.rings.material_params.set(row, params);
     }
 }

@@ -12,7 +12,7 @@ mod compile;
 mod tests;
 
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::render::backend::{LiveEdit, PipelineBuilder, PipelineSwap};
+use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, WorldShaders};
 use concinnity_engine::render::world_load::source_maps::{ShaderSourceEntry, ShaderSourceMap};
 use concinnity_runtime::live_edit::shader_overrides::ShaderOverrides;
 use std::sync::Arc;
@@ -99,7 +99,7 @@ impl ShaderReload {
     }
 
     // Swap in every compile that finished since the last call.
-    pub(crate) fn poll(&self, backend: &mut dyn LiveEdit) -> Vec<ReloadReport> {
+    pub(crate) fn poll(&self, backend: &mut dyn WorldShaders) -> Vec<ReloadReport> {
         self.compiles
             .drain()
             .into_iter()
@@ -131,7 +131,7 @@ impl ShaderReload {
 fn apply(
     entry: &ShaderSourceEntry,
     rebuilt: Rebuilt,
-    backend: &mut dyn LiveEdit,
+    backend: &mut dyn WorldShaders,
     overrides: &ShaderOverrides,
 ) -> ReloadOutcome {
     let Rebuilt { compiled, prepared } = rebuilt;

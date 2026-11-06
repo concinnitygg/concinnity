@@ -17,6 +17,7 @@ use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
+use concinnity_engine::render::backend::{RenderTuning, WindowControl};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::ssao::SsaoPass;
 use concinnity_engine::render::post::ssgi::SsgiPass;
@@ -79,19 +80,6 @@ struct Wanted {
 }
 
 impl MtlContext {
-    // Turn display sync (vsync) on or off at runtime via the view's backing
-    // CAMetalLayer. Setting displaySyncEnabled is an idempotent property write
-    // (no swapchain rebuild on Metal), so a redundant call is cheap. Backend
-    // specific: Vulkan reaches the same end by rebuilding the swapchain with a
-    // different present mode, so this does not live on the shared window layer.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
-    )]
-    pub(crate) fn set_vsync(&mut self, on: bool) {
-        super::init::set_display_sync(&self.window().view, on);
-    }
-
     // Replace the live post-process tunables. They are pushed to the bloom
     // prefilter + composite shaders every frame (see draw/composite.rs), so a
     // change takes effect on the next draw with no allocation or pipeline
@@ -489,17 +477,6 @@ impl MtlContext {
     }
 }
 
-impl MtlContext {
-    // Apply a settings change in the plan order every backend shares.
-    pub(crate) fn apply_settings(
-        &mut self,
-        graphics: &ResolvedGraphics,
-        plan: &ApplyPlan,
-    ) -> RenderResult<()> {
-        apply_plan(self, graphics, plan)
-    }
-}
-
 impl SettingsTarget for MtlContext {
     fn rebuild_features(
         &mut self,
@@ -527,5 +504,16 @@ impl SettingsTarget for MtlContext {
 
     fn push_vsync(&mut self, on: bool) {
         self.set_vsync(on);
+    }
+}
+
+impl RenderTuning for MtlContext {
+    // Apply a settings change in the plan order every backend shares.
+    fn apply_settings(
+        &mut self,
+        graphics: &ResolvedGraphics,
+        plan: &ApplyPlan,
+    ) -> RenderResult<()> {
+        apply_plan(self, graphics, plan)
     }
 }

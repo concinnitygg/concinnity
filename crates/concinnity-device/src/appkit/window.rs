@@ -156,7 +156,7 @@ impl AppKitWindow {
     // The overlay coordinate space on macOS: the view's size in points, the same
     // units `cursor_in_content` reports the cursor in. Both macOS backends read
     // it from here, so the drawable's backing scale never leaks into UI space
-    // (see `RenderBackend::logical_size`).
+    // (see `WindowControl::logical_size`).
     pub(crate) fn logical_size(&self) -> (f32, f32) {
         let s = self.view.bounds().size;
         (narrow_f32(s.width), narrow_f32(s.height))

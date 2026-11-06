@@ -2,13 +2,12 @@
 //! per-frame step and the setup logic live in one cfg-free copy instead of
 //! three.
 //!
-//! [`RenderBackend`] is the mandatory half: the window and input lifecycle,
-//! the frame, and the pushes a frame is built from. It is required in full,
-//! and it is the whole of what a backend must answer for a world to reach the
-//! screen. Everything a backend can additionally do is grouped by domain into
-//! one supertrait per file below, where the methods are defaulted: a default
-//! is how a backend says it does not have that path, and the grouping is what
-//! tells a new backend author which subset is which.
+//! [`RenderBackend`] is the mandatory half: the frame, the pushes a frame is
+//! built from, and the thread check. Everything else a backend does is split
+//! by feature into one supertrait each, grouped into the files below, so a
+//! backend implements each feature once, in the module that owns it. Most
+//! methods are defaulted: a default is how a backend says it does not have
+//! that path.
 //!
 //! A default describes a backend without the feature the operation serves,
 //! by one rule:
@@ -30,35 +29,41 @@
 //! Operations that only edit the CPU-side scene are defaulted over
 //! [`SceneHost`], which the families that edit the scene require: the backend
 //! lends its [`SceneState`](crate::render::scene_state::SceneState) and a
-//! geometry writer, and the bookkeeping is written once. Operations that touch the
-//! graphics API are thin forwarders to the inherent methods on `MtlContext` /
-//! `DxContext` / `VkContext`; concinnity-device generates the 1:1 ones from a
-//! shared `forward!` macro, one invocation per family.
+//! geometry writer, and the bookkeeping is written once.
 
 // Decals and particle emitters, added and removed while the world runs.
 mod effects;
-// Rewriting a built world's GPU content: the hot-reload rebuilders and the
-// editor's live previews, reached through `RenderBackend::live_edit`.
-mod live_edit;
+// Rewriting a built world's geometry: the hot-reload rebuilders.
+mod geometry_rebuild;
+// The material parameter table world Shaders read.
+mod materials;
 #[cfg(any(test, feature = "test-support"))]
 mod null;
 // Building replacement pipelines on a thread other than the frame thread.
 mod pipeline_builder;
-// What the backend reports about itself: capabilities, GPU class, counters,
-// and the CPU-side readbacks.
+// What a backend keeps of the world's planet beyond its tiles.
+mod planet;
+// What the backend reports about itself: capabilities, GPU class, counters.
 mod probe;
+// The presented frame and the cull decisions, read back to the CPU.
+mod readback;
 #[cfg(any(test, feature = "test-support"))]
 pub mod recording;
+// Reloading shaders or a whole world on the live device.
+mod reload;
 // The scene a backend lends to the defaults that only edit it.
 mod scene_host;
 // The skinned draw path, from one upload to each frame's joint palette.
 mod skinned;
-// Slot residency: the mesh, texture and chunk uploads a streaming world
-// drives.
+// Slot residency: the mesh and chunk uploads a streaming world drives.
 mod streaming;
-// The live render settings: quality, shadows, post-process, lighting.
+// The texture pool, the color-grading LUT and the environment map.
+mod textures;
+// The live render settings and the lights, probes and fog the world feeds.
 mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
+mod window;
+// The world Shader and SdfVolume pipelines.
 pub mod error;
 pub mod feature_plan;
 pub mod init;
@@ -66,29 +71,34 @@ pub mod object_counts;
 pub mod parallel_ctx;
 pub mod pass_timing;
 pub mod render_mode;
-mod window;
+mod world_shaders;
 
 pub use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
-pub use effects::SceneEffects;
-pub use live_edit::{
-    DrawGeometryUpdate, LiveEdit, PipelineSwap, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
+pub use effects::{RuntimeDecals, RuntimeEmitters};
+pub use geometry_rebuild::{
+    DrawGeometryUpdate, GeometryRebuild, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
+pub use materials::MaterialParamRows;
 #[cfg(any(test, feature = "test-support"))]
 pub use null::NullBackend;
 pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
+pub use planet::PlanetReshape;
 pub use probe::{
     AppleVariant, BackendProbe, DeviceCapabilities, DeviceProbe, GpuClassInput, GpuProfile,
     GpuTier, GpuVendor, apple_family_from_device_name, apple_variant_from_device_name,
     classify_tier,
 };
+pub use readback::{CullReadback, FrameCapture};
+pub use reload::WorldReload;
 pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::{SkinnedDraws, SkinnedFrame};
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
-pub use tuning::RenderTuning;
+pub use textures::TextureUploads;
+pub use tuning::{FogControl, ReflectionProbes, RenderTuning, SceneLights};
 pub use window::WindowControl;
+pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
-use crate::gfx::render_types::{LineVertex, TextDrawCall};
-use crate::input::snapshot::InputSnapshot;
+use crate::gfx::render_types::{LineVertex, MaterialUniforms, TextDrawCall};
 use crate::render::backend::error::RenderResult;
 use crate::render::scene::flow::SceneControl;
 
@@ -172,7 +182,7 @@ pub struct FrameParams<'a> {
     /// Save the image this frame presents as a PNG at this path, or `None`.
     /// The copy rides the frame's own submission and the file is written off
     /// the frame path once the frame retires, so a capture costs the frame
-    /// nothing it shows; [`RenderBackend::finish_captures`] waits the writes
+    /// nothing it shows; [`FrameCapture::finish_captures`] waits the writes
     /// out. The outcome is logged.
     pub capture: Option<&'a str>,
 }
@@ -180,36 +190,40 @@ pub struct FrameParams<'a> {
 /// The per-frame drive: what every graphics backend must implement for a world
 /// to reach the screen.
 ///
-/// The window, input and frame are required, so a backend missing one fails
-/// to compile rather than silently drawing nothing. The scene pushes are
-/// defaulted over [`SceneHost`]. The optional operation families are the
-/// supertraits, each grouped by domain in its own module; the module docs give
-/// the rule their defaults follow.
+/// The frame and the thread check are required, so a backend missing one
+/// fails to compile rather than silently drawing nothing. The scene pushes are
+/// defaulted over [`SceneHost`]. Everything else is a feature supertrait, each
+/// in its own module; the module docs give the rule their defaults follow.
 pub trait RenderBackend:
     SceneHost
     + BackendProbe
+    + CullReadback
     + DrawStreaming
+    + FogControl
+    + FrameCapture
+    + GeometryRebuild
+    + MaterialParamRows
+    + PlanetReshape
+    + ReflectionProbes
     + RenderTuning
-    + SceneEffects
+    + RuntimeDecals
+    + RuntimeEmitters
+    + SceneLights
+    + SdfVolumeShaders
     + SkinnedDraws
+    + TextureUploads
     + WindowControl
+    + WorldReload
+    + WorldShaders
     + Send
 {
-    /// Whether the window has been asked to close, polled once a frame.
-    fn window_closed(&mut self) -> bool;
-    /// The paths an asset hot-reload and the editor's live previews rewrite a
-    /// built world through, or `None` for a backend without them.
-    fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
-        None
-    }
-    /// [`Self::live_edit`], for its queries.
-    fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
-        None
-    }
-    /// Ask the window to capture the cursor; a backend may defer until the first content click.
-    fn request_cursor_capture(&mut self);
-    /// Take the input sampled since the last call.
-    fn take_input(&mut self) -> InputSnapshot;
+    /// Debug-assert that the caller is on the thread that owns this backend's
+    /// window and queues. A backend's graphics API and window are
+    /// thread-affine, so the runtime calls this each time it takes the backend
+    /// to drive it, and a schedule that moved the driver off that thread fails
+    /// loudly instead of racing the platform. Compiles to nothing in release.
+    #[track_caller]
+    fn assert_owner_thread(&self);
     /// Block until the GPU has drained every submitted frame.
     fn wait_idle(&self);
 
@@ -230,9 +244,6 @@ pub trait RenderBackend:
     /// Returns an error if recording, submitting, or presenting the frame
     /// fails.
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
-    /// Block until every frame capture asked of [`Self::draw_frame`] so far is
-    /// written to disk or has failed. Waits for the GPU first.
-    fn finish_captures(&mut self) {}
     /// Push the camera's view matrix, column-major.
     fn update_view(&mut self, matrix: [[f32; 4]; 4]) {
         if let Some(scene) = self.scene_mut() {
@@ -299,6 +310,32 @@ pub trait RenderBackend:
     fn retire_draw_object(&mut self, draw_idx: DrawIndex) {
         if let Some(scene) = self.scene_mut() {
             scene.retire_draw_object(draw_idx);
+        }
+    }
+
+    /// Rewrite a draw slot's material parameters + texture/normal-map pool
+    /// indices in place. Driven by the editor's live draw seam when a Prop edits
+    /// its `material` arg. The caller gates on
+    /// [`DeviceCapabilities::rewrites_draws`], which a backend reports once its
+    /// GPU records and ray-tracing geometry table follow the rewritten slot.
+    fn set_draw_material(
+        &mut self,
+        draw_idx: DrawIndex,
+        material: MaterialUniforms,
+        texture_slot: usize,
+        normal_map_slot: usize,
+    ) {
+        if let Some(scene) = self.scene_mut() {
+            scene.set_draw_material(draw_idx, material, texture_slot, normal_map_slot);
+        }
+    }
+
+    /// Rewrite a draw slot's `cull_distance` in place. Driven by the editor's
+    /// live draw seam when a Prop edits its `cull_distance` arg. Gated by the
+    /// same [`DeviceCapabilities::rewrites_draws`] flag.
+    fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
+        if let Some(scene) = self.scene_mut() {
+            scene.set_draw_cull_distance(draw_idx, cull_distance);
         }
     }
 }

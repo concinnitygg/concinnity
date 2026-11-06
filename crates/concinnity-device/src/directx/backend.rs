@@ -8,8 +8,10 @@ use concinnity_engine::input::snapshot::InputSnapshot;
 use concinnity_engine::profile::RenderStats;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{
-    BackendProbe, DrawStreaming, FrameParams, LiveEdit, RenderBackend, RenderTuning, SceneEffects,
-    SkinnedDraws, SkinnedIndex, WindowControl,
+    BackendProbe, CullReadback, DrawStreaming, FogControl, FrameCapture, FrameParams,
+    GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes, RenderBackend,
+    RenderTuning, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws,
+    SkinnedIndex, TextureUploads, WindowControl, WorldReload, WorldShaders,
 };
 use concinnity_engine::render::{
     backend, backend::init, decal, environment::volumetric_fog, particles, probe::capture,
@@ -22,27 +24,15 @@ use super::context::{DxContext, debug_assert_main_thread};
 use crate::forward::forward;
 
 impl RenderBackend for DxContext {
-    fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
-        Some(self)
-    }
-
-    fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
-        Some(self)
+    fn assert_owner_thread(&self) {
+        debug_assert_main_thread("DxContext");
     }
 
     forward! { assert = debug_assert_main_thread;
-        fn window_closed(&mut self) -> bool;
-        fn request_cursor_capture(&mut self);
-        fn take_input(&mut self) -> InputSnapshot;
         fn wait_idle(&self);
         fn prepare_frame(&mut self);
         fn pump_events(&mut self);
         fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()>;
-    }
-
-    fn finish_captures(&mut self) {
-        debug_assert_main_thread("finish_captures");
-        self.finish_frame_captures();
     }
 }
 
@@ -53,19 +43,30 @@ impl SkinnedDraws for DxContext {
         // shader model 5.1, which D3D12 cannot pair with the engine's 6.0
         // vertex (see `compile_skinned_shaders`).
         fn upload_skinned(&mut self, vertices: &[SkinnedVertex], indices: &[u32], draw_objects: Vec<SkinnedDrawObject>) -> RenderResult<()>;
+        fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
+    }
+}
+
+impl TextureUploads for DxContext {
+    forward! { assert = debug_assert_main_thread;
+        fn evict_texture_slot(&mut self, slot: concinnity_engine::gfx::render_types::TextureSlot) -> RenderResult<()>;
+        fn update_texture_slot(&mut self, slot: concinnity_engine::gfx::render_types::TextureSlot, image: &bake::texture::TextureImage) -> RenderResult<()>;
+        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
+        fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
     }
 }
 
 impl DrawStreaming for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn evict_texture_slot(&mut self, slot: concinnity_engine::gfx::render_types::TextureSlot) -> RenderResult<()>;
-        fn update_texture_slot(&mut self, slot: concinnity_engine::gfx::render_types::TextureSlot, image: &bake::texture::TextureImage) -> RenderResult<()>;
-        fn evict_world_shader(&mut self, bucket: u32);
         fn setup_chunk_streaming(&mut self, chunk_vtx_bytes: usize, chunk_idx_bytes: usize) -> RenderResult<()>;
     }
+}
 
+impl WorldShaders for DxContext {
     forward! { assert = debug_assert_main_thread;
+        fn evict_world_shader(&mut self, bucket: u32);
         fn install_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<()>;
+        fn update_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
     }
 
     fn pipeline_builder(&self) -> Option<std::sync::Arc<dyn backend::PipelineBuilder>> {
@@ -74,8 +75,24 @@ impl DrawStreaming for DxContext {
     }
 }
 
+impl SdfVolumeShaders for DxContext {
+    forward! { assert = debug_assert_main_thread;
+        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_engine::render::sdf::programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
+    }
+}
+
+impl GeometryRebuild for DxContext {
+    forward! { assert = debug_assert_main_thread;
+        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
+        fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
+    }
+}
+
 impl WindowControl for DxContext {
     forward! { assert = debug_assert_main_thread;
+        fn window_closed(&mut self) -> bool;
+        fn request_cursor_capture(&mut self);
+        fn take_input(&mut self) -> InputSnapshot;
         fn set_ui_cursor_hidden(&mut self, hidden: bool);
         fn cursor_outside_window(&self) -> bool;
         fn window_minimized(&self) -> bool;
@@ -99,25 +116,44 @@ impl WindowControl for DxContext {
 impl RenderTuning for DxContext {
     forward! { assert = debug_assert_main_thread;
         fn apply_settings(&mut self, graphics: &concinnity_engine::settings::ResolvedGraphics, plan: &concinnity_engine::settings::apply::ApplyPlan) -> RenderResult<()>;
-        fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool);
+    }
+}
+
+impl SceneLights for DxContext {
+    forward! { assert = debug_assert_main_thread;
         fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]);
         fn update_sky_occluders(&mut self, occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders);
         fn move_local_lights(&mut self, lights: &concinnity_engine::render::light::lights::LightData, uniforms: &concinnity_engine::gfx::render_types::LightUniforms) -> RenderResult<()>;
+    }
+}
+
+impl ReflectionProbes for DxContext {
+    forward! { assert = debug_assert_main_thread;
+        fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool);
+    }
+}
+
+impl FogControl for DxContext {
+    forward! { assert = debug_assert_main_thread;
         fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>);
     }
 }
 
-impl LiveEdit for DxContext {
+impl MaterialParamRows for DxContext {
     forward! { assert = debug_assert_main_thread;
-        fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()>;
-        fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()>;
-        fn update_world_shader(&mut self, bucket: u32, programs: &components::ShaderPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
-        fn replace_sdf_volume_pipelines(&mut self, volume: usize, programs: &concinnity_engine::render::sdf::programs::SdfPrograms, prepared: Option<backend::PreparedPipelines>) -> RenderResult<backend::PipelineSwap>;
-        fn update_skinned_mesh_geometry(&mut self, skinned_index: SkinnedIndex, vertex_base: u32, verts: &[SkinnedVertex], idxs: &[u16]) -> RenderResult<()>;
-        fn rebuild_skinned_geometry(&mut self, changes: Vec<backend::SkinnedDrawGeometryUpdate>) -> RenderResult<Vec<backend::SkinnedSlotLayout>>;
-        fn rebuild_static_geometry(&mut self, changes: Vec<backend::DrawGeometryUpdate>) -> RenderResult<()>;
         fn set_material_params(&mut self, row: u32, params: [f32; concinnity_engine::gfx::render_types::MATERIAL_PARAM_COUNT]);
+    }
+}
+
+impl PlanetReshape for DxContext {
+    forward! { assert = debug_assert_main_thread;
         fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape);
+    }
+}
+
+impl WorldReload for DxContext {
+    fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        self.hot_reload.flag()
     }
 
     // The swapchain config this live context was built with. A live `cn edit`
@@ -134,16 +170,17 @@ impl LiveEdit for DxContext {
         debug_assert_main_thread("reload_world");
         self.apply_world_reload(init)
     }
-
-    fn shader_reload_flag(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
-        self.hot_reload.flag()
-    }
 }
 
-impl SceneEffects for DxContext {
+impl RuntimeDecals for DxContext {
     forward! { assert = debug_assert_main_thread;
         fn add_decal(&mut self, record: decal::DecalRecord) -> RenderResult<usize>;
         fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()>;
+    }
+}
+
+impl RuntimeEmitters for DxContext {
+    forward! { assert = debug_assert_main_thread;
         fn add_emitter(&mut self, record: particles::ParticleEmitterRecord) -> RenderResult<usize>;
         fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()>;
     }
@@ -155,7 +192,9 @@ impl BackendProbe for DxContext {
         fn capabilities(&self) -> backend::DeviceCapabilities;
         fn gpu_profile(&self) -> backend::GpuProfile;
     }
+}
 
+impl FrameCapture for DxContext {
     // Inherent method is named `capture_screenshot` to keep the forwarder
     // unambiguous (an inherent `screenshot` would shadow the trait method and
     // recurse); kept explicit out of the `forward!` macro for that rename.
@@ -164,6 +203,13 @@ impl BackendProbe for DxContext {
         self.capture_screenshot(path)
     }
 
+    fn finish_captures(&mut self) {
+        debug_assert_main_thread("finish_captures");
+        self.finish_frame_captures();
+    }
+}
+
+impl CullReadback for DxContext {
     // Inherent method is named `read_cull_status_buffer` for the same reason
     // `capture_screenshot` is: an inherent `read_cull_status` would shadow the
     // trait method and recurse.

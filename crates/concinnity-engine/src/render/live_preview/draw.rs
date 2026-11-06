@@ -109,14 +109,12 @@ pub fn apply_material(world: &mut World, entity: Entity, material: DrawMaterial)
     with_ops(world, |ops| {
         for draw in draws {
             ops.record(move |backend| {
-                if let Some(edit) = backend.live_edit() {
-                    edit.set_draw_material(
-                        draw,
-                        entry.uniforms,
-                        entry.albedo_slot,
-                        entry.normal_map_slot,
-                    );
-                }
+                backend.set_draw_material(
+                    draw,
+                    entry.uniforms,
+                    entry.albedo_slot,
+                    entry.normal_map_slot,
+                );
             });
         }
     })
@@ -139,9 +137,7 @@ pub fn apply_cull_distance(world: &mut World, entity: Entity, cull_distance: f32
     with_ops(world, |ops| {
         for draw in draws {
             ops.record(move |backend| {
-                if let Some(edit) = backend.live_edit() {
-                    edit.set_draw_cull_distance(draw, cull_distance);
-                }
+                backend.set_draw_cull_distance(draw, cull_distance);
             });
         }
     })

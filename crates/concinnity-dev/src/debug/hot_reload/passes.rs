@@ -36,7 +36,7 @@ pub(crate) struct FogReloadResult {
 pub(super) fn reload_volumetric_fog(
     path: &Path,
     last_pushed: &mut Option<volumetric_fog::FogSettings>,
-    backend: &mut dyn backend::RenderBackend,
+    backend: &mut dyn backend::FogControl,
 ) -> FogReloadResult {
     let mut result = FogReloadResult::default();
 
@@ -131,7 +131,7 @@ pub(crate) struct ProceduralMeshReloadResult {
 pub(super) fn reload_procedural_meshes(
     path: &Path,
     procedural_meshes: &mut ProceduralMeshSourceMap,
-    backend: &mut dyn backend::LiveEdit,
+    backend: &mut dyn backend::GeometryRebuild,
 ) -> ProceduralMeshReloadResult {
     let mut result = ProceduralMeshReloadResult::default();
     if procedural_meshes.is_empty() {

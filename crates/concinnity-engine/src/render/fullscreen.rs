@@ -30,7 +30,7 @@ use concinnity_core::math::{SaturatingFrom, ceil, floor};
 /// clamped rectangle is empty (a row scrolled fully out of its band), so the
 /// caller skips the draw entirely.
 ///
-/// `ui` is the overlay's logical size (see `RenderBackend::logical_size`) and
+/// `ui` is the overlay's logical size (see `WindowControl::logical_size`) and
 /// `attach` the pixel size of the target the text pass writes. The two are equal
 /// wherever a window's logical units are pixels (Windows, unscaled X11), leaving
 /// a pure clamp; on a hi-DPI surface (macOS retina, scaled Wayland) the

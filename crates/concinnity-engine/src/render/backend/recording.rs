@@ -23,8 +23,10 @@ use crate::input::snapshot::InputSnapshot;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
-    BackendProbe, ChunkMesh, DeviceCapabilities, DrawStreaming, FrameParams, LiveEdit,
-    RenderBackend, RenderTuning, SceneEffects, SkinnedDraws, SkinnedFrame, WindowControl,
+    BackendProbe, ChunkMesh, CullReadback, DeviceCapabilities, DrawStreaming, FogControl,
+    FrameCapture, FrameParams, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
+    RenderBackend, RenderTuning, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders,
+    SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
 };
 use crate::render::scene_state::SceneState;
 use crate::render::{backend, environment::volumetric_fog, probe::capture, slots::draw_slot};
@@ -402,6 +404,8 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl RenderBackend for RecordingBackend {
+    fn assert_owner_thread(&self) {}
+
     fn update_visibility(&mut self, draw_idx: DrawIndex, visible: bool) {
         let mut s = self.state.lock();
         s.visibility.insert(draw_idx, visible);
@@ -412,38 +416,12 @@ impl RenderBackend for RecordingBackend {
         self.record(Call::SetFade(fade));
     }
 
-    fn live_edit(&mut self) -> Option<&mut dyn LiveEdit> {
-        Some(self)
-    }
-
-    fn live_edit_ref(&self) -> Option<&dyn LiveEdit> {
-        Some(self)
-    }
-
-    fn window_closed(&mut self) -> bool {
-        self.state.lock().window_closed
-    }
-
-    fn request_cursor_capture(&mut self) {
-        self.record(Call::RequestCursorCapture);
-    }
-
     fn pump_events(&mut self) {
         self.record(Call::PumpEvents);
     }
 
-    fn take_input(&mut self) -> InputSnapshot {
-        let mut s = self.state.lock();
-        s.calls.push(Call::TakeInput);
-        core::mem::take(&mut s.next_input)
-    }
-
     fn wait_idle(&self) {
         self.record(Call::WaitIdle);
-    }
-
-    fn finish_captures(&mut self) {
-        self.record(Call::FinishCaptures);
     }
 
     fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
@@ -481,6 +459,24 @@ impl RenderBackend for RecordingBackend {
 
     fn retire_draw_object(&mut self, draw_idx: DrawIndex) {
         self.record(Call::RetireDrawObject(draw_idx));
+    }
+
+    fn set_draw_material(
+        &mut self,
+        draw_idx: DrawIndex,
+        _material: MaterialUniforms,
+        texture_slot: usize,
+        normal_map_slot: usize,
+    ) {
+        self.record(Call::SetDrawMaterial {
+            draw_idx,
+            texture_slot,
+            normal_map_slot,
+        });
+    }
+
+    fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
+        self.record(Call::SetDrawCullDistance(draw_idx, cull_distance));
     }
 }
 
@@ -522,31 +518,7 @@ impl SkinnedDraws for RecordingBackend {
     }
 }
 
-impl DrawStreaming for RecordingBackend {
-    fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        programs: &crate::components::ShaderPrograms,
-        prepared: Option<backend::PreparedPipelines>,
-    ) -> RenderResult<()> {
-        self.record(Call::InstallWorldShader {
-            bucket,
-            name: programs.name.clone(),
-            prepared: prepared
-                .and_then(backend::PreparedPipelines::downcast::<RecordingPipeline>)
-                .map(|p| p.0),
-        });
-        Ok(())
-    }
-
-    fn evict_world_shader(&mut self, bucket: u32) {
-        self.record(Call::EvictWorldShader(bucket));
-    }
-
-    fn pipeline_builder(&self) -> Option<Arc<dyn backend::PipelineBuilder>> {
-        self.state.lock().pipeline_builder.clone()
-    }
-
+impl TextureUploads for RecordingBackend {
     fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
         let mut s = self.state.lock();
         s.calls.push(Call::EvictTextureSlot(slot));
@@ -566,7 +538,9 @@ impl DrawStreaming for RecordingBackend {
         });
         s.fail_texture_upload.clone().map_or(Ok(()), Err)
     }
+}
 
+impl DrawStreaming for RecordingBackend {
     fn evict_mesh(&mut self, draw_idx: DrawIndex, _retire_frame: u64) -> RenderResult<()> {
         self.record(Call::EvictMesh(draw_idx));
         Ok(())
@@ -640,7 +614,47 @@ impl DrawStreaming for RecordingBackend {
     }
 }
 
+impl WorldShaders for RecordingBackend {
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &crate::components::ShaderPrograms,
+        prepared: Option<backend::PreparedPipelines>,
+    ) -> RenderResult<()> {
+        self.record(Call::InstallWorldShader {
+            bucket,
+            name: programs.name.clone(),
+            prepared: prepared
+                .and_then(backend::PreparedPipelines::downcast::<RecordingPipeline>)
+                .map(|p| p.0),
+        });
+        Ok(())
+    }
+
+    fn evict_world_shader(&mut self, bucket: u32) {
+        self.record(Call::EvictWorldShader(bucket));
+    }
+
+    fn pipeline_builder(&self) -> Option<Arc<dyn backend::PipelineBuilder>> {
+        self.state.lock().pipeline_builder.clone()
+    }
+}
+
 impl WindowControl for RecordingBackend {
+    fn window_closed(&mut self) -> bool {
+        self.state.lock().window_closed
+    }
+
+    fn request_cursor_capture(&mut self) {
+        self.record(Call::RequestCursorCapture);
+    }
+
+    fn take_input(&mut self) -> InputSnapshot {
+        let mut s = self.state.lock();
+        s.calls.push(Call::TakeInput);
+        core::mem::take(&mut s.next_input)
+    }
+
     fn logical_size(&self) -> (f32, f32) {
         self.state.lock().logical_size
     }
@@ -686,23 +700,6 @@ impl RenderTuning for RecordingBackend {
     ) -> RenderResult<()> {
         apply_plan(self, graphics, plan)
     }
-
-    fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool) {
-        self.record(Call::SetReflectionProbes(probes.to_vec(), prop_probe));
-    }
-
-    fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
-        self.record(Call::UpdateDirectionalLights(
-            lights
-                .iter()
-                .map(|l| (l.direction, l.color, l.intensity))
-                .collect(),
-        ));
-    }
-
-    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
-        self.record(Call::UpdateFogSettings(settings));
-    }
 }
 
 // The plan's pieces, each recorded as the call it stands for.
@@ -738,7 +735,42 @@ impl SettingsTarget for RecordingBackend {
     }
 }
 
-impl LiveEdit for RecordingBackend {
+impl SceneLights for RecordingBackend {
+    fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
+        self.record(Call::UpdateDirectionalLights(
+            lights
+                .iter()
+                .map(|l| (l.direction, l.color, l.intensity))
+                .collect(),
+        ));
+    }
+}
+
+impl ReflectionProbes for RecordingBackend {
+    fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool) {
+        self.record(Call::SetReflectionProbes(probes.to_vec(), prop_probe));
+    }
+}
+
+impl FogControl for RecordingBackend {
+    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
+        self.record(Call::UpdateFogSettings(settings));
+    }
+}
+
+impl MaterialParamRows for RecordingBackend {
+    fn set_material_params(&mut self, row: u32, params: [f32; render_types::MATERIAL_PARAM_COUNT]) {
+        self.record(Call::SetMaterialParams { row, params });
+    }
+}
+
+impl PlanetReshape for RecordingBackend {
+    fn reshape_planet(&mut self, _shape: &crate::planet::PlanetShape) {
+        self.record(Call::ReshapePlanet);
+    }
+}
+
+impl WorldReload for RecordingBackend {
     fn hot_swap_config(&self) -> Option<SwapchainConfig> {
         self.hot_swap
     }
@@ -755,37 +787,18 @@ impl LiveEdit for RecordingBackend {
         record_init(&self.state, init);
         Ok(())
     }
-
-    fn set_draw_material(
-        &mut self,
-        draw_idx: DrawIndex,
-        _material: MaterialUniforms,
-        texture_slot: usize,
-        normal_map_slot: usize,
-    ) {
-        self.record(Call::SetDrawMaterial {
-            draw_idx,
-            texture_slot,
-            normal_map_slot,
-        });
-    }
-
-    fn set_draw_cull_distance(&mut self, draw_idx: DrawIndex, cull_distance: f32) {
-        self.record(Call::SetDrawCullDistance(draw_idx, cull_distance));
-    }
-
-    fn set_material_params(&mut self, row: u32, params: [f32; render_types::MATERIAL_PARAM_COUNT]) {
-        self.record(Call::SetMaterialParams { row, params });
-    }
-
-    fn reshape_planet(&mut self, _shape: &crate::planet::PlanetShape) {
-        self.record(Call::ReshapePlanet);
-    }
 }
 
-// Not recorded: the defaults stand, so a test that reaches a decal or an
-// emitter sees the same `Err` a backend without those passes reports.
-impl SceneEffects for RecordingBackend {}
+impl FrameCapture for RecordingBackend {
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
+        self.record(Call::Screenshot(path.to_string()));
+        Ok(path.to_string())
+    }
+
+    fn finish_captures(&mut self) {
+        self.record(Call::FinishCaptures);
+    }
+}
 
 impl BackendProbe for RecordingBackend {
     fn capabilities(&self) -> DeviceCapabilities {
@@ -795,12 +808,15 @@ impl BackendProbe for RecordingBackend {
     fn render_stats(&self) -> crate::profile::RenderStats {
         self.state.lock().render_stats
     }
-
-    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
-        self.record(Call::Screenshot(path.to_string()));
-        Ok(path.to_string())
-    }
 }
+
+// Not recorded: the defaults stand, so a test that reaches one of these sees
+// the same `Err` a backend without the feature reports.
+impl CullReadback for RecordingBackend {}
+impl GeometryRebuild for RecordingBackend {}
+impl RuntimeDecals for RecordingBackend {}
+impl RuntimeEmitters for RecordingBackend {}
+impl SdfVolumeShaders for RecordingBackend {}
 
 #[cfg(test)]
 mod tests {
