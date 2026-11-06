@@ -25,17 +25,21 @@ struct Chosen {
 }
 
 define_class!(
+    // SAFETY: NSObject has no requirements a subclass with these ivars could break.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "ConcinnityEditorMenuTarget"]
     #[ivars = Chosen]
     struct MenuTarget;
 
+    // SAFETY: the class subclasses `NSObject`, which already conforms.
     unsafe impl NSObjectProtocol for MenuTarget {}
 
     impl MenuTarget {
         // Queued, not acted on: the editor's own frame is parked partway
         // through while AppKit tracks the open menu.
+        // SAFETY: `menuItemChosen:` takes the sending NSMenuItem and returns
+        // nothing, the target-action signature AppKit calls.
         #[unsafe(method(menuItemChosen:))]
         fn menu_item_chosen(&self, sender: &NSMenuItem) {
             if let Some(command) = MenuCommand::from_tag(sender.tag()) {

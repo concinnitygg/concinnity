@@ -65,14 +65,18 @@ pub(crate) struct DelegateIvars {
 }
 
 define_class!(
+    // SAFETY: NSObject has no requirements a subclass with these ivars could break.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "ConcinnityWindowDelegate"]
     #[ivars = DelegateIvars]
     pub(crate) struct WindowDelegate;
 
+    // SAFETY: the class subclasses `NSObject`, which already conforms.
     unsafe impl NSObjectProtocol for WindowDelegate {}
 
+    // SAFETY: each method's selector and signature match the protocol's
+    // declaration, and AppKit calls them on the main thread the class is bound to.
     unsafe impl NSWindowDelegate for WindowDelegate {
         // Fired at the start of the enter-fullscreen animation, so the flag is
         // correct as soon as a transition begins rather than at its end.
