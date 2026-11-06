@@ -161,7 +161,7 @@ fn bare_menu_expands_to_default_layout() {
 #[test]
 fn missing_name_is_an_error() {
     let mut assets = vec![serde_json::json!({"type":"MainMenu","args":{}})];
-    let err = expand_main_menus(&mut assets).unwrap_err();
+    let err = expand_main_menus(&mut assets).unwrap_err().to_string();
     assert_eq!(err, "MainMenu: missing `name`");
 }
 
@@ -170,7 +170,7 @@ fn invalid_args_name_the_menu() {
     let mut assets = vec![serde_json::json!({
         "type":"MainMenu","args":{"$id":"m","button_width":"wide"}
     })];
-    let err = expand_main_menus(&mut assets).unwrap_err();
+    let err = expand_main_menus(&mut assets).unwrap_err().to_string();
     assert!(err.contains("MainMenu 'm'"), "{err}");
     assert!(err.contains("invalid args: `button_width`"), "{err}");
 }
@@ -517,7 +517,7 @@ fn generated_name_collision_is_an_error() {
         serde_json::json!({"type":"MainMenu","args":{"$id":"m","toggle_key":""}}),
         serde_json::json!({"type":"Sprite","args":{"$id":"m_btn_0"}}),
     ];
-    let err = expand_main_menus(&mut assets).unwrap_err();
+    let err = expand_main_menus(&mut assets).unwrap_err().to_string();
     assert!(err.contains("m_btn_0"));
     assert!(err.contains("collides"));
 }

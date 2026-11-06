@@ -3,21 +3,32 @@
 use concinnity_engine::error::AssetError;
 use thiserror::Error;
 
-/// Why a declared world, or a single asset, failed validation: one message
+use super::diagnostic::Diagnostic;
+
+/// Why a declared world, or a single asset, failed validation: one diagnostic
 /// per problem found, so an author can fix them in one pass.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{}", .0.join("\n"))]
-pub struct WorldValidationError(Vec<String>);
+#[error("{}", lines(.0))]
+pub struct WorldValidationError(Vec<Diagnostic>);
 
 impl WorldValidationError {
-    pub(crate) fn new(messages: Vec<String>) -> Self {
-        Self(messages)
+    pub(crate) fn new(diagnostics: Vec<Diagnostic>) -> Self {
+        Self(diagnostics)
     }
 
     /// Every problem found, in the order the checks reported them.
-    pub fn messages(&self) -> &[String] {
+    pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.0
     }
+}
+
+// One diagnostic per line.
+fn lines(diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Why a declared world did not compile into a runnable world or blob files.

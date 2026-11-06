@@ -162,9 +162,9 @@ impl BuildStatus {
 
     /// End the display as failed by the world's validation `errors`, listing
     /// each above the steps.
-    pub(crate) fn fail_validation(mut self, errors: &[String]) {
+    pub(crate) fn fail_validation(mut self, errors: &[concinnity_cook::Diagnostic]) {
         for error in errors {
-            self.shared.note(NoteLevel::Error, error.clone());
+            self.shared.note(NoteLevel::Error, error.to_string());
         }
         let detail = render::plural(
             u32::saturating_from(errors.len()),

@@ -1,6 +1,7 @@
 // Entry point for all build-time JSON-level world expansion.
 // Operates purely on serde_json::Value; no type registry or blob compilation.
 
+use crate::world_builder::Diagnostic;
 use std::path::Path;
 
 use super::app_config::apply_app_config;
@@ -50,7 +51,7 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
     ty: RegisteredType,
     name: &str,
     args: Option<&serde_json::Value>,
-) -> Result<T, String> {
+) -> Result<T, Diagnostic> {
     let mut args = match args {
         None | Some(serde_json::Value::Null) => serde_json::json!({}),
         Some(a) => a.clone(),
@@ -59,12 +60,10 @@ pub(crate) fn schema_args<T: serde::de::DeserializeOwned>(
         obj.remove(ID_KEY);
     }
     serde_path_to_error::deserialize(args).map_err(|e| {
-        format!(
-            "{} '{}': invalid args: `{}`: {}",
+        Diagnostic::asset(
             ty.as_str(),
             name,
-            e.path(),
-            e.inner()
+            format!("invalid args: `{}`: {}", e.path(), e.inner()),
         )
     })
 }
@@ -184,7 +183,7 @@ impl ExpandReport {
 pub(crate) fn expand_world(
     assets: &mut Vec<serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<ExpandReport, String> {
+) -> Result<ExpandReport, Diagnostic> {
     let mut report = ExpandReport::default();
     // The assets the world declares itself, snapshotted before any pass runs:
     // a generated entry landing on one of these names is the user's patch of
@@ -343,14 +342,18 @@ mod tests {
     fn schema_args_names_the_asset_and_the_field_path() {
         let ty = RegisteredType::Prefab;
         let bad = serde_json::json!({"items": [{}, {"size": [1, 2]}]});
-        let err = schema_args::<Probe>(ty, "crate", Some(&bad)).unwrap_err();
+        let err = schema_args::<Probe>(ty, "crate", Some(&bad))
+            .unwrap_err()
+            .to_string();
         assert!(
             err.starts_with("Prefab 'crate': invalid args: `items[1].size`: "),
             "{err}"
         );
 
         let bad = serde_json::json!({"speed": "fast"});
-        let err = schema_args::<Probe>(ty, "crate", Some(&bad)).unwrap_err();
+        let err = schema_args::<Probe>(ty, "crate", Some(&bad))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("`speed`: invalid type: string"), "{err}");
     }
 
@@ -389,7 +392,7 @@ mod tests {
             ),
         ] {
             let mut assets = vec![asset.clone()];
-            let err = expand_world(&mut assets, None).unwrap_err();
+            let err = expand_world(&mut assets, None).unwrap_err().to_string();
             assert!(err.contains(needle), "{asset} -> {err}");
         }
     }
@@ -400,7 +403,7 @@ mod tests {
             serde_json::json!({"type":"EngineDefaults","args":{"$id":"a"}}),
             serde_json::json!({"type":"EngineDefaults","args":{"$id":"b"}}),
         ];
-        let err = expand_world(&mut assets, None).unwrap_err();
+        let err = expand_world(&mut assets, None).unwrap_err().to_string();
         assert!(err.contains("at most one"), "{err}");
     }
 
@@ -410,7 +413,7 @@ mod tests {
             serde_json::json!({"type":"AppConfig","args":{"$id":"app","name":"My Game"}}),
             serde_json::json!({"type":"Window","args":[]}),
         ];
-        let err = expand_world(&mut assets, None).unwrap_err();
+        let err = expand_world(&mut assets, None).unwrap_err().to_string();
         assert!(err.contains("Window"), "{err}");
         assert!(err.contains("args must be an object"), "{err}");
     }

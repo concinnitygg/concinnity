@@ -20,6 +20,12 @@ pub enum CompileError {
     Invalid(String),
 }
 
+impl From<crate::world_builder::Diagnostic> for CompileError {
+    fn from(d: crate::world_builder::Diagnostic) -> Self {
+        Self::Invalid(d.to_string())
+    }
+}
+
 impl CompileError {
     /// The bytes of `path`, or a [`Source`](Self::Source) error naming what the
     /// compile was doing.

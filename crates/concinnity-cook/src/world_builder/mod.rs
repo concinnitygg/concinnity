@@ -19,8 +19,10 @@ use crate::authoring::world::{
 use crate::build_only::{LoadedWorld, merge_args, prepare_world};
 use crate::pipeline::{PipelineResult, build_compiled, write_blobs_to};
 
+mod diagnostic;
 mod error;
 
+pub use diagnostic::{AssetRef, Diagnostic};
 pub use error::{WorldBuildError, WorldValidationError};
 
 /// A world under construction: typed authored assets, compiled together into
@@ -386,7 +388,9 @@ mod tests {
             panic!("expected a validation failure, got {err:?}");
         };
         assert!(
-            errs.messages().iter().any(|e| e.contains("no_such_body")),
+            errs.diagnostics()
+                .iter()
+                .any(|e| e.to_string().contains("no_such_body")),
             "got: {errs:?}"
         );
     }
@@ -536,14 +540,16 @@ mod tests {
         let err = builder()
             .add_jsonl("{\"not\":\"a line\"}\n")
             .compile()
-            .expect_err("an object is not a line");
-        assert!(err.to_string().contains("line 1"), "{err}");
+            .expect_err("an object is not a line")
+            .to_string();
+        assert!(err.contains("line 1"), "{err}");
 
         let err = builder()
             .add_jsonl("[\"NoSuchAsset\",{}]\n")
             .compile()
-            .expect_err("the type is unknown");
-        assert!(err.to_string().contains("NoSuchAsset"), "{err}");
+            .expect_err("the type is unknown")
+            .to_string();
+        assert!(err.contains("NoSuchAsset"), "{err}");
     }
 
     // Removing by `$id` or by anonymous label drops that entry, and the
@@ -565,8 +571,9 @@ mod tests {
         let err = builder()
             .remove("missing")
             .compile()
-            .expect_err("nothing is named missing");
-        assert!(err.to_string().contains("missing"), "{err}");
+            .expect_err("nothing is named missing")
+            .to_string();
+        assert!(err.contains("missing"), "{err}");
     }
 
     // The search root is what a bare `source` filename resolves under, so a

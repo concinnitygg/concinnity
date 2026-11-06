@@ -12,6 +12,7 @@
 // so generated elements stay scoped to its Screen via the build pipeline's
 // `<screen>_*` rule and never collide with hand-authored assets.
 
+use crate::world_builder::Diagnostic;
 use concinnity_engine::components::{NamedAction, SettingVerb};
 use concinnity_engine::settings::{SettingKey, SettingKind};
 
@@ -49,7 +50,7 @@ const GLYPH_PAD: f32 = 8.0;
 const VALUE_PLACEHOLDER: &str = "--";
 
 // Replace every OptionSelect asset with the concrete UI assets it expands to.
-pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::OptionSelect))
@@ -68,7 +69,7 @@ pub(crate) fn expand_option_selects(assets: &mut Vec<serde_json::Value>) -> Resu
 
         let name = asset_name(&value);
         if name.is_empty() {
-            return Err("OptionSelect: missing `name`".to_string());
+            return Err(Diagnostic::world("OptionSelect: missing `name`"));
         }
         let select: OptionSelect =
             schema_args(RegisteredType::OptionSelect, &name, value.get("args"))?;
@@ -393,7 +394,7 @@ mod tests {
             let mut assets = vec![serde_json::json!({
                 "type": "OptionSelect", "args": {"$id": "opt", "setting": setting}
             })];
-            let err = expand_option_selects(&mut assets).unwrap_err();
+            let err = expand_option_selects(&mut assets).unwrap_err().to_string();
             assert!(err.contains("OptionSelect 'opt'"), "{err}");
             assert!(err.contains(expected), "{err}");
         }
@@ -404,7 +405,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "OptionSelect", "args": {"$id": "opt", "width": "wide"}
         })];
-        let err = expand_option_selects(&mut assets).unwrap_err();
+        let err = expand_option_selects(&mut assets).unwrap_err().to_string();
         assert!(err.contains("OptionSelect 'opt'"), "{err}");
         assert!(err.contains("invalid args: `width`"), "{err}");
     }

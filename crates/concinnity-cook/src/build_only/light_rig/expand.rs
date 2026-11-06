@@ -1,5 +1,6 @@
 // Build-time expansion: LightRig -> DirectionalLight / PointLight assets.
 
+use crate::world_builder::Diagnostic;
 use std::path::Path;
 
 use crate::authoring::registry::RegisteredType;
@@ -10,7 +11,7 @@ use crate::build_only::preset::load_preset_obj;
 pub(crate) fn expand_light_rigs(
     asset_values: &mut Vec<serde_json::Value>,
     assets_dir: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let mut result: Vec<serde_json::Value> = Vec::new();
     for value in asset_values.drain(..) {
         if registered_type(&value) != Some(RegisteredType::LightRig) {
@@ -258,7 +259,9 @@ mod tests {
             let mut assets = vec![
                 serde_json::json!({"type": "LightRig", "args": crate::authoring::world::args_with_id(args, "rig")}),
             ];
-            let err = expand_light_rigs(&mut assets, None).unwrap_err();
+            let err = expand_light_rigs(&mut assets, None)
+                .unwrap_err()
+                .to_string();
             assert!(err.starts_with("LightRig 'rig': invalid args: "), "{err}");
             assert!(err.contains(field), "{err}");
         }

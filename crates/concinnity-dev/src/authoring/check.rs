@@ -4,6 +4,7 @@
 //! the semantic checks in `crate::check`) and reports the outcome. Used by
 //! `cn check`.
 
+use concinnity_cook::Diagnostic;
 use std::path::Path;
 
 /// Read `world_path`, run validation, and report results. Returns Ok if every
@@ -23,14 +24,14 @@ fn check_source(source: concinnity_cook::WorldSource<'_>, label: &str) -> std::i
             println!("ok: {} asset(s) passed in {}", loaded.assets.len(), label);
             Ok(())
         }
-        Err(errors) => Err(report_validation_errors(errors.messages())),
+        Err(errors) => Err(report_validation_errors(errors.diagnostics())),
     }
 }
 
 /// Print each validation error in CLI form and collapse them into a single
 /// `io::Error` naming the count, so a failed world surfaces every problem in one
 /// pass.
-pub(crate) fn report_validation_errors(errors: &[String]) -> std::io::Error {
+pub(crate) fn report_validation_errors(errors: &[Diagnostic]) -> std::io::Error {
     for e in errors {
         eprintln!("error:   {e}");
     }
@@ -53,7 +54,7 @@ mod tests {
 
     #[test]
     fn report_validation_errors_names_the_count() {
-        let errors = vec!["first".to_string(), "second".to_string()];
+        let errors = vec![Diagnostic::from("first"), Diagnostic::from("second")];
         let err = report_validation_errors(&errors);
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("2 error(s)"), "got: {err}");

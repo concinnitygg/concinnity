@@ -8,9 +8,10 @@ use crate::authoring::spec::{asset, spec_to_value};
 use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::build_only::membership::scope_to_screen;
 use crate::build_only::ui_spec::label_value;
+use crate::world_builder::Diagnostic;
 
 // Replace every Panel asset with the concrete UI assets it expands to.
-pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::Panel))
@@ -27,7 +28,7 @@ pub(crate) fn expand_panels(assets: &mut Vec<serde_json::Value>) -> Result<(), S
 
         let name = asset_name(&value);
         if name.is_empty() {
-            return Err("Panel: missing `name`".to_string());
+            return Err(Diagnostic::world("Panel: missing `name`"));
         }
         let panel: Panel = schema_args(RegisteredType::Panel, &name, value.get("args"))?;
 
@@ -164,7 +165,7 @@ mod tests {
         let mut assets = vec![serde_json::json!({
             "type": "Panel", "args": {"$id": "card", "width": "wide"}
         })];
-        let err = expand_panels(&mut assets).unwrap_err();
+        let err = expand_panels(&mut assets).unwrap_err().to_string();
         assert!(err.contains("Panel 'card'"), "{err}");
         assert!(err.contains("invalid args: `width`"), "{err}");
     }

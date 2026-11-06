@@ -1,6 +1,7 @@
 //! The compile-free half of the pipeline: resolve every asset's type and args
 //! and run the structural checks, without producing a payload.
 
+use crate::world_builder::Diagnostic;
 use concinnity_host::thread::asset_id;
 use std::path::Path;
 
@@ -31,7 +32,7 @@ pub fn validate_asset(
     check_one(asset_type, name, args).map_err(|e| WorldValidationError::new(vec![e]))
 }
 
-fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(), String> {
+fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     // Single-asset validation has no surrounding world to intern against; the
     // resulting ids are throwaway. Reset so calls do not accumulate entries.
     // Clear the resource handle map too: with no world there are no handles, so
@@ -58,7 +59,8 @@ fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(
         asset_type: asset_type.to_string(),
         args: Some(args.clone()),
     };
-    asset_api::create_asset_def(&req).map_err(|e| format!("Asset '{name}': {e}"))?;
+    asset_api::create_asset_def(&req)
+        .map_err(|e| Diagnostic::asset(asset_type, name, e.to_string()))?;
 
     if let Some(registered) = registered {
         crate::check::check_asset(registered, name, args)?;
@@ -84,7 +86,7 @@ pub fn validate_world_jsonl(
 ) -> Result<(), WorldValidationError> {
     let loaded = crate::build_only::prepare_world(content, assets_dir)?;
 
-    let mut errors: Vec<String> = Vec::new();
+    let mut errors: Vec<Diagnostic> = Vec::new();
     for asset in &loaded.assets {
         // A resource asset does not build a component def, so skip the component
         // resolution for it.
@@ -96,7 +98,11 @@ pub fn validate_world_jsonl(
             args: Some(asset.args.clone()),
         };
         if let Err(e) = asset_api::create_asset_def(&req) {
-            errors.push(format!("Asset '{}': {}", asset.id, e));
+            errors.push(Diagnostic::asset(
+                asset.asset_type.as_str(),
+                &asset.id,
+                e.to_string(),
+            ));
         }
     }
 
@@ -216,9 +222,17 @@ mod tests {
             "\n",
         );
         let err = validate_world_jsonl(bad, None).expect_err("mistyped args do not resolve");
-        let msg = err.to_string();
-        assert!(msg.contains("Asset 't1'"), "got: {msg}");
-        assert!(msg.contains("Asset 't2'"), "got: {msg}");
+        let failed: Vec<_> = err
+            .diagnostics()
+            .iter()
+            .filter_map(Diagnostic::asset_ref)
+            .map(|a| (a.type_name.as_str(), a.name.as_str()))
+            .collect();
+        assert_eq!(
+            failed,
+            [("PointLight", "t1"), ("PointLight", "t2")],
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -229,7 +243,12 @@ mod tests {
             &serde_json::json!({"action": "teleport"}),
         )
         .expect_err("malformed action");
-        assert!(err.to_string().starts_with("Asset 'warp': "), "got: {err}");
+        let asset = err.diagnostics().first().and_then(Diagnostic::asset_ref);
+        assert_eq!(
+            asset.map(|a| (a.type_name.as_str(), a.name.as_str())),
+            Some(("HitRegion", "warp")),
+            "got: {err}"
+        );
         validate_asset(
             "HitRegion",
             "go",

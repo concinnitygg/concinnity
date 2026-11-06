@@ -4,9 +4,12 @@ use crate::authoring::registry::RegisteredType;
 use crate::authoring::registry::build_only::{Dirt, Sand};
 use crate::build_only::expand::{asset_name, registered_type, schema_args};
 use crate::compile::ground_surface::{dirt_peak, sand_peak};
+use crate::world_builder::Diagnostic;
 use concinnity_engine::components::GroundMap;
 
-pub(crate) fn expand_ground_looks(asset_values: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_ground_looks(
+    asset_values: &mut Vec<serde_json::Value>,
+) -> Result<(), Diagnostic> {
     let mut result = Vec::with_capacity(asset_values.len());
     for value in asset_values.drain(..) {
         let ty = registered_type(&value);
@@ -136,7 +139,7 @@ mod tests {
     fn a_misspelled_field_names_the_asset() {
         let mut assets =
             vec![serde_json::json!({"type": "Sand", "args": {"$id": "beach", "shells": "lots"}})];
-        let err = expand_ground_looks(&mut assets).unwrap_err();
+        let err = expand_ground_looks(&mut assets).unwrap_err().to_string();
         assert!(err.contains("beach"), "{err}");
     }
 }

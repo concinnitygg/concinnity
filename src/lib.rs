@@ -531,7 +531,9 @@ pub mod cook {
     //! ```
 
     pub use concinnity_cook::authoring::registry::Authored;
-    pub use concinnity_cook::{WorldBuildError, WorldBuilder, WorldValidationError};
+    pub use concinnity_cook::{
+        AssetRef, Diagnostic, WorldBuildError, WorldBuilder, WorldValidationError,
+    };
 
     // The authoring vocabulary, from the two crates that own its halves: the
     // compiled resources and the five diverging args schemas from the runtime

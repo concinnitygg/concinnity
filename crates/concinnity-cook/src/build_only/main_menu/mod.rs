@@ -8,6 +8,8 @@
 // flip; this pass adds no runtime behavior, only the assets the existing UI
 // systems already drive.
 
+use crate::world_builder::Diagnostic;
+
 mod rows;
 pub(crate) mod schema;
 mod screen;
@@ -82,7 +84,7 @@ fn cursor_sprite(name: &str, style: &MainMenu) -> serde_json::Value {
 // Replace every MainMenu asset with the concrete UI assets it expands to.
 // Generated names are prefixed with the menu's (unique) asset name, so they
 // never collide with hand-authored assets; a collision is a hard error.
-pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(), String> {
+pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(), Diagnostic> {
     if !assets
         .iter()
         .any(|v| registered_type(v) == Some(RegisteredType::MainMenu))
@@ -114,7 +116,7 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
 
         let menu_name = asset_name(&value);
         if menu_name.is_empty() {
-            return Err("MainMenu: missing `name`".to_string());
+            return Err(Diagnostic::world("MainMenu: missing `name`"));
         }
         let menu: MainMenu = schema_args(RegisteredType::MainMenu, &menu_name, value.get("args"))?;
 
@@ -129,9 +131,13 @@ pub(crate) fn expand_main_menus(assets: &mut Vec<serde_json::Value>) -> Result<(
         for entry in expand_one(&menu_name, &menu, win_w, win_h, font_px) {
             let name = asset_name(&entry);
             if !name.is_empty() && !taken.insert(name.clone()) {
-                return Err(format!(
-                    "MainMenu '{menu_name}': generated asset name '{name}' collides with an existing \
+                return Err(Diagnostic::asset(
+                    "MainMenu",
+                    &menu_name,
+                    format!(
+                        "generated asset name '{name}' collides with an existing \
                      asset; rename the menu or the conflicting asset"
+                    ),
                 ));
             }
             result.push(entry);

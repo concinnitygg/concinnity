@@ -12,7 +12,7 @@ fn names_of_type(assets: &[serde_json::Value], t: RegisteredType) -> Vec<String>
         .collect()
 }
 
-fn inject(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, String> {
+fn inject(assets: &mut Vec<serde_json::Value>) -> Result<ExpandReport, Diagnostic> {
     let mut report = ExpandReport::default();
     inject_menu_defaults(assets, &mut report)?;
     Ok(report)
@@ -86,7 +86,7 @@ fn a_second_directive_is_an_error() {
         serde_json::json!({"type":"EngineDefaults","args":{"$id":"a"}}),
         serde_json::json!({"type":"EngineDefaults","args":{"$id":"b"}}),
     ];
-    let err = inject(&mut assets).unwrap_err();
+    let err = inject(&mut assets).unwrap_err().to_string();
     assert!(err.contains("at most one"), "{err}");
 }
 
@@ -95,7 +95,7 @@ fn malformed_directive_args_are_an_error() {
     let mut assets = vec![serde_json::json!({
         "type":"EngineDefaults","args":{"$id":"d","hud":"yes"}
     })];
-    let err = inject(&mut assets).unwrap_err();
+    let err = inject(&mut assets).unwrap_err().to_string();
     assert!(err.contains("EngineDefaults 'd'"), "{err}");
     assert!(err.contains("invalid args"), "{err}");
 }
@@ -275,7 +275,7 @@ fn a_default_name_held_by_another_type_is_an_error() {
         serde_json::json!({"type":"Story","args":{"$id":"tale"}}),
         serde_json::json!({"type":"Window","args":{"$id":"tale_pause"}}),
     ];
-    let err = inject(&mut assets).unwrap_err();
+    let err = inject(&mut assets).unwrap_err().to_string();
     assert!(err.contains("tale_pause"), "{err}");
     assert!(err.contains("Window"), "{err}");
 
@@ -284,7 +284,7 @@ fn a_default_name_held_by_another_type_is_an_error() {
         serde_json::json!({"type":"MainMenu","args":{"$id":"pause"}}),
         serde_json::json!({"type":"Window","args":{"$id":"stat_hud"}}),
     ];
-    let err = inject(&mut assets).unwrap_err();
+    let err = inject(&mut assets).unwrap_err().to_string();
     assert!(err.contains("stat_hud"), "{err}");
 }
 

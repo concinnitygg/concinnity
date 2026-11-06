@@ -19,7 +19,13 @@ use super::ExportMesh;
 // folded into the vertices and bind pose instead of exporting morph targets.
 pub(crate) fn export_world_mesh(content: &str, mesh: &str, bake: bool) -> Result<Vec<u8>, String> {
     let loaded = concinnity_cook::prepare_world(content, crate::project::assets_dir().as_deref())
-        .map_err(|errs| errs.messages().join("; "))?;
+        .map_err(|errs| {
+        errs.diagnostics()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
     let mut assets = loaded.assets;
     let entry = assets
         .iter()

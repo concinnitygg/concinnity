@@ -68,7 +68,7 @@ fn missing_source_is_an_error() {
     let mut assets = vec![serde_json::json!({
         "type": "StoryImport", "args": {"$id": "story"}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("missing `source`"));
 }
 
@@ -76,7 +76,7 @@ fn missing_source_is_an_error() {
 #[test]
 fn an_import_without_args_is_a_missing_source() {
     let mut assets = vec![serde_json::json!({"type":"StoryImport","args":{"$id":"story"}})];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert_eq!(err, "StoryImport 'story': missing `source`");
 }
 
@@ -86,7 +86,7 @@ fn unreadable_source_file_is_an_error() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": "/no/such/story.md"}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("cannot read"), "{err}");
     assert!(err.contains("/no/such/story.md"), "{err}");
 }
@@ -101,7 +101,7 @@ fn parse_failure_is_wrapped_with_import_context() {
         "type": "StoryImport",
         "args": {"$id": "story", "source": path.to_str().unwrap()}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("StoryImport 'story'"), "{err}");
     assert!(err.contains("title"), "{err}");
 }
@@ -428,7 +428,7 @@ fn malformed_import_fields_name_the_import_and_the_field() {
         let mut assets = vec![
             serde_json::json!({"type": "StoryImport", "args": crate::authoring::world::args_with_id(args, "tale")}),
         ];
-        let err = expand_stories(&mut assets).unwrap_err();
+        let err = expand_stories(&mut assets).unwrap_err().to_string();
         assert!(
             err.starts_with("StoryImport 'tale': invalid args: "),
             "{err}"
@@ -449,7 +449,7 @@ fn generated_name_collision_is_an_error() {
         }),
         serde_json::json!({"type":"Screen","args":{"$id":"story_title"}}),
     ];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("collides"));
 }
 
@@ -1029,7 +1029,7 @@ fn an_emission_failure_is_wrapped_with_import_context() {
         "type": "StoryImport",
         "args": {"$id": "tale", "source": path.to_str().unwrap()}
     })];
-    let err = expand_stories(&mut assets).unwrap_err();
+    let err = expand_stories(&mut assets).unwrap_err().to_string();
     assert!(err.contains("StoryImport 'tale'"), "{err}");
     assert!(err.contains("portrait.png"), "{err}");
 }
