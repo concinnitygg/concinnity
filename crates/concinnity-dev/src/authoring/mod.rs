@@ -14,7 +14,9 @@ pub(crate) use build::{
     build_world_and_shadows, build_world_file, build_world_file_as, build_world_file_for,
     build_world_from_path, build_world_from_str, build_world_str_to_disk,
 };
-pub(crate) use check::{check_at_path, report_validation_errors, validation_failed};
+pub(crate) use check::{
+    ValidationFailed, check_at_path, report_validation_errors, validation_failed,
+};
 pub(crate) use rm::rm_at_path;
 pub(crate) use template_spec::{spec_args, world_template_entries};
 // The path-to-entries resolution and the extensions it handles, shared with

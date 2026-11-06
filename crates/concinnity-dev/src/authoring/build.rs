@@ -236,9 +236,7 @@ fn build_world(
         Ok(loaded) => loaded,
         Err(errs) => {
             status.fail_validation(errs.diagnostics());
-            return Err(crate::authoring::validation_failed(
-                errs.diagnostics().len(),
-            ));
+            return Err(crate::authoring::validation_failed(errs.diagnostics()));
         }
     };
     status.loaded(&loaded);

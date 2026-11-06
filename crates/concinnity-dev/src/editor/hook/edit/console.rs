@@ -12,13 +12,14 @@ use concinnity_engine::components::{FrameInput, InputKey};
 use concinnity_engine::ecs::World;
 use std::sync::atomic::Ordering;
 
+use crate::editor::build_failure;
 use crate::editor::entry_list::build_text;
 use crate::editor::hook::{EditorHook, declared_id, entry_type_name, scroll_step};
 use crate::editor::panels::console;
 use crate::editor::panels::console_panel::{self, ConsoleAction, ConsoleView};
 use crate::editor::panels::registry::PanelKey;
 use crate::editor::viewport::snap;
-use crate::editor::{notify, widget};
+use crate::editor::widget;
 
 impl EditorHook {
     // Open / close the console (the View row, the title X, and backtick all
@@ -319,8 +320,11 @@ impl EditorHook {
                 toasts.success(&format!("Cook finished in {secs:.1}s"));
             }
             Err(e) => {
-                sink.error(&format!("cook failed: {e}"));
-                toasts.error_with(&format!("Cook failed: {e}"), notify::Action::OpenConsole);
+                let failure = build_failure::report("Cook", &e);
+                for line in &failure.lines {
+                    sink.error(line);
+                }
+                toasts.error_with(&failure.toast, failure.action);
             }
         });
     }

@@ -993,10 +993,11 @@ impl EditorHook {
                 if self.start_mode {
                     self.preview_failed(&e.to_string());
                 } else {
-                    self.notifier.error_with(
-                        &format!("Preview rebuild failed: {e}"),
-                        notify::Action::OpenConsole,
-                    );
+                    let failure = super::build_failure::report("Preview rebuild", &e);
+                    for line in &failure.lines {
+                        self.console_sink.error(line);
+                    }
+                    self.notifier.error_with(&failure.toast, failure.action);
                 }
                 return;
             }

@@ -34,10 +34,12 @@ impl Level {
 }
 
 // What clicking a toast does, beyond dismissing it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
     OpenConsole,
     GoToBehaviorFault,
+    // Select the asset of this name and open its editing surface.
+    SelectAsset(String),
 }
 
 #[derive(Debug)]

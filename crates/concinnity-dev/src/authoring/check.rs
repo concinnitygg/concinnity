@@ -36,17 +36,42 @@ pub(crate) fn report_validation_errors(errors: &[Diagnostic]) -> std::io::Error 
         eprintln!("error:   {e}");
     }
     eprintln!("\nvalidation failed ({} error(s))", errors.len());
-    validation_failed(errors.len())
+    validation_failed(errors)
 }
 
-/// The error a world that failed validation with `count` errors returns, once
-/// they have been shown.
-pub(crate) fn validation_failed(count: usize) -> std::io::Error {
+/// The error a world that failed validation with `errors` returns, once they
+/// have been shown. It carries them, for a tool that points at what failed.
+pub(crate) fn validation_failed(errors: &[Diagnostic]) -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::InvalidData,
-        format!("validation failed with {count} error(s)"),
+        ValidationFailed(errors.to_vec()),
     )
 }
+
+/// A world that failed validation: every problem found, in the order the
+/// checks reported them.
+#[derive(Debug)]
+pub(crate) struct ValidationFailed(Vec<Diagnostic>);
+
+impl ValidationFailed {
+    /// The validation failure `e` carries, if it is one.
+    pub(crate) fn of(e: &std::io::Error) -> Option<&Self> {
+        e.get_ref()?.downcast_ref()
+    }
+
+    /// Every problem found.
+    pub(crate) fn diagnostics(&self) -> &[Diagnostic] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ValidationFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "validation failed with {} error(s)", self.0.len())
+    }
+}
+
+impl std::error::Error for ValidationFailed {}
 
 #[cfg(test)]
 mod tests {

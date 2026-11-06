@@ -80,6 +80,20 @@ impl EditorHook {
                 self.focus_panel(PanelKey::Behavior);
                 self.select_behavior_fault(world);
             }
+            // A name this world no longer resolves has nothing to select.
+            notify::Action::SelectAsset(name)
+                if self.entry_key_named(&name).is_none()
+                    && concinnity_host::thread::asset_id::lookup(&name).is_none() =>
+            {
+                self.open_console_panel(world);
+            }
+            notify::Action::SelectAsset(name) => {
+                self.select_named(&name);
+                self.open_asset_form(&name, world);
+                self.reveal_in_tree(&name, world);
+                self.pick_last = None;
+                self.frame_selection(self.viewport, world);
+            }
         }
     }
 

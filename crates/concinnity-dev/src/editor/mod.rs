@@ -30,6 +30,9 @@ mod asset_handle;
 // The Behavior panel's model half: one behavior's authored args as an editable
 // node graph, plus the palette, outline and chart views over it.
 mod behavior;
+// How a world that failed to build is reported: a console line per problem,
+// and a toast that selects the asset the first one names.
+mod build_failure;
 // The macOS menu bar: the application menu, and a View menu offering the
 // Display chip's rows a second time.
 #[cfg(target_os = "macos")]

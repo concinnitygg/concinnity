@@ -6,7 +6,7 @@
 use concinnity_engine::ecs::World;
 
 use crate::editor::behavior::panel::Status;
-use crate::editor::hook::tests::fixtures::hook;
+use crate::editor::hook::tests::fixtures::{entry, hook, selected, world_with_fields};
 
 use crate::editor::{notify, toast_overlay};
 
@@ -39,6 +39,41 @@ fn toast_presses_claim_cards_and_fall_through_elsewhere() {
         "the error's action opened the Console"
     );
     assert!(h.notifier.is_empty(), "the card dismissed");
+}
+
+// A failed build's toast names an asset; clicking it selects that asset.
+#[test]
+fn a_build_failure_toast_selects_the_asset_it_names() {
+    let mut h = hook(vec![entry("rock", "Prop"), entry("tree", "Prop")]);
+    let vp = [1280.0, 720.0];
+    let mut world = world_with_fields();
+    h.notifier.error_with(
+        "Cook failed: Prop 'tree': unknown mesh 'oak'",
+        notify::Action::SelectAsset("tree".into()),
+    );
+    h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
+    let r = toast_overlay::card_rect(vp, 0, 0);
+    assert!(h.try_toast_press(r[0] + 5.0, r[1] + 5.0, vp, &mut world));
+    assert_eq!(selected(&h), ["tree"]);
+    assert!(h.notifier.is_empty(), "the card dismissed");
+}
+
+// A name the world no longer resolves has nothing to select, so the click
+// opens the Console, where the whole failure is listed.
+#[test]
+fn a_build_failure_toast_for_a_vanished_asset_opens_the_console() {
+    let mut h = hook(vec![entry("rock", "Prop")]);
+    let vp = [1280.0, 720.0];
+    let mut world = world_with_fields();
+    h.notifier.error_with(
+        "Cook failed: Prop 'ghost': unknown mesh",
+        notify::Action::SelectAsset("ghost".into()),
+    );
+    h.drive_toasts(&mut world, vp, true, [0.0, 0.0]);
+    let r = toast_overlay::card_rect(vp, 0, 0);
+    assert!(h.try_toast_press(r[0] + 5.0, r[1] + 5.0, vp, &mut world));
+    assert!(selected(&h).is_empty());
+    assert!(h.open[PanelKey::Console]);
 }
 
 // After the last toast goes, the drive hides the overlay once and then does
