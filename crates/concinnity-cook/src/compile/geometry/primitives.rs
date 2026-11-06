@@ -2,9 +2,7 @@
 // geometry itself is `concinnity_engine::geometry`.
 
 use super::json_args::{f32_arg, u32_arg};
-
-type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
-type GeomResult = Result<(Verts, Vec<u16>), String>;
+use super::{GeomResult, Verts};
 
 pub(super) fn build_box(args: &serde_json::Value) -> (Verts, Vec<u16>) {
     let he =
@@ -34,19 +32,8 @@ pub(super) fn build_sphere(args: &serde_json::Value) -> GeomResult {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::bounds;
     use super::*;
-
-    fn bounds(verts: &Verts) -> ([f32; 3], [f32; 3]) {
-        let mut mn = [f32::INFINITY; 3];
-        let mut mx = [f32::NEG_INFINITY; 3];
-        for (pos, ..) in verts {
-            for k in 0..3 {
-                mn[k] = mn[k].min(pos[k]);
-                mx[k] = mx[k].max(pos[k]);
-            }
-        }
-        (mn, mx)
-    }
 
     #[test]
     fn box_defaults_to_a_unit_cube() {

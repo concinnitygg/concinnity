@@ -52,8 +52,8 @@ use super::reactive_mask::{self, WriterRenderPasses};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
 use super::texture::{
-    GpuImage, GpuUploadContext, ImageSpec, LayoutTransition, SubresourceRange, create_image,
-    create_image_view, one_shot_submit, transition_image_layout_range, upload_texture,
+    GpuImage, GpuUploadContext, ImageSpec, create_hdr_snapshot, create_image, create_image_view,
+    upload_texture,
 };
 use super::water_sim::OceanViews;
 use super::wire_cache::WireCache;
@@ -1152,52 +1152,6 @@ fn transparent_pipeline(
     .build(device, "transparent")
 }
 
-// Create the pre-transparent HDR scene snapshot (SAMPLED | TRANSFER_DST,
-// GPU-local) and rest it in SHADER_READ_ONLY so the first frame's snapshot
-// barrier (SHADER_READ_ONLY -> TRANSFER_DST) matches. Mirrors the raymarch
-// scene snapshot.
-fn create_snapshot(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    width: u32,
-    height: u32,
-) -> RenderResult<GpuImage> {
-    let pooled = create_image(
-        alloc,
-        &ImageSpec {
-            width: width.max(1),
-            height: height.max(1),
-            format: HDR_FORMAT,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |rec| {
-        transition_image_layout_range(
-            rec,
-            image,
-            LayoutTransition {
-                old_layout: vk::ImageLayout::UNDEFINED,
-                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                aspect: vk::ImageAspectFlags::COLOR,
-            },
-            SubresourceRange {
-                base_layer: 0,
-                layer_count: 1,
-                base_mip: 0,
-                mip_count: 1,
-            },
-        );
-    })?;
-    let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage::from_pooled(pooled, view))
-}
-
 // The Vulkan device handles the transparent build + rebuild need: the instance,
 // logical + physical device, and the transient command pool + queue used for the
 // one-shot snapshot layout transition.
@@ -1480,7 +1434,7 @@ impl TransparentResources {
             None
         };
 
-        let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
+        let snapshot = create_hdr_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
         let view_size = size_of::<TransparentView>() as u64;
@@ -1849,7 +1803,7 @@ impl TransparentResources {
         } = targets;
         let old = std::mem::replace(
             &mut self.snapshot,
-            create_snapshot(alloc, device, command_pool, queue, width, height)?,
+            create_hdr_snapshot(alloc, device, command_pool, queue, width, height)?,
         );
         drop(old);
 

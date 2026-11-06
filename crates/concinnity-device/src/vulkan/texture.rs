@@ -1544,3 +1544,53 @@ pub(super) fn create_sampler_cube_linear(device: &VkDevice) -> RenderResult<Owne
         .create_sampler(&info)
         .map_err(|e| map_vk_result(e, "cube sampler"))
 }
+
+// A snapshot of the HDR scene a later pass samples (SAMPLED | TRANSFER_DST,
+// GPU-local), rested in SHADER_READ_ONLY so the first frame's snapshot barrier
+// (SHADER_READ_ONLY -> TRANSFER_DST) matches.
+pub(super) fn create_hdr_snapshot(
+    alloc: &DeviceAllocator,
+    device: &VkDevice,
+    command_pool: vk::CommandPool,
+    queue: vk::Queue,
+    width: u32,
+    height: u32,
+) -> RenderResult<GpuImage> {
+    let pooled = create_image(
+        alloc,
+        &ImageSpec {
+            width: width.max(1),
+            height: height.max(1),
+            format: super::context::HDR_FORMAT,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+        },
+    )?;
+    let image = pooled.image();
+    one_shot_submit(device, command_pool, queue, |rec| {
+        transition_image_layout_range(
+            rec,
+            image,
+            LayoutTransition {
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                aspect: vk::ImageAspectFlags::COLOR,
+            },
+            SubresourceRange {
+                base_layer: 0,
+                layer_count: 1,
+                base_mip: 0,
+                mip_count: 1,
+            },
+        );
+    })?;
+    let view = create_image_view(
+        device,
+        image,
+        super::context::HDR_FORMAT,
+        vk::ImageAspectFlags::COLOR,
+    )?;
+    Ok(GpuImage::from_pooled(pooled, view))
+}

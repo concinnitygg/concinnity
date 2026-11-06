@@ -30,9 +30,9 @@ fn usage_reaches_a_field_through_its_owner_and_calls_a_helper() {
     );
 }
 
-#[test]
-fn every_signature_names_its_entry() {
-    for e in ENTRIES {
+// Every entry's signature names the entry it declares.
+pub(super) fn assert_signatures_name_their_entries(entries: &[Entry]) {
+    for e in entries {
         assert!(
             identifiers(e.signature).any(|x| x == e.name),
             "{}: {}",
@@ -40,6 +40,11 @@ fn every_signature_names_its_entry() {
             e.signature
         );
     }
+}
+
+#[test]
+fn every_signature_names_its_entry() {
+    assert_signatures_name_their_entries(ENTRIES);
 }
 
 // The template a world Shader compiles inside, as each backend assembles it.

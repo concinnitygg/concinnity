@@ -62,7 +62,9 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use super::error::allocation_failed;
 use concinnity_engine::render::buffers::block_pool::Placement;
-use concinnity_engine::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
+use concinnity_engine::render::buffers::block_pool::{
+    BlockGrowth, BlockPool, PoolStats, ReserveError,
+};
 
 const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 
@@ -135,18 +137,6 @@ impl Inner {
             pool.free(placement, size, retire);
         }
     }
-}
-
-// What the allocator is holding, for diagnostics and the memory ledger.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::metal) struct AllocatorStats {
-    // Bytes the device has committed across every heap.
-    pub(in crate::metal) reserved_bytes: u64,
-    // Bytes live resources occupy. The gap to `reserved_bytes` is alignment
-    // padding, fragmentation, and unfilled block tails.
-    pub(in crate::metal) in_use_bytes: u64,
-    // Live heaps, i.e. how many device allocations back the pooled set.
-    pub(in crate::metal) block_count: usize,
 }
 
 // A reserved range plus the heap to place into, handed from `reserve` to the
@@ -365,19 +355,8 @@ impl DeviceAllocator {
         }
     }
 
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each pool is visited on its own, so the order cannot show"
-    )]
-    pub(in crate::metal) fn stats(&self) -> AllocatorStats {
-        let inner = self.inner.borrow();
-        let mut stats = AllocatorStats::default();
-        for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.reserved_bytes();
-            stats.in_use_bytes += pool.in_use_bytes();
-            stats.block_count += pool.block_count();
-        }
-        stats
+    pub(in crate::metal) fn stats(&self) -> PoolStats {
+        PoolStats::of(self.inner.borrow().pools.values())
     }
 
     // Reserve `size` bytes at `align` in `key`'s pool, opening a heap when no

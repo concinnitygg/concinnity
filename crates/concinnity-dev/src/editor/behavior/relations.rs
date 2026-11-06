@@ -232,7 +232,7 @@ impl Build<'_> {
     fn behavior(&mut self, at: usize, name: &str, args: &Value) {
         let handle =
             declared(self.world, name, Some(RegisteredType::Behavior)).map(Declared::handle);
-        let mut card = card(name, scope_summary(args), CardKind::Behavior, handle);
+        let mut card = Card::world_thing(name, scope_summary(args), CardKind::Behavior, handle);
         card.behavior = Some(at);
         let card = self.push(card);
         self.behaviors.push(card);
@@ -327,7 +327,7 @@ impl Build<'_> {
         if let Some(at) = Self::find(&self.triggers, caption) {
             return at;
         }
-        let card = self.push(card(
+        let card = self.push(Card::world_thing(
             caption,
             "trigger".to_string(),
             CardKind::Trigger,
@@ -341,7 +341,12 @@ impl Build<'_> {
         if let Some(at) = Self::find(&self.variables, name) {
             return at;
         }
-        let card = self.push(card(name, "variable".to_string(), CardKind::Variable, None));
+        let card = self.push(Card::world_thing(
+            name,
+            "variable".to_string(),
+            CardKind::Variable,
+            None,
+        ));
         self.variables.push((name.to_string(), card));
         card
     }
@@ -354,13 +359,13 @@ impl Build<'_> {
         }
         let found = declared(self.world, name, want.asset_type());
         let card = self.push(match found {
-            Some(entry) => card(
+            Some(entry) => Card::world_thing(
                 name,
                 entry.asset_type.as_str().to_string(),
                 CardKind::Asset,
                 Some(entry.handle()),
             ),
-            None => card(
+            None => Card::world_thing(
                 name,
                 format!("missing {}", want.noun()),
                 CardKind::Missing,
@@ -386,13 +391,13 @@ impl Build<'_> {
             return at;
         }
         let card = self.push(match told {
-            Some(entry) => card(
+            Some(entry) => Card::world_thing(
                 name,
                 "story".to_string(),
                 CardKind::Asset,
                 Some(entry.handle()),
             ),
-            None => card(name, "missing story".to_string(), CardKind::Missing, None),
+            None => Card::world_thing(name, "missing story".to_string(), CardKind::Missing, None),
         });
         self.assets.push((name.to_string(), card));
         card
@@ -438,23 +443,6 @@ impl Build<'_> {
             columns,
             rows,
         }
-    }
-}
-
-// A card of the map: one of the world's own things, placed by `place` below.
-// `handle` is how the rest of the editor addresses what the card stands for,
-// which only the cards standing for a whole asset carry.
-fn card(title: &str, detail: String, kind: CardKind, handle: Option<AssetHandle>) -> Card {
-    Card {
-        column: 0,
-        row: 0,
-        title: title.to_string(),
-        detail,
-        kind,
-        path: Vec::new(),
-        settles: Vec::new(),
-        behavior: None,
-        handle,
     }
 }
 

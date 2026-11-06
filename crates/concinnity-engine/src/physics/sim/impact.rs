@@ -184,18 +184,6 @@ mod tests {
         half_extents: [0.5, 0.5, 0.5],
     };
 
-    fn params() -> DynamicParams {
-        DynamicParams {
-            mass: 1.0,
-            friction: 0.5,
-            restitution: 0.0,
-            gravity_scale: 1.0,
-            linear_damping: 0.0,
-            angular_damping: 0.0,
-            rolling_resistance: 0.0,
-        }
-    }
-
     /// A floor in slot 0 and a freely simulated cube in slot 1, which is the
     /// pair every test below reports about.
     fn floor_and_cube() -> Pool<Body> {
@@ -211,7 +199,7 @@ mod tests {
             CUBE,
             vec3(0.0, 0.5, 0.0),
             Quat::IDENTITY,
-            params(),
+            DynamicParams::default(),
             LayerMask::ALL,
         ));
         bodies
@@ -350,7 +338,7 @@ mod tests {
                 CUBE,
                 vec3(x, 0.5, 0.0),
                 Quat::IDENTITY,
-                params(),
+                DynamicParams::default(),
                 LayerMask::ALL,
             ));
         }
@@ -376,7 +364,7 @@ mod tests {
             CUBE,
             vec3(4.0, 0.5, 0.0),
             Quat::IDENTITY,
-            params(),
+            DynamicParams::default(),
             LayerMask::ALL,
         ));
         let mut impacts = Impacts::with_capacity(1);

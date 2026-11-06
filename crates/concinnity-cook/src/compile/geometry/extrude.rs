@@ -2,11 +2,9 @@
 // extruded along Y, authored by the macOS Mesh Editor); the geometry itself is
 // `concinnity_engine::geometry::build_extrude`.
 
+use super::GeomResult;
 use super::json_args::{f32_arg, u32_arg};
 use concinnity_core::math::narrow_f32;
-
-type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
-type GeomResult = Result<(Verts, Vec<u16>), String>;
 
 pub(super) fn build_extrude(args: &serde_json::Value) -> GeomResult {
     let profile_raw = args

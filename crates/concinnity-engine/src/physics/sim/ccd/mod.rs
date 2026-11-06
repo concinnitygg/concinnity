@@ -345,24 +345,12 @@ mod tests {
 
     const BULLET: ColliderShape = ColliderShape::Ball { radius: 0.1 };
 
-    fn params() -> DynamicParams {
-        DynamicParams {
-            mass: 1.0,
-            friction: 0.5,
-            restitution: 0.0,
-            gravity_scale: 1.0,
-            linear_damping: 0.0,
-            angular_damping: 0.0,
-            rolling_resistance: 0.0,
-        }
-    }
-
     fn dynamic_at(position: Vec3) -> Body {
         Body::dynamic(
             BULLET,
             position,
             super::super::math::Quat::IDENTITY,
-            params(),
+            DynamicParams::default(),
             LayerMask::ALL,
         )
     }

@@ -34,14 +34,7 @@ fn usage_writes_a_hook_whole_calls_a_helper_and_names_the_rest() {
 
 #[test]
 fn every_signature_names_its_entry() {
-    for e in ENTRIES {
-        assert!(
-            identifiers(e.signature).any(|x| x == e.name),
-            "{}: {}",
-            e.name,
-            e.signature
-        );
-    }
+    super::super::tests::assert_signatures_name_their_entries(ENTRIES);
 }
 
 // The template a field compiles inside, in every family on every host, with

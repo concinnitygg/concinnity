@@ -268,3 +268,27 @@ impl crate::ecs::PayloadStore for OneSection {
         false
     }
 }
+
+// A wide sea with one swell, large enough that its wind sea is simulated
+// rather than summed.
+pub(crate) fn open_sea(center: [f32; 3]) -> crate::components::WaterSurface {
+    crate::components::WaterSurface {
+        center,
+        extent: [4000.0, 3000.0],
+        fetch_meters: 1.0e5,
+        waves: alloc::vec![crate::components::WaterWave {
+            amplitude: 0.4,
+            wavelength: 80.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+// A steady 9 m/s wind.
+pub(crate) fn fresh_breeze() -> crate::wind::WindField {
+    crate::wind::WindField::new(Some(&crate::components::Wind {
+        strength: 9.0,
+        ..Default::default()
+    }))
+}

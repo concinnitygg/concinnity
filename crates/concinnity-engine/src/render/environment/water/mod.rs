@@ -79,31 +79,9 @@ impl WaterBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{WaterSurface, WaterWave, Wind};
+    use crate::components::WaterSurface;
+    use crate::test_support::{fresh_breeze, open_sea};
     use crate::water::ocean::OceanQuality;
-    use crate::wind::WindField;
-    use alloc::vec;
-
-    fn fresh_breeze() -> WindField {
-        WindField::new(Some(&Wind {
-            strength: 9.0,
-            ..Wind::default()
-        }))
-    }
-
-    fn open_sea(center: [f32; 3]) -> WaterSurface {
-        WaterSurface {
-            center,
-            extent: [4000.0, 3000.0],
-            fetch_meters: 1.0e5,
-            waves: vec![WaterWave {
-                amplitude: 0.4,
-                wavelength: 80.0,
-                ..WaterWave::default()
-            }],
-            ..Default::default()
-        }
-    }
 
     // A pond's mesh is its own tessellation; an ocean's is the
     // camera-centered grid.

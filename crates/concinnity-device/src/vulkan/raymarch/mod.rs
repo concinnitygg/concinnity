@@ -43,10 +43,7 @@ use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc, Raster};
 use super::render_pass::{create_main_render_pass_two_pass, main_framebuffer_dependency};
 use super::resources::{alloc_descriptor_sets, create_descriptor_set_layout};
 use super::set_writes::SetWrites;
-use super::texture::{
-    GpuImage, ImageSpec, LayoutTransition, SubresourceRange, create_image, create_image_view,
-    one_shot_submit, transition_image_layout_range,
-};
+use super::texture::{GpuImage, create_hdr_snapshot};
 use crate::shader::raymarch_source::{face_artifacts, family_artifacts};
 use crate::vulkan::owned::{
     OwnedDescriptorPool, OwnedPipeline, OwnedPipelineLayout, OwnedRenderPass, OwnedSetLayout,
@@ -742,51 +739,6 @@ fn create_prepass_pipeline(
     .build(device, "raymarch prepass")
 }
 
-// Create the pre-raymarch HDR scene snapshot (SAMPLED | TRANSFER_DST, GPU-local)
-// and rest it in SHADER_READ_ONLY so the first frame's snapshot barrier
-// (SHADER_READ_ONLY -> TRANSFER_DST) matches.
-fn create_snapshot(
-    alloc: &DeviceAllocator,
-    device: &VkDevice,
-    command_pool: vk::CommandPool,
-    queue: vk::Queue,
-    width: u32,
-    height: u32,
-) -> RenderResult<GpuImage> {
-    let pooled = create_image(
-        alloc,
-        &ImageSpec {
-            width: width.max(1),
-            height: height.max(1),
-            format: HDR_FORMAT,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-            mem_props: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            samples: vk::SampleCountFlags::TYPE_1,
-        },
-    )?;
-    let image = pooled.image();
-    one_shot_submit(device, command_pool, queue, |rec| {
-        transition_image_layout_range(
-            rec,
-            image,
-            LayoutTransition {
-                old_layout: vk::ImageLayout::UNDEFINED,
-                new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                aspect: vk::ImageAspectFlags::COLOR,
-            },
-            SubresourceRange {
-                base_layer: 0,
-                layer_count: 1,
-                base_mip: 0,
-                mip_count: 1,
-            },
-        );
-    })?;
-    let view = create_image_view(device, image, HDR_FORMAT, vk::ImageAspectFlags::COLOR)?;
-    Ok(GpuImage::from_pooled(pooled, view))
-}
-
 // What a volume's pipelines are built against: the pass's render passes and
 // layouts, and the target configuration the pass was built with.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1036,7 +988,7 @@ impl RaymarchResources {
 
         let (cube_vb, cube_ib) = build_cube_buffers(alloc)?;
 
-        let snapshot = create_snapshot(alloc, device, command_pool, queue, width, height)?;
+        let snapshot = create_hdr_snapshot(alloc, device, command_pool, queue, width, height)?;
 
         // Per-frame view UBO ring (HOST_VISIBLE | HOST_COHERENT, mapped).
         let view_size = size_of::<RaymarchView>() as u64;
@@ -1261,7 +1213,7 @@ impl RaymarchResources {
         } = ctx;
         let old = std::mem::replace(
             &mut self.snapshot,
-            create_snapshot(alloc, device, command_pool, queue, width, height)?,
+            create_hdr_snapshot(alloc, device, command_pool, queue, width, height)?,
         );
         drop(old);
         for &set in &self.view_sets {

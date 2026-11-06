@@ -27,6 +27,10 @@ use json_args::{f32_arg, u32_arg};
 // are derived).
 type RawVert = ([f32; 3], [f32; 3], [f32; 2]);
 
+// What the generators build: their vertices and indices.
+type Verts = Vec<Vert>;
+type GeomResult = Result<(Verts, Vec<u16>), String>;
+
 // Convert an args-form `SkeletonJoint` into the payload joint form.
 fn joint_def_to_payload(j: &SkeletonJoint) -> mesh_payload::PayloadJoint {
     mesh_payload::PayloadJoint {
@@ -493,6 +497,19 @@ mod tests {
     use concinnity_engine::gfx::mesh_payload::{
         Vertex, deserialize_skinned_with_lods, deserialize_with_lods,
     };
+
+    // The axis-aligned bounds of `verts`' positions.
+    pub(super) fn bounds(verts: &Verts) -> ([f32; 3], [f32; 3]) {
+        let mut mn = [f32::INFINITY; 3];
+        let mut mx = [f32::NEG_INFINITY; 3];
+        for (pos, ..) in verts {
+            for k in 0..3 {
+                mn[k] = mn[k].min(pos[k]);
+                mx[k] = mx[k].max(pos[k]);
+            }
+        }
+        (mn, mx)
+    }
 
     // The engine's plain `deserialize` is `#[cfg(test)]`-scoped to that crate, so it is
     // not linkable here; recover the (vertices, indices) pair from the public

@@ -6,9 +6,10 @@
 //! thread starts on the first queued operation and is joined on Drop after it
 //! drains the queue, so the last save is always flushed before shutdown.
 
+use crate::thread::pending::Pending;
 use crate::thread::{ThreadRole, set_current_thread_role};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 // One queued file operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,46 +27,6 @@ impl FileOp {
 }
 
 type Sink = Box<dyn FnMut(&FileOp) -> std::io::Result<()> + Send>;
-
-// Operations queued but not yet applied, so a reader can wait them out.
-#[derive(Default)]
-struct Pending {
-    count: Mutex<usize>,
-    drained: Condvar,
-}
-
-impl Pending {
-    fn add(&self) {
-        *self
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
-    }
-
-    fn done(&self) {
-        let mut count = self
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *count = count.saturating_sub(1);
-        if *count == 0 {
-            self.drained.notify_all();
-        }
-    }
-
-    fn wait(&self) {
-        let mut count = self
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *count > 0 {
-            count = self
-                .drained
-                .wait(count)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-    }
-}
 
 struct Running {
     tx: mpsc::Sender<FileOp>,

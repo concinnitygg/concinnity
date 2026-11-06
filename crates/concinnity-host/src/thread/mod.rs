@@ -2,7 +2,7 @@
 //! vocabulary and compute layer below them (`concinnity-engine`) so that layer
 //! needs no operating system.
 //!
-//! Four of them, sharing nothing but a need for real threads:
+//! Five of them, sharing nothing but a need for real threads:
 //!
 //!   - [`jobs`]: the process-wide worker pool a single system fans its own
 //!     data-parallel work across (pose sampling, particle update, the
@@ -13,6 +13,7 @@
 //!     frame thread (streaming loads, decodes, ground patches).
 //!   - [`asset_id`]: the build-time name -> dense id interner, whose table is
 //!     per-thread so two concurrent builds cannot see each other's ids.
+//!   - [`pending`]: a count of handed-off work a caller can wait to drain.
 //!
 //! It knows where nothing lives: it names no path and opens no file. The
 //! identity types the interner hands back are `concinnity-engine`'s, and the
@@ -21,6 +22,7 @@
 pub mod asset_id;
 pub mod jobs;
 mod name_interner;
+pub mod pending;
 pub mod role;
 pub mod worker;
 

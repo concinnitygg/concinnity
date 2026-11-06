@@ -1,61 +1,29 @@
 // The Background-role thread that turns read-back frames into PNG files, so
 // decoding, compressing and writing never run on the thread that presents.
 
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
 
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_host::thread::pending::Pending;
 use concinnity_host::thread::{ThreadRole, set_current_thread_role};
 
 use super::image::{CaptureImage, save_png};
 use super::readback::ReadbackLease;
 
-// Captures recorded but not yet written, so the end of a run can wait them out.
-#[derive(Default)]
-struct Outstanding {
-    count: Mutex<usize>,
-    drained: Condvar,
-}
-
-impl Outstanding {
-    fn wait(&self) {
-        let mut count = self
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *count > 0 {
-            count = self
-                .drained
-                .wait(count)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-    }
-}
-
 // One outstanding capture. Dropping it, written or abandoned, is what lets a
 // waiting flush go on.
-struct Ticket(Arc<Outstanding>);
+struct Ticket(Arc<Pending>);
 
 impl Ticket {
-    fn new(outstanding: &Arc<Outstanding>) -> Self {
-        *outstanding
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+    fn new(outstanding: &Arc<Pending>) -> Self {
+        outstanding.add();
         Self(Arc::clone(outstanding))
     }
 }
 
 impl Drop for Ticket {
     fn drop(&mut self) {
-        let mut count = self
-            .0
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *count = count.saturating_sub(1);
-        if *count == 0 {
-            self.0.drained.notify_all();
-        }
+        self.0.done();
     }
 }
 
@@ -113,7 +81,7 @@ struct Running {
 /// on the first capture, and on drop writes every capture already sent before it
 /// is joined.
 pub(crate) struct CaptureWriter {
-    outstanding: Arc<Outstanding>,
+    outstanding: Arc<Pending>,
     encode: Encode,
     running: Option<Running>,
 }

@@ -408,12 +408,7 @@ impl MtlContext {
         ctx.state.planner.shadow.cadence = shadows.cadence;
         ctx.refresh_gates(&graphics);
         let pooled = ctx.hw.allocator.stats();
-        tracing::info!(
-            "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
-            pooled.block_count,
-            pooled.reserved_bytes / 1024,
-            pooled.in_use_bytes / 1024,
-        );
+        tracing::info!("device allocator: {pooled}");
         // Tally the raymarch metallib cache (the only shader-cache client on
         // Metal; everything else precompiles at build time).
         crate::shader::cache::report_init();

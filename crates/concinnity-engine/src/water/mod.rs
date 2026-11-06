@@ -529,6 +529,7 @@ pub struct WaterSurface {
 mod tests {
     use super::*;
     use crate::components::{WaterWave, Wind};
+    use crate::test_support::{fresh_breeze, open_sea};
     use alloc::vec;
 
     fn breeze() -> WindField {
@@ -630,27 +631,6 @@ mod tests {
         let still = WaterBody::resolve(&surface, &WindField::STILL);
         assert_eq!(still.waves.len(), 1);
         assert!((total_pinch(&still) - MAX_TOTAL_PINCH).abs() < 1e-4);
-    }
-
-    fn open_sea(center: [f32; 3]) -> WaterSurface {
-        WaterSurface {
-            center,
-            extent: [4000.0, 3000.0],
-            fetch_meters: 1.0e5,
-            waves: vec![WaterWave {
-                amplitude: 0.4,
-                wavelength: 80.0,
-                ..WaterWave::default()
-            }],
-            ..Default::default()
-        }
-    }
-
-    fn fresh_breeze() -> WindField {
-        WindField::new(Some(&Wind {
-            strength: 9.0,
-            ..Wind::default()
-        }))
     }
 
     // A large sea takes its wind sea from a simulation and sums only its

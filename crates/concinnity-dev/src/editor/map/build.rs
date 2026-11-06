@@ -4,7 +4,6 @@
 use concinnity_cook::authoring::flow::{FlowEdge, FlowGraph, Move, Place, PlaceKind};
 
 use super::{Entries, contents};
-use crate::editor::asset_handle::AssetHandle;
 use crate::editor::behavior::chart::LABEL_CHARS;
 use crate::editor::behavior::graph::{Card, CardKind, Chart, Wire};
 
@@ -88,7 +87,10 @@ impl Build<'_> {
             format!("{kind}, {held}")
         };
         let handle = self.entries.handle(place);
-        let at = self.push(card(&place.id, detail, CardKind::Asset, handle), start);
+        let at = self.push(
+            Card::world_thing(&place.id, detail, CardKind::Asset, handle),
+            start,
+        );
         self.by_place.push((place.id.clone(), at));
         at
     }
@@ -139,7 +141,7 @@ impl Build<'_> {
             return at;
         }
         let at = self.push(
-            card(name, format!("missing {noun}"), CardKind::Missing, None),
+            Card::world_thing(name, format!("missing {noun}"), CardKind::Missing, None),
             false,
         );
         self.by_name.push((name.to_string(), at));
@@ -151,7 +153,7 @@ impl Build<'_> {
             return at;
         }
         let held = contents::unplaced(self.entries.assets(), &self.graph.places);
-        let at = self.push(card(WORLD, held, CardKind::Asset, None), false);
+        let at = self.push(Card::world_thing(WORLD, held, CardKind::Asset, None), false);
         self.world = Some(at);
         at
     }
@@ -191,20 +193,6 @@ impl Build<'_> {
             columns,
             rows,
         }
-    }
-}
-
-fn card(title: &str, detail: String, kind: CardKind, handle: Option<AssetHandle>) -> Card {
-    Card {
-        column: 0,
-        row: 0,
-        title: title.to_string(),
-        detail,
-        kind,
-        path: Vec::new(),
-        settles: Vec::new(),
-        behavior: None,
-        handle,
     }
 }
 

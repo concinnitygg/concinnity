@@ -61,7 +61,9 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use concinnity_engine::render::buffers::block_pool::Placement;
-use concinnity_engine::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
+use concinnity_engine::render::buffers::block_pool::{
+    BlockGrowth, BlockPool, PoolStats, ReserveError,
+};
 
 const GROWTH: BlockGrowth = BlockGrowth::STANDARD;
 
@@ -377,31 +379,6 @@ impl PooledImage {
     }
 }
 
-// What the allocator is holding, for the memory ledger and diagnostics.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct AllocatorStats {
-    // Bytes the device has committed across every block.
-    pub(super) reserved_bytes: u64,
-    // Bytes live resources occupy. The gap to `reserved_bytes` is alignment
-    // padding, fragmentation, and unfilled block tails.
-    pub(super) in_use_bytes: u64,
-    // Live `vkAllocateMemory` results, i.e. what counts against
-    // `maxMemoryAllocationCount`.
-    pub(super) block_count: usize,
-}
-
-impl std::fmt::Display for AllocatorStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} block(s), {} KiB reserved for {} KiB of resources",
-            self.block_count,
-            self.reserved_bytes / 1024,
-            self.in_use_bytes / 1024,
-        )
-    }
-}
-
 // A reserved range plus the block it lives in, handed from `reserve` to the
 // bind calls.
 struct Reservation {
@@ -631,19 +608,8 @@ impl DeviceAllocator {
         }
     }
 
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each pool is visited on its own, so the order cannot show"
-    )]
-    pub(super) fn stats(&self) -> AllocatorStats {
-        let inner = self.inner.borrow();
-        let mut stats = AllocatorStats::default();
-        for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.reserved_bytes();
-            stats.in_use_bytes += pool.in_use_bytes();
-            stats.block_count += pool.block_count();
-        }
-        stats
+    pub(super) fn stats(&self) -> PoolStats {
+        PoolStats::of(self.inner.borrow().pools.values())
     }
 
     // The device's hard ceiling on live allocations, for readouts that want to

@@ -54,6 +54,42 @@ impl BlockGrowth {
     }
 }
 
+/// What a backend allocator's pools hold, for diagnostics and the memory
+/// ledger.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoolStats {
+    /// Bytes the device has committed across every block.
+    pub reserved_bytes: u64,
+    /// Bytes live resources occupy. The gap to `reserved_bytes` is alignment
+    /// padding, fragmentation, and unfilled block tails.
+    pub in_use_bytes: u64,
+    /// Live blocks: how many device allocations back the pooled set.
+    pub block_count: usize,
+}
+
+impl PoolStats {
+    /// The stats of every pool in `pools`, summed.
+    pub fn of<'a, B: 'a>(pools: impl IntoIterator<Item = &'a BlockPool<B>>) -> Self {
+        pools.into_iter().fold(Self::default(), |sum, pool| Self {
+            reserved_bytes: sum.reserved_bytes + pool.reserved_bytes(),
+            in_use_bytes: sum.in_use_bytes + pool.in_use_bytes(),
+            block_count: sum.block_count + pool.block_count(),
+        })
+    }
+}
+
+impl core::fmt::Display for PoolStats {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{} block(s), {} KiB reserved for {} KiB of resources",
+            self.block_count,
+            self.reserved_bytes / 1024,
+            self.in_use_bytes / 1024,
+        )
+    }
+}
+
 /// A reservation [`BlockPool::reserve`] made.
 #[derive(Debug)]
 pub struct Reserved<'a, B> {
@@ -316,5 +352,22 @@ mod tests {
         pool.add_block(MIB, 2);
         assert_eq!(pool.drain().collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(pool.block(0), None);
+    }
+
+    #[test]
+    fn stats_sum_every_pool() {
+        let mut one = BlockPool::new(growth(MIB, 4, 1));
+        one.reserve(1024, 16, |_| Ok::<_, ()>('a')).unwrap();
+        let mut two = BlockPool::new(growth(MIB, 4, 1));
+        two.reserve(512, 16, |_| Ok::<_, ()>('b')).unwrap();
+        two.reserve(2 * MIB, 16, |_| Ok::<_, ()>('c')).unwrap();
+        let stats = PoolStats::of([&one, &two]);
+        assert_eq!(stats.block_count, 3);
+        assert_eq!(stats.in_use_bytes, 1024 + 512 + 2 * MIB);
+        assert_eq!(
+            stats.reserved_bytes,
+            one.reserved_bytes() + two.reserved_bytes()
+        );
+        assert_eq!(PoolStats::of::<char>([]), PoolStats::default());
     }
 }

@@ -240,7 +240,7 @@ mod tests {
         assert!(cube_mip_byte_len(4, 40).is_err());
     }
 
-    fn solid_cube(face_size: u32, color: [f32; 3]) -> [Vec<f32>; 6] {
+    pub(super) fn solid_cube(face_size: u32, color: [f32; 3]) -> [Vec<f32>; 6] {
         let f = face_size as usize;
         core::array::from_fn(|_| {
             let mut face = Vec::with_capacity(f * f * 4);

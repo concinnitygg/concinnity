@@ -506,6 +506,7 @@ pub fn compute_prefilter(
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::solid_cube;
     use super::*;
     use concinnity_core::fanout::Inline;
     use concinnity_core::fanout::test_pools::Reversed;
@@ -528,17 +529,6 @@ mod tests {
             assert_eq!(face.len(), 4 * 4 * 4);
             assert!(face.chunks_exact(4).all(|px| px[0] > 0.0));
         }
-    }
-
-    fn solid_cube(face_size: u32, color: [f32; 3]) -> [Vec<f32>; 6] {
-        let f = face_size as usize;
-        core::array::from_fn(|_| {
-            let mut face = Vec::with_capacity(f * f * 4);
-            for _ in 0..f * f {
-                face.extend_from_slice(&[color[0], color[1], color[2], 1.0]);
-            }
-            face
-        })
     }
 
     fn face_mean(face: &[f32]) -> [f32; 3] {

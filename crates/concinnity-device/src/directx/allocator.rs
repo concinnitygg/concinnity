@@ -61,7 +61,9 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::core::IUnknown;
 
 use concinnity_engine::render::buffers::block_pool::Placement;
-use concinnity_engine::render::buffers::block_pool::{BlockGrowth, BlockPool, ReserveError};
+use concinnity_engine::render::buffers::block_pool::{
+    BlockGrowth, BlockPool, PoolStats, ReserveError,
+};
 
 // Placement granularity every heap size is rounded to. D3D12 places resources
 // at 64 KiB by default, so a block that is not a multiple of it ends in bytes
@@ -177,30 +179,6 @@ impl Inner {
         if let Some(pool) = self.pools.get_mut(&key) {
             pool.free(placement, size, retire);
         }
-    }
-}
-
-// What the allocator is holding, for diagnostics and the memory ledger.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct AllocatorStats {
-    // Bytes the device has committed across every heap.
-    pub reserved_bytes: u64,
-    // Bytes live resources occupy. The gap to `reserved_bytes` is alignment
-    // padding, fragmentation, and unfilled block tails.
-    pub in_use_bytes: u64,
-    // Live heaps, i.e. how many device allocations back the pooled set.
-    pub block_count: usize,
-}
-
-impl std::fmt::Display for AllocatorStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} heap(s), {} KiB reserved for {} KiB of resources",
-            self.block_count,
-            self.reserved_bytes / 1024,
-            self.in_use_bytes / 1024,
-        )
     }
 }
 
@@ -405,19 +383,8 @@ impl DeviceAllocator {
         inner.parked.collect(frame, depth);
     }
 
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "each pool is visited on its own, so the order cannot show"
-    )]
-    pub(super) fn stats(&self) -> AllocatorStats {
-        let inner = self.inner.borrow();
-        let mut stats = AllocatorStats::default();
-        for pool in inner.pools.values() {
-            stats.reserved_bytes += pool.reserved_bytes();
-            stats.in_use_bytes += pool.in_use_bytes();
-            stats.block_count += pool.block_count();
-        }
-        stats
+    pub(super) fn stats(&self) -> PoolStats {
+        PoolStats::of(self.inner.borrow().pools.values())
     }
 
     // Reserve a range for `desc`, place the resource in it, and activate the

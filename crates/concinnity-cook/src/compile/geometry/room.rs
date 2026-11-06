@@ -1,9 +1,8 @@
 // JSON arg parsing for the room generator; the geometry itself is
 // `concinnity_engine::geometry::build_room_geometry`.
 
+use super::Verts;
 use super::json_args::f32_arg;
-
-type Verts = Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 2])>;
 
 pub(super) fn build_room(args: &serde_json::Value) -> (Verts, Vec<u16>) {
     let half_width = f32_arg(args, "half_width", 8.0);
@@ -14,19 +13,8 @@ pub(super) fn build_room(args: &serde_json::Value) -> (Verts, Vec<u16>) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tests::bounds;
     use super::*;
-
-    fn bounds(verts: &Verts) -> ([f32; 3], [f32; 3]) {
-        let mut mn = [f32::INFINITY; 3];
-        let mut mx = [f32::NEG_INFINITY; 3];
-        for (pos, ..) in verts {
-            for k in 0..3 {
-                mn[k] = mn[k].min(pos[k]);
-                mx[k] = mx[k].max(pos[k]);
-            }
-        }
-        (mn, mx)
-    }
 
     #[test]
     fn room_args_override_the_default_extents() {

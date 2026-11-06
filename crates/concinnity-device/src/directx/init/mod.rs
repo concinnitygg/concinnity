@@ -523,12 +523,7 @@ fn report_init(hw: &DxHardware) {
     crate::shader::runtime_cache::checkpoint();
 
     let pooled = hw.alloc.stats();
-    tracing::info!(
-        "device allocator: {} heap(s), {} KiB reserved for {} KiB of resources",
-        pooled.block_count,
-        pooled.reserved_bytes / 1024,
-        pooled.in_use_bytes / 1024,
-    );
+    tracing::info!("device allocator: {pooled}");
 }
 
 impl DxContext {
