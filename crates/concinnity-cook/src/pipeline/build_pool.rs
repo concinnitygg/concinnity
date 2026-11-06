@@ -1,22 +1,24 @@
 //! A worker pool for the compile pass whose threads share the calling thread's
 //! build tables.
 //!
-//! The name interner and the resource-handle map are per-thread, so concurrent
-//! builds cannot see each other's ids. A compile that resolves a reference (a
-//! Material's texture, a `SkinnedMesh`'s own name) on a shared pool worker would
-//! read that worker's stale or empty tables instead of this build's. Every
-//! thread of this pool starts with a copy of the caller's.
+//! Each thread resolves names and resource handles through the tables it was
+//! given, so concurrent builds cannot see each other's ids. A compile that
+//! resolves a reference (a Material's texture, a `SkinnedMesh`'s own name) on
+//! a pool worker reads the caller's own tables, and a name it interns there is
+//! the caller's too.
+
+use std::sync::Arc;
 
 use concinnity_host::thread::asset_id;
 
 pub(in crate::pipeline) fn build_pool() -> std::io::Result<rayon::ThreadPool> {
-    let interner = asset_id::snapshot();
+    let interner = asset_id::shared_interner();
     let handles = crate::resource_handles::current_resource_handles();
     rayon::ThreadPoolBuilder::new()
         .thread_name(|i| format!("cook-compile-{i}"))
         .start_handler(move |_| {
-            asset_id::install_snapshot(&interner);
-            crate::resource_handles::install_resource_handles(handles.clone());
+            asset_id::adopt_interner(&interner);
+            crate::resource_handles::adopt_resource_handles(Arc::clone(&handles));
         })
         .build()
         .map_err(std::io::Error::other)
@@ -61,5 +63,16 @@ mod tests {
             (0..64).into_par_iter().map(|_| resolve()).collect()
         });
         assert!(seen.iter().all(|r| *r == expected), "{seen:?}");
+    }
+
+    // A name a pool thread interns joins the build's own table, so the
+    // caller sees the same id the worker assigned.
+    #[test]
+    fn a_name_a_pool_thread_interns_is_the_callers() {
+        asset_id::reset_interner();
+        asset_id::intern_all(&["floor"]);
+        let pool = build_pool().expect("pool");
+        let assigned = pool.install(|| asset_id::intern("lantern"));
+        assert_eq!(asset_id::lookup("lantern"), Some(assigned));
     }
 }

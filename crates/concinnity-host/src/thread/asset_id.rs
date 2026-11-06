@@ -6,26 +6,65 @@
 //! seam (`concinnity_engine::ecs::install_name_resolver`) so a name-string
 //! reference deserializes to a dense id during a build. At runtime references
 //! are already integers, so the seam is never consulted.
+//!
+//! Each thread resolves through one table, which a build starts fresh and the
+//! threads it hands work to share, so every thread of a build agrees on every
+//! id and concurrent builds stay apart. A reference resolved through the seams
+//! ([`resolve_reference`]) on a thread no build gave a table is reported, since
+//! its ids belong to no build.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use concinnity_engine::ecs::NameResolver;
 use concinnity_engine::ecs::asset_id::AssetId;
 
 use super::name_interner::NameInterner;
 
+/// A build's interner, shared by every thread the build hands work to.
+#[derive(Clone, Default)]
+pub struct SharedInterner(Arc<Mutex<NameInterner>>);
+
 thread_local! {
-    static INTERNER: RefCell<NameInterner> = RefCell::new(NameInterner::default());
+    static INTERNER: RefCell<SharedInterner> = RefCell::new(SharedInterner::default());
+    // Whether this thread was given a table to resolve through.
+    static ASSIGNED: Cell<bool> = const { Cell::new(false) };
 }
 
-// The seam's view of the calling thread's interner, so per-thread interner
-// state stays isolated.
+// Run `f` on the calling thread's table.
+fn with_table<R>(f: impl FnOnce(&mut NameInterner) -> R) -> R {
+    INTERNER.with(|t| {
+        let table = t.borrow();
+        let mut guard = table.0.lock().unwrap_or_else(PoisonError::into_inner);
+        f(&mut guard)
+    })
+}
+
+// Resolve through this thread's table from now on.
+fn assign(table: SharedInterner) {
+    INTERNER.with(|t| *t.borrow_mut() = table);
+    ASSIGNED.with(|a| a.set(true));
+}
+
+// The seam's view of the calling thread's interner.
 struct ThreadInterner;
 
 impl NameResolver for ThreadInterner {
     fn resolve(&self, name: &str) -> u32 {
-        INTERNER.with(|i| i.borrow_mut().intern(name))
+        resolve_reference(name).0
     }
+}
+
+/// Intern a name a deserialized reference names, as the resolver seams do,
+/// warning once on a thread no build gave a table.
+pub fn resolve_reference(name: &str) -> AssetId {
+    if !ASSIGNED.with(|a| a.replace(true)) {
+        tracing::warn!(
+            "asset name '{name}' resolved on a thread no build gave its tables; \
+             its ids match no build"
+        );
+    }
+    intern(name)
 }
 
 /// Install the resolver seam so a name-string reference deserializes through
@@ -35,27 +74,28 @@ pub fn ensure_name_resolver() {
     concinnity_engine::ecs::install_name_resolver(&RESOLVER);
 }
 
-/// Intern a name into the current thread's interner, returning its id. If the
+/// Intern a name into the current thread's table, returning its id. If the
 /// name was already interned the existing id is returned (idempotent).
 pub fn intern(name: &str) -> AssetId {
     ensure_name_resolver();
-    AssetId(INTERNER.with(|i| i.borrow_mut().intern(name)))
+    AssetId(with_table(|i| i.intern(name)))
 }
 
-/// Clear the thread-local interner. Call once at the start of a build so ids
-/// are dense and declaration-ordered for that build.
+/// Start the calling thread on a fresh, empty table. Call once at the start of
+/// a build so ids are dense and declaration-ordered for that build. A table
+/// other threads share is left as it is.
 pub fn reset_interner() {
     ensure_name_resolver();
-    INTERNER.with(|i| *i.borrow_mut() = NameInterner::default());
+    assign(SharedInterner::default());
 }
 
 /// Resolve an already-interned name to its id without inserting: `None` for a
-/// name this thread's interner has never seen, so per-frame lookups of unknown
+/// name this thread's table has never seen, so per-frame lookups of unknown
 /// names never grow the table. O(1) and allocation-free, unlike snapshotting
 /// `name_table`.
 pub fn lookup(name: &str) -> Option<AssetId> {
     ensure_name_resolver();
-    INTERNER.with(|i| i.borrow().lookup(name).map(AssetId))
+    with_table(|i| i.lookup(name).map(AssetId))
 }
 
 /// The name `id` was interned under, or `None` when none was recorded for it --
@@ -64,7 +104,7 @@ pub fn lookup(name: &str) -> Option<AssetId> {
 /// table.
 pub fn name_of(id: AssetId) -> Option<String> {
     ensure_name_resolver();
-    INTERNER.with(|i| match i.borrow().name(id.0) {
+    with_table(|i| match i.name(id.0) {
         "" => None,
         name => Some(name.to_string()),
     })
@@ -75,7 +115,7 @@ pub fn name_of(id: AssetId) -> Option<String> {
 /// the declared name for that id. Used by the editor's debug module to remap
 /// runtime `AssetId`s back to their declared names.
 pub fn name_table() -> Vec<String> {
-    INTERNER.with(|i| i.borrow().names().map(str::to_string).collect())
+    with_table(|i| i.names().map(str::to_string).collect())
 }
 
 /// Install a recorded (id, name) table into an EMPTY interner, so a process
@@ -86,31 +126,30 @@ pub fn name_table() -> Vec<String> {
 /// cook has primed it authoritatively.
 pub fn prime_name_table(pairs: &[(u32, String)]) -> bool {
     ensure_name_resolver();
-    INTERNER.with(|i| i.borrow_mut().prime(pairs))
+    ASSIGNED.with(|a| a.set(true));
+    with_table(|i| i.prime(pairs))
 }
 
-/// A copy of one thread's interner, for giving another thread the same ids.
-#[derive(Clone)]
-pub struct InternerSnapshot(NameInterner);
-
-/// Copy the current thread's interner.
-pub fn snapshot() -> InternerSnapshot {
-    InternerSnapshot(INTERNER.with(|i| i.borrow().clone()))
+/// The calling thread's table, for handing to the threads a build gives work.
+pub fn shared_interner() -> SharedInterner {
+    INTERNER.with(|t| t.borrow().clone())
 }
 
-/// Replace the current thread's interner with a copy of `snapshot`, so names
-/// resolve here to the ids they had on the thread it was taken from.
-pub fn install_snapshot(snapshot: &InternerSnapshot) {
+/// Resolve through `table` on the calling thread, so it agrees on every id
+/// with the thread `table` came from, and a name it interns is that thread's
+/// too. Names past the ones a build declares land in arrival order; the
+/// declared ones are interned by position first, so their ids are fixed.
+pub fn adopt_interner(table: &SharedInterner) {
     ensure_name_resolver();
-    INTERNER.with(|i| *i.borrow_mut() = snapshot.0.clone());
+    assign(table.clone());
 }
 
 /// Pre-intern a batch of names in order so identity ids are dense and follow
 /// world.jsonl declaration order.
 pub fn intern_all(names: &[&str]) {
     ensure_name_resolver();
-    INTERNER.with(|i| {
-        let mut interner = i.borrow_mut();
+    ASSIGNED.with(|a| a.set(true));
+    with_table(|interner| {
         for n in names {
             interner.intern(n);
         }
@@ -231,17 +270,17 @@ mod tests {
         assert_eq!(intern("floor"), AssetId(0));
     }
 
-    // A snapshot carries this thread's ids, sparse slots included, to a thread
-    // whose own interner has never seen them.
+    // An adopted table resolves names to the source thread's ids, sparse slots
+    // included, and a name the adopting thread interns is the source's too.
     #[test]
-    fn an_installed_snapshot_resolves_names_to_the_source_threads_ids() {
+    fn an_adopted_table_is_the_source_threads_own() {
         reset_interner();
         prime_name_table(&[(0, "floor".to_string()), (3, "lamp".to_string())]);
         intern("wall");
-        let snap = snapshot();
+        let table = shared_interner();
 
         let resolved = std::thread::spawn(move || {
-            install_snapshot(&snap);
+            adopt_interner(&table);
             (
                 lookup("floor"),
                 lookup("lamp"),
@@ -263,7 +302,26 @@ mod tests {
                 AssetId(5)
             )
         );
-        assert_eq!(lookup("chair"), None, "the source thread is untouched");
+        assert_eq!(lookup("chair"), Some(AssetId(5)), "the source sees it");
+    }
+
+    // A new build on one thread starts its own table and leaves the one it was
+    // sharing with another thread as it was.
+    #[test]
+    fn a_reset_leaves_a_shared_table_alone() {
+        reset_interner();
+        intern_all(&["floor", "wall"]);
+        let table = shared_interner();
+        reset_interner();
+        assert_eq!(lookup("floor"), None, "this thread starts fresh");
+
+        let kept = std::thread::spawn(move || {
+            adopt_interner(&table);
+            lookup("wall")
+        })
+        .join()
+        .unwrap();
+        assert_eq!(kept, Some(AssetId(1)));
     }
 
     // Integration: a name string deserializes to a dense id through the resolver

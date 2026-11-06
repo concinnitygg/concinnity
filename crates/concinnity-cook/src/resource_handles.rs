@@ -16,6 +16,7 @@ use concinnity_host::thread::asset_id;
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::authoring::registry::RegisteredType;
 
@@ -280,11 +281,11 @@ pub(crate) fn assign_mesh_source_handles(
 }
 
 // The current build's handle map, consulted by the resource-handle resolver.
-// One map holds every space's handles. Thread-local so parallel builds (and the
-// interner they share) stay isolated, exactly like
-// `concinnity_host::thread::asset_id`'s interner.
+// One map holds every space's handles. Each thread resolves through the map it
+// was given, which the threads of one build share, so parallel builds stay
+// isolated, as `concinnity_host::thread::asset_id`'s interner does.
 thread_local! {
-    static RESOURCE_HANDLES: RefCell<ResourceHandles> = RefCell::new(ResourceHandles::default());
+    static RESOURCE_HANDLES: RefCell<Arc<ResourceHandles>> = RefCell::default();
 }
 
 // The seam's view of the calling thread's handle map: a name resolves to its
@@ -295,7 +296,7 @@ struct ThreadHandles;
 
 impl HandleResolver for ThreadHandles {
     fn resolve(&self, kind: HandleKind, name: &str) -> Option<u32> {
-        let id = asset_id::intern(name);
+        let id = asset_id::resolve_reference(name);
         RESOURCE_HANDLES.with(|h| h.borrow().handle(kind, id))
     }
 }
@@ -311,20 +312,24 @@ pub(crate) fn ensure_resource_handle_resolvers() {
 // during the component reserialize pass. Call after `from_assets` over the
 // expanded + injected world, before reserializing any component.
 pub(crate) fn install_resource_handles(handles: ResourceHandles) {
+    adopt_resource_handles(Arc::new(handles));
+}
+
+// This thread's handle map, for handing to the threads a build gives work.
+pub(crate) fn current_resource_handles() -> Arc<ResourceHandles> {
+    RESOURCE_HANDLES.with(|h| Arc::clone(&h.borrow()))
+}
+
+// Resolve through `handles` on the calling thread.
+pub(crate) fn adopt_resource_handles(handles: Arc<ResourceHandles>) {
     ensure_resource_handle_resolvers();
     RESOURCE_HANDLES.with(|h| *h.borrow_mut() = handles);
 }
 
-// A copy of this thread's installed handle map, for installing on another thread.
-pub(crate) fn current_resource_handles() -> ResourceHandles {
-    RESOURCE_HANDLES.with(|h| h.borrow().clone())
-}
-
-// Clear the thread-local handle map. Call at the start of a build so a prior
-// build's map cannot leak into this one (mirrors `reset_interner`).
+// Start this thread on an empty handle map. Call at the start of a build so a
+// prior build's map cannot leak into this one (mirrors `reset_interner`).
 pub(crate) fn reset_resource_handles() {
-    ensure_resource_handle_resolvers();
-    RESOURCE_HANDLES.with(|h| *h.borrow_mut() = ResourceHandles::default());
+    adopt_resource_handles(Arc::default());
 }
 
 #[cfg(test)]
