@@ -2,6 +2,7 @@
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::world_builder::Diagnostic;
 use concinnity_engine::components::Cloud;
 
 // The most layers one atmosphere draws; `MAX_CLOUD_LAYERS` in the engine.
@@ -10,14 +11,14 @@ const MAX_LAYERS: usize = concinnity_engine::render::environment::clouds::MAX_CL
 /// Refuse an `Atmosphere` naming more cloud layers than it draws or layers whose
 /// heights overlap, and warn of a `Cloud` no atmosphere names, which is never
 /// drawn.
-pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     for warning in warnings(assets, errors) {
         tracing::warn!("{warning}");
     }
 }
 
 // The problems `check_layers` reports: errors pushed, warnings returned.
-fn warnings(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) -> Vec<String> {
+fn warnings(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) -> Vec<String> {
     let mut named = Vec::new();
     for a in assets
         .iter()
@@ -32,11 +33,14 @@ fn warnings(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) -> Vec<String>
             .filter_map(|v| v.as_str())
             .collect();
         if layers.len() > MAX_LAYERS {
-            errors.push(format!(
-                "Asset '{}': an Atmosphere draws at most {MAX_LAYERS} cloud layers, but its \
+            errors.push(Diagnostic::asset(
+                a.asset_type.as_str(),
+                &a.id,
+                format!(
+                    "an Atmosphere draws at most {MAX_LAYERS} cloud layers, but its \
                  `clouds` names {}",
-                a.id,
-                layers.len()
+                    layers.len()
+                ),
             ));
         }
         overlaps(a, &layers, assets, errors);
@@ -76,7 +80,7 @@ fn overlaps(
     atmosphere: &WorldJsonlAsset,
     layers: &[&str],
     assets: &[WorldJsonlAsset],
-    errors: &mut Vec<String>,
+    errors: &mut Vec<Diagnostic>,
 ) {
     let spans: Vec<(&str, [f64; 2])> = layers
         .iter()
@@ -90,10 +94,13 @@ fn overlaps(
     for (i, (a, [a_lo, a_hi])) in spans.iter().enumerate() {
         for (b, [b_lo, b_hi]) in &spans[i + 1..] {
             if a_lo < b_hi && b_lo < a_hi {
-                errors.push(format!(
-                    "Asset '{}': cloud layers '{a}' and '{b}' overlap in height; each layer \
-                     must lie wholly above or below the others",
-                    atmosphere.id
+                errors.push(Diagnostic::asset(
+                    atmosphere.asset_type.as_str(),
+                    &atmosphere.id,
+                    format!(
+                        "cloud layers '{a}' and '{b}' overlap in height; each layer \
+                     must lie wholly above or below the others"
+                    ),
                 ));
             }
         }
@@ -137,7 +144,7 @@ mod tests {
         let mut errors = Vec::new();
         warnings(&[atmosphere(&["a", "b", "c"])], &mut errors);
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("at most 2"), "{errors:?}");
+        assert!(errors[0].to_string().contains("at most 2"), "{errors:?}");
     }
 
     fn layer(id: &str, base: f32, thickness: f32) -> WorldJsonlAsset {
@@ -160,7 +167,10 @@ mod tests {
             &mut errors,
         );
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("'low' and 'mid'"), "{errors:?}");
+        assert!(
+            errors[0].to_string().contains("'low' and 'mid'"),
+            "{errors:?}"
+        );
     }
 
     // Layers that only touch, and a default layer under an authored one, pass.

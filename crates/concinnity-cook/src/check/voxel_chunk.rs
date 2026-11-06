@@ -2,30 +2,30 @@
 //! handled by `crate::check::cross_reference::validate_cross_references`; this check
 //! only catches problems we can see from the chunk's own args alone.
 
+use crate::world_builder::Diagnostic;
 use concinnity_core::math::SaturatingFrom;
 
 /// Check a `VoxelChunk`'s authored args.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    let dim = args
-        .get("dim")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| format!("Asset '{name}': VoxelChunk `dim` must be a [dx, dy, dz] array"))?;
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
+    let dim = args.get("dim").and_then(|v| v.as_array()).ok_or_else(|| {
+        Diagnostic::asset("VoxelChunk", name, "`dim` must be a [dx, dy, dz] array")
+    })?;
     if dim.len() < 3 {
-        return Err(format!(
-            "Asset '{}': VoxelChunk `dim` must have 3 elements, got {}",
+        return Err(Diagnostic::asset(
+            "VoxelChunk",
             name,
-            dim.len()
+            format!("`dim` must have 3 elements, got {}", dim.len()),
         ));
     }
     let dims: [u64; 3] = [
         dim[0].as_u64().ok_or_else(|| {
-            format!("Asset '{name}': VoxelChunk dim[0] must be a non-negative integer")
+            Diagnostic::asset("VoxelChunk", name, "dim[0] must be a non-negative integer")
         })?,
         dim[1].as_u64().ok_or_else(|| {
-            format!("Asset '{name}': VoxelChunk dim[1] must be a non-negative integer")
+            Diagnostic::asset("VoxelChunk", name, "dim[1] must be a non-negative integer")
         })?,
         dim[2].as_u64().ok_or_else(|| {
-            format!("Asset '{name}': VoxelChunk dim[2] must be a non-negative integer")
+            Diagnostic::asset("VoxelChunk", name, "dim[2] must be a non-negative integer")
         })?,
     ];
     let expected = dims[0].saturating_mul(dims[1]).saturating_mul(dims[2]);
@@ -34,17 +34,24 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
         .get("blocks")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            format!("Asset '{name}': VoxelChunk `blocks` must be an array of palette indices")
+            Diagnostic::asset(
+                "VoxelChunk",
+                name,
+                "`blocks` must be an array of palette indices",
+            )
         })?;
     if (blocks.len() as u64) != expected {
-        return Err(format!(
-            "Asset '{}': VoxelChunk blocks length {} does not match dim {}x{}x{} ({} expected)",
+        return Err(Diagnostic::asset(
+            "VoxelChunk",
             name,
-            blocks.len(),
-            dims[0],
-            dims[1],
-            dims[2],
-            expected
+            format!(
+                "blocks length {} does not match dim {}x{}x{} ({} expected)",
+                blocks.len(),
+                dims[0],
+                dims[1],
+                dims[2],
+                expected
+            ),
         ));
     }
 
@@ -54,11 +61,17 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> 
         .map_or(0, Vec::len);
     for (i, entry) in blocks.iter().enumerate() {
         let idx = entry.as_u64().ok_or_else(|| {
-            format!("Asset '{name}': VoxelChunk blocks[{i}] must be a non-negative integer")
+            Diagnostic::asset(
+                "VoxelChunk",
+                name,
+                format!("blocks[{i}] must be a non-negative integer"),
+            )
         })?;
         if palette_len == 0 || usize::saturating_from(idx) >= palette_len {
-            return Err(format!(
-                "Asset '{name}': VoxelChunk blocks[{i}] = {idx} out of palette range (len {palette_len})"
+            return Err(Diagnostic::asset(
+                "VoxelChunk",
+                name,
+                format!("blocks[{i}] = {idx} out of palette range (len {palette_len})"),
             ));
         }
     }
@@ -92,7 +105,7 @@ mod tests {
 
     #[test]
     fn missing_dim_errors() {
-        let err = check("c", &json!({"blocks": []})).unwrap_err();
+        let err = check("c", &json!({"blocks": []})).unwrap_err().to_string();
         assert!(
             err.contains("`dim` must be a [dx, dy, dz] array"),
             "got: {err}"
@@ -103,7 +116,7 @@ mod tests {
     fn short_dim_errors() {
         let mut args = ok_args();
         args["dim"] = json!([2, 2]);
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(err.contains("must have 3 elements, got 2"), "got: {err}");
     }
 
@@ -111,7 +124,7 @@ mod tests {
     fn non_integer_dim_element_errors() {
         let mut args = ok_args();
         args["dim"] = json!([2, "one", 2]);
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(
             err.contains("dim[1] must be a non-negative integer"),
             "got: {err}"
@@ -122,7 +135,7 @@ mod tests {
     fn negative_dim_element_errors() {
         let mut args = ok_args();
         args["dim"] = json!([2, 1, -2]);
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(
             err.contains("dim[2] must be a non-negative integer"),
             "got: {err}"
@@ -132,7 +145,7 @@ mod tests {
     #[test]
     fn missing_blocks_errors() {
         let args = json!({"dim": [1, 1, 1], "palette": ["air"]});
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(err.contains("`blocks` must be an array"), "got: {err}");
     }
 
@@ -140,7 +153,7 @@ mod tests {
     fn blocks_length_mismatch_errors() {
         let mut args = ok_args();
         args["blocks"] = json!([0, 1, 0]);
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(
             err.contains("blocks length 3 does not match dim 2x1x2 (4 expected)"),
             "got: {err}"
@@ -151,7 +164,7 @@ mod tests {
     fn non_integer_block_errors() {
         let mut args = ok_args();
         args["blocks"] = json!([0, 1, "x", 1]);
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(
             err.contains("blocks[2] must be a non-negative integer"),
             "got: {err}"
@@ -162,7 +175,7 @@ mod tests {
     fn block_index_past_the_palette_errors() {
         let mut args = ok_args();
         args["blocks"] = json!([0, 1, 2, 1]);
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(
             err.contains("blocks[2] = 2 out of palette range (len 2)"),
             "got: {err}"
@@ -172,13 +185,13 @@ mod tests {
     #[test]
     fn any_block_with_an_empty_palette_errors() {
         let args = json!({"dim": [1, 1, 1], "blocks": [0]});
-        let err = check("c", &args).unwrap_err();
+        let err = check("c", &args).unwrap_err().to_string();
         assert!(err.contains("out of palette range (len 0)"), "got: {err}");
     }
 
     #[test]
     fn error_messages_carry_the_asset_name() {
-        let err = check("cave_chunk", &json!({})).unwrap_err();
-        assert!(err.contains("Asset 'cave_chunk'"), "got: {err}");
+        let err = check("cave_chunk", &json!({})).unwrap_err().to_string();
+        assert!(err.contains("VoxelChunk 'cave_chunk'"), "got: {err}");
     }
 }

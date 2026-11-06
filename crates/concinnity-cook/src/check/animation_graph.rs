@@ -4,11 +4,12 @@
 // graph-ownership rules (one graph per mesh, no unreferenced clips) are
 // world-global passes in crate::check::cross_reference.
 
+use crate::world_builder::Diagnostic;
 use concinnity_engine::animation::anim_graph::CmpOp;
 use serde_json::Value;
 
-pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
-    let err = |detail: String| Err(format!("AnimationGraph '{name}': {detail}"));
+pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
+    let err = |detail: String| Err(Diagnostic::asset("AnimationGraph", name, detail));
 
     let states = args
         .get("states")
@@ -210,14 +211,16 @@ fn check_blend(
     state: &str,
     blend: &Value,
     declared_param: &impl Fn(&str) -> bool,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     let err = |detail: String| {
-        Err(format!(
-            "AnimationGraph '{graph}': state '{state}': {detail}"
+        Err(Diagnostic::asset(
+            "AnimationGraph",
+            graph,
+            format!("state '{state}': {detail}"),
         ))
     };
     let ascending = |v: &[f64]| v.windows(2).all(|w| w[0] < w[1]);
-    let param_of = |field: &str| -> Result<(), String> {
+    let param_of = |field: &str| -> Result<(), Diagnostic> {
         let p = blend.get(field).and_then(|v| v.as_str()).unwrap_or("");
         if p.is_empty() {
             return err(format!("blend has no `{field}`"));
@@ -227,22 +230,30 @@ fn check_blend(
         }
         Ok(())
     };
-    let axis_of = |field: &str| -> Result<Vec<f64>, String> {
+    let axis_of = |field: &str| -> Result<Vec<f64>, Diagnostic> {
         let values: Vec<f64> = blend
             .get(field)
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(Value::as_f64).collect())
             .unwrap_or_default();
         if values.is_empty() {
-            return Err(format!(
-                "AnimationGraph '{graph}': state '{state}': blend `{field}` must be a non-empty \
+            return Err(Diagnostic::asset(
+                "AnimationGraph",
+                graph,
+                format!(
+                    "state '{state}': blend `{field}` must be a non-empty \
                  number array"
+                ),
             ));
         }
         if !ascending(&values) {
-            return Err(format!(
-                "AnimationGraph '{graph}': state '{state}': blend `{field}` must be strictly \
+            return Err(Diagnostic::asset(
+                "AnimationGraph",
+                graph,
+                format!(
+                    "state '{state}': blend `{field}` must be strictly \
                  ascending"
+                ),
             ));
         }
         Ok(values)
@@ -345,7 +356,9 @@ mod tests {
 
     #[test]
     fn empty_states_fails() {
-        let e = check("g", &serde_json::json!({"target":"hero"})).unwrap_err();
+        let e = check("g", &serde_json::json!({"target":"hero"}))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("at least one state"));
     }
 
@@ -353,49 +366,59 @@ mod tests {
     fn duplicate_state_name_fails() {
         let mut v = base();
         v["states"][1]["name"] = serde_json::json!("idle");
-        assert!(check("g", &v).unwrap_err().contains("duplicate state"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate state")
+        );
     }
 
     #[test]
     fn duplicate_parameter_name_fails() {
         let mut v = base();
         v["parameters"] = serde_json::json!([{"name":"speed"},{"name":"speed"}]);
-        assert!(check("g", &v).unwrap_err().contains("duplicate parameter"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate parameter")
+        );
     }
 
     #[test]
     fn non_positive_rate_fails() {
         let mut v = base();
         v["states"][0]["rate"] = serde_json::json!(0.0);
-        assert!(check("g", &v).unwrap_err().contains("rate"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("rate"));
     }
 
     #[test]
     fn unknown_initial_fails() {
         let mut v = base();
         v["initial"] = serde_json::json!("ghost");
-        assert!(check("g", &v).unwrap_err().contains("ghost"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("ghost"));
     }
 
     #[test]
     fn transition_to_unknown_state_fails() {
         let mut v = base();
         v["transitions"][0]["to"] = serde_json::json!("ghost");
-        assert!(check("g", &v).unwrap_err().contains("ghost"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("ghost"));
     }
 
     #[test]
     fn undeclared_condition_parameter_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["parameter"] = serde_json::json!("nope");
-        assert!(check("g", &v).unwrap_err().contains("nope"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("nope"));
     }
 
     #[test]
     fn unknown_op_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["op"] = serde_json::json!("between");
-        let e = check("g", &v).unwrap_err();
+        let e = check("g", &v).unwrap_err().to_string();
         assert!(e.contains("between"), "got: {e}");
         assert!(e.contains("condition #0"), "got: {e}");
         assert!(e.contains("`ne`"), "the known ops are listed: {e}");
@@ -405,7 +428,7 @@ mod tests {
     fn non_string_op_fails() {
         let mut v = base();
         v["transitions"][0]["conditions"][0]["op"] = serde_json::json!(5);
-        let e = check("g", &v).unwrap_err();
+        let e = check("g", &v).unwrap_err().to_string();
         assert!(e.contains("condition #0"), "got: {e}");
     }
 
@@ -436,14 +459,24 @@ mod tests {
     fn out_of_range_exit_time_fails() {
         let mut v = base();
         v["transitions"][0]["exit_time"] = serde_json::json!(1.5);
-        assert!(check("g", &v).unwrap_err().contains("exit_time"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("exit_time")
+        );
     }
 
     #[test]
     fn negative_duration_fails() {
         let mut v = base();
         v["transitions"][0]["duration_secs"] = serde_json::json!(-0.1);
-        assert!(check("g", &v).unwrap_err().contains("duration_secs"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("duration_secs")
+        );
     }
 
     fn blend_base() -> Value {
@@ -480,41 +513,56 @@ mod tests {
     fn clip_and_blend_together_fails() {
         let mut v = blend_base();
         v["states"][0]["clip"] = serde_json::json!("idle");
-        assert!(check("g", &v).unwrap_err().contains("pick one"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("pick one"));
     }
 
     #[test]
     fn state_without_clip_or_blend_fails() {
         let v = serde_json::json!({"target":"hero","states":[{"name":"empty"}]});
-        assert!(check("g", &v).unwrap_err().contains("no `clip` or `blend`"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("no `clip` or `blend`")
+        );
     }
 
     #[test]
     fn unknown_blend_kind_fails() {
         let mut v = blend_base();
         v["states"][0]["blend"]["kind"] = serde_json::json!("radial");
-        assert!(check("g", &v).unwrap_err().contains("radial"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("radial"));
     }
 
     #[test]
     fn undeclared_blend_parameter_fails() {
         let mut v = blend_base();
         v["states"][0]["blend"]["parameter"] = serde_json::json!("nope");
-        assert!(check("g", &v).unwrap_err().contains("nope"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("nope"));
     }
 
     #[test]
     fn unsorted_blend_points_fail() {
         let mut v = blend_base();
         v["states"][0]["blend"]["points"][1]["value"] = serde_json::json!(-1.0);
-        assert!(check("g", &v).unwrap_err().contains("ascending"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("ascending")
+        );
     }
 
     #[test]
     fn blend_point_without_clip_fails() {
         let mut v = blend_base();
         v["states"][0]["blend"]["points"][1] = serde_json::json!({"value": 5.0});
-        assert!(check("g", &v).unwrap_err().contains("no `clip`"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("no `clip`")
+        );
     }
 
     #[test]
@@ -525,7 +573,7 @@ mod tests {
             "x_values": [0.0, 5.0], "y_values": [-1.0, 1.0],
             "rows": [["a", "b"]]
         });
-        assert!(check("g", &v).unwrap_err().contains("row(s)"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("row(s)"));
     }
 
     #[test]
@@ -536,7 +584,12 @@ mod tests {
             "x_values": [5.0, 0.0], "y_values": [-1.0, 1.0],
             "rows": [["a", "b"], ["c", "d"]]
         });
-        assert!(check("g", &v).unwrap_err().contains("ascending"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("ascending")
+        );
     }
 
     #[test]
@@ -554,9 +607,19 @@ mod tests {
     fn ik_chain_needs_exactly_three_named_joints() {
         let mut v = base();
         v["ik_chains"] = serde_json::json!([{"joints": ["hip", "foot"]}]);
-        assert!(check("g", &v).unwrap_err().contains("exactly three"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("exactly three")
+        );
         v["ik_chains"] = serde_json::json!([{"joints": ["hip", "", "foot"]}]);
-        assert!(check("g", &v).unwrap_err().contains("joints[1]"));
+        assert!(
+            check("g", &v)
+                .unwrap_err()
+                .to_string()
+                .contains("joints[1]")
+        );
     }
 
     #[test]
@@ -566,7 +629,7 @@ mod tests {
             "joints": ["hip", "knee", "foot"],
             "pole": [0.0, 0.0, 0.0]
         }]);
-        assert!(check("g", &v).unwrap_err().contains("non-zero"));
+        assert!(check("g", &v).unwrap_err().to_string().contains("non-zero"));
         v["ik_chains"] = serde_json::json!([{
             "joints": ["hip", "knee", "foot"],
             "weight_parameter": "ghost"
@@ -574,6 +637,7 @@ mod tests {
         assert!(
             check("g", &v)
                 .unwrap_err()
+                .to_string()
                 .contains("'ghost' is not declared")
         );
     }

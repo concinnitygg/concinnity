@@ -1,8 +1,9 @@
+use crate::world_builder::Diagnostic;
 use concinnity_engine::render::sdf::volume::SDF_PARAMS_LEN;
 
 /// Check an `SdfVolume`'s authored args.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_args(args).map_err(|e| format!("Asset '{name}': {e}"))
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
+    check_args(args).map_err(|e| Diagnostic::asset("SdfVolume", name, e))
 }
 
 // Validate SdfVolume args without compiling.
@@ -71,7 +72,9 @@ mod tests {
     // asset failed.
     #[test]
     fn the_error_names_the_asset() {
-        let err = check("blob", &serde_json::json!({})).unwrap_err();
-        assert!(err.starts_with("Asset 'blob':"), "got: {err}");
+        let err = check("blob", &serde_json::json!({}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("SdfVolume 'blob':"), "got: {err}");
     }
 }

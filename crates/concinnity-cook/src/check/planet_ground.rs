@@ -2,21 +2,22 @@
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::world_builder::Diagnostic;
 use concinnity_engine::components::cook::PlanetGround;
 
 /// Check one `PlanetGround`'s args make a square of ground.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let ground: PlanetGround = serde_json::from_value(args.clone())
-        .map_err(|e| format!("Asset '{name}': PlanetGround: {e}"))?;
+        .map_err(|e| Diagnostic::asset("PlanetGround", name, e.to_string()))?;
     ground
         .page()
         .map(|_| ())
-        .map_err(|e| format!("Asset '{name}': PlanetGround {e}"))
+        .map_err(|e| Diagnostic::asset("PlanetGround", name, e.to_string()))
 }
 
 /// Refuse sculpted ground with no planet to lie on, and two squares on one
 /// tile, which would leave which one the ground takes to chance.
-pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let grounds: Vec<&WorldJsonlAsset> = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::PlanetGround)
@@ -28,9 +29,10 @@ pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<String>
         .iter()
         .any(|a| a.asset_type == RegisteredType::Planet)
     {
-        errors.push(format!(
-            "Asset '{}': PlanetGround sculpts a planet, but the world declares no Planet",
-            grounds[0].id
+        errors.push(Diagnostic::asset(
+            grounds[0].asset_type.as_str(),
+            &grounds[0].id,
+            "PlanetGround sculpts a planet, but the world declares no Planet",
         ));
     }
     let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
@@ -41,10 +43,13 @@ pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<String>
             .map(ToString::to_string)
             .unwrap_or_default();
         if let Some(first) = seen.insert(tile.clone(), &ground.id) {
-            errors.push(format!(
-                "Asset '{}': PlanetGround tile {tile} is also sculpted by '{first}'; a tile \
-                 holds one square of ground",
-                ground.id
+            errors.push(Diagnostic::asset(
+                ground.asset_type.as_str(),
+                &ground.id,
+                format!(
+                    "PlanetGround tile {tile} is also sculpted by '{first}'; a tile \
+                 holds one square of ground"
+                ),
             ));
         }
     }
@@ -67,13 +72,17 @@ mod tests {
     #[test]
     fn a_square_s_args_are_checked() {
         assert!(check("g", &ground("g", [2, 8, 128, 127]).args).is_ok());
-        let err = check("g", &ground("g", [2, 8, 300, 0]).args).unwrap_err();
+        let err = check("g", &ground("g", [2, 8, 300, 0]).args)
+            .unwrap_err()
+            .to_string();
         assert!(
-            err.contains("Asset 'g'") && err.contains("names no square"),
+            err.contains("PlanetGround 'g'") && err.contains("names no square"),
             "{err}"
         );
-        let err = check("g", &serde_json::json!({ "height": "high" })).unwrap_err();
-        assert!(err.contains("Asset 'g'"), "{err}");
+        let err = check("g", &serde_json::json!({ "height": "high" }))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("PlanetGround 'g'"), "{err}");
     }
 
     #[test]
@@ -95,12 +104,12 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert!(
-            errors[0].contains("'b'") && errors[0].contains("'a'"),
+            errors[0].to_string().contains("'b'") && errors[0].to_string().contains("'a'"),
             "{errors:?}"
         );
         errors.clear();
         check_squares(&[ground("a", [2, 8, 1, 1])], &mut errors);
-        assert!(errors[0].contains("no Planet"), "{errors:?}");
+        assert!(errors[0].to_string().contains("no Planet"), "{errors:?}");
         errors.clear();
         check_squares(&[], &mut errors);
         assert!(errors.is_empty());

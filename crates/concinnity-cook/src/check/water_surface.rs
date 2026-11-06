@@ -3,10 +3,11 @@
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
+use crate::world_builder::Diagnostic;
 
 /// Refuse a planet sea whose `WaterSurface` authors swell, which a sea does not
 /// carry.
-pub(crate) fn check_sea_swell(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+pub(crate) fn check_sea_swell(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let seas = assets
         .iter()
         .filter(|a| a.asset_type == RegisteredType::Planet)
@@ -18,11 +19,14 @@ pub(crate) fn check_sea_swell(assets: &[WorldJsonlAsset], errors: &mut Vec<Strin
             .filter_map(|a| a.args.get("waves")?.as_array())
             .any(|w| !w.is_empty());
         if swell {
-            errors.push(format!(
-                "Asset '{}': Planet's sea takes its look from WaterSurface '{water}', which \
+            errors.push(Diagnostic::asset(
+                planet.asset_type.as_str(),
+                &planet.id,
+                format!(
+                    "Planet's sea takes its look from WaterSurface '{water}', which \
                  authors `waves`; a planet's sea carries no swell, its waves all come from the \
-                 wind, so drop the swell",
-                planet.id
+                 wind, so drop the swell"
+                ),
             ));
         }
     }
@@ -52,7 +56,7 @@ mod tests {
         check_sea_swell(&[planet(), sea], &mut errors);
         assert_eq!(errors.len(), 1);
         assert!(
-            errors[0].contains("'sea'") && errors[0].contains("waves"),
+            errors[0].to_string().contains("'sea'") && errors[0].to_string().contains("waves"),
             "{errors:?}"
         );
     }

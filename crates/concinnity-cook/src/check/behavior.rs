@@ -12,6 +12,7 @@
 //! authored JSON can address the value at fault. A build reports the message
 //! alone, which is why the string-returning entry points are unchanged.
 
+use crate::world_builder::Diagnostic;
 use serde_json::Value;
 
 use concinnity_engine::components::SceneTransition;
@@ -117,7 +118,7 @@ impl Scope<'_> {
     }
 }
 
-pub(crate) fn check(name: &str, args: &Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {
     check_with_vars(name, args, &DeclaredVars::default())
 }
 
@@ -153,8 +154,8 @@ pub fn check_with_variables(
 ///
 /// Returns an error if a declaration has no name, repeats a name, or lacks a
 /// typed starting value.
-pub fn check_variables(name: &str, args: &Value) -> Result<(), String> {
-    let err = |detail: String| format!("Variables '{name}': {detail}");
+pub fn check_variables(name: &str, args: &Value) -> Result<(), Diagnostic> {
+    let err = |detail: String| Diagnostic::asset("Variables", name, detail);
     let mut seen: Vec<&str> = Vec::new();
     for (i, decl) in array(args, "vars").iter().enumerate() {
         let var = decl.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -205,8 +206,12 @@ fn unmatchable(component: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn check_with_vars(name: &str, args: &Value, vars: &DeclaredVars) -> Result<(), String> {
-    locate(name, args, vars).map_err(|f| f.message)
+pub(crate) fn check_with_vars(
+    name: &str,
+    args: &Value,
+    vars: &DeclaredVars,
+) -> Result<(), Diagnostic> {
+    body(args, vars).map_err(|f| Diagnostic::asset("Behavior", name, f.message))
 }
 
 // Every complaint reads "Behavior '<name>': ..." whoever asked, so the asset's
@@ -712,7 +717,7 @@ mod tests {
     use super::*;
 
     fn check_json(json: &str) -> Result<(), String> {
-        check("b", &serde_json::from_str(json).expect("args parse"))
+        check("b", &serde_json::from_str(json).expect("args parse")).map_err(|e| e.to_string())
     }
 
     fn expect_err(json: &str, needle: &str) {
@@ -950,7 +955,8 @@ mod tests {
                 .unwrap(),
             &vars,
         )
-        .expect_err("an int does not fit a float variable");
+        .expect_err("an int does not fit a float variable")
+        .to_string();
         assert!(e.contains("must be float, found int"), "{e}");
     }
 
@@ -963,7 +969,8 @@ mod tests {
                 .unwrap(),
             &vars,
         )
-        .expect_err("a misspelled name is caught");
+        .expect_err("a misspelled name is caught")
+        .to_string();
         assert!(e.contains("undeclared variable 'helth'"), "{e}");
     }
 
@@ -989,7 +996,8 @@ mod tests {
             &serde_json::from_str(r#"{"on":{"variable":"ghost"}}"#).unwrap(),
             &vars,
         )
-        .expect_err("an unknown watched variable is caught");
+        .expect_err("an unknown watched variable is caught")
+        .to_string();
         assert!(e.contains("undeclared variable 'ghost'"), "{e}");
     }
 
@@ -999,14 +1007,18 @@ mod tests {
             r#"{"vars":[{"name":"a","value":{"int":0}},{"name":"a","value":{"int":1}}]}"#,
         )
         .unwrap();
-        let e = check_variables("v", &args).expect_err("duplicates are caught");
+        let e = check_variables("v", &args)
+            .expect_err("duplicates are caught")
+            .to_string();
         assert!(e.contains("duplicate variable 'a'"), "{e}");
     }
 
     #[test]
     fn an_untyped_declaration_is_rejected() {
         let args = serde_json::from_str(r#"{"vars":[{"name":"a"}]}"#).unwrap();
-        let e = check_variables("v", &args).expect_err("an untyped declaration is caught");
+        let e = check_variables("v", &args)
+            .expect_err("an untyped declaration is caught")
+            .to_string();
         assert!(e.contains("needs a typed `value`"), "{e}");
     }
 
@@ -1222,7 +1234,9 @@ mod tests {
     fn the_message_reads_the_same_whichever_entry_point_asked() {
         let json = r#"{"on":"start","do":[{"teleport":{}}]}"#;
         let args: Value = serde_json::from_str(json).expect("args parse");
-        let text = check("chase", &args).expect_err("expected a validation error");
+        let text = check("chase", &args)
+            .expect_err("expected a validation error")
+            .to_string();
         assert_eq!(text, "Behavior 'chase': unknown node `teleport`");
         assert_eq!(
             check_with_variables("chase", &args, None)

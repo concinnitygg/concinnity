@@ -103,6 +103,7 @@ impl EditorHook {
             let name = declared_id(&self.entries[idx]).unwrap_or("");
             let args = self.variables_args().unwrap_or(Value::Null);
             if let Err(e) = concinnity_cook::check::behavior::check_variables(name, &args) {
+                let e = e.to_string();
                 return Some(e.lines().next().unwrap_or(&e).to_string());
             }
         }

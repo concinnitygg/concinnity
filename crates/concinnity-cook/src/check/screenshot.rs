@@ -1,6 +1,7 @@
 // `Screenshot` checks: each names a file inside the screenshot directory, and
 // no two name the same one.
 
+use crate::world_builder::Diagnostic;
 use std::collections::HashMap;
 
 use crate::authoring::registry::RegisteredType;
@@ -9,19 +10,23 @@ use concinnity_engine::screenshot::{is_contained_file, normal_file};
 
 /// A screenshot's `file` must be a relative path that stays inside the
 /// screenshot directory.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let file = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
     if is_contained_file(file) {
         Ok(())
     } else {
-        Err(format!(
-            "Screenshot '{name}': `file` {file:?} must be a relative path to a file inside the screenshot directory, with no `..` part or `:`"
+        Err(Diagnostic::asset(
+            "Screenshot",
+            name,
+            format!(
+                "`file` {file:?} must be a relative path to a file inside the screenshot directory, with no `..` part or `:`"
+            ),
         ))
     }
 }
 
 /// Two screenshots writing one file would overwrite each other.
-pub(crate) fn check_unique_files(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+pub(crate) fn check_unique_files(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let mut seen: HashMap<String, &str> = HashMap::new();
     for asset in assets
         .iter()
@@ -31,9 +36,10 @@ pub(crate) fn check_unique_files(assets: &[WorldJsonlAsset], errors: &mut Vec<St
             continue;
         };
         if let Some(first) = seen.insert(normal_file(file), asset.id.as_str()) {
-            errors.push(format!(
-                "Screenshots '{first}' and '{}' both write {file:?}; give each its own file",
-                asset.id
+            errors.push(Diagnostic::asset(
+                "Screenshot",
+                &asset.id,
+                format!("writes {file:?}, as Screenshot '{first}' does; give each its own file"),
             ));
         }
     }
@@ -64,6 +70,7 @@ mod tests {
             assert!(
                 check("a", &bad)
                     .unwrap_err()
+                    .to_string()
                     .contains("inside the screenshot directory")
             );
         }
@@ -81,6 +88,11 @@ mod tests {
         assert!(errors.is_empty(), "refused by the file check instead");
         check_unique_files(&[shot("a", "x.png"), shot("b", "./x.png")], &mut errors);
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("'a' and 'b'"), "{}", errors[0]);
+        assert!(
+            errors[0].to_string()
+                == "Screenshot 'b': writes \"./x.png\", as Screenshot 'a' does; give each its own file",
+            "{}",
+            errors[0]
+        );
     }
 }

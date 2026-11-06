@@ -3,6 +3,7 @@
 //! Also the authored shape the build sizes a world's spawn reservation from:
 //! which of its assets can create collider-bearing props while it runs.
 
+use crate::world_builder::Diagnostic;
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::components::PropColliderShape;
 
@@ -20,7 +21,11 @@ const MAX_USER_LAYERS: usize = 32 - BUILTIN_LAYERS.len();
 // as one aborted deserialize naming neither the asset nor the aliases. This
 // runs in the batch check instead, so a world hears about every bad shape at
 // once and in the words an author can act on.
-pub(crate) fn check_collider_shape(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_collider_shape(
+    ty: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<(), Diagnostic> {
     let Some(shape) = args
         .get("collider")
         .and_then(|c| c.get("shape"))
@@ -31,24 +36,27 @@ pub(crate) fn check_collider_shape(name: &str, args: &serde_json::Value) -> Resu
     if PropColliderShape::from_str_norm(shape).is_some() {
         return Ok(());
     }
-    Err(format!(
-        "Asset '{}': unknown collider shape '{}'; expected one of {}",
+    Err(Diagnostic::asset(
+        ty,
         name,
-        shape,
-        PropColliderShape::ACCEPTED.join(", ")
+        format!(
+            "unknown collider shape '{}'; expected one of {}",
+            shape,
+            PropColliderShape::ACCEPTED.join(", ")
+        ),
     ))
 }
 
 /// Check a physics asset's authored args.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_collider_shape(name, args)
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
+    check_collider_shape("TriggerVolume", name, args)
 }
 
 // World-shape rule: every layer name a world uses must resolve. Declared
 // names must be unique, not shadow a built-in, and fit the 32-bit group
 // space; `no_collide` pairs and collider `layer` fields must name a declared
 // or built-in layer.
-pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>) {
+pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnostic>) {
     let config = assets
         .iter()
         .find(|a| a.asset_type == RegisteredType::PhysicsConfig);
@@ -62,20 +70,28 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
             .map(|list| list.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
         if declared.len() > MAX_USER_LAYERS {
-            errors.push(format!(
-                "PhysicsConfig '{}': {} extra layers declared; at most {} fit the 32-bit group space",
-                config.id,
-                declared.len(),
-                MAX_USER_LAYERS
+            errors.push(Diagnostic::asset(
+                "PhysicsConfig",
+                &config.id,
+                format!(
+                    "{} extra layers declared; at most {} fit the 32-bit group space",
+                    declared.len(),
+                    MAX_USER_LAYERS
+                ),
             ));
         }
         for layer in declared {
             if layer.is_empty() {
-                errors.push(format!("PhysicsConfig '{}': empty layer name", config.id));
+                errors.push(Diagnostic::asset(
+                    "PhysicsConfig",
+                    &config.id,
+                    "empty layer name",
+                ));
             } else if known.iter().any(|k| k == layer) {
-                errors.push(format!(
-                    "PhysicsConfig '{}': layer '{}' is already defined",
-                    config.id, layer
+                errors.push(Diagnostic::asset(
+                    "PhysicsConfig",
+                    &config.id,
+                    format!("layer '{layer}' is already defined"),
                 ));
             } else {
                 known.push(layer.to_string());
@@ -87,17 +103,19 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
                     .as_array()
                     .map(|p| p.iter().filter_map(|v| v.as_str()).collect::<Vec<&str>>());
                 let Some(names) = names.filter(|n| n.len() == 2) else {
-                    errors.push(format!(
-                        "PhysicsConfig '{}': no_collide entries are [\"layer_a\", \"layer_b\"] pairs",
-                        config.id
+                    errors.push(Diagnostic::asset(
+                        "PhysicsConfig",
+                        &config.id,
+                        "no_collide entries are [\"layer_a\", \"layer_b\"] pairs",
                     ));
                     continue;
                 };
                 for layer in names {
                     if !known.iter().any(|k| k == layer) {
-                        errors.push(format!(
-                            "PhysicsConfig '{}': no_collide names unknown layer '{}'",
-                            config.id, layer
+                        errors.push(Diagnostic::asset(
+                            "PhysicsConfig",
+                            &config.id,
+                            format!("no_collide names unknown layer '{layer}'"),
                         ));
                     }
                 }
@@ -109,9 +127,10 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
             .and_then(serde_json::Value::as_f64)
             && min < 0.0
         {
-            errors.push(format!(
-                "PhysicsConfig '{}': contact_min_impulse must not be negative",
-                config.id
+            errors.push(Diagnostic::asset(
+                "PhysicsConfig",
+                &config.id,
+                "contact_min_impulse must not be negative",
             ));
         }
     }
@@ -130,10 +149,7 @@ pub(crate) fn check_layers(assets: &[WorldJsonlAsset], errors: &mut Vec<String>)
             continue;
         };
         if !known.iter().any(|k| k == layer) {
-            errors.push(format!(
-                "Prop '{}': collider layer '{}' is not a built-in layer or declared in PhysicsConfig `layers`",
-                asset.id, layer
-            ));
+            errors.push(Diagnostic::asset("Prop", &asset.id, format!("collider layer '{layer}' is not a built-in layer or declared in PhysicsConfig `layers`")));
         }
     }
 }
@@ -285,17 +301,22 @@ mod tests {
     fn layer_errors(assets: &[WorldJsonlAsset]) -> Vec<String> {
         let mut errors = Vec::new();
         check_layers(assets, &mut errors);
-        errors
+        errors.iter().map(ToString::to_string).collect()
     }
 
     #[test]
     fn known_shapes_pass_and_unknown_shapes_fail() {
         let ok = serde_json::json!({"collider": {"shape": "capsule"}});
-        assert!(check_collider_shape("p", &ok).is_ok());
+        assert!(check_collider_shape("Prop", "p", &ok).is_ok());
         // No collider or no shape field: nothing to judge.
-        assert!(check_collider_shape("p", &serde_json::json!({})).is_ok());
-        let err = check_collider_shape("p", &serde_json::json!({"collider": {"shape": "mesh"}}))
-            .unwrap_err();
+        assert!(check_collider_shape("Prop", "p", &serde_json::json!({})).is_ok());
+        let err = check_collider_shape(
+            "Prop",
+            "p",
+            &serde_json::json!({"collider": {"shape": "mesh"}}),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("unknown collider shape 'mesh'"), "got: {err}");
     }
 

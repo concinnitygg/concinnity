@@ -1,49 +1,59 @@
 //! Audio authoring checks: emitter attenuation ranges and the shared volume /
 //! bus / rolloff fields on emitters and cues.
 
+use crate::world_builder::Diagnostic;
+
 const BUS_NAMES: [&str; 3] = ["music", "sfx", "voice"];
 const ROLLOFF_NAMES: [&str; 3] = ["logarithmic", "linear", "none"];
 
-fn check_volume(name: &str, args: &serde_json::Value) -> Result<(), String> {
+fn check_volume(ty: &str, name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let Some(volume) = args.get("volume").and_then(serde_json::Value::as_f64) else {
         return Ok(());
     };
     if volume.is_finite() && volume >= 0.0 {
         return Ok(());
     }
-    Err(format!(
-        "Asset '{name}': volume must be a non-negative gain, got {volume}"
+    Err(Diagnostic::asset(
+        ty,
+        name,
+        format!("volume must be a non-negative gain, got {volume}"),
     ))
 }
 
-fn check_bus(name: &str, args: &serde_json::Value) -> Result<(), String> {
+fn check_bus(ty: &str, name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let Some(bus) = args.get("bus").and_then(|v| v.as_str()) else {
         return Ok(());
     };
     if BUS_NAMES.contains(&bus) {
         return Ok(());
     }
-    Err(format!(
-        "Asset '{}': unknown bus '{}'; expected one of {}",
+    Err(Diagnostic::asset(
+        ty,
         name,
-        bus,
-        BUS_NAMES.join(", ")
+        format!(
+            "unknown bus '{}'; expected one of {}",
+            bus,
+            BUS_NAMES.join(", ")
+        ),
     ))
 }
 
 // AudioEmitter: min/max distance must form a positive, finite, non-empty
 // range, and the rolloff must be a known curve.
-pub(crate) fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_volume(name, args)?;
-    check_bus(name, args)?;
+pub(crate) fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
+    check_volume("AudioEmitter", name, args)?;
+    check_bus("AudioEmitter", name, args)?;
     if let Some(rolloff) = args.get("rolloff").and_then(|v| v.as_str())
         && !ROLLOFF_NAMES.contains(&rolloff)
     {
-        return Err(format!(
-            "Asset '{}': unknown rolloff '{}'; expected one of {}",
+        return Err(Diagnostic::asset(
+            "AudioEmitter",
             name,
-            rolloff,
-            ROLLOFF_NAMES.join(", ")
+            format!(
+                "unknown rolloff '{}'; expected one of {}",
+                rolloff,
+                ROLLOFF_NAMES.join(", ")
+            ),
         ));
     }
     let field = |key: &str| args.get(key).and_then(serde_json::Value::as_f64);
@@ -53,8 +63,10 @@ pub(crate) fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), 
         if let Some(value) = value
             && !(value.is_finite() && value >= 0.0)
         {
-            return Err(format!(
-                "Asset '{name}': {key} must be a non-negative distance, got {value}"
+            return Err(Diagnostic::asset(
+                "AudioEmitter",
+                name,
+                format!("{key} must be a non-negative distance, got {value}"),
             ));
         }
     }
@@ -62,21 +74,23 @@ pub(crate) fn check_emitter(name: &str, args: &serde_json::Value) -> Result<(), 
     let min = min.unwrap_or(1.0);
     let max = max.unwrap_or(50.0);
     if max <= min {
-        return Err(format!(
-            "Asset '{name}': max_distance ({max}) must exceed min_distance ({min})"
+        return Err(Diagnostic::asset(
+            "AudioEmitter",
+            name,
+            format!("max_distance ({max}) must exceed min_distance ({min})"),
         ));
     }
     Ok(())
 }
 
 // AudioCue: volume and bus follow the shared rules.
-pub(crate) fn check_cue(name: &str, args: &serde_json::Value) -> Result<(), String> {
-    check_volume(name, args)?;
-    check_bus(name, args)
+pub(crate) fn check_cue(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
+    check_volume("AudioCue", name, args)?;
+    check_bus("AudioCue", name, args)
 }
 
 // PropBody: the impact gain must be a non-negative finite number.
-pub(crate) fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let Some(volume) = args
         .get("impact_volume")
         .and_then(serde_json::Value::as_f64)
@@ -86,8 +100,10 @@ pub(crate) fn check_prop_body(name: &str, args: &serde_json::Value) -> Result<()
     if volume.is_finite() && volume >= 0.0 {
         return Ok(());
     }
-    Err(format!(
-        "Asset '{name}': impact_volume must be a non-negative gain, got {volume}"
+    Err(Diagnostic::asset(
+        "PropBody",
+        name,
+        format!("impact_volume must be a non-negative gain, got {volume}"),
     ))
 }
 

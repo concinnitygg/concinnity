@@ -99,7 +99,7 @@ fn prepare(
 
     let assets = typed_assets(&expanded).map_err(diagnostics)?;
 
-    crate::check::check_world(&assets).map_err(diagnostics)?;
+    crate::check::check_world(&assets)?;
 
     Ok(LoadedWorld {
         assets,

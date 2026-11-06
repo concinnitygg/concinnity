@@ -1,18 +1,24 @@
 // Structural validation for Planet args: what a planet's layers can use, and
 // covers past the most a planet lays.
 
+use crate::world_builder::Diagnostic;
+
 /// Check a `Planet`'s authored args, warning about what it drops.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     for warning in warnings(name, args) {
         tracing::warn!("{warning}");
     }
     let layers = args.get("layers").and_then(|v| v.as_array());
     for (i, layer) in layers.into_iter().flatten().enumerate() {
         if layer.get("density_mask").is_some_and(|m| !m.is_null()) {
-            return Err(format!(
-                "Asset '{name}': Planet layers[{i}] sets a `density_mask`, which a Planet does not \
+            return Err(Diagnostic::asset(
+                "Planet",
+                name,
+                format!(
+                    "layers[{i}] sets a `density_mask`, which a Planet does not \
                  support; a planet's grass density comes from its procedural meadow, so drop the \
                  mask"
+                ),
             ));
         }
     }
@@ -60,7 +66,7 @@ mod tests {
         let args = serde_json::json!({
             "layers": [{"grass": "meadow"}, {"grass": "meadow", "density_mask": "mask"}]
         });
-        let err = check("world", &args).unwrap_err();
+        let err = check("world", &args).unwrap_err().to_string();
         assert!(
             err.contains("layers[1]") && err.contains("density_mask"),
             "{err}"

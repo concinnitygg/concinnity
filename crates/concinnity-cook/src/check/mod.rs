@@ -32,6 +32,7 @@ pub(crate) mod sdf_volume;
 /// `Shader` argument checks.
 pub(crate) mod shader;
 
+use crate::world_builder::Diagnostic;
 pub use shader::is_shader_extension;
 use std::collections::HashSet;
 pub(crate) mod shape;
@@ -52,7 +53,7 @@ fn check_authored_asset(
     asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     match asset_type {
         RegisteredType::AnimationGraph => animation_graph::check(name, args),
         RegisteredType::Behavior => behavior::check(name, args),
@@ -87,12 +88,14 @@ fn check_compiled_asset(
     asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     match asset_type {
         RegisteredType::Texture => texture::check(name, args),
         RegisteredType::CubemapTexture => cubemap_texture::check(name, args),
         RegisteredType::EnvironmentMap => environment_map::check(name, args),
-        RegisteredType::Mesh | RegisteredType::ProceduralMesh => mesh::check(name, args),
+        RegisteredType::Mesh | RegisteredType::ProceduralMesh => {
+            mesh::check(asset_type.as_str(), name, args)
+        }
         _ => Ok(()),
     }
 }
@@ -102,7 +105,7 @@ pub(crate) fn check_asset(
     asset_type: RegisteredType,
     name: &str,
     args: &serde_json::Value,
-) -> Result<(), String> {
+) -> Result<(), Diagnostic> {
     check_authored_asset(asset_type, name, args)?;
     check_compiled_asset(asset_type, name, args)
 }
@@ -110,8 +113,8 @@ pub(crate) fn check_asset(
 /// Run all semantic validation on a fully expanded world. Collects every
 /// problem found (per-asset arg errors, unresolved cross-references, and
 /// graphics-rule violations) so the caller can report them in a single pass.
-pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>> {
-    let mut errors: Vec<String> = Vec::new();
+pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<Diagnostic>> {
+    let mut errors: Vec<Diagnostic> = Vec::new();
 
     // Names must still be unique after expansion and injection: a duplicate
     // here means a generated or injected asset silently aliased another (the
@@ -119,10 +122,11 @@ pub(crate) fn check_world(assets: &[WorldJsonlAsset]) -> Result<(), Vec<String>>
     let mut seen_names: HashSet<&str> = HashSet::default();
     for asset in assets {
         if !seen_names.insert(asset.id.as_str()) {
-            errors.push(format!(
-                "duplicate name '{}' after build-time expansion: a generated or \
-                 injected asset collides with another; rename one of them",
-                asset.id
+            errors.push(Diagnostic::asset(
+                asset.asset_type.as_str(),
+                &asset.id,
+                "duplicate name after build-time expansion: a generated or injected \
+                 asset collides with another; rename one of them",
             ));
         }
     }
@@ -198,8 +202,34 @@ mod tests {
             ),
         ];
         let errs = check_world(&assets).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("bad_prop")));
-        assert!(errs.iter().any(|e| e.contains("ghost")));
+        assert!(errs.iter().any(|e| e.to_string().contains("bad_prop")));
+        assert!(errs.iter().any(|e| e.to_string().contains("ghost")));
+    }
+
+    // Every per-asset and cross-reference failure names the asset it is about.
+    #[test]
+    fn check_failures_name_their_assets() {
+        let assets = vec![
+            asset("bad_prop", RegisteredType::Prop, serde_json::json!({})),
+            asset(
+                "bad_mat",
+                RegisteredType::Material,
+                serde_json::json!({"albedo":"ghost"}),
+            ),
+        ];
+        let errs = check_world(&assets).unwrap_err();
+        let mut named: Vec<_> = errs
+            .iter()
+            .filter_map(Diagnostic::asset_ref)
+            .map(|a| (a.type_name.as_str(), a.name.as_str()))
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+        assert_eq!(
+            named,
+            [("Material", "bad_mat"), ("Prop", "bad_prop")],
+            "{errs:?}"
+        );
     }
 
     // The composed pass surfaces a compile-backed error (unknown texture
@@ -216,19 +246,26 @@ mod tests {
             ),
         ];
         let errs = check_world(&assets).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("bad_prop")));
-        assert!(errs.iter().any(|e| e.contains("not_a_generator")));
+        assert!(errs.iter().any(|e| e.to_string().contains("bad_prop")));
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("not_a_generator"))
+        );
     }
 
     // Each compile-backed asset type reaches its own check.
     #[test]
     fn check_asset_routes_compile_backed_types() {
         let args = serde_json::json!({"source": "studio.png"});
-        let err = check_asset(RegisteredType::CubemapTexture, "c", &args).unwrap_err();
+        let err = check_asset(RegisteredType::CubemapTexture, "c", &args)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Radiance .hdr"), "{err}");
 
         let args = serde_json::json!({"generator": "aurora"});
-        let err = check_asset(RegisteredType::EnvironmentMap, "e", &args).unwrap_err();
+        let err = check_asset(RegisteredType::EnvironmentMap, "e", &args)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unknown EnvironmentMap generator"), "{err}");
     }
 

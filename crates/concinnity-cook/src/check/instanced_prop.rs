@@ -2,40 +2,54 @@
 // lookups are handled by build/pipeline.rs::validate_cross_references; this
 // check enforces only the things we can see from the asset's own args.
 
+use crate::world_builder::Diagnostic;
+
 // Soft cap on instances per cluster. The expansion path produces one
 // DrawObject per instance, so a runaway cluster can blow out the draw list
 // budget without warning.
 pub(crate) const MAX_INSTANCES_PER_CLUSTER: usize = 16_384;
 
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let instances = args
         .get("instances")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            format!("Asset '{name}': InstancedProp `instances` must be an array of transforms")
+            Diagnostic::asset(
+                "InstancedProp",
+                name,
+                "`instances` must be an array of transforms",
+            )
         })?;
     if instances.len() > MAX_INSTANCES_PER_CLUSTER {
-        return Err(format!(
-            "Asset '{}': InstancedProp has {} instances; current cap is {}. Split into multiple clusters.",
+        return Err(Diagnostic::asset(
+            "InstancedProp",
             name,
-            instances.len(),
-            MAX_INSTANCES_PER_CLUSTER
+            format!(
+                "has {} instances; current cap is {}. Split into multiple clusters.",
+                instances.len(),
+                MAX_INSTANCES_PER_CLUSTER
+            ),
         ));
     }
     for (i, entry) in instances.iter().enumerate() {
         if !entry.is_object() {
-            return Err(format!(
-                "Asset '{name}': InstancedProp instances[{i}] must be an object"
+            return Err(Diagnostic::asset(
+                "InstancedProp",
+                name,
+                format!("instances[{i}] must be an object"),
             ));
         }
         if let Some(p) = entry.get("position") {
-            check_f32x3(p, &format!("Asset '{name}': instances[{i}].position"))?;
+            check_f32x3(p, &format!("instances[{i}].position"))
+                .map_err(|e| Diagnostic::asset("InstancedProp", name, e))?;
         }
         if let Some(r) = entry.get("rotation_deg") {
-            check_f32x3(r, &format!("Asset '{name}': instances[{i}].rotation_deg"))?;
+            check_f32x3(r, &format!("instances[{i}].rotation_deg"))
+                .map_err(|e| Diagnostic::asset("InstancedProp", name, e))?;
         }
         if let Some(s) = entry.get("scale") {
-            check_f32x3(s, &format!("Asset '{name}': instances[{i}].scale"))?;
+            check_f32x3(s, &format!("instances[{i}].scale"))
+                .map_err(|e| Diagnostic::asset("InstancedProp", name, e))?;
         }
     }
     Ok(())
@@ -77,7 +91,7 @@ mod tests {
 
     #[test]
     fn missing_instances_errors() {
-        let err = check("p", &json!({})).unwrap_err();
+        let err = check("p", &json!({})).unwrap_err().to_string();
         assert!(err.contains("`instances` must be an array"), "got: {err}");
     }
 
@@ -85,7 +99,9 @@ mod tests {
     fn instances_over_the_cap_error() {
         let entries: Vec<serde_json::Value> =
             (0..=MAX_INSTANCES_PER_CLUSTER).map(|_| json!({})).collect();
-        let err = check("p", &json!({"instances": entries})).unwrap_err();
+        let err = check("p", &json!({"instances": entries}))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("16385 instances"), "got: {err}");
         assert!(err.contains("cap is 16384"), "got: {err}");
     }
@@ -99,14 +115,16 @@ mod tests {
 
     #[test]
     fn non_object_instance_errors() {
-        let err = check("p", &json!({"instances": [{}, 3]})).unwrap_err();
+        let err = check("p", &json!({"instances": [{}, 3]}))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("instances[1] must be an object"), "got: {err}");
     }
 
     #[test]
     fn non_array_position_errors() {
         let args = json!({"instances": [{"position": "origin"}]});
-        let err = check("p", &args).unwrap_err();
+        let err = check("p", &args).unwrap_err().to_string();
         assert!(
             err.contains("instances[0].position must be an array of 3 numbers"),
             "got: {err}"
@@ -116,14 +134,14 @@ mod tests {
     #[test]
     fn short_position_errors() {
         let args = json!({"instances": [{"position": [1.0, 2.0]}]});
-        let err = check("p", &args).unwrap_err();
+        let err = check("p", &args).unwrap_err().to_string();
         assert!(err.contains("must have 3 elements, got 2"), "got: {err}");
     }
 
     #[test]
     fn non_numeric_position_component_errors() {
         let args = json!({"instances": [{"position": [1.0, null, 3.0]}]});
-        let err = check("p", &args).unwrap_err();
+        let err = check("p", &args).unwrap_err().to_string();
         assert!(err.contains("position[1] must be a number"), "got: {err}");
     }
 
@@ -136,14 +154,14 @@ mod tests {
     #[test]
     fn bad_rotation_and_scale_are_validated_too() {
         let args = json!({"instances": [{"rotation_deg": [0, 0, "x"]}]});
-        let err = check("p", &args).unwrap_err();
+        let err = check("p", &args).unwrap_err().to_string();
         assert!(
             err.contains("rotation_deg[2] must be a number"),
             "got: {err}"
         );
 
         let args = json!({"instances": [{"scale": 2.0}]});
-        let err = check("p", &args).unwrap_err();
+        let err = check("p", &args).unwrap_err().to_string();
         assert!(
             err.contains("scale must be an array of 3 numbers"),
             "got: {err}"

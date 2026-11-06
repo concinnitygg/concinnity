@@ -1,3 +1,4 @@
+use crate::world_builder::Diagnostic;
 use concinnity_engine::components::{ColorRun, color_run_error};
 
 // The two fields the check reads; the rest of the label parses when it bakes.
@@ -11,12 +12,12 @@ struct Runs {
 
 /// Check a `TextLabel`'s authored args: its color runs lie inside its content,
 /// in order, and do not overlap.
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     let Ok(runs) = serde_json::from_value::<Runs>(args.clone()) else {
         return Ok(());
     };
     match color_run_error(&runs.content, &runs.color_runs) {
-        Some(e) => Err(format!("Asset '{name}': TextLabel {e}")),
+        Some(e) => Err(Diagnostic::asset("TextLabel", name, e.to_string())),
         None => Ok(()),
     }
 }
@@ -45,7 +46,7 @@ mod tests {
     #[test]
     fn a_run_past_the_content_names_the_asset_and_the_run() {
         let args = json!({"content": "hi", "color_runs": [run(0, 1), run(1, 5)]});
-        let err = check("title", &args).unwrap_err();
+        let err = check("title", &args).unwrap_err().to_string();
         assert!(err.contains("'title'"), "{err}");
         assert!(err.contains("color_runs[1]"), "{err}");
     }
@@ -53,7 +54,7 @@ mod tests {
     #[test]
     fn overlapping_runs_fail() {
         let args = json!({"content": "hello", "color_runs": [run(0, 3), run(2, 1)]});
-        let err = check("t", &args).unwrap_err();
+        let err = check("t", &args).unwrap_err().to_string();
         assert!(
             err.contains("color_runs[1]") && err.contains("overlap"),
             "{err}"

@@ -12,6 +12,7 @@
 // on, and their runtime `Component` impls, live in
 // concinnity-engine.
 
+use crate::world_builder::Diagnostic;
 use concinnity_engine::components::{
     AnimationGraph, Behavior, Camera3D, InstancedProp, Model, PhysicsJoint, PhysicsJointKind, Prop,
     VoxelChunk, VoxelWorld,
@@ -43,11 +44,11 @@ pub(crate) enum CrossRef {
     Resolve {
         kind: RefKind,
         target: String,
-        error: String,
+        error: Diagnostic,
     },
     // A problem the asset detected on its own: a missing required field, a
     // malformed array entry, an empty list. Collected verbatim.
-    Issue(String),
+    Issue(Diagnostic),
 }
 
 // Implemented by every asset type that references other assets by name.
@@ -115,8 +116,10 @@ impl CrossReferenced for AnimationGraph {
         // variant, stay here.
         let mut refs = Vec::new();
         if is_blank(args.get("target")) {
-            refs.push(CrossRef::Issue(format!(
-                "AnimationGraph '{name}': `target` field is required (the SkinnedMesh to animate)"
+            refs.push(CrossRef::Issue(Diagnostic::asset(
+                "AnimationGraph",
+                name,
+                "`target` field is required (the SkinnedMesh to animate)",
             )));
         }
         let states = args
@@ -133,14 +136,22 @@ impl CrossReferenced for AnimationGraph {
             };
             let clips = state_clip_names(state);
             if clips.is_empty() {
-                refs.push(CrossRef::Issue(format!(
-                    "AnimationGraph '{name}': {label} names no Animation (set `clip`, or `blend` \
+                refs.push(CrossRef::Issue(Diagnostic::asset(
+                    "AnimationGraph",
+                    name,
+                    format!(
+                        "{label} names no Animation (set `clip`, or `blend` \
                      members)"
+                    ),
                 )));
             }
             for clip in state.get("blend").map(blend_clip_names).unwrap_or_default() {
                 refs.push(CrossRef::Resolve {
-                    error: format!("AnimationGraph '{name}': {label} clip '{clip}' not found"),
+                    error: Diagnostic::asset(
+                        "AnimationGraph",
+                        name,
+                        format!("{label} clip '{clip}' not found"),
+                    ),
                     kind: RefKind::Animation,
                     target: clip,
                 });
@@ -162,11 +173,15 @@ impl CrossReferenced for Camera3D {
         // The target or prop resolves generically; only that exactly one is
         // named is checked here.
         match (is_blank(follow.get("target")), is_blank(follow.get("prop"))) {
-            (true, true) => vec![CrossRef::Issue(format!(
-                "Camera3D '{name}': `controller.follow` needs a `target` (the SkinnedMesh to follow) or a `prop` (the Prop to follow)"
+            (true, true) => vec![CrossRef::Issue(Diagnostic::asset(
+                "Camera3D",
+                name,
+                "`controller.follow` needs a `target` (the SkinnedMesh to follow) or a `prop` (the Prop to follow)",
             ))],
-            (false, false) => vec![CrossRef::Issue(format!(
-                "Camera3D '{name}': `controller.follow` names both a `target` and a `prop`; it follows one"
+            (false, false) => vec![CrossRef::Issue(Diagnostic::asset(
+                "Camera3D",
+                name,
+                "`controller.follow` names both a `target` and a `prop`; it follows one",
             ))],
             _ => Vec::new(),
         }
@@ -190,8 +205,12 @@ impl CrossReferenced for Prop {
         vec![CrossRef::Resolve {
             kind: RefKind::MeshSource,
             target: mesh_ref.to_string(),
-            error: format!(
-                "Prop '{name}': mesh '{mesh_ref}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
+            error: Diagnostic::asset(
+                "Prop",
+                name,
+                format!(
+                    "mesh '{mesh_ref}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
+                ),
             ),
         }]
     }
@@ -220,9 +239,7 @@ impl CrossReferenced for Prefab {
                 let mesh = text(e, "mesh");
                 (!mesh.is_empty()).then(|| CrossRef::Resolve {
                     kind: RefKind::MeshSource,
-                    error: format!(
-                        "Prefab '{name}': props[{i}].mesh '{mesh}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
-                    ),
+                    error: Diagnostic::asset("Prefab", name, format!("props[{i}].mesh '{mesh}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`")),
                     target: mesh,
                 })
             })
@@ -238,16 +255,16 @@ impl CrossReferenced for Model {
             for (i, sub) in meshes.iter().enumerate() {
                 let sub_mesh = sub.get("mesh").and_then(|v| v.as_str()).unwrap_or("");
                 if sub_mesh.is_empty() {
-                    refs.push(CrossRef::Issue(format!(
-                        "Model '{name}': submesh[{i}] is missing a 'mesh' field"
+                    refs.push(CrossRef::Issue(Diagnostic::asset(
+                        "Model",
+                        name,
+                        format!("submesh[{i}] is missing a 'mesh' field"),
                     )));
                 } else {
                     refs.push(CrossRef::Resolve {
                         kind: RefKind::MeshSource,
                         target: sub_mesh.to_string(),
-                        error: format!(
-                            "Model '{name}': submesh[{i}] mesh '{sub_mesh}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`"
-                        ),
+                        error: Diagnostic::asset("Model", name, format!("submesh[{i}] mesh '{sub_mesh}' not found, add a Mesh, ProceduralMesh, or File (obj) asset with that `$id`")),
                     });
                 }
             }
@@ -263,15 +280,21 @@ impl CrossReferenced for InstancedProp {
         // here for its required-ness and its polymorphic target set.
         let mesh_ref = args.get("mesh").and_then(|v| v.as_str()).unwrap_or("");
         if mesh_ref.is_empty() {
-            return vec![CrossRef::Issue(format!(
-                "InstancedProp '{name}': `mesh` field is required"
+            return vec![CrossRef::Issue(Diagnostic::asset(
+                "InstancedProp",
+                name,
+                "`mesh` field is required",
             ))];
         }
         vec![CrossRef::Resolve {
             kind: RefKind::MeshSource,
             target: mesh_ref.to_string(),
-            error: format!(
-                "InstancedProp '{name}': mesh '{mesh_ref}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that `$id`"
+            error: Diagnostic::asset(
+                "InstancedProp",
+                name,
+                format!(
+                    "mesh '{mesh_ref}' not found, add a Mesh, ProceduralMesh, VoxelChunk, or File (obj) asset with that `$id`"
+                ),
             ),
         }]
     }
@@ -290,8 +313,10 @@ impl CrossReferenced for VoxelChunk {
         // is caught here.
         for (i, entry) in palette.iter().enumerate() {
             if entry.as_str().unwrap_or("").is_empty() && !entry.is_u64() {
-                refs.push(CrossRef::Issue(format!(
-                    "VoxelChunk '{name}': palette[{i}] is not a valid BlockType name"
+                refs.push(CrossRef::Issue(Diagnostic::asset(
+                    "VoxelChunk",
+                    name,
+                    format!("palette[{i}] is not a valid BlockType name"),
                 )));
             }
         }
@@ -313,8 +338,10 @@ impl CrossReferenced for VoxelWorld {
         // is caught here.
         for (i, entry) in palette.iter().enumerate() {
             if entry.as_str().unwrap_or("").is_empty() && !entry.is_u64() {
-                refs.push(CrossRef::Issue(format!(
-                    "VoxelWorld '{name}': palette[{i}] is not a valid BlockType name"
+                refs.push(CrossRef::Issue(Diagnostic::asset(
+                    "VoxelWorld",
+                    name,
+                    format!("palette[{i}] is not a valid BlockType name"),
                 )));
             }
         }
@@ -332,15 +359,21 @@ impl CrossReferenced for PhysicsJoint {
 
         let kind = arg_str("kind");
         if !kind.is_empty() && PhysicsJointKind::from_str_norm(kind).is_none() {
-            refs.push(CrossRef::Issue(format!(
-                "PhysicsJoint '{name}': unknown kind '{kind}' (expected one of {})",
-                PhysicsJointKind::ACCEPTED.join(" | ")
+            refs.push(CrossRef::Issue(Diagnostic::asset(
+                "PhysicsJoint",
+                name,
+                format!(
+                    "unknown kind '{kind}' (expected one of {})",
+                    PhysicsJointKind::ACCEPTED.join(" | ")
+                ),
             )));
         }
 
         if arg_str("body_a").is_empty() {
-            refs.push(CrossRef::Issue(format!(
-                "PhysicsJoint '{name}': `body_a` is required, name of a Prop with a collider"
+            refs.push(CrossRef::Issue(Diagnostic::asset(
+                "PhysicsJoint",
+                name,
+                "`body_a` is required, name of a Prop with a collider",
             )));
         }
 
@@ -358,8 +391,10 @@ impl CrossReferenced for Behavior {
             if let Some(var) = source.get("variable")
                 && var.as_str().unwrap_or("").is_empty()
             {
-                refs.push(CrossRef::Issue(format!(
-                    "Behavior '{name}': `variable` source requires a variable name"
+                refs.push(CrossRef::Issue(Diagnostic::asset(
+                    "Behavior",
+                    name,
+                    "`variable` source requires a variable name",
                 )));
             }
             for verb in ["enter", "exit"] {
@@ -368,15 +403,21 @@ impl CrossReferenced for Behavior {
                         refs.push(CrossRef::Resolve {
                             kind: RefKind::TriggerVolume,
                             target: target.clone(),
-                            error: format!(
-                                "Behavior '{name}': `{verb}` volume '{target}' not found, \
+                            error: Diagnostic::asset(
+                                "Behavior",
+                                name,
+                                format!(
+                                    "`{verb}` volume '{target}' not found, \
                                  add a TriggerVolume asset with that `$id`"
+                                ),
                             ),
                         });
                     }
                     Some(serde_json::Value::String(_) | serde_json::Value::Null) => {
-                        refs.push(CrossRef::Issue(format!(
-                            "Behavior '{name}': `{verb}` source requires a TriggerVolume name"
+                        refs.push(CrossRef::Issue(Diagnostic::asset(
+                            "Behavior",
+                            name,
+                            format!("`{verb}` source requires a TriggerVolume name"),
                         )));
                     }
                     _ => {}
@@ -387,12 +428,18 @@ impl CrossReferenced for Behavior {
                     refs.push(CrossRef::Resolve {
                         kind: RefKind::AnyAsset,
                         target: target.clone(),
-                        error: format!("Behavior '{name}': `interact` target '{target}' not found"),
+                        error: Diagnostic::asset(
+                            "Behavior",
+                            name,
+                            format!("`interact` target '{target}' not found"),
+                        ),
                     });
                 }
                 Some(serde_json::Value::String(_) | serde_json::Value::Null) => {
-                    refs.push(CrossRef::Issue(format!(
-                        "Behavior '{name}': `interact` source requires an entity name"
+                    refs.push(CrossRef::Issue(Diagnostic::asset(
+                        "Behavior",
+                        name,
+                        "`interact` source requires an entity name",
                     )));
                 }
                 _ => {}
@@ -422,12 +469,18 @@ fn walk_behavior_nodes(value: Option<&serde_json::Value>, name: &str, refs: &mut
                 refs.push(CrossRef::Resolve {
                     kind,
                     target: target.clone(),
-                    error: format!("Behavior '{name}': {verb} {key} '{target}' not found"),
+                    error: Diagnostic::asset(
+                        "Behavior",
+                        name,
+                        format!("{verb} {key} '{target}' not found"),
+                    ),
                 });
             }
             None | Some(serde_json::Value::String(_) | serde_json::Value::Null) => {
-                refs.push(CrossRef::Issue(format!(
-                    "Behavior '{name}': `{verb}` node requires `{key}`"
+                refs.push(CrossRef::Issue(Diagnostic::asset(
+                    "Behavior",
+                    name,
+                    format!("`{verb}` node requires `{key}`"),
                 )));
             }
             _ => {}
@@ -449,14 +502,18 @@ fn walk_behavior_nodes(value: Option<&serde_json::Value>, name: &str, refs: &mut
                             refs.push(CrossRef::Resolve {
                                 kind: RefKind::AnyAsset,
                                 target: target.clone(),
-                                error: format!(
-                                    "Behavior '{name}': `named` entity '{target}' not found"
+                                error: Diagnostic::asset(
+                                    "Behavior",
+                                    name,
+                                    format!("`named` entity '{target}' not found"),
                                 ),
                             });
                         }
                         serde_json::Value::String(_) | serde_json::Value::Null => {
-                            refs.push(CrossRef::Issue(format!(
-                                "Behavior '{name}': `named` requires an entity name"
+                            refs.push(CrossRef::Issue(Diagnostic::asset(
+                                "Behavior",
+                                name,
+                                "`named` requires an entity name",
                             )));
                         }
                         _ => {}
@@ -598,7 +655,7 @@ mod tests {
         let issues: Vec<_> = refs
             .iter()
             .filter_map(|r| match r {
-                CrossRef::Issue(msg) => Some(msg.clone()),
+                CrossRef::Issue(msg) => Some(msg.to_string()),
                 CrossRef::Resolve { .. } => None,
             })
             .collect();

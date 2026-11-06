@@ -1,6 +1,7 @@
-pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), String> {
+use crate::world_builder::Diagnostic;
+pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
     crate::compile::environment_map::validate_environment_map_args(args)
-        .map_err(|e| format!("Asset '{name}': {e}"))
+        .map_err(|e| Diagnostic::asset("EnvironmentMap", name, e))
 }
 
 #[cfg(test)]
@@ -14,10 +15,12 @@ mod tests {
 
     #[test]
     fn an_unsupported_source_container_is_reported_against_the_asset_name() {
-        let err = check("ibl", &serde_json::json!({"source": "studio.png"})).unwrap_err();
+        let err = check("ibl", &serde_json::json!({"source": "studio.png"}))
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             err,
-            "Asset 'ibl': EnvironmentMap source 'studio.png' must be a Radiance .hdr \
+            "EnvironmentMap 'ibl': EnvironmentMap source 'studio.png' must be a Radiance .hdr \
              file or a panorama-sphere .glb / .gltf"
         );
     }
@@ -29,10 +32,12 @@ mod tests {
 
     #[test]
     fn an_unknown_generator_is_reported_against_the_asset_name() {
-        let err = check("ibl", &serde_json::json!({"generator": "aurora"})).unwrap_err();
+        let err = check("ibl", &serde_json::json!({"generator": "aurora"}))
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             err,
-            "Asset 'ibl': unknown EnvironmentMap generator 'aurora'"
+            "EnvironmentMap 'ibl': unknown EnvironmentMap generator 'aurora'"
         );
     }
 }
