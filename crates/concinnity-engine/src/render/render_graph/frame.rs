@@ -48,10 +48,10 @@ use super::{
     full_mip_levels,
 };
 
-/// Per-frame inputs that gate conditional passes. Built by `draw_frame`
-/// from the live `MtlContext` state and consumed by `build_frame_graph`
-/// so the conditional-inclusion decisions made here match what the
-/// executor will dispatch.
+/// Per-frame inputs that gate conditional passes. The frame planner builds
+/// them from what a backend has built and what the world holds this frame,
+/// and `build_frame_graph` consumes them, so the conditional-inclusion
+/// decisions made here match what every backend's executor dispatches.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,

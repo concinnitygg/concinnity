@@ -164,9 +164,8 @@ pub struct SkinnedMeshSourceEntry {
     /// Mirrors `SkinnedMesh::skin_index`: which skinned mesh of `source` the
     /// reload re-imports.
     pub skin_index: u32,
-    /// Index into `MtlContext.skinned_draw_objects` (and the corresponding
-    /// `SkinnedDrawObject` slot on every backend) of the draw this entry
-    /// owns.
+    /// Index of the `SkinnedDrawObject` slot this entry owns, the same on
+    /// every backend.
     pub skinned_index: SkinnedIndex,
     /// Vertex offset (in vertex units, not bytes) into the shared skinned
     /// vertex buffer where this slot's geometry starts.

@@ -130,7 +130,7 @@ pub enum PassKind {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ResourceOrigin {
     // Engine owns the GPU object; the graph just references it by
-    // handle. Most of today's `MtlContext` targets enter the graph via
+    // handle. Most of a backend's render targets enter the graph via
     // `import_texture` / `import_buffer`.
     Imported,
     // Graph-tracked resource declared via `create_texture` /

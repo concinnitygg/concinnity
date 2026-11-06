@@ -302,4 +302,93 @@ mod tests {
         assert_eq!(cloud_march_size([7, 1]), [4, 1]);
         assert_eq!(cloud_march_size([0, 0]), [1, 1]);
     }
+
+    // One default layer in a still wind, the march at full quality.
+    fn one_layer() -> CloudSettings {
+        CloudSettings::resolve(
+            &[crate::components::Cloud::default()],
+            &crate::wind::WindField::STILL,
+            CloudMarch::FULL,
+        )
+        .expect("a default cloud resolves")
+    }
+
+    fn frame(camera_km: [f32; 3]) -> CloudFrame {
+        CloudFrame {
+            layers: Default::default(),
+            to_fixed: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            camera_km,
+            daylight: DaylightBlock::OFF,
+            shadow: super::super::shadow::CloudShadowSquare::default(),
+            shadow_lanes: crate::gfx::render_types::CloudShadowLanes::OFF,
+            time: 0.0,
+            horizon: super::super::frame::CloudHorizon::true_ground(6360.0),
+        }
+    }
+
+    // A layer's shell is its base and top above the ground, and the shell
+    // around every layer spans the lowest base to the highest top.
+    #[test]
+    fn layers_sit_above_the_ground_they_are_built_over() {
+        let settings = one_layer();
+        let layer = settings.layers()[0];
+        let ground = 6360.0;
+        let p = CloudParams::new(
+            &settings,
+            ground,
+            &frame([0.0, ground, 0.0]),
+            [1280, 720],
+            0,
+        );
+        assert_eq!(p.layers[0].shell[0], ground + layer.base_km);
+        assert_eq!(p.layers[0].shell[1], ground + layer.top_km);
+        let [lo, hi] = settings.span_km();
+        assert_eq!(&p.shell[..3], &[ground + lo, ground + hi, 1.0]);
+        assert_eq!(p.camera, [0.0, ground, 0.0, ground]);
+        assert_eq!(p.layers[1].shell, [0.0; 4], "an undeclared layer is empty");
+    }
+
+    // The target is the scene scaled down, with its reciprocals beside it, and
+    // the frame index picks the texel each 2x2 block marches.
+    #[test]
+    fn the_target_and_the_marched_texel_follow_the_scene_and_frame() {
+        let settings = one_layer();
+        let p = CloudParams::new(&settings, 6360.0, &frame([0.0; 3]), [1280, 720], 2);
+        assert_eq!(p.target, [640.0, 360.0, 1.0 / 640.0, 1.0 / 360.0]);
+        assert_eq!(
+            p.scene,
+            [1280.0, 720.0, 1.0, 0.0],
+            "frame 2 marches texel [1, 0]"
+        );
+        assert_eq!(p.shell[3], 2.0, "the frame index lane");
+        let wrapped = CloudParams::new(&settings, 6360.0, &frame([0.0; 3]), [1280, 720], 4098);
+        assert_eq!(wrapped.shell[3], 2.0, "the index lane wraps at 4096");
+    }
+
+    // With no previous frame the block marches; with one it reprojects
+    // through the previous view from the previous camera.
+    #[test]
+    fn history_is_read_only_when_there_is_a_previous_frame() {
+        let settings = one_layer();
+        let p = CloudParams::new(&settings, 6360.0, &frame([0.0; 3]), [64, 64], 0);
+        let mut moved = crate::transform::IDENTITY;
+        moved[3] = [4.0, 5.0, 6.0, 1.0];
+        let previous = CloudProjection {
+            view: moved,
+            camera_km: [1.0, 2.0, 3.0],
+        };
+        let reprojecting = p.with_history(Some(previous));
+        assert_eq!(reprojecting.prev_view, moved);
+        assert_eq!(reprojecting.prev_camera, [1.0, 2.0, 3.0, 1.0]);
+        assert_eq!(
+            reprojecting.with_history(None).prev_camera,
+            [0.0; 4],
+            "losing the previous frame turns reprojection off"
+        );
+        assert_eq!(
+            p.panorama[0], 1.0,
+            "every panorama texel marches by default"
+        );
+        assert_eq!(p.with_panorama_share(0.25).panorama[0], 0.25);
+    }
 }

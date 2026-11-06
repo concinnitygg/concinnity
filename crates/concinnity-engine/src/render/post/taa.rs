@@ -421,4 +421,75 @@ mod tests {
             }
         );
     }
+
+    // The constants a recorded draw was given, read back as the four lanes of
+    // `TaaParams`.
+    fn lanes(constants: &[u8]) -> Vec<f32> {
+        constants
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
+    }
+
+    // The resolve writes this frame's slot from the scene, the motion vectors
+    // and the slot before it, and stands the motion vectors in for a reactive
+    // mask no pass wrote, which it then ignores.
+    #[test]
+    fn the_resolve_reads_the_previous_slot_into_this_one() {
+        use crate::render::post::mock::{MockDevice, MockTexture};
+        let device = MockDevice::new();
+        let extent = PostExtent {
+            width: 64,
+            height: 64,
+        };
+        let pass = TaaPass::new(&device, TaaRing::ping_pong(), extent).expect("pass");
+        let (scene, velocity) = (MockTexture::External(1), MockTexture::External(2));
+        let inputs = TaaInputs {
+            scene,
+            velocity,
+            reactive: None,
+            history_scale: 2.0,
+        };
+        pass.encode(&device, &(), 1, &inputs).expect("encode");
+        let draws = device.draws.borrow();
+        let [draw] = draws.as_slice() else {
+            panic!("one draw, got {}", draws.len());
+        };
+        assert_eq!(draw.target, MockTexture::Target(1));
+        let binds: Vec<_> = draw.binds.iter().map(|b| b.0).collect();
+        assert_eq!(binds, [scene, velocity, MockTexture::Target(0), velocity]);
+        assert_eq!(lanes(&draw.constants), [0.0, 0.0, LOCK_DECAY, 2.0]);
+    }
+
+    // Once the ring holds history it is read, and a mask written this frame is
+    // bound and capped at what TAA's reader allows.
+    #[test]
+    fn valid_history_and_a_written_mask_reach_the_resolve() {
+        use crate::render::post::mock::{MockDevice, MockTexture};
+        let device = MockDevice::new();
+        let extent = PostExtent {
+            width: 64,
+            height: 64,
+        };
+        let mut pass = TaaPass::new(&device, TaaRing::ping_pong(), extent).expect("pass");
+        pass.advance();
+        let mask = MockTexture::External(3);
+        let inputs = TaaInputs {
+            scene: MockTexture::External(1),
+            velocity: MockTexture::External(2),
+            reactive: Some(mask),
+            history_scale: 1.0,
+        };
+        pass.encode(&device, &(), 0, &inputs).expect("encode");
+        let draw = &device.draws.borrow()[0];
+        assert_eq!(draw.target, MockTexture::Target(0));
+        assert_eq!(
+            draw.binds[2].0,
+            MockTexture::Target(1),
+            "the slot before slot 0"
+        );
+        assert_eq!(draw.binds[3].0, mask);
+        let cap = ReactiveReader::Taa.cap().expect("TAA reads the mask");
+        assert_eq!(lanes(&draw.constants), [1.0, cap, LOCK_DECAY, 1.0]);
+    }
 }
