@@ -243,8 +243,8 @@ impl DxContext {
             eye,
             concinnity_engine::render::temporal::model_history::HistoryMode::Untracked,
         );
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(slot);
+        if let Some(params) = self.cull.material_params.as_ref() {
+            params.upload(&mut self.state.material_params, slot);
         }
 
         let alloc = &self.hw.alloc;

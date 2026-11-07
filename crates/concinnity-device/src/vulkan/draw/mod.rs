@@ -68,8 +68,8 @@ impl VkContext {
         cam_pos: [f32; 3],
         history: HistoryMode,
     ) -> FanOutTiming {
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(frame_idx);
+        if let Some(params) = self.cull.material_params.as_ref() {
+            params.upload(&mut self.state.material_params, frame_idx);
         }
         let (Some(objects), Some(args)) = (
             self.cull.object_buffers.get(frame_idx),

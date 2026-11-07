@@ -36,6 +36,7 @@ use concinnity_engine::render::backend::init::{
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::decal::DecalRecord;
 use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
+use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::particles::ParticleEmitterRecord;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
@@ -178,7 +179,7 @@ impl VkContext {
             hot_reload,
             capture,
             embedded_surface: _,
-            scene: world,
+            scene: mut world,
             shaders: world_shaders,
             media,
             light_uniforms,
@@ -207,6 +208,9 @@ impl VkContext {
         // thread alone.
         record_main_thread();
         let frames = graphics.frames_in_flight();
+        // The material parameter table, one copy per frame in flight.
+        let material_params =
+            MaterialParamTable::new(std::mem::take(&mut world.material_params), frames);
 
         let request = bootstrap::HardwareRequest {
             window,
@@ -297,6 +301,7 @@ impl VkContext {
             cull::CullInputs {
                 world: &world,
                 world_shaders: &world_shaders,
+                material_params: &material_params,
                 plan: &plan,
                 occlusion_two_pass: graphics.culling.two_pass_occlusion,
                 descriptors: &descriptors,
@@ -445,6 +450,7 @@ impl VkContext {
                     world.n_chunk_max,
                 ),
                 clear_color,
+                material_params,
             ),
             graph_scratch: None,
             submit_scratch: Vec::new(),

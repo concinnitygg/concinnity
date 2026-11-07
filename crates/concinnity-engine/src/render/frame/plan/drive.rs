@@ -175,7 +175,11 @@ mod tests {
     impl Recorder {
         fn new(acquire: bool) -> Self {
             Self {
-                scene: SceneState::new(DrawList::unreserved(Vec::new(), 0), [0.0; 4]),
+                scene: SceneState::new(
+                    DrawList::unreserved(Vec::new(), 0),
+                    [0.0; 4],
+                    crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+                ),
                 lights: LightState::new(LightUniforms::DEFAULT, &[], 1),
                 steps: Vec::new(),
                 acquire,

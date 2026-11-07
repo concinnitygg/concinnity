@@ -3,7 +3,8 @@
 
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::shader::world_pipelines::{BucketPlan, WorldPipelines};
 use windows::Win32::Graphics::Direct3D12::*;
 
@@ -41,8 +42,8 @@ pub(super) struct BindlessPass {
 // by `install_world_shader`.
 pub(super) fn build_bindless_pass(
     gpu: &InitGpu<'_>,
-    world: &SceneData<'_>,
     world_shaders: &[WorldShader<'_>],
+    material_params: &MaterialParamTable,
     plan: &CullPlan,
     msaa_samples: u32,
     gbuffer_enabled: bool,
@@ -118,14 +119,11 @@ pub(super) fn build_bindless_pass(
             object_buffers.push(buf);
         }
     }
-    // The material parameter table, over the same slots as the object buffers.
+    // The material parameter table's copies, over the same slots as the
+    // object buffers.
     let material_params = match n_cull {
         0 => None,
-        _ => Some(DxMaterialParams::new(
-            &gpu.hw.alloc,
-            world.material_params.clone(),
-            gpu.hw.frames() + 1,
-        )?),
+        _ => Some(DxMaterialParams::new(&gpu.hw.alloc, material_params)?),
     };
 
     Ok(BindlessPass {

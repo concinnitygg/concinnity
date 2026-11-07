@@ -926,7 +926,6 @@ impl backend::SdfVolumeShaders for RecordingBackend {}
 impl SettingsTarget for RecordingBackend {}
 impl backend::SceneLights for RecordingBackend {}
 impl backend::ReflectionProbes for RecordingBackend {}
-impl backend::MaterialParamRows for RecordingBackend {}
 impl backend::PlanetReshape for RecordingBackend {}
 impl backend::RuntimeDecals for RecordingBackend {}
 impl backend::RuntimeEmitters for RecordingBackend {}

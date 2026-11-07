@@ -5,6 +5,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
 use crate::directx::context::{DxDescriptors, DxTargets};
@@ -49,6 +50,7 @@ pub(super) fn plan_cull(world: &SceneData<'_>) -> CullPlan {
 pub(super) struct CullInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    pub(super) material_params: &'a MaterialParamTable,
     pub(super) plan: &'a CullPlan,
     pub(super) descriptors: &'a DxDescriptors,
     pub(super) targets: &'a DxTargets,
@@ -65,6 +67,7 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     let CullInputs {
         world,
         world_shaders,
+        material_params,
         plan,
         descriptors,
         targets,
@@ -76,8 +79,8 @@ pub(super) fn build_cull(gpu: &InitGpu<'_>, inputs: CullInputs<'_>) -> RenderRes
     } = inputs;
     let bindless = bindless::build_bindless_pass(
         gpu,
-        world,
         world_shaders,
+        material_params,
         plan,
         targets.hdr.msaa_samples,
         gbuffer_enabled,

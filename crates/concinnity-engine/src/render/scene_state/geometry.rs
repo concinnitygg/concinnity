@@ -721,7 +721,11 @@ mod tests {
         obj.vertex_count = 3;
         obj.index_count = 3;
         obj.resident = false;
-        let mut scene = SceneState::new(DrawList::unreserved(vec![obj], 0), [0.0; 4]);
+        let mut scene = SceneState::new(
+            DrawList::unreserved(vec![obj], 0),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        );
         scene.seed_mesh_streaming(
             0,
             (meshes * 3 * VERTEX) as u64,
@@ -887,7 +891,11 @@ mod tests {
             index_count: 2,
             switch_distance: 5.0,
         }];
-        SceneState::new(DrawList::unreserved(vec![obj], 0), [0.0; 4])
+        SceneState::new(
+            DrawList::unreserved(vec![obj], 0),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        )
     }
 
     #[test]
@@ -956,7 +964,11 @@ mod tests {
 
     // A scene with chunk headroom for `vertices` vertices and `indices` indices.
     fn chunked(vertices: usize, indices: usize) -> SceneState {
-        let mut scene = SceneState::new(DrawList::with_runtime_reserve(vec![], 0, 4), [0.0; 4]);
+        let mut scene = SceneState::new(
+            DrawList::with_runtime_reserve(vec![], 0, 4),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        );
         scene
             .placement
             .chunk_vtx
@@ -1362,7 +1374,11 @@ mod tests {
     fn a_chunk_in_headroom_off_a_vertex_boundary_still_draws_its_own_vertices() {
         // An empty world's shared vertex buffer is a 4-byte placeholder, so the
         // chunk headroom appended after it starts mid-vertex.
-        let mut scene = SceneState::new(DrawList::with_runtime_reserve(vec![], 0, 4), [0.0; 4]);
+        let mut scene = SceneState::new(
+            DrawList::with_runtime_reserve(vec![], 0, 4),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        );
         scene.placement.chunk_vtx.free(4, (4 * VERTEX) as u64, 0);
         scene.placement.chunk_idx.free(2, 16, 0);
         let mut w = Recorder::default();

@@ -1558,7 +1558,11 @@ mod tests {
         let t = terrain([0.0; 3], [400.0, 400.0], vec![grass(100.0)]);
         let mut f = GrassField::resolve(&[t], None).unwrap();
         resize(&mut f, [1600, 900]);
-        let scene = SceneState::new(DrawList::unreserved(Vec::new(), 0), [0.0; 4]);
+        let scene = SceneState::new(
+            DrawList::unreserved(Vec::new(), 0),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        );
         let mut state = GrassFrameState::default();
         let view = GrassView {
             camera: camera([0.0, 2.0, 0.0]),

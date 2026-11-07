@@ -1,59 +1,43 @@
-//! The material parameter table on Metal: the engine's table ringed over the same
+//! The material parameter table on Metal: the scene's table ringed over the same
 //! slots as the object buffer (the frames in flight plus the probe bake's), each
 //! slot's copy rewritten only when it is fresh or behind a change.
 
-use concinnity_engine::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
-use concinnity_engine::render::backend::MaterialParamRows;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice};
 
-use super::context::{MtlContext, bytes_of_slice, write_buffer_region};
+use super::context::{bytes_of_slice, write_buffer_region};
 use super::frame_rings::TransientRing;
 
 // The Metal buffer index the main pass reads the table from, on both stages.
 pub(super) const MATERIAL_PARAMS_BUFFER_INDEX: usize = 16;
 
 pub(super) struct MaterialParamRing {
-    table: MaterialParamTable,
     ring: TransientRing,
 }
 
 impl MaterialParamRing {
-    // `depth` ring slots over `rows` (see `material_params::rows`).
-    pub(super) fn new(rows: Vec<GpuMaterialParams>, depth: usize) -> Self {
-        let depth = depth.max(1);
+    // One ring slot per copy `table` tracks.
+    pub(super) fn new(table: &MaterialParamTable) -> Self {
         Self {
-            table: MaterialParamTable::new(rows, depth),
-            ring: TransientRing::new(depth),
+            ring: TransientRing::new(table.copies().max(1)),
         }
     }
 
-    pub(super) fn set(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) -> bool {
-        self.table.set(row, params)
-    }
-
-    // `slot`'s copy of the table, written first when it is new or out of date.
+    // `slot`'s copy of `table`, written first when it is new or out of date.
     pub(super) fn buffer(
         &mut self,
         device: &ProtocolObject<dyn MTLDevice>,
+        table: &mut MaterialParamTable,
         slot: usize,
     ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
-        let (buf, fresh) = self.ring.slot_fresh(device, slot, self.table.byte_len())?;
-        let behind = self.table.take_upload(slot).is_some();
+        let (buf, fresh) = self.ring.slot_fresh(device, slot, table.byte_len())?;
+        let behind = table.take_upload(slot).is_some();
         if fresh || behind {
-            write_buffer_region(&buf, 0, bytes_of_slice(self.table.rows()))?;
+            write_buffer_region(&buf, 0, bytes_of_slice(table.rows()))?;
         }
         Ok(buf)
-    }
-}
-
-impl MaterialParamRows for MtlContext {
-    // Replace one row of the material parameter table; every ring slot is
-    // rewritten as the frames come round to it.
-    fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
-        self.rings.material_params.set(row, params);
     }
 }

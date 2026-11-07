@@ -12,6 +12,7 @@ use crate::metal::frame_rings::{JointRing, TransientRing};
 use crate::metal::material_params::MaterialParamRing;
 use crate::metal::pass_timing::PassTimingResources;
 use crate::record_pack::RecordPacker;
+use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::record_pack::StaticSlots;
 
 // The bindless buffers an async reflection-probe bake reads across frames
@@ -23,22 +24,24 @@ use concinnity_engine::render::record_pack::StaticSlots;
 // frame never overwrites, keeping the bake's CPU-written buffers valid
 // across its asynchronous (no `waitUntilCompleted`) GPU capture. See
 // metal/probe.rs `bake_ring_slot`.
-pub(super) fn build_rings(
-    gpu: &InitGpu<'_>,
-    material_params: Vec<concinnity_engine::gfx::render_types::GpuMaterialParams>,
-) -> FrameRings {
+pub(super) fn ring_slots(frames_in_flight: usize) -> usize {
+    frames_in_flight.max(1) + 1
+}
+
+pub(super) fn build_rings(gpu: &InitGpu<'_>, material_params: &MaterialParamTable) -> FrameRings {
     let frames_in_flight = gpu.frames_in_flight;
+    let slots = ring_slots(frames_in_flight);
     FrameRings {
-        object: TransientRing::new(frames_in_flight.max(1) + 1),
-        draw_args: TransientRing::new(frames_in_flight.max(1) + 1),
-        instance_tail: StaticSlots::new(frames_in_flight.max(1) + 1),
+        object: TransientRing::new(slots),
+        draw_args: TransientRing::new(slots),
+        instance_tail: StaticSlots::new(slots),
         packer: RecordPacker::default(),
         model_history: TransientRing::new(frames_in_flight),
         bindless_tex: TransientRing::new(frames_in_flight.max(1)),
-        probe_records: TransientRing::new(frames_in_flight.max(1) + 1),
-        probe_tail: StaticSlots::new(frames_in_flight.max(1) + 1),
-        joint: JointRing::new(frames_in_flight.max(1) + 1),
-        material_params: MaterialParamRing::new(material_params, frames_in_flight.max(1) + 1),
+        probe_records: TransientRing::new(slots),
+        probe_tail: StaticSlots::new(slots),
+        joint: JointRing::new(slots),
+        material_params: MaterialParamRing::new(material_params),
     }
 }
 

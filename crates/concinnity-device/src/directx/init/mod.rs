@@ -27,6 +27,7 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan
 use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::init::{BackendInit, PlanarBudget, WorldShader};
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
@@ -161,7 +162,7 @@ impl DxContext {
             hot_reload,
             capture,
             embedded_surface: _,
-            scene: world,
+            scene: mut world,
             shaders: world_shaders,
             media,
             light_uniforms,
@@ -265,11 +266,16 @@ impl DxContext {
             shadows.map_size,
         )?;
 
+        // The material parameter table, over the same slots as the object
+        // buffers: the frames in flight plus the probe bake's.
+        let material_params =
+            MaterialParamTable::new(std::mem::take(&mut world.material_params), hw.frames() + 1);
         let cull = cull::build_cull(
             &gpu,
             cull::CullInputs {
                 world: &world,
                 world_shaders: &world_shaders,
+                material_params: &material_params,
                 plan: &plan,
                 descriptors: &descriptors,
                 targets: &targets,
@@ -449,6 +455,7 @@ impl DxContext {
                     world.n_chunk_max,
                 ),
                 clear_color,
+                material_params,
             ),
             graph_scratch: std::cell::Cell::default(),
             pass_lists: std::cell::Cell::default(),

@@ -43,7 +43,7 @@ use super::context::{HDR_FORMAT, VkContext};
 use super::descriptor_layout::{PoolSizes, global_set};
 use super::draw::ViewUniforms;
 use super::global_set::{GlobalBindings, GlobalSetContents};
-use super::material_params::{MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING};
+use super::material_params::{self, MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING};
 use super::probe_prefilter::PrefilterGpu;
 use super::resources::alloc_descriptor_sets;
 use super::set_writes::SetWrites;
@@ -1263,12 +1263,12 @@ impl BakeResources {
         );
 
         // The material parameter table as the bake starts, for every face.
-        let params_buf = ctx
-            .cull
-            .material_params
-            .as_ref()
-            .ok_or_else(|| RenderError::Other("probe: no material parameter table".into()))?
-            .snapshot(alloc)?;
+        if ctx.cull.material_params.is_none() {
+            return Err(RenderError::Other(
+                "probe: no material parameter table".into(),
+            ));
+        }
+        let params_buf = material_params::snapshot(alloc, &ctx.state.material_params)?;
 
         // Per-face bindless sets (set 1): object SSBO + the shared texture pool
         // array + the parameter table + the vertex stream. Only the first and

@@ -7,6 +7,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{SceneData, WorldShader};
+use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
 use crate::vulkan::context::{
@@ -107,6 +108,7 @@ pub(super) fn plan_cull(
 pub(super) struct CullInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) world_shaders: &'a [WorldShader<'a>],
+    pub(super) material_params: &'a MaterialParamTable,
     pub(super) plan: &'a CullPlan,
     pub(super) occlusion_two_pass: bool,
     pub(super) descriptors: &'a VkDescriptors,
@@ -129,6 +131,7 @@ pub(super) fn build_cull(
     let CullInputs {
         world,
         world_shaders,
+        material_params,
         plan,
         occlusion_two_pass,
         descriptors,
@@ -148,7 +151,7 @@ pub(super) fn build_cull(
             descriptors,
             targets,
             scene,
-            material_params: &world.material_params,
+            material_params,
             vertices: geometry.vertex_range(),
             swapchain_format,
             gbuffer_render_pass: gbuffer.map(|gb| gb.prepass_render_pass.handle()),

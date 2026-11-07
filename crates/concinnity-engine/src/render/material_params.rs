@@ -4,8 +4,9 @@
 //! `params_index`, so draws sharing a material share its row, and a change to a
 //! material's parameters rewrites one row without touching any object.
 //!
-//! The CPU owns the rows. A backend rings the table over its frames in flight
-//! and rewrites a frame's copy only after a row changed.
+//! The CPU owns the rows, in the scene every backend draws from. A backend
+//! rings the table over its frames in flight and rewrites a frame's copy only
+//! after a row changed.
 
 use alloc::vec::Vec;
 
@@ -41,6 +42,7 @@ pub fn rows(
 #[derive(Clone, Debug)]
 pub struct MaterialParamTable {
     rows: Vec<GpuMaterialParams>,
+    copies: usize,
     dirty: FrameDirty,
 }
 
@@ -54,6 +56,7 @@ impl MaterialParamTable {
         }
         Self {
             rows,
+            copies: frames,
             dirty: FrameDirty::new(frames),
         }
     }
@@ -61,6 +64,12 @@ impl MaterialParamTable {
     /// Every row, the zero row first.
     pub fn rows(&self) -> &[GpuMaterialParams] {
         &self.rows
+    }
+
+    /// How many GPU copies of the table its changes are tracked for, which is
+    /// how many a backend allocates.
+    pub fn copies(&self) -> usize {
+        self.copies
     }
 
     /// The table's size in bytes, which a copy of it is allocated at.
@@ -134,6 +143,7 @@ mod tests {
     fn a_world_without_materials_still_has_the_zero_row() {
         let table = MaterialParamTable::new(rows([]), 2);
         assert_eq!(table.rows(), &[GpuMaterialParams::default()]);
+        assert_eq!(table.copies(), 2);
         assert_eq!(table.byte_len(), 32);
         assert_eq!(MaterialParamTable::new(Vec::new(), 2).rows().len(), 1);
     }

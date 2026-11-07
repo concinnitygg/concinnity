@@ -38,13 +38,15 @@ pub trait SceneHost {
 mod tests {
     use super::*;
     use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
-    use crate::gfx::render_types::{DrawIndex, MaterialUniforms, SkinnedDrawObject, SkinnedIndex};
+    use crate::gfx::render_types::{
+        DrawIndex, MATERIAL_PARAM_COUNT, MaterialUniforms, SkinnedDrawObject, SkinnedIndex,
+    };
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
         BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
-        FrameParams, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
-        RenderBackend, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws,
-        SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
+        FrameParams, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend,
+        RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame,
+        TextureUploads, WindowControl, WorldReload, WorldShaders,
     };
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
@@ -89,7 +91,11 @@ mod tests {
                     obj
                 })
                 .collect();
-            let mut scene = SceneState::new(DrawList::unreserved(objects, 0), [0.0; 4]);
+            let mut scene = SceneState::new(
+                DrawList::unreserved(objects, 0),
+                [0.0; 4],
+                crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            );
             scene
                 .skinned
                 .draw_objects
@@ -175,7 +181,6 @@ mod tests {
     impl FogControl for Hosted {}
     impl FrameCapture for Hosted {}
     impl GeometryRebuild for Hosted {}
-    impl MaterialParamRows for Hosted {}
     impl PlanetReshape for Hosted {}
     impl ReflectionProbes for Hosted {}
     impl SettingsTarget for Hosted {}
@@ -281,5 +286,25 @@ mod tests {
         assert_eq!(b.scene.draw.objects[0].cull_distance, 9.0);
         assert_eq!(b.draw_geometry_size(DrawIndex(0)), Some((3, 3)));
         assert_eq!(b.draw_lod_index_counts(DrawIndex(0)), Some(vec![]));
+    }
+
+    // A material's new params land in the scene's table, the one every
+    // backend copy is written from; the zero row stays zero.
+    #[test]
+    fn material_params_rewrite_the_scenes_row() {
+        let mut b = Hosted::new();
+        b.scene.material_params = crate::render::material_params::MaterialParamTable::new(
+            crate::render::material_params::rows([[0.0; MATERIAL_PARAM_COUNT]]),
+            2,
+        );
+        let params = [1.0; MATERIAL_PARAM_COUNT];
+        b.set_material_params(1, params);
+        b.set_material_params(0, params);
+        assert_eq!(b.scene.material_params.rows()[1].values, params);
+        assert_eq!(
+            b.scene.material_params.rows()[0].values,
+            [0.0; MATERIAL_PARAM_COUNT]
+        );
+        assert!(b.scene.material_params.take_upload(0).is_some());
     }
 }

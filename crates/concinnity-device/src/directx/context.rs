@@ -1338,8 +1338,8 @@ impl FrameDevice for DxContext {
         // frame) so this write never races a prior frame's in-flight GPU read.
         self.upload_probe_set(frame)?;
         // The material parameter table's copy for this frame, after a change.
-        if let Some(params) = self.cull.material_params.as_mut() {
-            params.upload(frame);
+        if let Some(params) = self.cull.material_params.as_ref() {
+            params.upload(&mut self.state.material_params, frame);
         }
 
         let particle = self.prepare_particle_pass(narrow_f32(elapsed_f64), particle_bursts, frame);

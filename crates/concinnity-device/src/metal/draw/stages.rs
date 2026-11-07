@@ -539,11 +539,11 @@ impl MtlContext {
                 None => (None, None),
             };
             let material_params = match object_buffer {
-                Some(_) => Some(
-                    self.rings
-                        .material_params
-                        .buffer(&self.hw.device, ring_slot)?,
-                ),
+                Some(_) => Some(self.rings.material_params.buffer(
+                    &self.hw.device,
+                    &mut self.state.material_params,
+                    ring_slot,
+                )?),
                 None => None,
             };
             if draw_args.is_some() {

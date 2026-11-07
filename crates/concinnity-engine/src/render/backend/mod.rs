@@ -36,8 +36,6 @@
 mod effects;
 // Rewriting a built world's geometry: the hot-reload rebuilders.
 mod geometry_rebuild;
-// The material parameter table world Shaders read.
-mod materials;
 #[cfg(any(test, feature = "test-support"))]
 mod null;
 // Building replacement pipelines on a thread other than the frame thread.
@@ -79,7 +77,6 @@ pub use effects::{RuntimeDecals, RuntimeEmitters};
 pub use geometry_rebuild::{
     DrawGeometryUpdate, GeometryRebuild, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
-pub use materials::MaterialParamRows;
 #[cfg(any(test, feature = "test-support"))]
 pub use null::NullBackend;
 pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
@@ -99,7 +96,7 @@ pub use tuning::{FogControl, ReflectionProbes, SceneLights};
 pub use window::WindowControl;
 pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
-use crate::gfx::render_types::{LineVertex, MaterialUniforms, TextDrawCall};
+use crate::gfx::render_types::{LineVertex, MATERIAL_PARAM_COUNT, MaterialUniforms, TextDrawCall};
 use crate::render::backend::error::RenderResult;
 use crate::render::scene::flow::SceneControl;
 use crate::settings::apply::SettingsTarget;
@@ -206,7 +203,6 @@ pub trait RenderBackend:
     + FogControl
     + FrameCapture
     + GeometryRebuild
-    + MaterialParamRows
     + PlanetReshape
     + ReflectionProbes
     + SettingsTarget
@@ -331,6 +327,18 @@ pub trait RenderBackend:
     ) {
         if let Some(scene) = self.scene_mut() {
             scene.set_draw_material(draw_idx, material, texture_slot, normal_map_slot);
+        }
+    }
+
+    /// Replace one row of the material parameter table with a material's new
+    /// `params`; `row` is [`crate::render::material_params::row_of`] of its
+    /// handle. Every draw reading the row picks the values up on the next
+    /// frame, as each of the backend's copies of the table comes round. Driven
+    /// by the editor's live material seam. Out-of-range rows and the zero row
+    /// are ignored.
+    fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
+        if let Some(scene) = self.scene_mut() {
+            scene.material_params.set(row, params);
         }
     }
 

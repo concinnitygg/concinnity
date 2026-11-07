@@ -29,6 +29,7 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan
 use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
@@ -340,7 +341,11 @@ impl MtlContext {
             },
         )?;
         let instanced = cull::build_instanced(world.instanced_clusters, scene.textures.len());
-        let rings = commands::build_rings(&gpu, world.material_params);
+        let material_params = MaterialParamTable::new(
+            world.material_params,
+            commands::ring_slots(gpu.frames_in_flight),
+        );
+        let rings = commands::build_rings(&gpu, &material_params);
         // Every instance is one more cull record after the static objects.
         let n_instances = instanced.clusters.iter().map(|c| c.instances.len()).sum();
 
@@ -352,6 +357,7 @@ impl MtlContext {
             state: SceneState::new(
                 DrawList::unreserved(world.draw_objects, n_instances),
                 graphics.background.color,
+                material_params,
             ),
             graph_scratch: None,
             instanced,

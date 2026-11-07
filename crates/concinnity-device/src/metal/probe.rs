@@ -232,7 +232,11 @@ impl MtlContext {
             )?
             .ok_or_else(|| RenderError::Other("probe: no static geometry to bake".into()))?;
         let (object_buffer, draw_args) = (records.objects, records.draw_args);
-        let material_params = self.rings.material_params.buffer(&self.hw.device, slot)?;
+        let material_params = self.rings.material_params.buffer(
+            &self.hw.device,
+            &mut self.state.material_params,
+            slot,
+        )?;
         let counts = self.draw_record_counts();
         let joint_bufs = self.build_joint_buffers(slot)?;
         let morph_weight_bufs = self.build_morph_weight_buffers(slot)?;

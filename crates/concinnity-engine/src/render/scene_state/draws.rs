@@ -194,7 +194,11 @@ mod tests {
 
     fn scene(n: usize) -> SceneState {
         let objects = (0..n).map(|_| draw_object()).collect();
-        SceneState::new(DrawList::unreserved(objects, 0), [0.0; 4])
+        SceneState::new(
+            DrawList::unreserved(objects, 0),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        )
     }
 
     // One tracked draw-args build that observes every draw slot's occupant.
@@ -371,7 +375,11 @@ mod tests {
 
     #[test]
     fn a_clone_past_a_full_reserve_is_refused() {
-        let mut s = SceneState::new(DrawList::with_runtime_reserve(vec![], 0, 1), [0.0; 4]);
+        let mut s = SceneState::new(
+            DrawList::with_runtime_reserve(vec![], 0, 1),
+            [0.0; 4],
+            crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+        );
         s.draw.objects.push(draw_object());
         s.draw.objects[0].resident = true;
         let err = s

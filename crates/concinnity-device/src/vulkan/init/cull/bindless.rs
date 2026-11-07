@@ -7,6 +7,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::WorldShader;
+use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{
     BucketPlan, BucketSource, WorldPipelines,
@@ -50,7 +51,7 @@ pub(super) struct BindlessInputs<'a> {
     pub(super) descriptors: &'a VkDescriptors,
     pub(super) targets: &'a VkTargets,
     pub(super) scene: &'a VkSceneAssets,
-    pub(super) material_params: &'a [render_types::GpuMaterialParams],
+    pub(super) material_params: &'a MaterialParamTable,
     // The shared vertex stream and its size, which a planet tile's morph reads.
     pub(super) vertices: BufferRange,
     pub(super) swapchain_format: vk::Format,
@@ -205,7 +206,7 @@ pub(super) fn build_bindless_pass(
             )?);
         }
 
-        let params = VkMaterialParams::new(alloc, material_params.to_vec(), frames)?;
+        let params = VkMaterialParams::new(alloc, material_params)?;
 
         // One bindless set per frame: binding 0 = that frame's SSBO,
         // binding 1 = the shared pool ([albedo views..] ++ [normal..]), read
@@ -233,7 +234,7 @@ pub(super) fn build_bindless_pass(
             pool_infos.resize(bindless_pool_size, tail);
         }
         for (i, &set) in sets.iter().enumerate() {
-            let params_info = params.descriptor(i);
+            let params_info = params.descriptor(material_params, i);
             SetWrites::new(set)
                 .storage_buffer(0, buffers[i].buffer(), object_buffer_size)
                 .images(1, vk::DescriptorType::SAMPLED_IMAGE, &pool_infos)
