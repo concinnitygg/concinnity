@@ -247,9 +247,7 @@ impl SettingsTarget for Recorder {
         self.calls.push("rebuild".into());
         self.rebuilt = features;
         if self.fail_rebuild {
-            Err(crate::render::backend::error::RenderError::Other(
-                "no".into(),
-            ))
+            Err(RenderError::Other("no".into()))
         } else {
             Ok(())
         }
@@ -363,7 +361,6 @@ fn an_empty_set_rebuilds_nothing() {
 
 #[test]
 fn a_failed_feature_does_not_stop_the_rest_and_its_error_comes_back() {
-    use crate::render::backend::error::RenderError;
     use RebuildFeature::{AutoExposure, Ssao, Ssr};
     let mut ran = Vec::new();
     let result = rebuild_each(set(&[Ssao, Ssr, AutoExposure]), |f| {
@@ -377,4 +374,29 @@ fn a_failed_feature_does_not_stop_the_rest_and_its_error_comes_back() {
     assert_eq!(ran, [Ssao, Ssr, AutoExposure]);
     let err = result.expect_err("the failure is reported");
     assert!(err.to_string().contains("first"), "{err}");
+}
+
+// A backend with no live settings path keeps the default SettingsTarget: it
+// accepts a plan of live pushes and refuses one that reallocates.
+#[test]
+fn a_default_settings_target_accepts_a_live_plan_and_refuses_a_rebuild() {
+    struct Defaulted;
+    impl SettingsTarget for Defaulted {}
+
+    let graphics = ResolvedGraphics::default();
+    let mut plan = ApplyPlan::live(LiveChanges {
+        post_process: true,
+        ambient: true,
+        shadow_cadence: true,
+        feature_params: true,
+        vsync: true,
+    });
+    assert!(apply_plan(&mut Defaulted, &graphics, &plan).is_ok());
+    plan.rebuild.insert(RebuildFeature::Ssao);
+    assert!(matches!(
+        apply_plan(&mut Defaulted, &graphics, &plan),
+        Err(RenderError::Unsupported {
+            op: "rebuild_features"
+        })
+    ));
 }

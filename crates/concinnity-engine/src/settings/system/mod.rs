@@ -248,7 +248,7 @@ pub(crate) fn record_plan(ops: &mut RenderOps, graphics: &ResolvedGraphics, plan
     }
     let graphics = graphics.clone();
     ops.record_with(move |backend, out| {
-        if let Err(e) = backend.apply_settings(&graphics, &plan) {
+        if let Err(e) = crate::settings::apply::apply_plan(backend, &graphics, &plan) {
             tracing::error!("SettingsSystem: settings apply failed: {e}");
             out.note(&e);
         }

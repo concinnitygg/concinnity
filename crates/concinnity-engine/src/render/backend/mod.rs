@@ -5,9 +5,10 @@
 //! [`RenderBackend`] is the mandatory half: the frame, the pushes a frame is
 //! built from, and the thread check. Everything else a backend does is split
 //! by feature into one supertrait each, grouped into the files below, so a
-//! backend implements each feature once, in the module that owns it. Most
-//! methods are defaulted: a default is how a backend says it does not have
-//! that path.
+//! backend implements each feature once, in the module that owns it. The
+//! settings seam is [`SettingsTarget`], which lives in
+//! `crate::settings::apply` with the settings it applies. Most methods are
+//! defaulted: a default is how a backend says it does not have that path.
 //!
 //! A default describes a backend without the feature the operation serves,
 //! by one rule:
@@ -59,7 +60,7 @@ mod skinned;
 mod streaming;
 // The texture pool, the color-grading LUT and the environment map.
 mod textures;
-// The live render settings and the lights, probes and fog the world feeds.
+// The lights, probes and fog the world feeds.
 mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
 mod window;
@@ -94,13 +95,14 @@ pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::{SkinnedDraws, SkinnedFrame};
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
 pub use textures::TextureUploads;
-pub use tuning::{FogControl, ReflectionProbes, RenderTuning, SceneLights};
+pub use tuning::{FogControl, ReflectionProbes, SceneLights};
 pub use window::WindowControl;
 pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
 use crate::gfx::render_types::{LineVertex, MaterialUniforms, TextDrawCall};
 use crate::render::backend::error::RenderResult;
 use crate::render::scene::flow::SceneControl;
+use crate::settings::apply::SettingsTarget;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
 /// an opaque menu backdrop covers the scene: the backend skips every world pass
@@ -193,7 +195,9 @@ pub struct FrameParams<'a> {
 /// The frame and the thread check are required, so a backend missing one
 /// fails to compile rather than silently drawing nothing. The scene pushes are
 /// defaulted over [`SceneHost`]. Everything else is a feature supertrait, each
-/// in its own module; the module docs give the rule their defaults follow.
+/// in its own module, and the settings seam is [`SettingsTarget`] in
+/// `crate::settings::apply`; the module docs give the rule their defaults
+/// follow.
 pub trait RenderBackend:
     SceneHost
     + BackendProbe
@@ -205,7 +209,7 @@ pub trait RenderBackend:
     + MaterialParamRows
     + PlanetReshape
     + ReflectionProbes
-    + RenderTuning
+    + SettingsTarget
     + RuntimeDecals
     + RuntimeEmitters
     + SceneLights
@@ -358,7 +362,6 @@ mod tests {
     use crate::components::ShaderPrograms;
     use crate::gfx::render_types::MaterialUniforms;
     use crate::profile::RenderStats;
-    use crate::render::backend::error::RenderError;
     use crate::render::backend::init::BackendInit;
     use alloc::vec;
 
@@ -436,22 +439,6 @@ mod tests {
         });
 
         // Live look + input tunable no-ops.
-        let graphics = crate::settings::ResolvedGraphics::default();
-        let mut plan =
-            crate::settings::apply::ApplyPlan::live(crate::settings::apply::LiveChanges {
-                post_process: true,
-                ambient: true,
-                shadow_cadence: true,
-                feature_params: true,
-                vsync: true,
-            });
-        assert!(backend.apply_settings(&graphics, &plan).is_ok());
-        plan.rebuild
-            .insert(crate::settings::apply::RebuildFeature::Ssao);
-        assert!(matches!(
-            backend.apply_settings(&graphics, &plan),
-            Err(RenderError::Unsupported { .. })
-        ));
         backend.update_fog_settings(None);
         backend.update_directional_lights(&[]);
         // Moving local lights is a feed like the directional push beside it.

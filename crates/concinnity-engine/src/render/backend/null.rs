@@ -6,12 +6,12 @@
 use super::{
     BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
     FrameParams, GeometryEdit, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
-    RenderBackend, RenderResult, RenderTuning, RuntimeDecals, RuntimeEmitters, SceneHost,
-    SceneLights, SdfVolumeShaders, SkinnedDraws, TextureUploads, WindowControl, WorldReload,
-    WorldShaders,
+    RenderBackend, RenderResult, RuntimeDecals, RuntimeEmitters, SceneHost, SceneLights,
+    SdfVolumeShaders, SkinnedDraws, TextureUploads, WindowControl, WorldReload, WorldShaders,
 };
 use crate::gfx::render_types::TextureSlot;
 use crate::input::snapshot::InputSnapshot;
+use crate::settings::apply::SettingsTarget;
 
 /// A `RenderBackend` that accepts every call and draws nothing.
 pub struct NullBackend;
@@ -92,7 +92,7 @@ impl GeometryRebuild for NullBackend {}
 impl MaterialParamRows for NullBackend {}
 impl PlanetReshape for NullBackend {}
 impl ReflectionProbes for NullBackend {}
-impl RenderTuning for NullBackend {}
+impl SettingsTarget for NullBackend {}
 impl RuntimeDecals for NullBackend {}
 impl RuntimeEmitters for NullBackend {}
 impl SceneLights for NullBackend {}

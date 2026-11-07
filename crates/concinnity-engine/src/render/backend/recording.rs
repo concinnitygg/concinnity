@@ -25,13 +25,13 @@ use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, Swa
 use crate::render::backend::{
     BackendProbe, ChunkMesh, CullReadback, DeviceCapabilities, DrawStreaming, FogControl,
     FrameCapture, FrameParams, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
-    RenderBackend, RenderTuning, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders,
-    SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
+    RenderBackend, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws,
+    SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
 };
 use crate::render::scene_state::SceneState;
 use crate::render::{backend, environment::volumetric_fog, probe::capture, slots::draw_slot};
 use crate::settings::ResolvedGraphics;
-use crate::settings::apply::{ApplyPlan, RebuildSet, SettingsTarget, apply_plan};
+use crate::settings::apply::{RebuildSet, SettingsTarget};
 use crate::window::display_mode;
 
 /// The parts of an assembled `BackendInit` worth asserting on, captured before
@@ -689,16 +689,6 @@ impl WindowControl for RecordingBackend {
 
     fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
         self.record(Call::SetDisplayMode(mode));
-    }
-}
-
-impl RenderTuning for RecordingBackend {
-    fn apply_settings(
-        &mut self,
-        graphics: &ResolvedGraphics,
-        plan: &ApplyPlan,
-    ) -> RenderResult<()> {
-        apply_plan(self, graphics, plan)
     }
 }
 

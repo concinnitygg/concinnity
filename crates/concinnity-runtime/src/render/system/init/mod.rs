@@ -18,7 +18,7 @@ use concinnity_engine::render::world_load::stream_seed::{
 };
 use concinnity_engine::render::{backend, backend::init, draw_list};
 use concinnity_engine::resource::{FontTable, MaterialTable, TextureTable};
-use concinnity_engine::settings::apply::{ApplyPlan, LiveChanges};
+use concinnity_engine::settings::apply::{ApplyPlan, LiveChanges, apply_plan};
 
 use super::backend_handoff::RuntimeHandoff;
 use super::skinned_templates::SkinnedUpload;
@@ -256,7 +256,7 @@ impl GraphicsSystem {
                 ambient: true,
                 ..Default::default()
             });
-            if let Err(e) = backend.apply_settings(&settings.resolved().graphics, &ambient) {
+            if let Err(e) = apply_plan(backend, &settings.resolved().graphics, &ambient) {
                 tracing::error!("GraphicsSystem: ambient push failed: {e}");
             }
             if cursor.capture_at_start {

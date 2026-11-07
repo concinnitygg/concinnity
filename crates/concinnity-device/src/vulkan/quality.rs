@@ -26,15 +26,15 @@
 
 use ash::vk;
 use concinnity_engine::gfx::{auto_exposure, render_types};
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
-use concinnity_engine::render::backend::{RenderTuning, WindowControl};
 use concinnity_engine::render::post::rt_reflections;
 use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
 use concinnity_engine::settings::ResolvedGraphics;
 use concinnity_engine::settings::apply::{
-    ApplyPlan, RebuildFeature, RebuildSet, SettingsTarget, apply_plan, rebuild_each,
+    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 
 use super::context::VkContext;
@@ -424,16 +424,5 @@ impl SettingsTarget for VkContext {
 
     fn push_vsync(&mut self, on: bool) {
         self.set_vsync(on);
-    }
-}
-
-impl RenderTuning for VkContext {
-    // Apply a settings change in the plan order every backend shares.
-    fn apply_settings(
-        &mut self,
-        graphics: &ResolvedGraphics,
-        plan: &ApplyPlan,
-    ) -> RenderResult<()> {
-        apply_plan(self, graphics, plan)
     }
 }

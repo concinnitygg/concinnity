@@ -15,6 +15,7 @@ use concinnity_engine::render::world_load::source_maps::*;
 use concinnity_engine::render::{
     backend, backend::error, environment::volumetric_fog, scene_state, slots::draw_slot,
 };
+use concinnity_engine::settings::apply::SettingsTarget;
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
 use std::path::PathBuf;
@@ -922,7 +923,7 @@ impl backend::FrameCapture for RecordingBackend {}
 impl backend::CullReadback for RecordingBackend {}
 impl backend::WorldShaders for RecordingBackend {}
 impl backend::SdfVolumeShaders for RecordingBackend {}
-impl backend::RenderTuning for RecordingBackend {}
+impl SettingsTarget for RecordingBackend {}
 impl backend::SceneLights for RecordingBackend {}
 impl backend::ReflectionProbes for RecordingBackend {}
 impl backend::MaterialParamRows for RecordingBackend {}

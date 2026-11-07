@@ -43,11 +43,12 @@ mod tests {
     use crate::render::backend::{
         BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
         FrameParams, GeometryRebuild, MaterialParamRows, PlanetReshape, ReflectionProbes,
-        RenderBackend, RenderTuning, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders,
-        SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
+        RenderBackend, RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws,
+        SkinnedFrame, TextureUploads, WindowControl, WorldReload, WorldShaders,
     };
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
+    use crate::settings::apply::SettingsTarget;
     use crate::test_support::draw_object;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -177,7 +178,7 @@ mod tests {
     impl MaterialParamRows for Hosted {}
     impl PlanetReshape for Hosted {}
     impl ReflectionProbes for Hosted {}
-    impl RenderTuning for Hosted {}
+    impl SettingsTarget for Hosted {}
     impl RuntimeDecals for Hosted {}
     impl RuntimeEmitters for Hosted {}
     impl SceneLights for Hosted {}

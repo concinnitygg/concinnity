@@ -20,17 +20,17 @@
 //! geometry), so a live enable hitches once proportional to triangle count.
 
 use concinnity_engine::gfx::{auto_exposure, render_types};
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
-use concinnity_engine::render::backend::{RenderTuning, WindowControl};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::post::rt_reflections;
 use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
 use concinnity_engine::settings::ResolvedGraphics;
 use concinnity_engine::settings::apply::{
-    ApplyPlan, RebuildFeature, RebuildSet, SettingsTarget, apply_plan, rebuild_each,
+    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
 
 use super::auto_exposure::AutoExposureResources;
@@ -484,16 +484,5 @@ impl SettingsTarget for DxContext {
 
     fn push_vsync(&mut self, on: bool) {
         self.set_vsync(on);
-    }
-}
-
-impl RenderTuning for DxContext {
-    // Apply a settings change in the plan order every backend shares.
-    fn apply_settings(
-        &mut self,
-        graphics: &ResolvedGraphics,
-        plan: &ApplyPlan,
-    ) -> RenderResult<()> {
-        apply_plan(self, graphics, plan)
     }
 }

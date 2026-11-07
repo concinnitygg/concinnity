@@ -1,49 +1,11 @@
-//! The render settings a running world can change.
+//! The lights, reflection probes and fog the world feeds a running backend.
 //!
-//! The resolved graphics settings, applied through one plan per change, plus
-//! the lights, reflection probes and fog the world feeds the backend.
+//! The resolved graphics settings reach the backend through
+//! [`SettingsTarget`](crate::settings::apply::SettingsTarget), carried out by
+//! [`apply_plan`](crate::settings::apply::apply_plan).
 
-use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::backend::error::RenderResult;
 use crate::render::environment::volumetric_fog::FogSettings;
-use crate::settings::ResolvedGraphics;
-use crate::settings::apply::ApplyPlan;
-
-/// Live render settings: quality, shadows and post-process.
-///
-/// Defaulted. A plan with nothing to reallocate is a no-op, so a backend that
-/// reads a setting only at init keeps its init-time value;
-/// [`apply_settings`](Self::apply_settings) reports a rebuild it cannot make as
-/// [`RenderError::Unsupported`], so the caller learns it did not happen.
-pub trait RenderTuning {
-    /// Apply a settings change: push the live values the plan names, and
-    /// reallocate the runtime-switched features it names (TAA, SSAO, SSR,
-    /// ray-traced reflections, SSGI, auto-exposure, their G-buffer), whose
-    /// pipelines and targets are built from the settings rather than flipped by
-    /// a uniform. `graphics` is the full resolved snapshot the plan moves to.
-    /// Default: a plan with nothing to reallocate is a no-op, and one with
-    /// something is [`RenderError::Unsupported`], for a backend with no live
-    /// rebuild path. The live values are a feed; a rebuild is a request.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RenderError::Unsupported`] for a plan that reallocates on a
-    /// backend with no live rebuild path, or an error if reallocating a feature
-    /// fails.
-    fn apply_settings(
-        &mut self,
-        graphics: &ResolvedGraphics,
-        plan: &ApplyPlan,
-    ) -> RenderResult<()> {
-        let _ = graphics;
-        if plan.rebuild.is_empty() {
-            Ok(())
-        } else {
-            Err(RenderError::Unsupported {
-                op: "apply_settings",
-            })
-        }
-    }
-}
 
 /// The lights the backend shades with, replaced or moved in place.
 ///

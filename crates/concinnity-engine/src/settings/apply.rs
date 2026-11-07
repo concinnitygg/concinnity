@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use crate::ecs::asset_fields::{ApplyClass, ParamChange};
 use crate::gfx::render_types::PostProcessTunables;
-use crate::render::backend::error::RenderResult;
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::ShadowCadence;
 use crate::settings::{ResolvedGraphics, SettingsDiff};
 
@@ -241,30 +241,52 @@ pub fn rebuild_each(
     first
 }
 
-/// The pieces of a renderer a settings plan reaches. Each backend implements
-/// it once; [`apply_plan`] decides what runs and in which order.
+/// The pieces of a renderer a settings plan reaches: the device seam every
+/// backend implements once, and [`apply_plan`] decides what runs and in which
+/// order.
+///
+/// Defaulted for a backend without live settings: the pushes are feeds and do
+/// nothing, so it keeps its init-time values, and a reallocation is a request
+/// and reports [`RenderError::Unsupported`], so the caller learns it did not
+/// happen.
 pub trait SettingsTarget {
     /// Reallocate `features` to match `graphics`, leaving every other feature's
     /// resources untouched.
     ///
     /// # Errors
     ///
-    /// Returns an error if a feature's GPU resources cannot be reallocated.
+    /// Returns [`RenderError::Unsupported`] on a backend with no live rebuild
+    /// path, or an error if a feature's GPU resources cannot be reallocated.
     fn rebuild_features(
         &mut self,
         graphics: &ResolvedGraphics,
         features: RebuildSet,
-    ) -> RenderResult<()>;
+    ) -> RenderResult<()> {
+        let _ = (graphics, features);
+        Err(RenderError::Unsupported {
+            op: "rebuild_features",
+        })
+    }
     /// Push the per-feature sub-quality scalars of the live features.
-    fn push_feature_params(&mut self, graphics: &ResolvedGraphics);
+    fn push_feature_params(&mut self, graphics: &ResolvedGraphics) {
+        let _ = graphics;
+    }
     /// Push the composite tunables.
-    fn push_post_process(&mut self, tunables: PostProcessTunables);
+    fn push_post_process(&mut self, tunables: PostProcessTunables) {
+        let _ = tunables;
+    }
     /// Push the ambient (IBL) scale.
-    fn push_ambient(&mut self, value: f32);
+    fn push_ambient(&mut self, value: f32) {
+        let _ = value;
+    }
     /// Push the cascade shadow schedule.
-    fn push_shadow_cadence(&mut self, cadence: ShadowCadence);
+    fn push_shadow_cadence(&mut self, cadence: ShadowCadence) {
+        let _ = cadence;
+    }
     /// Turn display sync on or off.
-    fn push_vsync(&mut self, on: bool);
+    fn push_vsync(&mut self, on: bool) {
+        let _ = on;
+    }
 }
 
 /// Carry `plan` out on `target`: reallocate first, so the live pushes that
