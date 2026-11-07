@@ -4,6 +4,7 @@
 // rewritten only after a row changed.
 
 use concinnity_engine::gfx::render_types::{GpuMaterialParams, MATERIAL_PARAM_COUNT};
+use concinnity_engine::render::backend::MaterialParamRows;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -83,14 +84,6 @@ impl DxMaterialParams {
 }
 
 impl DxContext {
-    // Replace one row of the material parameter table; each slot's copy is
-    // rewritten as that slot comes round.
-    pub(super) fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
-        if let Some(table) = self.cull.material_params.as_mut() {
-            table.set(row, params);
-        }
-    }
-
     // The table's GPU address for the pass recorded into ring slot `slot`, or
     // 0 in a world without the bindless pass, whose pipelines never bind it.
     pub(super) fn material_params_gva(&self, slot: usize) -> u64 {
@@ -98,5 +91,15 @@ impl DxContext {
             .material_params
             .as_ref()
             .map_or(0, |table| table.gpu_va(slot))
+    }
+}
+
+impl MaterialParamRows for DxContext {
+    // Replace one row of the material parameter table; each slot's copy is
+    // rewritten as that slot comes round.
+    fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
+        if let Some(table) = self.cull.material_params.as_mut() {
+            table.set(row, params);
+        }
     }
 }

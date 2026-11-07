@@ -41,6 +41,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{ReflectionProbes, RenderBackend};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
 use concinnity_engine::render::planar_reflection::PixelRect;
 use concinnity_engine::render::probe::bake::{
@@ -180,21 +181,6 @@ pub(in crate::directx) struct FaceExtent {
 }
 
 impl DxContext {
-    // Set the reflection-probe placements the graphics system resolved
-    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
-    // scene); an empty list bakes none. Resets the staggered bake, and grows the
-    // cube array when the list outgrows it; a world whose array cannot grow keeps
-    // the sky.
-    pub(super) fn set_reflection_probes(
-        &mut self,
-        placements: &[ProbePlacement],
-        prop_probe: bool,
-    ) {
-        let placements = placements.to_vec();
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
-        crate::probe_report::report_probe_placement(placed);
-    }
-
     // The reserved transient-ring slot the asynchronous bake builds its bindless
     // buffers into. The cull rings are sized one past the frames in
     // flight to make room.
@@ -1126,4 +1112,17 @@ pub(in crate::directx) fn create_bake_depth(
     // destination handle addresses a slot this context reserved for the view in a heap it owns.
     unsafe { device.CreateDepthStencilView(&texture, Some(&raw const dsv_desc), dsv_cpu) };
     Ok(texture)
+}
+
+impl ReflectionProbes for DxContext {
+    // Set the reflection-probe placements the graphics system resolved
+    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
+    // scene); an empty list bakes none. Resets the staggered bake, and grows the
+    // cube array when the list outgrows it; a world whose array cannot grow keeps
+    // the sky.
+    fn set_reflection_probes(&mut self, placements: &[ProbePlacement], prop_probe: bool) {
+        let placements = placements.to_vec();
+        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
+        crate::probe_report::report_probe_placement(placed);
+    }
 }

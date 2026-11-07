@@ -21,6 +21,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::ParticleParams;
+use concinnity_engine::render::backend::RuntimeEmitters;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
@@ -658,18 +659,19 @@ impl DxContext {
     }
 }
 
-// Runtime mutation (RenderBackend::add_emitter / remove_emitter)
+// Runtime mutation (RuntimeEmitters::add_emitter / remove_emitter)
 
 // cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/decal.rs].
-impl DxContext {
+
+impl RuntimeEmitters for DxContext {
     // Append a runtime emitter. Builds the particle pipelines + per-frame
     // uniform rings on first use (matching the init-time path) so a world
     // that never declared an emitter pays zero pipeline cost until the
     // first add. Reuses tombstoned slots from a prior `remove_emitter`
     // before growing the vec.
-    pub(crate) fn add_emitter(&mut self, record: ParticleEmitterRecord) -> RenderResult<usize> {
+    fn add_emitter(&mut self, record: ParticleEmitterRecord) -> RenderResult<usize> {
         if self.particle.resources.is_none() {
             let resources = ParticleResources::new(
                 &self.hw.alloc,
@@ -721,7 +723,7 @@ impl DxContext {
     // `add_emitter` may reuse it. The pool resource is dropped; the D3D12
     // driver keeps it alive until any in-flight command list that referenced it
     // completes, so this is safe to call mid-frame between encode passes.
-    pub(crate) fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
+    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
         self.particle
             .system
             .remove(emitter_id)

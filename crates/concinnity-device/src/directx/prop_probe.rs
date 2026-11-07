@@ -13,6 +13,7 @@
 //! then reads.
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32, saturating_u32};
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::CAPTURE_FACES;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan};

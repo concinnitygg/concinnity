@@ -5,13 +5,14 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::render::backend::error;
+use concinnity_engine::render::backend::{DrawStreaming, RenderBackend};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::com;
 use super::super::context::DxContext;
 use super::super::texture::{one_shot_submit, transition_barrier};
 
-impl DxContext {
+impl DrawStreaming for DxContext {
     // Grow the shared vertex/index buffers by a headroom region for streamed
     // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk
     // material's texture slots ride each chunk's cull record.
@@ -21,7 +22,7 @@ impl DxContext {
     // (larger) DEFAULT-heap buffers; chunks are placed in the appended
     // headroom by `add_chunk_mesh`. This runs before the first frame, so no
     // in-flight command list references the replaced buffers.
-    pub(crate) fn setup_chunk_streaming(
+    fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,

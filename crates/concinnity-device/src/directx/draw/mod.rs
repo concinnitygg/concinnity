@@ -15,14 +15,17 @@ use concinnity_engine::gfx::render_types::{
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
-use concinnity_engine::render::frame::plan::FramePlan;
+use concinnity_engine::render::backend::{FrameParams, RenderBackend, WindowControl};
+use concinnity_engine::render::frame::plan::{FramePlan, drive_frame};
 use concinnity_engine::render::render_graph::PassId;
 use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::System::Threading::WaitForSingleObject;
 
 use super::com;
 use super::context::DxContext;
 use super::graph_exec::GraphFrameParams;
 use crate::directx::error::map_hresult;
+use crate::gpu_wait::GpuWait;
 
 pub(in crate::directx) mod composite;
 pub(in crate::directx) mod main;
@@ -475,4 +478,70 @@ pub(super) fn upload_static_records<T: Copy>(
     // SAFETY: `buffer` was mapped by the `Map` call above, and the copy into it is complete.
     unsafe { buffer.Unmap(0, None) };
     Ok(())
+}
+
+impl RenderBackend for DxContext {
+    // The Win32 message pump and D3D12 command-queue submission are both
+    // thread-affine, which is what the `unsafe impl Send for DxContext` rests on.
+    fn assert_owner_thread(&self) {
+        debug_assert!(
+            super::context::on_owner_thread(),
+            "DxContext is main-thread-only (see `unsafe impl Send for DxContext`); \
+             driving it off the main thread races the Win32 window + D3D12 command submission",
+        );
+    }
+
+    fn wait_idle(&self) {
+        // Staged geometry writes count as submitted work, so an idle GPU has
+        // applied them.
+        if let Err(e) = self.flush_geometry_uploads() {
+            tracing::error!("geometry upload submit failed: {e}");
+        }
+        // Signal a new fence value and wait until the GPU reaches it.
+        let val = self.frame_sync.next_fence_value.get();
+        self.frame_sync.next_fence_value.set(val + 1);
+        // SAFETY: the fence and the event were created from this device and are live for the call.
+        if unsafe { self.hw.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
+            && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
+            // SAFETY: the fence and the event were created from this device and are live for the
+            // call.
+            && unsafe {
+                self.frame_sync
+                    .fence
+                    .SetEventOnCompletion(val, self.frame_sync.fence_event)
+            }
+            .is_ok()
+        {
+            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
+            // context, and the wait borrows nothing else.
+            unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
+        }
+    }
+
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
+    }
+
+    // Block on the next frame slot ahead of the draw: DXGI's frame-latency
+    // waitable, then the slot's fence. The draw's own wait then returns at once.
+    fn prepare_frame(&mut self) {
+        if self.window_minimized() {
+            return;
+        }
+        let mut gpu_wait = GpuWait::none();
+        if self
+            .block_on_frame_slot(self.current_frame, &mut gpu_wait)
+            .is_ok()
+        {
+            self.frame_latency_reserved = true;
+        }
+    }
+
+    // Pump the window's messages outside the draw. The closed flag is sticky,
+    // so the frame's own poll still reports a close.
+    fn pump_events(&mut self) {
+        self.window_closed();
+    }
 }

@@ -11,6 +11,7 @@
 //! follows the resolution (the bloom chain's octaves) moves no other slot.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 use windows::Win32::Graphics::Direct3D12::*;

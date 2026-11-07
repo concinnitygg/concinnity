@@ -4,9 +4,9 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::jitter;
 use concinnity_engine::profile;
-use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::backend::{FrameParams, RenderBackend};
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
@@ -62,30 +62,13 @@ impl DxContext {
         }
     }
 
-    // Block on the next frame slot ahead of the draw: DXGI's frame-latency
-    // waitable, then the slot's fence. The draw's own wait then returns at once.
-    pub(crate) fn prepare_frame(&mut self) {
-        if self.window_minimized() {
-            return;
-        }
-        let mut gpu_wait = GpuWait::none();
-        if self
-            .block_on_frame_slot(self.current_frame, &mut gpu_wait)
-            .is_ok()
-        {
-            self.frame_latency_reserved = true;
-        }
-    }
-
-    // Pump the window's messages outside the draw. The closed flag is sticky,
-    // so the frame's own poll still reports a close.
-    pub(crate) fn pump_events(&mut self) {
-        self.window_closed();
-    }
-
     // Wait until DXGI may queue another present, unless `prepare_frame` already
     // did, then until `frame`'s previous submission has finished.
-    fn block_on_frame_slot(&mut self, frame: usize, gpu_wait: &mut GpuWait) -> RenderResult<()> {
+    pub(super) fn block_on_frame_slot(
+        &mut self,
+        frame: usize,
+        gpu_wait: &mut GpuWait,
+    ) -> RenderResult<()> {
         // Start the frame only once DXGI may queue its present. Bounded, so a
         // display that stops consuming presents cannot wedge the loop.
         if !std::mem::take(&mut self.frame_latency_reserved) {

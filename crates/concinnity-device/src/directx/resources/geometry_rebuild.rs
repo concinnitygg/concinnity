@@ -8,6 +8,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{GeometryRebuild, RenderBackend};
 use concinnity_engine::render::{backend, rt_accel::geom, slots::geometry_repack};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
@@ -22,14 +23,71 @@ use crate::directx::error::map_hresult;
 // below (`read_typed_vec` / `write_upload_buffer`) are walked through these
 // suppressed-but-live-root methods, so they need no attribute of their own.
 // See the note on the analogous block in [directx/decal.rs].
-impl DxContext {
+
+// Byte capacity of a buffer resource. `Width` is the buffer's size in bytes.
+fn buffer_bytes(res: &ID3D12Resource) -> u64 {
+    // SAFETY: a property query on a live resource; it only reads.
+    unsafe { res.GetDesc() }.Width
+}
+
+// Map a READBACK-heap buffer and copy `count` `T`s out into a CPU Vec. The
+// caller has already gated the GPU writes (via `one_shot_submit`'s internal
+// fence wait), so the memcpy sees fully committed bytes. `T` must match the
+// buffer's stride exactly.
+fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> RenderResult<Vec<T>> {
+    let want = (count * size_of::<T>()) as u64;
+    let have = buffer_bytes(src);
+    assert!(
+        want <= have,
+        "read_typed_vec: {want} bytes exceeds readback buffer {have}"
+    );
+    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
+    unsafe { src.Map(0, None, Some(&raw mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), "rebuild readback map"))?;
+    let mut out: Vec<T> = Vec::with_capacity(count);
+    // SAFETY: `Map` returned the live mapping of a READBACK buffer the assert above proved holds at
+    // least `count` `T`s, `out` reserved that many, and the two are separate allocations.
+    unsafe { std::ptr::copy_nonoverlapping(ptr as *const T, out.as_mut_ptr(), count) };
+    // SAFETY: the copy above initialized all `count` elements, within the reserved capacity.
+    unsafe { out.set_len(count) };
+    // SAFETY: unmaps subresource 0 of `src`, mapped above; the copy is done.
+    unsafe { src.Unmap(0, None) };
+    Ok(out)
+}
+
+// Map an UPLOAD-heap buffer and copy `bytes` into it. Standard UPLOAD-heap
+// idiom: Map (CPU writes), copy_nonoverlapping, Unmap (driver flushes).
+fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> {
+    let have = buffer_bytes(dest);
+    assert!(
+        bytes.len() as u64 <= have,
+        "write_upload_buffer: {} bytes exceeds upload buffer {have}",
+        bytes.len()
+    );
+    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
+    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
+    // receives the mapping.
+    unsafe { dest.Map(0, None, Some(&raw mut ptr)) }
+        .map_err(|e| map_hresult(e.code(), "rebuild upload map"))?;
+    // SAFETY: `Map` returned the live mapping of an UPLOAD buffer the assert above proved is at
+    // least `bytes.len()` long, and the source is a separate allocation, so the ranges cannot
+    // overlap.
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len()) };
+    // SAFETY: unmaps subresource 0 of `dest`, mapped above; the write is done.
+    unsafe { dest.Unmap(0, None) };
+    Ok(())
+}
+
+impl GeometryRebuild for DxContext {
     // Swap in rebuilt shared static-mesh buffers for the draws named in
     // `changes`, when a reloaded mesh no longer fits its slot. The DEFAULT-heap
     // buffers are read back through READBACK staging for the repack, and the
     // result is uploaded through UPLOAD staging into fresh DEFAULT-heap
     // buffers. The streamed-mesh sub-allocators are not preserved, so a later
     // `upload_mesh` fails allocation.
-    pub(crate) fn rebuild_static_geometry(
+    fn rebuild_static_geometry(
         &mut self,
         changes: Vec<backend::DrawGeometryUpdate>,
     ) -> RenderResult<()> {
@@ -236,7 +294,7 @@ impl DxContext {
     // (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
     // are untouched. Skeleton-shape changes (joint-count mismatch) route
     // through `update_skinned_skeleton`, not this call.
-    pub(crate) fn rebuild_skinned_geometry(
+    fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<backend::SkinnedDrawGeometryUpdate>,
     ) -> RenderResult<Vec<backend::SkinnedSlotLayout>> {
@@ -389,60 +447,4 @@ impl DxContext {
         self.skinned.index_buffer = Some(new_ibuf);
         Ok(repacked.layouts())
     }
-}
-
-// Byte capacity of a buffer resource. `Width` is the buffer's size in bytes.
-fn buffer_bytes(res: &ID3D12Resource) -> u64 {
-    // SAFETY: a property query on a live resource; it only reads.
-    unsafe { res.GetDesc() }.Width
-}
-
-// Map a READBACK-heap buffer and copy `count` `T`s out into a CPU Vec. The
-// caller has already gated the GPU writes (via `one_shot_submit`'s internal
-// fence wait), so the memcpy sees fully committed bytes. `T` must match the
-// buffer's stride exactly.
-fn read_typed_vec<T: Copy>(src: &ID3D12Resource, count: usize) -> RenderResult<Vec<T>> {
-    let want = (count * size_of::<T>()) as u64;
-    let have = buffer_bytes(src);
-    assert!(
-        want <= have,
-        "read_typed_vec: {want} bytes exceeds readback buffer {have}"
-    );
-    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
-    // receives the mapping.
-    unsafe { src.Map(0, None, Some(&raw mut ptr)) }
-        .map_err(|e| map_hresult(e.code(), "rebuild readback map"))?;
-    let mut out: Vec<T> = Vec::with_capacity(count);
-    // SAFETY: `Map` returned the live mapping of a READBACK buffer the assert above proved holds at
-    // least `count` `T`s, `out` reserved that many, and the two are separate allocations.
-    unsafe { std::ptr::copy_nonoverlapping(ptr as *const T, out.as_mut_ptr(), count) };
-    // SAFETY: the copy above initialized all `count` elements, within the reserved capacity.
-    unsafe { out.set_len(count) };
-    // SAFETY: unmaps subresource 0 of `src`, mapped above; the copy is done.
-    unsafe { src.Unmap(0, None) };
-    Ok(out)
-}
-
-// Map an UPLOAD-heap buffer and copy `bytes` into it. Standard UPLOAD-heap
-// idiom: Map (CPU writes), copy_nonoverlapping, Unmap (driver flushes).
-fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> {
-    let have = buffer_bytes(dest);
-    assert!(
-        bytes.len() as u64 <= have,
-        "write_upload_buffer: {} bytes exceeds upload buffer {have}",
-        bytes.len()
-    );
-    let mut ptr = std::ptr::null_mut::<std::ffi::c_void>();
-    // SAFETY: the resource is a live CPU-visible buffer, and the out-parameter is a live local that
-    // receives the mapping.
-    unsafe { dest.Map(0, None, Some(&raw mut ptr)) }
-        .map_err(|e| map_hresult(e.code(), "rebuild upload map"))?;
-    // SAFETY: `Map` returned the live mapping of an UPLOAD buffer the assert above proved is at
-    // least `bytes.len()` long, and the source is a separate allocation, so the ranges cannot
-    // overlap.
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len()) };
-    // SAFETY: unmaps subresource 0 of `dest`, mapped above; the write is done.
-    unsafe { dest.Unmap(0, None) };
-    Ok(())
 }

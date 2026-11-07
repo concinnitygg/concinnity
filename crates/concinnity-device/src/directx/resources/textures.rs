@@ -6,6 +6,7 @@
 use concinnity_engine::bake;
 use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, TextureUploads};
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::context::DxContext;
@@ -63,6 +64,42 @@ impl DxContext {
         !(self.cull.main_bindless_pso.is_some() && self.state.draw.record_count() > 0)
     }
 
+    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
+    // right after frame slot `frame`'s fence wait: re-point this frame's
+    // flat-pool copy at any swapped slots (legal now -- the wait retired every
+    // list that dereferences this copy), then release retires whose covering
+    // fence has signaled (dropping the entry releases the COM references).
+    pub(in crate::directx) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
+        self.stream.frame += 1;
+        if !self.stream.pool_rewrites.is_empty() {
+            let last = self.scene.textures.len().saturating_sub(1);
+            for slot in self.stream.pool_rewrites.begin_frame() {
+                let resource = &self.scene.textures[slot.min(last)];
+                write_texture_srv(
+                    &self.hw.device,
+                    resource,
+                    self.srv_slot_cpu(self.flat_pool_slot(frame, slot)),
+                );
+            }
+        }
+        self.stream
+            .retires
+            .collect(self.stream.frame, self.stream.retire_depth);
+    }
+}
+
+impl TextureUploads for DxContext {
+    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
+    //
+    // Used by the asset-streaming subsystem to mark a slot whose texture is
+    // not yet resident; a later `update_texture_slot` brings the real texture
+    // back. The gray is distinct from the white no-texture fallback so a
+    // not-yet-streamed slot reads differently under inspection.
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
+        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        self.update_texture_slot(slot, &gray)
+    }
+
     // Replace texture-pool `slot` with a freshly decoded texture.
     //
     // The asset-streaming subsystem calls this to bring a texture resident
@@ -80,7 +117,7 @@ impl DxContext {
     // pending-referenced SRV samples the slot (see `streamed_slot_needs_drain`)
     // the swap instead drains the device and rewrites everything in place,
     // matching the hot-reload paths below.
-    pub(crate) fn update_texture_slot(
+    fn update_texture_slot(
         &mut self,
         slot: TextureSlot,
         image: &bake::texture::TextureImage,
@@ -118,40 +155,6 @@ impl DxContext {
         Ok(())
     }
 
-    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
-    // right after frame slot `frame`'s fence wait: re-point this frame's
-    // flat-pool copy at any swapped slots (legal now -- the wait retired every
-    // list that dereferences this copy), then release retires whose covering
-    // fence has signaled (dropping the entry releases the COM references).
-    pub(in crate::directx) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
-        self.stream.frame += 1;
-        if !self.stream.pool_rewrites.is_empty() {
-            let last = self.scene.textures.len().saturating_sub(1);
-            for slot in self.stream.pool_rewrites.begin_frame() {
-                let resource = &self.scene.textures[slot.min(last)];
-                write_texture_srv(
-                    &self.hw.device,
-                    resource,
-                    self.srv_slot_cpu(self.flat_pool_slot(frame, slot)),
-                );
-            }
-        }
-        self.stream
-            .retires
-            .collect(self.stream.frame, self.stream.retire_depth);
-    }
-
-    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
-    //
-    // Used by the asset-streaming subsystem to mark a slot whose texture is
-    // not yet resident; a later `update_texture_slot` brings the real texture
-    // back. The gray is distinct from the white no-texture fallback so a
-    // not-yet-streamed slot reads differently under inspection.
-    pub(crate) fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
-        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
-        self.update_texture_slot(slot, &gray)
-    }
-
     // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
     // Driven by asset hot-reload (`cn run -f` only) when the file-backed
     // `ColorLut` source is saved. Reuses the SRV heap slot the composite pass
@@ -160,7 +163,7 @@ impl DxContext {
     // guarantees no in-flight command list still references the old texture
     // (or the now-stale SRV) before it is overwritten and dropped. Mirrors
     // `MtlContext::update_color_lut`.
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
+    fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let srv_cpu = self.scene.color_lut.srv_cpu;
         let srv_gpu = self.scene.color_lut.srv_gpu;
@@ -180,7 +183,7 @@ impl DxContext {
     // no in-flight command list still references the old cubes (or the
     // now-stale SRVs) before they are overwritten and dropped. Mirrors
     // `MtlContext::update_environment_map`.
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         self.wait_idle();

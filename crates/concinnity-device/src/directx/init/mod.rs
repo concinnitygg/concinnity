@@ -24,11 +24,15 @@ use concinnity_engine::components::Window;
 use concinnity_engine::gfx::render_types::{FALLBACK_TEXTURE_COUNT, PostProcessParams};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
-use concinnity_engine::render::backend::init::{self, BackendInit, PlanarBudget, WorldShader};
+use concinnity_engine::render::backend::init::SwapchainConfig;
+use concinnity_engine::render::backend::init::{BackendInit, PlanarBudget, WorldShader};
+use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::settings::ResolvedGraphics;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::{
@@ -184,9 +188,9 @@ impl DxContext {
             .first()
             .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
         let output = (window.width, window.height);
-        // Record this (main) thread so the `RenderBackend` mutation entry
-        // points can `debug_assert_main_thread` against it; the Send invariant
-        // rests on the context being touched from this thread alone.
+        // Record this (main) thread for `RenderBackend::assert_owner_thread`;
+        // the Send invariant rests on the context being touched from this
+        // thread alone.
         record_main_thread();
 
         let (hw, swapchain) = open_hardware(reuse, window, &graphics, validation)?;
@@ -481,7 +485,7 @@ fn open_hardware(
         return Ok(reuse);
     }
     // The swapchain config the caller's reload gate compares against.
-    let swapchain_config = init::SwapchainConfig {
+    let swapchain_config = SwapchainConfig {
         frames_in_flight: graphics.frames_in_flight(),
         hdr_display: graphics.display.hdr,
         hdr_pq: graphics.display.pq,
@@ -526,7 +530,18 @@ fn report_init(hw: &DxHardware) {
     tracing::info!("device allocator: {pooled}");
 }
 
-impl DxContext {
+impl WorldReload for DxContext {
+    fn shader_reload_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.hot_reload.flag()
+    }
+
+    // The swapchain config this live context was built with. A live `cn edit`
+    // reload reuses this backend (via `reload_world`) only when the new world's
+    // `swapchain_config` matches; otherwise the swap does a full rebuild.
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        Some(self.hw.swapchain_config)
+    }
+
     // Rebuild the world's GPU content in place for a live `cn edit` reload:
     // idle the GPU, hand the hardware and swapchain to a successor built from
     // `init`, then replace `self` with it. The D3D12 / DXGI objects are COM
@@ -538,10 +553,7 @@ impl DxContext {
     // On a content-build failure (essentially impossible for a pre-validated
     // editor edit built from the engine's built-in shaders) `self.hw.win_state`
     // is left `None`; the caller drops this backend and marks the session failed.
-    pub(in crate::directx) fn apply_world_reload(
-        &mut self,
-        init: BackendInit<'_>,
-    ) -> RenderResult<()> {
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
         self.wait_idle();
         let swapchain = bootstrap::DxgiSwapchain {
             handle: self.swapchain.handle.clone(),

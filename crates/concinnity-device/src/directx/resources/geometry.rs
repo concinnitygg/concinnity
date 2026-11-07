@@ -10,7 +10,7 @@ use concinnity_engine::render::scene_state::{GeometryBuffer, GeometryWriter, Sce
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::super::allocator::DeviceAllocator;
-use super::super::context::{DxContext, debug_assert_main_thread};
+use super::super::context::DxContext;
 use super::super::geometry_upload::{GeometryTarget, GeometryUploads};
 use super::super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
@@ -44,12 +44,10 @@ impl SceneHost for DxContext {
     }
 
     fn scene_mut(&mut self) -> Option<&mut SceneState> {
-        debug_assert_main_thread("scene_mut");
         Some(&mut self.state)
     }
 
     fn edit_geometry(&mut self, edit: GeometryEdit<'_>) -> Option<RenderResult<()>> {
-        debug_assert_main_thread("edit_geometry");
         let mut writer = StagingWriter {
             alloc: &self.hw.alloc,
             uploads: self.geometry_uploads.get_mut(),

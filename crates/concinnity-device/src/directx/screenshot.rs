@@ -19,6 +19,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::image_decode::PixelLayout;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{FrameCapture, RenderBackend};
 use concinnity_engine::render::output::hdr::HdrEncoding;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -35,57 +36,6 @@ use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, PendingCap
 pub(crate) type DxFrameCaptures = FrameCaptures<PooledBuffer, u64>;
 
 impl DxContext {
-    // Capture the last presented frame to a PNG at `path`. Returns the path on
-    // success. Distinct name from the `RenderBackend::screenshot` trait method
-    // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn run -f`).
-    pub(crate) fn capture_screenshot(&self, path: &str) -> RenderResult<String> {
-        let Some(back_idx) = self.swapchain.last_present_index else {
-            return Err(RenderError::Other(
-                "screenshot: no frame has been presented yet".into(),
-            ));
-        };
-        let back_buffer = self
-            .swapchain
-            .back_buffers
-            .get(back_idx)
-            .ok_or_else(|| RenderError::Other("screenshot: stale back-buffer index".into()))?
-            .clone();
-        let width = self.targets.extent.output_width;
-        let height = self.targets.extent.output_height;
-        if width == 0 || height == 0 {
-            return Err(RenderError::Other(
-                "screenshot: zero-sized swapchain".into(),
-            ));
-        }
-
-        // The GPU must be idle: the last-presented buffer is then stable and no
-        // in-flight command list still references the resources we touch.
-        self.wait_idle();
-
-        // Host-readable buffer sized for the padded footprint, mapped for its
-        // life.
-        let (layout, image) = self.capture_footprint();
-        let Mapped {
-            buffer: readback,
-            mapped,
-        } = readback_buffer(&self.hw.alloc, image.byte_len())?;
-
-        // Copy the presented back-buffer into the readback buffer, leaving it in
-        // PRESENT for the next present. `one_shot_submit` fence-waits internally.
-        // Leaking a back-buffer reference here would later block `ResizeBuffers`;
-        // `readback` / `back_buffer` outlive the synchronous `one_shot_submit`.
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
-            encode_copy(cmd, &back_buffer, &readback, layout);
-        })?;
-
-        // SAFETY: the mapping spans the `image.byte_len()` bytes the buffer was sized from, and
-        // the copy into it completed (one_shot_submit waits its fence).
-        let bytes = unsafe { std::slice::from_raw_parts(mapped, image.byte_len()) };
-        frame_capture::save_png(path, &image, bytes)?;
-        Ok(path.to_string())
-    }
-
     // Keep a read-back buffer for the swapchain's footprint ready, so the frame
     // that captures allocates nothing.
     pub(in crate::directx) fn reserve_frame_capture(&mut self) {
@@ -127,13 +77,6 @@ impl DxContext {
         // SAFETY: a capture is parked under the fence value its frame signals
         // after the copy, so a completed value means the copy is done.
         unsafe { self.frame_capture.retire(|&value| value <= completed) };
-    }
-
-    // Write every capture recorded so far, once the GPU has finished them.
-    pub(in crate::directx) fn finish_frame_captures(&mut self) {
-        self.wait_idle();
-        // SAFETY: the queue is idle.
-        unsafe { self.frame_capture.finish() };
     }
 
     // The swapchain back buffer's copy footprint, and the image it reads back
@@ -239,6 +182,64 @@ fn classify(format: DXGI_FORMAT, encoding: Option<HdrEncoding>) -> PixelLayout {
         },
         DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB => PixelLayout::Bgra8,
         _ => PixelLayout::Rgba8,
+    }
+}
+
+impl FrameCapture for DxContext {
+    // Capture the last presented frame to a PNG at `path`. Returns the path on
+    // success.
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
+        let Some(back_idx) = self.swapchain.last_present_index else {
+            return Err(RenderError::Other(
+                "screenshot: no frame has been presented yet".into(),
+            ));
+        };
+        let back_buffer = self
+            .swapchain
+            .back_buffers
+            .get(back_idx)
+            .ok_or_else(|| RenderError::Other("screenshot: stale back-buffer index".into()))?
+            .clone();
+        let width = self.targets.extent.output_width;
+        let height = self.targets.extent.output_height;
+        if width == 0 || height == 0 {
+            return Err(RenderError::Other(
+                "screenshot: zero-sized swapchain".into(),
+            ));
+        }
+
+        // The GPU must be idle: the last-presented buffer is then stable and no
+        // in-flight command list still references the resources we touch.
+        self.wait_idle();
+
+        // Host-readable buffer sized for the padded footprint, mapped for its
+        // life.
+        let (layout, image) = self.capture_footprint();
+        let Mapped {
+            buffer: readback,
+            mapped,
+        } = readback_buffer(&self.hw.alloc, image.byte_len())?;
+
+        // Copy the presented back-buffer into the readback buffer, leaving it in
+        // PRESENT for the next present. `one_shot_submit` fence-waits internally.
+        // Leaking a back-buffer reference here would later block `ResizeBuffers`;
+        // `readback` / `back_buffer` outlive the synchronous `one_shot_submit`.
+        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
+            encode_copy(cmd, &back_buffer, &readback, layout);
+        })?;
+
+        // SAFETY: the mapping spans the `image.byte_len()` bytes the buffer was sized from, and
+        // the copy into it completed (one_shot_submit waits its fence).
+        let bytes = unsafe { std::slice::from_raw_parts(mapped, image.byte_len()) };
+        frame_capture::save_png(path, &image, bytes)?;
+        Ok(path.to_string())
+    }
+
+    // Write every capture recorded so far, once the GPU has finished them.
+    fn finish_captures(&mut self) {
+        self.wait_idle();
+        // SAFETY: the queue is idle.
+        unsafe { self.frame_capture.finish() };
     }
 }
 

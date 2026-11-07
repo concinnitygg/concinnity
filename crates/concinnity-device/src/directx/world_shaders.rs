@@ -14,6 +14,7 @@
 // equivalent (an `ID3D12PipelineLibrary`) is not implemented.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::WorldShaders;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
@@ -31,23 +32,6 @@ use super::init::pipelines::{
 use super::pipeline_builder::{DxPipelineBuilder, Targets, VolumeRootSigs, world_shader_for};
 
 impl DxContext {
-    // Install one shader bucket's main-pass and pre-pass PSOs: `prepared` when
-    // they were built for this context's targets, else ones built here.
-    // Replaces whatever the bucket currently holds, so a re-pin after an
-    // eviction installs cleanly.
-    pub(in crate::directx) fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        programs: &concinnity_engine::components::ShaderPrograms,
-        prepared: Option<PreparedPipelines>,
-    ) -> RenderResult<()> {
-        let variant = self.cull.world_pipelines.variant(bucket as usize);
-        let psos = self.bucket_psos(bucket, programs, variant, prepared, false)?;
-        let family = self.build_family(bucket, programs, true)?;
-        self.install_bucket(bucket, psos)?;
-        self.install_family(family)
-    }
-
     // One shader bucket's PSOs to replace a bucket that has a pre-pass when
     // `live_prepass`: `prepared` when it keeps what the live bucket draws with,
     // else ones built here. Refused when the build would drop a live pre-pass,
@@ -196,40 +180,6 @@ impl DxContext {
         }
     }
 
-    // Rebuild one world Shader's PSOs from hot-reloaded programs, or swap in
-    // `prepared` when they were built for this context's targets. Bucket 0 is
-    // the main pass's and the pre-pass's own pair; another bucket is rebuilt
-    // only while installed. Both halves are built before the old PSOs retire,
-    // so a failed build of either leaves the live ones bound.
-    pub(in crate::directx) fn update_world_shader(
-        &mut self,
-        bucket: u32,
-        programs: &concinnity_engine::components::ShaderPrograms,
-        prepared: Option<PreparedPipelines>,
-    ) -> RenderResult<PipelineSwap> {
-        if bucket == 0 {
-            let prepared = self
-                .world_pso_targets()
-                .and_then(|targets| world_shader_for(prepared, &targets));
-            let family = self.build_family(0, programs, false)?;
-            self.update_default_world_shader(programs, prepared)?;
-            self.install_family(family)?;
-            return Ok(PipelineSwap::Swapped);
-        }
-        self.cull.world_pipelines.slot(bucket)?;
-        if !self.cull.world_pipelines.resident(bucket as usize) {
-            return Ok(PipelineSwap::NotResident);
-        }
-        let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
-            .is_some_and(|live| live.prepass.is_some());
-        let variant = self.cull.world_pipelines.variant(bucket as usize);
-        let psos = self.bucket_psos(bucket, programs, variant, prepared, live_prepass)?;
-        let family = self.build_family(bucket, programs, false)?;
-        self.install_bucket(bucket, psos)?;
-        self.install_family(family)?;
-        Ok(PipelineSwap::Swapped)
-    }
-
     // Shader `shader`'s grass variants built from its fresh programs, when it
     // has them: every one when `install`ing, else those already resident.
     // Built here rather than on a worker: only a pin or a hot reload of the
@@ -296,31 +246,6 @@ impl DxContext {
             hot_reload: self.hot_reload.enabled,
             template_generation: self.hot_reload.generation,
         })
-    }
-
-    // A builder for this context's world Shader and volume PSOs, for a
-    // streaming or hot-reload worker.
-    pub(in crate::directx) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
-        Arc::new(DxPipelineBuilder {
-            device: self.hw.device.clone(),
-            info_queue: self.hw.info_queue.clone(),
-            world: self.world_pso_targets(),
-            volumes: self.volume_pso_targets(),
-            variants: self.cull.world_pipelines.variants(),
-        })
-    }
-
-    // Release one bucket's pipelines. D3D12 command lists do not keep a
-    // pipeline state alive, so each PSO is retired through the allocator's frame
-    // tick, which holds it until every frame in flight that recorded against it
-    // has finished.
-    pub(in crate::directx) fn evict_world_shader(&mut self, bucket: u32) {
-        let family = self.cull.world_pipelines.family(bucket);
-        for b in family.chain([bucket]) {
-            if let Some(psos) = self.cull.world_pipelines.evict(b) {
-                self.retire_bucket(psos);
-            }
-        }
     }
 
     // Issue the bucket 1.. regions of `indirect`, each under its own material
@@ -425,5 +350,83 @@ impl DxContext {
             stream,
             self.stream_layout().slots(stream),
         )
+    }
+}
+
+impl WorldShaders for DxContext {
+    // Install one shader bucket's main-pass and pre-pass PSOs: `prepared` when
+    // they were built for this context's targets, else ones built here.
+    // Replaces whatever the bucket currently holds, so a re-pin after an
+    // eviction installs cleanly.
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<()> {
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let psos = self.bucket_psos(bucket, programs, variant, prepared, false)?;
+        let family = self.build_family(bucket, programs, true)?;
+        self.install_bucket(bucket, psos)?;
+        self.install_family(family)
+    }
+
+    // Release one bucket's pipelines. D3D12 command lists do not keep a
+    // pipeline state alive, so each PSO is retired through the allocator's frame
+    // tick, which holds it until every frame in flight that recorded against it
+    // has finished.
+    fn evict_world_shader(&mut self, bucket: u32) {
+        let family = self.cull.world_pipelines.family(bucket);
+        for b in family.chain([bucket]) {
+            if let Some(psos) = self.cull.world_pipelines.evict(b) {
+                self.retire_bucket(psos);
+            }
+        }
+    }
+
+    // Rebuild one world Shader's PSOs from hot-reloaded programs, or swap in
+    // `prepared` when they were built for this context's targets. Bucket 0 is
+    // the main pass's and the pre-pass's own pair; another bucket is rebuilt
+    // only while installed. Both halves are built before the old PSOs retire,
+    // so a failed build of either leaves the live ones bound.
+    fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<PipelineSwap> {
+        if bucket == 0 {
+            let prepared = self
+                .world_pso_targets()
+                .and_then(|targets| world_shader_for(prepared, &targets));
+            let family = self.build_family(0, programs, false)?;
+            self.update_default_world_shader(programs, prepared)?;
+            self.install_family(family)?;
+            return Ok(PipelineSwap::Swapped);
+        }
+        self.cull.world_pipelines.slot(bucket)?;
+        if !self.cull.world_pipelines.resident(bucket as usize) {
+            return Ok(PipelineSwap::NotResident);
+        }
+        let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
+            .is_some_and(|live| live.prepass.is_some());
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let psos = self.bucket_psos(bucket, programs, variant, prepared, live_prepass)?;
+        let family = self.build_family(bucket, programs, false)?;
+        self.install_bucket(bucket, psos)?;
+        self.install_family(family)?;
+        Ok(PipelineSwap::Swapped)
+    }
+
+    // A builder for this context's world Shader and volume PSOs, for a
+    // streaming or hot-reload worker.
+    fn pipeline_builder(&self) -> Option<Arc<dyn PipelineBuilder>> {
+        Some(Arc::new(DxPipelineBuilder {
+            device: self.hw.device.clone(),
+            info_queue: self.hw.info_queue.clone(),
+            world: self.world_pso_targets(),
+            volumes: self.volume_pso_targets(),
+            variants: self.cull.world_pipelines.variants(),
+        }))
     }
 }

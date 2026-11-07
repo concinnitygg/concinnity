@@ -7,6 +7,7 @@
 //! called with `hot_reload = true`. Production `cn run` never sets it. Mirrors
 //! `src/metal/hot_reload.rs`.
 
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{

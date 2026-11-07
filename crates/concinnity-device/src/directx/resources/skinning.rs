@@ -9,6 +9,7 @@ use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_engine::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, SkinnedDraws};
 use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
 use concinnity_engine::transform::IDENTITY;
 use windows::Win32::Graphics::Direct3D12::*;
@@ -97,13 +98,73 @@ impl SkinnedState {
     }
 }
 impl DxContext {
+    // Copy this frame's skinning matrices into the per-frame joint buffers.
+    // Called from `record_frame` before the skin fold reads them.
+    pub(in crate::directx) fn upload_joint_matrices(&self, frame_idx: usize) {
+        let Some(frame_ptrs) = self.skinned.joint_ptrs.get(frame_idx) else {
+            return;
+        };
+        for (i, mats) in self.state.skinned.joint_matrices.iter().enumerate() {
+            let Some(&dst) = frame_ptrs.get(i) else {
+                continue;
+            };
+            let n = mats.len().min(MAX_JOINTS);
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    mats.as_ptr().cast::<u8>(),
+                    dst,
+                    n * size_of::<[[f32; 4]; 4]>(),
+                );
+            }
+        }
+    }
+
+    // GPU virtual address of skinned object `i`'s joint buffer for `frame_idx`.
+    pub(in crate::directx) fn skinned_joint_gva(&self, frame_idx: usize, i: usize) -> u64 {
+        com::gpu_va(&self.skinned.joint_buffers[frame_idx][i])
+    }
+
+    // Copy this frame's morph weights into the per-frame weight buffers. Called
+    // from `record_frame` alongside `upload_joint_matrices`. A no-op when no
+    // object carries morphs (the buffers are empty).
+    pub(in crate::directx) fn upload_morph_weights(&self, frame_idx: usize) {
+        let Some(frame_ptrs) = self.skinned.morph_weight_ptrs.get(frame_idx) else {
+            return;
+        };
+        for (i, w) in self.state.skinned.morph_weights.iter().enumerate() {
+            let (Some(&dst), false) = (frame_ptrs.get(i), w.is_empty()) else {
+                continue;
+            };
+            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
+            // the source is a separate allocation, so the ranges cannot overlap.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    w.as_ptr().cast::<u8>(),
+                    dst,
+                    w.len() * size_of::<f32>(),
+                );
+            }
+        }
+    }
+
+    // GPU virtual address of skinned object `i`'s morph weight buffer for
+    // `frame_idx`, or `None` when no weight buffers are allocated.
+    pub(in crate::directx) fn morph_weight_gva(&self, frame_idx: usize, i: usize) -> Option<u64> {
+        let buf = self.skinned.morph_weight_buffers.get(frame_idx)?.get(i)?;
+        Some(com::gpu_va(buf))
+    }
+}
+
+impl SkinnedDraws for DxContext {
     // Upload skinned-mesh geometry and build the skin fold.
     //
     // Called once at init by `GraphicsSystem` when the world declares at least
     // one `SkinnedMesh`. The joint matrices live in per-(frame, object) upload
     // buffers the skinned passes bind as a root SRV. With no skinned meshes
     // this is never called and every skinned pass is skipped.
-    pub(crate) fn upload_skinned(
+    fn upload_skinned(
         &mut self,
         vertices: &[SkinnedVertex],
         indices: &[u32],
@@ -282,101 +343,12 @@ impl DxContext {
         Ok(())
     }
 
-    // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the shared
-    // skinned vertex / index buffers in place. Driven by asset hot-reload
-    // (`cn run -f` only). The slot's vertex region starts at
-    // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
-    // vertices wide; the index region lives at the slot's init-time
-    // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`
-    // before writing (matching the init-time `upload_skinned` rebasing).
-    // `indices.len()` must match init-time; size-changing reloads route
-    // through `rebuild_skinned_geometry`. Joint-count
-    // changes resize the per-slot joint-matrix buffers via
-    // `update_skinned_skeleton`. Pipelines stay untouched.
-    // Mirrors `MtlContext::update_skinned_mesh_geometry`.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
-    )]
-    pub(crate) fn update_skinned_mesh_geometry(
-        &mut self,
-        skinned_index: SkinnedIndex,
-        vertex_base: u32,
-        vertices: &[SkinnedVertex],
-        indices: &[u16],
-    ) -> RenderResult<()> {
-        let v_buf = self.skinned.vertex_buffer.clone().ok_or_else(|| {
-            RenderError::Other(
-                "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)"
-                    .into(),
-            )
-        })?;
-        let i_buf = self.skinned.index_buffer.clone().ok_or_else(|| {
-            RenderError::Other(
-                "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)"
-                    .into(),
-            )
-        })?;
-        let write = geometry_repack::place_skinned_update(
-            &self.state.skinned.draw_objects,
-            skinned_index,
-            vertex_base,
-            vertices.len(),
-            indices,
-            self.skinned.vertex_buffer_view.SizeInBytes as usize,
-        )?;
-
-        self.wait_idle();
-
-        self.write_geometry_region(
-            &v_buf,
-            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            write.vertex_offset,
-            bytemuck::cast_slice(vertices),
-        )?;
-        self.write_geometry_region(
-            &i_buf,
-            D3D12_RESOURCE_STATE_INDEX_BUFFER,
-            write.index_offset,
-            bytemuck::cast_slice(&write.indices),
-        )?;
-        Ok(())
-    }
-
-    // Copy this frame's skinning matrices into the per-frame joint buffers.
-    // Called from `record_frame` before the skin fold reads them.
-    pub(in crate::directx) fn upload_joint_matrices(&self, frame_idx: usize) {
-        let Some(frame_ptrs) = self.skinned.joint_ptrs.get(frame_idx) else {
-            return;
-        };
-        for (i, mats) in self.state.skinned.joint_matrices.iter().enumerate() {
-            let Some(&dst) = frame_ptrs.get(i) else {
-                continue;
-            };
-            let n = mats.len().min(MAX_JOINTS);
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-            // the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    mats.as_ptr().cast::<u8>(),
-                    dst,
-                    n * size_of::<[[f32; 4]; 4]>(),
-                );
-            }
-        }
-    }
-
-    // GPU virtual address of skinned object `i`'s joint buffer for `frame_idx`.
-    pub(in crate::directx) fn skinned_joint_gva(&self, frame_idx: usize, i: usize) -> u64 {
-        com::gpu_va(&self.skinned.joint_buffers[frame_idx][i])
-    }
-
     // Attach morph-target buffers (`PayloadMorphs::packed_words`) to the skinned
     // draw objects. `morphs[i]` pairs with draw object `i`; instance copies share
     // their template's `Arc`, so each unique entry set becomes one GPU buffer. Allocates the per-frame
     // weight upload buffers (one f32 per target per object) when any object
     // carries morphs. Called once after `upload_skinned`.
-    pub(in crate::directx) fn upload_skinned_morphs(
+    fn upload_skinned_morphs(
         &mut self,
         morphs: &[Option<std::sync::Arc<mesh_payload::PayloadMorphs>>],
     ) -> RenderResult<()> {
@@ -468,33 +440,60 @@ impl DxContext {
         Ok(())
     }
 
-    // Copy this frame's morph weights into the per-frame weight buffers. Called
-    // from `record_frame` alongside `upload_joint_matrices`. A no-op when no
-    // object carries morphs (the buffers are empty).
-    pub(in crate::directx) fn upload_morph_weights(&self, frame_idx: usize) {
-        let Some(frame_ptrs) = self.skinned.morph_weight_ptrs.get(frame_idx) else {
-            return;
-        };
-        for (i, w) in self.state.skinned.morph_weights.iter().enumerate() {
-            let (Some(&dst), false) = (frame_ptrs.get(i), w.is_empty()) else {
-                continue;
-            };
-            // SAFETY: the mapping covers an UPLOAD-heap buffer created to hold this payload, and
-            // the source is a separate allocation, so the ranges cannot overlap.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    w.as_ptr().cast::<u8>(),
-                    dst,
-                    w.len() * size_of::<f32>(),
-                );
-            }
-        }
-    }
+    // Overwrite a `SkinnedMesh` draw slot's vertex + index data in the shared
+    // skinned vertex / index buffers in place. Driven by asset hot-reload
+    // (`cn run -f` only). The slot's vertex region starts at
+    // `vertex_base * size_of::<SkinnedVertex>()` and is `vertices.len()`
+    // vertices wide; the index region lives at the slot's init-time
+    // `index_offset` / `index_count`. Indices are rebased onto `vertex_base`
+    // before writing (matching the init-time `upload_skinned` rebasing).
+    // `indices.len()` must match init-time; size-changing reloads route
+    // through `rebuild_skinned_geometry`. Joint-count
+    // changes resize the per-slot joint-matrix buffers via
+    // `update_skinned_skeleton`. Pipelines stay untouched.
+    // Mirrors `MtlContext::update_skinned_mesh_geometry`.
+    fn update_skinned_mesh_geometry(
+        &mut self,
+        skinned_index: SkinnedIndex,
+        vertex_base: u32,
+        vertices: &[SkinnedVertex],
+        indices: &[u16],
+    ) -> RenderResult<()> {
+        let v_buf = self.skinned.vertex_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned vertex buffer (was upload_skinned called?)"
+                    .into(),
+            )
+        })?;
+        let i_buf = self.skinned.index_buffer.clone().ok_or_else(|| {
+            RenderError::Other(
+                "update_skinned_mesh_geometry: no skinned index buffer (was upload_skinned called?)"
+                    .into(),
+            )
+        })?;
+        let write = geometry_repack::place_skinned_update(
+            &self.state.skinned.draw_objects,
+            skinned_index,
+            vertex_base,
+            vertices.len(),
+            indices,
+            self.skinned.vertex_buffer_view.SizeInBytes as usize,
+        )?;
 
-    // GPU virtual address of skinned object `i`'s morph weight buffer for
-    // `frame_idx`, or `None` when no weight buffers are allocated.
-    pub(in crate::directx) fn morph_weight_gva(&self, frame_idx: usize, i: usize) -> Option<u64> {
-        let buf = self.skinned.morph_weight_buffers.get(frame_idx)?.get(i)?;
-        Some(com::gpu_va(buf))
+        self.wait_idle();
+
+        self.write_geometry_region(
+            &v_buf,
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+            write.vertex_offset,
+            bytemuck::cast_slice(vertices),
+        )?;
+        self.write_geometry_region(
+            &i_buf,
+            D3D12_RESOURCE_STATE_INDEX_BUFFER,
+            write.index_offset,
+            bytemuck::cast_slice(&write.indices),
+        )?;
+        Ok(())
     }
 }

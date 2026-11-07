@@ -11,6 +11,7 @@
 // write state.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::capture::PrefilterPlan;
 use concinnity_engine::render::record_pack::StaticSlots;

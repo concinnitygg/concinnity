@@ -5,28 +5,26 @@
 use crate::gpu_wait::GpuWait;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{
-    InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
+    InstancedCluster, PostProcessParams, PostProcessTunables,
 };
-use concinnity_engine::input::snapshot::InputSnapshot;
-use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBackend, WindowControl};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan, drive_frame};
+use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan};
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
-    backend, backend::init, backend::pass_timing, light::lights, output::hdr, slots::rewrites,
+    backend, backend::init, backend::pass_timing, output::hdr, slots::rewrites,
 };
-use concinnity_engine::window::display_mode;
 use concinnity_engine::{components, profile};
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::System::Threading::{GetCurrentThreadId, WaitForSingleObject};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureState;
@@ -47,7 +45,7 @@ use super::resources::skinning::SkinnedState;
 use super::texture::{EnvironmentMapTextures, GpuResource, StreamedUploadRetire};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::win32::window;
-use crate::win32::window::{WindowState, frame_tick, take_input_snapshot};
+use crate::win32::window::WindowState;
 
 // Constants
 // Swapchain back buffers. Indexed by `GetCurrentBackBufferIndex`, independent of
@@ -621,9 +619,11 @@ impl DxHardware {
     // places into a fresh allocator; the outgoing world releases into its own.
     pub(super) fn hand_over(&mut self) -> RenderResult<Self> {
         Ok(Self {
-            win_state: Some(self.win_state.take().ok_or_else(|| {
-                RenderError::Other("apply_world_reload: window already taken".into())
-            })?),
+            win_state: Some(
+                self.win_state.take().ok_or_else(|| {
+                    RenderError::Other("reload_world: window already taken".into())
+                })?,
+            ),
             fullscreen_display: std::mem::replace(
                 &mut self.fullscreen_display,
                 crate::win32::display_mode::FullscreenDisplayMode::new(),
@@ -915,14 +915,14 @@ pub(crate) struct DxContext {
 // uniforms.view_ubo_ptrs are host-mapped and only touched on the render thread.
 // text_upload's RefCells + map pointers are single-threaded.
 // SAFETY: `DxContext` owns COM objects and host-mapped pointers that are only ever touched from the
-// thread that built it, which `debug_assert_main_thread` enforces at every mutation entry point.
+// thread that built it, which `RenderBackend::assert_owner_thread` checks each time the runtime
+// takes it.
 // Moving the whole context to another thread is therefore safe as long as it stays main-thread-only
 // there, and nothing in it is shared across threads (hence `Send` without `Sync`).
 unsafe impl Send for DxContext {}
 
 // Win32 thread id of the thread that built the context. `DxContext::new` runs
-// on the main thread and records it here; `debug_assert_main_thread` checks
-// every mutation entry point against it.
+// on the main thread and records it here; `on_owner_thread` checks against it.
 static MAIN_THREAD_ID: OnceLock<u32> = OnceLock::new();
 
 // Record the calling thread as the main (render) thread. Called once from
@@ -936,57 +936,20 @@ pub(super) fn record_main_thread() {
     let _ = MAIN_THREAD_ID.set(unsafe { GetCurrentThreadId() });
 }
 
-// Debug-only guard that the caller is on the main thread.
-//
-// The `unsafe impl Send for DxContext` above is sound only because the context
-// is touched from the main thread alone: the Win32 window message pump and
-// D3D12 command-queue submission are both thread-affine, and the parallel
-// encoder fan-out only ever shares `&self` read-only. The `RenderBackend`
-// mutation entry points (reached through the boxed trait object) had nothing
-// proving this, so scheduling `GraphicsSystem` off the main thread would
-// silently race the window/queue instead of failing. This makes that mistake
-// panic loudly in debug builds and compiles to nothing in release. `entry` is
-// the offending method name, for the message. Mirrors
-// `metal/context.rs::debug_assert_main_thread`.
-#[inline]
-#[track_caller]
-pub(super) fn debug_assert_main_thread(entry: &str) {
-    debug_assert!(
-        MAIN_THREAD_ID
-            .get()
-            // SAFETY: a read of the calling thread's own id; it borrows nothing.
-            .is_none_or(|&main| unsafe { GetCurrentThreadId() } == main),
-        "{entry} must be called from the main thread: DxContext is main-thread-only \
-         (see `unsafe impl Send for DxContext`); driving GraphicsSystem off the main \
-         thread races the Win32 window + D3D12 command submission",
-    );
+// Whether the caller is on the thread `record_main_thread` recorded, or no
+// context has been built yet.
+pub(super) fn on_owner_thread() -> bool {
+    MAIN_THREAD_ID
+        .get()
+        // SAFETY: a read of the calling thread's own id; it borrows nothing.
+        .is_none_or(|&main| unsafe { GetCurrentThreadId() } == main)
 }
 
 impl DxContext {
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
-    )]
-    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
-        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
-    }
-
     // Drain any queued D3D12 validation messages and emit them via tracing.
     pub(super) fn flush_validation(&self) {
         if let Some(ref iq) = self.hw.info_queue {
             drain_info_queue(iq);
-        }
-    }
-
-    // Render statistics for the most recent `draw_frame`, for the profiler
-    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
-    // the timestamp pair this slot resolved on its previous trip through the
-    // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
-    // stale" reading).
-    pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        profile::RenderStats {
-            spans: self.state.spans.get(),
-            ..self.diagnostics.frame_stats.get()
         }
     }
 
@@ -1166,20 +1129,6 @@ impl DxContext {
             .expect("DxContext window state present")
     }
 
-    pub(crate) fn window_closed(&mut self) -> bool {
-        // Message pump + cursor window-exit / fullscreen-confinement refresh +
-        // the Resolution-mode reconcile, shared with the Vulkan Windows window.
-        // Partial field borrow (not `win_mut`) so `fullscreen_display` can be
-        // borrowed disjointly in the same call.
-        frame_tick(
-            self.hw
-                .win_state
-                .as_mut()
-                .expect("DxContext window state present"),
-            &mut self.hw.fullscreen_display,
-        )
-    }
-
     // Submit every staged geometry write. Queue order puts the copies ahead of
     // any later submission, so nothing waits on them.
     pub(super) fn flush_geometry_uploads(&self) -> RenderResult<()> {
@@ -1191,135 +1140,6 @@ impl DxContext {
                 index: &self.scene.geometry.index_buffer,
             },
         )
-    }
-
-    pub(crate) fn wait_idle(&self) {
-        // Staged geometry writes count as submitted work, so an idle GPU has
-        // applied them.
-        if let Err(e) = self.flush_geometry_uploads() {
-            tracing::error!("geometry upload submit failed: {e}");
-        }
-        // Signal a new fence value and wait until the GPU reaches it.
-        let val = self.frame_sync.next_fence_value.get();
-        self.frame_sync.next_fence_value.set(val + 1);
-        // SAFETY: the fence and the event were created from this device and are live for the call.
-        if unsafe { self.hw.command_queue.Signal(&self.frame_sync.fence, val) }.is_ok()
-            // SAFETY: the fence and the event were created from this device and are live for the
-            // call.
-            && unsafe { self.frame_sync.fence.GetCompletedValue() } < val
-            // SAFETY: the fence and the event were created from this device and are live for the
-            // call.
-            && unsafe {
-                self.frame_sync
-                    .fence
-                    .SetEventOnCompletion(val, self.frame_sync.fence_event)
-            }
-            .is_ok()
-        {
-            // SAFETY: the event handle was created in `DxContext::new` and lives as long as the
-            // context, and the wait borrows nothing else.
-            unsafe { WaitForSingleObject(self.frame_sync.fence_event, u32::MAX) };
-        }
-    }
-
-    pub(crate) fn request_cursor_capture(&mut self) {
-        // Don't grab the cursor immediately. A freshly spawned window may not be
-        // focused yet, and clipping + hiding the system cursor before the user
-        // has interacted with the window is jarring; it also diverges from the
-        // Vulkan/GLFW backend, where a disabled cursor only engages once the
-        // window gains focus. Instead arm the click-to-capture path: the first
-        // left-click in the content area grabs the cursor, the same as
-        // recapturing after Escape or a focus loss (see `wnd_proc`'s
-        // `WM_LBUTTONDOWN` arm).
-        self.win_mut().recapture_on_click = true;
-    }
-
-    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
-    // without engaging camera capture. Edge-triggered in the helper, so calling
-    // it every frame with the same value is cheap.
-    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        window::set_ui_cursor_hidden(self.win_mut(), hidden);
-    }
-
-    // Whether the real cursor has left the window so the renderer should stop
-    // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
-    // frame by `update_ui_cursor_confinement` in `window_closed`; false while
-    // captured or in fullscreen (which confines the cursor instead).
-    pub(crate) fn cursor_outside_window(&self) -> bool {
-        self.win().cursor_outside_window
-    }
-
-    pub(crate) fn window_minimized(&self) -> bool {
-        window::is_minimized(self.win().hwnd)
-    }
-
-    // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
-    // Escape to the ECS and suppress click-to-recapture.
-    pub(crate) fn set_menu_mode(&mut self, on: bool) {
-        self.win_mut().menu_mode = on;
-    }
-
-    // Edge-triggered capture: capture for camera control, release while a menu
-    // is open. GraphicsSystem calls this each frame in menu mode. Unlike the
-    // startup `request_cursor_capture` (which arms click-to-capture), closing the menu
-    // recaptures immediately so the camera resumes without an extra click.
-    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
-        if capture == self.win().cursor_captured {
-            return;
-        }
-        if capture {
-            let hwnd = self.win().hwnd;
-            window::capture_cursor(hwnd, self.win_mut());
-        } else {
-            window::release_cursor(self.win_mut());
-        }
-    }
-
-    // Turn display sync (vsync) on or off at runtime. Only the present sync
-    // interval changes (1 = lock to refresh, 0 = uncapped); the present flags
-    // gate ALLOW_TEARING on this interval. The swapchain's ALLOW_TEARING flag
-    // is fixed at creation, so true tearing is available only when the
-    // swapchain was created with vsync off; turning vsync off later still
-    // presents uncapped (interval 0) but without the tearing flag if the
-    // swapchain lacks it.
-    pub(crate) fn set_vsync(&mut self, on: bool) {
-        self.swapchain.present_sync_interval = u32::from(on);
-    }
-
-    // Switch window mode / resize at runtime (windowed / borderless / fullscreen
-    // and content-size presets). The Win32 work lives in `window.rs`; the resize
-    // path picks up the resulting WM_SIZE.
-    pub(crate) fn set_window_mode(&mut self, mode: components::WindowMode) {
-        window::set_window_mode(self.win_mut(), mode);
-    }
-
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "`forward!` reaches it from the trait's `&mut self` method of the same name"
-    )]
-    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        window::set_window_size(self.win(), width, height);
-    }
-
-    // The display modes (resolution + refresh rate) of the monitor the window
-    // sits on, feeding the Resolution settings row (the caller dedups + sorts).
-    pub(crate) fn display_modes(&self) -> Vec<display_mode::DisplayMode> {
-        crate::win32::display_mode::enumerate(self.win().hwnd)
-    }
-
-    // The mode the window's monitor is currently running (what the Resolution
-    // row shows before the user ever picks one).
-    pub(crate) fn current_display_mode(&self) -> Option<display_mode::DisplayMode> {
-        crate::win32::display_mode::current(self.win().hwnd)
-    }
-
-    // Remember the display mode to hold while the window is in fullscreen.
-    // Applied by the per-frame reconcile in `window_closed` (which also
-    // restores the desktop mode on leaving fullscreen), so a choice made in
-    // any window mode takes effect when fullscreen is (or becomes) active.
-    pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
-        self.hw.fullscreen_display.set_desired(mode);
     }
 
     // Replace the live post-process tunables, pushed to the bloom + composite
@@ -1336,77 +1156,6 @@ impl DxContext {
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         self.uniforms.lights.set_ambient(value);
-    }
-
-    // Move the local lights in place. The light, area and spot tables and the
-    // spot slice CBVs are single UPLOAD buffers every in-flight frame reads,
-    // so the GPU is drained before they are rewritten; the cluster reach, the
-    // spot frusta and the spot refresh schedule are re-derived, and the light
-    // CBV ring is re-armed for the point array.
-    pub(crate) fn move_local_lights(
-        &mut self,
-        data: &lights::LightData,
-        uniforms: &LightUniforms,
-    ) -> RenderResult<()> {
-        if !self.uniforms.lights.same_local_count(&data.lights)
-            || data.spot_shadows.len() != self.spot_shadow.count() as usize
-        {
-            return Err(RenderError::Other(
-                "move_local_lights: the light count changed since init".into(),
-            ));
-        }
-        self.wait_idle();
-        if !data.lights.is_empty() {
-            super::draw::upload_static_records(
-                &self.uniforms.local_light_buffer,
-                &data.lights,
-                "local-light",
-            )?;
-        }
-        if !data.area_lights.is_empty() {
-            super::draw::upload_static_records(
-                &self.scene.area_light.buffer,
-                &data.area_lights,
-                "area-light",
-            )?;
-        }
-        if !data.spot_shadows.is_empty() {
-            super::draw::upload_static_records(
-                &self.spot_shadow.buffer,
-                &data.spot_shadows,
-                "spot-shadow",
-            )?;
-            super::init::shadow::write_spot_uniforms(
-                &self.spot_shadow.ubo,
-                &data.spot_shadows,
-                self.spot_shadow.ubo_stride,
-            )?;
-        }
-        self.spot_shadow.frusta = data
-            .spot_shadows
-            .iter()
-            .map(concinnity_engine::render::shadow::spot::slice_frustum)
-            .collect();
-        self.state.planner.shadow.reset_spots();
-        self.uniforms.lights.move_local(&data.lights, uniforms);
-        Ok(())
-    }
-
-    // Replace the live directional lights. The cascade shadow direction and the
-    // fog sun are derived from the first light on the CPU, so both are
-    // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
-    // changed one only re-arms the light CBV ring.
-    pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
-        self.uniforms.lights.set_directional(lights);
-    }
-
-    // Replace the sky-occluding spheres the light block carries; a changed set
-    // re-arms the light ring.
-    pub(crate) fn update_sky_occluders(
-        &mut self,
-        occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders,
-    ) {
-        self.uniforms.lights.set_sky_occluders(occluders);
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
@@ -1444,42 +1193,6 @@ impl DxContext {
             cur.settings = live;
         }
         self.refresh_gates(g);
-    }
-
-    pub(crate) fn take_input(&mut self) -> InputSnapshot {
-        take_input_snapshot(self.win_mut())
-    }
-
-    // Live window size for overlay (view-owned UI) scaling and cursor
-    // hit-testing. Returns the drawable (swapchain) pixel size, which is the
-    // attachment the composite + text pass writes and the space the UI shader
-    // divides vertices by; WM_MOUSEMOVE reports the cursor in the same client
-    // pixels, so the overlay forward / inverse transforms stay consistent.
-    pub(crate) fn logical_size(&self) -> (f32, f32) {
-        (
-            self.targets.extent.output_width as f32,
-            self.targets.extent.output_height as f32,
-        )
-    }
-
-    // Device capability flags for the settings menu. RT reflects the DXR-tier
-    // query made at init (`hw.rt_capable`).
-    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        super::gpu_profile::capabilities(self.hw.rt_capable)
-    }
-
-    // Coarse GPU performance profile for default-quality selection, read live
-    // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
-    // the adapter does not expose the v3 interface or the desc query fails.
-    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        let Some(adapter) = self.hw.adapter.as_ref() else {
-            return backend::GpuProfile::UNKNOWN;
-        };
-        // SAFETY: a property query on a live COM object; it only reads.
-        match unsafe { adapter.GetDesc1() } {
-            Ok(desc) => super::gpu_profile::adapter_profile(&desc),
-            Err(_) => backend::GpuProfile::UNKNOWN,
-        }
     }
 }
 
@@ -1842,4 +1555,38 @@ pub(super) fn dump_on_err<T, E>(
         drain_info_queue(iq);
     }
     r
+}
+
+impl BackendProbe for DxContext {
+    // Device capability flags for the settings menu. RT reflects the DXR-tier
+    // query made at init (`hw.rt_capable`).
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        super::gpu_profile::capabilities(self.hw.rt_capable)
+    }
+
+    // Coarse GPU performance profile for default-quality selection, read live
+    // from the adapter description (vendor id + dedicated VRAM). `UNKNOWN` when
+    // the adapter does not expose the v3 interface or the desc query fails.
+    fn gpu_profile(&self) -> backend::GpuProfile {
+        let Some(adapter) = self.hw.adapter.as_ref() else {
+            return backend::GpuProfile::UNKNOWN;
+        };
+        // SAFETY: a property query on a live COM object; it only reads.
+        match unsafe { adapter.GetDesc1() } {
+            Ok(desc) => super::gpu_profile::adapter_profile(&desc),
+            Err(_) => backend::GpuProfile::UNKNOWN,
+        }
+    }
+
+    // Render statistics for the most recent `draw_frame`, for the profiler
+    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame` from
+    // the timestamp pair this slot resolved on its previous trip through the
+    // ring (so a frames-in-flight-stale window, matching Metal's "frame or two
+    // stale" reading).
+    fn render_stats(&self) -> profile::RenderStats {
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.diagnostics.frame_stats.get()
+        }
+    }
 }

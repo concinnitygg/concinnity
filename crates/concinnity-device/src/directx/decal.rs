@@ -12,6 +12,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::render::backend::RuntimeDecals;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::transform::mat4_inverse;
@@ -473,7 +474,7 @@ impl DxContext {
     }
 }
 
-// Runtime mutation (RenderBackend::add_decal / remove_decal)
+// Runtime mutation (RuntimeDecals::add_decal / remove_decal)
 
 // Runtime-mutation surface driven only by the cn-debug command server
 // ([debug/verbs/render.rs]). This module tree is compiled into both the FFI
@@ -484,11 +485,12 @@ impl DxContext {
 // an `expect` would be unfulfilled. Suppressing the methods also marks them live
 // roots, so the slot-table / SRV-slot fields they touch stay un-flagged on their
 // own.
-impl DxContext {
+
+impl RuntimeDecals for DxContext {
     // Append a runtime decal. Writes the per-decal albedo SRV into the
     // reserved heap region; the encoder reads it next frame. Reuses
     // tombstoned slots from a prior `remove_decal` before growing the vec.
-    pub(crate) fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
+    fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
         let state = self.decal.state.as_ref().ok_or_else(|| {
             RenderError::Other("add_decal: decal pipeline unavailable".to_string())
         })?;
@@ -519,7 +521,7 @@ impl DxContext {
     // Tombstone a runtime decal slot. The id becomes invalid; the next
     // `add_decal` may reuse it. Returns an error when the id is out of
     // range or already tombstoned.
-    pub(crate) fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
+    fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
         self.decal
             .set
             .remove(decal_id)
