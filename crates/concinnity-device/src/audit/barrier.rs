@@ -440,7 +440,7 @@ const AUDITS: &[BackendAudit] = &[
             (
                 "resources/geometry_rebuild.rs",
                 ".ResourceBarrier(",
-                6,
+                3,
                 Reason::OutOfFrame,
             ),
             ("probe.rs", ".ResourceBarrier(", 6, Reason::OutOfFrame),

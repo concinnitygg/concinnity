@@ -1,27 +1,20 @@
-//! Hot-reload rebuild of the shared static + skinned vertex / index buffers
-//! when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
-//! `directx/resources/geometry_rebuild.rs` and `metal/resources/geometry_rebuild.rs +
-//! metal/resources/skinning.rs`'s rebuild paths.
+//! The shared static and skinned vertex / index buffers a size-changing asset
+//! hot-reload reads back and replaces whole; the repack itself is the
+//! engine's.
 //!
-//! Vulkan's `DEVICE_LOCAL` buffers are not host-visible, so the rebuild forces
-//! a CPU round-trip: a one-shot `cmd_copy_buffer` reads the live VB/IB into
-//! `HOST_VISIBLE` staging, the new contents are spliced CPU-side, fresh
-//! `DEVICE_LOCAL` buffers are allocated at the post-rebuild size, and the
-//! rebuilt data is uploaded via the existing `write_geometry_region` helper.
-//! The scene's streamed-mesh placement allocators are **not** preserved: the
-//! rebuilt buffer is sized exactly for the current draws, so any subsequent
-//! `upload_mesh` will fail allocation. `cn run -f`-only by design; matches
-//! DirectX + Metal.
+//! Vulkan's `DEVICE_LOCAL` buffers are not host-visible, so the read is a
+//! one-shot `cmd_copy_buffer` into `HOST_VISIBLE` staging, and the replacement
+//! is fresh `DEVICE_LOCAL` buffers at the post-rebuild size, filled through the
+//! existing `write_geometry_region` helper. The rebuilt buffers are sized
+//! exactly for the current draws, so the streamed-mesh placement allocators
+//! are not preserved and a later `upload_mesh` fails allocation.
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::{
-    DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
-};
-use concinnity_engine::render::backend::{GeometryRebuild, RenderBackend};
-use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::render::backend::{GeometryBuffers, GeometryRebuild, RenderBackend};
+use concinnity_engine::render::rt_accel::geom;
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;
@@ -31,8 +24,7 @@ use super::super::texture::one_shot_submit;
 // `cmd_copy_buffer` from `src` into it (`wait_idle` already gated the source
 // side; the one-shot's internal fence wait gates the destination), maps,
 // and `copy_nonoverlapping`s into the Vec. `T`'s stride must match the
-// buffer's stride exactly. Only reached through the (bin-only) geometry-rebuild
-// path, so dead in the FFI lib.
+// buffer's stride exactly.
 fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> RenderResult<Vec<T>> {
     if bytes == 0 {
         return Ok(Vec::new());
@@ -72,110 +64,63 @@ fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> Rend
     Ok(out)
 }
 
-impl GeometryRebuild for VkContext {
-    // Swap in rebuilt shared static-mesh buffers for the draws named in
-    // `changes`, when a reloaded mesh no longer fits its slot. The live buffers
-    // are read back for the repack, the result is uploaded into fresh
-    // DEVICE_LOCAL buffers, and the streamed-mesh sub-allocators reset, since
-    // the rebuilt buffers leave no headroom.
-    fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
-        // Stop GPU + CPU pipelines so the readback + swap can run safely.
+impl GeometryBuffers for VkContext {
+    // DEVICE_LOCAL is not host-mappable, so the live buffers come back through
+    // HOST_VISIBLE staging.
+    fn read_static_geometry(&mut self) -> RenderResult<(Vec<Vertex>, Vec<u32>)> {
         self.wait_idle();
-
-        // Read the live VB / IB back to CPU memory through a HOST_VISIBLE
-        // staging buffer (DEVICE_LOCAL is not host-mappable).
-        let old_v_bytes = self.geometry.vertex_buffer_bytes;
-        let old_i_bytes = self.geometry.index_buffer_bytes;
-        let old_vertices: Vec<Vertex> =
-            readback_typed(self, self.geometry.vertex_buffer.buffer(), old_v_bytes)?;
-        let old_indices: Vec<u32> =
-            readback_typed(self, self.geometry.index_buffer.buffer(), old_i_bytes)?;
-
-        let repacked = geometry_repack::repack_static_geometry(
-            &self.state.draw.objects,
-            &old_vertices,
-            &old_indices,
-            changes,
+        let vertices = readback_typed(
+            self,
+            self.geometry.vertex_buffer.buffer(),
+            self.geometry.vertex_buffer_bytes,
         )?;
-        if repacked.ignored_changes > 0 {
-            tracing::warn!(
-                "rebuild_static_geometry: {} change(s) targeted draw indices not in \
-                 draw_objects (ignored)",
-                repacked.ignored_changes
-            );
-        }
-        let new_vertices = repacked.vertices;
-        let new_indices = repacked.indices;
+        let indices = readback_typed(
+            self,
+            self.geometry.index_buffer.buffer(),
+            self.geometry.index_buffer_bytes,
+        )?;
+        Ok((vertices, indices))
+    }
 
-        // Allocate new DEVICE_LOCAL buffers + ship the rebuilt contents
-        // through staging (write_geometry_region's one-shot pattern).
-        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
+    // Fresh DEVICE_LOCAL buffers, filled through staging; the replaced pair
+    // retires through the allocator once swapped.
+    fn replace_static_geometry(
+        &mut self,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let v_bytes = size_of_val(vertices) as u64;
+        let i_bytes = size_of_val(indices) as u64;
         let shared = super::shared_geometry_usage(self.hw.rt_capable);
-        let new_vbuf = self.hw.alloc.create_buffer(
-            new_v_bytes,
+        let vbuf = self.hw.alloc.create_buffer(
+            v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let new_ibuf = self.hw.alloc.create_buffer(
-            new_i_bytes,
+        let ibuf = self.hw.alloc.create_buffer(
+            i_bytes,
             vk::BufferUsageFlags::INDEX_BUFFER | shared,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let vert_bytes = bytemuck::cast_slice(&new_vertices);
-        let idx_bytes = bytemuck::cast_slice(&new_indices);
-        self.write_geometry_region(new_vbuf.buffer(), 0, vert_bytes)?;
-        self.write_geometry_region(new_ibuf.buffer(), 0, idx_bytes)?;
-
-        // Commit the swap: the replaced buffers retire through the allocator.
-        // `wait_idle` above gated every in-flight read.
-        self.geometry.vertex_buffer = new_vbuf;
-        self.geometry.vertex_buffer_bytes = new_v_bytes;
-        self.geometry.index_buffer = new_ibuf;
-        self.geometry.index_buffer_bytes = new_i_bytes;
-        self.state.placement.forget_layout();
-        for (layout, obj) in repacked
-            .layouts
-            .into_iter()
-            .zip(&mut self.state.draw.objects)
-        {
-            layout.apply_to(obj);
-        }
-
-        // The RT acceleration structure was built against the buffers just
-        // destroyed and the per-draw offsets just rewritten. Rebuild it over the
-        // fresh layout and re-point the passes that read the buffers directly.
-        if self.rt_reflections.is_some() {
-            self.rebuild_rt_accel();
-        }
+        self.write_geometry_region(vbuf.buffer(), 0, bytemuck::cast_slice(vertices))?;
+        self.write_geometry_region(ibuf.buffer(), 0, bytemuck::cast_slice(indices))?;
+        self.geometry.vertex_buffer = vbuf;
+        self.geometry.vertex_buffer_bytes = v_bytes;
+        self.geometry.index_buffer = ibuf;
+        self.geometry.index_buffer_bytes = i_bytes;
         Ok(())
     }
 
-    // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
-    // fresh geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn run -f` only) when a `SkinnedMesh` re-import has a
-    // different vertex / index count than its init-time slot. Walks every
-    // `SkinnedDrawObject` in order: for each slot in `changes`, the new
-    // vertices / indices are appended to a fresh CPU buffer; for unchanged
-    // slots, the current geometry is read back from the live skinned
-    // buffers and copied with index rebasing from the slot's old
-    // `vertex_base` onto its new one. New DEVICE_LOCAL buffers are created
-    // at the post-rebuild size, the contents uploaded through staging, and
-    // the old buffers / memory dropped after the swap commits. Returns a
-    // `SkinnedSlotLayout` per slot (in `skinned_index` order) so the
-    // asset-hot-reload caller can refresh its `SkinnedMeshSourceEntry`s.
-    //
-    // The skinned IB stays `R16_UINT`; the skinned pipelines, shadow /
-    // SSAO / SSR variants, and per-slot metadata (`texture_slot` /
-    // `normal_map_slot` / `material` / `joint_count`) are untouched.
-    // Skeleton-shape changes route through `update_skinned_skeleton`, not
-    // this call. Mirrors `DxContext::rebuild_skinned_geometry`. Reached only
-    // through the bin's `cn run -f` runtime-mutation path (dead in the FFI lib,
-    // live in the bin).
-    fn rebuild_skinned_geometry(
-        &mut self,
-        changes: Vec<SkinnedDrawGeometryUpdate>,
-    ) -> RenderResult<Vec<SkinnedSlotLayout>> {
+    // The RT acceleration structure was built against the buffers just
+    // replaced and the per-draw offsets just rewritten. Rebuild it over the
+    // fresh layout and re-point the passes that read the buffers directly.
+    fn static_geometry_moved(&mut self) {
+        if self.rt_reflections.is_some() {
+            self.rebuild_rt_accel();
+        }
+    }
+
+    fn read_skinned_geometry(&mut self) -> RenderResult<(Vec<SkinnedVertex>, Vec<u32>)> {
         if self.skinned.vertex_buffer.is_null() || self.skinned.index_buffer.is_null() {
             return Err(RenderError::Other(
                 "rebuild_skinned_geometry: no skinned vertex/index buffer (was \
@@ -183,76 +128,66 @@ impl GeometryRebuild for VkContext {
                     .into(),
             ));
         }
-
         self.wait_idle();
-
-        // Read back the live skinned buffers via HOST_VISIBLE staging.
-        let old_v_bytes = self.skinned.vertex_buffer_bytes;
-        let old_i_bytes = self.skinned.index_buffer_bytes;
-        let old_vertices: Vec<SkinnedVertex> =
-            readback_typed(self, self.skinned.vertex_buffer.buffer(), old_v_bytes)?;
-        let old_indices: Vec<u32> =
-            readback_typed(self, self.skinned.index_buffer.buffer(), old_i_bytes)?;
-
-        let repacked = geometry_repack::repack_skinned_geometry(
-            &self.state.skinned.draw_objects,
-            &old_vertices,
-            &old_indices,
-            changes,
+        let vertices = readback_typed(
+            self,
+            self.skinned.vertex_buffer.buffer(),
+            self.skinned.vertex_buffer_bytes,
         )?;
-        if repacked.ignored_changes > 0 {
-            tracing::warn!(
-                "rebuild_skinned_geometry: {} change(s) targeted skinned indices not \
-                 in skinned_draw_objects (ignored)",
-                repacked.ignored_changes
-            );
-        }
-        let new_vertices = &repacked.vertices;
-        let new_indices = &repacked.indices;
+        let indices = readback_typed(
+            self,
+            self.skinned.index_buffer.buffer(),
+            self.skinned.index_buffer_bytes,
+        )?;
+        Ok((vertices, indices))
+    }
 
-        // Allocate new DEVICE_LOCAL skinned buffers + ship through staging. The
-        // new buffers must carry the same usage flags `upload_skinned` added, or
-        // the skinning paths lose their inputs after a size-changing skinned
-        // reload (the RT-only IB flags ride along whenever the device is capable
-        // so a live RT toggle keeps working across reloads).
-        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
-        let skinned_ib_rt = if self.hw.rt_capable {
+    // The new buffers carry the usage `upload_skinned` gives them, or the
+    // skinning paths lose their inputs after a size-changing reload; the RT
+    // index-buffer flags ride along whenever the device is capable, so a live
+    // RT toggle keeps working across reloads.
+    fn replace_skinned_geometry(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let v_bytes = size_of_val(vertices) as u64;
+        let i_bytes = size_of_val(indices) as u64;
+        let ib_rt = if self.hw.rt_capable {
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
         } else {
             vk::BufferUsageFlags::empty()
         };
-        let new_vbuf = self.hw.alloc.create_buffer(
-            new_v_bytes,
+        let vbuf = self.hw.alloc.create_buffer(
+            v_bytes,
             vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
         // Whole u32 words for the index buffer; see `upload_skinned`.
-        let new_ibuf = self.hw.alloc.create_buffer(
-            geom::skinned_index_buffer_bytes(new_indices.len()) as u64,
-            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | skinned_ib_rt,
+        let ibuf = self.hw.alloc.create_buffer(
+            geom::skinned_index_buffer_bytes(indices.len()) as u64,
+            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | ib_rt,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
-        let vert_bytes = bytemuck::cast_slice(new_vertices);
-        let idx_bytes = bytemuck::cast_slice(new_indices);
-        self.write_geometry_region(new_vbuf.buffer(), 0, vert_bytes)?;
-        self.write_geometry_region(new_ibuf.buffer(), 0, idx_bytes)?;
+        self.write_geometry_region(vbuf.buffer(), 0, bytemuck::cast_slice(vertices))?;
+        self.write_geometry_region(ibuf.buffer(), 0, bytemuck::cast_slice(indices))?;
+        self.skinned.vertex_buffer = vbuf;
+        self.skinned.vertex_buffer_bytes = v_bytes;
+        self.skinned.index_buffer = ibuf;
+        self.skinned.index_buffer_bytes = i_bytes;
+        Ok(())
+    }
 
-        // Commit: the replaced buffers retire through the allocator.
-        self.skinned.vertex_buffer = new_vbuf;
-        self.skinned.vertex_buffer_bytes = new_v_bytes;
-        self.skinned.index_buffer = new_ibuf;
-        self.skinned.index_buffer_bytes = new_i_bytes;
-        repacked.apply_to(&mut self.state.skinned.draw_objects);
-
-        // The skin fold's descriptor sets still bind the replaced bind-pose VB
-        // and a deformed ring sized for the old layout; re-point and re-size
-        // both. `wait_idle` above gated every in-flight read.
-        self.refresh_main_skin_geometry(new_vertices.len())?;
-        Ok(repacked.layouts())
+    // The skin fold's descriptor sets still bind the replaced bind-pose VB and
+    // a deformed ring sized for the old layout; re-point and re-size both. The
+    // read's drain gated every in-flight read.
+    fn skinned_geometry_moved(&mut self, vertex_count: usize) -> RenderResult<()> {
+        self.refresh_main_skin_geometry(vertex_count)
     }
 }
+
+impl GeometryRebuild for VkContext {}

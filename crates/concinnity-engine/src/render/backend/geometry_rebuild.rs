@@ -9,6 +9,7 @@ use crate::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 use crate::render::backend::SceneHost;
 use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::slots::geometry_repack::{repack_skinned_geometry, repack_static_geometry};
 use alloc::vec::Vec;
 
 /// One draw slot's fresh geometry, supplied to
@@ -66,14 +67,110 @@ pub struct SkinnedSlotLayout {
     pub index_count: usize,
 }
 
+/// The shared vertex and index buffers a backend draws the static and the
+/// skinned meshes from, read back and replaced whole when a size-changing
+/// reload repacks them.
+///
+/// The six methods come in matched read, replace and moved sets, called in
+/// that order only by the [`GeometryRebuild`] defaults, so the GPU the read
+/// drains stays drained through the replace. Defaulted for a backend without a
+/// rebuild path: the reads and replaces report [`RenderError::Unsupported`], so
+/// nothing is replaced and no layout is rewritten.
+pub trait GeometryBuffers {
+    /// Drain the GPU, then read the shared static vertex and index buffers
+    /// back.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if the readback fails.
+    fn read_static_geometry(&mut self) -> RenderResult<(Vec<Vertex>, Vec<u32>)> {
+        Err(RenderError::Unsupported {
+            op: "rebuild_static_geometry",
+        })
+    }
+
+    /// Replace the shared static vertex and index buffers with ones holding
+    /// `vertices` and `indices`. The GPU is still drained from the read, and
+    /// nothing is swapped when the new buffers cannot be made.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if the new buffers cannot be allocated or written.
+    fn replace_static_geometry(
+        &mut self,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let _ = (vertices, indices);
+        Err(RenderError::Unsupported {
+            op: "rebuild_static_geometry",
+        })
+    }
+
+    /// Bring what was built over the old static buffers and the old draw
+    /// layouts up to date with the new ones, such as a ray-tracing
+    /// acceleration structure. A failure is the backend's to log: the
+    /// geometry itself is already replaced.
+    fn static_geometry_moved(&mut self) {}
+
+    /// Drain the GPU, then read the shared skinned vertex and index buffers
+    /// back.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if no skinned geometry was uploaded or the readback
+    /// fails.
+    fn read_skinned_geometry(&mut self) -> RenderResult<(Vec<SkinnedVertex>, Vec<u32>)> {
+        Err(RenderError::Unsupported {
+            op: "rebuild_skinned_geometry",
+        })
+    }
+
+    /// Replace the shared skinned vertex and index buffers with ones holding
+    /// `vertices` and `indices`, with the usage the skinned passes need. The
+    /// GPU is still drained from the read, and nothing is swapped when the
+    /// new buffers cannot be made.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
+    /// path, or an error if the new buffers cannot be allocated or written.
+    fn replace_skinned_geometry(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let _ = (vertices, indices);
+        Err(RenderError::Unsupported {
+            op: "rebuild_skinned_geometry",
+        })
+    }
+
+    /// Bring what binds the skinned buffers up to date with the new ones of
+    /// `vertex_count` vertices.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if what binds them cannot be rebuilt.
+    fn skinned_geometry_moved(&mut self, vertex_count: usize) -> RenderResult<()> {
+        let _ = vertex_count;
+        Ok(())
+    }
+}
+
 /// The geometry an asset hot-reload rewrites in a built world.
 ///
-/// All defaulted. The in-place write and the size queries only touch the
-/// scene's draw slots, so they are defaulted over [`SceneHost`]: without a
+/// All defaulted, so a backend implements it empty: the size-changing
+/// rebuilds are written once here over the backend's [`GeometryBuffers`].
+/// The in-place write and the size queries only touch the scene's draw
+/// slots, so they are defaulted over [`SceneHost`]: without a
 /// scene the queries report `None`, which tells the caller there is nothing to
 /// rewrite. The rewrites report [`RenderError::Unsupported`], so a reload is
 /// never counted as applied when nothing changed.
-pub trait GeometryRebuild: SceneHost {
+pub trait GeometryRebuild: SceneHost + GeometryBuffers {
     /// `(vertex_count, index_count)` for the static draw at `draw_idx`, or
     /// `None` when the index is out of range / the backend does not expose
     /// the field. Used by asset hot-reload to detect size-changing
@@ -103,19 +200,45 @@ pub trait GeometryRebuild: SceneHost {
     /// `lod_alternates` index offsets are rewritten as the new buffers are
     /// laid out. Driven by asset hot-reload (`cn run -f` only) when a
     /// size-changing `.glb` re-export means the existing
-    /// [`Self::update_mesh_geometry`] in-place write no longer fits.
-    /// `wait_idle` first; the rebuild swaps the GPU buffers wholesale.
+    /// [`Self::update_mesh_geometry`] in-place write no longer fits. The
+    /// backend drains the GPU and reads its live buffers back through
+    /// [`GeometryBuffers`], the repack is shared, and the rebuilt buffers are
+    /// swapped in wholesale.
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
-    /// path, or an error if a change names no draw or the new buffers cannot be
-    /// allocated.
+    /// Returns [`RenderError::Unsupported`] without a scene or on a backend
+    /// without a rebuild path, or an error if the buffers cannot be read back,
+    /// a change names no draw, or the new buffers cannot be allocated.
     fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
-        let _ = changes;
-        Err(RenderError::Unsupported {
+        let unsupported = RenderError::Unsupported {
             op: "rebuild_static_geometry",
-        })
+        };
+        if self.scene().is_none() {
+            return Err(unsupported);
+        }
+        let (old_vertices, old_indices) = self.read_static_geometry()?;
+        let Some(scene) = self.scene() else {
+            return Err(unsupported);
+        };
+        let repacked =
+            repack_static_geometry(&scene.draw.objects, &old_vertices, &old_indices, changes)?;
+        if repacked.ignored_changes > 0 {
+            tracing::warn!(
+                "rebuild_static_geometry: {} change(s) targeted draw indices not in \
+                 draw_objects (ignored)",
+                repacked.ignored_changes
+            );
+        }
+        self.replace_static_geometry(&repacked.vertices, &repacked.indices)?;
+        if let Some(scene) = self.scene_mut() {
+            for (layout, obj) in repacked.layouts.into_iter().zip(&mut scene.draw.objects) {
+                layout.apply_to(obj);
+            }
+            scene.placement.forget_layout();
+        }
+        self.static_geometry_moved();
+        Ok(())
     }
 
     /// Rebuild the shared skinned-mesh vertex + index buffers, replacing the
@@ -129,26 +252,52 @@ pub trait GeometryRebuild: SceneHost {
     /// regions. Driven by asset hot-reload (`cn run -f` only) when a
     /// size-changing `.glb` re-export means the existing
     /// [`SkinnedDraws::update_skinned_mesh_geometry`](super::SkinnedDraws::update_skinned_mesh_geometry) in-place write no longer fits.
-    /// The backend `wait_idle`s first; the rebuild swaps the GPU buffers
-    /// wholesale. The skinned pipelines, shadow + velocity + SSAO + SSR
-    /// variants, and `skinned_draw_objects` slot metadata
-    /// (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
-    /// all stay untouched; only the `index_offset` / `index_count` on each
-    /// `SkinnedDrawObject` (and the buffers themselves) move.
+    /// The backend drains the GPU and reads its live buffers back through
+    /// [`GeometryBuffers`], and the rebuilt buffers are swapped in wholesale.
+    /// The skinned pipelines, shadow + velocity + SSAO + SSR variants, and
+    /// `skinned_draw_objects` slot metadata (`texture_slot` /
+    /// `normal_map_slot` / `material` / `joint_count`) all stay untouched;
+    /// only the `index_offset` / `index_count` on each `SkinnedDrawObject`
+    /// (and the buffers themselves) move.
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Unsupported`] on a backend without a rebuild
-    /// path, or an error if a change names no slot or the new buffers cannot be
-    /// allocated.
+    /// Returns [`RenderError::Unsupported`] without a scene or on a backend
+    /// without a rebuild path, or an error if the buffers cannot be read back,
+    /// a change names no slot, or the new buffers cannot be allocated.
     fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
     ) -> RenderResult<Vec<SkinnedSlotLayout>> {
-        let _ = changes;
-        Err(RenderError::Unsupported {
+        let unsupported = RenderError::Unsupported {
             op: "rebuild_skinned_geometry",
-        })
+        };
+        if self.scene().is_none() {
+            return Err(unsupported);
+        }
+        let (old_vertices, old_indices) = self.read_skinned_geometry()?;
+        let Some(scene) = self.scene() else {
+            return Err(unsupported);
+        };
+        let repacked = repack_skinned_geometry(
+            &scene.skinned.draw_objects,
+            &old_vertices,
+            &old_indices,
+            changes,
+        )?;
+        if repacked.ignored_changes > 0 {
+            tracing::warn!(
+                "rebuild_skinned_geometry: {} change(s) targeted skinned indices not \
+                 in skinned_draw_objects (ignored)",
+                repacked.ignored_changes
+            );
+        }
+        self.replace_skinned_geometry(&repacked.vertices, &repacked.indices)?;
+        if let Some(scene) = self.scene_mut() {
+            repacked.apply_to(&mut scene.skinned.draw_objects);
+        }
+        self.skinned_geometry_moved(repacked.vertices.len())?;
+        Ok(repacked.layouts())
     }
 
     /// Replace a `Mesh` draw slot's vertex + index data in place. Driven by

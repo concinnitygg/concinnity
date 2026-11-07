@@ -1,28 +1,22 @@
-//! Hot-reload rebuild of the shared static + skinned vertex / index buffers
-//! when a re-imported `.glb` no longer fits in its init-time slot. Mirrors
-//! `metal/resources/geometry_rebuild.rs` + metal/resources/skinning.rs's
-//! `rebuild_skinned_geometry`; the DEFAULT-heap buffers force a CPU
-//! round-trip (READBACK staging for the old contents, UPLOAD staging for
-//! the new ones) where Metal can just read `StorageModeShared` `contents()`.
+//! The shared static and skinned vertex / index buffers a size-changing asset
+//! hot-reload reads back and replaces whole; the repack itself is the
+//! engine's. The DEFAULT-heap buffers force a CPU round-trip (READBACK staging
+//! for the old contents, UPLOAD staging for the new ones) where Metal can just
+//! read `StorageModeShared` `contents()`.
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::mesh_payload::{SkinnedVertex, Vertex};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::{GeometryRebuild, RenderBackend};
-use concinnity_engine::render::{backend, rt_accel::geom, slots::geometry_repack};
+use concinnity_engine::render::backend::{GeometryBuffers, GeometryRebuild, RenderBackend};
+use concinnity_engine::render::rt_accel::geom;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT;
 
+use super::super::allocator::PooledBuffer;
 use super::super::com;
 use super::super::context::DxContext;
 use super::super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
-
-// cn-debug-only asset hot-reload geometry rebuild; dead from the FFI lib
-// crate's roots, live in the concinnity binary. The two module-level helper fns
-// below (`read_typed_vec` / `write_upload_buffer`) are walked through these
-// suppressed-but-live-root methods, so they need no attribute of their own.
-// See the note on the analogous block in [directx/decal.rs].
 
 // Byte capacity of a buffer resource. `Width` is the buffer's size in bytes.
 fn buffer_bytes(res: &ID3D12Resource) -> u64 {
@@ -80,371 +74,225 @@ fn write_upload_buffer(dest: &ID3D12Resource, bytes: &[u8]) -> RenderResult<()> 
     Ok(())
 }
 
-impl GeometryRebuild for DxContext {
-    // Swap in rebuilt shared static-mesh buffers for the draws named in
-    // `changes`, when a reloaded mesh no longer fits its slot. The DEFAULT-heap
-    // buffers are read back through READBACK staging for the repack, and the
-    // result is uploaded through UPLOAD staging into fresh DEFAULT-heap
-    // buffers. The streamed-mesh sub-allocators are not preserved, so a later
-    // `upload_mesh` fails allocation.
-    fn rebuild_static_geometry(
-        &mut self,
-        changes: Vec<backend::DrawGeometryUpdate>,
-    ) -> RenderResult<()> {
-        // Stop the GPU + CPU pipelines so the readback + swap can run safely.
-        // Costs a frame-time stall but only fires under `cn run -f` when the
-        // source `.glb` size actually changed.
-        self.wait_idle();
-
-        // Read the current shared buffers back to CPU memory via READBACK
-        // staging (DEFAULT-heap resources are not CPU-mappable). One one-shot
-        // submit transitions both buffers to COPY_SOURCE, copies each to its
-        // matching staging buffer, then transitions back; `wait_idle` above
-        // gates the source side; the one-shot's internal fence wait gates
-        // the destination.
-        let old_v_bytes = u64::from(self.scene.geometry.vertex_buffer_view.SizeInBytes);
-        let old_i_bytes = u64::from(self.scene.geometry.index_buffer_view.SizeInBytes);
+impl DxContext {
+    // Read a vertex + index buffer pair back to CPU memory through READBACK
+    // staging (DEFAULT-heap resources are not CPU-mappable). One one-shot
+    // submit moves both to COPY_SOURCE, copies each into its staging buffer and
+    // moves them back; the caller drained every reader, and the one-shot's
+    // fence wait gates the staging side.
+    fn read_back_pair<V: Copy>(
+        &self,
+        vertex_buffer: &ID3D12Resource,
+        index_buffer: &ID3D12Resource,
+        v_bytes: u64,
+        i_bytes: u64,
+    ) -> RenderResult<(Vec<V>, Vec<u32>)> {
         let v_readback = self.hw.alloc.alloc_buffer(
-            old_v_bytes,
+            v_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         let i_readback = self.hw.alloc.alloc_buffer(
-            old_i_bytes,
+            i_bytes,
             D3D12_HEAP_TYPE_READBACK,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )?;
         one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             let v_src = transition_barrier(
-                &self.scene.geometry.vertex_buffer,
+                vertex_buffer,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
             let i_src = transition_barrier(
-                &self.scene.geometry.index_buffer,
+                index_buffer,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
             );
-            // SAFETY: the one-shot list is recording, and `wait_idle` above drained every reader
-            // of the scene buffers.
+            // SAFETY: the one-shot list is recording, and the caller drained every reader of both
+            // buffers.
             unsafe { cmd.ResourceBarrier(&[v_src, i_src]) };
-            // SAFETY: the vertex buffer is in COPY_SOURCE from the barrier above, and the staging
-            // buffer was sized `old_v_bytes` for it.
-            unsafe {
-                cmd.CopyBufferRegion(
-                    &*v_readback,
-                    0,
-                    &*self.scene.geometry.vertex_buffer,
-                    0,
-                    old_v_bytes,
-                );
-            }
-            // SAFETY: the index buffer is in COPY_SOURCE from the barrier above, and the staging
-            // buffer was sized `old_i_bytes` for it.
-            unsafe {
-                cmd.CopyBufferRegion(
-                    &*i_readback,
-                    0,
-                    &*self.scene.geometry.index_buffer,
-                    0,
-                    old_i_bytes,
-                );
-            }
+            // SAFETY: the vertex buffer is in COPY_SOURCE from the barrier above, and its staging
+            // buffer was sized `v_bytes` for it.
+            unsafe { cmd.CopyBufferRegion(&*v_readback, 0, vertex_buffer, 0, v_bytes) };
+            // SAFETY: the index buffer is in COPY_SOURCE from the barrier above, and its staging
+            // buffer was sized `i_bytes` for it.
+            unsafe { cmd.CopyBufferRegion(&*i_readback, 0, index_buffer, 0, i_bytes) };
             let v_back = transition_barrier(
-                &self.scene.geometry.vertex_buffer,
+                vertex_buffer,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             );
             let i_back = transition_barrier(
-                &self.scene.geometry.index_buffer,
+                index_buffer,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
             // SAFETY: the list is recording, and both buffers are live through the fence wait.
             unsafe { cmd.ResourceBarrier(&[v_back, i_back]) };
         })?;
+        let v_count = usize::saturating_from(v_bytes) / size_of::<V>();
+        let i_count = usize::saturating_from(i_bytes) / size_of::<u32>();
+        Ok((
+            read_typed_vec(&v_readback, v_count)?,
+            read_typed_vec(&i_readback, i_count)?,
+        ))
+    }
 
-        // Map the readback staging buffers and copy into typed CPU Vecs.
-        // The static IB is `u32` (set when the buffer was created in
-        // init/mod.rs); the VB stride is `size_of::<Vertex>()`.
-        let old_v_count = usize::saturating_from(old_v_bytes) / size_of::<Vertex>();
-        let old_i_count = usize::saturating_from(old_i_bytes) / size_of::<u32>();
-        let old_vertices: Vec<Vertex> = read_typed_vec(&v_readback, old_v_count)?;
-        let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
-
-        let repacked = geometry_repack::repack_static_geometry(
-            &self.state.draw.objects,
-            &old_vertices,
-            &old_indices,
-            changes,
-        )?;
-        if repacked.ignored_changes > 0 {
-            tracing::warn!(
-                "rebuild_static_geometry: {} change(s) targeted draw indices not in \
-                 draw_objects (ignored)",
-                repacked.ignored_changes
-            );
-        }
-        let new_vertices = repacked.vertices;
-        let new_indices = repacked.indices;
-
-        // Allocate the new DEFAULT-heap buffers + UPLOAD-heap staging copies
-        // and ship the rebuilt contents in a single one-shot submit. The new
-        // resources start in COMMON; CopyBufferRegion promotes them to
-        // COPY_DEST implicitly, then a barrier puts each into its read state.
-        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
-        let new_vbuf = self.hw.alloc.alloc_buffer(
-            new_v_bytes,
+    // Fresh DEFAULT-heap buffers holding `vertices` and `indices` (the index
+    // buffer `i_bytes` long), filled through UPLOAD staging in one one-shot
+    // submit and left in their read states. The new resources start in COMMON,
+    // which CopyBufferRegion promotes to COPY_DEST.
+    fn upload_pair(
+        &self,
+        vertices: &[u8],
+        indices: &[u8],
+        i_bytes: u64,
+    ) -> RenderResult<(PooledBuffer, PooledBuffer)> {
+        let v_bytes = vertices.len() as u64;
+        let alloc = |bytes, heap, state| self.hw.alloc.alloc_buffer(bytes, heap, state);
+        let vbuf = alloc(
+            v_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let new_ibuf = self.hw.alloc.alloc_buffer(
-            new_i_bytes,
+        let ibuf = alloc(
+            i_bytes,
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_RESOURCE_STATE_COMMON,
         )?;
-        let v_upload = self.hw.alloc.alloc_buffer(
-            new_v_bytes,
+        let v_upload = alloc(
+            v_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        let i_upload = self.hw.alloc.alloc_buffer(
-            new_i_bytes,
+        let i_upload = alloc(
+            i_bytes,
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_RESOURCE_STATE_GENERIC_READ,
         )?;
-        write_upload_buffer(&v_upload, bytemuck::cast_slice(&new_vertices))?;
-        write_upload_buffer(&i_upload, bytemuck::cast_slice(&new_indices))?;
+        write_upload_buffer(&v_upload, vertices)?;
+        write_upload_buffer(&i_upload, indices)?;
+        let index_len = indices.len() as u64;
         one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
             // SAFETY: the one-shot list is recording, the new buffer promotes from COMMON to
             // COPY_DEST, and `v_upload` holds the vertices and outlives the fence wait.
-            unsafe { cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes) };
+            unsafe { cmd.CopyBufferRegion(&*vbuf, 0, &*v_upload, 0, v_bytes) };
             // SAFETY: as for the vertices, with `i_upload` holding the indices.
-            unsafe { cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes) };
+            unsafe { cmd.CopyBufferRegion(&*ibuf, 0, &*i_upload, 0, index_len) };
             let v_dst = transition_barrier(
-                &new_vbuf,
+                &vbuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
             );
             let i_dst = transition_barrier(
-                &new_ibuf,
+                &ibuf,
                 D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_INDEX_BUFFER,
             );
             // SAFETY: the list is recording, and both new buffers are owned by this function.
             unsafe { cmd.ResourceBarrier(&[v_dst, i_dst]) };
         })?;
+        Ok((vbuf, ibuf))
+    }
+}
 
-        // Commit the swap: rewrite per-draw layouts, point the live views at
-        // the new buffers, then drop the old buffer references. After this
-        // line the old `vertex_buffer` / `index_buffer` resources are
-        // unreachable; the next-frame fence wait has already happened, so
-        // the COM refcount drop is safe.
-        for (layout, obj) in repacked
-            .layouts
-            .into_iter()
-            .zip(&mut self.state.draw.objects)
-        {
-            layout.apply_to(obj);
-        }
-        self.state.placement.forget_layout();
-        self.scene.geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            BufferLocation: com::gpu_va(&new_vbuf),
-            SizeInBytes: u32::saturating_from(new_v_bytes),
+impl GeometryBuffers for DxContext {
+    fn read_static_geometry(&mut self) -> RenderResult<(Vec<Vertex>, Vec<u32>)> {
+        self.wait_idle();
+        let geometry = &self.scene.geometry;
+        self.read_back_pair(
+            &geometry.vertex_buffer,
+            &geometry.index_buffer,
+            u64::from(geometry.vertex_buffer_view.SizeInBytes),
+            u64::from(geometry.index_buffer_view.SizeInBytes),
+        )
+    }
+
+    // The old buffers drop once the views point at the new pair; the read's
+    // drain already gated every frame that referenced them.
+    fn replace_static_geometry(
+        &mut self,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let v_bytes = size_of_val(vertices) as u64;
+        let i_bytes = size_of_val(indices) as u64;
+        let (vbuf, ibuf) = self.upload_pair(
+            bytemuck::cast_slice(vertices),
+            bytemuck::cast_slice(indices),
+            i_bytes,
+        )?;
+        let geometry = &mut self.scene.geometry;
+        geometry.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
+            BufferLocation: com::gpu_va(&vbuf),
+            SizeInBytes: u32::saturating_from(v_bytes),
             StrideInBytes: u32::saturating_from(size_of::<Vertex>()),
         };
-        self.scene.geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            BufferLocation: com::gpu_va(&new_ibuf),
-            SizeInBytes: u32::saturating_from(new_i_bytes),
+        geometry.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
+            BufferLocation: com::gpu_va(&ibuf),
+            SizeInBytes: u32::saturating_from(i_bytes),
             Format: DXGI_FORMAT_R32_UINT,
         };
-        self.scene.geometry.vertex_buffer = new_vbuf;
-        self.scene.geometry.index_buffer = new_ibuf;
-
-        // The RT acceleration structure was built against the buffers just
-        // dropped and the per-draw offsets just rewritten, so its BLAS hold the
-        // old geometry and its geometry table would address the new buffers at
-        // old offsets. Rebuild it over the fresh layout. `wait_idle` above plus
-        // the one-shot fence waits leave the GPU quiet, so the synchronous
-        // rebuild is safe here.
-        if self.rt.accel.is_some() {
-            self.rebuild_rt_accel();
-        }
+        geometry.vertex_buffer = vbuf;
+        geometry.index_buffer = ibuf;
         Ok(())
     }
 
-    // Rebuild the shared skinned-mesh vertex + index buffers, swapping in
-    // fresh geometry for the slots named in `changes`. Driven by asset
-    // hot-reload (`cn run -f` only) when a `SkinnedMesh` re-import has a
-    // different vertex / index count than its init-time slot. Walks every
-    // `SkinnedDrawObject` in order: for each slot in `changes`, the new
-    // vertices / indices are appended to a fresh CPU buffer; for unchanged
-    // slots, the current geometry is read back from the live skinned
-    // buffers (DEFAULT heap → READBACK staging + one-shot GPU copy + Map)
-    // and copied with index rebasing from the slot's old `vertex_base`
-    // onto its new one. New DEFAULT-heap buffers are created at the
-    // post-rebuild size and the contents uploaded through UPLOAD staging;
-    // the old buffers are dropped only after the swap commits. Returns a
-    // `SkinnedSlotLayout` per slot (in `skinned_index` order) so the
-    // asset-hot-reload caller can refresh its `SkinnedMeshSourceEntry`s.
-    //
-    // The skinned IB stays `DXGI_FORMAT_R32_UINT`; the skinned pipelines,
-    // shadow / velocity / SSAO / SSR variants, and per-slot metadata
-    // (`texture_slot` / `normal_map_slot` / `material` / `joint_count`)
-    // are untouched. Skeleton-shape changes (joint-count mismatch) route
-    // through `update_skinned_skeleton`, not this call.
-    fn rebuild_skinned_geometry(
-        &mut self,
-        changes: Vec<backend::SkinnedDrawGeometryUpdate>,
-    ) -> RenderResult<Vec<backend::SkinnedSlotLayout>> {
-        let v_buf = self.skinned.vertex_buffer.clone().ok_or_else(|| {
-            RenderError::Other(
-                "rebuild_skinned_geometry: no skinned vertex buffer (was upload_skinned called?)"
-                    .into(),
-            )
-        })?;
-        let i_buf = self.skinned.index_buffer.clone().ok_or_else(|| {
-            RenderError::Other(
-                "rebuild_skinned_geometry: no skinned index buffer (was upload_skinned called?)"
-                    .into(),
-            )
-        })?;
-
-        self.wait_idle();
-
-        // Read the live skinned buffers back to CPU memory via READBACK
-        // staging. Same one-shot pattern as `rebuild_static_geometry`.
-        let old_v_bytes = u64::from(self.skinned.vertex_buffer_view.SizeInBytes);
-        let old_i_bytes = u64::from(self.skinned.index_buffer_view.SizeInBytes);
-        let v_readback = self.hw.alloc.alloc_buffer(
-            old_v_bytes,
-            D3D12_HEAP_TYPE_READBACK,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-        )?;
-        let i_readback = self.hw.alloc.alloc_buffer(
-            old_i_bytes,
-            D3D12_HEAP_TYPE_READBACK,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-        )?;
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
-            let v_src = transition_barrier(
-                &v_buf,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-            );
-            let i_src = transition_barrier(
-                &i_buf,
-                D3D12_RESOURCE_STATE_INDEX_BUFFER,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-            );
-            // SAFETY: the one-shot list is recording, and `wait_idle` above drained every reader
-            // of the skinned buffers.
-            unsafe { cmd.ResourceBarrier(&[v_src, i_src]) };
-            // SAFETY: `v_buf` is in COPY_SOURCE, and its staging buffer holds `old_v_bytes`.
-            unsafe { cmd.CopyBufferRegion(&*v_readback, 0, &*v_buf, 0, old_v_bytes) };
-            // SAFETY: `i_buf` is in COPY_SOURCE, and its staging buffer holds `old_i_bytes`.
-            unsafe { cmd.CopyBufferRegion(&*i_readback, 0, &*i_buf, 0, old_i_bytes) };
-            let v_back = transition_barrier(
-                &v_buf,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            );
-            let i_back = transition_barrier(
-                &i_buf,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                D3D12_RESOURCE_STATE_INDEX_BUFFER,
-            );
-            // SAFETY: the list is recording, and both buffers are live through the fence wait.
-            unsafe { cmd.ResourceBarrier(&[v_back, i_back]) };
-        })?;
-
-        // Skinned VB stride is `size_of::<SkinnedVertex>()`; skinned IB is
-        // `u32` (matches the format set in `upload_skinned`).
-        let old_v_count = usize::saturating_from(old_v_bytes) / size_of::<SkinnedVertex>();
-        let old_i_count = usize::saturating_from(old_i_bytes) / size_of::<u32>();
-        let old_vertices: Vec<SkinnedVertex> = read_typed_vec(&v_readback, old_v_count)?;
-        let old_indices: Vec<u32> = read_typed_vec(&i_readback, old_i_count)?;
-
-        let repacked = geometry_repack::repack_skinned_geometry(
-            &self.state.skinned.draw_objects,
-            &old_vertices,
-            &old_indices,
-            changes,
-        )?;
-        if repacked.ignored_changes > 0 {
-            tracing::warn!(
-                "rebuild_skinned_geometry: {} change(s) targeted skinned indices not \
-                 in skinned_draw_objects (ignored)",
-                repacked.ignored_changes
-            );
+    // The RT acceleration structure was built against the buffers just
+    // dropped and the per-draw offsets just rewritten, so its BLAS hold the old
+    // geometry. Rebuild it over the fresh layout; the GPU is still quiet.
+    fn static_geometry_moved(&mut self) {
+        if self.rt.accel.is_some() {
+            self.rebuild_rt_accel();
         }
-        let new_vertices = &repacked.vertices;
-        let new_indices = &repacked.indices;
+    }
 
-        // Allocate new DEFAULT-heap buffers + UPLOAD staging copies and ship
-        // the rebuilt contents in a single one-shot submit.
-        let new_v_bytes = size_of_val(new_vertices.as_slice()) as u64;
-        let new_i_bytes = size_of_val(new_indices.as_slice()) as u64;
-        // Whole u32 words for the index buffer; see `upload_skinned`.
-        let ibuf_bytes = geom::skinned_index_buffer_bytes(new_indices.len()) as u64;
-        let new_vbuf = self.hw.alloc.alloc_buffer(
-            new_v_bytes,
-            D3D12_HEAP_TYPE_DEFAULT,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?;
-        let new_ibuf = self.hw.alloc.alloc_buffer(
-            ibuf_bytes,
-            D3D12_HEAP_TYPE_DEFAULT,
-            D3D12_RESOURCE_STATE_COMMON,
-        )?;
-        let v_upload = self.hw.alloc.alloc_buffer(
-            new_v_bytes,
-            D3D12_HEAP_TYPE_UPLOAD,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-        )?;
-        let i_upload = self.hw.alloc.alloc_buffer(
-            ibuf_bytes,
-            D3D12_HEAP_TYPE_UPLOAD,
-            D3D12_RESOURCE_STATE_GENERIC_READ,
-        )?;
-        write_upload_buffer(&v_upload, bytemuck::cast_slice(new_vertices))?;
-        write_upload_buffer(&i_upload, bytemuck::cast_slice(new_indices))?;
-        one_shot_submit(&self.hw.device, &self.hw.command_queue, |cmd| {
-            // SAFETY: the one-shot list is recording, the new buffer promotes from COMMON to
-            // COPY_DEST, and `v_upload` holds the vertices and outlives the fence wait.
-            unsafe { cmd.CopyBufferRegion(&*new_vbuf, 0, &*v_upload, 0, new_v_bytes) };
-            // SAFETY: as for the vertices, with `i_upload` holding the indices.
-            unsafe { cmd.CopyBufferRegion(&*new_ibuf, 0, &*i_upload, 0, new_i_bytes) };
-            let v_dst = transition_barrier(
-                &new_vbuf,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
-            );
-            let i_dst = transition_barrier(
-                &new_ibuf,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_INDEX_BUFFER,
-            );
-            // SAFETY: the list is recording, and both new buffers are owned by this function.
-            unsafe { cmd.ResourceBarrier(&[v_dst, i_dst]) };
-        })?;
+    fn read_skinned_geometry(&mut self) -> RenderResult<(Vec<SkinnedVertex>, Vec<u32>)> {
+        let (Some(vertex_buffer), Some(index_buffer)) = (
+            self.skinned.vertex_buffer.clone(),
+            self.skinned.index_buffer.clone(),
+        ) else {
+            return Err(RenderError::Other(
+                "rebuild_skinned_geometry: no skinned buffers (was upload_skinned called?)".into(),
+            ));
+        };
+        self.wait_idle();
+        self.read_back_pair(
+            &vertex_buffer,
+            &index_buffer,
+            u64::from(self.skinned.vertex_buffer_view.SizeInBytes),
+            u64::from(self.skinned.index_buffer_view.SizeInBytes),
+        )
+    }
 
-        // Commit: rewrite per-slot layouts, repoint the live views at the
-        // new buffers, and drop the old buffer COM references.
-        repacked.apply_to(&mut self.state.skinned.draw_objects);
+    // The skinned IB stays `DXGI_FORMAT_R32_UINT`, sized in whole u32 words
+    // (see `upload_skinned`).
+    fn replace_skinned_geometry(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: &[u32],
+    ) -> RenderResult<()> {
+        let v_bytes = size_of_val(vertices) as u64;
+        let i_bytes = size_of_val(indices) as u64;
+        let (vbuf, ibuf) = self.upload_pair(
+            bytemuck::cast_slice(vertices),
+            bytemuck::cast_slice(indices),
+            geom::skinned_index_buffer_bytes(indices.len()) as u64,
+        )?;
         self.skinned.vertex_buffer_view = D3D12_VERTEX_BUFFER_VIEW {
-            BufferLocation: com::gpu_va(&new_vbuf),
-            SizeInBytes: u32::saturating_from(new_v_bytes),
+            BufferLocation: com::gpu_va(&vbuf),
+            SizeInBytes: u32::saturating_from(v_bytes),
             StrideInBytes: u32::saturating_from(size_of::<SkinnedVertex>()),
         };
         self.skinned.index_buffer_view = D3D12_INDEX_BUFFER_VIEW {
-            BufferLocation: com::gpu_va(&new_ibuf),
-            SizeInBytes: u32::saturating_from(new_i_bytes),
+            BufferLocation: com::gpu_va(&ibuf),
+            SizeInBytes: u32::saturating_from(i_bytes),
             Format: DXGI_FORMAT_R32_UINT,
         };
-        self.skinned.vertex_buffer = Some(new_vbuf);
-        self.skinned.index_buffer = Some(new_ibuf);
-        Ok(repacked.layouts())
+        self.skinned.vertex_buffer = Some(vbuf);
+        self.skinned.index_buffer = Some(ibuf);
+        Ok(())
     }
 }
+
+impl GeometryRebuild for DxContext {}

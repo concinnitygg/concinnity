@@ -864,6 +864,7 @@ impl backend::DrawStreaming for RecordingBackend {
     }
 }
 
+impl backend::GeometryBuffers for RecordingBackend {}
 impl backend::GeometryRebuild for RecordingBackend {
     fn draw_geometry_size(&self, draw_idx: DrawIndex) -> Option<(usize, usize)> {
         self.geometry_sizes.get(&draw_idx).copied()

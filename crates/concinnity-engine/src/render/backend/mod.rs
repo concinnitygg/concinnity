@@ -75,7 +75,8 @@ mod world_shaders;
 pub use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 pub use effects::{DecalPass, EmitterPass};
 pub use geometry_rebuild::{
-    DrawGeometryUpdate, GeometryRebuild, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
+    DrawGeometryUpdate, GeometryBuffers, GeometryRebuild, SkinnedDrawGeometryUpdate,
+    SkinnedSlotLayout,
 };
 pub use lights::LightTables;
 #[cfg(any(test, feature = "test-support"))]

@@ -44,9 +44,9 @@ mod tests {
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
         BackendProbe, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming, EmitterPass,
-        FrameCapture, FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend,
-        SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload,
-        WorldShaders,
+        FrameCapture, FrameParams, GeometryBuffers, GeometryRebuild, LightTables, PlanetReshape,
+        RenderBackend, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
+        WorldReload, WorldShaders,
     };
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
@@ -84,6 +84,9 @@ mod tests {
         // the next create fails when `fail_emitter` is set.
         emitter_pools: Vec<(usize, bool)>,
         fail_emitter: bool,
+        // What the shared geometry buffers were asked, in order.
+        geometry: Vec<&'static str>,
+        replaced: Option<(usize, usize)>,
     }
 
     impl Hosted {
@@ -122,6 +125,8 @@ mod tests {
                 decal_bindings: Vec::new(),
                 emitter_pools: Vec::new(),
                 fail_emitter: false,
+                geometry: Vec::new(),
+                replaced: None,
             }
         }
     }
@@ -196,6 +201,24 @@ mod tests {
     }
     impl CullReadback for Hosted {}
     impl FrameCapture for Hosted {}
+    impl GeometryBuffers for Hosted {
+        fn read_static_geometry(&mut self) -> RenderResult<(Vec<Vertex>, Vec<u32>)> {
+            self.geometry.push("read");
+            Ok((Vec::new(), Vec::new()))
+        }
+        fn replace_static_geometry(
+            &mut self,
+            vertices: &[Vertex],
+            indices: &[u32],
+        ) -> RenderResult<()> {
+            self.geometry.push("replace");
+            self.replaced = Some((vertices.len(), indices.len()));
+            Ok(())
+        }
+        fn static_geometry_moved(&mut self) {
+            self.geometry.push("moved");
+        }
+    }
     impl GeometryRebuild for Hosted {}
     impl PlanetReshape for Hosted {}
     impl SettingsTarget for Hosted {}
@@ -393,5 +416,25 @@ mod tests {
         assert!(b.scene.particles.is_empty());
         assert!(b.remove_emitter(id).is_err());
         assert_eq!(b.emitter_pools, [(id, true), (id, false)]);
+    }
+
+    // A size-changing rebuild reads the backend's buffers back, repacks them,
+    // swaps the new ones in, then lays the draws out over them before the
+    // backend refreshes what was built over the old ones.
+    #[test]
+    fn a_static_rebuild_repacks_through_the_backends_buffers() {
+        let mut b = Hosted::new();
+        let change = |draw: u32, vertex_count: usize| crate::render::backend::DrawGeometryUpdate {
+            draw_idx: DrawIndex(draw),
+            vertices: vec![crate::test_support::vertex(); vertex_count],
+            indices: vec![0, 1, 2],
+            lod_alternates: Vec::new(),
+        };
+        b.rebuild_static_geometry(vec![change(0, 4), change(1, 3)])
+            .unwrap();
+        assert_eq!(b.geometry, ["read", "replace", "moved"]);
+        assert_eq!(b.replaced, Some((7, 6)));
+        assert_eq!(b.scene.draw.objects[0].vertex_count, 4);
+        assert_eq!(b.scene.draw.objects[1].vertex_count, 3);
     }
 }
