@@ -10,7 +10,6 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::dispatch::build_asset;
 use super::partition::ResourceJob;
 use super::progress::{BuildStage, Progress, StageProgress};
 use crate::authoring::registry::RegisteredType;
@@ -78,7 +77,10 @@ pub(in crate::pipeline) fn probe_mesh_payload_cache(
             all_assets: &empty,
         };
         let discriminant = RESOURCE_CACHE_DISC_BASE + job_resource_kind(rt) as u8;
-        let inputs = crate::asset::CacheInputs::extra(rt.source_files(&asset.args, assets_dir));
+        let Some(build) = rt.build_asset() else {
+            continue;
+        };
+        let inputs = (build.cache_inputs)(&asset.args, &ctx);
         // A shape baked into the mesh changes its payload as much as the
         // source does, so its args join the key.
         let shape = crate::compile::character::bake::baking_shape_args(assets, &asset.id);
@@ -448,7 +450,7 @@ fn compile_component(
         assets_dir: shared.assets_dir,
         all_assets: shared.assets,
     };
-    let build = build_asset(ct).ok_or_else(|| {
+    let build = ct.build_asset().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
@@ -490,9 +492,7 @@ fn compile_component(
 }
 
 // Compile one resource-stream payload, or serve it from the probe or the
-// payload cache when its inputs are unchanged. Bypasses the
-// `BuildAsset`/`RegisteredType` path a component takes, since a resource is
-// not a component.
+// payload cache when its inputs are unchanged.
 fn compile_resource(
     (asset_idx, rt, handle): &ResourceJob,
     shared: &CompileShared<'_>,
@@ -505,10 +505,19 @@ fn compile_resource(
         assets_dir: shared.assets_dir,
         all_assets: shared.assets,
     };
+    let build = rt.build_asset().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "Asset '{}' is a resource but has no BuildAsset impl (RegisteredType {rt:?})",
+                asset.id
+            ),
+        )
+    })?;
     let extra_data = if *rt == RegisteredType::Texture {
         Vec::new()
     } else {
-        rt.compile_data(&asset.id, &asset.args)?.unwrap_or_default()
+        (build.compile_data)(&asset.id, &asset.args)?.unwrap_or_default()
     };
     // A glTF/FBX-sourced mesh was probed before desugar; honor that result so
     // the source parse really is skipped on a hit and the pre-desugar key is
@@ -517,25 +526,24 @@ fn compile_resource(
         if let Some(bytes) = &entry.bytes {
             (bytes.clone(), true)
         } else {
-            let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
+            let compiled = (build.compile)(&asset.args, &ctx)?;
             crate::cache::store(PAYLOAD, &entry.key, &compiled);
             (compiled, false)
         }
     } else {
         // Every resource asset compiles identically on every backend, so its
         // entry is shared across a DirectX and a Vulkan cook.
-        let inputs =
-            crate::asset::CacheInputs::extra(rt.source_files(&asset.args, shared.assets_dir));
+        let inputs = (build.cache_inputs)(&asset.args, &ctx);
         let key = crate::cache::payload_key(
             RESOURCE_CACHE_DISC_BASE + job_resource_kind(*rt) as u8,
-            &rt.payload_key_args(&asset.args),
+            &(build.payload_key_args)(&asset.args),
             &ctx,
             &inputs,
         );
         if let Some(bytes) = crate::cache::load(PAYLOAD, &key) {
             (bytes, true)
         } else {
-            let compiled = rt.compile_payload(&asset.args, shared.assets_dir)?;
+            let compiled = (build.compile)(&asset.args, &ctx)?;
             crate::cache::store(PAYLOAD, &key, &compiled);
             (compiled, false)
         }

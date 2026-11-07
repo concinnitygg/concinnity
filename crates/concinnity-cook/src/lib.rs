@@ -37,8 +37,7 @@
 pub use concinnity_core::platform;
 pub use concinnity_host::store::paths;
 pub(crate) mod asset;
-pub mod asset_api;
-pub(crate) mod asset_impls;
+pub use asset::api as asset_api;
 /// The authored world model: world.jsonl parsing and I/O, the type vocabulary,
 /// the asset cross-reference metadata, the typed spec vocabulary, and the
 /// build-only args schemas. Everything the cook reads before it compiles

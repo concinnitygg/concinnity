@@ -1,8 +1,9 @@
-//! `BuildAsset` is the build-time counterpart to `Component`. Components whose
-//! `PAYLOAD = AssetPayload::Compiled` implement this trait to turn their args
-//! into a binary payload (mesh vertices, shader bytecode, decoded image, etc.).
-//! The build pipeline calls `<T as BuildAsset>::compile_payload` for each
-//! declared asset and packs the resulting bytes into a blob.
+//! `BuildAsset` turns an asset's args into its binary payload (mesh vertices,
+//! shader bytecode, a decoded image, ...). Every registered type the registry
+//! marks `compiled` or `data`, component or resource, implements it, and the
+//! registry's generated `RegisteredType::build_asset` is the one table the
+//! build pipeline reaches each impl through, so a compiled type without an impl
+//! does not build.
 //!
 //! `BuildCtx` is the build-time context handed to each impl. It lives here
 //! because it is build-only: the runtime never compiles a payload. It carries
@@ -10,8 +11,10 @@
 //! concinnity-engine, since the engine selects a Shader stage's source with it at
 //! runtime.
 
+pub mod api;
+mod impls;
+
 use concinnity_core::platform::PlatformSet;
-use concinnity_engine::ecs::Component;
 use std::path::Path;
 
 use crate::authoring::world::WorldJsonlAsset;
@@ -52,12 +55,8 @@ pub(crate) struct BuildCtx<'a> {
     pub(crate) all_assets: &'a [WorldJsonlAsset],
 }
 
-// A component that compiles to a binary payload at build time.
-//
-// Only types whose `Component::PAYLOAD` is `AssetPayload::Compiled` should
-// implement this. The build pipeline reaches each impl through its arm in the
-// per-type `build_asset` entry in [`crate::pipeline`].
-pub(crate) trait BuildAsset: Component {
+// An asset that compiles to a binary payload at build time.
+pub(crate) trait BuildAsset {
     fn compile_payload(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
 
     // True when identical source bytes compile to a different payload per
@@ -94,6 +93,55 @@ pub(crate) trait BuildAsset: Component {
     fn dependency_args(_args: &serde_json::Value, _ctx: &BuildCtx<'_>) -> Vec<serde_json::Value> {
         Vec::new()
     }
+
+    // The args the payload cache key hashes: all of them, unless the payload
+    // never reads some fields, which then key on the bake inputs alone so
+    // editing one reuses the payload.
+    fn payload_key_args(args: &serde_json::Value) -> std::borrow::Cow<'_, serde_json::Value> {
+        std::borrow::Cow::Borrowed(args)
+    }
+
+    // Runtime data baked beside the payload into the record's own bytes, for a
+    // resource whose record carries fields the payload does not. `name` is the
+    // asset's declared name.
+    fn compile_data(_name: &str, _args: &serde_json::Value) -> std::io::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+}
+
+type CompileFn = fn(&serde_json::Value, &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
+type CacheInputsFn = fn(&serde_json::Value, &BuildCtx<'_>) -> CacheInputs;
+type KeyArgsFn = for<'a> fn(&'a serde_json::Value) -> std::borrow::Cow<'a, serde_json::Value>;
+type DataFn = fn(&str, &serde_json::Value) -> std::io::Result<Option<Vec<u8>>>;
+
+// One type's `BuildAsset` impl, as the registry's dispatch table holds it.
+#[derive(Clone, Copy)]
+pub(crate) struct BuildAssetEntry {
+    pub(crate) compile: CompileFn,
+    pub(crate) cache_inputs: CacheInputsFn,
+    pub(crate) payload_key_args: KeyArgsFn,
+    pub(crate) compile_data: DataFn,
+}
+
+impl BuildAssetEntry {
+    pub(crate) fn of<T: BuildAsset>() -> Self {
+        Self {
+            compile: T::compile_payload,
+            cache_inputs: cache_inputs_of::<T>,
+            payload_key_args: T::payload_key_args,
+            compile_data: T::compile_data,
+        }
+    }
+}
+
+// `source_files` and `TARGET_DEPENDENT` are read together, so a type whose
+// payload differs per backend cannot report one without the other.
+fn cache_inputs_of<T: BuildAsset>(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> CacheInputs {
+    CacheInputs {
+        sources: T::source_files(args, ctx),
+        target_dependent: T::TARGET_DEPENDENT,
+        dependencies: T::dependency_args(args, ctx),
+    }
 }
 
 // An asset's contribution to its payload cache key: the inputs its compile
@@ -107,6 +155,7 @@ pub(crate) struct CacheInputs {
     pub(crate) dependencies: Vec<serde_json::Value>,
 }
 
+#[cfg(test)]
 impl CacheInputs {
     // Inputs for an asset whose compile is platform-independent and whose
     // source paths the cache's generic args walk resolves on its own.
@@ -116,5 +165,57 @@ impl CacheInputs {
             target_dependent: false,
             dependencies: Vec::new(),
         }
+    }
+}
+
+// A type's dispatch-table entry, reached the way the build reaches it, for the
+// tests that compile one asset with no surrounding world.
+#[cfg(test)]
+impl crate::authoring::registry::RegisteredType {
+    fn test_ctx(assets_dir: Option<&Path>) -> BuildCtx<'_> {
+        BuildCtx {
+            name: "test",
+            targets: PlatformSet::single(concinnity_core::platform::Platform::Metal),
+            assets_dir,
+            all_assets: &[],
+        }
+    }
+
+    fn entry(self) -> BuildAssetEntry {
+        self.build_asset()
+            .unwrap_or_else(|| panic!("{} compiles no payload", self.as_str()))
+    }
+
+    pub(crate) fn compile_payload(
+        self,
+        args: &serde_json::Value,
+        assets_dir: Option<&Path>,
+    ) -> std::io::Result<Vec<u8>> {
+        (self.entry().compile)(args, &Self::test_ctx(assets_dir))
+    }
+
+    pub(crate) fn source_files(
+        self,
+        args: &serde_json::Value,
+        assets_dir: Option<&Path>,
+    ) -> Vec<std::path::PathBuf> {
+        match (self.entry().cache_inputs)(args, &Self::test_ctx(assets_dir)).sources {
+            SourceFiles::Extra(paths) | SourceFiles::Only(paths) => paths,
+        }
+    }
+
+    pub(crate) fn payload_key_args(
+        self,
+        args: &serde_json::Value,
+    ) -> std::borrow::Cow<'_, serde_json::Value> {
+        (self.entry().payload_key_args)(args)
+    }
+
+    pub(crate) fn compile_data(
+        self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> std::io::Result<Option<Vec<u8>>> {
+        (self.entry().compile_data)(name, args)
     }
 }

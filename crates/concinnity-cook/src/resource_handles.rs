@@ -6,248 +6,15 @@
 //! producers -- are `concinnity_engine::resource::ResourceHandles`, shared with
 //! the typed bake builder so the two producers of a world can never drift. What
 //! lives here is the authored-world half: classifying JSON assets into those
-//! spaces, the resolver seams a reference name deserializes through, and the
-//! per-type compile dispatch.
+//! spaces, and the resolver seams a reference name deserializes through.
 
-use concinnity_engine::components::{Material, SkeletonJoint, SkinnedMesh};
 use concinnity_engine::ecs::{HandleKind, HandleResolver};
 use concinnity_engine::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
-use serde::Deserialize;
 use std::cell::RefCell;
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::authoring::registry::RegisteredType;
-
-// Compile dispatch for resource assets: the vocabulary enum is authoring-side,
-// so the per-type compile arms attach here, where the compilers live.
-impl RegisteredType {
-    /// Compile this resource's payload from its authored args, resolving bare
-    /// source filenames under `assets_dir`. Bypasses the `BuildAsset` trait
-    /// (which requires `Component`, a thing a resource no longer is) and calls
-    /// the concrete compiler directly.
-    pub(crate) fn compile_payload(
-        self,
-        args: &serde_json::Value,
-        assets_dir: Option<&Path>,
-    ) -> std::io::Result<Vec<u8>> {
-        match self {
-            Self::AudioClip => crate::compile::audio_clip::compile_audio_clip_payload(args)
-                .map_err(std::io::Error::from),
-            Self::Texture => crate::compile::texture::compile_texture_payload(args, assets_dir)
-                .map_err(std::io::Error::from),
-            Self::CubemapTexture => {
-                crate::compile::cubemap::compile_cubemap_payload(args).map_err(std::io::Error::from)
-            }
-            Self::EnvironmentMap => {
-                crate::compile::environment_map::compile_environment_map_payload(args, assets_dir)
-                    .map_err(std::io::Error::from)
-            }
-            Self::ColorLut => {
-                crate::compile::color_lut::compile_color_lut_payload(args, assets_dir)
-                    .map_err(std::io::Error::from)
-            }
-            Self::Font => {
-                crate::compile::font::compile_font_payload(args).map_err(std::io::Error::from)
-            }
-            Self::Material => compile_material_data(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::Mesh => crate::compile::mesh::compile_mesh_payload(args)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::SkinnedMesh => compile_skinned_mesh_payload(args),
-            // The registry spans every declarable type; only the resource group
-            // reaches here, and callers select on `is_resource` first.
-            other => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("{} is not a resource asset", other.as_str()),
-            )),
-        }
-    }
-
-    /// The args this resource's payload cache key hashes: the whole authored
-    /// args, except for a resource whose record carries fields its payload
-    /// never reads, which keys on its bake inputs alone so editing one of those
-    /// fields reuses the payload. Args that do not resolve key as authored; the
-    /// compile refuses them with the real error.
-    pub(crate) fn payload_key_args(
-        self,
-        args: &serde_json::Value,
-    ) -> std::borrow::Cow<'_, serde_json::Value> {
-        match self {
-            Self::EnvironmentMap => {
-                crate::compile::environment_map::environment_map_payload_key_args(args)
-                    .map_or(std::borrow::Cow::Borrowed(args), std::borrow::Cow::Owned)
-            }
-            _ => std::borrow::Cow::Borrowed(args),
-        }
-    }
-
-    /// The source files this resource reads, folded into its payload cache key
-    /// so an unchanged source is a cache hit.
-    pub(crate) fn source_files(
-        self,
-        args: &serde_json::Value,
-        assets_dir: Option<&Path>,
-    ) -> Vec<std::path::PathBuf> {
-        match self {
-            Self::AudioClip
-            | Self::Texture
-            | Self::CubemapTexture
-            | Self::EnvironmentMap
-            | Self::ColorLut
-            | Self::Mesh
-            | Self::SkinnedMesh => {
-                let source = args
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty());
-                let mut files: Vec<std::path::PathBuf> =
-                    source.map(std::path::PathBuf::from).into_iter().collect();
-                // A text `.gltf` reads sibling files (external buffers /
-                // images) the args never name; fold them into the cache key
-                // so editing one recompiles the payload.
-                if let Some(src) = source
-                    && src.to_lowercase().ends_with(".gltf")
-                {
-                    files.extend(crate::import::gltf_source::referenced_files(
-                        src, assets_dir,
-                    ));
-                }
-                // A character model reads its source file.
-                if let Some(arg) = args.get("character_model").and_then(|v| {
-                    serde_json::from_value::<crate::compile::character::import::CharacterModelArg>(
-                        v.clone(),
-                    )
-                    .ok()
-                }) {
-                    files.extend(arg.source_files());
-                }
-                files
-            }
-            // A Font keys its TTF source under `path`, not `source`.
-            Self::Font => args
-                .get("path")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(std::path::PathBuf::from)
-                .into_iter()
-                .collect(),
-            // A Material bakes only its authored args (texture refs are already
-            // resolved handles); it reads no external source file, and neither
-            // does anything outside the resource group.
-            _ => Vec::new(),
-        }
-    }
-
-    /// The baked runtime data that rides the resource record's `data_bytes`
-    /// ALONGSIDE a compiled payload, or `None`. Two kinds are such hybrids: a
-    /// `SkinnedMesh`'s geometry compiles into a blob payload while its authored
-    /// placement/material/capsule fields bake here, and an `EnvironmentMap`'s
-    /// cubemaps compile while its display fields (`background`) bake here, so
-    /// changing one never re-runs the convolution. (Material, a pure data
-    /// resource, routes its bytes through `compile_payload` + `is_data`
-    /// instead.) `name` is the asset's declared name, interned into the baked
-    /// form where the runtime needs the identity.
-    pub(crate) fn compile_data(
-        self,
-        name: &str,
-        args: &serde_json::Value,
-    ) -> std::io::Result<Option<Vec<u8>>> {
-        match self {
-            Self::SkinnedMesh => compile_skinned_mesh_data(name, args)
-                .map(Some)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
-            Self::EnvironmentMap => {
-                crate::compile::environment_map::compile_environment_map_data(args)
-                    .map(Some)
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-            _ => Ok(None),
-        }
-    }
-}
-
-// Bake a Material into its resource `data_bytes`: resolve its texture references
-// to handles (the texture-handle resolver is installed before this runs), apply
-// the runtime validation clamps -- which no longer run via a generated `from_args`
-// now that Material is a resource -- and serialize. The runtime deserializes these
-// bytes straight back into a `Material` to build its material map.
-fn compile_material_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let mat: Material =
-        Deserialize::deserialize(args).map_err(|e| format!("Material args: {e}"))?;
-    let mat = crate::authoring::validate::material(mat);
-    postcard::to_allocvec(&mat).map_err(|e| format!("Material serialize: {e}"))
-}
-
-// Compile a SkinnedMesh's geometry payload: vertices + indices + the skeleton
-// the desugar pass wrote into the args, with the LOD trailer. The placement /
-// material fields ride separately in the record's `data_bytes` (see
-// `compile_skinned_mesh_data`).
-fn compile_skinned_mesh_payload(args: &serde_json::Value) -> std::io::Result<Vec<u8>> {
-    let mesh: SkinnedMesh = Deserialize::deserialize(args)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
-    // `skeleton` is not a field on the schema struct; the desugar pass writes it
-    // into the args JSON for glTF-sourced meshes, and inline-authored worlds may
-    // carry it directly. Read it straight from the JSON so it can be baked into
-    // the compiled payload alongside vertices and indices.
-    let skeleton: Vec<SkeletonJoint> = match args.get("skeleton") {
-        Some(v) => Deserialize::deserialize(v).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("SkinnedMesh: invalid skeleton args: {e}"),
-            )
-        })?,
-        None => Vec::new(),
-    };
-    crate::compile::geometry::compile_skinned_mesh_payload_with_lods(
-        &mesh.vertices,
-        &mesh.indices,
-        &skeleton,
-        &mesh.morph_target_names,
-        &mesh.morph_deltas,
-        &crate::compile::geometry::SkinnedLods {
-            levels: mesh.lod_levels,
-            distances: &mesh.lod_distances,
-        },
-    )
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
-// Bake a SkinnedMesh's runtime data (its placement, material/texture handles,
-// capsule, and spawn reserve) into the resource record's `data_bytes`, applying
-// the clamps that used to run in the retired `from_args`. The geometry is
-// dropped from the baked form -- it rides the compiled payload. Serialized as a
-// `(name_id, mesh)` JSON tuple: the struct carries no identity, so the interned
-// name (which the runtime's spawn-by-name registration still needs) travels
-// beside it.
-fn compile_skinned_mesh_data(name: &str, args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    let mut sm: SkinnedMesh =
-        Deserialize::deserialize(args).map_err(|e| format!("SkinnedMesh args: {e}"))?;
-    // A zero scale would collapse the world matrix; clamp to a sane unit.
-    if sm.scale == [0.0, 0.0, 0.0] {
-        sm.scale = [1.0, 1.0, 1.0];
-    }
-    // 0 and 1 are equivalent (no alternates); cap at the 8-level LOD ceiling.
-    if sm.lod_levels == 0 {
-        sm.lod_levels = 1;
-    }
-    sm.lod_levels = sm.lod_levels.min(8);
-    // A runaway reserve would pre-expand the skinned vertex buffer without
-    // bound; cap it. The skinned index buffer is u16, so init applies a further
-    // per-mesh limit when the copies would overflow that.
-    sm.max_instances = sm.max_instances.min(4096);
-    // Geometry rides the compiled payload, not the baked data. The morph
-    // fields are geometry too: the desugar pass writes them into the args only
-    // on a payload-cache miss, so leaving them here would make the record
-    // depend on whether the payload was compiled or replayed.
-    sm.vertices = Vec::new();
-    sm.indices = Vec::new();
-    sm.morph_target_names = Vec::new();
-    sm.morph_deltas = Vec::new();
-    let name_id = asset_id::intern(name);
-    postcard::to_allocvec(&(name_id.0, sm)).map_err(|e| format!("SkinnedMesh serialize: {e}"))
-}
 
 // Assign the shader handle space over the expanded world, in declaration
 // order. Walks the same expanded + injected `assets` list the blob defs are
@@ -338,6 +105,7 @@ mod tests {
     use crate::authoring::world::WorldJsonlAsset;
     use concinnity_core::math::SaturatingFrom;
     use concinnity_engine::blob::ResourceKind;
+    use concinnity_engine::components::Material;
     use concinnity_engine::components::{AudioCue, AudioEmitter, Decal, Prop};
     use concinnity_engine::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
 
@@ -622,9 +390,11 @@ mod tests {
             ]),
         );
 
-        assert_eq!(
-            compile_skinned_mesh_data("body", &desugared).unwrap(),
-            compile_skinned_mesh_data("body", &authored).unwrap(),
-        );
+        let data = |args| {
+            RegisteredType::SkinnedMesh
+                .compile_data("body", args)
+                .unwrap()
+        };
+        assert_eq!(data(&desugared), data(&authored));
     }
 }

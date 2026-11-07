@@ -18,6 +18,7 @@
 mod build_pool;
 mod cook_only;
 mod desugar;
+#[cfg(test)]
 mod dispatch;
 mod entry;
 mod hot_reload_sources;

@@ -150,6 +150,19 @@ macro_rules! __meta_renders {
     (renders $($r:tt)*) => { true };
     ($t:tt $($r:tt)*) => { crate::authoring::registry::__meta_renders!($($r)*) };
 }
+// The `BuildAsset` impl of a type that compiles a payload (`compiled`) or bakes
+// its record's data (`data`); `None` for the rest.
+macro_rules! __meta_build {
+    ($ty:path;) => { None };
+    ($ty:path; compiled $($r:tt)*) => {
+        Some(crate::asset::BuildAssetEntry::of::<$ty>())
+    };
+    ($ty:path; data $($r:tt)*) => {
+        Some(crate::asset::BuildAssetEntry::of::<$ty>())
+    };
+    ($ty:path; $t:tt $($r:tt)*) => { __meta_build!($ty; $($r)*) };
+}
+
 macro_rules! __meta_live {
     () => { false };
     (live $($r:tt)*) => { true };
@@ -489,6 +502,13 @@ macro_rules! define_registered_type {
             /// component column.
             pub fn is_resource(self) -> bool {
                 self.resource_kind().is_some()
+            }
+            /// The `BuildAsset` impl that compiles this type's payload, or
+            /// `None` for a type with nothing to compile.
+            pub(crate) fn build_asset(self) -> Option<crate::asset::BuildAssetEntry> {
+                match self {
+                    $( Self::$variant => __meta_build!($ty; $($meta)*) ),+
+                }
             }
             /// Whether this resource's compiled bytes ride inline in its record
             /// rather than in a payload section the record points at. False for

@@ -1,514 +1,480 @@
-//! Per-type dispatch for the compile pass: which `BuildAsset` impl compiles a
-//! payload, and which inputs that compile reads.
+//! The compile dispatch the registry generates (`RegisteredType::build_asset`):
+//! every compiled type reaches its `BuildAsset` impl, and each impl compiles
+//! and keys its payload as it should.
 
-use crate::asset::{BuildAsset, BuildCtx, CacheInputs};
+use crate::asset::{BuildAssetEntry, BuildCtx};
 use crate::authoring::registry::RegisteredType;
-use concinnity_engine::components::{
-    File, PlanetGround, ProceduralMesh, Room, SdfVolume, Shader, Terrain, VoxelChunk,
-};
+use crate::pipeline::fixtures::wja;
+use concinnity_engine::components::SkinnedMesh;
+use concinnity_host::thread::asset_id;
 
-type CompileFn = fn(&serde_json::Value, &BuildCtx<'_>) -> std::io::Result<Vec<u8>>;
-type CacheInputsFn = fn(&serde_json::Value, &BuildCtx<'_>) -> CacheInputs;
-
-// One compiled component's `BuildAsset` impl: its payload compile and the
-// inputs that compile reads, for the payload cache key.
-#[derive(Clone, Copy)]
-pub(super) struct BuildAssetEntry {
-    pub(super) compile: CompileFn,
-    pub(super) cache_inputs: CacheInputsFn,
-}
-
-impl BuildAssetEntry {
-    fn of<T: BuildAsset>() -> Self {
-        Self {
-            compile: T::compile_payload,
-            cache_inputs: cache_inputs_of::<T>,
-        }
-    }
-}
-
-// `source_files` and `TARGET_DEPENDENT` are read together, so a type whose
-// payload differs per backend cannot report one without the other.
-fn cache_inputs_of<T: BuildAsset>(args: &serde_json::Value, ctx: &BuildCtx<'_>) -> CacheInputs {
-    CacheInputs {
-        sources: T::source_files(args, ctx),
-        target_dependent: T::TARGET_DEPENDENT,
-        dependencies: T::dependency_args(args, ctx),
-    }
-}
-
-// The `BuildAsset` impl behind a compiled component type, or `None` for a type
-// that has none.
-pub(super) fn build_asset(ct: RegisteredType) -> Option<BuildAssetEntry> {
-    Some(match ct {
-        RegisteredType::ProceduralMesh => BuildAssetEntry::of::<ProceduralMesh>(),
-        RegisteredType::VoxelChunk => BuildAssetEntry::of::<VoxelChunk>(),
-        RegisteredType::File => BuildAssetEntry::of::<File>(),
-        RegisteredType::Room => BuildAssetEntry::of::<Room>(),
-        RegisteredType::Shader => BuildAssetEntry::of::<Shader>(),
-        RegisteredType::SdfVolume => BuildAssetEntry::of::<SdfVolume>(),
-        RegisteredType::Terrain => BuildAssetEntry::of::<Terrain>(),
-        RegisteredType::PlanetGround => BuildAssetEntry::of::<PlanetGround>(),
-        _ => return None,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::pipeline::fixtures::wja;
-    use concinnity_engine::components::SkinnedMesh;
-    use concinnity_host::thread::asset_id;
-
-    #[test]
-    fn voxel_chunk_payload_compiles_end_to_end() {
-        let world = r#"["Shader",{"$id":"scene_shader","fragment":"x.hlsl"}]
+#[test]
+fn voxel_chunk_payload_compiles_end_to_end() {
+    let world = r#"["Shader",{"$id":"scene_shader","fragment":"x.hlsl"}]
 ["BlockType",{"$id":"air","solid":false}]
 ["BlockType",{"$id":"stone","uv_min":[0,0],"uv_max":[1,1]}]
 ["VoxelChunk",{"$id":"chunk","palette":["air","stone"],"dim":[2,1,1],"blocks":[1,1]}]
 "#;
-        // We can't easily compile shaders here, so go through the geometry
-        // entry point directly to verify the voxel chunk produces a non-empty
-        // payload for two adjacent solid blocks (10 faces after interior cull).
-        let chunk_args = serde_json::json!({
-            "palette": ["air", "stone"],
-            "dim": [2, 1, 1],
-            "blocks": [1, 1],
-            "block_size": 1.0,
-        });
-        let bt = |name: &str| -> Option<serde_json::Value> {
-            match name {
-                "air" => Some(serde_json::json!({"solid": false})),
-                "stone" => Some(serde_json::json!({"uv_min":[0,0],"uv_max":[1,1]})),
-                _ => None,
-            }
-        };
-        let bytes = crate::compile::geometry::compile_voxel_chunk_payload(&chunk_args, bt).unwrap();
-        assert!(!bytes.is_empty());
-        let _ = world; // keeps the inline jsonl reference for documentation
-    }
-
-    fn ctx() -> BuildCtx<'static> {
-        BuildCtx {
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
-            ),
-            name: "test",
-            assets_dir: None,
-            all_assets: &[],
+    // We can't easily compile shaders here, so go through the geometry
+    // entry point directly to verify the voxel chunk produces a non-empty
+    // payload for two adjacent solid blocks (10 faces after interior cull).
+    let chunk_args = serde_json::json!({
+        "palette": ["air", "stone"],
+        "dim": [2, 1, 1],
+        "blocks": [1, 1],
+        "block_size": 1.0,
+    });
+    let bt = |name: &str| -> Option<serde_json::Value> {
+        match name {
+            "air" => Some(serde_json::json!({"solid": false})),
+            "stone" => Some(serde_json::json!({"uv_min":[0,0],"uv_max":[1,1]})),
+            _ => None,
         }
-    }
+    };
+    let bytes = crate::compile::geometry::compile_voxel_chunk_payload(&chunk_args, bt).unwrap();
+    assert!(!bytes.is_empty());
+    let _ = world; // keeps the inline jsonl reference for documentation
+}
 
-    fn ct(name: &str) -> RegisteredType {
-        RegisteredType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
+fn ctx() -> BuildCtx<'static> {
+    BuildCtx {
+        targets: concinnity_core::platform::PlatformSet::single(
+            concinnity_core::platform::Platform::Metal,
+        ),
+        name: "test",
+        assets_dir: None,
+        all_assets: &[],
     }
+}
 
-    fn entry(name: &str) -> BuildAssetEntry {
-        build_asset(ct(name)).unwrap_or_else(|| panic!("{name} has a build_asset entry"))
-    }
+fn ct(name: &str) -> RegisteredType {
+    RegisteredType::parse(name).unwrap_or_else(|| panic!("{name} is a registered component"))
+}
 
-    #[test]
-    fn build_asset_has_no_entry_for_a_type_without_a_build_impl() {
-        assert!(build_asset(ct("Prop")).is_none());
-    }
+fn entry(name: &str) -> BuildAssetEntry {
+    ct(name)
+        .build_asset()
+        .unwrap_or_else(|| panic!("{name} has a build_asset entry"))
+}
 
-    // Every component that compiles a payload outside the resource stream must
-    // reach its `BuildAsset` impl, or cooking a world that declares it fails.
-    #[test]
-    fn build_asset_covers_every_compiled_component() {
-        for &rt in RegisteredType::all() {
-            if rt.registration().needs_compilation() && rt.resource_kind().is_none() {
-                assert!(build_asset(rt).is_some(), "{rt:?} has no build_asset entry");
-            }
-        }
-    }
+#[test]
+fn build_asset_has_no_entry_for_a_type_without_a_build_impl() {
+    assert!(ct("Prop").build_asset().is_none());
+}
 
-    // The arms that take the trait default report no inputs of their own: every
-    // file they read is named by an args string, which the payload cache's
-    // generic walk already hashes.
-    #[test]
-    fn cache_inputs_entry_covers_the_args_walk_arms() {
-        use crate::asset::SourceFiles;
-        for name in ["ProceduralMesh", "VoxelChunk", "File", "Room", "Terrain"] {
-            let inputs = (entry(name).cache_inputs)(&serde_json::json!({}), &ctx());
-            assert_eq!(
-                inputs.sources,
-                SourceFiles::Extra(Vec::new()),
-                "{name} must not narrow the generic args walk"
-            );
+// Every type that compiles a payload or bakes its record's data reaches its
+// `BuildAsset` impl, component and resource alike.
+#[test]
+fn build_asset_covers_every_compiled_type() {
+    for &rt in RegisteredType::all() {
+        if rt.registration().needs_compilation() || rt.is_data() {
             assert!(
-                !inputs.target_dependent,
-                "{name} compiles the same everywhere"
+                rt.build_asset().is_some(),
+                "{rt:?} has no build_asset entry"
             );
         }
     }
+}
 
-    // AudioClip compiles through `RegisteredType` now, not `build_asset`
-    // (it left the component registry). Its source-less error still surfaces, and
-    // its source file is folded into the payload cache key.
-    #[test]
-    fn resource_asset_types_compile_audio_clip_texture_cubemap_env_lut_and_font() {
-        use crate::authoring::registry::RegisteredType;
-        let rt = RegisteredType::parse("AudioClip").expect("AudioClip is a resource asset");
-        let err = rt
-            .compile_payload(&serde_json::json!({}), None)
-            .expect_err("a source-less AudioClip must fail to compile");
-        assert!(err.to_string().contains("missing 'source'"), "got: {err}");
-        assert_eq!(
-            rt.source_files(&serde_json::json!({"source": "a.wav"}), None),
-            vec!["a.wav".to_string()]
-        );
-        assert!(rt.source_files(&serde_json::json!({}), None).is_empty());
-
-        // Texture is also a resource asset (it left the component registry). A
-        // procedural texture compiles a non-empty payload, and a file-backed one
-        // folds its source into the payload cache key.
-        let tex = RegisteredType::parse("Texture").expect("Texture is a resource asset");
-        let bytes = tex
-            .compile_payload(
-                &serde_json::json!({"generator": "checker", "resolution": 32}),
-                None,
-            )
-            .expect("a procedural texture compiles");
-        assert!(!bytes.is_empty());
-        assert_eq!(
-            tex.source_files(&serde_json::json!({"source": "a.png"}), None),
-            vec!["a.png".to_string()]
-        );
-
-        // CubemapTexture is a resource asset too. Source-less args fail, and its
-        // `.hdr` source folds into the payload cache key.
-        let cube =
-            RegisteredType::parse("CubemapTexture").expect("CubemapTexture is a resource asset");
-        let err = cube
-            .compile_payload(&serde_json::json!({}), None)
-            .expect_err("a source-less CubemapTexture must fail to compile");
-        assert!(
-            err.to_string().contains("requires a `source` path"),
-            "got: {err}"
-        );
-        assert_eq!(
-            cube.source_files(&serde_json::json!({"source": "c.hdr"}), None),
-            vec!["c.hdr".to_string()]
-        );
-
-        // EnvironmentMap and ColorLut are resource assets too. Both surface their
-        // source-less error through `RegisteredType::compile_payload`, and fold
-        // their `source` into the payload cache key.
-        let env =
-            RegisteredType::parse("EnvironmentMap").expect("EnvironmentMap is a resource asset");
-        let err = env
-            .compile_payload(&serde_json::json!({}), None)
-            .expect_err("a source-less EnvironmentMap must fail to compile");
-        assert!(
-            err.to_string()
-                .contains("requires either `source` or `generator`"),
-            "got: {err}"
-        );
-        assert_eq!(
-            env.source_files(&serde_json::json!({"source": "e.hdr"}), None),
-            vec!["e.hdr".to_string()]
-        );
-
-        let lut = RegisteredType::parse("ColorLut").expect("ColorLut is a resource asset");
-        let err = lut
-            .compile_payload(&serde_json::json!({}), None)
-            .expect_err("a source-less ColorLut must fail to compile");
-        assert!(
-            err.to_string().contains("requires a `source` path"),
-            "got: {err}"
-        );
-        assert_eq!(
-            lut.source_files(&serde_json::json!({"source": "l.cube"}), None),
-            vec!["l.cube".to_string()]
-        );
-
-        // Font is a resource asset. The built-in font (empty `path`) compiles a
-        // non-empty atlas, and a file-backed font folds its `path` (not `source`)
-        // into the payload cache key.
-        let font = RegisteredType::parse("Font").expect("Font is a resource asset");
-        let bytes = font
-            .compile_payload(&serde_json::json!({"size_px": 20}), None)
-            .expect("the built-in font compiles");
-        assert!(!bytes.is_empty());
-        assert_eq!(
-            font.source_files(&serde_json::json!({"path": "f.ttf"}), None),
-            vec!["f.ttf".to_string()]
-        );
-        assert!(
-            font.source_files(&serde_json::json!({"source": "x.ttf"}), None)
-                .is_empty()
-        );
-    }
-
-    // A mesh whose source is a text `.gltf` reads sibling files the args never
-    // name; `source_files` must report them so an edited external buffer or
-    // image busts the payload cache.
-    #[test]
-    fn gltf_sources_fold_referenced_sibling_files_into_source_files() {
-        use crate::authoring::registry::RegisteredType;
-
-        let dir = tempfile::tempdir().unwrap();
-        let json = serde_json::json!({
-            "asset": {"version": "2.0"},
-            "buffers": [{"byteLength": 4, "uri": "geo.bin"}],
-            "images": [{"uri": "albedo.png"}]
-        });
-        let gltf_path = dir.path().join("tri.gltf");
-        std::fs::write(&gltf_path, serde_json::to_vec(&json).unwrap()).unwrap();
-        let src = gltf_path.to_str().unwrap().to_string();
-
-        for rt in [RegisteredType::Mesh, RegisteredType::SkinnedMesh] {
-            let files = rt.source_files(&serde_json::json!({"source": src}), None);
-            assert_eq!(files.len(), 3, "{rt:?}: {files:?}");
-            assert_eq!(files[0], src);
-            assert!(files.iter().any(|f| f.ends_with("geo.bin")), "{files:?}");
-            assert!(files.iter().any(|f| f.ends_with("albedo.png")), "{files:?}");
+// Every resource compiles identically on every backend, so one cooked payload
+// serves a DirectX and a Vulkan build alike: its cache inputs extend the args
+// walk, never depend on the target, and name no other asset.
+#[test]
+fn resource_cache_inputs_are_shared_across_backends() {
+    use crate::asset::SourceFiles;
+    for &rt in RegisteredType::all() {
+        if !rt.is_resource() {
+            continue;
         }
-
-        // A `.glb` source reports only itself.
-        let glb =
-            RegisteredType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}), None);
-        assert_eq!(glb, vec!["scene.glb".to_string()]);
+        let entry = rt
+            .build_asset()
+            .unwrap_or_else(|| panic!("{rt:?} has no entry"));
+        let inputs = (entry.cache_inputs)(&serde_json::json!({}), &ctx());
+        assert!(matches!(inputs.sources, SourceFiles::Extra(_)), "{rt:?}");
+        assert!(!inputs.target_dependent, "{rt:?} is target-dependent");
+        assert!(inputs.dependencies.is_empty(), "{rt:?} reads other assets");
     }
+}
 
-    // Arms whose outcome is deterministic from inline args alone: a valid
-    // minimal payload for the ones that need no source file, and the expected
-    // error for the ones that require a source but got none.
-    #[test]
-    fn compile_entry_dispatches_deterministic_arms() {
-        // Mesh is a resource asset now: it compiles through
-        // `RegisteredType::compile_payload`, not the RegisteredType dispatch.
-        let mesh_bytes = RegisteredType::Mesh
-            .compile_payload(
-                &serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
-                None,
-            )
-            .expect("Mesh compiles through the resource path");
-        assert!(!mesh_bytes.is_empty());
-
-        let ok_cases: &[(&str, serde_json::Value)] = &[
-            (
-                "ProceduralMesh",
-                serde_json::json!({"generator": "sphere", "radius": 1.0}),
-            ),
-            ("Room", serde_json::json!({})),
-        ];
-        for case in ok_cases {
-            let name = case.0;
-            let args = &case.1;
-            let bytes = (entry(name).compile)(args, &ctx())
-                .unwrap_or_else(|e| panic!("{name} should compile: {e}"));
-            assert!(!bytes.is_empty(), "{name} payload should be non-empty");
-        }
-
-        let err_cases: &[(&str, serde_json::Value, &str)] =
-            &[("File", serde_json::json!({}), "unsupported File kind")];
-        for case in err_cases {
-            let name = case.0;
-            let args = &case.1;
-            let needle = case.2;
-            let err = (entry(name).compile)(args, &ctx())
-                .expect_err(&format!("{name} with empty args should error"));
-            assert!(
-                err.to_string().contains(needle),
-                "{name} error should mention '{needle}', got: {err}"
-            );
-        }
-    }
-
-    // The File wrapper decodes an OBJ mesh source into a non-empty payload.
-    #[test]
-    fn compile_entry_file_compiles_an_obj_source() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let obj = dir.path().join("tri.obj");
-        std::fs::write(&obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").expect("write obj");
-        let args = serde_json::json!({"path": obj.to_str().unwrap(), "kind": "obj"});
-        let bytes = (entry("File").compile)(&args, &ctx()).expect("obj compiles");
-        assert!(!bytes.is_empty());
-    }
-
-    // The SkinnedMesh resource compiler deserializes args + an optional
-    // skeleton, then bakes geometry: one vertex is enough for a payload, no
-    // vertices and a malformed skeleton are the two error arms. Its baked
-    // data form carries the interned name id and drops the geometry.
-    #[test]
-    fn skinned_mesh_resource_compile_paths() {
-        use crate::authoring::registry::RegisteredType;
-        let rt = RegisteredType::SkinnedMesh;
-
-        let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
-        let bytes = rt.compile_payload(&ok, None).expect("skinned compiles");
-        assert!(!bytes.is_empty());
-
-        let no_verts = rt
-            .compile_payload(&serde_json::json!({}), None)
-            .expect_err("no vertices");
-        assert!(
-            no_verts.to_string().contains("at least one vertex"),
-            "got: {no_verts}"
+// The arms that take the trait default report no inputs of their own: every
+// file they read is named by an args string, which the payload cache's
+// generic walk already hashes.
+#[test]
+fn cache_inputs_entry_covers_the_args_walk_arms() {
+    use crate::asset::SourceFiles;
+    for name in ["ProceduralMesh", "VoxelChunk", "File", "Room", "Terrain"] {
+        let inputs = (entry(name).cache_inputs)(&serde_json::json!({}), &ctx());
+        assert_eq!(
+            inputs.sources,
+            SourceFiles::Extra(Vec::new()),
+            "{name} must not narrow the generic args walk"
         );
-
-        let bad_skeleton = rt
-            .compile_payload(
-                &serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "skeleton": 5}),
-                None,
-            )
-            .expect_err("malformed skeleton");
         assert!(
-            bad_skeleton.to_string().contains("invalid skeleton args"),
-            "got: {bad_skeleton}"
+            !inputs.target_dependent,
+            "{name} compiles the same everywhere"
         );
-
-        // The baked data tuple: name id first, then the clamped mesh with its
-        // geometry cleared.
-        asset_id::reset_interner();
-        let name_id = asset_id::intern("hero");
-        let data = rt
-            .compile_data(
-                "hero",
-                &serde_json::json!({
-                    "vertices": [{"pos": [0.0, 0.0, 0.0]}],
-                    "scale": [0.0, 0.0, 0.0],
-                    "max_instances": 999_999,
-                    "capsule": {"half_height": 0.6, "radius": 0.2},
-                }),
-            )
-            .expect("data bakes")
-            .expect("skinned mesh carries baked data");
-        let (baked_name, sm): (u32, SkinnedMesh) = postcard::from_bytes(&data).unwrap();
-        assert_eq!(baked_name, name_id.0);
-        assert_eq!(sm.scale, [1.0, 1.0, 1.0], "zero scale clamps to unit");
-        assert_eq!(sm.max_instances, 4096, "reserve caps at 4096");
-        assert!(sm.vertices.is_empty(), "geometry rides the payload");
-        assert!(sm.capsule.is_some());
     }
+}
 
-    // The VoxelChunk wrapper resolves its palette from sibling BlockType assets
-    // in the build context.
-    #[test]
-    fn compile_entry_voxel_chunk_resolves_palette_from_ctx() {
-        let blocks = vec![
-            wja(
-                "air",
-                RegisteredType::BlockType,
-                serde_json::json!({"solid": false}),
-            ),
-            wja(
-                "stone",
-                RegisteredType::BlockType,
-                serde_json::json!({"uv_min": [0, 0], "uv_max": [1, 1]}),
-            ),
-        ];
-        let vctx = BuildCtx {
-            targets: concinnity_core::platform::PlatformSet::single(
-                concinnity_core::platform::Platform::Metal,
-            ),
-            name: "chunk",
-            assets_dir: None,
-            all_assets: &blocks,
-        };
-        let args = serde_json::json!({
-            "palette": ["air", "stone"],
-            "dim": [2, 1, 1],
-            "blocks": [1, 1],
-            "block_size": 1.0,
-        });
-        let bytes = (entry("VoxelChunk").compile)(&args, &vctx).expect("voxel compiles");
-        assert!(!bytes.is_empty());
-    }
+// A resource compiles through the same table as a component. A source-less
+// AudioClip's error still surfaces, and its source file is folded into the
+// payload cache key.
+#[test]
+fn resource_asset_types_compile_audio_clip_texture_cubemap_env_lut_and_font() {
+    use crate::authoring::registry::RegisteredType;
+    let rt = RegisteredType::parse("AudioClip").expect("AudioClip is a resource asset");
+    let err = rt
+        .compile_payload(&serde_json::json!({}), None)
+        .expect_err("a source-less AudioClip must fail to compile");
+    assert!(err.to_string().contains("missing 'source'"), "got: {err}");
+    assert_eq!(
+        rt.source_files(&serde_json::json!({"source": "a.wav"}), None),
+        vec!["a.wav".to_string()]
+    );
+    assert!(rt.source_files(&serde_json::json!({}), None).is_empty());
 
-    // The SdfVolume wrapper compiles the world's distance field through dxc,
-    // so a field that does not compile fails the build here rather than a
-    // renderer's init. A missing source is a hard error, not an empty payload.
-    #[test]
-    fn compile_entry_sdf_volume_compiles_the_declared_field() {
-        use concinnity_engine::render::sdf::programs::SdfPrograms;
-        concinnity_shader::require_dxc!();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let field = dir.path().join("blob.hlsl");
-        std::fs::write(
-            &field,
-            "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
-             SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
-                 SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
-                 s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
-                 s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n",
+    // Texture is also a resource asset (it left the component registry). A
+    // procedural texture compiles a non-empty payload, and a file-backed one
+    // folds its source into the payload cache key.
+    let tex = RegisteredType::parse("Texture").expect("Texture is a resource asset");
+    let bytes = tex
+        .compile_payload(
+            &serde_json::json!({"generator": "checker", "resolution": 32}),
+            None,
         )
-        .expect("write field");
-        let args = serde_json::json!({ "fragment_shader": field.to_str().unwrap() });
+        .expect("a procedural texture compiles");
+    assert!(!bytes.is_empty());
+    assert_eq!(
+        tex.source_files(&serde_json::json!({"source": "a.png"}), None),
+        vec!["a.png".to_string()]
+    );
 
-        let bytes = (entry("SdfVolume").compile)(&args, &ctx()).expect("sdf compiles");
-        let programs: SdfPrograms = postcard::from_bytes(&bytes).expect("payload decodes");
-        // A surface volume that casts no shadow compiles its own pair and its
-        // G-buffer pre-pass pair.
-        let mut entries: Vec<&str> = programs.programs.iter().map(|p| p.entry.as_str()).collect();
-        entries.sort_unstable();
-        assert_eq!(
-            entries,
-            [
-                "raymarch_fragment",
-                "raymarch_front_fragment",
-                "raymarch_prepass_fragment",
-                "raymarch_prepass_front_fragment",
-                "raymarch_prepass_vertex",
-                "raymarch_vertex"
-            ]
-        );
-        assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
-        assert!(programs.field.text.contains("float map("));
-        assert_eq!(
-            programs.field.path,
-            field.to_str().unwrap(),
-            "the declared path"
-        );
+    // CubemapTexture is a resource asset too. Source-less args fail, and its
+    // `.hdr` source folds into the payload cache key.
+    let cube = RegisteredType::parse("CubemapTexture").expect("CubemapTexture is a resource asset");
+    let err = cube
+        .compile_payload(&serde_json::json!({}), None)
+        .expect_err("a source-less CubemapTexture must fail to compile");
+    assert!(
+        err.to_string().contains("requires a `source` path"),
+        "got: {err}"
+    );
+    assert_eq!(
+        cube.source_files(&serde_json::json!({"source": "c.hdr"}), None),
+        vec!["c.hdr".to_string()]
+    );
 
-        let err = (entry("SdfVolume").compile)(&serde_json::json!({}), &ctx())
-            .expect_err("no distance field");
+    // EnvironmentMap and ColorLut are resource assets too. Both surface their
+    // source-less error, and fold their `source` into the payload cache key.
+    let env = RegisteredType::parse("EnvironmentMap").expect("EnvironmentMap is a resource asset");
+    let err = env
+        .compile_payload(&serde_json::json!({}), None)
+        .expect_err("a source-less EnvironmentMap must fail to compile");
+    assert!(
+        err.to_string()
+            .contains("requires either `source` or `generator`"),
+        "got: {err}"
+    );
+    assert_eq!(
+        env.source_files(&serde_json::json!({"source": "e.hdr"}), None),
+        vec!["e.hdr".to_string()]
+    );
+
+    let lut = RegisteredType::parse("ColorLut").expect("ColorLut is a resource asset");
+    let err = lut
+        .compile_payload(&serde_json::json!({}), None)
+        .expect_err("a source-less ColorLut must fail to compile");
+    assert!(
+        err.to_string().contains("requires a `source` path"),
+        "got: {err}"
+    );
+    assert_eq!(
+        lut.source_files(&serde_json::json!({"source": "l.cube"}), None),
+        vec!["l.cube".to_string()]
+    );
+
+    // Font is a resource asset. The built-in font (empty `path`) compiles a
+    // non-empty atlas, and a file-backed font folds its `path` (not `source`)
+    // into the payload cache key.
+    let font = RegisteredType::parse("Font").expect("Font is a resource asset");
+    let bytes = font
+        .compile_payload(&serde_json::json!({"size_px": 20}), None)
+        .expect("the built-in font compiles");
+    assert!(!bytes.is_empty());
+    assert_eq!(
+        font.source_files(&serde_json::json!({"path": "f.ttf"}), None),
+        vec!["f.ttf".to_string()]
+    );
+    assert!(
+        font.source_files(&serde_json::json!({"source": "x.ttf"}), None)
+            .is_empty()
+    );
+}
+
+// A mesh whose source is a text `.gltf` reads sibling files the args never
+// name; `source_files` must report them so an edited external buffer or
+// image busts the payload cache.
+#[test]
+fn gltf_sources_fold_referenced_sibling_files_into_source_files() {
+    use crate::authoring::registry::RegisteredType;
+
+    let dir = tempfile::tempdir().unwrap();
+    let json = serde_json::json!({
+        "asset": {"version": "2.0"},
+        "buffers": [{"byteLength": 4, "uri": "geo.bin"}],
+        "images": [{"uri": "albedo.png"}]
+    });
+    let gltf_path = dir.path().join("tri.gltf");
+    std::fs::write(&gltf_path, serde_json::to_vec(&json).unwrap()).unwrap();
+    let src = gltf_path.to_str().unwrap().to_string();
+
+    for rt in [RegisteredType::Mesh, RegisteredType::SkinnedMesh] {
+        let files = rt.source_files(&serde_json::json!({"source": src}), None);
+        assert_eq!(files.len(), 3, "{rt:?}: {files:?}");
+        assert_eq!(files[0], src);
+        assert!(files.iter().any(|f| f.ends_with("geo.bin")), "{files:?}");
+        assert!(files.iter().any(|f| f.ends_with("albedo.png")), "{files:?}");
+    }
+
+    // A `.glb` source reports only itself.
+    let glb = RegisteredType::Mesh.source_files(&serde_json::json!({"source": "scene.glb"}), None);
+    assert_eq!(glb, vec!["scene.glb".to_string()]);
+}
+
+// Arms whose outcome is deterministic from inline args alone: a valid
+// minimal payload for the ones that need no source file, and the expected
+// error for the ones that require a source but got none.
+#[test]
+fn compile_entry_dispatches_deterministic_arms() {
+    let mesh_bytes = RegisteredType::Mesh
+        .compile_payload(
+            &serde_json::json!({"generator": "box", "half_extents": [1, 1, 1]}),
+            None,
+        )
+        .expect("Mesh compiles through the resource path");
+    assert!(!mesh_bytes.is_empty());
+
+    let ok_cases: &[(&str, serde_json::Value)] = &[
+        (
+            "ProceduralMesh",
+            serde_json::json!({"generator": "sphere", "radius": 1.0}),
+        ),
+        ("Room", serde_json::json!({})),
+    ];
+    for case in ok_cases {
+        let name = case.0;
+        let args = &case.1;
+        let bytes = (entry(name).compile)(args, &ctx())
+            .unwrap_or_else(|e| panic!("{name} should compile: {e}"));
+        assert!(!bytes.is_empty(), "{name} payload should be non-empty");
+    }
+
+    let err_cases: &[(&str, serde_json::Value, &str)] =
+        &[("File", serde_json::json!({}), "unsupported File kind")];
+    for case in err_cases {
+        let name = case.0;
+        let args = &case.1;
+        let needle = case.2;
+        let err = (entry(name).compile)(args, &ctx())
+            .expect_err(&format!("{name} with empty args should error"));
         assert!(
-            err.to_string().contains("no distance field declared"),
-            "got: {err}"
+            err.to_string().contains(needle),
+            "{name} error should mention '{needle}', got: {err}"
         );
     }
+}
 
-    // The Shader wrapper's non-compiling arm: a declaration with no fragment
-    // file is a hard error before any compiler runs, so the test stays
-    // backend-agnostic.
-    #[test]
-    fn compile_entry_shader_without_a_fragment_file_does_not_shell_out() {
-        let err = (entry("Shader").compile)(&serde_json::json!({}), &ctx())
-            .expect_err("no fragment file");
-        assert!(
-            err.to_string().contains("no `fragment` file declared"),
-            "got: {err}"
-        );
-    }
+// The File wrapper decodes an OBJ mesh source into a non-empty payload.
+#[test]
+fn compile_entry_file_compiles_an_obj_source() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let obj = dir.path().join("tri.obj");
+    std::fs::write(&obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").expect("write obj");
+    let args = serde_json::json!({"path": obj.to_str().unwrap(), "kind": "obj"});
+    let bytes = (entry("File").compile)(&args, &ctx()).expect("obj compiles");
+    assert!(!bytes.is_empty());
+}
 
-    // The cache-inputs entry routes to the two overriding wrappers. Both report
-    // `Only` -- the complete input set the current backend reads -- so an edit
-    // to a sibling backend's shader leaves this backend's payload cached.
-    #[test]
-    fn cache_inputs_entry_covers_the_overriding_wrappers() {
-        use crate::asset::SourceFiles;
-        let dir = tempfile::tempdir().expect("tempdir");
-        let shader = dir.path().join("blob.hlsl");
-        std::fs::write(&shader, b"x").expect("write field");
-        let path = shader.to_str().unwrap();
+// The SkinnedMesh resource compiler deserializes args + an optional
+// skeleton, then bakes geometry: one vertex is enough for a payload, no
+// vertices and a malformed skeleton are the two error arms. Its baked
+// data form carries the interned name id and drops the geometry.
+#[test]
+fn skinned_mesh_resource_compile_paths() {
+    use crate::authoring::registry::RegisteredType;
+    let rt = RegisteredType::SkinnedMesh;
 
-        // SdfVolume reports the one declared field, and compiles it to a
-        // different artifact per backend, so the target is an input too.
-        let sdf_args = serde_json::json!({ "fragment_shader": path });
-        let sdf = (entry("SdfVolume").cache_inputs)(&sdf_args, &ctx());
-        assert_eq!(sdf.sources, SourceFiles::Only(vec![shader.clone()]));
-        assert!(sdf.target_dependent);
-        assert_eq!(
-            (entry("SdfVolume").cache_inputs)(&serde_json::json!({}), &ctx()).sources,
-            SourceFiles::Only(Vec::new())
-        );
+    let ok = serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "indices": []});
+    let bytes = rt.compile_payload(&ok, None).expect("skinned compiles");
+    assert!(!bytes.is_empty());
 
-        // Shader compiles its files per backend, so the target is an input.
-        let no_source = (entry("Shader").cache_inputs)(&serde_json::json!({}), &ctx());
-        assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
-        assert!(no_source.target_dependent);
-    }
+    let no_verts = rt
+        .compile_payload(&serde_json::json!({}), None)
+        .expect_err("no vertices");
+    assert!(
+        no_verts.to_string().contains("at least one vertex"),
+        "got: {no_verts}"
+    );
+
+    let bad_skeleton = rt
+        .compile_payload(
+            &serde_json::json!({"vertices": [{"pos": [0.0, 0.0, 0.0]}], "skeleton": 5}),
+            None,
+        )
+        .expect_err("malformed skeleton");
+    assert!(
+        bad_skeleton.to_string().contains("invalid skeleton args"),
+        "got: {bad_skeleton}"
+    );
+
+    // The baked data tuple: name id first, then the clamped mesh with its
+    // geometry cleared.
+    asset_id::reset_interner();
+    let name_id = asset_id::intern("hero");
+    let data = rt
+        .compile_data(
+            "hero",
+            &serde_json::json!({
+                "vertices": [{"pos": [0.0, 0.0, 0.0]}],
+                "scale": [0.0, 0.0, 0.0],
+                "max_instances": 999_999,
+                "capsule": {"half_height": 0.6, "radius": 0.2},
+            }),
+        )
+        .expect("data bakes")
+        .expect("skinned mesh carries baked data");
+    let (baked_name, sm): (u32, SkinnedMesh) = postcard::from_bytes(&data).unwrap();
+    assert_eq!(baked_name, name_id.0);
+    assert_eq!(sm.scale, [1.0, 1.0, 1.0], "zero scale clamps to unit");
+    assert_eq!(sm.max_instances, 4096, "reserve caps at 4096");
+    assert!(sm.vertices.is_empty(), "geometry rides the payload");
+    assert!(sm.capsule.is_some());
+}
+
+// The VoxelChunk wrapper resolves its palette from sibling BlockType assets
+// in the build context.
+#[test]
+fn compile_entry_voxel_chunk_resolves_palette_from_ctx() {
+    let blocks = vec![
+        wja(
+            "air",
+            RegisteredType::BlockType,
+            serde_json::json!({"solid": false}),
+        ),
+        wja(
+            "stone",
+            RegisteredType::BlockType,
+            serde_json::json!({"uv_min": [0, 0], "uv_max": [1, 1]}),
+        ),
+    ];
+    let vctx = BuildCtx {
+        targets: concinnity_core::platform::PlatformSet::single(
+            concinnity_core::platform::Platform::Metal,
+        ),
+        name: "chunk",
+        assets_dir: None,
+        all_assets: &blocks,
+    };
+    let args = serde_json::json!({
+        "palette": ["air", "stone"],
+        "dim": [2, 1, 1],
+        "blocks": [1, 1],
+        "block_size": 1.0,
+    });
+    let bytes = (entry("VoxelChunk").compile)(&args, &vctx).expect("voxel compiles");
+    assert!(!bytes.is_empty());
+}
+
+// The SdfVolume wrapper compiles the world's distance field through dxc,
+// so a field that does not compile fails the build here rather than a
+// renderer's init. A missing source is a hard error, not an empty payload.
+#[test]
+fn compile_entry_sdf_volume_compiles_the_declared_field() {
+    use concinnity_engine::render::sdf::programs::SdfPrograms;
+    concinnity_shader::require_dxc!();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let field = dir.path().join("blob.hlsl");
+    std::fs::write(
+        &field,
+        "float map(float3 p, SdfParams q, float t) { return sdSphere(p, 0.5); }\n\
+         SdfSurface shade(float3 p, float3 n, SdfParams q, float t, float2 uv) {\n\
+             SdfSurface s; s.albedo = float3(1.0, 1.0, 1.0); s.roughness = 0.5;\n\
+             s.metallic = 0.0; s.emissive = float3(0.0, 0.0, 0.0);\n\
+             s.transmitted = float3(0.0, 0.0, 0.0); return s; }\n",
+    )
+    .expect("write field");
+    let args = serde_json::json!({ "fragment_shader": field.to_str().unwrap() });
+
+    let bytes = (entry("SdfVolume").compile)(&args, &ctx()).expect("sdf compiles");
+    let programs: SdfPrograms = postcard::from_bytes(&bytes).expect("payload decodes");
+    // A surface volume that casts no shadow compiles its own pair and its
+    // G-buffer pre-pass pair.
+    let mut entries: Vec<&str> = programs.programs.iter().map(|p| p.entry.as_str()).collect();
+    entries.sort_unstable();
+    assert_eq!(
+        entries,
+        [
+            "raymarch_fragment",
+            "raymarch_front_fragment",
+            "raymarch_prepass_fragment",
+            "raymarch_prepass_front_fragment",
+            "raymarch_prepass_vertex",
+            "raymarch_vertex"
+        ]
+    );
+    assert!(programs.programs.iter().all(|p| !p.artifact.is_empty()));
+    assert!(programs.field.text.contains("float map("));
+    assert_eq!(
+        programs.field.path,
+        field.to_str().unwrap(),
+        "the declared path"
+    );
+
+    let err = (entry("SdfVolume").compile)(&serde_json::json!({}), &ctx())
+        .expect_err("no distance field");
+    assert!(
+        err.to_string().contains("no distance field declared"),
+        "got: {err}"
+    );
+}
+
+// The Shader wrapper's non-compiling arm: a declaration with no fragment
+// file is a hard error before any compiler runs, so the test stays
+// backend-agnostic.
+#[test]
+fn compile_entry_shader_without_a_fragment_file_does_not_shell_out() {
+    let err =
+        (entry("Shader").compile)(&serde_json::json!({}), &ctx()).expect_err("no fragment file");
+    assert!(
+        err.to_string().contains("no `fragment` file declared"),
+        "got: {err}"
+    );
+}
+
+// The cache-inputs entry routes to the two overriding wrappers. Both report
+// `Only` -- the complete input set the current backend reads -- so an edit
+// to a sibling backend's shader leaves this backend's payload cached.
+#[test]
+fn cache_inputs_entry_covers_the_overriding_wrappers() {
+    use crate::asset::SourceFiles;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shader = dir.path().join("blob.hlsl");
+    std::fs::write(&shader, b"x").expect("write field");
+    let path = shader.to_str().unwrap();
+
+    // SdfVolume reports the one declared field, and compiles it to a
+    // different artifact per backend, so the target is an input too.
+    let sdf_args = serde_json::json!({ "fragment_shader": path });
+    let sdf = (entry("SdfVolume").cache_inputs)(&sdf_args, &ctx());
+    assert_eq!(sdf.sources, SourceFiles::Only(vec![shader.clone()]));
+    assert!(sdf.target_dependent);
+    assert_eq!(
+        (entry("SdfVolume").cache_inputs)(&serde_json::json!({}), &ctx()).sources,
+        SourceFiles::Only(Vec::new())
+    );
+
+    // Shader compiles its files per backend, so the target is an input.
+    let no_source = (entry("Shader").cache_inputs)(&serde_json::json!({}), &ctx());
+    assert_eq!(no_source.sources, SourceFiles::Only(Vec::new()));
+    assert!(no_source.target_dependent);
 }
