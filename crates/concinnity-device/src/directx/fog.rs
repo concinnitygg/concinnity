@@ -19,9 +19,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
-use concinnity_engine::render::backend::FogControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::environment::volumetric_fog;
 use concinnity_engine::render::frame::plan::FogBlocks;
 use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
 use windows::Win32::Foundation::RECT;
@@ -40,13 +38,12 @@ use crate::directx::pso::{Blend, GraphicsPso, Raster, compute_pso};
 use crate::directx::root_sig::{RootSig, SamplerState, Visibility};
 use crate::directx::texture::HDR_FORMAT;
 
-// Volumetric fog. All fields `None`/default until the world declares a
-// `VolumetricFog`; the fog pass is skipped while `resources` is `None`. The
-// settings are cached so the per-frame encoder can build its `FogParams`
-// without re-resolving the asset. The sun it lights with is the light state's.
+// Volumetric fog. `resources` is `None` until the world declares a
+// `VolumetricFog`, and the fog pass is skipped while it is. The live settings
+// are the scene's (`SceneState::fog`), and the sun it lights with is the light
+// state's.
 pub(in crate::directx) struct FogState {
     pub resources: Option<FogResources>,
-    pub settings: Option<volumetric_fog::FogSettings>,
 }
 
 // Compile the fog vertex + fragment shaders; the MSAA define keeps the
@@ -565,33 +562,5 @@ impl DxContext {
 
         // The scene spine, main depth and the froxel volume are all graph
         // resources; nothing here is left to restore.
-    }
-}
-
-impl FogControl for DxContext {
-    // Hot-reload entry point for the volumetric-fog tunables. Writes the new
-    // `Option<FogSettings>` into `self.fog.settings`; the next frame's
-    // `encode_fog_froxel` + `encode_fog` re-derive `FogParams` /
-    // `FogFroxelParams` from it (both bail to a no-op when it is `None`, so a
-    // `None` here disables the pass). Mirrors `MtlContext::update_fog_settings`.
-    //
-    // If the world started with no `VolumetricFog` (so `self.fog.resources` is
-    // `None` and the froxel + fog PSOs were never built), a `Some` update logs
-    // once and is dropped: re-enabling fog mid-run requires a relaunch.
-    //
-    // The only caller is the bin-only `cn run -f` world hot-reload
-    // (`debug::hot_reload::passes`), reached through the `RenderBackend`
-    // vtable. Mirrors the other bin-only runtime-mutation seams on this
-    // backend.
-    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
-        if settings.is_some() && self.fog.resources.is_none() {
-            tracing::warn!(
-                "VolumetricFog hot-reload: world started without fog, so the fog \
-                 pipeline was never built: re-enabling fog mid-run is not \
-                 supported (relaunch required). Ignoring update."
-            );
-            return;
-        }
-        self.fog.settings = settings;
     }
 }

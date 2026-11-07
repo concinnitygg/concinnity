@@ -43,10 +43,10 @@ mod tests {
     };
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
-        BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
-        FrameParams, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend,
-        RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame,
-        TextureUploads, WindowControl, WorldReload, WorldShaders,
+        BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
+        GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend, RuntimeDecals,
+        RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads,
+        WindowControl, WorldReload, WorldShaders,
     };
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
@@ -95,6 +95,7 @@ mod tests {
                 DrawList::unreserved(objects, 0),
                 [0.0; 4],
                 crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+                crate::render::environment::volumetric_fog::SceneFog::default(),
             );
             scene
                 .skinned
@@ -178,7 +179,6 @@ mod tests {
         }
     }
     impl CullReadback for Hosted {}
-    impl FogControl for Hosted {}
     impl FrameCapture for Hosted {}
     impl GeometryRebuild for Hosted {}
     impl PlanetReshape for Hosted {}

@@ -420,7 +420,6 @@ pub(super) fn build_fog(
     };
     Ok(FogState {
         resources: fog_resources,
-        settings,
     })
 }
 

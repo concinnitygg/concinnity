@@ -1,6 +1,6 @@
 //! The CPU-side scene every graphics backend draws from: the draw list, the
-//! camera view, the skinned slots, the material parameter table, the
-//! model-history tracker, the placement of streamed geometry in the shared
+//! camera view, the skinned slots, the material parameter table, the live
+//! fog, the model-history tracker, the placement of streamed geometry in the shared
 //! vertex and index buffers, and the flags that tell the GPU side what to
 //! rebuild.
 //!
@@ -19,6 +19,7 @@ use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::planet::{HorizonOccluder, TileMorphFrame, tile_morph_row};
 use crate::render::backend::PlanetChunk;
 use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
+use crate::render::environment::volumetric_fog::SceneFog;
 use crate::render::frame::plan::FramePlanner;
 use crate::render::material_params::MaterialParamTable;
 use crate::render::slots::skinned_slots::SkinnedSlots;
@@ -46,6 +47,8 @@ pub struct SceneState {
     /// The rows world Shaders read a material's `params` from, and which of
     /// the backend's copies of them a change has left behind.
     pub material_params: MaterialParamTable,
+    /// The live volumetric fog.
+    pub fog: SceneFog,
     /// Which cull records hold a usable previous-frame transform. Interior
     /// mutability because a backend records its draw-args build from `&self`.
     pub model_history: RefCell<ModelHistory>,
@@ -67,13 +70,20 @@ pub struct SceneState {
 
 impl SceneState {
     /// A scene over `draw` with an identity view cleared to `clear_color`,
-    /// whose draws read their material params from `material_params`.
-    pub fn new(draw: DrawList, clear_color: [f32; 4], material_params: MaterialParamTable) -> Self {
+    /// whose draws read their material params from `material_params`, drawn
+    /// through `fog`.
+    pub fn new(
+        draw: DrawList,
+        clear_color: [f32; 4],
+        material_params: MaterialParamTable,
+        fog: SceneFog,
+    ) -> Self {
         Self {
             draw,
             view: SceneView::new(clear_color),
             skinned: SkinnedSlots::new(),
             material_params,
+            fog,
             model_history: RefCell::new(ModelHistory::new()),
             placement: GeometryPlacement::default(),
             gpu_dirty: GpuDirty::default(),
@@ -386,6 +396,7 @@ mod tests {
             DrawList::unreserved(vec![], 0),
             [0.1, 0.2, 0.3, 1.0],
             MaterialParamTable::new(Vec::new(), 1),
+            SceneFog::default(),
         );
         assert_eq!(scene.view.clear_color, [0.1, 0.2, 0.3, 1.0]);
         assert_eq!(scene.view.matrix, IDENTITY);

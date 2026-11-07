@@ -198,6 +198,7 @@ mod tests {
             DrawList::unreserved(objects, 0),
             [0.0; 4],
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            crate::render::environment::volumetric_fog::SceneFog::default(),
         )
     }
 
@@ -379,6 +380,7 @@ mod tests {
             DrawList::with_runtime_reserve(vec![], 0, 1),
             [0.0; 4],
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            crate::render::environment::volumetric_fog::SceneFog::default(),
         );
         s.draw.objects.push(draw_object());
         s.draw.objects[0].resident = true;

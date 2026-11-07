@@ -725,6 +725,7 @@ mod tests {
             DrawList::unreserved(vec![obj], 0),
             [0.0; 4],
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            crate::render::environment::volumetric_fog::SceneFog::default(),
         );
         scene.seed_mesh_streaming(
             0,
@@ -895,6 +896,7 @@ mod tests {
             DrawList::unreserved(vec![obj], 0),
             [0.0; 4],
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            crate::render::environment::volumetric_fog::SceneFog::default(),
         )
     }
 
@@ -968,6 +970,7 @@ mod tests {
             DrawList::with_runtime_reserve(vec![], 0, 4),
             [0.0; 4],
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            crate::render::environment::volumetric_fog::SceneFog::default(),
         );
         scene
             .placement
@@ -1378,6 +1381,7 @@ mod tests {
             DrawList::with_runtime_reserve(vec![], 0, 4),
             [0.0; 4],
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
+            crate::render::environment::volumetric_fog::SceneFog::default(),
         );
         scene.placement.chunk_vtx.free(4, (4 * VERTEX) as u64, 0);
         scene.placement.chunk_idx.free(2, 16, 0);

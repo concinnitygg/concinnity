@@ -27,6 +27,7 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan
 use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::init::{BackendInit, PlanarBudget, WorldShader};
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::environment::volumetric_fog::SceneFog;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
@@ -456,6 +457,7 @@ impl DxContext {
                 ),
                 clear_color,
                 material_params,
+                SceneFog::new(fx.fog),
             ),
             graph_scratch: std::cell::Cell::default(),
             pass_lists: std::cell::Cell::default(),

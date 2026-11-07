@@ -142,7 +142,6 @@ pub(in crate::metal::init) fn build_fog(
         (None, None, None)
     };
     Ok(FogState {
-        settings,
         pipeline,
         froxel_pipeline,
         froxel_volume,

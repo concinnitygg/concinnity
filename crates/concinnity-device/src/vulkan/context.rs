@@ -15,8 +15,7 @@ use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
-    backend, backend::error, backend::init, decal, environment::volumetric_fog, output::hdr,
-    shadow::spot, slots::rewrites,
+    backend, backend::error, backend::init, decal, output::hdr, shadow::spot, slots::rewrites,
 };
 use concinnity_engine::{components, profile};
 
@@ -645,13 +644,11 @@ pub(super) struct DecalState {
 }
 
 // Volumetric fog. `resources` is `Some` only when the world declared a
-// `VolumetricFog` asset; with none it and `settings` both stay `None` and the
-// fog pass is skipped entirely. The settings are cached so the per-frame
-// encoder can build its `FogParams` without re-resolving the asset. The sun it
-// lights with is the light state's.
+// `VolumetricFog` asset; with none the fog pass is skipped entirely. The live
+// settings are the scene's (`SceneState::fog`), and the sun it lights with is
+// the light state's.
 pub(super) struct FogState {
     pub resources: Option<crate::vulkan::fog::FogResources>,
-    pub settings: Option<volumetric_fog::FogSettings>,
 }
 
 // Auto-exposure (EV adaptation). `resources` is `Some` only when

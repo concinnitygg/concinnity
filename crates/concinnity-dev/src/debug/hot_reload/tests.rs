@@ -734,6 +734,10 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl backend::RenderBackend for RecordingBackend {
+    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
+        self.fog_updates += 1;
+    }
+
     fn assert_owner_thread(&self) {}
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {
@@ -910,12 +914,6 @@ impl backend::GeometryRebuild for RecordingBackend {
             return Err(error::RenderError::Other("mesh update rejected".into()));
         }
         Ok(())
-    }
-}
-
-impl backend::FogControl for RecordingBackend {
-    fn update_fog_settings(&mut self, _: Option<volumetric_fog::FogSettings>) {
-        self.fog_updates += 1;
     }
 }
 

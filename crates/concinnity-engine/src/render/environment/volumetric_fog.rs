@@ -34,6 +34,45 @@ const MIN_FROXEL_NEAR: f32 = 1e-3;
 #[derive(Debug, Default)]
 pub struct PushedFogSettings(pub Option<FogSettings>);
 
+/// The volumetric fog a running scene draws: the live settings, and whether
+/// the scene has fog passes to draw them with. A backend builds those passes at
+/// init only for a world that declared a `VolumetricFog`, so a world that
+/// started without fog keeps it off until a relaunch.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SceneFog {
+    settings: Option<FogSettings>,
+    resident: bool,
+}
+
+impl SceneFog {
+    /// The fog of a scene that starts with `settings`, which has fog passes
+    /// exactly when it starts with fog.
+    pub const fn new(settings: Option<FogSettings>) -> Self {
+        Self {
+            settings,
+            resident: settings.is_some(),
+        }
+    }
+
+    /// The live settings, `None` while fog is off.
+    pub const fn settings(&self) -> Option<FogSettings> {
+        self.settings
+    }
+
+    /// Replace the live settings, or turn fog off with `None`. Settings for a
+    /// scene without fog passes are dropped with a warning.
+    pub fn set(&mut self, settings: Option<FogSettings>) {
+        if settings.is_some() && !self.resident {
+            tracing::warn!(
+                "VolumetricFog hot-reload: the world started without fog, so its fog \
+                 passes were never built; re-enabling fog needs a relaunch. Ignoring update."
+            );
+            return;
+        }
+        self.settings = settings;
+    }
+}
+
 /// Resolved and clamped fog tunables, threaded into the backend at init.
 /// `None` from `FogSettings::resolve_optional` means the world declared no
 /// `VolumetricFog`: the renderer then skips the fog pass entirely.
@@ -244,6 +283,34 @@ pub struct VolumetricFog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fog() -> FogSettings {
+        FogSettings::resolve([0.7; 3], 0.05, 0.2, 0.0, 50.0, 0.4, 0.15)
+    }
+
+    #[test]
+    fn a_scene_with_fog_takes_new_settings_and_can_turn_it_off() {
+        let mut scene = SceneFog::new(Some(fog()));
+        let mut denser = fog();
+        denser.density = 0.2;
+        scene.set(Some(denser));
+        assert_eq!(scene.settings(), Some(denser));
+        scene.set(None);
+        assert_eq!(scene.settings(), None);
+        // Off is not gone: the passes are still there to turn back on.
+        scene.set(Some(fog()));
+        assert_eq!(scene.settings(), Some(fog()));
+    }
+
+    #[test]
+    fn a_scene_that_started_without_fog_refuses_to_turn_it_on() {
+        let mut scene = SceneFog::new(None);
+        scene.set(Some(fog()));
+        assert_eq!(scene.settings(), None);
+        scene.set(None);
+        assert_eq!(scene, SceneFog::new(None));
+        assert_eq!(SceneFog::default(), SceneFog::new(None));
+    }
 
     fn authored(enabled: bool, density: f32) -> VolumetricFog {
         VolumetricFog {

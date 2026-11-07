@@ -418,7 +418,7 @@ pub(super) fn build_world_effects(
 
     // Volumetric fog: pipeline + per-frame uniform ring. Built only
     // when the world declared a `VolumetricFog`; the encoder skips the
-    // pass when the fog settings are `None`.
+    // pass when the scene's fog settings are `None`.
     let fog_resources = if fx.fog.is_some() {
         Some(crate::vulkan::fog::FogResources::new(
             crate::vulkan::fog::FogDeviceContext {
@@ -694,7 +694,6 @@ pub(super) fn build_world_effects(
         },
         fog: FogState {
             resources: fog_resources,
-            settings: fx.fog,
         },
         raymarch,
         planar_reflection,

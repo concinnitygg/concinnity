@@ -1,11 +1,10 @@
-//! The lights, reflection probes and fog the world feeds a running backend.
+//! The lights and reflection probes the world feeds a running backend.
 //!
 //! The resolved graphics settings reach the backend through
 //! [`SettingsTarget`](crate::settings::apply::SettingsTarget), carried out by
 //! [`apply_plan`](crate::settings::apply::apply_plan).
 
 use crate::render::backend::error::RenderResult;
-use crate::render::environment::volumetric_fog::FogSettings;
 
 /// The lights the backend shades with, replaced or moved in place.
 ///
@@ -73,19 +72,5 @@ pub trait ReflectionProbes {
         prop_probe: bool,
     ) {
         let _ = (probes, prop_probe);
-    }
-}
-
-/// The live volumetric-fog settings.
-pub trait FogControl {
-    /// Replace the live volumetric-fog settings, or disable the fog pass when
-    /// `None`. Default no-op: the fog pass keeps its init-time settings.
-    ///
-    /// A backend that built its fog pipeline lazily based on the world's
-    /// init-time `VolumetricFog` cannot enable the pass via this call when
-    /// the world started with no fog declared; re-enabling fog on a world
-    /// that did not declare it at startup requires a relaunch.
-    fn update_fog_settings(&mut self, settings: Option<FogSettings>) {
-        let _ = settings;
     }
 }

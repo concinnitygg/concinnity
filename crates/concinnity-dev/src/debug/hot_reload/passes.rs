@@ -36,7 +36,7 @@ pub(crate) struct FogReloadResult {
 pub(super) fn reload_volumetric_fog(
     path: &Path,
     last_pushed: &mut Option<volumetric_fog::FogSettings>,
-    backend: &mut dyn backend::FogControl,
+    backend: &mut dyn backend::RenderBackend,
 ) -> FogReloadResult {
     let mut result = FogReloadResult::default();
 

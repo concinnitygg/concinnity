@@ -4,10 +4,10 @@
 //! be exercised without a GPU.
 
 use super::{
-    BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FogControl, FrameCapture,
-    FrameParams, GeometryEdit, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend,
-    RenderResult, RuntimeDecals, RuntimeEmitters, SceneHost, SceneLights, SdfVolumeShaders,
-    SkinnedDraws, TextureUploads, WindowControl, WorldReload, WorldShaders,
+    BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
+    GeometryEdit, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend, RenderResult,
+    RuntimeDecals, RuntimeEmitters, SceneHost, SceneLights, SdfVolumeShaders, SkinnedDraws,
+    TextureUploads, WindowControl, WorldReload, WorldShaders,
 };
 use crate::gfx::render_types::TextureSlot;
 use crate::input::snapshot::InputSnapshot;
@@ -86,7 +86,6 @@ impl BackendProbe for NullBackend {
     }
 }
 impl CullReadback for NullBackend {}
-impl FogControl for NullBackend {}
 impl FrameCapture for NullBackend {}
 impl GeometryRebuild for NullBackend {}
 impl PlanetReshape for NullBackend {}

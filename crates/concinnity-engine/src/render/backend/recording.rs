@@ -23,10 +23,10 @@ use crate::input::snapshot::InputSnapshot;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
-    BackendProbe, ChunkMesh, CullReadback, DeviceCapabilities, DrawStreaming, FogControl,
-    FrameCapture, FrameParams, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend,
-    RuntimeDecals, RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame,
-    TextureUploads, WindowControl, WorldReload, WorldShaders,
+    BackendProbe, ChunkMesh, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture,
+    FrameParams, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend, RuntimeDecals,
+    RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads,
+    WindowControl, WorldReload, WorldShaders,
 };
 use crate::render::scene_state::SceneState;
 use crate::render::{backend, environment::volumetric_fog, probe::capture, slots::draw_slot};
@@ -404,6 +404,10 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl RenderBackend for RecordingBackend {
+    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
+        self.record(Call::UpdateFogSettings(settings));
+    }
+
     fn assert_owner_thread(&self) {}
 
     fn set_material_params(&mut self, row: u32, params: [f32; render_types::MATERIAL_PARAM_COUNT]) {
@@ -743,12 +747,6 @@ impl SceneLights for RecordingBackend {
 impl ReflectionProbes for RecordingBackend {
     fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool) {
         self.record(Call::SetReflectionProbes(probes.to_vec(), prop_probe));
-    }
-}
-
-impl FogControl for RecordingBackend {
-    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
-        self.record(Call::UpdateFogSettings(settings));
     }
 }
 

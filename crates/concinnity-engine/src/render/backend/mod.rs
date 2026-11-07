@@ -58,7 +58,7 @@ mod skinned;
 mod streaming;
 // The texture pool, the color-grading LUT and the environment map.
 mod textures;
-// The lights, probes and fog the world feeds.
+// The lights and probes the world feeds.
 mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
 mod window;
@@ -92,7 +92,7 @@ pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::{SkinnedDraws, SkinnedFrame};
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
 pub use textures::TextureUploads;
-pub use tuning::{FogControl, ReflectionProbes, SceneLights};
+pub use tuning::{ReflectionProbes, SceneLights};
 pub use window::WindowControl;
 pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
@@ -200,7 +200,6 @@ pub trait RenderBackend:
     + BackendProbe
     + CullReadback
     + DrawStreaming
-    + FogControl
     + FrameCapture
     + GeometryRebuild
     + PlanetReshape
@@ -339,6 +338,19 @@ pub trait RenderBackend:
     fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
         if let Some(scene) = self.scene_mut() {
             scene.material_params.set(row, params);
+        }
+    }
+
+    /// Replace the live volumetric-fog settings, or turn the fog off with
+    /// `None`. A world that started without fog has no fog passes to turn on,
+    /// so a later `Some` is dropped and fog needs a relaunch (see
+    /// [`SceneFog`](crate::render::environment::volumetric_fog::SceneFog)).
+    fn update_fog_settings(
+        &mut self,
+        settings: Option<crate::render::environment::volumetric_fog::FogSettings>,
+    ) {
+        if let Some(scene) = self.scene_mut() {
+            scene.fog.set(settings);
         }
     }
 

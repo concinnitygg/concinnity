@@ -500,7 +500,7 @@ impl DxContext {
             bvh_live: self.rt.accel.is_some(),
             emitters: !self.particle.system.is_empty(),
             late_emitters: self.particle.system.draws_after_transparent(),
-            fog: self.fog.settings.is_some_and(|s| s.contributes()),
+            fog: self.state.fog.settings().is_some_and(|s| s.contributes()),
             decals: !self.decal.set.is_empty(),
             visible_surfaces: self
                 .transparent
@@ -562,7 +562,7 @@ impl DxContext {
             upscaler_jitter,
             lights: &self.uniforms.lights,
             probes: self.probe.book.records(),
-            fog: self.fog.settings,
+            fog: self.state.fog.settings(),
             pre_exposure: self.pre_exposure,
             adaptation: self.auto_exposure.adaptation.as_ref(),
             surface,
