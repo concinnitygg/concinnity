@@ -3,6 +3,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::output::hdr;
 use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};

@@ -7,6 +7,7 @@
 
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{PipelineSwap, PreparedPipelines};
+use concinnity_engine::render::backend::{RenderBackend, SdfVolumeShaders};
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 
 use super::{VolumePipelineTargets, VolumePipelines, build_volume_pipelines};
@@ -15,11 +16,24 @@ use crate::vulkan::context::VkContext;
 use crate::vulkan::pipeline_builder::volume_for;
 
 impl VkContext {
+    // What a volume's pipelines are built against here, or `None` when the
+    // world has no raymarch pass.
+    pub(in crate::vulkan) fn volume_pipeline_targets(&self) -> Option<VolumePipelineTargets> {
+        let rm = self.raymarch.as_ref()?;
+        Some(rm.volume_targets(
+            self.shadow.render_pass.handle(),
+            self.targets.msaa_samples,
+            self.hot_reload.enabled,
+        ))
+    }
+}
+
+impl SdfVolumeShaders for VkContext {
     // Rebuild every pipeline volume `volume` draws with from `programs`, or
     // swap in `prepared` when it was built for this volume against this
     // context's targets. Both are built before either replaces the live one,
     // so a failed build leaves the volume drawing as it was.
-    pub(in crate::vulkan) fn replace_sdf_volume_pipelines(
+    fn replace_sdf_volume_pipelines(
         &mut self,
         volume: usize,
         programs: &SdfPrograms,
@@ -63,16 +77,5 @@ impl VkContext {
         }
         self.hw.device.reclaim_idle();
         Ok(PipelineSwap::Swapped)
-    }
-
-    // What a volume's pipelines are built against here, or `None` when the
-    // world has no raymarch pass.
-    pub(in crate::vulkan) fn volume_pipeline_targets(&self) -> Option<VolumePipelineTargets> {
-        let rm = self.raymarch.as_ref()?;
-        Some(rm.volume_targets(
-            self.shadow.render_pass.handle(),
-            self.targets.msaa_samples,
-            self.hot_reload.enabled,
-        ))
     }
 }

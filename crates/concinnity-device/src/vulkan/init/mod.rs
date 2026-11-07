@@ -29,9 +29,11 @@ use ash::vk;
 use concinnity_engine::gfx::render_types::PostProcessParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan};
+use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::init::{
     BackendInit, MediaPayloads, ShadowCadence, WorldShader,
 };
+use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::decal::DecalRecord;
 use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
 use concinnity_engine::render::particles::ParticleEmitterRecord;
@@ -39,6 +41,8 @@ use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::settings::ResolvedGraphics;
 use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use super::context::{
     CompositeState, HDR_FORMAT, ProbeState, StreamState, SwapchainState, TextState, VkContext,
@@ -156,10 +160,10 @@ impl VkContext {
     // Construct from the assembled backend inputs (see
     // `concinnity_engine::render::backend::init::BackendInit` for per-field docs).
     //
-    // `reuse` is `Some` only on a live editor `reload_world` (see
-    // `apply_world_reload`): the hardware and swapchain are inherited from the
-    // outgoing context instead of acquired fresh, and every per-world resource
-    // is rebuilt on them. `None` acquires it all fresh, the normal launch path.
+    // `reuse` is `Some` only on a live editor `WorldReload::reload_world`: the
+    // hardware and swapchain are inherited from the outgoing context instead of
+    // acquired fresh, and every per-world resource is rebuilt on them. `None`
+    // acquires it all fresh, the normal launch path.
     fn build(
         init: BackendInit<'_>,
         reuse: Option<(VkHardware, SwapchainState)>,
@@ -198,9 +202,9 @@ impl VkContext {
         } = world_shaders
             .first()
             .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
-        // Record this (main) thread so the `RenderBackend` mutation entry points
-        // can `debug_assert_main_thread` against it; the Send invariant rests on
-        // the context being touched from this thread alone.
+        // Record this (main) thread for `RenderBackend::assert_owner_thread`;
+        // the Send invariant rests on the context being touched from this
+        // thread alone.
         record_main_thread();
         let frames = graphics.frames_in_flight();
 
@@ -448,7 +452,7 @@ impl VkContext {
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
             // A freshly built context owns its hardware outright; only
-            // `apply_world_reload` flips this on the outgoing context.
+            // `reload_world` flips this on the outgoing context.
             reused_by_successor: false,
             world_content_destroyed: false,
             hw,
@@ -472,7 +476,7 @@ impl VkContext {
         // first frame runs.
         self.upload_initial_decals(decals)?;
         // Same pattern for particle emitters: each world-authored record
-        // routes through `add_particle_emitter` so its pool, counter, and
+        // routes through `add_emitter` so its pool, counter, and
         // descriptor sets land before the first frame.
         self.upload_initial_particles(particles)?;
         self.sync_grass_prepass(false);
@@ -506,61 +510,6 @@ impl VkContext {
         crate::shader::pipeline_cache::report_init(super::pipeline_cache::disk_state());
         crate::shader::runtime_cache::checkpoint();
         Ok(())
-    }
-
-    // Rebuild this backend's world content in place on its existing hardware for
-    // a live editor edit: wait for the GPU to idle, hand the hardware and
-    // swapchain to a successor context built from `init`, then replace `self`
-    // with it. The outgoing `self` is dropped by the `*self = rebuilt`
-    // assignment; `reused_by_successor` (set just before it) makes that Drop free
-    // only this world's content and leave the shared hardware to the successor.
-    // Only ever called when `hot_swap_config` reported a config matching
-    // `init.swapchain_config()`, so the swapchain (format / frames-in-flight /
-    // EDR) is guaranteed unchanged. Mirrors `DxContext::apply_world_reload`.
-    //
-    // The old world's content is freed BEFORE the successor builds, into the
-    // allocator the two contexts share, so the rebuild fills the released
-    // blocks instead of holding both worlds' memory for the reload's duration.
-    //
-    // On a content-build failure (essentially impossible for a pre-validated
-    // editor edit built from the engine's built-in shaders) the moved window is
-    // closed with the dropped hardware handles and the old world is already
-    // gone; `self` keeps the shared hardware (the flag is unset on the failure
-    // path) and tears it down in a normal Drop, so the caller can drop this
-    // backend and mark the session failed without a leak.
-    pub(in crate::vulkan) fn apply_world_reload(
-        &mut self,
-        init: BackendInit<'_>,
-    ) -> RenderResult<()> {
-        self.wait_idle();
-        let reuse = (self.hw.hand_over()?, self.swapchain.share());
-        // Free the old world into the shared allocator BEFORE the successor
-        // builds, and make the released ranges placeable now (`wait_idle`
-        // above gated everything in flight): the rebuild then fills the same
-        // blocks instead of doubling the device footprint for the reload's
-        // duration. The flag is set first so the content pass keeps the
-        // swapchain for the successor; a build failure unsets it and re-runs
-        // the swapchain teardown the content pass skipped, so the
-        // failed-session `Drop` still tears the shared hardware down.
-        self.reused_by_successor = true;
-        self.destroy_world_content();
-        self.hw.alloc.reclaim_idle();
-        // The old world's pipelines, layouts and render passes queued on the
-        // device's retire list as their owners dropped; the `wait_idle` above
-        // means they can go now rather than after the successor's first frames.
-        self.hw.device.reclaim_idle();
-        tracing::debug!("reload: old world freed: {}", self.hw.alloc.stats());
-        match Self::build(init, Some(reuse)) {
-            Ok(rebuilt) => {
-                *self = rebuilt;
-                Ok(())
-            }
-            Err(e) => {
-                self.reused_by_successor = false;
-                self.destroy_swapchain_resources();
-                Err(e)
-            }
-        }
     }
 }
 
@@ -787,4 +736,70 @@ fn build_grass(
         gpu.hot_reload,
     )
     .map(Some)
+}
+
+impl WorldReload for VkContext {
+    fn shader_reload_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.hot_reload.flag()
+    }
+
+    // The swapchain config this live backend can hot-swap a world onto. A live
+    // editor reload reuses this backend in place (via `reload_world`) only when
+    // the new world's `swapchain_config` matches; otherwise the swap does a full
+    // rebuild (recreating the window).
+    fn hot_swap_config(&self) -> Option<SwapchainConfig> {
+        Some(self.hw.swapchain_config)
+    }
+
+    // Rebuild this backend's world content in place on its existing hardware for
+    // a live editor edit: wait for the GPU to idle, hand the hardware and
+    // swapchain to a successor context built from `init`, then replace `self`
+    // with it. The outgoing `self` is dropped by the `*self = rebuilt`
+    // assignment; `reused_by_successor` (set just before it) makes that Drop free
+    // only this world's content and leave the shared hardware to the successor.
+    // Only ever called when `hot_swap_config` reported a config matching
+    // `init.swapchain_config()`, so the swapchain (format / frames-in-flight /
+    // EDR) is guaranteed unchanged. Mirrors `DxContext::reload_world`.
+    //
+    // The old world's content is freed BEFORE the successor builds, into the
+    // allocator the two contexts share, so the rebuild fills the released
+    // blocks instead of holding both worlds' memory for the reload's duration.
+    //
+    // On a content-build failure (essentially impossible for a pre-validated
+    // editor edit built from the engine's built-in shaders) the moved window is
+    // closed with the dropped hardware handles and the old world is already
+    // gone; `self` keeps the shared hardware (the flag is unset on the failure
+    // path) and tears it down in a normal Drop, so the caller can drop this
+    // backend and mark the session failed without a leak.
+    fn reload_world(&mut self, init: BackendInit<'_>) -> RenderResult<()> {
+        self.wait_idle();
+        let reuse = (self.hw.hand_over()?, self.swapchain.share());
+        // Free the old world into the shared allocator BEFORE the successor
+        // builds, and make the released ranges placeable now (`wait_idle`
+        // above gated everything in flight): the rebuild then fills the same
+        // blocks instead of doubling the device footprint for the reload's
+        // duration. The flag is set first so the content pass keeps the
+        // swapchain for the successor; a build failure unsets it and re-runs
+        // the swapchain teardown the content pass skipped, so the
+        // failed-session `Drop` still tears the shared hardware down.
+        self.reused_by_successor = true;
+        self.destroy_world_content();
+        self.hw.alloc.reclaim_idle();
+        // The old world's pipelines, layouts and render passes queued on the
+        // device's retire list as their owners dropped; the `wait_idle` above
+        // means they can go now rather than after the successor's first frames.
+        self.hw.device.reclaim_idle();
+        tracing::debug!("reload: old world freed: {}", self.hw.alloc.stats());
+        match Self::build(init, Some(reuse)) {
+            Ok(rebuilt) => {
+                *self = rebuilt;
+                Ok(())
+            }
+            Err(e) => {
+                self.reused_by_successor = false;
+                self.destroy_swapchain_resources();
+                Err(e)
+            }
+        }
+    }
 }

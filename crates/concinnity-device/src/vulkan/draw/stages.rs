@@ -4,6 +4,7 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::profile;
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::{backend::pass_timing, output::hdr};
 
@@ -33,33 +34,6 @@ impl VkContext {
             }
         }
         Ok(())
-    }
-
-    // Block on the next frame slot's fence ahead of the draw. The fence stays
-    // signaled until the draw resets it, so the draw's own wait returns at
-    // once, and a failure surfaces there.
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "a failed wait surfaces on the draw's own wait on the same fence"
-    )]
-    pub(crate) fn prepare_frame(&mut self) {
-        if self.frame_is_parked() {
-            return;
-        }
-        let fence = self.frame_sync.in_flight[self.current_frame];
-        // SAFETY: the fence belongs to the next frame slot and was created from this device; the
-        // slice borrows it for the call.
-        let _ = unsafe {
-            self.hw
-                .device
-                .wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)
-        };
-    }
-
-    // Pump the window's pending events outside the draw. The closed flag is
-    // sticky, so the frame's own poll still reports a close.
-    pub(crate) fn pump_events(&mut self) {
-        self.window_closed();
     }
 
     // Blocks on this frame slot's previous submission, then runs the ticks it gates.

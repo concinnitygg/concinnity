@@ -5,7 +5,6 @@
 mod allocator;
 mod atmosphere;
 mod auto_exposure;
-mod backend;
 mod barrier_translate;
 pub(crate) mod builtin_shaders;
 mod canopy;
@@ -35,6 +34,7 @@ mod hot_reload;
 mod init;
 mod instance_exts;
 mod light_cull;
+mod lights;
 mod line;
 mod loader;
 mod material_params;

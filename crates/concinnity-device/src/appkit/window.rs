@@ -355,7 +355,7 @@ impl AppKitWindow {
     }
 
     // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`.
+    // `WindowControl::set_menu_mode`.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.menu_mode = on;
     }

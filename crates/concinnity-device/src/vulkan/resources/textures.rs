@@ -8,6 +8,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::bake;
 use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, TextureUploads};
 
 use super::super::context::VkContext;
 use super::super::descriptor_layout::{IRRADIANCE_CUBE_BINDING, PREFILTER_CUBE_BINDING};
@@ -68,6 +69,46 @@ impl VkContext {
         self.decal_samples_slot(slot) || self.particle_samples_slot(slot)
     }
 
+    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
+    // right after frame slot `frame`'s fence wait: re-point this slot's
+    // bindless pool copy at any swapped slots (legal now -- the wait retired
+    // every command buffer that binds this copy), then free retires whose
+    // covering fence has signaled.
+    pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
+        self.stream.frame += 1;
+        if !self.stream.pool_rewrites.is_empty() {
+            let last = self.scene.textures.len().saturating_sub(1);
+            for slot in self.stream.pool_rewrites.begin_frame() {
+                let view = self.scene.textures[slot.min(last)].view;
+                if let Some(&set) = self.cull.bindless_sets.get(frame) {
+                    self.write_pool_image(set, u32::saturating_from(slot), view);
+                }
+            }
+        }
+        let now = self.stream.frame;
+        let depth = self.stream.retire_depth;
+        while let Some(retire) = self.stream.retires.pop_due(now, depth) {
+            retire.destroy(&self.hw.device, self.commands.command_pool);
+        }
+    }
+
+    // Free every parked streamed-texture retire immediately. Only legal after
+    // a device drain; the world-reload and drop paths call this before
+    // tearing the pool down.
+    pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
+        for retire in self.stream.retires.drain() {
+            retire.destroy(&self.hw.device, self.commands.command_pool);
+        }
+    }
+}
+
+impl TextureUploads for VkContext {
+    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
+    fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
+        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
+        self.update_texture_slot(slot, &gray)
+    }
+
     // Replace albedo texture-pool `slot` with a freshly decoded texture.
     //
     // The streaming fast path never stalls the device: the upload is
@@ -80,7 +121,7 @@ impl VkContext {
     // set samples the slot (see `streamed_slot_needs_drain`) the swap instead
     // drains the device and rewrites everything in place, matching the
     // hot-reload paths below.
-    pub(crate) fn update_texture_slot(
+    fn update_texture_slot(
         &mut self,
         slot: TextureSlot,
         image: &bake::texture::TextureImage,
@@ -129,44 +170,6 @@ impl VkContext {
         Ok(())
     }
 
-    // Reset texture-pool `slot` to a 1x1 mid-gray placeholder.
-    pub(crate) fn evict_texture_slot(&mut self, slot: TextureSlot) -> RenderResult<()> {
-        let gray = bake::texture::TextureImage::rgba8(1, 1, vec![128, 128, 128, 255]);
-        self.update_texture_slot(slot, &gray)
-    }
-
-    // Per-frame streamed-texture upkeep, called at the top of `draw_frame`
-    // right after frame slot `frame`'s fence wait: re-point this slot's
-    // bindless pool copy at any swapped slots (legal now -- the wait retired
-    // every command buffer that binds this copy), then free retires whose
-    // covering fence has signaled.
-    pub(in crate::vulkan) fn apply_streamed_texture_rewrites(&mut self, frame: usize) {
-        self.stream.frame += 1;
-        if !self.stream.pool_rewrites.is_empty() {
-            let last = self.scene.textures.len().saturating_sub(1);
-            for slot in self.stream.pool_rewrites.begin_frame() {
-                let view = self.scene.textures[slot.min(last)].view;
-                if let Some(&set) = self.cull.bindless_sets.get(frame) {
-                    self.write_pool_image(set, u32::saturating_from(slot), view);
-                }
-            }
-        }
-        let now = self.stream.frame;
-        let depth = self.stream.retire_depth;
-        while let Some(retire) = self.stream.retires.pop_due(now, depth) {
-            retire.destroy(&self.hw.device, self.commands.command_pool);
-        }
-    }
-
-    // Free every parked streamed-texture retire immediately. Only legal after
-    // a device drain; the world-reload and drop paths call this before
-    // tearing the pool down.
-    pub(in crate::vulkan) fn drain_stream_retires(&mut self) {
-        for retire in self.stream.retires.drain() {
-            retire.destroy(&self.hw.device, self.commands.command_pool);
-        }
-    }
-
     // Replace the live color-grading LUT with a fresh `size³` RGBA8 payload.
     // Driven by asset hot-reload (`cn run -f` only) when the file-backed
     // `ColorLut` source is saved. `wait_idle` first guarantees no in-flight
@@ -178,7 +181,7 @@ impl VkContext {
     // `DxContext::update_color_lut` / `MtlContext::update_color_lut`. Reached
     // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    pub(crate) fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
+    fn update_color_lut(&mut self, size: u32, data: &[u8]) -> RenderResult<()> {
         self.wait_idle();
         let new_lut = super::super::texture::upload_color_lut(
             &GpuUploadContext {
@@ -219,7 +222,7 @@ impl VkContext {
     // `DxContext::update_environment_map`. Reached
     // only through the bin's `cn run -f` runtime-mutation path (dead in the FFI
     // lib, live in the bin).
-    pub(crate) fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
+    fn update_environment_map(&mut self, payload: &[u8]) -> RenderResult<()> {
         let view = bake::environment_map::deserialize(payload)
             .map_err(|e| RenderError::Other(format!("envmap hot-reload payload malformed: {e}")))?;
         self.wait_idle();

@@ -16,9 +16,10 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_engine::gfx::{jitter, lod};
 use concinnity_engine::profile::FrameSpans;
-use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
+use concinnity_engine::render::backend::{FrameParams, RenderBackend, WindowControl};
+use concinnity_engine::render::frame::plan::drive_frame;
 use concinnity_engine::render::frame::plan::{
     EffectInputs, FrameDevice, FramePlan, PlanInputs, SurfaceInputs, camera_inputs,
 };
@@ -824,4 +825,60 @@ pub(super) fn upload_static_records<T: Copy>(
         return;
     }
     buffer.write_slice(0, records);
+}
+
+impl RenderBackend for VkContext {
+    // The GLFW window and event pump are thread-affine, and the host-mapped
+    // uniform pointers and the device allocator's RefCell are single-threaded,
+    // which is what the `unsafe impl Send for VkContext` rests on.
+    fn assert_owner_thread(&self) {
+        debug_assert!(
+            super::context::on_owner_thread(),
+            "VkContext is main-thread-only (see `unsafe impl Send for VkContext`); \
+             driving it off the main thread races the window + Vulkan queue submission",
+        );
+    }
+
+    fn wait_idle(&self) {
+        // Staged geometry writes count as submitted work, so an idle device has
+        // applied them.
+        if let Err(e) = self.flush_geometry_uploads() {
+            tracing::error!("geometry upload submit failed: {e}");
+        }
+        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
+        if let Err(e) = unsafe { self.hw.device.device_wait_idle() } {
+            tracing::error!("device wait idle failed: {e}");
+        }
+    }
+
+    fn draw_frame(&mut self, params: FrameParams<'_>) -> RenderResult<()> {
+        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
+    }
+
+    // Block on the next frame slot's fence ahead of the draw. The fence stays
+    // signaled until the draw resets it, so the draw's own wait returns at
+    // once, and a failure surfaces there.
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a failed wait surfaces on the draw's own wait on the same fence"
+    )]
+    fn prepare_frame(&mut self) {
+        if self.frame_is_parked() {
+            return;
+        }
+        let fence = self.frame_sync.in_flight[self.current_frame];
+        // SAFETY: the fence belongs to the next frame slot and was created from this device; the
+        // slice borrows it for the call.
+        let _ = unsafe {
+            self.hw
+                .device
+                .wait_for_fences(std::slice::from_ref(&fence), true, u64::MAX)
+        };
+    }
+
+    // Pump the window's pending events outside the draw. The closed flag is
+    // sticky, so the frame's own poll still reports a close.
+    fn pump_events(&mut self) {
+        self.window_closed();
+    }
 }

@@ -4,16 +4,17 @@
 
 use ash::vk;
 use concinnity_engine::render::backend::error;
+use concinnity_engine::render::backend::{DrawStreaming, RenderBackend};
 
 use super::super::context::VkContext;
 use super::super::texture;
 
-impl VkContext {
+impl DrawStreaming for VkContext {
     // Grow the shared vertex/index buffers by a headroom region for streamed
     // `VoxelWorld` chunks and seed the chunk sub-allocators with it. The chunk
     // material's texture slots ride each chunk's cull record, so no descriptor
     // is baked here.
-    pub(crate) fn setup_chunk_streaming(
+    fn setup_chunk_streaming(
         &mut self,
         chunk_vtx_bytes: usize,
         chunk_idx_bytes: usize,

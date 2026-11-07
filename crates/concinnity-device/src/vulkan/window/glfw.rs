@@ -339,7 +339,7 @@ impl GlfwWindow {
     }
 
     // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`. The poll loop reads this to route Escape
+    // `WindowControl::set_menu_mode`. The poll loop reads this to route Escape
     // to the ECS instead of releasing the cursor inline.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.menu_mode = on;

@@ -20,6 +20,7 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams, ShadowUniforms};
+use concinnity_engine::render::backend::FogControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::environment::volumetric_fog;
 use concinnity_engine::render::frame::plan::FogBlocks;
@@ -650,37 +651,6 @@ fn create_fog_pipeline(
 // Encoder
 
 impl VkContext {
-    // Hot-reload entry point for the volumetric-fog tunables (driven by
-    // `world.jsonl` hot-reload under `cn run -f`). Writes the new
-    // `Option<FogSettings>` into `self.fog.settings`; the next frame's graph
-    // seed re-reads it (so `None` drops the FogFroxel + Fog passes) and
-    // `encode_fog_froxel` rebuilds `FogParams` / `FogFroxelParams` from it.
-    // Mirrors `MtlContext::update_fog_settings`.
-    //
-    // If the world started with no `VolumetricFog` (so `fog.resources` is
-    // `None`), a `Some` update logs once and is dropped: re-enabling fog
-    // mid-run requires a relaunch (the froxel pipeline + volume were never
-    // built).
-    //
-    // Named distinctly from the `RenderBackend::update_fog_settings` trait
-    // method so the backend forwarder's `self.apply_fog_settings(...)` is
-    // unambiguous. Reached through the `RenderBackend` vtable (the bin's
-    // `cn run -f` world.jsonl hot-reload).
-    pub(in crate::vulkan) fn apply_fog_settings(
-        &mut self,
-        settings: Option<volumetric_fog::FogSettings>,
-    ) {
-        if settings.is_some() && self.fog.resources.is_none() {
-            tracing::warn!(
-                "VolumetricFog hot-reload: world started without fog, so the fog \
-                 pipeline + froxel volume were never built: re-enabling fog mid-run \
-                 is not supported (relaunch required). Ignoring update."
-            );
-            return;
-        }
-        self.fog.settings = settings;
-    }
-
     // Encode the volumetric-fog froxel-volume compute pass. Populates the 3D
     // `(scattered, 1 - T)` volume the fog fragment shader samples. The shared
     // graph seeds `PassId::FogFroxel` before `Fog` so the RAW edge orders the
@@ -775,6 +745,31 @@ impl VkContext {
         );
         rec.draw(3, 1, 0, 0);
         rec.end_render_pass();
+    }
+}
+
+impl FogControl for VkContext {
+    // Hot-reload entry point for the volumetric-fog tunables (driven by
+    // `world.jsonl` hot-reload under `cn run -f`). Writes the new
+    // `Option<FogSettings>` into `self.fog.settings`; the next frame's graph
+    // seed re-reads it (so `None` drops the FogFroxel + Fog passes) and
+    // `encode_fog_froxel` rebuilds `FogParams` / `FogFroxelParams` from it.
+    // Mirrors `MtlContext::update_fog_settings`.
+    //
+    // If the world started with no `VolumetricFog` (so `fog.resources` is
+    // `None`), a `Some` update logs once and is dropped: re-enabling fog
+    // mid-run requires a relaunch (the froxel pipeline + volume were never
+    // built).
+    fn update_fog_settings(&mut self, settings: Option<volumetric_fog::FogSettings>) {
+        if settings.is_some() && self.fog.resources.is_none() {
+            tracing::warn!(
+                "VolumetricFog hot-reload: world started without fog, so the fog \
+                 pipeline + froxel volume were never built: re-enabling fog mid-run \
+                 is not supported (relaunch required). Ignoring update."
+            );
+            return;
+        }
+        self.fog.settings = settings;
     }
 }
 

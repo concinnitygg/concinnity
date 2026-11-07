@@ -7,13 +7,10 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::{
-    InstancedCluster, LightUniforms, PostProcessParams, PostProcessTunables,
+    InstancedCluster, PostProcessParams, PostProcessTunables,
 };
-use concinnity_engine::input::snapshot::InputSnapshot;
-use concinnity_engine::render::backend::FrameParams;
+use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::render::frame::plan::drive_frame;
-use concinnity_engine::render::light::lights::LightData;
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
@@ -21,7 +18,6 @@ use concinnity_engine::render::{
     backend, backend::error, backend::init, decal, environment::volumetric_fog, output::hdr,
     shadow::spot, slots::rewrites,
 };
-use concinnity_engine::window::display_mode;
 use concinnity_engine::{components, profile};
 
 use super::allocator::PooledBuffer;
@@ -999,7 +995,7 @@ impl VkHardware {
     pub(super) fn hand_over(&mut self) -> error::RenderResult<Self> {
         Ok(Self {
             window: Some(self.window.take().ok_or_else(|| {
-                error::RenderError::Other("apply_world_reload: window already taken".into())
+                error::RenderError::Other("reload_world: window already taken".into())
             })?),
             instance: self.instance.clone(),
             device: self.device.clone(),
@@ -1302,7 +1298,7 @@ pub(crate) struct VkContext {
     // constructed context, so a plain shutdown still tears everything down.
     // Vulkan needs this because its handles are not refcounted (unlike DirectX's
     // COM device / swapchain, where the outgoing context's release just drops a
-    // reference). See `apply_world_reload` + `destroy_swapchain_resources`.
+    // reference). See `reload_world` + `destroy_swapchain_resources`.
     pub(super) reused_by_successor: bool,
     // Set once `destroy_world_content` has run, so `Drop` never runs the
     // content teardown twice. True early on the outgoing context of a
@@ -1316,13 +1312,14 @@ pub(crate) struct VkContext {
 }
 
 // SAFETY: The host-mapped uniform pointers and the RefCell device allocator behind
-// every pooled resource are used only on this thread; see
-// `debug_assert_main_thread` below.
+// every pooled resource are used only on the thread that built the context,
+// which `RenderBackend::assert_owner_thread` checks each time the runtime takes
+// it.
 unsafe impl Send for VkContext {}
 
 // Thread id of the thread that built the context. `VkContext::new` runs on the
-// main thread and records it here; `debug_assert_main_thread` checks every
-// mutation entry point against it. Portable across platforms (unlike the Win32
+// main thread and records it here; `RenderBackend::assert_owner_thread` checks
+// against it. Portable across platforms (unlike the Win32
 // `GetCurrentThreadId` the DirectX backend uses) since Vulkan also targets Linux.
 static MAIN_THREAD_ID: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
 
@@ -1336,40 +1333,15 @@ pub(super) fn record_main_thread() {
     let _ = MAIN_THREAD_ID.set(std::thread::current().id());
 }
 
-// Debug-only guard that the caller is on the main thread.
-//
-// The `unsafe impl Send for VkContext` above is sound only because the context
-// is touched from one thread alone: the GLFW window/event pump is thread-affine,
-// the host-mapped uniform pointers and the device allocator's RefCell are
-// single-threaded, and the parallel-encoder fan-out only ever shares `&self`
-// read-only. The `RenderBackend` mutation entry points (reached through the
-// boxed trait object) had nothing proving this, so scheduling `GraphicsSystem`
-// off the main thread would silently race the window + queue submission instead
-// of failing. This makes that mistake panic loudly in debug builds and compiles
-// to nothing in release. `entry` is the offending method name, for the message.
-// Mirrors `directx/context.rs::debug_assert_main_thread`.
-#[inline]
-#[track_caller]
-pub(super) fn debug_assert_main_thread(entry: &str) {
-    debug_assert!(
-        MAIN_THREAD_ID
-            .get()
-            .is_none_or(|main| *main == std::thread::current().id()),
-        "{entry} must be called from the main thread: VkContext is main-thread-only \
-         (see `unsafe impl Send for VkContext`); driving GraphicsSystem off the main \
-         thread races the GLFW window + Vulkan queue submission",
-    );
+// Whether the caller is on the thread `record_main_thread` recorded, or no
+// context has been built yet.
+pub(super) fn on_owner_thread() -> bool {
+    MAIN_THREAD_ID
+        .get()
+        .is_none_or(|main| *main == std::thread::current().id())
 }
 
 impl VkContext {
-    #[expect(
-        clippy::large_types_passed_by_value,
-        reason = "keeps the `RenderBackend::draw_frame` signature it serves"
-    )]
-    pub(crate) fn draw_frame(&mut self, params: FrameParams<'_>) -> error::RenderResult<()> {
-        drive_frame(self, params, concinnity_host::clock::monotonic_micros)
-    }
-
     // The live platform window. Present for every constructed context; `None`
     // only on the outgoing context of a `reload_world` (its window was moved
     // into the successor), which is dropped without any further window access.
@@ -1422,10 +1394,6 @@ impl VkContext {
         }
     }
 
-    pub(crate) fn window_closed(&mut self) -> bool {
-        self.window_mut().poll()
-    }
-
     // Submit every staged geometry write. Submission order puts the copies
     // ahead of any later submission, so nothing waits on them.
     pub(super) fn flush_geometry_uploads(&self) -> error::RenderResult<()> {
@@ -1440,31 +1408,6 @@ impl VkContext {
                 index: self.geometry.index_buffer.buffer(),
             },
         )
-    }
-
-    pub(crate) fn wait_idle(&self) {
-        // Staged geometry writes count as submitted work, so an idle device has
-        // applied them.
-        if let Err(e) = self.flush_geometry_uploads() {
-            tracing::error!("geometry upload submit failed: {e}");
-        }
-        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
-        if let Err(e) = unsafe { self.hw.device.device_wait_idle() } {
-            tracing::error!("device wait idle failed: {e}");
-        }
-    }
-
-    // Render statistics for the most recent `draw_frame`, for the profiler
-    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame`
-    // from the timestamp pair this slot resolved on its previous trip
-    // through the ring (so the reading is `frames_in_flight`-stale by
-    // construction, matching DirectX / Metal). Per-pass GPU timing is
-    // still a follow-up.
-    pub(crate) fn render_stats(&self) -> profile::RenderStats {
-        profile::RenderStats {
-            spans: self.state.spans.get(),
-            ..self.frame_stats.get()
-        }
     }
 
     // Current device-local memory residency in bytes, via
@@ -1504,85 +1447,6 @@ impl VkContext {
             .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub(crate) fn request_cursor_capture(&mut self) {
-        self.window_mut().request_cursor_capture();
-    }
-
-    // Hide or show the OS cursor for an in-engine UI cursor (e.g. a MainMenu),
-    // without engaging camera capture. Edge-triggered in the window helper.
-    pub(crate) fn set_ui_cursor_hidden(&mut self, hidden: bool) {
-        self.window_mut().set_ui_cursor_hidden(hidden);
-    }
-
-    // Whether the real cursor has left the window so the renderer should stop
-    // drawing the in-engine UI cursor (windowed / borderless). Recomputed each
-    // `poll` (in `window_closed`); false while captured or in fullscreen (which
-    // confines the cursor instead).
-    pub(crate) fn cursor_outside_window(&self) -> bool {
-        self.window().cursor_outside_window()
-    }
-
-    pub(crate) fn window_minimized(&self) -> bool {
-        self.window().window_minimized()
-    }
-
-    // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`.
-    pub(crate) fn set_menu_mode(&mut self, on: bool) {
-        self.window_mut().set_menu_mode(on);
-    }
-
-    // Drive cursor capture from the menu state each frame: capture for camera
-    // control, release while a menu is open. Edge-triggered in the window.
-    pub(crate) fn set_camera_capture(&mut self, capture: bool) {
-        self.window_mut().set_camera_capture(capture);
-    }
-
-    // Turn display sync (vsync) on or off at runtime. The present mode is fixed
-    // at swapchain creation (FIFO for vsync, MAILBOX/IMMEDIATE for uncapped), so
-    // a change recreates the swapchain, which re-selects the mode from
-    // `self.hw.vsync`. Edge-triggered: a redundant call (a swapchain rebuild is
-    // expensive) is skipped.
-    pub(crate) fn set_vsync(&mut self, on: bool) {
-        if on == self.hw.vsync {
-            return;
-        }
-        self.hw.vsync = on;
-        if let Err(e) = self.rebuild_swapchain() {
-            tracing::warn!("set_vsync: rebuild_swapchain failed: {}", e);
-        }
-    }
-
-    // Switch window mode / resize at runtime. The GLFW work lives in window.rs;
-    // the framebuffer-size change drives a swapchain rebuild via the present
-    // path's OUT_OF_DATE handling.
-    pub(crate) fn set_window_mode(&mut self, mode: components::WindowMode) {
-        self.window_mut().set_window_mode(mode);
-    }
-
-    pub(crate) fn set_window_size(&mut self, width: u32, height: u32) {
-        self.window_mut().set_window_size(width, height);
-    }
-
-    // The display modes feeding the Resolution settings row; enumeration,
-    // the fullscreen mode hold, and the desktop-mode restore all live in
-    // window.rs (GLFW owns the video-mode switching).
-    pub(crate) fn display_modes(&self) -> Vec<display_mode::DisplayMode> {
-        self.window().display_modes()
-    }
-
-    pub(crate) fn current_display_mode(&self) -> Option<display_mode::DisplayMode> {
-        self.window().current_display_mode()
-    }
-
-    pub(crate) fn display_refresh(&self) -> Option<display_mode::DisplayRefresh> {
-        self.window().display_refresh()
-    }
-
-    pub(crate) fn set_display_mode(&mut self, mode: display_mode::DisplayMode) {
-        self.window_mut().set_display_mode(mode);
-    }
-
     // Replace the live post-process tunables, pushed to the bloom + composite
     // shaders each frame. The composite's display-output flags are not part of
     // the payload, so the EDR path negotiated at init survives every push.
@@ -1597,49 +1461,6 @@ impl VkContext {
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
         self.uniforms.lights.set_ambient(value);
-    }
-
-    // Replace the live directional lights. The cascade shadow direction and the
-    // fog sun are derived from the first light on the CPU, so both are
-    // re-derived here. Edge-triggered: an unchanged set touches nothing, and a
-    // changed one only re-arms the light UBO ring.
-    pub(crate) fn update_directional_lights(&mut self, lights: &[components::DirectionalLight]) {
-        self.uniforms.lights.set_directional(lights);
-    }
-
-    // Replace the sky-occluding spheres the light block carries; a changed set
-    // re-arms the light ring.
-    pub(crate) fn update_sky_occluders(
-        &mut self,
-        occluders: &concinnity_engine::render::light::sky_occluders::SkyOccluders,
-    ) {
-        self.uniforms.lights.set_sky_occluders(occluders);
-    }
-
-    // Move the local lights in place. The light SSBO, the area table and the
-    // spot projections are single host-visible buffers every in-flight frame
-    // reads, so the GPU is drained before they are rewritten; the cluster
-    // reach and the spot frusta are re-derived, and the light UBO ring is
-    // re-armed for the point array.
-    pub(crate) fn move_local_lights(
-        &mut self,
-        data: &LightData,
-        uniforms: &LightUniforms,
-    ) -> error::RenderResult<()> {
-        if !self.uniforms.lights.same_local_count(&data.lights)
-            || data.spot_shadows.len() != self.spot_shadow.count() as usize
-        {
-            return Err(error::RenderError::Other(
-                "move_local_lights: the light count changed since init".into(),
-            ));
-        }
-        self.wait_idle();
-        super::draw::upload_static_records(&self.uniforms.local_light_buffer, &data.lights);
-        super::draw::upload_static_records(&self.area_light.buffer, &data.area_lights);
-        self.spot_shadow.rewrite(&data.spot_shadows);
-        self.state.planner.shadow.reset_spots();
-        self.uniforms.lights.move_local(&data.lights, uniforms);
-        Ok(())
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {
@@ -1677,48 +1498,6 @@ impl VkContext {
         }
         self.refresh_gates(g);
     }
-
-    // Public accessor for the shared shader-reload flag. Cloning the `Arc`
-    // lets the debug server flip it from a non-render thread.
-    // `None` outside `cn run -f`. Mirrors `DxContext::shader_reload_pending`.
-    pub(crate) fn take_input(&mut self) -> InputSnapshot {
-        // Both platform windows snapshot straight into the shared InputSnapshot.
-        self.window_mut().take_input()
-    }
-
-    // Live window size for overlay (view-owned UI) scaling and cursor
-    // hit-testing, in the window's logical units. Read from the platform window
-    // rather than the swapchain extent so the overlay space matches the units
-    // `poll()` reports the cursor in on every platform: points on macOS, client
-    // pixels on Windows, window coordinates on Linux. Where the framebuffer is
-    // larger (a retina drawable, a scaled Wayland surface) the difference is
-    // absorbed by the UI shader's divide to NDC, and only the text scissor
-    // converts back to pixels.
-    pub(crate) fn logical_size(&self) -> (f32, f32) {
-        self.window().logical_size()
-    }
-
-    // The window chrome overlapping the top of the frame, in the same units.
-    // Non-zero only on the macOS window, whose content view runs under a
-    // transparent title bar.
-    pub(crate) fn top_content_inset(&self) -> f32 {
-        self.window().top_content_inset()
-    }
-
-    // Device capability flags for the settings menu. RT reflects whether the
-    // ray-query device extensions were enabled at device creation
-    // (`rt_capable`), which XeSS rules out.
-    pub(crate) fn capabilities(&self) -> backend::DeviceCapabilities {
-        super::gpu_profile::capabilities(self.hw.rt_capable)
-    }
-
-    // Coarse GPU performance profile for default-quality selection, read live
-    // from the physical device: vendor id, discrete / integrated device type,
-    // and the summed DEVICE_LOCAL heap size as the VRAM budget (the true heap
-    // size, unlike the residency chip which sums live usage).
-    pub(crate) fn gpu_profile(&self) -> backend::GpuProfile {
-        super::gpu_profile::device_profile(&self.hw.instance, self.hw.physical_device)
-    }
 }
 
 impl VkContext {
@@ -1727,7 +1506,7 @@ impl VkContext {
     // allocator as their holders drop or clear). Shared hardware, the
     // allocator itself, and the surface / device / instance are NOT touched;
     // `Drop` owns those. Called from `Drop` on a normal shutdown, and early by
-    // `apply_world_reload` so the successor build places into the blocks this
+    // `reload_world` so the successor build places into the blocks this
     // world releases instead of doubling the footprint. Guarded so the `Drop`
     // after an early call is a no-op; the caller has idled the device.
     pub(super) fn destroy_world_content(&mut self) {
@@ -1983,6 +1762,36 @@ impl Drop for VkContext {
 // minimize gate is unit-testable without a live window / surface.
 fn extent_minimized(width: i32, height: i32) -> bool {
     width <= 0 || height <= 0
+}
+
+impl BackendProbe for VkContext {
+    // Device capability flags for the settings menu. RT reflects whether the
+    // ray-query device extensions were enabled at device creation
+    // (`rt_capable`), which XeSS rules out.
+    fn capabilities(&self) -> backend::DeviceCapabilities {
+        super::gpu_profile::capabilities(self.hw.rt_capable)
+    }
+
+    // Coarse GPU performance profile for default-quality selection, read live
+    // from the physical device: vendor id, discrete / integrated device type,
+    // and the summed DEVICE_LOCAL heap size as the VRAM budget (the true heap
+    // size, unlike the residency chip which sums live usage).
+    fn gpu_profile(&self) -> backend::GpuProfile {
+        super::gpu_profile::device_profile(&self.hw.instance, self.hw.physical_device)
+    }
+
+    // Render statistics for the most recent `draw_frame`, for the profiler
+    // overlay. `gpu_frame_us` is filled at the top of each `draw_frame`
+    // from the timestamp pair this slot resolved on its previous trip
+    // through the ring (so the reading is `frames_in_flight`-stale by
+    // construction, matching DirectX / Metal). Per-pass GPU timing is
+    // still a follow-up.
+    fn render_stats(&self) -> profile::RenderStats {
+        profile::RenderStats {
+            spans: self.state.spans.get(),
+            ..self.frame_stats.get()
+        }
+    }
 }
 
 #[cfg(test)]

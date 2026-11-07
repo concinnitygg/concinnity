@@ -13,6 +13,7 @@
 
 use ash::vk;
 use concinnity_engine::planet::Rebase;
+use concinnity_engine::render::backend::PlanetReshape;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
 use concinnity_engine::water::WaterBody;
@@ -256,27 +257,6 @@ impl VkContext {
         self.wake.rebase(rebase);
     }
 
-    // Bring the planet's sea, grass and ground's far field to its reshaped
-    // `shape`.
-    pub(in crate::vulkan) fn reshape_planet(
-        &mut self,
-        shape: &concinnity_engine::planet::PlanetShape,
-    ) {
-        let water = self
-            .transparent
-            .as_mut()
-            .and_then(TransparentResources::water_mut)
-            .map(|w| w.water.iter_mut())
-            .into_iter()
-            .flatten();
-        concinnity_engine::render::environment::reshape::reshape_planet(
-            shape,
-            water,
-            self.grass.as_mut().map(|g| &mut g.field),
-            self.canopy_field.as_mut(),
-        );
-    }
-
     // Advance the wake to this frame when a sea runs one and the `WaterSim`
     // node will, so the node and the draws read the same frame of it.
     pub(in crate::vulkan) fn prepare_water_wake(
@@ -335,6 +315,26 @@ impl VkContext {
                 .as_ref()
                 .and_then(TransparentResources::water)
                 .is_some_and(TransparentProducer::samples_ocean)
+    }
+}
+
+impl PlanetReshape for VkContext {
+    // Bring the planet's sea, grass and ground's far field to its reshaped
+    // `shape`.
+    fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape) {
+        let water = self
+            .transparent
+            .as_mut()
+            .and_then(TransparentResources::water_mut)
+            .map(|w| w.water.iter_mut())
+            .into_iter()
+            .flatten();
+        concinnity_engine::render::environment::reshape::reshape_planet(
+            shape,
+            water,
+            self.grass.as_mut().map(|g| &mut g.field),
+            self.canopy_field.as_mut(),
+        );
     }
 }
 

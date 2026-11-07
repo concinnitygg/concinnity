@@ -20,21 +20,65 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{
     DrawGeometryUpdate, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
+use concinnity_engine::render::backend::{GeometryRebuild, RenderBackend};
 use concinnity_engine::render::{rt_accel::geom, slots::geometry_repack};
 
 use super::super::context::VkContext;
 use super::super::texture::one_shot_submit;
 
-impl VkContext {
+// Read a DEVICE_LOCAL buffer's full contents back to CPU memory as a typed
+// `Vec<T>`. Allocates a HOST_VISIBLE staging buffer, runs a one-shot
+// `cmd_copy_buffer` from `src` into it (`wait_idle` already gated the source
+// side; the one-shot's internal fence wait gates the destination), maps,
+// and `copy_nonoverlapping`s into the Vec. `T`'s stride must match the
+// buffer's stride exactly. Only reached through the (bin-only) geometry-rebuild
+// path, so dead in the FFI lib.
+fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> RenderResult<Vec<T>> {
+    if bytes == 0 {
+        return Ok(Vec::new());
+    }
+    let stride = size_of::<T>() as u64;
+    if !bytes.is_multiple_of(stride) {
+        return Err(RenderError::Other(format!(
+            "readback_typed: buffer size {bytes} not a multiple of T stride {stride}"
+        )));
+    }
+    let count = usize::saturating_from(bytes / stride);
+    let staging = ctx.hw.alloc.create_buffer(
+        bytes,
+        vk::BufferUsageFlags::TRANSFER_DST,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+    )?;
+    one_shot_submit(
+        &ctx.hw.device,
+        ctx.commands.command_pool,
+        ctx.hw.graphics_queue,
+        |rec| {
+            let copy = vk::BufferCopy::default()
+                .src_offset(0)
+                .dst_offset(0)
+                .size(bytes);
+            rec.copy_buffer(src, staging.buffer(), std::slice::from_ref(&copy));
+        },
+    )?;
+
+    let mut out: Vec<T> = Vec::with_capacity(count);
+    let src = staging.mapped_ptr() as *const T;
+    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `bytes`,
+    // so `src` is a live mapping of `count` values; `out` is a separate allocation that holds them.
+    unsafe { std::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), count) };
+    // SAFETY: the copy above initialized all `count` elements within `out`'s capacity.
+    unsafe { out.set_len(count) };
+    Ok(out)
+}
+
+impl GeometryRebuild for VkContext {
     // Swap in rebuilt shared static-mesh buffers for the draws named in
     // `changes`, when a reloaded mesh no longer fits its slot. The live buffers
     // are read back for the repack, the result is uploaded into fresh
     // DEVICE_LOCAL buffers, and the streamed-mesh sub-allocators reset, since
     // the rebuilt buffers leave no headroom.
-    pub(crate) fn rebuild_static_geometry(
-        &mut self,
-        changes: Vec<DrawGeometryUpdate>,
-    ) -> RenderResult<()> {
+    fn rebuild_static_geometry(&mut self, changes: Vec<DrawGeometryUpdate>) -> RenderResult<()> {
         // Stop GPU + CPU pipelines so the readback + swap can run safely.
         self.wait_idle();
 
@@ -128,7 +172,7 @@ impl VkContext {
     // this call. Mirrors `DxContext::rebuild_skinned_geometry`. Reached only
     // through the bin's `cn run -f` runtime-mutation path (dead in the FFI lib,
     // live in the bin).
-    pub(crate) fn rebuild_skinned_geometry(
+    fn rebuild_skinned_geometry(
         &mut self,
         changes: Vec<SkinnedDrawGeometryUpdate>,
     ) -> RenderResult<Vec<SkinnedSlotLayout>> {
@@ -211,50 +255,4 @@ impl VkContext {
         self.refresh_main_skin_geometry(new_vertices.len())?;
         Ok(repacked.layouts())
     }
-}
-
-// Read a DEVICE_LOCAL buffer's full contents back to CPU memory as a typed
-// `Vec<T>`. Allocates a HOST_VISIBLE staging buffer, runs a one-shot
-// `cmd_copy_buffer` from `src` into it (`wait_idle` already gated the source
-// side; the one-shot's internal fence wait gates the destination), maps,
-// and `copy_nonoverlapping`s into the Vec. `T`'s stride must match the
-// buffer's stride exactly. Only reached through the (bin-only) geometry-rebuild
-// path, so dead in the FFI lib.
-fn readback_typed<T: Copy>(ctx: &VkContext, src: vk::Buffer, bytes: u64) -> RenderResult<Vec<T>> {
-    if bytes == 0 {
-        return Ok(Vec::new());
-    }
-    let stride = size_of::<T>() as u64;
-    if !bytes.is_multiple_of(stride) {
-        return Err(RenderError::Other(format!(
-            "readback_typed: buffer size {bytes} not a multiple of T stride {stride}"
-        )));
-    }
-    let count = usize::saturating_from(bytes / stride);
-    let staging = ctx.hw.alloc.create_buffer(
-        bytes,
-        vk::BufferUsageFlags::TRANSFER_DST,
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    )?;
-    one_shot_submit(
-        &ctx.hw.device,
-        ctx.commands.command_pool,
-        ctx.hw.graphics_queue,
-        |rec| {
-            let copy = vk::BufferCopy::default()
-                .src_offset(0)
-                .dst_offset(0)
-                .size(bytes);
-            rec.copy_buffer(src, staging.buffer(), std::slice::from_ref(&copy));
-        },
-    )?;
-
-    let mut out: Vec<T> = Vec::with_capacity(count);
-    let src = staging.mapped_ptr() as *const T;
-    // SAFETY: the staging buffer was created HOST_VISIBLE | HOST_COHERENT and sized to `bytes`,
-    // so `src` is a live mapping of `count` values; `out` is a separate allocation that holds them.
-    unsafe { std::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), count) };
-    // SAFETY: the copy above initialized all `count` elements within `out`'s capacity.
-    unsafe { out.set_len(count) };
-    Ok(out)
 }

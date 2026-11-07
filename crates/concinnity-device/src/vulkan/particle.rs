@@ -26,6 +26,7 @@ use concinnity_core::math::saturating_u32;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::ParticleParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{RenderBackend, RuntimeEmitters};
 use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
     ParticleBurst, ParticleEmitterRecord, ParticleFrame, ParticleSystem,
@@ -134,7 +135,7 @@ impl ParticleEmitterGpuState {
 // The emitter table with each emitter's GPU state, and the shared resources
 // (pipelines, per-frame view UBO, descriptor pool, framebuffers), built only
 // when the world declared at least one `ParticleEmitter` or on the first
-// runtime `add_particle_emitter`.
+// runtime `add_emitter`.
 pub(in crate::vulkan) struct ParticleState {
     pub resources: Option<ParticleResources>,
     pub system: ParticleSystem<ParticleEmitterGpuState>,
@@ -1008,18 +1009,93 @@ impl VkContext {
     }
 }
 
-// Runtime mutation (RenderBackend::add_emitter / remove_emitter)
+// Runtime mutation (RuntimeEmitters::add_emitter / remove_emitter)
 
 impl VkContext {
+    fn recycle_emitter_sets(&mut self, sets: EmitterSets) {
+        if let Some(resources) = self.particle.resources.as_mut() {
+            resources.spare_sets.recycle(sets);
+        }
+    }
+
+    // Wire every world-authored particle emitter through `add_emitter`
+    // so the same descriptor / SRV / GPU-state path serves both init and
+    // runtime adds. Called from `VkContext::new` after the texture pool
+    // is uploaded.
+    pub(in crate::vulkan) fn upload_initial_particles(
+        &mut self,
+        records: Vec<ParticleEmitterRecord>,
+    ) -> RenderResult<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        if records.len() > MAX_EMITTERS {
+            return Err(RenderError::Other(format!(
+                "particles: {} authored emitters exceed MAX_EMITTERS ({})",
+                records.len(),
+                MAX_EMITTERS
+            )));
+        }
+        for record in records {
+            self.add_emitter(record)?;
+        }
+        Ok(())
+    }
+
+    // Re-point every emitter's albedo binding (set 1, binding 1) that samples
+    // texture-pool `slot` at the just-swapped `self.scene.textures[slot]` view. The
+    // emitter albedo lives in the shared texture pool, so a streamed or
+    // hot-reloaded albedo swap recreates the view and leaves a dangling
+    // descriptor unless every emitter sampling that slot is re-pointed. Called
+    // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
+    // Whether any live emitter's render set samples texture-pool `slot`. The
+    // streaming fast path checks this: emitter sets are single-copy and bound
+    // whenever the particle pass runs, so a swap of a slot they sample must
+    // drain the device before rewriting.
+    pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
+        let last = self.scene.textures.len().saturating_sub(1);
+        self.particle
+            .system
+            .gpu_states()
+            .any(|state| state.texture_slot.min(last) == slot)
+    }
+
+    pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
+        if self.particle.resources.is_none() {
+            return;
+        }
+        let last = self.scene.textures.len().saturating_sub(1);
+        let view = self.scene.textures[slot].view;
+        for state in self.particle.system.gpu_states() {
+            if state.texture_slot.min(last) == slot {
+                write_render_albedo_binding(&self.hw.device, state.render_set, view);
+            }
+        }
+    }
+
+    // Free every per-emitter pool/counter buffer. Called from
+    // `Drop for VkContext` after `device_wait_idle`. Sibling of
+    // `ParticleResources::destroy`, which handles the shared pipelines.
+    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
+        // The pooled per-emitter buffers retire through the allocator as the
+        // states drop.
+        self.particle.system.clear();
+    }
+}
+
+// Point an emitter's render set at albedo `view`. Its sampler was written with
+// the set.
+fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
+    SetWrites::new(set).sampled_image(1, view).apply(device);
+}
+
+impl RuntimeEmitters for VkContext {
     // Append a runtime emitter. Builds the particle pipelines + per-frame
     // uniform ring on first use (matching the init-time path) so a world
     // that never declared an emitter pays zero pipeline cost until the
     // first add. Reuses tombstoned slots from a prior `remove_emitter`
     // before growing the vec.
-    pub(in crate::vulkan) fn add_particle_emitter(
-        &mut self,
-        record: ParticleEmitterRecord,
-    ) -> RenderResult<usize> {
+    fn add_emitter(&mut self, record: ParticleEmitterRecord) -> RenderResult<usize> {
         if self.particle.resources.is_none() {
             let hdr_resolve_views: Vec<vk::ImageView> = self
                 .targets
@@ -1114,10 +1190,7 @@ impl VkContext {
     // for in-flight buffer references, so we must drain the queue before
     // freeing the backing memory. Reached only through the bin's `cn run -f`
     // runtime-mutation path (dead in the FFI lib, live in the bin).
-    pub(in crate::vulkan) fn remove_particle_emitter(
-        &mut self,
-        emitter_id: usize,
-    ) -> RenderResult<()> {
+    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
         let state = self
             .particle
             .system
@@ -1130,82 +1203,6 @@ impl VkContext {
         drop(state);
         Ok(())
     }
-
-    fn recycle_emitter_sets(&mut self, sets: EmitterSets) {
-        if let Some(resources) = self.particle.resources.as_mut() {
-            resources.spare_sets.recycle(sets);
-        }
-    }
-
-    // Wire every world-authored particle emitter through `add_particle_emitter`
-    // so the same descriptor / SRV / GPU-state path serves both init and
-    // runtime adds. Called from `VkContext::new` after the texture pool
-    // is uploaded.
-    pub(in crate::vulkan) fn upload_initial_particles(
-        &mut self,
-        records: Vec<ParticleEmitterRecord>,
-    ) -> RenderResult<()> {
-        if records.is_empty() {
-            return Ok(());
-        }
-        if records.len() > MAX_EMITTERS {
-            return Err(RenderError::Other(format!(
-                "particles: {} authored emitters exceed MAX_EMITTERS ({})",
-                records.len(),
-                MAX_EMITTERS
-            )));
-        }
-        for record in records {
-            self.add_particle_emitter(record)?;
-        }
-        Ok(())
-    }
-
-    // Re-point every emitter's albedo binding (set 1, binding 1) that samples
-    // texture-pool `slot` at the just-swapped `self.scene.textures[slot]` view. The
-    // emitter albedo lives in the shared texture pool, so a streamed or
-    // hot-reloaded albedo swap recreates the view and leaves a dangling
-    // descriptor unless every emitter sampling that slot is re-pointed. Called
-    // from `rewrite_texture_slot`, the sibling of the per-object / clone rewires.
-    // Whether any live emitter's render set samples texture-pool `slot`. The
-    // streaming fast path checks this: emitter sets are single-copy and bound
-    // whenever the particle pass runs, so a swap of a slot they sample must
-    // drain the device before rewriting.
-    pub(in crate::vulkan) fn particle_samples_slot(&self, slot: usize) -> bool {
-        let last = self.scene.textures.len().saturating_sub(1);
-        self.particle
-            .system
-            .gpu_states()
-            .any(|state| state.texture_slot.min(last) == slot)
-    }
-
-    pub(in crate::vulkan) fn rewrite_particle_albedo_slot(&self, slot: usize) {
-        if self.particle.resources.is_none() {
-            return;
-        }
-        let last = self.scene.textures.len().saturating_sub(1);
-        let view = self.scene.textures[slot].view;
-        for state in self.particle.system.gpu_states() {
-            if state.texture_slot.min(last) == slot {
-                write_render_albedo_binding(&self.hw.device, state.render_set, view);
-            }
-        }
-    }
-
-    // Free every per-emitter pool/counter buffer. Called from
-    // `Drop for VkContext` after `device_wait_idle`. Sibling of
-    // `ParticleResources::destroy`, which handles the shared pipelines.
-    pub(in crate::vulkan) fn destroy_particle_emitter_states(&mut self, _device: &VkDevice) {
-        // The pooled per-emitter buffers retire through the allocator as the
-        // states drop.
-        self.particle.system.clear();
-    }
-}
-
-// Point an emitter's render set at albedo `view`. Its sampler was written with
-// the set.
-fn write_render_albedo_binding(device: &VkDevice, set: vk::DescriptorSet, view: vk::ImageView) {
-    SetWrites::new(set).sampled_image(1, view).apply(device);
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@
 use ash::vk;
 use concinnity_engine::gfx::image_decode::PixelLayout;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{FrameCapture, RenderBackend};
 use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
@@ -34,55 +35,6 @@ use crate::vulkan::record::Recorder;
 pub(in crate::vulkan) type VkFrameCaptures = FrameCaptures<PooledBuffer, usize>;
 
 impl VkContext {
-    // Capture the last presented frame to a PNG at `path`. Returns the path on
-    // success. Distinct name from the `RenderBackend::screenshot` trait method
-    // so the backend forwarder is unambiguous. Reached through the
-    // `RenderBackend` vtable (bin-only `cn run -f`).
-    pub(in crate::vulkan) fn capture_screenshot(&mut self, path: &str) -> RenderResult<String> {
-        let Some(image_index) = self.swapchain.last_present_index else {
-            return Err(RenderError::Other(
-                "screenshot: no frame has been presented yet".into(),
-            ));
-        };
-        let src_image = *self
-            .swapchain
-            .images
-            .get(image_index as usize)
-            .ok_or_else(|| RenderError::Other("screenshot: stale swapchain image index".into()))?;
-        let width = self.swapchain.extent.width;
-        let height = self.swapchain.extent.height;
-        if width == 0 || height == 0 {
-            return Err(RenderError::Other(
-                "screenshot: zero-sized swapchain".into(),
-            ));
-        }
-
-        // The GPU must be idle: the last-presented image is then stable and no
-        // in-flight command buffer still references the resources we touch.
-        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
-        unsafe { self.hw.device.device_wait_idle() }
-            .map_err(|e| super::error::map_vk_result(e, "screenshot: wait idle"))?;
-
-        let image = self.capture_image();
-        let Mapped {
-            buffer: readback,
-            mapped,
-        } = readback_buffer(&self.hw.alloc, image.byte_len())?;
-
-        let device = self.hw.device.clone();
-        one_shot_submit(
-            &device,
-            self.commands.command_pool,
-            self.hw.graphics_queue,
-            |rec| encode_copy(rec, src_image, &readback, &image),
-        )?;
-        // SAFETY: the buffer is `image.byte_len()` mapped bytes, and the copy into it completed
-        // (one_shot_submit waits its fence).
-        let bytes = unsafe { std::slice::from_raw_parts(mapped, image.byte_len()) };
-        frame_capture::save_png(path, &image, bytes)?;
-        Ok(path.to_string())
-    }
-
     // Keep a read-back buffer the size of the swapchain ready, so the frame
     // that captures allocates nothing.
     pub(in crate::vulkan) fn reserve_frame_capture(&mut self) {
@@ -124,13 +76,6 @@ impl VkContext {
         // SAFETY: called after the wait on `frame`'s fence, which the submission
         // carrying the copy signals.
         unsafe { self.frame_capture.retire(|&slot| slot == frame) };
-    }
-
-    // Write every capture recorded so far, once the GPU has finished them.
-    pub(in crate::vulkan) fn finish_frame_captures(&mut self) {
-        self.wait_idle();
-        // SAFETY: the device is idle.
-        unsafe { self.frame_capture.finish() };
     }
 
     // The swapchain image as it reads back: tightly packed at its format's
@@ -281,6 +226,62 @@ fn classify(format: vk::Format, encoding: Option<HdrEncoding>) -> PixelLayout {
             PixelLayout::Bgra8
         }
         _ => PixelLayout::Rgba8,
+    }
+}
+
+impl FrameCapture for VkContext {
+    // Capture the last presented frame to a PNG at `path`. Returns the path on
+    // success.
+    fn screenshot(&mut self, path: &str) -> RenderResult<String> {
+        let Some(image_index) = self.swapchain.last_present_index else {
+            return Err(RenderError::Other(
+                "screenshot: no frame has been presented yet".into(),
+            ));
+        };
+        let src_image = *self
+            .swapchain
+            .images
+            .get(image_index as usize)
+            .ok_or_else(|| RenderError::Other("screenshot: stale swapchain image index".into()))?;
+        let width = self.swapchain.extent.width;
+        let height = self.swapchain.extent.height;
+        if width == 0 || height == 0 {
+            return Err(RenderError::Other(
+                "screenshot: zero-sized swapchain".into(),
+            ));
+        }
+
+        // The GPU must be idle: the last-presented image is then stable and no
+        // in-flight command buffer still references the resources we touch.
+        // SAFETY: a wait on this device's own queues; it takes no borrowed state.
+        unsafe { self.hw.device.device_wait_idle() }
+            .map_err(|e| super::error::map_vk_result(e, "screenshot: wait idle"))?;
+
+        let image = self.capture_image();
+        let Mapped {
+            buffer: readback,
+            mapped,
+        } = readback_buffer(&self.hw.alloc, image.byte_len())?;
+
+        let device = self.hw.device.clone();
+        one_shot_submit(
+            &device,
+            self.commands.command_pool,
+            self.hw.graphics_queue,
+            |rec| encode_copy(rec, src_image, &readback, &image),
+        )?;
+        // SAFETY: the buffer is `image.byte_len()` mapped bytes, and the copy into it completed
+        // (one_shot_submit waits its fence).
+        let bytes = unsafe { std::slice::from_raw_parts(mapped, image.byte_len()) };
+        frame_capture::save_png(path, &image, bytes)?;
+        Ok(path.to_string())
+    }
+
+    // Write every capture recorded so far, once the GPU has finished them.
+    fn finish_captures(&mut self) {
+        self.wait_idle();
+        // SAFETY: the device is idle.
+        unsafe { self.frame_capture.finish() };
     }
 }
 

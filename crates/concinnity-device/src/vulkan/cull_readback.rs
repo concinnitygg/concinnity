@@ -1,6 +1,6 @@
 //! Per-object cull-status readback for the Vulkan backend. The `cull-status`
 //! debug tool call routes here (via
-//! `RenderBackend::read_cull_status`) to copy the GPU-driven cull's status
+//! `CullReadback::read_cull_status`) to copy the GPU-driven cull's status
 //! buffer for the most recently submitted frame into a host-visible buffer and
 //! hand back one `CullStatus` value per live cull record.
 //!
@@ -13,17 +13,16 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::cull_status;
+use concinnity_engine::render::backend::CullReadback;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 
 use super::context::VkContext;
 use super::texture::one_shot_submit;
 
-impl VkContext {
+impl CullReadback for VkContext {
     // Read the last submitted frame's cull-status buffer back to the host, one
-    // u32 per live cull record. Distinct name from the
-    // `RenderBackend::read_cull_status` trait method so the backend forwarder
-    // is unambiguous.
-    pub(in crate::vulkan) fn read_cull_status_buffer(&mut self) -> RenderResult<Vec<u32>> {
+    // u32 per live cull record.
+    fn read_cull_status(&mut self) -> RenderResult<Vec<u32>> {
         if self.cull.cull_status_buffers.is_empty() {
             return Err(RenderError::Other(
                 "cull-status: this world does not run the GPU-driven cull".into(),

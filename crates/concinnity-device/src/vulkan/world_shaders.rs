@@ -12,6 +12,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::render::backend::WorldShaders;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::{PipelineBuilder, PipelineSwap, PreparedPipelines};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
@@ -29,26 +30,6 @@ use crate::vulkan::record::Recorder;
 use std::sync::Arc;
 
 impl VkContext {
-    // Install one shader bucket's main-pass and pre-pass pipelines: `prepared`
-    // when they were built for this context's targets, else ones built here.
-    // Replaces whatever the bucket currently holds, so a re-pin after an
-    // eviction installs cleanly.
-    pub(in crate::vulkan) fn install_world_shader(
-        &mut self,
-        bucket: u32,
-        programs: &concinnity_engine::components::ShaderPrograms,
-        prepared: Option<PreparedPipelines>,
-    ) -> RenderResult<()> {
-        let variant = self.cull.world_pipelines.variant(bucket as usize);
-        let pipelines = self.bucket_pipelines(bucket, programs, variant, prepared, false)?;
-        let family = self.build_family(bucket, programs, true)?;
-        // The displaced pipelines drop into the device's retire queue, which
-        // holds them until every frame in flight that recorded against them
-        // retires.
-        self.cull.world_pipelines.install(bucket, pipelines)?;
-        self.install_family(family)
-    }
-
     // One shader bucket's pipelines to replace a bucket that has a pre-pass
     // when `live_prepass`: `prepared` when it keeps what the live bucket draws
     // with, else ones built here. Refused when the build would drop a live
@@ -81,40 +62,6 @@ impl VkContext {
                 )
             },
         )
-    }
-
-    // Rebuild one world Shader's pipelines from hot-reloaded programs, or swap
-    // in `prepared` when they were built for this context's targets. Bucket 0
-    // is the main pass's and the pre-pass's own pair; another bucket is rebuilt
-    // only while installed. Both halves are built before the old pipelines
-    // retire, so a failed build of either leaves the live ones bound.
-    pub(in crate::vulkan) fn update_world_shader(
-        &mut self,
-        bucket: u32,
-        programs: &concinnity_engine::components::ShaderPrograms,
-        prepared: Option<PreparedPipelines>,
-    ) -> RenderResult<PipelineSwap> {
-        if bucket == 0 {
-            let prepared = self
-                .bucket_pipeline_targets()
-                .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
-            let family = self.build_family(0, programs, false)?;
-            self.update_default_world_shader(programs, prepared)?;
-            self.install_family(family)?;
-            return Ok(PipelineSwap::Swapped);
-        }
-        self.cull.world_pipelines.slot(bucket)?;
-        if !self.cull.world_pipelines.resident(bucket as usize) {
-            return Ok(PipelineSwap::NotResident);
-        }
-        let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
-            .is_some_and(|live| live.prepass.is_some());
-        let variant = self.cull.world_pipelines.variant(bucket as usize);
-        let pipelines = self.bucket_pipelines(bucket, programs, variant, prepared, live_prepass)?;
-        let family = self.build_family(bucket, programs, false)?;
-        self.cull.world_pipelines.install(bucket, pipelines)?;
-        self.install_family(family)?;
-        Ok(PipelineSwap::Swapped)
     }
 
     // Shader `shader`'s grass variants built from its fresh programs, when it
@@ -253,29 +200,6 @@ impl VkContext {
         Ok(rebuilt)
     }
 
-    // A builder for this context's world Shader and volume pipelines, for a
-    // streaming or hot-reload worker.
-    pub(in crate::vulkan) fn pipeline_builder(&self) -> Arc<dyn PipelineBuilder> {
-        Arc::new(VkPipelineBuilder {
-            device: self.hw.device.clone(),
-            gate: self.pipeline_gate.clone(),
-            world: self.bucket_pipeline_targets(),
-            volumes: self.volume_pipeline_targets(),
-            variants: self.cull.world_pipelines.variants(),
-        })
-    }
-
-    // Release one bucket's pipelines. They drop into the device's retire queue,
-    // which destroys them only once every frame in flight that recorded against
-    // them has retired.
-    pub(in crate::vulkan) fn evict_world_shader(&mut self, bucket: u32) {
-        let family = self.cull.world_pipelines.family(bucket);
-        for b in family {
-            self.cull.world_pipelines.evict(b);
-        }
-        self.cull.world_pipelines.evict(bucket);
-    }
-
     // Issue the bucket 1.. regions of `indirect`, each under its own material
     // shader's pipeline. Bucket 0's region is issued by the caller (it runs under
     // the pipeline the pass already bound), so this covers only the
@@ -369,5 +293,84 @@ impl VkContext {
             stream,
             self.stream_layout().slots(stream),
         );
+    }
+}
+
+impl WorldShaders for VkContext {
+    // Install one shader bucket's main-pass and pre-pass pipelines: `prepared`
+    // when they were built for this context's targets, else ones built here.
+    // Replaces whatever the bucket currently holds, so a re-pin after an
+    // eviction installs cleanly.
+    fn install_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<()> {
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, variant, prepared, false)?;
+        let family = self.build_family(bucket, programs, true)?;
+        // The displaced pipelines drop into the device's retire queue, which
+        // holds them until every frame in flight that recorded against them
+        // retires.
+        self.cull.world_pipelines.install(bucket, pipelines)?;
+        self.install_family(family)
+    }
+
+    // Release one bucket's pipelines. They drop into the device's retire queue,
+    // which destroys them only once every frame in flight that recorded against
+    // them has retired.
+    fn evict_world_shader(&mut self, bucket: u32) {
+        let family = self.cull.world_pipelines.family(bucket);
+        for b in family {
+            self.cull.world_pipelines.evict(b);
+        }
+        self.cull.world_pipelines.evict(bucket);
+    }
+
+    // Rebuild one world Shader's pipelines from hot-reloaded programs, or swap
+    // in `prepared` when they were built for this context's targets. Bucket 0
+    // is the main pass's and the pre-pass's own pair; another bucket is rebuilt
+    // only while installed. Both halves are built before the old pipelines
+    // retire, so a failed build of either leaves the live ones bound.
+    fn update_world_shader(
+        &mut self,
+        bucket: u32,
+        programs: &concinnity_engine::components::ShaderPrograms,
+        prepared: Option<PreparedPipelines>,
+    ) -> RenderResult<PipelineSwap> {
+        if bucket == 0 {
+            let prepared = self
+                .bucket_pipeline_targets()
+                .and_then(|targets| world_shader_for(prepared, &self.pipeline_gate, targets));
+            let family = self.build_family(0, programs, false)?;
+            self.update_default_world_shader(programs, prepared)?;
+            self.install_family(family)?;
+            return Ok(PipelineSwap::Swapped);
+        }
+        self.cull.world_pipelines.slot(bucket)?;
+        if !self.cull.world_pipelines.resident(bucket as usize) {
+            return Ok(PipelineSwap::NotResident);
+        }
+        let live_prepass = (self.cull.world_pipelines.get(bucket as usize))
+            .is_some_and(|live| live.prepass.is_some());
+        let variant = self.cull.world_pipelines.variant(bucket as usize);
+        let pipelines = self.bucket_pipelines(bucket, programs, variant, prepared, live_prepass)?;
+        let family = self.build_family(bucket, programs, false)?;
+        self.cull.world_pipelines.install(bucket, pipelines)?;
+        self.install_family(family)?;
+        Ok(PipelineSwap::Swapped)
+    }
+
+    // A builder for this context's world Shader and volume pipelines, for a
+    // streaming or hot-reload worker.
+    fn pipeline_builder(&self) -> Option<Arc<dyn PipelineBuilder>> {
+        Some(Arc::new(VkPipelineBuilder {
+            device: self.hw.device.clone(),
+            gate: self.pipeline_gate.clone(),
+            world: self.bucket_pipeline_targets(),
+            volumes: self.volume_pipeline_targets(),
+            variants: self.cull.world_pipelines.variants(),
+        }))
     }
 }

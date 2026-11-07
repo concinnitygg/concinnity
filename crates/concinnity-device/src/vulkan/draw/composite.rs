@@ -15,6 +15,7 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types::{CompositeParams, TextDrawCall, TextUniforms};
+use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::fullscreen;
 use concinnity_engine::render::fullscreen::TextBindCache;

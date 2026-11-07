@@ -81,7 +81,7 @@ impl Win32Window {
     }
 
     // A togglable menu coexists with a captured camera; see
-    // `RenderBackend::set_menu_mode`. The wnd_proc reads this flag to route
+    // `WindowControl::set_menu_mode`. The wnd_proc reads this flag to route
     // Escape to the ECS and suppress click-to-recapture.
     pub(crate) fn set_menu_mode(&mut self, on: bool) {
         self.win_state.menu_mode = on;

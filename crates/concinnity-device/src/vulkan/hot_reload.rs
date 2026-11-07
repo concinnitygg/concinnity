@@ -8,6 +8,7 @@
 //! `directx/hot_reload.rs` and `metal/hot_reload.rs`.
 
 use ash::vk;
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::shader::programs::surface::SurfaceVariant;
 use concinnity_engine::render::shader::world_pipelines::{

@@ -11,9 +11,8 @@
 
 #[cfg(backend_dx)]
 pub(crate) mod directx;
-// The forwarding macro the three backends write their RenderBackend family
-// impls with.
-#[cfg(any(backend_metal, backend_dx, backend_vk))]
+// The forwarding macro DirectX's RenderBackend family impls are written with.
+#[cfg(backend_dx)]
 pub(crate) mod forward;
 // Copying presented frames out and writing them as PNGs off the frame path.
 #[cfg(any(backend_metal, backend_dx, backend_vk))]
