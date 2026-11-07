@@ -924,7 +924,7 @@ impl backend::SdfVolumeShaders for RecordingBackend {}
 impl SettingsTarget for RecordingBackend {}
 impl backend::LightTables for RecordingBackend {}
 impl backend::PlanetReshape for RecordingBackend {}
-impl backend::RuntimeDecals for RecordingBackend {}
+impl backend::DecalPass for RecordingBackend {}
 impl backend::RuntimeEmitters for RecordingBackend {}
 impl backend::WorldReload for RecordingBackend {}
 

@@ -1,48 +1,48 @@
 //! Decals and particle emitters, added and removed while the world runs.
 //!
-//! Both are slot tables the backend owns: the caller hands over a record and
-//! gets back the index it will remove by. Neither is part of the draw set, so
-//! neither reaches the per-frame contract.
+//! Both are slot tables: the caller hands over a record and gets back the
+//! index it will remove by. The decals' table is the scene's, and a backend
+//! answers only for the pass that draws it; the emitters' is the backend's
+//! own.
 
 use crate::render::backend::error::{RenderError, RenderResult};
 
-/// The projected-decal slot table.
+/// The GPU side of the projected-decal pass: the pipeline a runtime decal
+/// draws with and each slot's albedo binding. The slot table itself is the
+/// scene's [`DecalSet`](crate::render::decal::DecalSet).
 ///
-/// Defaulted to [`RenderError::Unsupported`], so a backend without the pass
-/// reports the failure to whoever asked rather than silently accepting a
-/// record it will never draw.
-pub trait RuntimeDecals {
-    /// Append a projected-decal record at runtime, returning a stable slot
-    /// index the caller hands to [`Self::remove_decal`] later. Lets a
-    /// gameplay system stamp bullet holes, footprints, or other ad-hoc
-    /// decals after the world has built.
+/// Defaulted for a backend without the pass: it has no pipeline to make
+/// ready, so a runtime decal is refused with [`RenderError::Unsupported`]
+/// rather than silently accepted and never drawn.
+pub trait DecalPass {
+    /// Make the decal pass ready to draw a runtime decal, building what it
+    /// draws with on first use where the backend builds it lazily.
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Unsupported`] on a backend without runtime
-    /// decals, or an error if the record cannot be stored.
-    fn add_decal(&mut self, record: crate::render::decal::DecalRecord) -> RenderResult<usize> {
-        let _ = record;
+    /// Returns [`RenderError::Unsupported`] on a backend without the pass, or
+    /// an error if its pipeline cannot be built.
+    fn ensure_decal_pass(&mut self) -> RenderResult<()> {
         Err(RenderError::Unsupported { op: "add_decal" })
     }
 
-    /// Tombstone a runtime decal slot. The id returned by
-    /// [`Self::add_decal`] becomes invalid; the next add may reuse it.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RenderError::Unsupported`] on a backend without runtime
-    /// decals, or an error if `decal_id` names no live decal.
-    fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
-        let _ = decal_id;
-        Err(RenderError::Unsupported { op: "remove_decal" })
+    /// Point decal slot `id`'s albedo at `texture_slot` of the texture pool,
+    /// for a backend that binds each slot's albedo itself.
+    fn bind_decal_texture(&mut self, id: usize, texture_slot: usize) {
+        let _ = (id, texture_slot);
+    }
+
+    /// Forget decal slot `id`'s albedo binding, once the slot is removed.
+    fn release_decal_texture(&mut self, id: usize) {
+        let _ = id;
     }
 }
 
 /// The particle-emitter slot table.
 ///
-/// Defaulted to [`RenderError::Unsupported`], for the same reason as
-/// [`RuntimeDecals`].
+/// Defaulted to [`RenderError::Unsupported`], so a backend without the pass
+/// reports the failure to whoever asked rather than silently accepting a
+/// record it will never draw.
 pub trait RuntimeEmitters {
     /// Append a particle-emitter record at runtime, returning a stable slot
     /// index. The backend allocates the per-emitter GPU pool + atomic

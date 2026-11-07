@@ -50,6 +50,11 @@ impl<T> SlotTable<T> {
         }
     }
 
+    /// The most slots the table holds.
+    pub(crate) fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// Whether another [`Self::insert`] would succeed, so a caller can skip
     /// building resources for a value the table would reject.
     pub(crate) fn has_room(&self) -> bool {

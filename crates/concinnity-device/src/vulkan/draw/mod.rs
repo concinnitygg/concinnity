@@ -383,7 +383,7 @@ impl VkContext {
             emitters: !self.particle.system.is_empty(),
             late_emitters: self.particle.system.draws_after_transparent(),
             fog: self.state.fog.settings().is_some_and(|s| s.contributes()),
-            decals: !self.decal.set.is_empty(),
+            decals: !self.state.decals.is_empty(),
             visible_surfaces: self
                 .transparent
                 .as_ref()
@@ -495,7 +495,7 @@ impl FrameDevice for VkContext {
         // A moved world's decals and grass move with it whatever happens to
         // history.
         if let Some(rebase) = &params.rebase {
-            self.decal.set.rebase(rebase);
+            self.state.decals.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
             self.particle.system.rebase(rebase);

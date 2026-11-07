@@ -1213,7 +1213,7 @@ impl FrameDevice for DxContext {
         // A moved world's decals and grass move with it whatever happens to
         // history.
         if let Some(rebase) = &params.rebase {
-            self.decal.set.rebase(rebase);
+            self.state.decals.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
             self.particle.system.rebase(rebase);

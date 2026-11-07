@@ -4,9 +4,9 @@
 //! be exercised without a GPU.
 
 use super::{
-    BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
-    GeometryEdit, GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RenderResult,
-    RuntimeDecals, RuntimeEmitters, SceneHost, SdfVolumeShaders, SkinnedDraws, TextureUploads,
+    BackendProbe, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming, FrameCapture,
+    FrameParams, GeometryEdit, GeometryRebuild, LightTables, PlanetReshape, RenderBackend,
+    RenderResult, RuntimeEmitters, SceneHost, SdfVolumeShaders, SkinnedDraws, TextureUploads,
     WindowControl, WorldReload, WorldShaders,
 };
 use crate::gfx::render_types::TextureSlot;
@@ -90,7 +90,7 @@ impl FrameCapture for NullBackend {}
 impl GeometryRebuild for NullBackend {}
 impl PlanetReshape for NullBackend {}
 impl SettingsTarget for NullBackend {}
-impl RuntimeDecals for NullBackend {}
+impl DecalPass for NullBackend {}
 impl RuntimeEmitters for NullBackend {}
 impl LightTables for NullBackend {}
 impl SdfVolumeShaders for NullBackend {}

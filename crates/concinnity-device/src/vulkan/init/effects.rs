@@ -7,7 +7,6 @@ use ash::vk;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{PlanarBudget, WorldFx};
-use concinnity_engine::render::decal;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::settings::ResolvedGraphics;
 
@@ -688,9 +687,6 @@ pub(super) fn build_world_effects(
     Ok(WorldEffects {
         decal: DecalState {
             resources: decals_state,
-            // Authored decals land in the table through `add_decal`, which
-            // also writes each one's albedo descriptor.
-            set: decal::DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
         },
         fog: FogState {
             resources: fog_resources,

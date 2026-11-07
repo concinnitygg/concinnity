@@ -1,6 +1,7 @@
 //! The CPU-side scene every graphics backend draws from: the draw list, the
 //! camera view, the light block, the skinned slots, the material parameter
-//! table, the live fog, the reflection-probe book, the model-history tracker,
+//! table, the live fog, the reflection-probe book, the runtime decals, the
+//! model-history tracker,
 //! the placement of streamed geometry in the shared vertex and index buffers,
 //! and the flags that tell the GPU side what to rebuild.
 //!
@@ -18,6 +19,7 @@ use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_res
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
 use crate::planet::{HorizonOccluder, TileMorphFrame, tile_morph_row};
 use crate::render::backend::PlanetChunk;
+use crate::render::decal::DecalSet;
 use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
 use crate::render::environment::volumetric_fog::SceneFog;
 use crate::render::frame::plan::FramePlanner;
@@ -54,6 +56,9 @@ pub struct SceneState {
     pub material_params: MaterialParamTable,
     /// The live volumetric fog.
     pub fog: SceneFog,
+    /// The projected decals the decal pass draws, by the slot id the caller
+    /// removes them by.
+    pub decals: DecalSet,
     /// The reflection probes placed, which have baked, and the placements
     /// asked for and not yet placed, which the backend's bake places on its
     /// next step.
@@ -80,13 +85,14 @@ pub struct SceneState {
 impl SceneState {
     /// A scene over `draw` with an identity view cleared to `clear_color`, lit
     /// by `lights`, whose draws read their material params from
-    /// `material_params`, drawn through `fog`.
+    /// `material_params`, drawn through `fog`, with `decals` projected onto it.
     pub fn new(
         draw: DrawList,
         clear_color: [f32; 4],
         lights: LightState,
         material_params: MaterialParamTable,
         fog: SceneFog,
+        decals: DecalSet,
     ) -> Self {
         Self {
             draw,
@@ -95,6 +101,7 @@ impl SceneState {
             skinned: SkinnedSlots::new(),
             material_params,
             fog,
+            decals,
             probes: ProbeBook::new(),
             model_history: RefCell::new(ModelHistory::new()),
             placement: GeometryPlacement::default(),
@@ -410,6 +417,7 @@ mod tests {
             LightState::new(crate::gfx::render_types::LightUniforms::DEFAULT, &[], 1),
             MaterialParamTable::new(Vec::new(), 1),
             SceneFog::default(),
+            DecalSet::new(0, 1),
         );
         assert_eq!(scene.view.clear_color, [0.1, 0.2, 0.3, 1.0]);
         assert_eq!(scene.view.matrix, IDENTITY);

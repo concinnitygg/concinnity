@@ -36,15 +36,15 @@ use crate::metal::{glass, raymarch, raytrace, water};
 // Projected-decal pass. The pipeline and unit cube are built only when the
 // world declares at least one decal; with none, all four resources stay `None`
 // and the pass is skipped by `draw_frame`. The first runtime
-// [`MtlContext::add_decal`] for a world that started with no decals will
-// rebuild the same four resources on demand. The slot table the decal pass
-// draws from: authored decals seed it in order, and a runtime add reuses
-// whatever `remove_decal` freed. Metal reserves no per-decal descriptors, so the
-// table is uncapped.
+// `RenderBackend::add_decal` for a world that started with no decals will
+// rebuild the same four resources on demand. Also returns the scene's slot
+// table: authored decals seed it in order, and a runtime add reuses whatever
+// `remove_decal` freed. Metal reserves no per-decal descriptors, so the table
+// is uncapped.
 pub(in crate::metal::init) fn build_decals(
     gpu: &InitGpu<'_>,
     decals: Vec<DecalRecord>,
-) -> RenderResult<DecalState> {
+) -> RenderResult<(DecalState, DecalSet)> {
     let (pipeline, cube_vertex_buffer, cube_index_buffer, sampler) = if decals.is_empty() {
         (None, None, None, None)
     } else {
@@ -57,13 +57,13 @@ pub(in crate::metal::init) fn build_decals(
         set.insert(record)
             .map_err(|_| RenderError::Other("decals: decal slot table is full".to_string()))?;
     }
-    Ok(DecalState {
-        set,
+    let state = DecalState {
         pipeline,
         cube_vertex_buffer,
         cube_index_buffer,
         sampler,
-    })
+    };
+    Ok((state, set))
 }
 
 type DecalResources = (
@@ -75,7 +75,7 @@ type DecalResources = (
 
 // Build the projected-decal pipeline + the unit-cube vertex / index buffers
 // + the shared sampler. Called either at init when the world declared ≥1
-// decal, or lazily by [`crate::metal::MtlContext::add_decal`] on the first
+// decal, or lazily by `RenderBackend::add_decal` on the first
 // runtime add for a world that started with none. The unit cube spans
 // `[-0.5, 0.5]^3` -- the same local space the decal `inv_model` maps a
 // reconstructed world point into. 36 indices form 12 triangles wound CCW

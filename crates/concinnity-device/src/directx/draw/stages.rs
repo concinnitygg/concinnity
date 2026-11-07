@@ -501,7 +501,7 @@ impl DxContext {
             emitters: !self.particle.system.is_empty(),
             late_emitters: self.particle.system.draws_after_transparent(),
             fog: self.state.fog.settings().is_some_and(|s| s.contributes()),
-            decals: !self.decal.set.is_empty(),
+            decals: !self.state.decals.is_empty(),
             visible_surfaces: self
                 .transparent
                 .as_ref()

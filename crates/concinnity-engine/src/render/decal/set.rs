@@ -117,6 +117,12 @@ impl DecalSet {
         }
     }
 
+    /// The most decals the set holds, which a backend that reserves per-slot
+    /// GPU storage sizes it to.
+    pub fn capacity(&self) -> usize {
+        self.slots.capacity()
+    }
+
     /// Whether no slot is live, so the pass can be skipped outright.
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()

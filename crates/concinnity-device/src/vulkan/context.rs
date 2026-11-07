@@ -14,7 +14,7 @@ use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
-    backend, backend::error, backend::init, decal, output::hdr, shadow::spot, slots::rewrites,
+    backend, backend::error, backend::init, output::hdr, shadow::spot, slots::rewrites,
 };
 use concinnity_engine::{components, profile};
 
@@ -631,11 +631,11 @@ impl VkUniforms {
 // Projected decals. `resources` (pipeline + unit-cube buffers + per-frame
 // uniforms + per-decal albedo sets) is always built so runtime `add_decal`
 // works from a world that started empty; the encoder simply skips when no slot
-// is live or every live decal culls. `set` is the shared slot table, indexing
-// the per-decal albedo sets and the per-frame params ring by decal id.
+// is live or every live decal culls. The scene's slot table
+// (`SceneState::decals`) indexes the per-decal albedo sets and the per-frame
+// params ring by decal id.
 pub(super) struct DecalState {
     pub resources: Option<crate::vulkan::decal::DecalResources>,
-    pub set: decal::DecalSet,
 }
 
 // Volumetric fog. `resources` is `Some` only when the world declared a

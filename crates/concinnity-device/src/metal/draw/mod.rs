@@ -132,7 +132,7 @@ impl FrameDevice for MtlContext {
         // A moved world's decals and grass move with it whatever happens to
         // history.
         if let Some(rebase) = &params.rebase {
-            self.decal.set.rebase(rebase);
+            self.state.decals.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_water(rebase);
             self.particle.system.rebase(rebase);

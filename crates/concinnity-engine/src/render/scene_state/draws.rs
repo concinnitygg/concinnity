@@ -204,6 +204,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         )
     }
 
@@ -391,6 +392,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         );
         s.draw.objects.push(draw_object());
         s.draw.objects[0].resident = true;

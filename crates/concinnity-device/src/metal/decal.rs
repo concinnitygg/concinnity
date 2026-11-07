@@ -11,9 +11,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::gfx::frustum::Frustum;
-use concinnity_engine::render::backend::RuntimeDecals;
+use concinnity_engine::render::backend::DecalPass;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::decal::DecalSet;
 use concinnity_engine::render::uniforms::DecalView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -30,14 +29,12 @@ use super::descriptors::{VertexAttr, VertexLayout, vertex_descriptor};
 use super::encode::RenderEncode;
 use super::scoped_encoder::ScopedEncoder;
 
-// All projected-decal state grouped into one feature unit: the decal slot
-// table, the pipeline, the shared unit-cube geometry, and the sampler. The
-// pipeline / cube buffers / sampler are built lazily either at init (≥1
-// declared decal) or on the first runtime [`MtlContext::add_decal`]; they stay
-// `None` only when the world has never had a decal, in which case the pass is
-// skipped before iteration.
+// The projected-decal pass: the pipeline, the shared unit-cube geometry, and
+// the sampler. They are built either at init (≥1 declared decal) or on the
+// first runtime `add_decal`; they stay `None` only when the world has never had
+// a decal, in which case the pass is skipped before iteration. The slot table
+// is the scene's (`SceneState::decals`).
 pub(crate) struct DecalState {
-    pub set: DecalSet,
     pub pipeline: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     pub cube_vertex_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
     pub cube_index_buffer: Option<Retained<ProtocolObject<dyn objc2_metal::MTLBuffer>>>,
@@ -70,7 +67,7 @@ impl MtlContext {
         // Visibility-cull first so a world where every decal lands off-screen
         // skips the whole pass, including opening the render encoder. Peeking
         // answers that without testing any decal twice.
-        let mut visible = self.decal.set.visible(frustum).peekable();
+        let mut visible = self.state.decals.visible(frustum).peekable();
         if visible.peek().is_none() {
             return Ok(0);
         }
@@ -234,18 +231,12 @@ pub(super) fn build_decal_pipeline(
         .map_err(|e| RenderError::ShaderCompile(format!("decal pipeline state: {e:?}")))
 }
 
-impl RuntimeDecals for MtlContext {
-    // Append a projected-decal record at runtime, returning a stable slot
-    // index the caller hands to [`Self::remove_decal`] later. Builds the
-    // decal pipeline + unit-cube buffers on first use so a world that never
-    // declared a decal still pays zero pipeline cost until the first add.
-    // A vacated slot from [`Self::remove_decal`] is reused before growing
-    // the slot table so a steady-state spawn/despawn pattern (bullet holes,
-    // footprints) stays bounded.
-    fn add_decal(
-        &mut self,
-        record: concinnity_engine::render::decal::DecalRecord,
-    ) -> RenderResult<usize> {
+impl DecalPass for MtlContext {
+    // Build the decal pipeline + unit-cube buffers on first use, so a world
+    // that never declared a decal pays no pipeline cost until the first add.
+    // Metal samples each decal's albedo through the bindless pool, so a slot
+    // binds nothing of its own.
+    fn ensure_decal_pass(&mut self) -> RenderResult<()> {
         if self.decal.pipeline.is_none() {
             let (ps, vbuf, ibuf, samp) =
                 super::init::effects::world::build_decal_resources_for_runtime(
@@ -257,21 +248,6 @@ impl RuntimeDecals for MtlContext {
             self.decal.cube_index_buffer = Some(ibuf);
             self.decal.sampler = Some(samp);
         }
-        self.decal
-            .set
-            .insert(record)
-            .map_err(|_| RenderError::Other("add_decal: decal set is full".to_string()))
-    }
-
-    // Tombstone a runtime decal slot. The slot index returned by
-    // [`Self::add_decal`] becomes invalid; the next add may reuse it.
-    // Returns an error when the index is out of range or already tombstoned.
-    // The decal pipeline + unit-cube buffers are kept around so a later add
-    // does not pay the rebuild cost.
-    fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
-        self.decal
-            .set
-            .remove(decal_id)
-            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))
+        Ok(())
     }
 }

@@ -731,6 +731,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         );
         scene.seed_mesh_streaming(
             0,
@@ -907,6 +908,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         )
     }
 
@@ -986,6 +988,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         );
         scene
             .placement
@@ -1402,6 +1405,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         );
         scene.placement.chunk_vtx.free(4, (4 * VERTEX) as u64, 0);
         scene.placement.chunk_idx.free(2, 16, 0);

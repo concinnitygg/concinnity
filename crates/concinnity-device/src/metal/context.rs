@@ -660,7 +660,7 @@ pub(crate) struct MtlContext {
     // Projected-decal feature state: the decal slot table, the pipeline, the
     // shared unit-cube geometry, and the sampler. See [`DecalState`]. The pipeline / cube buffers / sampler are
     // built lazily at init (≥1 declared decal) or on the first runtime
-    // [`MtlContext::add_decal`].
+    // `RenderBackend::add_decal`.
     pub(super) decal: DecalState,
     // Volumetric-fog feature state: resolved tunables, the ray-march
     // pipeline, and the froxel-volume compute pipeline + 3D output volume.

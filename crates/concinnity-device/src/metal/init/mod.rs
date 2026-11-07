@@ -296,7 +296,7 @@ impl MtlContext {
         let auto_exposure =
             effects::build_auto_exposure(&hw.device, &settings, frames_in_flight, hot_reload)?;
 
-        let decal = effects::world::build_decals(&gpu, fx.decals)?;
+        let (decal, decals) = effects::world::build_decals(&gpu, fx.decals)?;
         let fog = effects::world::build_fog(&gpu, fx.fog)?;
         let particle = effects::world::build_particles(&gpu, fx.particles)?;
         let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
@@ -362,6 +362,7 @@ impl MtlContext {
                 LightState::new(light_uniforms, &local_lights, 1),
                 material_params,
                 SceneFog::new(fx.fog),
+                decals,
             ),
             graph_scratch: None,
             instanced,

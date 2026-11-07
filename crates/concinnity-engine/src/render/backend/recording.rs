@@ -23,8 +23,8 @@ use crate::input::snapshot::InputSnapshot;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
-    BackendProbe, ChunkMesh, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture,
-    FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RuntimeDecals,
+    BackendProbe, ChunkMesh, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming,
+    FrameCapture, FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend,
     RuntimeEmitters, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
     WorldReload, WorldShaders,
 };
@@ -797,7 +797,7 @@ impl BackendProbe for RecordingBackend {
 impl CullReadback for RecordingBackend {}
 impl LightTables for RecordingBackend {}
 impl GeometryRebuild for RecordingBackend {}
-impl RuntimeDecals for RecordingBackend {}
+impl DecalPass for RecordingBackend {}
 impl RuntimeEmitters for RecordingBackend {}
 impl SdfVolumeShaders for RecordingBackend {}
 

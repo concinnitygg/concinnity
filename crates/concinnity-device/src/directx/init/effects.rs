@@ -8,7 +8,7 @@ use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::render_types::DrawObject;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::SdfVolumeSource;
-use concinnity_engine::render::decal::{self, DecalRecord};
+use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
 use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleSystem};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
@@ -339,7 +339,7 @@ pub(super) fn build_decals(
     targets: &DxTargets,
     scene: &DxSceneAssets,
     decals: Vec<DecalRecord>,
-) -> RenderResult<DecalState> {
+) -> RenderResult<(DecalState, DecalSet)> {
     let hw = gpu.hw;
     let decal_srv_base_slot = descriptors.layout.decal_srv_base_slot;
     let decals_state = Some(crate::directx::decal::DecalResources::new(
@@ -371,16 +371,18 @@ pub(super) fn build_decals(
     }
     // The slot table the decal pass draws from. Each authored decal takes
     // the slot whose albedo SRV was just written above, in the same order.
-    let mut decal_set = decal::DecalSet::new(crate::directx::decal::MAX_DECALS, hw.frames());
+    let mut decal_set = DecalSet::new(crate::directx::decal::MAX_DECALS, hw.frames());
     for record in decals {
         decal_set.insert(record).map_err(|_| {
             RenderError::Other("decals: authored decals exceed MAX_DECALS".to_string())
         })?;
     }
-    Ok(DecalState {
-        state: decals_state,
-        set: decal_set,
-    })
+    Ok((
+        DecalState {
+            state: decals_state,
+        },
+        decal_set,
+    ))
 }
 
 // Volumetric fog: pipeline + per-frame uniform ring. Built only when the world

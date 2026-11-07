@@ -34,7 +34,7 @@ use concinnity_engine::render::backend::init::{
     BackendInit, MediaPayloads, ShadowCadence, WorldShader,
 };
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
-use concinnity_engine::render::decal::DecalRecord;
+use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
 use concinnity_engine::render::light::state::LightState;
@@ -455,6 +455,7 @@ impl VkContext {
                 LightState::new(light_uniforms, &local_lights, frames),
                 material_params,
                 SceneFog::new(fx.fog),
+                DecalSet::new(crate::vulkan::decal::MAX_DECALS, frames),
             ),
             graph_scratch: None,
             submit_scratch: Vec::new(),

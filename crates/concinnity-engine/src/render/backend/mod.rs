@@ -73,7 +73,7 @@ pub mod render_mode;
 mod world_shaders;
 
 pub use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
-pub use effects::{RuntimeDecals, RuntimeEmitters};
+pub use effects::{DecalPass, RuntimeEmitters};
 pub use geometry_rebuild::{
     DrawGeometryUpdate, GeometryRebuild, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
@@ -199,12 +199,12 @@ pub trait RenderBackend:
     SceneHost
     + BackendProbe
     + CullReadback
+    + DecalPass
     + DrawStreaming
     + FrameCapture
     + GeometryRebuild
     + PlanetReshape
     + SettingsTarget
-    + RuntimeDecals
     + RuntimeEmitters
     + LightTables
     + SdfVolumeShaders
@@ -413,6 +413,59 @@ pub trait RenderBackend:
             scene.planner.shadow.reset_spots();
             scene.lights.move_local(&lights.lights, uniforms);
         }
+        Ok(())
+    }
+
+    /// Append a projected-decal record at runtime, returning a stable slot
+    /// index the caller hands to [`Self::remove_decal`] later. Lets a
+    /// gameplay system stamp bullet holes, footprints, or other ad-hoc
+    /// decals after the world has built. The record lands in the scene's
+    /// decal set, reusing a vacated slot before growing it, and the backend
+    /// readies its [`DecalPass`] and binds the slot's albedo.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene or on a backend
+    /// without the decal pass, or an error if the pass cannot be readied or
+    /// the set is full.
+    fn add_decal(&mut self, record: crate::render::decal::DecalRecord) -> RenderResult<usize> {
+        // Asked first so a backend that builds its pass lazily builds nothing
+        // for a scene-less add that is refused anyway.
+        if self.scene().is_none() {
+            return Err(RenderError::Unsupported { op: "add_decal" });
+        }
+        self.ensure_decal_pass()?;
+        let texture_slot = record.texture_slot;
+        let Some(scene) = self.scene_mut() else {
+            return Err(RenderError::Unsupported { op: "add_decal" });
+        };
+        let capacity = scene.decals.capacity();
+        let id = scene.decals.insert(record).map_err(|_| {
+            RenderError::Other(alloc::format!(
+                "add_decal: the decal set is full ({capacity} decals)"
+            ))
+        })?;
+        self.bind_decal_texture(id, texture_slot);
+        Ok(id)
+    }
+
+    /// Tombstone a runtime decal slot. The id returned by
+    /// [`Self::add_decal`] becomes invalid; the next add may reuse it. What the
+    /// pass draws with is kept, so a later add does not rebuild it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `decal_id` names no live decal.
+    fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
+        let Some(scene) = self.scene_mut() else {
+            return Err(RenderError::Unsupported { op: "remove_decal" });
+        };
+        scene
+            .decals
+            .remove(decal_id)
+            .map_err(|e| RenderError::Other(alloc::format!("remove_decal: id {decal_id} {e}")))?;
+        self.release_decal_texture(decal_id);
         Ok(())
     }
 

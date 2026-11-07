@@ -43,8 +43,8 @@ mod tests {
     };
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
-        BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
-        GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RuntimeDecals, RuntimeEmitters,
+        BackendProbe, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming, FrameCapture,
+        FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RuntimeEmitters,
         SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload,
         WorldShaders,
     };
@@ -77,6 +77,9 @@ mod tests {
     struct Hosted {
         scene: SceneState,
         writes: Writes,
+        // Decal slot bindings, `(id, Some(texture))` bound and `(id, None)`
+        // released.
+        decal_bindings: Vec<(usize, Option<usize>)>,
     }
 
     impl Hosted {
@@ -101,6 +104,7 @@ mod tests {
                 ),
                 crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
                 crate::render::environment::volumetric_fog::SceneFog::default(),
+                crate::render::decal::DecalSet::new(0, 1),
             );
             scene
                 .skinned
@@ -111,6 +115,7 @@ mod tests {
             Self {
                 scene,
                 writes: Writes::default(),
+                decal_bindings: Vec::new(),
             }
         }
     }
@@ -188,7 +193,17 @@ mod tests {
     impl GeometryRebuild for Hosted {}
     impl PlanetReshape for Hosted {}
     impl SettingsTarget for Hosted {}
-    impl RuntimeDecals for Hosted {}
+    impl DecalPass for Hosted {
+        fn ensure_decal_pass(&mut self) -> RenderResult<()> {
+            Ok(())
+        }
+        fn bind_decal_texture(&mut self, id: usize, texture_slot: usize) {
+            self.decal_bindings.push((id, Some(texture_slot)));
+        }
+        fn release_decal_texture(&mut self, id: usize) {
+            self.decal_bindings.push((id, None));
+        }
+    }
     impl RuntimeEmitters for Hosted {}
     impl LightTables for Hosted {}
     impl SdfVolumeShaders for Hosted {}
@@ -310,5 +325,27 @@ mod tests {
             [0.0; MATERIAL_PARAM_COUNT]
         );
         assert!(b.scene.material_params.take_upload(0).is_some());
+    }
+
+    // A runtime decal lands in the scene's set and the backend binds its
+    // albedo; removing it frees the slot and releases the binding.
+    #[test]
+    fn a_runtime_decal_lives_in_the_scenes_set() {
+        let mut b = Hosted::new();
+        b.scene.decals = crate::render::decal::DecalSet::new(1, 1);
+        let record = crate::render::decal::DecalRecord {
+            model: MOVED,
+            inv_model: MOVED,
+            texture_slot: 4,
+            tint: [1.0; 4],
+        };
+        let id = b.add_decal(record).unwrap();
+        assert!(!b.scene.decals.is_empty());
+        let full = b.add_decal(record).unwrap_err();
+        assert!(alloc::format!("{full}").contains("(1 decals)"), "{full}");
+        b.remove_decal(id).unwrap();
+        assert!(b.scene.decals.is_empty());
+        assert!(b.remove_decal(id).is_err());
+        assert_eq!(b.decal_bindings, [(id, Some(4)), (id, None)]);
     }
 }

@@ -1568,6 +1568,7 @@ mod tests {
             ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
+            crate::render::decal::DecalSet::new(0, 1),
         );
         let mut state = GrassFrameState::default();
         let view = GrassView {

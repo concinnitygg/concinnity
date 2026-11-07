@@ -330,7 +330,8 @@ impl DxContext {
         let gbuffer =
             effects::build_gbuffer(&gpu, &targets, &quality_slots, features.gbuffer_enabled)?;
 
-        let decal = effects::build_decals(&gpu, &descriptors, &targets, &scene, fx.decals)?;
+        let (decal, decals) =
+            effects::build_decals(&gpu, &descriptors, &targets, &scene, fx.decals)?;
         let fog = effects::build_fog(&gpu, &descriptors, &targets, &shadow, fx.fog)?;
         let particle =
             effects::build_particles(&gpu, &descriptors, &targets, &scene, fx.particles)?;
@@ -460,6 +461,7 @@ impl DxContext {
                 LightState::new(light_uniforms, &local_lights, hw.frames()),
                 material_params,
                 SceneFog::new(fx.fog),
+                decals,
             ),
             graph_scratch: std::cell::Cell::default(),
             pass_lists: std::cell::Cell::default(),

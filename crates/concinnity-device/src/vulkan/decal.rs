@@ -14,8 +14,8 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::geometry::proxy_cube::{CUBE_INDICES, cube_corners};
 use concinnity_engine::gfx::frustum::Frustum;
-use concinnity_engine::render::backend::RuntimeDecals;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::backend::{DecalPass, RenderBackend};
 use concinnity_engine::render::decal::DecalRecord;
 use concinnity_engine::transform::mat4_inverse;
 use std::cell::Cell;
@@ -556,7 +556,7 @@ impl VkContext {
         // Frustum-cull first so a frame where every live decal lands
         // off-screen skips the pass, including the depth-transition
         // barriers. Peeking answers that without testing any decal twice.
-        let mut visible = self.decal.set.visible(frustum).peekable();
+        let mut visible = self.state.decals.visible(frustum).peekable();
         if visible.peek().is_none() {
             return;
         }
@@ -639,7 +639,7 @@ impl VkContext {
     }
 }
 
-// Runtime mutation (RuntimeDecals::add_decal / remove_decal)
+// Runtime decals (`RenderBackend::add_decal` / `remove_decal`)
 
 impl VkContext {
     // Re-point every decal albedo set that pointed at texture-pool slot
@@ -706,49 +706,45 @@ impl VkContext {
 // decal module is the only consumer of a few of its helpers.
 type _Marker = GpuImage;
 
-impl RuntimeDecals for VkContext {
-    // Append a runtime decal. Writes the per-decal albedo descriptor
-    // into the reserved slot for `id`; the encoder reads it next frame.
-    // Reuses tombstoned slots from a prior `remove_decal` before growing
-    // the vec.
-    fn add_decal(&mut self, record: DecalRecord) -> RenderResult<usize> {
-        let last_tex = self.scene.textures.len().saturating_sub(1);
-        let tex_idx = record.texture_slot.min(last_tex);
+impl DecalPass for VkContext {
+    // The decal pipeline is built at init, so a world without one cannot take
+    // a runtime decal.
+    fn ensure_decal_pass(&mut self) -> RenderResult<()> {
+        if self.decal.resources.is_none() {
+            return Err(RenderError::Other(
+                "add_decal: decal pipeline unavailable".to_string(),
+            ));
+        }
+        Ok(())
+    }
 
-        let id = self.decal.set.insert(record).map_err(|_| {
-            RenderError::Other(format!("add_decal: MAX_DECALS ({MAX_DECALS}) exceeded"))
-        })?;
-
-        // Write the albedo descriptor for this slot. The texture pool
-        // entry is referenced live; a future eviction routes through
-        // `rewrite_texture_slot` to re-point.
-        let decals = self.decal.resources.as_ref().ok_or_else(|| {
-            RenderError::Other("add_decal: decal pipeline unavailable".to_string())
-        })?;
-        write_albedo_image(
-            &self.hw.device,
-            decals.albedo_sets[id],
-            self.scene.textures[tex_idx].view,
-        );
+    // Write the albedo descriptor for slot `id`; the encoder reads it next
+    // frame. The texture pool entry is referenced live; a future eviction
+    // routes through `rewrite_texture_slot` to re-point.
+    fn bind_decal_texture(&mut self, id: usize, texture_slot: usize) {
+        let Some(decals) = self.decal.resources.as_ref() else {
+            return;
+        };
+        let Some(&set) = decals.albedo_sets.get(id) else {
+            debug_assert!(
+                false,
+                "decal id {id} is past the {} reserved albedo sets",
+                decals.albedo_sets.len()
+            );
+            return;
+        };
+        let tex_idx = texture_slot.min(self.scene.textures.len().saturating_sub(1));
+        write_albedo_image(&self.hw.device, set, self.scene.textures[tex_idx].view);
         let mut slots = decals.decal_texture_slots.get();
         slots[id] = tex_idx;
         decals.decal_texture_slots.set(slots);
-        Ok(id)
     }
 
-    // Tombstone a runtime decal slot. The id becomes invalid; the next
-    // `add_decal` may reuse it. Reached only through the bin's `cn run -f`
-    // runtime-mutation path (dead in the FFI lib, live in the bin).
-    fn remove_decal(&mut self, decal_id: usize) -> RenderResult<()> {
-        self.decal
-            .set
-            .remove(decal_id)
-            .map_err(|e| RenderError::Other(format!("remove_decal: id {decal_id} {e}")))?;
+    fn release_decal_texture(&mut self, id: usize) {
         if let Some(decals) = &self.decal.resources {
             let mut slots = decals.decal_texture_slots.get();
-            slots[decal_id] = usize::MAX;
+            slots[id] = usize::MAX;
             decals.decal_texture_slots.set(slots);
         }
-        Ok(())
     }
 }
