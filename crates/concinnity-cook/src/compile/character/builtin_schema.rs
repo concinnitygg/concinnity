@@ -11,7 +11,7 @@ use crate::authoring::world::WorldJsonlAsset;
 /// `CharacterModel.schema` value of the bundled humanoid schema.
 pub const HUMANOID_SCHEMA: &str = "builtin:humanoid";
 
-const HUMANOID_JSON: &str = include_str!("../../../assets/humanoid_schema.json");
+const HUMANOID_JSON: &str = include_str!("humanoid_schema.json");
 
 /// The bundled humanoid schema, parsed once per process.
 #[expect(

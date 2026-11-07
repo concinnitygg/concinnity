@@ -107,7 +107,7 @@ pub(super) fn build_icns(src: &Path, resources: &Path, slug: &str) -> io::Result
 // The engine's built-in fallback icon (the Concinnity mark on a dark gradient),
 // used when the AppConfig asset sets no icon. Baked into the `cn` binary so a
 // shipped toolchain, which has no engine source tree, still carries it.
-pub(super) const DEFAULT_ICON_PNG: &[u8] = include_bytes!("../../../assets/default-icon.png");
+pub(super) const DEFAULT_ICON_PNG: &[u8] = include_bytes!("default-icon.png");
 
 // Build `<resources>/<slug>.icns` from the bundled default icon. Writes the
 // embedded PNG to a scratch file so it flows through the same sips/iconutil

@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 use concinnity_engine::bake;
 use concinnity_engine::ecs::{FontHandle, World};
 
-const FONT_BYTES: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
+const FONT_BYTES: &[u8] = include_bytes!("fonts/JetBrainsMono-Regular.ttf");
 const FONT_FILE: &str = "JetBrainsMono-Regular.ttf";
 
 // The size the atlas is rasterized at; labels scale it to `TEXT_PX`.

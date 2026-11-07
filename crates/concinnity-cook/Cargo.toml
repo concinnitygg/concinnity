@@ -13,7 +13,6 @@ categories = ["game-engines", "development-tools::build-utils"]
 include = [
     "/README.md",
     "/src",
-    "/assets",
 ]
 
 [features]

@@ -13,7 +13,6 @@ categories = ["game-engines", "development-tools"]
 include = [
     "/README.md",
     "/src",
-    "/assets",
     "/build.rs",
 ]
 
