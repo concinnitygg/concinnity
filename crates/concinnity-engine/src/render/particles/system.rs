@@ -1,7 +1,8 @@
 //! The emitter table the backends share: one slot per emitter id holding its
-//! record, the cached cull bounds, the spawn ring, and the backend's own
-//! per-emitter GPU state `G`. The backend keeps pipelines and encoding; this
-//! owns which emitters exist, how far each has spawned, and which are seen.
+//! record, the cached cull bounds and the spawn ring. It owns which emitters
+//! exist, how far each has spawned, and which are seen; a backend keeps its
+//! pipelines and encoding, and its per-emitter GPU state in an
+//! [`EmitterGpu`](super::EmitterGpu) by the same id.
 
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::ParticleParams;
@@ -25,7 +26,7 @@ pub struct ParticleFrame {
     pub frame_index: u32,
 }
 
-struct Emitter<G> {
+struct Emitter {
     record: ParticleEmitterRecord,
     aabb_min: [f32; 3],
     aabb_max: [f32; 3],
@@ -40,13 +41,13 @@ struct Emitter<G> {
     // Whether the pool was already dead a frame ago, so the simulation has
     // stepped it since and it has nothing left to simulate or draw.
     idle: bool,
-    gpu: G,
 }
 
 /// The emitters a backend's particle passes simulate and draw, addressed by the
 /// slot id [`ParticleSystem::insert`] returns. That id is stable until
 /// [`ParticleSystem::remove`] tombstones it, and indexes any parallel
-/// per-emitter resource the backend reserves (a descriptor, a uniform slot).
+/// per-emitter resource the backend reserves (a GPU pool, a descriptor, a
+/// uniform slot).
 ///
 /// The table holds at most [`MAX_EMITTERS`] live emitters on every backend.
 ///
@@ -55,13 +56,13 @@ struct Emitter<G> {
 /// # use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleSystem};
 /// let record = ParticleEmitterRecord::new(&ParticleEmitter::default(), 0);
 /// let mut particles = ParticleSystem::new();
-/// let id = particles.insert(record, "pool").expect("room for one");
+/// let id = particles.insert(record).expect("room for one");
 /// let frame = particles.prepare(0.5, &[]).expect("an emitter exists");
 /// assert_eq!(particles.emitters(&frame).count(), 1);
-/// assert_eq!(particles.remove(id), Ok("pool"));
+/// assert_eq!(particles.remove(id), Ok(()));
 /// ```
-pub struct ParticleSystem<G> {
-    emitters: SlotTable<Emitter<G>>,
+pub struct ParticleSystem {
+    emitters: SlotTable<Emitter>,
     last_elapsed: f32,
     frame_index: u32,
     rows: FrameRows,
@@ -69,13 +70,13 @@ pub struct ParticleSystem<G> {
     dropped_reported: bool,
 }
 
-impl<G> Default for ParticleSystem<G> {
+impl Default for ParticleSystem {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<G> ParticleSystem<G> {
+impl ParticleSystem {
     /// An empty system holding at most [`MAX_EMITTERS`] live emitters.
     pub fn new() -> Self {
         Self::with_capacity(MAX_EMITTERS)
@@ -91,19 +92,18 @@ impl<G> ParticleSystem<G> {
         }
     }
 
-    /// Whether another [`Self::insert`] would succeed, checked before the
-    /// backend allocates an emitter's GPU state.
+    /// Whether another [`Self::insert`] would succeed.
     pub fn has_room(&self) -> bool {
         self.emitters.has_room()
     }
 
-    /// Place `record` with its GPU state in a slot and return the id, reusing a
-    /// tombstoned slot before growing. The emitter starts with an empty pool.
+    /// Place `record` in a slot and return the id, reusing a tombstoned slot
+    /// before growing. The emitter starts with an empty pool.
     ///
     /// # Errors
     ///
     /// Returns `AtCapacity` if the table has no free slot and cannot grow.
-    pub fn insert(&mut self, record: ParticleEmitterRecord, gpu: G) -> Result<usize, AtCapacity> {
+    pub fn insert(&mut self, record: ParticleEmitterRecord) -> Result<usize, AtCapacity> {
         let (aabb_min, aabb_max) = record.aabb();
         self.emitters.insert(Emitter {
             record,
@@ -115,18 +115,16 @@ impl<G> ParticleSystem<G> {
             fed: false,
             dead: false,
             idle: false,
-            gpu,
         })
     }
 
-    /// Tombstone the emitter at `id`, handing its GPU state back so the backend
-    /// can release it on its own terms.
+    /// Tombstone the emitter at `id`, freeing it for the next [`Self::insert`].
     ///
     /// # Errors
     ///
     /// Returns an error if `id` was never handed out or is already removed.
-    pub fn remove(&mut self, id: usize) -> Result<G, RemoveError> {
-        self.emitters.remove(id).map(|e| e.gpu)
+    pub fn remove(&mut self, id: usize) -> Result<(), RemoveError> {
+        self.emitters.remove(id).map(|_| ())
     }
 
     /// Whether no emitter is live, so both passes can be skipped.
@@ -247,7 +245,7 @@ impl<G> ParticleSystem<G> {
     pub fn emitters<'a>(
         &'a self,
         frame: &'a ParticleFrame,
-    ) -> impl Iterator<Item = ActiveEmitter<'a, G>> + 'a {
+    ) -> impl Iterator<Item = ActiveEmitter<'a>> + 'a {
         self.emitters
             .iter()
             .filter(|(_, e)| !e.idle)
@@ -265,7 +263,7 @@ impl<G> ParticleSystem<G> {
         frame: &'a ParticleFrame,
         frustum: &'a Frustum,
         after_transparent: bool,
-    ) -> impl Iterator<Item = ActiveEmitter<'a, G>> + 'a {
+    ) -> impl Iterator<Item = ActiveEmitter<'a>> + 'a {
         self.emitters
             .iter()
             .filter(move |(_, e)| e.record.draw_after_transparent == after_transparent && !e.idle)
@@ -273,38 +271,30 @@ impl<G> ParticleSystem<G> {
             .map(move |(id, e)| ActiveEmitter::new(id, e, *frame))
     }
 
-    /// Every live emitter's GPU state, in id order.
-    pub fn gpu_states(&self) -> impl Iterator<Item = &G> {
-        self.emitters.iter().map(|(_, e)| &e.gpu)
-    }
-
-    /// Drop every emitter, live or tombstoned, with its GPU state.
+    /// Drop every emitter, live or tombstoned.
     pub fn clear(&mut self) {
         self.emitters.clear();
     }
 }
 
-/// A live emitter for one pass: its id, record, GPU state, and this frame's
-/// simulation uniform.
-pub struct ActiveEmitter<'a, G> {
-    /// The emitter's slot id.
+/// A live emitter for one pass: its id, record, and this frame's simulation
+/// uniform.
+pub struct ActiveEmitter<'a> {
+    /// The emitter's slot id, which its GPU state is kept by.
     pub id: usize,
     /// The emitter's record.
     pub record: &'a ParticleEmitterRecord,
-    /// The backend's per-emitter GPU state.
-    pub gpu: &'a G,
     /// This frame's uniform: the record's fields plus the frame step, the
     /// emitter's spawn run, and its RNG seed. The simulation and the draw bind
     /// the same block; the draw reads only the record's size and color ramps.
     pub params: ParticleParams,
 }
 
-impl<'a, G> ActiveEmitter<'a, G> {
-    fn new(id: usize, e: &'a Emitter<G>, frame: ParticleFrame) -> Self {
+impl<'a> ActiveEmitter<'a> {
+    fn new(id: usize, e: &'a Emitter, frame: ParticleFrame) -> Self {
         Self {
             id,
             record: &e.record,
-            gpu: &e.gpu,
             params: e.record.params(
                 frame.dt,
                 e.spawns,
@@ -360,7 +350,7 @@ mod tests {
 
     #[test]
     fn a_never_used_system_prepares_nothing() {
-        let mut s = ParticleSystem::<()>::with_capacity(4);
+        let mut s = ParticleSystem::with_capacity(4);
         assert!(s.is_empty());
         assert_eq!(s.prepare(1.0, &[]), None);
     }
@@ -368,7 +358,7 @@ mod tests {
     #[test]
     fn prepare_steps_the_clock_and_the_frame_counter() {
         let mut s = ParticleSystem::with_capacity(4);
-        s.insert(record_at([0.0; 3]), ()).unwrap();
+        s.insert(record_at([0.0; 3])).unwrap();
         let a = s.prepare(0.25, &[]).unwrap();
         assert_eq!((a.dt, a.frame_index), (0.25, 1));
         let b = s.prepare(0.75, &[]).unwrap();
@@ -380,13 +370,13 @@ mod tests {
     #[test]
     fn the_clock_keeps_running_while_every_emitter_is_removed() {
         let mut s = ParticleSystem::with_capacity(4);
-        let id = s.insert(record_at([0.0; 3]), ()).unwrap();
+        let id = s.insert(record_at([0.0; 3])).unwrap();
         s.prepare(1.0, &[]);
         s.remove(id).unwrap();
         assert!(s.is_empty());
         assert!(!s.never_used());
         assert_eq!(s.prepare(2.0, &[]).unwrap().frame_index, 2);
-        s.insert(record_at([0.0; 3]), ()).unwrap();
+        s.insert(record_at([0.0; 3])).unwrap();
         assert_eq!(s.prepare(2.5, &[]).unwrap().dt, 0.5);
     }
 
@@ -394,8 +384,8 @@ mod tests {
     fn the_uniform_carries_the_spawn_run_and_seed() {
         let mut s = ParticleSystem::with_capacity(4);
         let rec = record_at([0.0; 3]);
-        s.insert(rec, ()).unwrap();
-        s.insert(rec, ()).unwrap();
+        s.insert(rec).unwrap();
+        s.insert(rec).unwrap();
         let frame = s.prepare(0.5, &[]).unwrap();
         let all: Vec<_> = s.emitters(&frame).collect();
         assert_eq!(all.len(), 2);
@@ -414,14 +404,14 @@ mod tests {
     #[test]
     fn only_emitters_meeting_the_frustum_are_visible() {
         let mut s = ParticleSystem::with_capacity(4);
-        let near = s.insert(record_at([0.0; 3]), 'n').unwrap();
-        s.insert(record_at([100.0, 0.0, 0.0]), 'f').unwrap();
+        let near = s.insert(record_at([0.0; 3])).unwrap();
+        s.insert(record_at([100.0, 0.0, 0.0])).unwrap();
         let frame = s.prepare(0.1, &[]).unwrap();
-        let seen: Vec<(usize, char)> = s
+        let seen: Vec<usize> = s
             .visible(&frame, &frustum_left_of_ten(), false)
-            .map(|e| (e.id, *e.gpu))
+            .map(|e| e.id)
             .collect();
-        assert_eq!(seen, vec![(near, 'n')]);
+        assert_eq!(seen, vec![near]);
         // The culled emitter still simulates.
         assert_eq!(s.emitters(&frame).count(), 2);
     }
@@ -430,13 +420,13 @@ mod tests {
     #[test]
     fn each_draw_stage_draws_its_own_emitters() {
         let mut s = ParticleSystem::with_capacity(4);
-        let before = s.insert(record_at([0.0; 3]), 'b').unwrap();
+        let before = s.insert(record_at([0.0; 3])).unwrap();
         assert!(!s.draws_after_transparent());
         let late = ParticleEmitterRecord {
             draw_after_transparent: true,
             ..record_at([0.0; 3])
         };
-        let after = s.insert(late, 'a').unwrap();
+        let after = s.insert(late).unwrap();
         assert!(s.draws_after_transparent());
         let frame = s.prepare(0.1, &[]).unwrap();
         let ids = |late| -> Vec<usize> {
@@ -454,16 +444,15 @@ mod tests {
     #[test]
     fn a_reused_slot_starts_a_fresh_ring() {
         let mut s = ParticleSystem::with_capacity(1);
-        let id = s.insert(record_at([0.0; 3]), 1).unwrap();
+        let id = s.insert(record_at([0.0; 3])).unwrap();
         s.prepare(1.0, &[]);
         assert!(!s.has_room());
-        assert_eq!(s.insert(record_at([0.0; 3]), 2), Err(AtCapacity));
-        assert_eq!(s.remove(id), Ok(1));
-        assert_eq!(s.insert(record_at([0.0; 3]), 3), Ok(id));
+        assert_eq!(s.insert(record_at([0.0; 3])), Err(AtCapacity));
+        assert_eq!(s.remove(id), Ok(()));
+        assert_eq!(s.insert(record_at([0.0; 3])), Ok(id));
         let frame = s.prepare(1.5, &[]).unwrap();
         let e = s.emitters(&frame).next().unwrap();
         assert_eq!((e.params.spawn_first, e.params.spawn_count), (0, 5));
-        assert_eq!(s.gpu_states().copied().collect::<Vec<_>>(), vec![3]);
     }
 
     fn burst_for(emitter: AssetId, x: f32, count: u32) -> ParticleBurst {
@@ -493,8 +482,8 @@ mod tests {
     #[test]
     fn bursts_reach_the_emitter_they_name() {
         let mut s = ParticleSystem::with_capacity(4);
-        let spray = s.insert(named([0.0; 3], 9, 0.0), ()).unwrap();
-        let other = s.insert(record_at([0.0; 3]), ()).unwrap();
+        let spray = s.insert(named([0.0; 3], 9, 0.0)).unwrap();
+        let other = s.insert(record_at([0.0; 3])).unwrap();
         let bursts = [
             burst_for(AssetId(9), 1.0, 3),
             burst_for(AssetId(4), 2.0, 5),
@@ -528,7 +517,7 @@ mod tests {
         let mut s = ParticleSystem::with_capacity(2);
         let mut rec = named([0.0; 3], 9, 0.0);
         rec.max_particles = 40;
-        s.insert(rec, ()).unwrap();
+        s.insert(rec).unwrap();
         let many: Vec<_> = (0..MAX_EMITTER_BURSTS + 5)
             .map(|i| burst_for(AssetId(9), i as f32, 2))
             .collect();
@@ -550,7 +539,7 @@ mod tests {
         // The frame as a whole holds its own cap.
         let mut wide = ParticleSystem::with_capacity(MAX_EMITTERS);
         for id in 0..20 {
-            wide.insert(named([0.0; 3], id, 0.0), ()).unwrap();
+            wide.insert(named([0.0; 3], id, 0.0)).unwrap();
         }
         let flood: Vec<_> = (0..20)
             .flat_map(|id| (0..MAX_EMITTER_BURSTS).map(move |_| burst_for(AssetId(id), 0.0, 1)))
@@ -566,8 +555,8 @@ mod tests {
         let mut s = ParticleSystem::with_capacity(2);
         let mut rec = named([100.0, 0.0, 0.0], 9, 0.0);
         rec.lifetime_max = 1.0;
-        s.insert(rec, ()).unwrap();
-        let seen = |s: &ParticleSystem<()>, frame: &ParticleFrame| {
+        s.insert(rec).unwrap();
+        let seen = |s: &ParticleSystem, frame: &ParticleFrame| {
             s.visible(frame, &frustum_left_of_ten(), false).count()
         };
         let frame = s.prepare(0.1, &[]).unwrap();
@@ -588,8 +577,8 @@ mod tests {
         let mut s = ParticleSystem::with_capacity(2);
         let mut rec = named([0.0; 3], 9, 0.0);
         rec.lifetime_max = 1.0;
-        s.insert(rec, ()).unwrap();
-        let counts = |s: &ParticleSystem<()>, frame: &ParticleFrame| {
+        s.insert(rec).unwrap();
+        let counts = |s: &ParticleSystem, frame: &ParticleFrame| {
             let drawn = s.visible(frame, &frustum_left_of_ten(), false).count();
             (s.emitters(frame).count(), drawn)
         };
@@ -618,7 +607,7 @@ mod tests {
     #[test]
     fn a_frame_move_carries_the_emitters_and_the_live_particles() {
         let mut s = ParticleSystem::with_capacity(2);
-        s.insert(record_at([5.0, 0.0, 0.0]), ()).unwrap();
+        s.insert(record_at([5.0, 0.0, 0.0])).unwrap();
         s.rebase(&Rebase {
             rotation: [0.0, 0.0, 0.0, 1.0],
             translation: [-5.0, 0.0, 0.0],
@@ -636,7 +625,7 @@ mod tests {
     fn remove_rejects_unknown_and_repeated_ids() {
         let mut s = ParticleSystem::with_capacity(2);
         assert_eq!(s.remove(0), Err(RemoveError::OutOfRange));
-        let id = s.insert(record_at([0.0; 3]), ()).unwrap();
+        let id = s.insert(record_at([0.0; 3])).unwrap();
         s.remove(id).unwrap();
         assert_eq!(s.remove(id), Err(RemoveError::AlreadyRemoved));
     }
@@ -645,18 +634,18 @@ mod tests {
     fn the_cap_counts_live_emitters() {
         let mut s = ParticleSystem::new();
         let ids: Vec<usize> = (0..MAX_EMITTERS)
-            .map(|_| s.insert(record_at([0.0; 3]), ()).unwrap())
+            .map(|_| s.insert(record_at([0.0; 3])).unwrap())
             .collect();
-        assert_eq!(s.insert(record_at([0.0; 3]), ()), Err(AtCapacity));
+        assert_eq!(s.insert(record_at([0.0; 3])), Err(AtCapacity));
         s.remove(ids[7]).unwrap();
         assert!(s.has_room());
-        assert_eq!(s.insert(record_at([0.0; 3]), ()), Ok(ids[7]));
+        assert_eq!(s.insert(record_at([0.0; 3])), Ok(ids[7]));
     }
 
     #[test]
     fn clear_drops_every_emitter() {
         let mut s = ParticleSystem::with_capacity(2);
-        s.insert(record_at([0.0; 3]), ()).unwrap();
+        s.insert(record_at([0.0; 3])).unwrap();
         s.clear();
         assert_eq!(s.prepare(1.0, &[]), None);
     }

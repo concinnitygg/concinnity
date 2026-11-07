@@ -42,6 +42,7 @@ use super::context::{
     DxContext, DxHardware, DxInstanced, ProbeState, StreamState, record_main_thread,
 };
 use super::geometry_upload::GeometryUploads;
+use super::particle::ParticleState;
 use super::resources::skinning::SkinnedState;
 
 mod adapter;
@@ -333,8 +334,6 @@ impl DxContext {
         let (decal, decals) =
             effects::build_decals(&gpu, &descriptors, &targets, &scene, fx.decals)?;
         let fog = effects::build_fog(&gpu, &descriptors, &targets, &shadow, fx.fog)?;
-        let particle =
-            effects::build_particles(&gpu, &descriptors, &targets, &scene, fx.particles)?;
         let commands = commands::build_commands(&gpu)?;
         let frame_sync = commands::build_frame_sync(&gpu)?;
         let timestamps = commands::build_timestamps(&gpu);
@@ -396,8 +395,7 @@ impl DxContext {
             },
         );
 
-        report_init(&hw);
-
+        let particle = ParticleState::new(descriptors.layout.particle_srv_base_slot);
         let mut ctx = Self {
             post: post_descriptors,
             retired_effects: concinnity_engine::render::buffers::retire_pool::TickedRetirePool::new(
@@ -480,6 +478,11 @@ impl DxContext {
         ctx.state.planner.shadow.cadence = shadows.cadence;
         ctx.sync_disocclusion()?;
         ctx.refresh_gates(&graphics);
+        // Authored emitters take the runtime path, built with the first of them.
+        for record in fx.particles {
+            ctx.add_emitter(record)?;
+        }
+        report_init(&ctx.hw);
         Ok(ctx)
     }
 }

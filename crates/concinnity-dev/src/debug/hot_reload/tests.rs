@@ -925,7 +925,7 @@ impl SettingsTarget for RecordingBackend {}
 impl backend::LightTables for RecordingBackend {}
 impl backend::PlanetReshape for RecordingBackend {}
 impl backend::DecalPass for RecordingBackend {}
-impl backend::RuntimeEmitters for RecordingBackend {}
+impl backend::EmitterPass for RecordingBackend {}
 impl backend::WorldReload for RecordingBackend {}
 
 // A valid 1x1 RGBA8 PNG, so the texture-decode path has a real file to chew on.

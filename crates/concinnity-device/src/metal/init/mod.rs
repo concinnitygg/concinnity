@@ -298,7 +298,6 @@ impl MtlContext {
 
         let (decal, decals) = effects::world::build_decals(&gpu, fx.decals)?;
         let fog = effects::world::build_fog(&gpu, fx.fog)?;
-        let particle = effects::world::build_particles(&gpu, fx.particles)?;
         let planar = PlanarReflectors::plan(&fx.water_surfaces, &fx.glass_panels, planar);
         let n_water = fx.water_surfaces.len();
         let slots = &planar.assignment.slots;
@@ -393,7 +392,7 @@ impl MtlContext {
             fog,
             light_cull,
             cluster_params: ClusterParams::ZERO,
-            particle,
+            particle: super::particle::ParticleState::default(),
             auto_exposure,
             hot_reload: ShaderReload::new(hot_reload),
             world_shader: world_shaders[0].programs.cloned(),
@@ -417,6 +416,11 @@ impl MtlContext {
         };
         ctx.state.planner.shadow.cadence = shadows.cadence;
         ctx.refresh_gates(&graphics);
+        // Authored emitters take the runtime path, which builds the particle
+        // pipelines with the first of them.
+        for record in fx.particles {
+            ctx.add_emitter(record)?;
+        }
         let pooled = ctx.hw.allocator.stats();
         tracing::info!("device allocator: {pooled}");
         // Tally the raymarch metallib cache (the only shader-cache client on

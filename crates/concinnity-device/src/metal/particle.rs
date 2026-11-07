@@ -18,12 +18,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::gfx::frustum::Frustum;
-use concinnity_engine::render::backend::RuntimeEmitters;
+use concinnity_engine::render::backend::EmitterPass;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::particles;
 use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
-    ParticleBurst, ParticleEmitterRecord, ParticleFrame, ParticleSystem,
+    EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
 };
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::uniforms::ParticleView;
@@ -67,11 +66,12 @@ pub(super) struct ParticlePipelines {
     pub rows: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
 
-// The emitter table with each emitter's GPU pool, and the shared compute +
-// render pipelines, built lazily at init (>= 1 declared emitter) or on the
-// first runtime [`MtlContext::add_emitter`].
+// Each emitter's GPU pool, by the id the scene's particle system hands out,
+// and the shared compute + render pipelines, built on the first
+// `RenderBackend::add_emitter`, authored emitters included.
+#[derive(Default)]
 pub(crate) struct ParticleState {
-    pub system: ParticleSystem<ParticleEmitterGpuState>,
+    pub gpu: EmitterGpu<ParticleEmitterGpuState>,
     pub pipelines: Option<ParticlePipelines>,
     // The ring slot this frame's rows went to.
     pub rows_slot: usize,
@@ -88,9 +88,9 @@ impl MtlContext {
         ring_slot: usize,
     ) -> Option<ParticleFrame> {
         let pipelines = self.particle.pipelines.as_ref()?;
-        let frame = self.particle.system.prepare(elapsed, bursts)?;
+        let frame = self.state.particles.prepare(elapsed, bursts)?;
         let slot = ring_slot % pipelines.rows.len().max(1);
-        let rows = self.particle.system.rows();
+        let rows = self.state.particles.rows();
         if let Some(buffer) = pipelines.rows.get(slot) {
             let bytes = bytemuck::cast_slice::<[f32; 4], u8>(rows);
             // SAFETY: the buffer is shared storage sized for `PARTICLE_FRAME_ROWS` rows, which
@@ -126,7 +126,7 @@ impl MtlContext {
         let Some(pipelines) = self.particle.pipelines.as_ref() else {
             return Ok(());
         };
-        if self.particle.system.is_empty() {
+        if self.state.particles.is_empty() {
             return Ok(());
         }
         let sim_desc = MTLComputePassDescriptor::new();
@@ -149,8 +149,11 @@ impl MtlContext {
         // in a realistic mid-life state for when the camera turns back. The cost
         // is per-slot work in a single threadgroup, so leaving it un-culled is
         // cheap.
-        for emitter in self.particle.system.emitters(&frame) {
-            let (rec, gpu, params) = (emitter.record, emitter.gpu, emitter.params);
+        for emitter in self.state.particles.emitters(&frame) {
+            let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                continue;
+            };
+            let (rec, params) = (emitter.record, emitter.params);
             enc.set_buffer(gpu.pool.as_ref(), 0, 0);
             enc.set_value(&params, 2);
             let grid = MTLSize {
@@ -193,8 +196,8 @@ impl MtlContext {
         // Visibility-cull per emitter, for the draw alone: the simulation above
         // ticked every pool.
         let mut visible = self
-            .particle
-            .system
+            .state
+            .particles
             .visible(&frame, frustum, late.is_some())
             .peekable();
 
@@ -251,7 +254,10 @@ impl MtlContext {
 
         let mut draw_calls: u32 = 0;
         for emitter in visible {
-            let (rec, gpu) = (emitter.record, emitter.gpu);
+            let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                continue;
+            };
+            let rec = emitter.record;
             let params = emitter.params;
             if rec.lit != lit {
                 lit = rec.lit;
@@ -395,14 +401,10 @@ pub(super) fn build_emitter_gpu_state(
     Ok(ParticleEmitterGpuState { pool })
 }
 
-impl RuntimeEmitters for MtlContext {
-    // Append a particle-emitter record at runtime, returning a stable slot
-    // index. Allocates the per-emitter GPU pool + atomic counter buffer
-    // (matching the init-time path) and builds the compute + render
-    // pipelines on first use so a world that never declared an emitter
-    // pays zero pipeline cost until the first add. Tombstoned slots from
-    // [`Self::remove_emitter`] are reused before growing the vec.
-    fn add_emitter(&mut self, record: ParticleEmitterRecord) -> RenderResult<usize> {
+impl EmitterPass for MtlContext {
+    // Build the compute + render pipelines on first use, so a world that never
+    // had an emitter pays no pipeline cost until the first add.
+    fn ensure_emitter_pass(&mut self) -> RenderResult<()> {
         if self.particle.pipelines.is_none() {
             let pipelines = build_particle_pipelines(
                 &self.hw.device,
@@ -411,34 +413,21 @@ impl RuntimeEmitters for MtlContext {
             )?;
             self.particle.pipelines = Some(pipelines);
         }
-        let max = particles::MAX_EMITTERS;
-        if !self.particle.system.has_room() {
-            return Err(RenderError::Other(format!(
-                "add_emitter: MAX_EMITTERS ({max}) exceeded"
-            )));
-        }
-        let gpu_state = build_emitter_gpu_state(&self.hw.device, &record)?;
-        let idx = self
-            .particle
-            .system
-            .insert(record, gpu_state)
-            .map_err(|_| {
-                RenderError::Other(format!("add_emitter: MAX_EMITTERS ({max}) exceeded"))
-            })?;
-        Ok(idx)
+        Ok(())
     }
 
-    // Tombstone a runtime emitter slot. Drops the `ParticleEmitterGpuState`:
-    // Metal keeps the underlying pool + counter buffers alive until any
-    // in-flight command buffer referencing them completes, so this is safe
-    // to call mid-frame between encode passes (a debug tool call runs in
-    // the per-frame hook window before the world step). Returns an error
-    // when the index is out of range or already tombstoned.
-    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
-        self.particle
-            .system
-            .remove(emitter_id)
-            .map_err(|e| RenderError::Other(format!("remove_emitter: id {emitter_id} {e}")))?;
+    // Allocate the emitter's pool + atomic counter buffer, zeroed so every slot
+    // starts dead.
+    fn create_emitter(&mut self, id: usize, record: &ParticleEmitterRecord) -> RenderResult<()> {
+        let state = build_emitter_gpu_state(&self.hw.device, record)?;
+        self.particle.gpu.set(id, state);
         Ok(())
+    }
+
+    // Drop the emitter's pool: Metal keeps the underlying buffers alive until
+    // any in-flight command buffer referencing them completes, so this is safe
+    // between encode passes.
+    fn destroy_emitter(&mut self, id: usize) {
+        drop(self.particle.gpu.take(id));
     }
 }

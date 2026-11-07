@@ -15,8 +15,10 @@ use concinnity_core::math::{cos, floor};
 
 pub mod burst;
 pub(crate) mod emitter;
+mod emitter_gpu;
 mod system;
 pub use burst::{EmitterBursts, ParticleBurst, ParticleBursts};
+pub use emitter_gpu::EmitterGpu;
 pub use system::{ActiveEmitter, ParticleFrame, ParticleSystem};
 
 /// Live emitters a renderer holds at once, on every backend; adds past it

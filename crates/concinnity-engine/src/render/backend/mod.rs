@@ -73,7 +73,7 @@ pub mod render_mode;
 mod world_shaders;
 
 pub use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
-pub use effects::{DecalPass, RuntimeEmitters};
+pub use effects::{DecalPass, EmitterPass};
 pub use geometry_rebuild::{
     DrawGeometryUpdate, GeometryRebuild, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
@@ -200,12 +200,12 @@ pub trait RenderBackend:
     + BackendProbe
     + CullReadback
     + DecalPass
+    + EmitterPass
     + DrawStreaming
     + FrameCapture
     + GeometryRebuild
     + PlanetReshape
     + SettingsTarget
-    + RuntimeEmitters
     + LightTables
     + SdfVolumeShaders
     + SkinnedDraws
@@ -466,6 +466,68 @@ pub trait RenderBackend:
             .remove(decal_id)
             .map_err(|e| RenderError::Other(alloc::format!("remove_decal: id {decal_id} {e}")))?;
         self.release_decal_texture(decal_id);
+        Ok(())
+    }
+
+    /// Append a particle-emitter record at runtime, returning a stable slot
+    /// index the caller hands to [`Self::remove_emitter`] later. The record
+    /// lands in the scene's particle system, reusing a vacated slot before
+    /// growing it, and the backend readies its [`EmitterPass`] and allocates
+    /// the emitter's pool, so the simulation begins ticking it on the next
+    /// frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene or on a backend
+    /// without the particle passes, or an error if the passes cannot be
+    /// readied, the system is full, or the pool cannot be allocated.
+    fn add_emitter(
+        &mut self,
+        record: crate::render::particles::ParticleEmitterRecord,
+    ) -> RenderResult<usize> {
+        // Asked first so a backend that builds its passes lazily builds
+        // nothing for a scene-less add that is refused anyway.
+        if self.scene().is_none() {
+            return Err(RenderError::Unsupported { op: "add_emitter" });
+        }
+        self.ensure_emitter_pass()?;
+        let Some(scene) = self.scene_mut() else {
+            return Err(RenderError::Unsupported { op: "add_emitter" });
+        };
+        let id = scene.particles.insert(record).map_err(|_| {
+            RenderError::Other(alloc::format!(
+                "add_emitter: MAX_EMITTERS ({}) exceeded",
+                crate::render::particles::MAX_EMITTERS
+            ))
+        })?;
+        if let Err(e) = self.create_emitter(id, &record) {
+            if let Some(scene) = self.scene_mut() {
+                let removed = scene.particles.remove(id);
+                debug_assert!(removed.is_ok(), "emitter {id} was just handed out");
+            }
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    /// Tombstone a runtime emitter slot and release its GPU pool. The id
+    /// returned by [`Self::add_emitter`] becomes invalid; the next add may
+    /// reuse it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError::Unsupported`] without a scene, or an error if
+    /// `emitter_id` names no live emitter.
+    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
+        let Some(scene) = self.scene_mut() else {
+            return Err(RenderError::Unsupported {
+                op: "remove_emitter",
+            });
+        };
+        scene.particles.remove(emitter_id).map_err(|e| {
+            RenderError::Other(alloc::format!("remove_emitter: id {emitter_id} {e}"))
+        })?;
+        self.destroy_emitter(emitter_id);
         Ok(())
     }
 

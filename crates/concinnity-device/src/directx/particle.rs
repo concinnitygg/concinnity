@@ -21,11 +21,11 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::ParticleParams;
-use concinnity_engine::render::backend::RuntimeEmitters;
+use concinnity_engine::render::backend::EmitterPass;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
-    ParticleBurst, ParticleEmitterRecord, ParticleFrame, ParticleSystem,
+    EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
 };
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use windows::Win32::Foundation::RECT;
@@ -46,15 +46,27 @@ use crate::directx::texture::{
 use crate::directx::{builtin_shaders, com};
 
 // GPU-compute particle system. `resources` (compute + render PSOs + per-frame
-// uniform rings) is built lazily either at init (when the world declared >= 1
-// emitter) or on the first runtime `add_emitter`; it stays `None` when no
-// emitter has ever existed. `system` holds the emitters, each with its pool.
-// `srv_base_slot` is the SRV-heap slot where emitter `i`'s albedo SRV lives
-// (written by `add_emitter`).
+// uniform rings) is built on the first `add_emitter`, authored emitters
+// included; it stays `None` when no emitter has ever existed. `gpu` holds each
+// emitter's pool. `srv_base_slot` is the SRV-heap slot where emitter `i`'s
+// albedo SRV lives (written by `create_emitter`).
 pub(in crate::directx) struct ParticleState {
     pub resources: Option<ParticleResources>,
-    pub system: ParticleSystem<ParticleEmitterGpuState>,
+    // Each emitter's pool, by the id the scene's particle system hands out.
+    pub gpu: EmitterGpu<ParticleEmitterGpuState>,
     pub srv_base_slot: usize,
+}
+
+impl ParticleState {
+    // No emitter yet, with emitter `i`'s albedo SRV at heap slot
+    // `srv_base_slot + i`.
+    pub(in crate::directx) fn new(srv_base_slot: usize) -> Self {
+        Self {
+            resources: None,
+            gpu: EmitterGpu::new(),
+            srv_base_slot,
+        }
+    }
 }
 
 // The SRV heap reserves a fixed block of `MAX_EMITTERS` per-emitter albedo
@@ -443,8 +455,8 @@ impl DxContext {
         frame_idx: usize,
     ) -> Option<ParticleFrame> {
         let resources = self.particle.resources.as_ref()?;
-        let frame = self.particle.system.prepare(elapsed, bursts)?;
-        let rows = bytemuck::cast_slice::<[f32; 4], u8>(self.particle.system.rows());
+        let frame = self.state.particles.prepare(elapsed, bursts)?;
+        let rows = bytemuck::cast_slice::<[f32; 4], u8>(self.state.particles.rows());
         resources.rows.write_bytes(frame_idx, rows)?;
         Some(frame)
     }
@@ -479,7 +491,7 @@ impl DxContext {
                 size_of::<ParticleView>(),
             );
         }
-        for emitter in self.particle.system.emitters(frame) {
+        for emitter in self.state.particles.emitters(frame) {
             let offset = usize::saturating_from(emitter.id as u64 * resources.params_stride);
             // SAFETY: init sized the persistent mapping for `MAX_EMITTERS` slots of
             // `params_stride` bytes, and emitter ids stay below `MAX_EMITTERS`.
@@ -532,11 +544,14 @@ impl DxContext {
         unsafe { cmd.SetPipelineState(&resources.simulate_pso) };
         // SAFETY: the signature declares the rows' SRV here, and this frame's block is live.
         unsafe { cmd.SetComputeRootShaderResourceView(2, rows_gva) };
-        for emitter in self.particle.system.emitters(&frame) {
+        for emitter in self.state.particles.emitters(&frame) {
             let params_gva = Self::particle_params_gva(resources, frame_idx, emitter.id);
             // SAFETY: `params_gva` addresses this emitter's slot in this frame's params ring.
             unsafe { cmd.SetComputeRootConstantBufferView(0, params_gva) };
-            let pool_gva = com::gpu_va(&emitter.gpu.pool);
+            let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                continue;
+            };
+            let pool_gva = com::gpu_va(&gpu.pool);
             // SAFETY: the emitter's pool is live and already in UNORDERED_ACCESS.
             unsafe { cmd.SetComputeRootUnorderedAccessView(1, pool_gva) };
             let groups = emitter.record.max_particles.div_ceil(64);
@@ -570,8 +585,8 @@ impl DxContext {
         // state for when the camera turns back. Tombstoned (None) slots are
         // always invisible.
         let mut visible = self
-            .particle
-            .system
+            .state
+            .particles
             .visible(frame, frustum, late)
             .peekable();
         let any_visible = visible.peek().is_some();
@@ -645,7 +660,10 @@ impl DxContext {
                 let albedo_srv_gpu = self.emitter_albedo_srv_gpu(emitter.id);
                 // SAFETY: `params_gva` addresses this emitter's slot in this frame's params ring.
                 unsafe { cmd.SetGraphicsRootConstantBufferView(1, params_gva) };
-                let pool_gva = com::gpu_va(&emitter.gpu.pool);
+                let Some(gpu) = self.particle.gpu.get(emitter.id) else {
+                    continue;
+                };
+                let pool_gva = com::gpu_va(&gpu.pool);
                 // SAFETY: the emitter's pool is live, and the graph moved it to a vertex-readable
                 // state for this pass.
                 unsafe { cmd.SetGraphicsRootShaderResourceView(2, pool_gva) };
@@ -659,19 +677,17 @@ impl DxContext {
     }
 }
 
-// Runtime mutation (RuntimeEmitters::add_emitter / remove_emitter)
+// Runtime emitters (`RenderBackend::add_emitter` / `remove_emitter`)
 
 // cn-debug-only runtime-mutation surface; dead from the FFI lib crate's roots,
 // live in the concinnity binary. See the note on the analogous block in
 // [directx/decal.rs].
 
-impl RuntimeEmitters for DxContext {
-    // Append a runtime emitter. Builds the particle pipelines + per-frame
-    // uniform rings on first use (matching the init-time path) so a world
-    // that never declared an emitter pays zero pipeline cost until the
-    // first add. Reuses tombstoned slots from a prior `remove_emitter`
-    // before growing the vec.
-    fn add_emitter(&mut self, record: ParticleEmitterRecord) -> RenderResult<usize> {
+impl EmitterPass for DxContext {
+    // Build the particle pipelines + per-frame uniform rings on first use, so a
+    // world that never had an emitter pays no pipeline cost until the first
+    // add.
+    fn ensure_emitter_pass(&mut self) -> RenderResult<()> {
         if self.particle.resources.is_none() {
             let resources = ParticleResources::new(
                 &self.hw.alloc,
@@ -683,6 +699,12 @@ impl RuntimeEmitters for DxContext {
             )?;
             self.particle.resources = Some(resources);
         }
+        Ok(())
+    }
+
+    // Allocate the emitter's pool and write its albedo SRV into its reserved
+    // heap slot; the encoder reads both next frame.
+    fn create_emitter(&mut self, id: usize, record: &ParticleEmitterRecord) -> RenderResult<()> {
         let base_slot = self
             .particle
             .resources
@@ -691,21 +713,14 @@ impl RuntimeEmitters for DxContext {
             .ok_or_else(|| {
                 RenderError::Other("add_emitter: particle pipeline unavailable".to_string())
             })?;
-
-        let gpu_state = build_emitter_gpu_state(&self.hw.alloc, &record)?;
-        let last_tex = self.scene.textures.len().saturating_sub(1);
-        let tex_idx = record.texture_slot.min(last_tex);
-
-        let id = self
-            .particle
-            .system
-            .insert(record, gpu_state)
-            .map_err(|_| {
-                RenderError::Other(format!(
-                    "add_emitter: MAX_EMITTERS ({MAX_EMITTERS}) exceeded"
-                ))
-            })?;
-
+        debug_assert!(
+            id < MAX_EMITTERS,
+            "emitter id {id} is past the {MAX_EMITTERS} reserved albedo SRVs"
+        );
+        let gpu_state = build_emitter_gpu_state(&self.hw.alloc, record)?;
+        let tex_idx = record
+            .texture_slot
+            .min(self.scene.textures.len().saturating_sub(1));
         let srv_cpu = D3D12_CPU_DESCRIPTOR_HANDLE {
             // SAFETY: a property query on a live descriptor heap; it only reads.
             ptr: unsafe {
@@ -716,18 +731,14 @@ impl RuntimeEmitters for DxContext {
             .ptr + (base_slot + id) * self.descriptors.srv_descriptor_size,
         };
         write_texture_srv(&self.hw.device, &self.scene.textures[tex_idx], srv_cpu);
-        Ok(id)
+        self.particle.gpu.set(id, gpu_state);
+        Ok(())
     }
 
-    // Tombstone a runtime emitter slot. The id becomes invalid; the next
-    // `add_emitter` may reuse it. The pool resource is dropped; the D3D12
-    // driver keeps it alive until any in-flight command list that referenced it
-    // completes, so this is safe to call mid-frame between encode passes.
-    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
-        self.particle
-            .system
-            .remove(emitter_id)
-            .map_err(|e| RenderError::Other(format!("remove_emitter: id {emitter_id} {e}")))?;
-        Ok(())
+    // Drop the emitter's pool; the D3D12 driver keeps it alive until any
+    // in-flight command list that referenced it completes, so this is safe
+    // between encode passes.
+    fn destroy_emitter(&mut self, id: usize) {
+        drop(self.particle.gpu.take(id));
     }
 }

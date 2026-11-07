@@ -1,9 +1,9 @@
 //! The CPU-side scene every graphics backend draws from: the draw list, the
 //! camera view, the light block, the skinned slots, the material parameter
-//! table, the live fog, the reflection-probe book, the runtime decals, the
-//! model-history tracker,
-//! the placement of streamed geometry in the shared vertex and index buffers,
-//! and the flags that tell the GPU side what to rebuild.
+//! table, the live fog, the reflection-probe book, the runtime decals and
+//! particle emitters, the model-history tracker, the placement of streamed
+//! geometry in the shared vertex and index buffers, and the flags that tell
+//! the GPU side what to rebuild.
 //!
 //! None of it is a device object. A backend embeds one [`SceneState`], reads it
 //! while recording a frame, and lends it to the
@@ -25,6 +25,7 @@ use crate::render::environment::volumetric_fog::SceneFog;
 use crate::render::frame::plan::FramePlanner;
 use crate::render::light::state::LightState;
 use crate::render::material_params::MaterialParamTable;
+use crate::render::particles::ParticleSystem;
 use crate::render::probe::book::ProbeBook;
 use crate::render::slots::skinned_slots::SkinnedSlots;
 use crate::render::temporal::model_history::ModelHistory;
@@ -59,6 +60,9 @@ pub struct SceneState {
     /// The projected decals the decal pass draws, by the slot id the caller
     /// removes them by.
     pub decals: DecalSet,
+    /// The particle emitters the particle passes simulate and draw, by the
+    /// slot id the caller removes them by.
+    pub particles: ParticleSystem,
     /// The reflection probes placed, which have baked, and the placements
     /// asked for and not yet placed, which the backend's bake places on its
     /// next step.
@@ -102,6 +106,7 @@ impl SceneState {
             material_params,
             fog,
             decals,
+            particles: ParticleSystem::new(),
             probes: ProbeBook::new(),
             model_history: RefCell::new(ModelHistory::new()),
             placement: GeometryPlacement::default(),

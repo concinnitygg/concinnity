@@ -261,8 +261,8 @@ impl MtlContext {
             shadowed_spot_count: self.spot_shadow.count,
             bloom_intensity: self.post_process.bloom_intensity,
             bvh_live: self.rt.accel.is_some(),
-            emitters: !self.particle.system.is_empty(),
-            late_emitters: self.particle.system.draws_after_transparent(),
+            emitters: !self.state.particles.is_empty(),
+            late_emitters: self.state.particles.draws_after_transparent(),
             fog: self.state.fog.settings().is_some_and(|s| s.contributes()),
             decals: !self.state.decals.is_empty(),
             visible_surfaces: (self.water.pipeline.is_some()

@@ -940,8 +940,8 @@ impl DxContext {
             let first = arena.len();
             arena.extend(
                 self.particle
-                    .system
-                    .gpu_states()
+                    .gpu
+                    .iter()
                     .map(|gpu| ResourceRef::new(&gpu.pool)),
             );
             let count = arena.len() - first;

@@ -43,8 +43,8 @@ mod tests {
     };
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
-        BackendProbe, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming, FrameCapture,
-        FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RuntimeEmitters,
+        BackendProbe, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming, EmitterPass,
+        FrameCapture, FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend,
         SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload,
         WorldShaders,
     };
@@ -80,6 +80,10 @@ mod tests {
         // Decal slot bindings, `(id, Some(texture))` bound and `(id, None)`
         // released.
         decal_bindings: Vec<(usize, Option<usize>)>,
+        // Emitter pools, `(id, true)` created and `(id, false)` destroyed;
+        // the next create fails when `fail_emitter` is set.
+        emitter_pools: Vec<(usize, bool)>,
+        fail_emitter: bool,
     }
 
     impl Hosted {
@@ -116,6 +120,8 @@ mod tests {
                 scene,
                 writes: Writes::default(),
                 decal_bindings: Vec::new(),
+                emitter_pools: Vec::new(),
+                fail_emitter: false,
             }
         }
     }
@@ -204,7 +210,27 @@ mod tests {
             self.decal_bindings.push((id, None));
         }
     }
-    impl RuntimeEmitters for Hosted {}
+    impl EmitterPass for Hosted {
+        fn ensure_emitter_pass(&mut self) -> RenderResult<()> {
+            Ok(())
+        }
+        fn create_emitter(
+            &mut self,
+            id: usize,
+            _: &crate::render::particles::ParticleEmitterRecord,
+        ) -> RenderResult<()> {
+            if self.fail_emitter {
+                return Err(crate::render::backend::error::RenderError::Other(
+                    "no pool".into(),
+                ));
+            }
+            self.emitter_pools.push((id, true));
+            Ok(())
+        }
+        fn destroy_emitter(&mut self, id: usize) {
+            self.emitter_pools.push((id, false));
+        }
+    }
     impl LightTables for Hosted {}
     impl SdfVolumeShaders for Hosted {}
     impl WorldReload for Hosted {}
@@ -347,5 +373,25 @@ mod tests {
         assert!(b.scene.decals.is_empty());
         assert!(b.remove_decal(id).is_err());
         assert_eq!(b.decal_bindings, [(id, Some(4)), (id, None)]);
+    }
+
+    // A runtime emitter lands in the scene's particle system and the backend
+    // allocates its pool; a pool that cannot be allocated leaves no emitter.
+    #[test]
+    fn a_runtime_emitter_lives_in_the_scenes_particle_system() {
+        let mut b = Hosted::new();
+        let record = crate::render::particles::ParticleEmitterRecord::new(
+            &crate::components::ParticleEmitter::default(),
+            0,
+        );
+        let id = b.add_emitter(record).unwrap();
+        assert!(!b.scene.particles.is_empty());
+        b.fail_emitter = true;
+        assert!(b.add_emitter(record).is_err());
+        b.fail_emitter = false;
+        b.remove_emitter(id).unwrap();
+        assert!(b.scene.particles.is_empty());
+        assert!(b.remove_emitter(id).is_err());
+        assert_eq!(b.emitter_pools, [(id, true), (id, false)]);
     }
 }

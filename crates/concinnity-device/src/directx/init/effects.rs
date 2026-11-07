@@ -10,7 +10,6 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::SdfVolumeSource;
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
-use concinnity_engine::render::particles::{ParticleEmitterRecord, ParticleSystem};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::ssao::settings::SsaoSettings;
@@ -29,7 +28,6 @@ use crate::directx::decal::DecalState;
 use crate::directx::descriptor_slot::SamplerSlot;
 use crate::directx::draw::shadow::ShadowState;
 use crate::directx::fog::FogState;
-use crate::directx::particle::ParticleState;
 use crate::directx::planar::PlanarReflectionSet;
 use crate::directx::post::descriptors::PostDescriptors;
 use crate::directx::post::gbuffer::{GbufferResources, GbufferSlots};
@@ -422,61 +420,6 @@ pub(super) fn build_fog(
     };
     Ok(FogState {
         resources: fog_resources,
-    })
-}
-
-// Particles: compute + render pipelines + per-frame uniform rings, plus one
-// persistent GPU pool per emitter. Built only when the world declared at least
-// one emitter; the encoder skips the passes when `resources` is `None`, and
-// runtime `add_emitter` builds the pipelines lazily the same way. The emitter
-// cap matches the SRV-heap reservation.
-pub(super) fn build_particles(
-    gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
-    scene: &DxSceneAssets,
-    particles: Vec<ParticleEmitterRecord>,
-) -> RenderResult<ParticleState> {
-    let hw = gpu.hw;
-    let particle_srv_base_slot = descriptors.layout.particle_srv_base_slot;
-    if particles.len() > crate::directx::particle::MAX_EMITTERS {
-        return Err(RenderError::Other(format!(
-            "particles: {} authored emitters exceed MAX_EMITTERS ({})",
-            particles.len(),
-            crate::directx::particle::MAX_EMITTERS
-        )));
-    }
-    let mut system = ParticleSystem::new();
-    let resources = if particles.is_empty() {
-        None
-    } else {
-        Some(crate::directx::particle::ParticleResources::new(
-            &hw.alloc,
-            particle_srv_base_slot,
-            targets.hdr.msaa_samples,
-            targets.main_depth_srv_gpu,
-            hw.info_queue.as_ref(),
-            gpu.hot_reload,
-        )?)
-    };
-    let last_tex = scene.textures.len().saturating_sub(1);
-    for rec in particles {
-        let state = crate::directx::particle::build_emitter_gpu_state(&hw.alloc, &rec)?;
-        let tex_idx = rec.texture_slot.min(last_tex);
-        let id = system
-            .insert(rec, state)
-            .map_err(|_| RenderError::Other("particles: no free emitter slot".into()))?;
-        // Write the per-emitter albedo SRV into its reserved heap slot.
-        write_texture_srv(
-            &hw.device,
-            &scene.textures[tex_idx],
-            descriptors.slot_cpu(particle_srv_base_slot + id),
-        );
-    }
-    Ok(ParticleState {
-        resources,
-        system,
-        srv_base_slot: particle_srv_base_slot,
     })
 }
 

@@ -24,8 +24,8 @@ use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
     BackendProbe, ChunkMesh, CullReadback, DecalPass, DeviceCapabilities, DrawStreaming,
-    FrameCapture, FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend,
-    RuntimeEmitters, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
+    EmitterPass, FrameCapture, FrameParams, GeometryRebuild, LightTables, PlanetReshape,
+    RenderBackend, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
     WorldReload, WorldShaders,
 };
 use crate::render::scene_state::SceneState;
@@ -798,7 +798,7 @@ impl CullReadback for RecordingBackend {}
 impl LightTables for RecordingBackend {}
 impl GeometryRebuild for RecordingBackend {}
 impl DecalPass for RecordingBackend {}
-impl RuntimeEmitters for RecordingBackend {}
+impl EmitterPass for RecordingBackend {}
 impl SdfVolumeShaders for RecordingBackend {}
 
 #[cfg(test)]

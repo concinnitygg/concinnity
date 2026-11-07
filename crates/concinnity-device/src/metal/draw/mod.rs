@@ -135,7 +135,7 @@ impl FrameDevice for MtlContext {
             self.state.decals.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_water(rebase);
-            self.particle.system.rebase(rebase);
+            self.state.particles.rebase(rebase);
         }
         Ok(())
     }

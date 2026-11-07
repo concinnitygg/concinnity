@@ -11,7 +11,6 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::SdfVolumeSource;
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::volumetric_fog::FogSettings;
-use concinnity_engine::render::particles::{MAX_EMITTERS, ParticleEmitterRecord, ParticleSystem};
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::water::WaterBody;
 use concinnity_engine::water::ocean::OceanPlan;
@@ -29,7 +28,6 @@ use crate::metal::fog::{
     FogState, build_fog_froxel_pipeline, build_fog_froxel_volume, build_fog_pipeline,
 };
 use crate::metal::init::{Features, InitGpu};
-use crate::metal::particle::{ParticleState, build_emitter_gpu_state, build_particle_pipelines};
 use crate::metal::planar::PlanarReflectionSet;
 use crate::metal::{glass, raymarch, raytrace, water};
 
@@ -145,43 +143,6 @@ pub(in crate::metal::init) fn build_fog(
         pipeline,
         froxel_pipeline,
         froxel_volume,
-    })
-}
-
-// Particle compute + render pipelines, plus one persistent GPU pool per
-// emitter. Pools are zero-initialized so every slot starts dead; the
-// compute kernel spawns into them on its first dispatch.
-pub(in crate::metal::init) fn build_particles(
-    gpu: &InitGpu<'_>,
-    particles: Vec<ParticleEmitterRecord>,
-) -> RenderResult<ParticleState> {
-    let device = &*gpu.hw.device;
-    if particles.len() > MAX_EMITTERS {
-        return Err(RenderError::Other(format!(
-            "particles: {} authored emitters exceed MAX_EMITTERS ({MAX_EMITTERS})",
-            particles.len()
-        )));
-    }
-    let mut system = ParticleSystem::new();
-    let pipelines = if particles.is_empty() {
-        None
-    } else {
-        Some(build_particle_pipelines(
-            device,
-            gpu.hot_reload,
-            gpu.frames_in_flight + 1,
-        )?)
-    };
-    for rec in particles {
-        let state = build_emitter_gpu_state(device, &rec)?;
-        system
-            .insert(rec, state)
-            .map_err(|_| RenderError::Other("particles: no free emitter slot".into()))?;
-    }
-    Ok(ParticleState {
-        system,
-        pipelines,
-        rows_slot: 0,
     })
 }
 

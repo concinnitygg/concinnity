@@ -1,9 +1,8 @@
 //! Decals and particle emitters, added and removed while the world runs.
 //!
-//! Both are slot tables: the caller hands over a record and gets back the
-//! index it will remove by. The decals' table is the scene's, and a backend
-//! answers only for the pass that draws it; the emitters' is the backend's
-//! own.
+//! Both are slot tables the scene keeps: the caller hands over a record and
+//! gets back the index it will remove by, and a backend answers only for the
+//! passes that draw them.
 
 use crate::render::backend::error::{RenderError, RenderResult};
 
@@ -38,41 +37,44 @@ pub trait DecalPass {
     }
 }
 
-/// The particle-emitter slot table.
+/// The GPU side of the particle passes: the pipelines every emitter runs
+/// through and each emitter's own pool. The emitter table itself is the
+/// scene's [`ParticleSystem`](crate::render::particles::ParticleSystem).
 ///
-/// Defaulted to [`RenderError::Unsupported`], so a backend without the pass
-/// reports the failure to whoever asked rather than silently accepting a
-/// record it will never draw.
-pub trait RuntimeEmitters {
-    /// Append a particle-emitter record at runtime, returning a stable slot
-    /// index. The backend allocates the per-emitter GPU pool + atomic
-    /// spawn counter (matching the init-time path) so the compute kernel
-    /// can begin ticking on the next frame.
+/// Defaulted for a backend without the passes: it has no pipelines to make
+/// ready, so a runtime emitter is refused with [`RenderError::Unsupported`]
+/// rather than silently accepted and never drawn.
+pub trait EmitterPass {
+    /// Make the particle passes ready to run an emitter, building their
+    /// pipelines on first use, so a world that never had an emitter pays
+    /// nothing until the first add.
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Unsupported`] on a backend without runtime
-    /// emitters, or an error if the emitter's GPU pool cannot be allocated.
-    fn add_emitter(
-        &mut self,
-        record: crate::render::particles::ParticleEmitterRecord,
-    ) -> RenderResult<usize> {
-        let _ = record;
+    /// Returns [`RenderError::Unsupported`] on a backend without the passes,
+    /// or an error if their pipelines cannot be built.
+    fn ensure_emitter_pass(&mut self) -> RenderResult<()> {
         Err(RenderError::Unsupported { op: "add_emitter" })
     }
 
-    /// Tombstone a runtime emitter slot and release its GPU pool +
-    /// counter buffers (the GPU keeps them alive via its own refcount
-    /// until any in-flight command buffer that referenced them completes).
+    /// Allocate emitter `id`'s GPU pool and spawn counter for `record`, and
+    /// bind its albedo, so the simulation can tick it from the next frame.
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::Unsupported`] on a backend without runtime
-    /// emitters, or an error if `emitter_id` names no live emitter.
-    fn remove_emitter(&mut self, emitter_id: usize) -> RenderResult<()> {
-        let _ = emitter_id;
-        Err(RenderError::Unsupported {
-            op: "remove_emitter",
-        })
+    /// Returns an error if the pool cannot be allocated.
+    fn create_emitter(
+        &mut self,
+        id: usize,
+        record: &crate::render::particles::ParticleEmitterRecord,
+    ) -> RenderResult<()> {
+        let _ = (id, record);
+        Ok(())
+    }
+
+    /// Release emitter `id`'s GPU pool once it is removed, keeping it alive
+    /// for whatever frame in flight still reads it.
+    fn destroy_emitter(&mut self, id: usize) {
+        let _ = id;
     }
 }

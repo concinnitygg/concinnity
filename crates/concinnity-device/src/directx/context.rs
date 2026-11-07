@@ -1216,7 +1216,7 @@ impl FrameDevice for DxContext {
             self.state.decals.rebase(rebase);
             self.rebase_grass(rebase);
             self.rebase_transparent_water(rebase);
-            self.particle.system.rebase(rebase);
+            self.state.particles.rebase(rebase);
         }
         Ok(())
     }

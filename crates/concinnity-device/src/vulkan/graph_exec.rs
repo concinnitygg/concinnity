@@ -812,12 +812,7 @@ impl VkContext {
             }),
             "particle_pool" => {
                 let first = arena.len();
-                arena.extend(
-                    self.particle
-                        .system
-                        .gpu_states()
-                        .map(|gpu| gpu.pool_buffer.buffer()),
-                );
+                arena.extend(self.particle.gpu.iter().map(|gpu| gpu.pool_buffer.buffer()));
                 let count = arena.len() - first;
                 (count > 0).then_some((
                     VkTargetObject::BufferSet { first, count },
