@@ -276,7 +276,7 @@ impl MtlContext {
             let cluster_params = mirror.cluster_params(
                 &frame,
                 &self.cluster_params,
-                self.lights.cluster_reach(),
+                self.state.lights.cluster_reach(),
                 self.state.probes.records(),
             );
             let clusters = (cluster_params.use_clusters != 0).then(|| ClusterGrid {

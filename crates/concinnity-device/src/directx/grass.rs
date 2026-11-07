@@ -477,7 +477,7 @@ impl DxContext {
             elapsed,
             shadow: cast.then(|| GrassShadowView {
                 vp: self.state.planner.shadow.uniforms.light_vps[0],
-                to_light: self.uniforms.lights.sun().direction,
+                to_light: self.state.lights.sun().direction,
             }),
             benders,
         };

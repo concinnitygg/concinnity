@@ -197,6 +197,11 @@ mod tests {
         SceneState::new(
             DrawList::unreserved(objects, 0),
             [0.0; 4],
+            crate::render::light::state::LightState::new(
+                crate::gfx::render_types::LightUniforms::DEFAULT,
+                &[],
+                1,
+            ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
         )
@@ -379,6 +384,11 @@ mod tests {
         let mut s = SceneState::new(
             DrawList::with_runtime_reserve(vec![], 0, 1),
             [0.0; 4],
+            crate::render::light::state::LightState::new(
+                crate::gfx::render_types::LightUniforms::DEFAULT,
+                &[],
+                1,
+            ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
         );

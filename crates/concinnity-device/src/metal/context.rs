@@ -585,9 +585,6 @@ pub(crate) struct MtlContext {
     pub(super) instanced: InstancedState,
     // Scene assets. See [`MtlSceneAssets`].
     pub(super) scene: MtlSceneAssets,
-    // All scene lights packed and pushed to the fragment shader at buffer(4),
-    // with the local lights' reach. Pushed every draw, so no copy is ever stale.
-    pub(super) lights: concinnity_engine::render::light::state::LightState,
     // What the canopy block is filled from: the grass's far fields and the
     // planet's ground. `None` when the world has neither.
     pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,

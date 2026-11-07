@@ -44,7 +44,7 @@ mod tests {
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
         BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
-        GeometryRebuild, PlanetReshape, RenderBackend, RuntimeDecals, RuntimeEmitters, SceneLights,
+        GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RuntimeDecals, RuntimeEmitters,
         SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload,
         WorldShaders,
     };
@@ -94,6 +94,11 @@ mod tests {
             let mut scene = SceneState::new(
                 DrawList::unreserved(objects, 0),
                 [0.0; 4],
+                crate::render::light::state::LightState::new(
+                    crate::gfx::render_types::LightUniforms::DEFAULT,
+                    &[],
+                    1,
+                ),
                 crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
                 crate::render::environment::volumetric_fog::SceneFog::default(),
             );
@@ -185,7 +190,7 @@ mod tests {
     impl SettingsTarget for Hosted {}
     impl RuntimeDecals for Hosted {}
     impl RuntimeEmitters for Hosted {}
-    impl SceneLights for Hosted {}
+    impl LightTables for Hosted {}
     impl SdfVolumeShaders for Hosted {}
     impl WorldReload for Hosted {}
     impl WorldShaders for Hosted {}

@@ -1111,7 +1111,7 @@ impl DxContext {
     ) -> super::transparent::TransparentView {
         super::transparent::TransparentView::new(
             &self.pass_camera(params, params.vp_mat),
-            self.uniforms.lights.uniforms(),
+            self.state.lights.uniforms(),
             &self.state.view.daylight,
         )
     }

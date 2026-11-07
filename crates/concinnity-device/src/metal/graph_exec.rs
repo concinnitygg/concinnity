@@ -921,7 +921,7 @@ impl MtlContext {
         let scene_pre_taa = pass_input(params.scene_pre_taa, PassId::Transparent, "scene_pre_taa")?;
         let view = concinnity_engine::render::uniforms::TransparentView::new(
             &self.pass_camera(params),
-            self.lights.uniforms(),
+            self.state.lights.uniforms(),
             &self.state.view.daylight,
         );
         // The mirrors `PlanarReflection` rendered this frame, if the pass

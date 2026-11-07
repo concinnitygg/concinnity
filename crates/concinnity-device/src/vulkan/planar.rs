@@ -868,7 +868,7 @@ impl VkContext {
             let cluster_params = mirror.cluster_params(
                 &frame,
                 &params.cluster_params,
-                self.uniforms.lights.cluster_reach(),
+                self.state.lights.cluster_reach(),
                 self.state.probes.records(),
             );
             set.cluster_params_bufs[ring].write_val(0, &cluster_params);

@@ -196,10 +196,6 @@ pub(super) struct DxUniforms {
     // pass. Static: filled once at init from `BackendInit.local_lights` and
     // never rewritten (not persistently mapped, so it stays out of `unmap`).
     pub local_light_buffer: PooledBuffer,
-    // The values the light ring carries, which slots of it are stale, and the
-    // local lights' reach. `record_frame` writes the frame's own slot, so no
-    // in-flight read is raced.
-    pub lights: concinnity_engine::render::light::state::LightState,
     pub shadow_ubo_resources: Vec<PooledBuffer>,
     pub shadow_ubo_ptrs: Vec<*mut u8>,
     // Per-frame CBVs holding the live probe count, bound at root param [11] by
@@ -1148,7 +1144,7 @@ impl DxContext {
     // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        self.uniforms.lights.set_ambient(value);
+        self.state.lights.set_ambient(value);
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {

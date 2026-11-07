@@ -19,8 +19,8 @@
 //!   nothing and succeeds.
 //! - A request asks for an outcome the caller reports or builds on: an id, a
 //!   screenshot, readback, a geometry edit, a pipeline swap, a reload. Its
-//!   default returns [`RenderError::Unsupported`](crate::render::backend::error::RenderError::Unsupported),
-//!   so "not done" is never mistaken for "done".
+//!   default returns [`RenderError::Unsupported`], so "not done" is never
+//!   mistaken for "done".
 //! - A window hint (cursor, menu mode, vsync, window mode) returns nothing and
 //!   defaults to doing nothing: the platform may refuse it anyway.
 //!
@@ -36,6 +36,8 @@
 mod effects;
 // Rewriting a built world's geometry: the hot-reload rebuilders.
 mod geometry_rebuild;
+// The per-light tables a backend's GPU reads.
+mod lights;
 #[cfg(any(test, feature = "test-support"))]
 mod null;
 // Building replacement pipelines on a thread other than the frame thread.
@@ -58,8 +60,6 @@ mod skinned;
 mod streaming;
 // The texture pool, the color-grading LUT and the environment map.
 mod textures;
-// The lights the world feeds.
-mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
 mod window;
 // The world Shader and SdfVolume pipelines.
@@ -77,6 +77,7 @@ pub use effects::{RuntimeDecals, RuntimeEmitters};
 pub use geometry_rebuild::{
     DrawGeometryUpdate, GeometryRebuild, SkinnedDrawGeometryUpdate, SkinnedSlotLayout,
 };
+pub use lights::LightTables;
 #[cfg(any(test, feature = "test-support"))]
 pub use null::NullBackend;
 pub use pipeline_builder::{PipelineBuilder, PreparedPipelines};
@@ -92,12 +93,11 @@ pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::{SkinnedDraws, SkinnedFrame};
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
 pub use textures::TextureUploads;
-pub use tuning::SceneLights;
 pub use window::WindowControl;
 pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
 use crate::gfx::render_types::{LineVertex, MATERIAL_PARAM_COUNT, MaterialUniforms, TextDrawCall};
-use crate::render::backend::error::RenderResult;
+use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::scene::flow::SceneControl;
 use crate::settings::apply::SettingsTarget;
 
@@ -206,7 +206,7 @@ pub trait RenderBackend:
     + SettingsTarget
     + RuntimeDecals
     + RuntimeEmitters
-    + SceneLights
+    + LightTables
     + SdfVolumeShaders
     + SkinnedDraws
     + TextureUploads
@@ -355,6 +355,65 @@ pub trait RenderBackend:
         if let Some(scene) = self.scene_mut() {
             scene.probes.request(probes.to_vec(), prop_probe);
         }
+    }
+
+    /// Replace the live directional-light set (the sun), written into the
+    /// scene's light block in place. Every reader, the cascade shadow
+    /// direction and the fog sun included, takes the sun from it each frame.
+    fn update_directional_lights(&mut self, lights: &[crate::components::DirectionalLight]) {
+        if let Some(scene) = self.scene_mut() {
+            scene.lights.set_directional(lights);
+        }
+    }
+
+    /// Replace the spheres that keep part of the sky's light off their
+    /// surroundings, written into the scene's light block in place.
+    fn update_sky_occluders(
+        &mut self,
+        occluders: &crate::render::light::sky_occluders::SkyOccluders,
+    ) {
+        if let Some(scene) = self.scene_mut() {
+            scene.lights.set_sky_occluders(occluders);
+        }
+    }
+
+    /// Move the local lights (point, spot and rect area) in place: `lights` is
+    /// `lights::build_light_data` over the same lights in the same order, so
+    /// the count and every slot assignment are unchanged and only positions
+    /// and directions differ. `uniforms` supplies the point array world shader
+    /// hooks read; its other fields are ignored. This is how a world that
+    /// moves to another simulated frame carries its lights. The GPU is drained
+    /// before the backend's [`LightTables`] are rewritten, and the spot shadow
+    /// slices re-render from their first refresh. Without a scene there are no
+    /// lights to move, and this succeeds doing nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the light count does not match the lights built at
+    /// init, or if a table cannot be written.
+    fn move_local_lights(
+        &mut self,
+        lights: &crate::render::light::lights::LightData,
+        uniforms: &crate::gfx::render_types::LightUniforms,
+    ) -> RenderResult<()> {
+        let spot_slices = self.spot_slice_count();
+        let Some(scene) = self.scene() else {
+            return Ok(());
+        };
+        if !scene.lights.same_local_count(&lights.lights)
+            || lights.spot_shadows.len() != spot_slices
+        {
+            return Err(RenderError::Other(
+                "move_local_lights: the light count changed since init".into(),
+            ));
+        }
+        self.wait_idle();
+        self.rewrite_light_tables(lights)?;
+        if let Some(scene) = self.scene_mut() {
+            scene.planner.shadow.reset_spots();
+            scene.lights.move_local(&lights.lights, uniforms);
+        }
+        Ok(())
     }
 
     /// Replace the live volumetric-fog settings, or turn the fog off with

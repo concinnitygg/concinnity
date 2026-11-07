@@ -670,7 +670,7 @@ impl MtlContext {
             .ok_or_else(|| RenderError::Other("raymarch cube index buffer missing".into()))?;
         let depth_sampler = self.composite.sampler.as_ref();
 
-        let lights_gpu: RaymarchLightsGpu = *self.lights.uniforms();
+        let lights_gpu: RaymarchLightsGpu = *self.state.lights.uniforms();
         let shadow_uniforms = self.state.planner.shadow.uniforms;
 
         // Refraction support: snapshot the pre-raymarch
@@ -877,7 +877,7 @@ impl MtlContext {
                 enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
                 enc.set_vertex_value(view, 0);
                 enc.set_fragment_value(view, 0);
-                enc.set_fragment_value(self.lights.uniforms(), 2);
+                enc.set_fragment_value(self.state.lights.uniforms(), 2);
                 enc.set_fragment_value(&self.state.planner.shadow.uniforms, 3);
                 enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
             }
@@ -941,7 +941,7 @@ impl MtlContext {
         let ibuf = self.raymarch.cube_index_buffer.as_ref().ok_or_else(|| {
             RenderError::Other("raymarch shadow: cube index buffer missing".into())
         })?;
-        let lights_gpu: RaymarchLightsGpu = *self.lights.uniforms();
+        let lights_gpu: RaymarchLightsGpu = *self.state.lights.uniforms();
         let shadow_uniforms = self.state.planner.shadow.uniforms;
 
         let mut draws: u32 = 0;

@@ -37,6 +37,7 @@ use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::decal::DecalRecord;
 use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
+use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::particles::ParticleEmitterRecord;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
@@ -451,6 +452,7 @@ impl VkContext {
                     world.n_chunk_max,
                 ),
                 clear_color,
+                LightState::new(light_uniforms, &local_lights, frames),
                 material_params,
                 SceneFog::new(fx.fog),
             ),

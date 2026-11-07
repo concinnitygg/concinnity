@@ -285,7 +285,7 @@ impl DxContext {
         // initialized, and the borrow keeps them live for the snapshot copy below.
         let light_bytes = unsafe {
             std::slice::from_raw_parts(
-                std::ptr::from_ref::<render_types::LightUniforms>(self.uniforms.lights.uniforms())
+                std::ptr::from_ref::<render_types::LightUniforms>(self.state.lights.uniforms())
                     .cast::<u8>(),
                 size_of::<render_types::LightUniforms>(),
             )

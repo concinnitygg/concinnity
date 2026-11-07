@@ -2055,7 +2055,7 @@ impl VkContext {
     ) -> TransparentView {
         TransparentView::new(
             &self.pass_camera(vp, cam_pos, time),
-            self.uniforms.lights.uniforms(),
+            self.state.lights.uniforms(),
             &self.state.view.daylight,
         )
     }

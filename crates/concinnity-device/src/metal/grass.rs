@@ -388,7 +388,7 @@ impl MtlContext {
         } = request;
         let shadow = cast.then(|| GrassShadowView {
             vp: self.state.planner.shadow.uniforms.light_vps[0],
-            to_light: self.lights.sun().direction,
+            to_light: self.state.lights.sun().direction,
         });
         // The pyramid holds last frame's depth once the cull has seen a frame
         // through, and is tested through last frame's view-projection.

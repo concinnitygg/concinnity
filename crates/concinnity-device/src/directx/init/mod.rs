@@ -28,6 +28,7 @@ use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::init::{BackendInit, PlanarBudget, WorldShader};
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
+use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
@@ -456,6 +457,7 @@ impl DxContext {
                     world.n_chunk_max,
                 ),
                 clear_color,
+                LightState::new(light_uniforms, &local_lights, hw.frames()),
                 material_params,
                 SceneFog::new(fx.fog),
             ),

@@ -922,7 +922,7 @@ impl backend::CullReadback for RecordingBackend {}
 impl backend::WorldShaders for RecordingBackend {}
 impl backend::SdfVolumeShaders for RecordingBackend {}
 impl SettingsTarget for RecordingBackend {}
-impl backend::SceneLights for RecordingBackend {}
+impl backend::LightTables for RecordingBackend {}
 impl backend::PlanetReshape for RecordingBackend {}
 impl backend::RuntimeDecals for RecordingBackend {}
 impl backend::RuntimeEmitters for RecordingBackend {}

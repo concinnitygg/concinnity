@@ -203,7 +203,7 @@ impl MtlContext {
             &self.state.view.matrix,
             self.targets.hdr.height as f32,
             self.pre_exposure.value(),
-            self.lights.uniforms(),
+            self.state.lights.uniforms(),
             &self.state.view.daylight,
         );
 

@@ -606,10 +606,6 @@ pub(super) struct VkUniforms {
     // against the same ring.
     pub(super) light_ubo_buffers: Vec<PooledBuffer>,
     pub(super) local_light_buffer: PooledBuffer,
-    // The values the ring carries, which slots of it are stale, and the local
-    // lights' reach. `record_frame` writes the frame's own slot, so no
-    // in-flight read is ever raced.
-    pub(super) lights: concinnity_engine::render::light::state::LightState,
     // Per-frame-in-flight canopy block (global set 0 binding 21), persistently
     // mapped and rewritten each frame, and the block last written, which a
     // probe capture snapshots.
@@ -1450,7 +1446,7 @@ impl VkContext {
     // the frame's own slot. Edge-triggered: a no-op when the value is unchanged
     // (e.g. an init push with no persisted override).
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        self.uniforms.lights.set_ambient(value);
+        self.state.lights.set_ambient(value);
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {

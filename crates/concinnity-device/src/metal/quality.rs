@@ -97,7 +97,7 @@ impl MtlContext {
     // re-derived per frame (unlike auto-exposure's `exposure`), so the value
     // stands until changed again.
     pub(crate) fn set_ambient_intensity(&mut self, value: f32) {
-        self.lights.set_ambient(value);
+        self.state.lights.set_ambient(value);
     }
 
     pub(crate) fn set_shadow_cadence(&mut self, cadence: init::ShadowCadence) {

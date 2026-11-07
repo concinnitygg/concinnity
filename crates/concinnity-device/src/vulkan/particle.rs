@@ -833,7 +833,7 @@ impl VkContext {
                 &self.state.view.matrix,
                 self.targets.render_extent.height as f32,
                 self.pre_exposure.value(),
-                self.uniforms.lights.uniforms(),
+                self.state.lights.uniforms(),
                 &self.state.view.daylight,
             );
             view.write_val(0, &view_uni);

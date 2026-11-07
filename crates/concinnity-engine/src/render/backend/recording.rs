@@ -24,8 +24,8 @@ use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
     BackendProbe, ChunkMesh, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture,
-    FrameParams, GeometryRebuild, PlanetReshape, RenderBackend, RuntimeDecals, RuntimeEmitters,
-    SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
+    FrameParams, GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RuntimeDecals,
+    RuntimeEmitters, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
     WorldReload, WorldShaders,
 };
 use crate::render::scene_state::SceneState;
@@ -404,6 +404,15 @@ impl backend::SceneHost for RecordingBackend {
 }
 
 impl RenderBackend for RecordingBackend {
+    fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
+        self.record(Call::UpdateDirectionalLights(
+            lights
+                .iter()
+                .map(|l| (l.direction, l.color, l.intensity))
+                .collect(),
+        ));
+    }
+
     fn set_reflection_probes(&mut self, probes: &[capture::ProbePlacement], prop_probe: bool) {
         self.record(Call::SetReflectionProbes(probes.to_vec(), prop_probe));
     }
@@ -737,17 +746,6 @@ impl SettingsTarget for RecordingBackend {
     }
 }
 
-impl SceneLights for RecordingBackend {
-    fn update_directional_lights(&mut self, lights: &[DirectionalLight]) {
-        self.record(Call::UpdateDirectionalLights(
-            lights
-                .iter()
-                .map(|l| (l.direction, l.color, l.intensity))
-                .collect(),
-        ));
-    }
-}
-
 impl PlanetReshape for RecordingBackend {
     fn reshape_planet(&mut self, _shape: &crate::planet::PlanetShape) {
         self.record(Call::ReshapePlanet);
@@ -797,6 +795,7 @@ impl BackendProbe for RecordingBackend {
 // Not recorded: the defaults stand, so a test that reaches one of these sees
 // the same `Err` a backend without the feature reports.
 impl CullReadback for RecordingBackend {}
+impl LightTables for RecordingBackend {}
 impl GeometryRebuild for RecordingBackend {}
 impl RuntimeDecals for RecordingBackend {}
 impl RuntimeEmitters for RecordingBackend {}

@@ -30,6 +30,7 @@ use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
+use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
@@ -358,17 +359,13 @@ impl MtlContext {
             state: SceneState::new(
                 DrawList::unreserved(world.draw_objects, n_instances),
                 graphics.background.color,
+                LightState::new(light_uniforms, &local_lights, 1),
                 material_params,
                 SceneFog::new(fx.fog),
             ),
             graph_scratch: None,
             instanced,
             scene,
-            lights: concinnity_engine::render::light::state::LightState::new(
-                light_uniforms,
-                &local_lights,
-                1,
-            ),
             canopy_field: fx.canopy,
             canopy: concinnity_engine::render::uniforms::canopy::CanopyParams::default(),
             grass_lod: None,

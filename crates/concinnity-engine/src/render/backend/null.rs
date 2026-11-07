@@ -5,8 +5,8 @@
 
 use super::{
     BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
-    GeometryEdit, GeometryRebuild, PlanetReshape, RenderBackend, RenderResult, RuntimeDecals,
-    RuntimeEmitters, SceneHost, SceneLights, SdfVolumeShaders, SkinnedDraws, TextureUploads,
+    GeometryEdit, GeometryRebuild, LightTables, PlanetReshape, RenderBackend, RenderResult,
+    RuntimeDecals, RuntimeEmitters, SceneHost, SdfVolumeShaders, SkinnedDraws, TextureUploads,
     WindowControl, WorldReload, WorldShaders,
 };
 use crate::gfx::render_types::TextureSlot;
@@ -92,7 +92,7 @@ impl PlanetReshape for NullBackend {}
 impl SettingsTarget for NullBackend {}
 impl RuntimeDecals for NullBackend {}
 impl RuntimeEmitters for NullBackend {}
-impl SceneLights for NullBackend {}
+impl LightTables for NullBackend {}
 impl SdfVolumeShaders for NullBackend {}
 impl WorldReload for NullBackend {}
 impl WorldShaders for NullBackend {}

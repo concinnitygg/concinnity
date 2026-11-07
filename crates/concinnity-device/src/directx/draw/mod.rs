@@ -228,10 +228,10 @@ impl DxContext {
         // Light uniforms for this frame. Written only into slots a live edit
         // (directional set / ambient scale) has re-armed, so a steady world
         // writes nothing after the ring has caught up.
-        if self.uniforms.lights.take_dirty(frame_idx) {
+        if self.state.lights.take_dirty(frame_idx) {
             upload_light_uniforms(
                 self.uniforms.light_ubo_ptrs[frame_idx],
-                self.uniforms.lights.uniforms(),
+                self.state.lights.uniforms(),
             );
         }
         self.grass_lod.set(self.grass.as_ref().map(|g| {

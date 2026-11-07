@@ -441,7 +441,7 @@ impl VkContext {
             resident,
             content,
             upscaler_jitter,
-            lights: &self.uniforms.lights,
+            lights: &self.state.lights,
             probes: self.state.probes.records(),
             fog: self.state.fog.settings(),
             pre_exposure: self.pre_exposure,
@@ -658,10 +658,10 @@ impl FrameDevice for VkContext {
         // Light uniforms for this frame. Written only into slots a live edit
         // (directional set / ambient scale) has re-armed, so a steady world
         // writes nothing after the ring has caught up.
-        if self.uniforms.lights.take_dirty(frame_idx) {
+        if self.state.lights.take_dirty(frame_idx) {
             upload_light_uniforms(
                 &self.uniforms.light_ubo_buffers[frame_idx],
-                self.uniforms.lights.uniforms(),
+                self.state.lights.uniforms(),
             );
         }
         let hand_off = self

@@ -1,8 +1,8 @@
 //! The CPU-side scene every graphics backend draws from: the draw list, the
-//! camera view, the skinned slots, the material parameter table, the live
-//! fog, the reflection-probe book, the model-history tracker, the placement of
-//! streamed geometry in the shared vertex and index buffers, and the flags
-//! that tell the GPU side what to rebuild.
+//! camera view, the light block, the skinned slots, the material parameter
+//! table, the live fog, the reflection-probe book, the model-history tracker,
+//! the placement of streamed geometry in the shared vertex and index buffers,
+//! and the flags that tell the GPU side what to rebuild.
 //!
 //! None of it is a device object. A backend embeds one [`SceneState`], reads it
 //! while recording a frame, and lends it to the
@@ -21,6 +21,7 @@ use crate::render::backend::PlanetChunk;
 use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
 use crate::render::environment::volumetric_fog::SceneFog;
 use crate::render::frame::plan::FramePlanner;
+use crate::render::light::state::LightState;
 use crate::render::material_params::MaterialParamTable;
 use crate::render::probe::book::ProbeBook;
 use crate::render::slots::skinned_slots::SkinnedSlots;
@@ -43,6 +44,9 @@ pub struct SceneState {
     pub draw: DrawList,
     /// The camera and presentation state for the next frame.
     pub view: SceneView,
+    /// The light block the passes shade with, and which of the backend's copies
+    /// of it a change has left behind.
+    pub lights: LightState,
     /// The skinned draw objects and their per-frame poses.
     pub skinned: SkinnedSlots,
     /// The rows world Shaders read a material's `params` from, and which of
@@ -74,18 +78,20 @@ pub struct SceneState {
 }
 
 impl SceneState {
-    /// A scene over `draw` with an identity view cleared to `clear_color`,
-    /// whose draws read their material params from `material_params`, drawn
-    /// through `fog`.
+    /// A scene over `draw` with an identity view cleared to `clear_color`, lit
+    /// by `lights`, whose draws read their material params from
+    /// `material_params`, drawn through `fog`.
     pub fn new(
         draw: DrawList,
         clear_color: [f32; 4],
+        lights: LightState,
         material_params: MaterialParamTable,
         fog: SceneFog,
     ) -> Self {
         Self {
             draw,
             view: SceneView::new(clear_color),
+            lights,
             skinned: SkinnedSlots::new(),
             material_params,
             fog,
@@ -401,6 +407,7 @@ mod tests {
         let scene = SceneState::new(
             DrawList::unreserved(vec![], 0),
             [0.1, 0.2, 0.3, 1.0],
+            LightState::new(crate::gfx::render_types::LightUniforms::DEFAULT, &[], 1),
             MaterialParamTable::new(Vec::new(), 1),
             SceneFog::default(),
         );

@@ -167,7 +167,6 @@ mod tests {
 
     struct Recorder {
         scene: SceneState,
-        lights: LightState,
         steps: Vec<Step>,
         acquire: bool,
     }
@@ -178,10 +177,10 @@ mod tests {
                 scene: SceneState::new(
                     DrawList::unreserved(Vec::new(), 0),
                     [0.0; 4],
+                    LightState::new(LightUniforms::DEFAULT, &[], 1),
                     crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
                     crate::render::environment::volumetric_fog::SceneFog::default(),
                 ),
-                lights: LightState::new(LightUniforms::DEFAULT, &[], 1),
                 steps: Vec::new(),
                 acquire,
             }
@@ -227,7 +226,7 @@ mod tests {
                 },
                 content: FrameContent::default(),
                 upscaler_jitter: None,
-                lights: &self.lights,
+                lights: &self.scene.lights,
                 probes: &[],
                 fog: None,
                 pre_exposure: PreExposure::UNIT,

@@ -193,11 +193,6 @@ pub(super) fn build_scene_resources(
             probe_set_ubo_buffers,
             light_ubo_buffers,
             local_light_buffer,
-            lights: concinnity_engine::render::light::state::LightState::new(
-                *light_uniforms,
-                local_lights,
-                frames,
-            ),
             canopy_buffers,
             canopy,
             canopy_tables,

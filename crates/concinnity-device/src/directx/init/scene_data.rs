@@ -182,11 +182,6 @@ pub(super) fn build_uniforms(
         light_ubo_resources,
         light_ubo_ptrs,
         local_light_buffer,
-        lights: concinnity_engine::render::light::state::LightState::new(
-            *light_uniforms,
-            local_lights,
-            frames,
-        ),
         shadow_ubo_resources,
         shadow_ubo_ptrs,
         probe_set_cbvs,

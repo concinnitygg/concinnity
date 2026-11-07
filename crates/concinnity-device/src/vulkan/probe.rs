@@ -1176,7 +1176,7 @@ impl BakeResources {
         )?;
 
         // Snapshot lighting (so all faces share one set) and six per-face view UBOs.
-        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(ctx.uniforms.lights.uniforms()))?;
+        let light = make_ubo_bytes(alloc, bytemuck::bytes_of(ctx.state.lights.uniforms()))?;
         let shadow = make_ubo_bytes(
             alloc,
             bytemuck::bytes_of(&ctx.state.planner.shadow.uniforms),

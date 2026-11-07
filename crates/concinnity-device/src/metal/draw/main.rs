@@ -709,7 +709,7 @@ impl MtlContext {
             0,
             concinnity_engine::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
         );
-        enc.set_fragment_value(self.lights.uniforms(), 4);
+        enc.set_fragment_value(self.state.lights.uniforms(), 4);
         enc.set_fragment_value(&self.canopy, 21);
         if let Some(tables) = self.canopy_tables.buffer() {
             enc.set_fragment_buffer(tables, 0, crate::metal::canopy::CANOPY_TABLES_BUFFER_INDEX);

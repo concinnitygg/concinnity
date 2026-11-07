@@ -1,7 +1,8 @@
-//! The live light block a backend draws with: the `LightUniforms` its passes
-//! bind, which frame-in-flight copies of it are stale, and the local lights'
-//! reach the cluster grid is sliced to. Every live light change goes through
-//! here, so the copies are re-armed the same way on every backend.
+//! The scene's live light block every backend draws with: the `LightUniforms`
+//! its passes bind, which frame-in-flight copies of it are stale, and the
+//! local lights' reach the cluster grid is sliced to. Every live light change
+//! goes through here, so the copies are re-armed the same way on every
+//! backend.
 
 use concinnity_core::math::SaturatingFrom;
 use core::cell::Cell;

@@ -578,7 +578,7 @@ impl DxContext {
             let cluster_params = mirror.cluster_params(
                 &frame,
                 &params.cluster_params,
-                self.uniforms.lights.cluster_reach(),
+                self.state.lights.cluster_reach(),
                 self.state.probes.records(),
             );
             clustered[slot] = cluster_params.use_clusters != 0;

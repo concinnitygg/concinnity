@@ -560,7 +560,7 @@ impl DxContext {
             resident,
             content,
             upscaler_jitter,
-            lights: &self.uniforms.lights,
+            lights: &self.state.lights,
             probes: self.state.probes.records(),
             fog: self.state.fog.settings(),
             pre_exposure: self.pre_exposure,

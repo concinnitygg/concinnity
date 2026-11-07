@@ -1561,6 +1561,11 @@ mod tests {
         let scene = SceneState::new(
             DrawList::unreserved(Vec::new(), 0),
             [0.0; 4],
+            crate::render::light::state::LightState::new(
+                crate::gfx::render_types::LightUniforms::DEFAULT,
+                &[],
+                1,
+            ),
             crate::render::material_params::MaterialParamTable::new(Vec::new(), 1),
             crate::render::environment::volumetric_fog::SceneFog::default(),
         );
