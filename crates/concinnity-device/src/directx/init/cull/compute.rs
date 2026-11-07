@@ -11,7 +11,7 @@ use super::CullPlan;
 use super::bindless::BindlessPass;
 use crate::directx::allocator::PooledBuffer;
 use crate::directx::builtin_shaders::{CULL_EARLY, CompileProgram as _};
-use crate::directx::context::{DxDescriptors, DxTargets, align256, dump_on_err};
+use crate::directx::context::{Descriptors, Targets, align256, dump_on_err};
 use crate::directx::cull::{
     CullKernels, create_cull_command_signature, create_cull_pso, create_cull_root_signature,
 };
@@ -31,7 +31,7 @@ pub(super) struct ComputeCull {
     pub(super) indirect_commands: usize,
     pub(super) status_buffers: Vec<ID3D12Resource>,
     // The packing kernels and each slot's group-count scratch.
-    pub(super) compact: Option<crate::directx::compact::DxCompactKernels>,
+    pub(super) compact: Option<crate::directx::compact::CompactKernels>,
     pub(super) group_count_buffers: Vec<ID3D12Resource>,
     // The routes and bucket regions, and their per-slot upload copies the
     // frame writes its view into.
@@ -46,8 +46,8 @@ pub(super) struct ComputeInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
     pub(super) bindless: &'a BindlessPass,
     pub(super) plan: &'a CullPlan,
-    pub(super) descriptors: &'a DxDescriptors,
-    pub(super) targets: &'a DxTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
 }
 
 // Commands a default-heap indirect-command buffer holds (UAV target for the
@@ -193,8 +193,8 @@ pub(super) fn build_compute_cull(
 // reads the main-depth SRV the render targets wrote.
 fn build_hiz(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
 ) -> RenderResult<HiZResources> {
     let layout = &descriptors.layout;
     let mut mip_uav_cpus: Vec<D3D12_CPU_DESCRIPTOR_HANDLE> = Vec::with_capacity(HIZ_MAX_MIPS);

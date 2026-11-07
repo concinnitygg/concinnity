@@ -13,8 +13,8 @@ use super::compute::{ComputeCull, VARIANT_BUFFER_BYTES, shadow_cull_set};
 use crate::vulkan::allocator::PooledBuffer;
 use crate::vulkan::builtin_shaders::{CULL_SHADOW, CompileProgram as _, SHADOW_VERT_BINDLESS};
 use crate::vulkan::compact::{CompactBuffers, DrawLists, INDIRECT_USAGE};
-use crate::vulkan::context::{VkDescriptors, VkShadow};
-use crate::vulkan::cull::VkShadowView;
+use crate::vulkan::context::{Descriptors, ShadowState};
+use crate::vulkan::cull::ShadowCullView;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::{CULL_PUSH_CONSTANT_BYTES, create_shadow_pipeline};
@@ -28,10 +28,10 @@ pub(super) struct ShadowCull {
     pub(super) cull_pipeline: Option<OwnedPipeline>,
     pub(super) cull_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) set_layout: Option<OwnedSetLayout>,
-    pub(super) views: Vec<Vec<VkShadowView>>,
+    pub(super) views: Vec<Vec<ShadowCullView>>,
     pub(super) bindless_pipeline: Option<OwnedPipeline>,
     pub(super) bindless_pipeline_layout: Option<OwnedPipelineLayout>,
-    pub(super) spot_views: Vec<Vec<VkShadowView>>,
+    pub(super) spot_views: Vec<Vec<ShadowCullView>>,
 }
 
 // Build the GPU-driven shadow pass: a frustum + distance cull per cascade and
@@ -40,8 +40,8 @@ pub(super) fn build_shadow_cull(
     gpu: &InitGpu<'_>,
     bindless: &BindlessPass,
     compute: &ComputeCull,
-    shadow: &VkShadow,
-    descriptors: &VkDescriptors,
+    shadow: &ShadowState,
+    descriptors: &Descriptors,
     plan: &CullPlan,
     spot_slices: usize,
 ) -> RenderResult<ShadowCull> {
@@ -63,7 +63,7 @@ pub(super) fn build_shadow_cull(
         Option<OwnedPipeline>,
         Option<OwnedPipelineLayout>,
         Option<OwnedSetLayout>,
-        Vec<Vec<VkShadowView>>,
+        Vec<Vec<ShadowCullView>>,
         Option<OwnedPipeline>,
         Option<OwnedPipelineLayout>,
     );
@@ -175,7 +175,7 @@ struct ViewCullInputs<'a> {
 
 impl ViewCullInputs<'_> {
     // `views` views per frame, indexed [frame][view].
-    fn build(&self, views: usize) -> RenderResult<Vec<Vec<VkShadowView>>> {
+    fn build(&self, views: usize) -> RenderResult<Vec<Vec<ShadowCullView>>> {
         let InitGpu {
             hw,
             command_pool,
@@ -228,7 +228,7 @@ impl ViewCullInputs<'_> {
                         },
                     },
                 );
-                frame_views.push(VkShadowView {
+                frame_views.push(ShadowCullView {
                     cull_set: pair[0],
                     compact_set: pair[1],
                     lists,

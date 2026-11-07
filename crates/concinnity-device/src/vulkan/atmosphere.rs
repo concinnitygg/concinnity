@@ -32,7 +32,7 @@ use super::builtin_shaders::{
     ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram,
     FULLSCREEN_VERT, SKY_ATMOSPHERE_FRAG,
 };
-use super::clouds::{CloudInputs, VkClouds};
+use super::clouds::{CloudInputs, CloudState};
 use super::context::VkContext;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::owned::{
@@ -99,7 +99,7 @@ pub(in crate::vulkan) struct AtmosphereSky {
     pub(in crate::vulkan) samples: vk::SampleCountFlags,
 }
 
-pub(in crate::vulkan) struct VkAtmosphere {
+pub(in crate::vulkan) struct AtmosphereState {
     settings: AtmosphereSettings,
     // This frame's inputs; `None` leaves the passes out of the graph.
     pub(in crate::vulkan) frame: Option<AtmosphereFrame>,
@@ -127,7 +127,7 @@ pub(in crate::vulkan) struct VkAtmosphere {
     aerial_sets: Vec<vk::DescriptorSet>,
     framebuffers: Vec<OwnedFramebuffer>,
     // The clouds, when the air has cloud layers.
-    pub(in crate::vulkan) clouds: Option<VkClouds>,
+    pub(in crate::vulkan) clouds: Option<CloudState>,
     // The ground the tables that depend on the air alone were built over.
     air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
@@ -451,7 +451,7 @@ fn compile_kernel(
     compute_pipeline(device, layout, &program.compile(hot_reload)?, program.label)
 }
 
-impl VkAtmosphere {
+impl AtmosphereState {
     // The tables, pipelines and sets, writing `cubes`.
     pub(in crate::vulkan) fn new(
         gpu: &GpuUploadContext<'_>,
@@ -869,13 +869,13 @@ fn build_clouds(
     kernel_sets: &[[vk::DescriptorSet; KERNELS]],
     sky_view: vk::ImageView,
     hot_reload: bool,
-) -> RenderResult<Option<VkClouds>> {
+) -> RenderResult<Option<CloudState>> {
     let clouds = settings
         .clouds
         .is_some()
-        .then(|| VkClouds::new(gpu, inputs, hot_reload))
+        .then(|| CloudState::new(gpu, inputs, hot_reload))
         .transpose()?;
-    let panorama = clouds.as_ref().map_or(sky_view, VkClouds::panorama_view);
+    let panorama = clouds.as_ref().map_or(sky_view, CloudState::panorama_view);
     for &set in kernel_sets.iter().flatten() {
         SetWrites::new(set)
             .sampled_image_in(6, panorama, vk::ImageLayout::GENERAL)

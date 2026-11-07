@@ -12,7 +12,7 @@ use super::compute::ComputeCull;
 use crate::directx::builtin_shaders::{CULL_SHADOW, CompileProgram as _, SHADOW_VERT_BINDLESS};
 use crate::directx::context::dump_on_err;
 use crate::directx::cull::{
-    DxShadowViews, create_cull_command_signature, create_cull_pso, shadow_status_bytes,
+    ShadowCullViews, create_cull_command_signature, create_cull_pso, shadow_status_bytes,
 };
 use crate::directx::init::InitGpu;
 use crate::directx::init::pipelines::{create_shadow_bindless_root_signature, create_shadow_pso};
@@ -23,8 +23,8 @@ pub(super) struct ShadowCull {
     pub(super) bindless_pso: Option<ID3D12PipelineState>,
     pub(super) cmd_sig: Option<ID3D12CommandSignature>,
     pub(super) cull_pso: Option<ID3D12PipelineState>,
-    pub(super) views: Vec<DxShadowViews>,
-    pub(super) spot_views: Vec<DxShadowViews>,
+    pub(super) views: Vec<ShadowCullViews>,
+    pub(super) spot_views: Vec<ShadowCullViews>,
 }
 
 // GPU-driven shadow pass: a depth-only bindless pipeline + the shared
@@ -92,10 +92,10 @@ fn shadow_views(
     device: &ID3D12Device,
     regions: usize,
     n_cull: usize,
-) -> RenderResult<DxShadowViews> {
+) -> RenderResult<ShadowCullViews> {
     use crate::directx::compact::{group_count_bytes, indirect_buffer_bytes};
     let regions = regions as u64;
-    Ok(DxShadowViews {
+    Ok(ShadowCullViews {
         lists: create_uav_buffer(device, regions * indirect_buffer_bytes(n_cull))?,
         status: create_uav_buffer(device, regions * shadow_status_bytes(n_cull))?,
         group_counts: create_uav_buffer(device, regions * group_count_bytes(n_cull))?,

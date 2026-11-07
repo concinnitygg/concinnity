@@ -18,7 +18,7 @@ use concinnity_engine::render::{shadow::csm, shadow::spot};
 
 use super::shadow::ShadowView;
 use crate::vulkan::allocator::{DeviceAllocator, PooledBuffer};
-use crate::vulkan::context::{VkContext, VkSpotShadow};
+use crate::vulkan::context::{SpotShadowState, VkContext};
 use crate::vulkan::descriptor_layout::{PoolSizes, shadow_global_set};
 use crate::vulkan::owned::VkDevice;
 use crate::vulkan::record::Recorder;
@@ -48,7 +48,9 @@ pub(in crate::vulkan) struct SpotShadowBuild<'a> {
 // storage buffer the forward pass indexes, and one `ShadowUniforms` slot per
 // slice with a descriptor set pointing at it. All static for the world's
 // lifetime; only the depth contents change per frame.
-pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResult<VkSpotShadow> {
+pub(in crate::vulkan) fn build_spot_shadow(
+    b: SpotShadowBuild<'_>,
+) -> RenderResult<SpotShadowState> {
     let SpotShadowBuild {
         alloc,
         instance,
@@ -132,7 +134,7 @@ pub(in crate::vulkan) fn build_spot_shadow(b: SpotShadowBuild<'_>) -> RenderResu
             .apply(device);
     }
 
-    Ok(VkSpotShadow {
+    Ok(SpotShadowState {
         map,
         framebuffers,
         slice_size,
@@ -161,7 +163,7 @@ fn slice_uniforms(spot_shadows: &[SpotShadowData]) -> Vec<ShadowUniforms> {
         .collect()
 }
 
-impl VkSpotShadow {
+impl SpotShadowState {
     // Rewrite every slice's projection in place for moved spot lights, and
     // start the refresh schedule over so each slice re-renders. The caller has
     // drained the GPU: both buffers are single, read by every in-flight frame.

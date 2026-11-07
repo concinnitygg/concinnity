@@ -105,7 +105,7 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
     Ok(ProbeState {
         cubes: ProbeCubeArray::placeholder(&gpu.hw.device)?,
         records_buf: None,
-        bake: crate::metal::probe::MtlProbeBake::default(),
+        bake: crate::metal::probe::ProbeBake::default(),
         prefilter,
         retire_pool: RetirePool::new(),
         prop: crate::metal::prop_probe::PropProbe::default(),

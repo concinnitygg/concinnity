@@ -8,7 +8,7 @@ use concinnity_engine::render::environment::grass::canopy_table::MAX_CANOPY_TABL
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 
-pub(in crate::vulkan) struct VkCanopyTables {
+pub(in crate::vulkan) struct CanopyTables {
     // The current tables, which a probe capture snapshots, and how many times
     // they have changed; each slot records the count it holds.
     rows: Vec<[f32; 4]>,
@@ -16,7 +16,7 @@ pub(in crate::vulkan) struct VkCanopyTables {
     copies: Vec<(PooledBuffer, u64)>,
 }
 
-impl VkCanopyTables {
+impl CanopyTables {
     // `frames` slots with room for every layer's table.
     pub(in crate::vulkan) fn new(alloc: &DeviceAllocator, frames: usize) -> RenderResult<Self> {
         let size = (MAX_CANOPY_TABLE_ROWS * size_of::<[f32; 4]>()) as u64;

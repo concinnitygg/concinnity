@@ -7,7 +7,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::init::MediaPayloads;
 
 use super::InitGpu;
-use crate::vulkan::context::VkSceneAssets;
+use crate::vulkan::context::SceneAssets;
 use crate::vulkan::texture::{
     EnvironmentMapTextures, GpuImage, create_fallback_color_lut, create_fallback_cubemap,
     create_fallback_flat_normal, create_fallback_white, create_sampler_cube_linear,
@@ -18,7 +18,7 @@ pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
     media: &MediaPayloads<'_>,
     anisotropy: u32,
-) -> RenderResult<VkSceneAssets> {
+) -> RenderResult<SceneAssets> {
     let hw = gpu.hw;
     let device = &hw.device;
     let textures: Vec<GpuImage> = if media.textures.is_empty() {
@@ -103,7 +103,7 @@ pub(super) fn build_scene_assets(
     // The 1x1 white image bound at set 0 binding 6 when SSAO is off, so the main
     // pass's `ambient *= ao` multiplier collapses to a pass-through.
     let ssao_white = create_fallback_white(&gpu.upload())?;
-    Ok(VkSceneAssets {
+    Ok(SceneAssets {
         textures,
         fallback_textures,
         linear_sampler,

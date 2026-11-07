@@ -14,10 +14,10 @@ use concinnity_engine::render::shader::world_pipelines::{
 };
 
 use super::CullPlan;
-use crate::vulkan::context::{VkDescriptors, VkSceneAssets, VkTargets};
+use crate::vulkan::context::{Descriptors, SceneAssets, Targets};
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::material_params::{
-    MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING, VkMaterialParams,
+    MATERIAL_PARAMS_BINDING, MESH_VERTICES_BINDING, MaterialParams,
 };
 use crate::vulkan::owned::{OwnedPipeline, OwnedPipelineLayout, OwnedSetLayout};
 use crate::vulkan::pipeline::{
@@ -40,7 +40,7 @@ pub(super) struct BindlessPass {
     pub(super) set_layout: Option<OwnedSetLayout>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) object_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
-    pub(super) material_params: Option<VkMaterialParams>,
+    pub(super) material_params: Option<MaterialParams>,
     pub(super) main_spv: BindlessSpv,
 }
 
@@ -48,9 +48,9 @@ pub(super) struct BindlessPass {
 pub(super) struct BindlessInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
     pub(super) plan: &'a CullPlan,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) targets: &'a VkTargets,
-    pub(super) scene: &'a VkSceneAssets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) scene: &'a SceneAssets,
     pub(super) material_params: &'a MaterialParamTable,
     // The shared vertex stream and its size, which a planet tile's morph reads.
     pub(super) vertices: BufferRange,
@@ -206,7 +206,7 @@ pub(super) fn build_bindless_pass(
             )?);
         }
 
-        let params = VkMaterialParams::new(alloc, material_params)?;
+        let params = MaterialParams::new(alloc, material_params)?;
 
         // One bindless set per frame: binding 0 = that frame's SSBO,
         // binding 1 = the shared pool ([albedo views..] ++ [normal..]), read

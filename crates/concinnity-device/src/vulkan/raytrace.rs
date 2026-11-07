@@ -73,7 +73,7 @@ use concinnity_engine::render::rt_accel::{
 use concinnity_engine::render::uniforms::SkinParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
-use super::context::VkGeometry;
+use super::context::Geometry;
 use super::descriptor_layout::{Binding, PoolSizes};
 use super::pipeline_desc::compute_pipeline;
 use super::resources::create_descriptor_set_layout;
@@ -251,7 +251,7 @@ struct DeviceBufferRef {
 // The compute pipeline that deforms skinned vertices for ray tracing
 // (`rt_skin.hlsl`): set 0 = [src skinned verts, joint palette, deformed output,
 // morph deltas, morph weights] (five storage buffers) + a 16-byte `SkinParams`
-// push-constant block. Built with the RT pass and held on `VkRayTracing`;
+// push-constant block. Built with the RT pass and held on `RtState`;
 // mirrors DirectX's `SkinPipeline` / Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
     set_layout: OwnedSetLayout,
@@ -622,7 +622,7 @@ struct BlasParams {
 }
 
 // The shared static vertex / index buffers every draw-object and cluster BLAS is
-// built over, read from the live `VkGeometry` at each build: chunk streaming and
+// built over, read from the live `Geometry` at each build: chunk streaming and
 // geometry rebuilds replace both buffers, so an address or vertex count captured
 // earlier can name a destroyed buffer or bound streamed geometry short.
 #[derive(Clone, Copy)]
@@ -634,7 +634,7 @@ pub(in crate::vulkan) struct SharedGeometry {
 }
 
 impl SharedGeometry {
-    pub(in crate::vulkan) fn of(geometry: &VkGeometry) -> Self {
+    pub(in crate::vulkan) fn of(geometry: &Geometry) -> Self {
         Self {
             vertex_buffer: geometry.vertex_buffer.buffer(),
             index_buffer: geometry.index_buffer.buffer(),
@@ -1559,7 +1559,7 @@ impl RtAccelData {
         }
 
         let skinned_objects = skinned.as_ref().map(|s| s.objects);
-        let mut steps = VkRtSteps {
+        let mut steps = RtSteps {
             accel: self,
             ctx,
             rec,
@@ -2433,7 +2433,7 @@ pub(super) fn create_main_deformed_buffer(
 // One frame's update of the live accel, recorded onto the frame's start
 // command buffer: the steps `drive_update` schedules, over this frame's device
 // context and geometry.
-struct VkRtSteps<'a> {
+struct RtSteps<'a> {
     accel: &'a mut RtAccelData,
     ctx: RtDeviceCtx<'a>,
     rec: &'a Recorder<'a>,
@@ -2444,7 +2444,7 @@ struct VkRtSteps<'a> {
     skinned: Option<SkinnedRtInputs<'a>>,
 }
 
-impl RtAccelSteps for VkRtSteps<'_> {
+impl RtAccelSteps for RtSteps<'_> {
     type Blas = AccelBuffer;
     type Instance = vk::AccelerationStructureInstanceKHR;
 
@@ -2492,7 +2492,7 @@ impl RtAccelSteps for VkRtSteps<'_> {
     }
 }
 
-impl super::context::VkRayTracing {
+impl super::context::RtState {
     // Advance the retire clock and destroy every dropped BVH no frame in flight
     // can still trace: the frame-begin fence wait bounds those at
     // `frames_in_flight`, plus the one this frame records.

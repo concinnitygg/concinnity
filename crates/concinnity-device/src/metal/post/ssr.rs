@@ -17,11 +17,11 @@ use objc2_metal::{MTLDevice as _, MTLPixelFormat, MTLTexture, MTLTextureUsage};
 
 use crate::metal::context::MtlContext;
 use crate::metal::descriptors::TextureDesc;
-use crate::metal::post::post_device::MtlPostPipeline;
+use crate::metal::post::post_device::PostPipeline;
 use crate::metal::post::reflection_composite::MtlReflectionCompositePass;
 
 // The shared resolve, holding Metal's own pipeline handle.
-pub(crate) type MtlSsrPass = SsrPass<MtlPostPipeline>;
+pub(crate) type MtlSsrPass = SsrPass<PostPipeline>;
 
 // All screen-space-reflection feature state grouped into one unit: the
 // resolved tunables, the reflection target, the resolve that fills it, and the

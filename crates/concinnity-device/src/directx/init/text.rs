@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
 
 use super::InitGpu;
-use crate::directx::context::{DxDescriptors, TextState, dump_on_err};
+use crate::directx::context::{Descriptors, TextState, dump_on_err};
 use crate::directx::descriptor_slot::SrvSlot;
 use crate::directx::pipeline::{compile_text_shaders, create_text_pso, create_text_root_signature};
 use crate::directx::texture::{GpuResource, upload_texture};
@@ -15,7 +15,7 @@ use crate::directx::upload_ring::UploadRing;
 
 pub(super) fn build_text(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     media: &MediaPayloads<'_>,
     swap_format: DXGI_FORMAT,
 ) -> RenderResult<TextState> {

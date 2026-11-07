@@ -7,12 +7,12 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::{Features, InitGpu};
-use crate::metal::context::MtlTargets;
+use crate::metal::context::Targets;
 use crate::metal::depth::Depth;
 use crate::metal::texture::create_hdr_targets;
 use crate::metal::transient_pool::TransientTexturePool;
 
-pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderResult<MtlTargets> {
+pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderResult<Targets> {
     let device = &*gpu.hw.device;
     let (render_w, render_h) = features.render;
 
@@ -22,7 +22,7 @@ pub(super) fn build_targets(gpu: &InitGpu<'_>, features: &Features) -> RenderRes
     let hdr = create_hdr_targets(device, render_w, render_h, features.hdr_samples)?;
     let transient_pool = build_transient_pool(device, features.render, features.output)?;
 
-    Ok(MtlTargets {
+    Ok(Targets {
         hdr,
         output: features.output,
         transient_pool,

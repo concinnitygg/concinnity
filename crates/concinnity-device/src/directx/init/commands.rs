@@ -7,10 +7,10 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::Threading::CreateEventW;
 
 use super::InitGpu;
-use crate::directx::context::{DxCommands, DxFrameSync, TimestampState, build_timestamp_resources};
+use crate::directx::context::{Commands, FrameSync, TimestampState, build_timestamp_resources};
 use crate::directx::error::map_hresult;
 
-pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
+pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<Commands> {
     let hw = gpu.hw;
     let frames = hw.frames();
     // Per-frame command infrastructure
@@ -93,7 +93,7 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
         end_command_lists.push(list);
     }
 
-    Ok(DxCommands {
+    Ok(Commands {
         command_allocators,
         command_lists,
         pass_allocators,
@@ -103,7 +103,7 @@ pub(super) fn build_commands(gpu: &InitGpu<'_>) -> RenderResult<DxCommands> {
     })
 }
 
-pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<DxFrameSync> {
+pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<FrameSync> {
     // SAFETY: the create descriptor and every pointer it borrows are live for the call, and the
     // new COM object lands in a binding that owns it.
     let fence: ID3D12Fence = unsafe { gpu.hw.device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
@@ -112,7 +112,7 @@ pub(super) fn build_frame_sync(gpu: &InitGpu<'_>) -> RenderResult<DxFrameSync> {
     // attributes; the call borrows nothing.
     let fence_event = unsafe { CreateEventW(None, false, false, None) }
         .map_err(|e| map_hresult(e.code(), "create fence event"))?;
-    Ok(DxFrameSync {
+    Ok(FrameSync {
         fence,
         fence_values: vec![0u64; gpu.hw.frames()],
         next_fence_value: std::cell::Cell::new(1),

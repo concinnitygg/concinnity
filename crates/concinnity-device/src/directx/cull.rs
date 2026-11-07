@@ -99,7 +99,7 @@ pub(in crate::directx) struct CullState {
     pub object_buffer_ptrs: Vec<*mut u8>,
     // The material parameter table, over the same slots as the object buffers;
     // `None` when the world has nothing to drive.
-    pub material_params: Option<super::material_params::DxMaterialParams>,
+    pub material_params: Option<super::material_params::MaterialParams>,
     // Flat-pool SRV region bases, one per frame in flight, bound to bindless
     // root param [5] as the texture pool for the frame being recorded. The
     // copies exist so a streamed texture swap rewrites the copy whose frame
@@ -121,7 +121,7 @@ pub(in crate::directx) struct CullState {
     // The scan and scatter that pack each cull's kept draws per stream, and
     // each slot's group-count scratch (the late pass reusing the early pass's once its
     // packing has read it). Resting `UNORDERED_ACCESS`.
-    pub compact: Option<super::compact::DxCompactKernels>,
+    pub compact: Option<super::compact::CompactKernels>,
     pub group_count_buffers: Vec<ID3D12Resource>,
     // Per-frame per-object cull-status buffers (one u32 each): early writes,
     // late reads. Resting `UNORDERED_ACCESS`.
@@ -141,12 +141,12 @@ pub(in crate::directx) struct CullState {
     pub shadow_bindless_cmd_sig: Option<ID3D12CommandSignature>,
     // Frustum-only shadow cull kernel (`main_shadow`), shares the cull root sig.
     pub cull_pso_shadow: Option<ID3D12PipelineState>,
-    pub shadow_views: Vec<DxShadowViews>,
+    pub shadow_views: Vec<ShadowCullViews>,
     // The spot shadow pass's views, one per frame-in-flight with a packed
     // region per spot slice, written by the same shadow kernel. Its own, so the
     // spot pass shares no state with the cascade pass. Empty when the world has
     // no shadowed spot.
-    pub spot_views: Vec<DxShadowViews>,
+    pub spot_views: Vec<ShadowCullViews>,
     // Per-frame model-history buffers (one column-major `float4x4` per cull
     // record), device-local: only the snapshot kernel writes them and only the
     // pre-pass reads them, so the host never touches their bytes. Frame `R`
@@ -301,7 +301,7 @@ pub(in crate::directx) struct RegionPacking<'a> {
 // One frame's shadow views of one pass, a region of `bucket_stride` records
 // each: their lists, status and group counts. Resting in COMMON until first
 // used, then the lists in INDIRECT_ARGUMENT and the rest in UNORDERED_ACCESS.
-pub(in crate::directx) struct DxShadowViews {
+pub(in crate::directx) struct ShadowCullViews {
     pub lists: ID3D12Resource,
     pub status: ID3D12Resource,
     pub group_counts: ID3D12Resource,
@@ -935,7 +935,7 @@ impl DxContext {
     fn shadow_cull_pass<'a>(
         &self,
         pso: &'a ID3D12PipelineState,
-        views: &'a DxShadowViews,
+        views: &'a ShadowCullViews,
     ) -> RegionCullPass<'a> {
         use crate::directx::compact::{group_count_bytes, indirect_buffer_bytes};
         let n_cull = self.cull.bucket_stride;
@@ -957,7 +957,7 @@ impl DxContext {
     // View `region`'s lists in `views`, for the shadow draws.
     pub(in crate::directx) fn shadow_lists<'a>(
         &self,
-        views: &'a DxShadowViews,
+        views: &'a ShadowCullViews,
         region: usize,
     ) -> DrawLists<'a> {
         let n_cull = self.cull.bucket_stride;

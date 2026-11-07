@@ -70,7 +70,7 @@ pub(in crate::directx) struct CloudSlots {
     pub gpu: [SrvSlot; CLOUD_SLOTS],
 }
 
-pub(in crate::directx) struct DxClouds {
+pub(in crate::directx) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Cell<Option<CloudParams>>,
     noise: ID3D12Resource,
@@ -356,7 +356,7 @@ fn composite_pso(
         .build(device, "cloud composite")
 }
 
-impl DxClouds {
+impl CloudState {
     // The volume, a target for a scene `scene` pixels across, the pipelines
     // and the parameter ring, their views in `slots`.
     pub(in crate::directx) fn new(
@@ -658,7 +658,7 @@ impl DxContext {
     pub(in crate::directx) fn encode_clouds(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        clouds: &DxClouds,
+        clouds: &CloudState,
         inputs: MarchInputs,
         frame_idx: usize,
     ) {
@@ -709,7 +709,7 @@ impl DxContext {
     pub(in crate::directx) fn encode_cloud_composite(
         &self,
         cmd: &ID3D12GraphicsCommandList,
-        clouds: &DxClouds,
+        clouds: &CloudState,
         depth_srv: SrvSlot,
         frame_idx: usize,
     ) {
@@ -777,7 +777,7 @@ impl DxContext {
         self.atmosphere
             .as_ref()
             .and_then(|a| a.clouds.as_ref())
-            .map_or(self.scene.area_light.ltc_table_gpu, DxClouds::shadow_srv)
+            .map_or(self.scene.area_light.ltc_table_gpu, CloudState::shadow_srv)
     }
 }
 
@@ -785,7 +785,7 @@ impl DxContext {
 // every cloud kernel reads.
 fn bind_march(
     cmd: &ID3D12GraphicsCommandList,
-    clouds: &DxClouds,
+    clouds: &CloudState,
     inputs: MarchInputs,
     params_gva: u64,
 ) {

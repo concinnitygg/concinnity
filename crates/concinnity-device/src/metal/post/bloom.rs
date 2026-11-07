@@ -11,10 +11,10 @@ use concinnity_engine::render::post::device::PostExtent;
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 
 // The shared chain, holding Metal's own pipeline and target handles.
-pub(crate) type MtlBloomPass = BloomPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlBloomPass = BloomPass<PostPipeline, PostTarget>;
 
 // Build the chain for an output of `width` x `height`.
 pub(crate) fn build_bloom_pass(

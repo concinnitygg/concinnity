@@ -13,10 +13,10 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{PostPipeline, PostTarget};
 
 // The shared SSGI pass, holding Metal's own pipeline and target handles.
-pub(crate) type MtlSsgiPass = SsgiPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlSsgiPass = SsgiPass<PostPipeline, PostTarget>;
 
 // Screen-space GI state: the resolved tunables, and the pass when SSGI is on
 // (and the unified G-buffer it traces against therefore exists).

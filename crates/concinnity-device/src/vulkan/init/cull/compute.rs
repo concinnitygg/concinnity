@@ -11,7 +11,7 @@ use concinnity_engine::render::backend::init::SceneData;
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use crate::vulkan::builtin_shaders::{CULL_EARLY, CompileProgram as _};
-use crate::vulkan::context::{VkCullKernels, VkDescriptors, VkSceneAssets, VkTargets};
+use crate::vulkan::context::{CullKernels, Descriptors, SceneAssets, Targets};
 use crate::vulkan::descriptor_layout::Binding;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::pipeline::CULL_PUSH_CONSTANT_BYTES;
@@ -22,7 +22,7 @@ use crate::vulkan::set_writes::SetWrites;
 // The compute cull; `None`/empty when the bindless path is inactive.
 pub(super) struct ComputeCull {
     // The early pass only; the two-pass build fills in `pipeline_late`.
-    pub(super) kernels: Option<VkCullKernels>,
+    pub(super) kernels: Option<CullKernels>,
     pub(super) sets: Vec<vk::DescriptorSet>,
     pub(super) draw_args_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) indirect_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
@@ -32,7 +32,7 @@ pub(super) struct ComputeCull {
     pub(super) hiz: Option<crate::vulkan::hiz::HiZResources>,
     // The scan and scatter, each frame's group-count scratch (both phases),
     // and each frame's early packing set.
-    pub(super) compact: Option<crate::vulkan::compact::VkCompactKernels>,
+    pub(super) compact: Option<crate::vulkan::compact::CompactKernels>,
     pub(super) group_count_buffers: Vec<crate::vulkan::allocator::PooledBuffer>,
     pub(super) compact_sets: Vec<vk::DescriptorSet>,
 }
@@ -40,9 +40,9 @@ pub(super) struct ComputeCull {
 #[derive(Clone, Copy)]
 pub(super) struct ComputeInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) targets: &'a VkTargets,
-    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) targets: &'a Targets,
+    pub(super) descriptors: &'a Descriptors,
     pub(super) plan: &'a CullPlan,
     pub(super) bindless: &'a BindlessPass,
     // Commands every shader bucket's region holds between them.
@@ -137,7 +137,7 @@ pub(super) fn build_compute_cull(
     // pass issues with a single multiDrawIndexedIndirect.
     let mut packing = (None, Vec::new(), Vec::new());
     type CullPipelineResources = (
-        Option<VkCullKernels>,
+        Option<CullKernels>,
         Vec<vk::DescriptorSet>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
         Vec<crate::vulkan::allocator::PooledBuffer>,
@@ -281,7 +281,7 @@ pub(super) fn build_compute_cull(
             }
             packing = (Some(compact), count_buffers, compact_sets);
 
-            let kernels = VkCullKernels {
+            let kernels = CullKernels {
                 pipeline,
                 pipeline_late: None,
                 pipeline_layout,

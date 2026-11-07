@@ -20,7 +20,7 @@ use super::owned::{OwnedPipeline, OwnedPipelineLayout, VkDevice};
 use super::pipeline_desc::{Blend, Depth, GraphicsPipelineDesc};
 use crate::vulkan::record::Recorder;
 
-pub(in crate::vulkan) struct VkSky {
+pub(in crate::vulkan) struct SkyState {
     // Set 0 only: the global set layout every scene pass binds.
     layout: OwnedPipelineLayout,
     pipeline: OwnedPipeline,
@@ -28,7 +28,7 @@ pub(in crate::vulkan) struct VkSky {
     background: bool,
 }
 
-impl VkSky {
+impl SkyState {
     pub(in crate::vulkan) fn build(
         device: &VkDevice,
         global_set_layout: vk::DescriptorSetLayout,

@@ -31,7 +31,7 @@ use concinnity_engine::gfx::render_types::TileMorphView;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
+use concinnity_engine::render::probe::bake::{self as bake, CAPTURE_FACES, ProbeBakeDevice};
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
@@ -133,7 +133,7 @@ impl FacePacking {
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
 // into its cube.
-pub(super) type VkProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
+pub(super) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 impl VkContext {
     // Advance the staggered reflection-probe bake one frame. Called every frame
@@ -151,7 +151,7 @@ impl VkContext {
 
     // Run `f` over the bake with this context as its device. The slots are lent
     // to `f`, so the context reads them as empty for the call.
-    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut VkProbeBake, &mut Self) -> R) -> R {
+    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut ProbeBake, &mut Self) -> R) -> R {
         let mut bake = std::mem::take(&mut self.probe.bake);
         let out = f(&mut bake, self);
         self.probe.bake = bake;

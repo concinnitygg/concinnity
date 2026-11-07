@@ -4,13 +4,13 @@
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::device::PostExtent;
 
-use crate::directx::context::DxTargets;
+use crate::directx::context::Targets;
 use crate::directx::post::bloom::BloomResources;
 use crate::directx::post::post_device::DxPostDevice;
 
 pub(super) fn build_bloom(
     device: &DxPostDevice<'_>,
-    targets: &DxTargets,
+    targets: &Targets,
     output: (u32, u32),
 ) -> RenderResult<BloomResources> {
     let top = targets

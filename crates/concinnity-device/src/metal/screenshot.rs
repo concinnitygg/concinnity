@@ -33,13 +33,13 @@ use objc2_metal::{
 use super::context::MtlContext;
 use super::descriptors::TextureDesc;
 use super::error::{allocation_failed, completed_command_buffer};
-use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, RetiredCapture};
+use crate::frame_capture::{self, CaptureImage, Mapped, RetiredCapture};
 
-type MtlBuffer = Retained<ProtocolObject<dyn MTLBuffer>>;
+type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 
 /// The Metal backend's frame captures. A completion handler reports
 /// retirement, so nothing is parked by token.
-pub(in crate::metal) type MtlFrameCaptures = FrameCaptures<MtlBuffer, ()>;
+pub(in crate::metal) type FrameCaptures = frame_capture::FrameCaptures<Buffer, ()>;
 
 impl MtlContext {
     // Keep a read-back buffer the size of `drawable` ready, so the frame that
@@ -144,7 +144,7 @@ impl MtlContext {
 fn shared_buffer(
     device: &ProtocolObject<dyn objc2_metal::MTLDevice>,
     len: usize,
-) -> RenderResult<Mapped<MtlBuffer>> {
+) -> RenderResult<Mapped<Buffer>> {
     let buffer = device
         .newBufferWithLength_options(len.max(1), MTLResourceOptions::StorageModeShared)
         .ok_or_else(|| allocation_failed("frame capture read-back buffer"))?;

@@ -8,7 +8,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{RtvHeapLayout, SrvHeapLayout, SrvHeapParams};
 use super::{InitGpu, heaps};
-use crate::directx::context::{DxDescriptors, SwapchainState};
+use crate::directx::context::{Descriptors, SwapchainState};
 use crate::directx::descriptor_slot::{SamplerSlot, SrvSlot};
 use crate::directx::error::map_hresult;
 use crate::directx::post::descriptors::{PostBlockBase, PostDescriptors};
@@ -17,7 +17,7 @@ pub(super) fn build_descriptors(
     gpu: &InitGpu<'_>,
     params: &SrvHeapParams,
     anisotropy: u32,
-) -> RenderResult<DxDescriptors> {
+) -> RenderResult<Descriptors> {
     let device = &gpu.hw.device;
     // CBV/SRV/UAV heap slot layout. The full per-block map + the
     // positional cascade live in `heap_layout.rs`, which a unit test
@@ -45,7 +45,7 @@ pub(super) fn build_descriptors(
     let sampler_descriptor_size =
         heaps::descriptor_size(device, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     let sampler_gpu = |slot| SamplerSlot::at(&sampler_heap, sampler_descriptor_size, slot);
-    Ok(DxDescriptors {
+    Ok(Descriptors {
         shadow_sampler_gpu: sampler_gpu(heaps::SHADOW_SAMPLER_SLOT),
         linear_sampler_gpu: sampler_gpu(heaps::LINEAR_SAMPLER_SLOT),
         text_sampler_gpu: sampler_gpu(heaps::TEXT_SAMPLER_SLOT),
@@ -57,7 +57,7 @@ pub(super) fn build_descriptors(
     })
 }
 
-impl DxDescriptors {
+impl Descriptors {
     // CPU handle of SRV heap `slot`.
     pub(in crate::directx) fn slot_cpu(&self, slot: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         heaps::cpu_handle(&self.srv_heap, self.srv_descriptor_size, slot)
@@ -72,7 +72,7 @@ impl DxDescriptors {
 // The shared post passes' descriptor block: SRVs after the color LUT, RTVs
 // after the HDR scene target's.
 pub(super) fn build_post_descriptors(
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     swapchain: &SwapchainState,
     rtv: &RtvHeapLayout,
     frames_in_flight: usize,

@@ -30,7 +30,7 @@ use crate::directx::upload_ring::UPLOAD_ALIGN;
 // type can't name a lifetime). `pub` because it is the `Args` associated type of
 // the (cross-crate) `render::fullscreen::CompositeEncoder` impl below, so it
 // cannot be more private than that public trait's interface.
-pub(crate) struct DxCompositeArgs {
+pub(crate) struct CompositeArgs {
     back_buffer: ID3D12Resource,
     back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     scene_srv: SrvSlot,
@@ -59,7 +59,7 @@ pub(in crate::directx) struct CompositeSources {
 // leaves it that way).
 impl fullscreen::CompositeEncoder for DxContext {
     type Rec = ID3D12GraphicsCommandList;
-    type Args = DxCompositeArgs;
+    type Args = CompositeArgs;
 
     fn begin_composite(&self, cmd: &Self::Rec, args: &Self::Args) {
         let to_rt = transition_barrier(
@@ -334,7 +334,7 @@ impl DxContext {
             .upload
             .reserve(&self.hw.alloc, frame_idx, text_bytes)?;
 
-        let args = DxCompositeArgs {
+        let args = CompositeArgs {
             back_buffer: back_buffer.clone(),
             back_buffer_rtv,
             scene_srv: sources.scene_srv,

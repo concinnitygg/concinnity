@@ -1137,7 +1137,7 @@ fn slot_scratch_bytes(blas_scratch: usize, tlas_scratch: usize) -> usize {
 // One frame's update of the live accel: the steps `drive_update` schedules,
 // over this frame's device, geometry and skinned inputs. `skinned` is `None`
 // when a skinned resource is missing, which skips the skinned step.
-pub(crate) struct MtlRtSteps<'a> {
+pub(crate) struct RtSteps<'a> {
     pub accel: &'a mut RtAccelData,
     pub gpu: RtGpu<'a>,
     pub geometry: RtStaticGeometry<'a>,
@@ -1148,7 +1148,7 @@ pub(crate) struct MtlRtSteps<'a> {
     pub skinned: Option<SkinnedRtInputs<'a>>,
 }
 
-impl RtAccelSteps for MtlRtSteps<'_> {
+impl RtAccelSteps for RtSteps<'_> {
     type Blas = Structure;
     type Instance = MTLIndirectAccelerationStructureInstanceDescriptor;
 

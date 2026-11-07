@@ -27,12 +27,12 @@ use concinnity_engine::render::output::hdr::{HdrEncoding, HdrOutputMode};
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;
 use super::texture::one_shot_submit;
-use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, PendingCapture};
+use crate::frame_capture::{self, CaptureImage, Mapped, PendingCapture};
 use crate::vulkan::record::Recorder;
 
 /// The Vulkan backend's frame captures, parked under the frame slot whose
 /// fence retires them.
-pub(in crate::vulkan) type VkFrameCaptures = FrameCaptures<PooledBuffer, usize>;
+pub(in crate::vulkan) type FrameCaptures = frame_capture::FrameCaptures<PooledBuffer, usize>;
 
 impl VkContext {
     // Keep a read-back buffer the size of the swapchain ready, so the frame

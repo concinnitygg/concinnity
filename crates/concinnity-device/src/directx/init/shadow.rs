@@ -12,7 +12,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::heap_layout::{DSV_SHADOW_BASE_SLOT, DSV_SPOT_SHADOW_BASE_SLOT};
 use super::{InitGpu, heaps};
-use crate::directx::context::{DxDescriptors, DxTargets, align256};
+use crate::directx::context::{Descriptors, Targets, align256};
 use crate::directx::draw::shadow::ShadowState;
 use crate::directx::draw::spot_shadow::SpotShadowState;
 use crate::directx::draw::upload_static_records;
@@ -21,8 +21,8 @@ use crate::directx::texture::{create_fallback_shadow_array, create_shadow_map_ar
 
 pub(super) fn build_shadow(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
     shadows: &ShadowParams,
 ) -> RenderResult<ShadowState> {
     let hw = gpu.hw;
@@ -111,8 +111,8 @@ pub(in crate::directx) fn write_spot_uniforms(
 
 pub(super) fn build_spot_shadow(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
     spot_shadows: &[SpotShadowData],
     shadow_map_size: u32,
 ) -> RenderResult<SpotShadowState> {

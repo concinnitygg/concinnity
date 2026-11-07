@@ -13,11 +13,10 @@ use concinnity_engine::render::post::reflection_composite::{
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 
 // The shared composite, holding Metal's own pipeline and target handles.
-pub(crate) type MtlReflectionCompositePass =
-    ReflectionCompositePass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlReflectionCompositePass = ReflectionCompositePass<PostPipeline, PostTarget>;
 
 // Build the composite at `render` resolution with its blur divided by
 // `blur_scale`.

@@ -22,7 +22,7 @@ use super::allocator::PooledBuffer;
 use super::geometry_upload::{CopySubmit, GeometryDest, GeometryUploads};
 use super::post::{
     GbufferResources, PostSupport, RtReflectionsResources, SsaoResources, SsgiResources,
-    SsrResources, TaaResources, VkBloomPass, VkReflectionCompositePass, VkUpscaleBackend, gbuffer,
+    SsrResources, TaaResources, UpscaleBackend, VkBloomPass, VkReflectionCompositePass, gbuffer,
 };
 use super::texture::{EnvironmentMapTextures, GpuImage, StreamedUploadRetire};
 use crate::vulkan::owned::{
@@ -40,7 +40,7 @@ pub(super) const HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 // (mirrors the DirectX backend's `self.shadow`). The barrier executor resolves
 // `shadow_map` through `build_barrier_registry`, so moving these fields behind
 // one field left the parallel emit path untouched.
-pub(super) struct VkShadow {
+pub(super) struct ShadowState {
     pub(super) render_pass: OwnedRenderPass,
     pub(super) map: GpuImage,
     pub(super) map_size: u32,
@@ -55,14 +55,14 @@ pub(super) struct VkShadow {
     pub(super) ubos: Vec<PooledBuffer>,
 }
 
-impl VkShadow {
+impl ShadowState {
     // Whether the world renders cascades at all (`shadow_map_size > 0`).
     pub(super) fn enabled(&self) -> bool {
         !self.framebuffers.is_empty()
     }
 
     // Destroy every owned GPU object. Called from `VkContext::drop` after
-    // `wait_idle`. The per-frame shadow global sets live in `VkDescriptors`.
+    // `wait_idle`. The per-frame shadow global sets live in `Descriptors`.
     pub(super) fn destroy(&mut self, _device: &VkDevice) {
         self.map = GpuImage::null();
         self.ubos.clear();
@@ -76,7 +76,7 @@ impl VkShadow {
 // shadowed spot still gets a 1x1 fallback array and a one-element buffer, so
 // the main pass's descriptors are always valid. Reuses the cascade pass's
 // render pass, GPU-driven pipeline, and comparison sampler.
-pub(super) struct VkSpotShadow {
+pub(super) struct SpotShadowState {
     pub(super) map: GpuImage,
     // One framebuffer per shadowed spot; empty when the world has none.
     pub(super) framebuffers: Vec<OwnedFramebuffer>,
@@ -102,7 +102,7 @@ pub(super) struct VkSpotShadow {
     pub(super) render_mask: u32,
 }
 
-impl VkSpotShadow {
+impl SpotShadowState {
     // Slices actually handed out; the array layers, the framebuffers, and the
     // data buffer all carry exactly this many entries.
     pub(super) fn count(&self) -> u32 {
@@ -128,13 +128,13 @@ impl VkSpotShadow {
 // samples. All three are static for the world's lifetime. The tables are
 // scene-independent (fitted at build time), so they are uploaded even with no
 // area light declared -- the shader simply never samples them.
-pub(super) struct VkAreaLight {
+pub(super) struct AreaLightState {
     pub(super) buffer: PooledBuffer,
     pub(super) ltc_matrix: GpuImage,
     pub(super) ltc_magnitude: GpuImage,
 }
 
-impl VkAreaLight {
+impl AreaLightState {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`.
     pub(super) fn destroy(&mut self, _device: &VkDevice) {
@@ -148,7 +148,7 @@ impl VkAreaLight {
 // field soup. All `None` / empty until `upload_skinned` runs; with no
 // `SkinnedMesh` in the world every skinned pass is skipped. The joint matrices
 // live in per-(frame, object) storage buffers the skin fold reads.
-pub(super) struct VkSkinned {
+pub(super) struct SkinnedState {
     pub(super) vertex_buffer: PooledBuffer,
     pub(super) index_buffer: PooledBuffer,
     // Current byte sizes of the skinned VB / IB. Used by
@@ -193,7 +193,7 @@ pub(super) struct VkSkinned {
     pub(super) deformed_primed: std::sync::atomic::AtomicBool,
 }
 
-impl VkSkinned {
+impl SkinnedState {
     // No skinned mesh uploaded yet: `upload_skinned` builds the rest.
     pub(super) fn new() -> Self {
         Self {
@@ -229,7 +229,7 @@ impl VkSkinned {
 // Shared static vertex/index buffers, grouped off the flat `VkContext` field
 // soup. Created at init and live for the context's lifetime; the
 // streaming and geometry-rebuild paths swap the buffers in place.
-pub(super) struct VkGeometry {
+pub(super) struct Geometry {
     pub(super) vertex_buffer: PooledBuffer,
     pub(super) index_buffer: PooledBuffer,
     // Current byte sizes of the shared vertex/index buffers. Tracked so
@@ -239,7 +239,7 @@ pub(super) struct VkGeometry {
     pub(super) index_buffer_bytes: u64,
 }
 
-impl VkGeometry {
+impl Geometry {
     // The shared vertex stream over its current size.
     pub(super) fn vertex_range(&self) -> super::set_writes::BufferRange {
         super::set_writes::BufferRange {
@@ -262,11 +262,11 @@ impl VkGeometry {
 // `*_sets` are allocated from `descriptor_pool` at init and freed with it, as
 // are the text, composite and cull sets their own states hold. Post and skinned
 // descriptors live in their own pools, not here.
-pub(super) struct VkDescriptors {
+pub(super) struct Descriptors {
     pub(super) global_set_layout: OwnedSetLayout,
     pub(super) descriptor_pool: OwnedDescriptorPool,
     pub(super) global_sets: Vec<vk::DescriptorSet>,
-    // The cascade shadow pass's set 0 per frame, over `VkShadow`'s layout and
+    // The cascade shadow pass's set 0 per frame, over `ShadowState`'s layout and
     // uniform ring.
     pub(super) shadow_global_sets: Vec<vk::DescriptorSet>,
 }
@@ -275,7 +275,7 @@ pub(super) struct VkDescriptors {
 // records, so no pass walks the instances on the CPU. Empty when the world
 // declares no `InstancedProp` clusters. `clusters` holds the declared clusters
 // (each with its per-instance transforms).
-pub(super) struct VkInstanced {
+pub(super) struct InstancedState {
     pub(super) clusters: Vec<InstancedCluster>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
     // per-instance LOD patch: without alternates the base slice written into
@@ -283,7 +283,7 @@ pub(super) struct VkInstanced {
     pub(super) any_lod: bool,
 }
 
-impl VkInstanced {
+impl InstancedState {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
             any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
@@ -294,7 +294,7 @@ impl VkInstanced {
 
 // The compute cull kernel and its layouts, plus two-pass occlusion's late
 // kernel over the same layout (`None` when two-pass is off).
-pub(super) struct VkCullKernels {
+pub(super) struct CullKernels {
     pub(super) pipeline: OwnedPipeline,
     pub(super) pipeline_late: Option<OwnedPipeline>,
     pub(super) pipeline_layout: OwnedPipelineLayout,
@@ -309,7 +309,7 @@ pub(super) struct VkCullKernels {
 // GPU-drive. Field names are kept verbatim (heterogeneous prefixes, no single
 // cluster prefix to drop). The two-pass Hi-Z pyramid + its temporal state live
 // here too.
-pub(super) struct VkCull {
+pub(super) struct CullState {
     // Packs the static draws' records into `object_buffers` / `draw_args_buffers`.
     pub(super) packer: crate::record_pack::RecordPacker,
     // Bindless static main pass: bucket 0's pipeline, the world default Shader's
@@ -368,10 +368,10 @@ pub(super) struct VkCull {
     pub(super) object_buffers: Vec<PooledBuffer>,
     // The material parameter table, one copy per frame at binding 2 of that
     // frame's bindless set. `None` when the bindless pass is inactive.
-    pub(super) material_params: Option<super::material_params::VkMaterialParams>,
+    pub(super) material_params: Option<super::material_params::MaterialParams>,
     // Compute cull kernels + their per-frame sets (bindings 0/1/2 = that frame's
     // object SSBO, draw-args SSBO, indirect-command SSBO). Sets are pool-freed.
-    pub(super) cull_kernels: Option<VkCullKernels>,
+    pub(super) cull_kernels: Option<CullKernels>,
     pub(super) cull_sets: Vec<vk::DescriptorSet>,
     // Per-frame `GpuDrawArgs` storage buffers, persistently mapped.
     pub(super) draw_args_buffers: Vec<PooledBuffer>,
@@ -384,7 +384,7 @@ pub(super) struct VkCull {
     // The scan and scatter that pack each cull's kept draws per stream, each
     // frame's group-count scratch (the late pass reusing the early pass's once its packing
     // has read it), and each frame's early and late packing sets.
-    pub(super) compact: Option<super::compact::VkCompactKernels>,
+    pub(super) compact: Option<super::compact::CompactKernels>,
     pub(super) group_count_buffers: Vec<PooledBuffer>,
     pub(super) compact_sets: Vec<vk::DescriptorSet>,
     pub(super) compact_sets_late: Vec<vk::DescriptorSet>,
@@ -395,7 +395,7 @@ pub(super) struct VkCull {
     // records the world's request; the live resources below are `Some` /
     // non-empty only when it AND the bindless cull path are active.
     pub(super) occlusion_two_pass: bool,
-    // Late cull sets (the pipeline is `VkCullKernels::pipeline_late`),
+    // Late cull sets (the pipeline is `CullKernels::pipeline_late`),
     // allocated from `two_pass_pool`.
     pub(super) cull_sets_late: Vec<vk::DescriptorSet>,
     pub(super) _two_pass_pool: Option<OwnedDescriptorPool>,
@@ -432,13 +432,13 @@ pub(super) struct VkCull {
     pub(super) shadow_cull_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_cull_pipeline_layout: Option<OwnedPipelineLayout>,
     pub(super) _shadow_cull_set_layout: Option<OwnedSetLayout>,
-    pub(super) shadow_views: Vec<Vec<super::cull::VkShadowView>>,
+    pub(super) shadow_views: Vec<Vec<super::cull::ShadowCullView>>,
     pub(super) shadow_bindless_pipeline: Option<OwnedPipeline>,
     pub(super) shadow_bindless_pipeline_layout: Option<OwnedPipelineLayout>,
     // The spot shadow pass's views, indexed [frame][slice], written by the
     // same shadow kernel. Their own, so the spot pass shares no state with the
     // cascade pass. Empty when the world has no shadowed spot.
-    pub(super) spot_views: Vec<Vec<super::cull::VkShadowView>>,
+    pub(super) spot_views: Vec<Vec<super::cull::ShadowCullView>>,
     // GPU-driven G-buffer pre-pass. Each bucket's pre-pass pipeline reads the
     // previous-frame model from `prev_model_buffers`; the velocity history for
     // the skinned tail rides the previous-frame deformed buffer. The pass reuses
@@ -455,7 +455,7 @@ pub(super) struct VkCull {
     pub(super) model_history: Option<gbuffer::ModelHistoryPipeline>,
 }
 
-impl VkCull {
+impl CullState {
     // Destroy every owned GPU object. Called from `VkContext::drop` after
     // `wait_idle`. The bindless / cull / late descriptor sets are freed with
     // the shared descriptor pool + `two_pass_pool`, so they are not destroyed
@@ -496,7 +496,7 @@ impl VkCull {
 // (its length tracks the swapchain, so a resize rebuilds it). The ring cursor
 // (`current_frame`) and depth (`frames_in_flight`) stay flat on `VkContext`:
 // they are read pervasively and are frame-pacing counters, not sync handles.
-pub(super) struct VkFrameSync {
+pub(super) struct FrameSync {
     // Signaled by `acquire_next_image`, waited on by that frame's submit.
     pub(super) image_available: Vec<vk::Semaphore>,
     // Signaled by the frame's submit, waited on by its present. Indexed by
@@ -507,7 +507,7 @@ pub(super) struct VkFrameSync {
     pub(super) in_flight: Vec<vk::Fence>,
 }
 
-impl VkFrameSync {
+impl FrameSync {
     // Destroy every owned semaphore + fence. Called from `VkContext::drop`
     // after `wait_idle`, so none are still in flight.
     pub(super) fn destroy(&self, device: &VkDevice) {
@@ -537,7 +537,7 @@ impl VkFrameSync {
 // one-shot pool for upload / layout-transition submits during resource
 // creation. DX keeps the analogous allocators / lists flat on `DxContext`, so
 // there is no DX sub-struct to mirror here.
-pub(super) struct VkCommands {
+pub(super) struct Commands {
     // Shared pool: allocates the per-frame "end" buffers below AND backs every
     // one-shot upload / layout-transition submit during resource creation.
     pub(super) command_pool: vk::CommandPool,
@@ -564,7 +564,7 @@ pub(super) struct VkCommands {
     pub(super) pass_command_buffers: Vec<vk::CommandBuffer>,
 }
 
-impl VkCommands {
+impl Commands {
     // Destroy every command pool, which frees the buffers allocated from it.
     // Called from `VkContext::drop` after `wait_idle`.
     pub(super) fn destroy(&self, device: &VkDevice) {
@@ -591,7 +591,7 @@ impl VkCommands {
 // the per-pass resource structs (decal / glass / raymarch / particle / gbuffer
 // each own their own `view_ubo_*`), so accesses are always anchored on the
 // `self.<field>` form, never a bare leading-dot.
-pub(super) struct VkUniforms {
+pub(super) struct Uniforms {
     // Per-frame-in-flight `ViewUniforms` UBO (camera + IBL params), persistently
     // mapped. `record_frame` memcpys this frame's view into its slot.
     pub(super) view_ubo_buffers: Vec<PooledBuffer>,
@@ -612,10 +612,10 @@ pub(super) struct VkUniforms {
     pub(super) canopy_buffers: Vec<PooledBuffer>,
     pub(super) canopy: concinnity_engine::render::uniforms::canopy::CanopyParams,
     // The canopy's view tables (binding 22).
-    pub(super) canopy_tables: super::canopy::VkCanopyTables,
+    pub(super) canopy_tables: super::canopy::CanopyTables,
 }
 
-impl VkUniforms {
+impl Uniforms {
     // Drop the per-frame view + light UBOs and the local-light SSBO (they
     // retire through the allocator).
     pub(super) fn destroy(&mut self) {
@@ -700,7 +700,7 @@ pub(super) struct ProbeState {
     // At most one probe capturing (six faces submitting one per frame, on
     // per-face fences) and one convolving into its cube on the GPU, one
     // destination mip per frame.
-    pub bake: super::probe::VkProbeBake,
+    pub bake: super::probe::ProbeBake,
     // The three convolution kernels and the layouts they bind, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -717,7 +717,7 @@ impl ProbeState {
     ) -> Self {
         Self {
             gpu,
-            bake: super::probe::VkProbeBake::default(),
+            bake: super::probe::ProbeBake::default(),
             prefilter,
             prop: super::prop_probe::PropProbe::default(),
         }
@@ -788,7 +788,7 @@ impl SwapchainState {
 // The render-resolution scene targets: the main render pass with its
 // per-frame-in-flight HDR attachments and framebuffers, and the transient image
 // pool. `rebuild_swapchain` rebuilds everything but the render pass.
-pub(super) struct VkTargets {
+pub(super) struct Targets {
     // Resolution the 3D scene is rendered at. Equals `swapchain.extent` unless
     // temporal upscaling is active, in which case it is
     // `round(swapchain.extent * upscale_scale)` and an FSR pass reconstructs the
@@ -822,7 +822,7 @@ pub(super) struct VkTargets {
 // The world's sampled scene assets: the shared texture pool and its fallbacks,
 // the IBL cubes and color-grading LUT, the samplers they are read with, and the
 // white stand-in for disabled SSAO. None of it depends on the swapchain.
-pub(super) struct VkSceneAssets {
+pub(super) struct SceneAssets {
     // Shared texture pool: every texture (albedo, normal map, emissive/ORM,
     // terrain secondary) lives here once at its handle, matching DX/Metal.
     pub(super) textures: Vec<GpuImage>,
@@ -851,7 +851,7 @@ pub(super) struct VkSceneAssets {
 
 // The hardware ray-tracing scene: the acceleration structures and the policy
 // that keeps them current as the draw set changes.
-pub(super) struct VkRayTracing {
+pub(super) struct RtState {
     // The scene BLAS / TLAS + geometry table. `Some` only while the RT pass is
     // live and the scene has participating geometry: it is seeded when the
     // first geometry appears and dropped once nothing can be traced.
@@ -1011,8 +1011,8 @@ impl VkHardware {
 pub(crate) struct VkContext {
     // Swapchain. See [`SwapchainState`].
     pub(super) swapchain: SwapchainState,
-    // Render-resolution scene targets. See [`VkTargets`].
-    pub(super) targets: VkTargets,
+    // Render-resolution scene targets. See [`Targets`].
+    pub(super) targets: Targets,
 
     // Composite (post-process) pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
@@ -1021,25 +1021,25 @@ pub(crate) struct VkContext {
     pub(super) feature_wires: super::feature_wires::FeatureWires,
 
     // Cascaded shadow map + its pipelines, framebuffers, UBO, and sampler.
-    pub(super) shadow: VkShadow,
+    pub(super) shadow: ShadowState,
 
-    // Spot shadow map resources. See [`VkSpotShadow`].
-    pub(super) spot_shadow: VkSpotShadow,
+    // Spot shadow map resources. See [`SpotShadowState`].
+    pub(super) spot_shadow: SpotShadowState,
 
-    // Rectangular area-light resources. See [`VkAreaLight`].
-    pub(super) area_light: VkAreaLight,
+    // Rectangular area-light resources. See [`AreaLightState`].
+    pub(super) area_light: AreaLightState,
 
-    // Sampled scene assets. See [`VkSceneAssets`].
-    pub(super) scene: VkSceneAssets,
+    // Sampled scene assets. See [`SceneAssets`].
+    pub(super) scene: SceneAssets,
 
     // Pipelines
     // GPU-driven cull + bindless static main pass + two-pass Hi-Z occlusion
-    // (pyramid + temporal state). See `VkCull`.
-    pub(super) cull: VkCull,
+    // (pyramid + temporal state). See `CullState`.
+    pub(super) cull: CullState,
     // Clustered light binning: the compute pipeline (built only when the world
     // has local lights), the per-cluster light-index buffer, and the
-    // `ClusterParams` UBOs. See `VkLightCull`.
-    pub(super) light_cull: super::light_cull::VkLightCull,
+    // `ClusterParams` UBOs. See `LightCullState`.
+    pub(super) light_cull: super::light_cull::LightCullState,
 
     // HUD text pass. See [`TextState`].
     pub(super) text: TextState,
@@ -1066,13 +1066,13 @@ pub(crate) struct VkContext {
     // the backend rather than once per effect, which is the point of the seam.
     pub(super) post: PostSupport,
 
-    // Temporal upscaling (FSR / DLSS / XeSS, behind `VkUpscaleBackend`). `Some`
+    // Temporal upscaling (FSR / DLSS / XeSS, behind `UpscaleBackend`). `Some`
     // only when the world's `AntiAliasing` set `upscaling: true`
     // AND a backend resolved + built; `None` renders at native resolution
     // (`render_extent == swapchain.extent`). When `Some`, the scene renders at
     // the reduced `render_extent` and this pass reconstructs the swapchain
     // resolution; bloom + composite sample its output.
-    pub(super) upscale: Option<Box<dyn VkUpscaleBackend>>,
+    pub(super) upscale: Option<Box<dyn UpscaleBackend>>,
     // The pre-exposure the upscaler divides its input by, stepped between
     // frames so its history stays in FP16's normal range.
     pub(super) upscale_exposure: auto_exposure::UpscalerExposure,
@@ -1132,8 +1132,8 @@ pub(crate) struct VkContext {
     // `rt_reflections.output` over the scene (RT takes precedence over SSR, which
     // stays the non-RT-GPU fallback).
     pub(super) rt_reflections: Option<RtReflectionsResources>,
-    // Ray-tracing acceleration state. See [`VkRayTracing`].
-    pub(super) rt: VkRayTracing,
+    // Ray-tracing acceleration state. See [`RtState`].
+    pub(super) rt: RtState,
 
     // Projected decals. See [`DecalState`].
     pub(super) decal: DecalState,
@@ -1152,10 +1152,10 @@ pub(crate) struct VkContext {
     pub(super) raymarch: Option<crate::vulkan::raymarch::RaymarchResources>,
 
     // The environment drawn behind the opaque scene. See `vulkan/sky.rs`.
-    pub(super) sky: crate::vulkan::sky::VkSky,
+    pub(super) sky: crate::vulkan::sky::SkyState,
     // The world's atmosphere, when it declares one: the sky, the haze and the
     // ambient light. See `vulkan/atmosphere.rs`.
-    pub(super) atmosphere: Option<crate::vulkan::atmosphere::VkAtmosphere>,
+    pub(super) atmosphere: Option<crate::vulkan::atmosphere::AtmosphereState>,
 
     // The shared `PassId::Transparent` slot and its two producers, translucent
     // glass panes and water surfaces. `Some` only when the world declared a
@@ -1219,30 +1219,30 @@ pub(crate) struct VkContext {
     pub(super) draw_calls_accum: std::sync::atomic::AtomicU32,
 
     // Main geometry-path descriptor layouts, shared pool, and per-frame sets.
-    // See `VkDescriptors`.
-    pub(super) descriptors: VkDescriptors,
+    // See `Descriptors`.
+    pub(super) descriptors: Descriptors,
     // Instanced-prop pipeline, per-cluster material sets, per-frame instance
-    // buffers + sets, and the cluster list. See `VkInstanced`.
-    pub(super) instanced: VkInstanced,
+    // buffers + sets, and the cluster list. See `InstancedState`.
+    pub(super) instanced: InstancedState,
 
-    // Shared static vertex/index buffers. See `VkGeometry`.
-    pub(super) geometry: VkGeometry,
+    // Shared static vertex/index buffers. See `Geometry`.
+    pub(super) geometry: Geometry,
 
     // Geometry writes staged for the next copy submit. See [`GeometryUploads`].
     pub(super) geometry_uploads: core::cell::RefCell<GeometryUploads>,
 
-    // Skinned (skeletally animated) mesh rendering. See `VkSkinned`.
-    pub(super) skinned: VkSkinned,
+    // Skinned (skeletally animated) mesh rendering. See `SkinnedState`.
+    pub(super) skinned: SkinnedState,
 
     // Main-pass view (per-frame) + light (shared) uniform buffers. See
-    // `VkUniforms`.
-    pub(super) uniforms: VkUniforms,
+    // `Uniforms`.
+    pub(super) uniforms: Uniforms,
 
-    // Per-frame-in-flight synchronization primitives. See `VkFrameSync`.
-    pub(super) frame_sync: VkFrameSync,
+    // Per-frame-in-flight synchronization primitives. See `FrameSync`.
+    pub(super) frame_sync: FrameSync,
     // Frame captures asked of `draw_frame`: their read-back buffers, the
     // captures awaiting their frame slot's fence, and the writer.
-    pub(super) frame_capture: super::screenshot::VkFrameCaptures,
+    pub(super) frame_capture: super::screenshot::FrameCaptures,
     pub(super) current_frame: usize,
     // When the input each frame slot's last frame showed was sampled, on the
     // host clock, read back beside that frame's timestamps.
@@ -1250,8 +1250,8 @@ pub(crate) struct VkContext {
     pub(super) frames_in_flight: usize,
 
     // Per-frame command pools + buffers (start / per-pass / end tiers + the
-    // shared one-shot pool). See `VkCommands`.
-    pub(super) commands: VkCommands,
+    // shared one-shot pool). See `Commands`.
+    pub(super) commands: Commands,
 
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
@@ -1262,13 +1262,13 @@ pub(crate) struct VkContext {
     // allocations are carried over, which is what the per-frame `Vec` builds were
     // actually costing. Taken during `execute_graph` and put back after, like
     // `graph_cache` above.
-    pub(super) graph_scratch: Option<super::graph_exec::VkGraphScratch>,
+    pub(super) graph_scratch: Option<super::graph_exec::GraphScratch>,
     // The frame's submit list, `[start, ...pass buffers, end]`, kept across
     // frames so building it allocates nothing.
     pub(super) submit_scratch: Vec<vk::CommandBuffer>,
     // Lazily-built wireframe twins of the main-pass pipelines; empty until the
     // first Wireframe frame. See [`super::wireframe`].
-    pub(super) wireframe: super::wireframe::VkWireframe,
+    pub(super) wireframe: super::wireframe::Wireframe,
 
     // Scene-captured reflection probes. See [`ProbeState`].
     pub(super) probe: ProbeState,
@@ -1548,7 +1548,7 @@ impl VkContext {
         self.text.pipeline = None;
 
         // GPU-driven cull + bindless static pass resources, including the Hi-Z
-        // pyramid (see `VkCull::destroy`). The bindless / cull / late
+        // pyramid (see `CullState::destroy`). The bindless / cull / late
         // descriptor sets are freed with the shared descriptor pool +
         // `two_pass_pool`.
         self.cull.destroy(device);

@@ -8,7 +8,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use super::CullPlan;
 use super::bindless::BindlessPass;
 use super::compute::ComputeCull;
-use crate::vulkan::context::VkDescriptors;
+use crate::vulkan::context::Descriptors;
 use crate::vulkan::init::InitGpu;
 use crate::vulkan::post::gbuffer::GbufferResources;
 
@@ -29,7 +29,7 @@ pub(super) fn build_gbuffer_pass(
     bindless: &BindlessPass,
     compute: &ComputeCull,
     gbuffer: Option<&GbufferResources>,
-    descriptors: &VkDescriptors,
+    descriptors: &Descriptors,
     plan: &CullPlan,
 ) -> RenderResult<GbufferPass> {
     let InitGpu {

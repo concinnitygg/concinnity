@@ -9,7 +9,7 @@ use concinnity_engine::render::output::hdr;
 use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::allocator::DeviceAllocator;
-use super::context::{HDR_FORMAT, VkContext, VkTargets};
+use super::context::{HDR_FORMAT, Targets, VkContext};
 use super::descriptor_layout::SCREEN_INDIRECT_BINDING;
 use super::device::query_queue_families;
 use super::hiz::{HiZDeviceCtx, HiZTarget};
@@ -1129,7 +1129,7 @@ pub(super) fn write_composite_channel_set(
 // is built, the pooled SSAO output's views, `white` wherever one does not
 // exist.
 pub(super) fn composite_channels(
-    targets: &VkTargets,
+    targets: &Targets,
     gbuffer: Option<&super::post::gbuffer::GbufferResources>,
     ssao_built: bool,
     white: vk::ImageView,

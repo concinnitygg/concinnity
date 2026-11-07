@@ -21,9 +21,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{DSV_GBUFFER_DEPTH_SLOT, DSV_GLASS_REFLECTION_DEPTH_SLOT, RtvHeapLayout};
 use super::{Features, InitGpu, heaps};
 use crate::directx::auto_exposure::AutoExposureState;
-use crate::directx::context::{
-    DxDescriptors, DxSceneAssets, DxTargets, SwapchainState, dump_on_err,
-};
+use crate::directx::context::{Descriptors, SceneAssets, SwapchainState, Targets, dump_on_err};
 use crate::directx::decal::DecalState;
 use crate::directx::descriptor_slot::SamplerSlot;
 use crate::directx::draw::shadow::ShadowState;
@@ -54,7 +52,7 @@ use crate::directx::transparent::TransparentResources;
 // native-resolution TAA rather than a low-res bilinear stretch.
 pub(super) fn build_upscale(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     output: (u32, u32),
     graphics: &ResolvedGraphics,
 ) -> RenderResult<UpscaleState> {
@@ -104,9 +102,9 @@ pub(super) fn build_upscale(
 // slots from here too.
 pub(super) fn build_quality_slots(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     swapchain: &SwapchainState,
-    targets: &DxTargets,
+    targets: &Targets,
     rtv: &RtvHeapLayout,
 ) -> QualitySlotHandles {
     let layout = &descriptors.layout;
@@ -146,7 +144,7 @@ pub(super) fn build_quality_slots(
 // set.
 pub(super) fn post_device<'a>(
     gpu: &InitGpu<'a>,
-    descriptors: &'a DxDescriptors,
+    descriptors: &'a Descriptors,
     post: &'a PostDescriptors,
 ) -> DxPostDevice<'a> {
     DxPostDevice {
@@ -164,7 +162,7 @@ pub(super) fn post_device<'a>(
 pub(super) fn build_taa(
     post_device: &DxPostDevice<'_>,
     features: &Features,
-    targets: &DxTargets,
+    targets: &Targets,
 ) -> RenderResult<Option<TaaResources>> {
     let taa = if features.taa_enabled {
         Some(TaaResources::new(
@@ -184,8 +182,8 @@ pub(super) fn build_taa(
 pub(super) fn build_ssao(
     gpu: &InitGpu<'_>,
     post_device: &DxPostDevice<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
     settings: Option<SsaoSettings>,
 ) -> RenderResult<SsaoState> {
     let hw = gpu.hw;
@@ -228,7 +226,7 @@ pub(super) fn build_ssao(
 // SSGI-only or RT-only build, which then holds no resolve or target.
 pub(super) fn build_ssr(
     post_device: &DxPostDevice<'_>,
-    targets: &DxTargets,
+    targets: &Targets,
     graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<SsrResources>> {
     let ssr = if graphics.ssr().is_some()
@@ -252,7 +250,7 @@ pub(super) fn build_ssr(
 // composite blends straight into the scene.
 pub(super) fn build_ssgi(
     post_device: &DxPostDevice<'_>,
-    targets: &DxTargets,
+    targets: &Targets,
     graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<SsgiResources>> {
     let ssgi = match graphics.ssgi() {
@@ -275,7 +273,7 @@ pub(super) fn build_ssgi(
 // `upload_skinned` once the joint-bound vertex layout exists.
 pub(super) fn build_gbuffer(
     gpu: &InitGpu<'_>,
-    targets: &DxTargets,
+    targets: &Targets,
     slots: &QualitySlotHandles,
     gbuffer_enabled: bool,
 ) -> RenderResult<Option<GbufferResources>> {
@@ -310,15 +308,15 @@ pub(super) fn build_gbuffer(
 // The simulated oceans, whose arrays every water draw binds.
 pub(super) fn build_water_sim(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     water_surfaces: &[WaterBody],
     ocean: &OceanPlan,
-) -> RenderResult<Option<crate::directx::water_sim::DxOceanSim>> {
+) -> RenderResult<Option<crate::directx::water_sim::OceanSim>> {
     if water_surfaces.is_empty() {
         return Ok(None);
     }
     let base = descriptors.layout.ocean_base_slot;
-    crate::directx::water_sim::DxOceanSim::new(
+    crate::directx::water_sim::OceanSim::new(
         &gpu.hw.alloc,
         ocean,
         &crate::directx::water_sim::OceanSlots {
@@ -333,9 +331,9 @@ pub(super) fn build_water_sim(
 
 pub(super) fn build_decals(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
-    scene: &DxSceneAssets,
+    descriptors: &Descriptors,
+    targets: &Targets,
+    scene: &SceneAssets,
     decals: Vec<DecalRecord>,
 ) -> RenderResult<(DecalState, DecalSet)> {
     let hw = gpu.hw;
@@ -389,8 +387,8 @@ pub(super) fn build_decals(
 // binds.
 pub(super) fn build_fog(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
     shadow: &ShadowState,
     settings: Option<FogSettings>,
 ) -> RenderResult<FogState> {
@@ -467,15 +465,15 @@ pub(super) fn build_auto_exposure(
 )]
 pub(super) fn build_atmosphere(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    scene: &DxSceneAssets,
+    descriptors: &Descriptors,
+    scene: &SceneAssets,
     settings: Option<concinnity_engine::render::environment::atmosphere::AtmosphereSettings>,
-    targets: &DxTargets,
-) -> RenderResult<Option<crate::directx::atmosphere::DxAtmosphere>> {
+    targets: &Targets,
+) -> RenderResult<Option<crate::directx::atmosphere::AtmosphereState>> {
     use crate::directx::atmosphere::{
-        ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, DxAtmosphere, DxSkyCube,
+        ATMOSPHERE_SRV_SLOTS, ATMOSPHERE_UAV_SLOTS, AtmosphereSlots, AtmosphereState, SkyCube,
     };
-    use crate::directx::clouds::{CLOUD_SLOTS, CloudSlots, DxClouds};
+    use crate::directx::clouds::{CLOUD_SLOTS, CloudSlots, CloudState};
     use crate::directx::probe_prefilter::PrefilterSlots;
     use concinnity_engine::render::environment::atmosphere::SKY_CUBE_PLAN;
     let Some(settings) = settings else {
@@ -496,7 +494,7 @@ pub(super) fn build_atmosphere(
         irradiance_srv_cpu: scene.env_map.irradiance.srv_cpu,
         depth_srv_gpu: descriptors.slot_gpu(layout.decal_depth_srv_slot),
     };
-    let sky_cube = DxSkyCube::new(
+    let sky_cube = SkyCube::new(
         &gpu.hw.device,
         PrefilterSlots::block(layout.sky_cube_base_slot, SKY_CUBE_PLAN.mips()),
         |slot| descriptors.slot_cpu(slot),
@@ -509,7 +507,7 @@ pub(super) fn build_atmosphere(
         .clouds
         .is_some()
         .then(|| {
-            DxClouds::new(
+            CloudState::new(
                 &gpu.hw.alloc,
                 CloudSlots {
                     cpu: core::array::from_fn::<_, CLOUD_SLOTS, _>(|i| {
@@ -523,7 +521,7 @@ pub(super) fn build_atmosphere(
             )
         })
         .transpose()?;
-    DxAtmosphere::new(
+    AtmosphereState::new(
         &gpu.hw.alloc,
         settings,
         slots,
@@ -537,11 +535,11 @@ pub(super) fn build_atmosphere(
 
 pub(super) fn build_raymarch(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
     shadow: &ShadowState,
-    scene: &DxSceneAssets,
-    atmosphere: Option<&crate::directx::atmosphere::DxAtmosphere>,
+    scene: &SceneAssets,
+    atmosphere: Option<&crate::directx::atmosphere::AtmosphereState>,
     sdf_volumes: &[SdfVolumeSource],
 ) -> RenderResult<Option<RaymarchResources>> {
     let hw = gpu.hw;
@@ -602,8 +600,8 @@ pub(super) fn build_raymarch(
 // indirect buffer.
 pub(super) fn build_planar_reflection(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
-    targets: &DxTargets,
+    descriptors: &Descriptors,
+    targets: &Targets,
     planar: PlanarReflectors,
     n_cull: usize,
     clear_color: [f32; 4],
@@ -639,8 +637,8 @@ pub(super) fn build_planar_reflection(
 
 #[derive(Clone, Copy)]
 pub(super) struct TransparentInputs<'a> {
-    pub(super) descriptors: &'a DxDescriptors,
-    pub(super) targets: &'a DxTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
     pub(super) reflection_slots: crate::directx::transparent::GlassReflectionSlots,
     pub(super) post: &'a PostDescriptors,
     // Per-axis divisor of the glass reflection pre-pass; 1 traces in place.

@@ -8,7 +8,7 @@ use concinnity_engine::render::backend::init::{SceneData, WorldShader};
 use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
-use crate::directx::context::{DxDescriptors, DxTargets};
+use crate::directx::context::{Descriptors, Targets};
 use crate::directx::cull::{CullKernels, CullState};
 use crate::directx::probe_prefilter::ProbePrefilterPipelines;
 use bindless::BindlessPass;
@@ -52,8 +52,8 @@ pub(super) struct CullInputs<'a> {
     pub(super) world_shaders: &'a [WorldShader<'a>],
     pub(super) material_params: &'a MaterialParamTable,
     pub(super) plan: &'a CullPlan,
-    pub(super) descriptors: &'a DxDescriptors,
-    pub(super) targets: &'a DxTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
     // Albedo resources at the front of the flat bindless pool.
     pub(super) albedo_count: usize,
     pub(super) shadow_enabled: bool,

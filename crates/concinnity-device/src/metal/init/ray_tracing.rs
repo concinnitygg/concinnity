@@ -8,7 +8,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLDevice;
 
 use super::InitGpu;
-use crate::metal::context::{GlassState, MtlSceneAssets};
+use crate::metal::context::{GlassState, SceneAssets};
 use crate::metal::post::RtReflectionPipelines;
 use crate::metal::raytrace::{
     RtGpu, RtPipelines, RtSceneGeometry, RtState, RtStaticGeometry, RtTextureCounts,
@@ -18,7 +18,7 @@ use crate::metal::raytrace::{
 #[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
-    pub(super) scene: &'a MtlSceneAssets,
+    pub(super) scene: &'a SceneAssets,
     pub(super) glass: &'a GlassState,
     pub(super) rt_reflections: Option<RtReflectionSettings>,
     pub(super) launch: RenderLaunch,

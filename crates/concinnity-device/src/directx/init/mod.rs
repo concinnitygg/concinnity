@@ -39,7 +39,7 @@ use std::sync::atomic::AtomicBool;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
 use super::context::{
-    DxContext, DxHardware, DxInstanced, ProbeState, StreamState, record_main_thread,
+    DxContext, DxHardware, InstancedState, ProbeState, StreamState, record_main_thread,
 };
 use super::geometry_upload::GeometryUploads;
 use super::particle::ParticleState;
@@ -354,7 +354,7 @@ impl DxContext {
             atmosphere.as_ref(),
             &fx.sdf_volumes,
         )?;
-        let sky = super::sky::DxSky::build(
+        let sky = super::sky::SkyState::build(
             &gpu.hw.device,
             features.msaa_samples,
             media.env_map_background,
@@ -411,7 +411,7 @@ impl DxContext {
             geometry_uploads: std::cell::RefCell::new(GeometryUploads::new(hw.frames())),
             skinned: SkinnedState::new(),
             uniforms,
-            canopy: super::canopy::DxCanopy::new(&hw.alloc, hw.frames())?,
+            canopy: super::canopy::CanopyState::new(&hw.alloc, hw.frames())?,
             light_cull,
             cull,
             text,
@@ -464,8 +464,8 @@ impl DxContext {
             graph_scratch: std::cell::Cell::default(),
             pass_lists: std::cell::Cell::default(),
             submission: Vec::new(),
-            instanced: DxInstanced::new(world.instanced_clusters),
-            wireframe: crate::directx::wireframe::DxWireframe::default(),
+            instanced: InstancedState::new(world.instanced_clusters),
+            wireframe: crate::directx::wireframe::Wireframe::default(),
             diagnostics: crate::directx::context::Diagnostics::default(),
             timestamps,
             auto_exposure,

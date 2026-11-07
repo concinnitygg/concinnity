@@ -15,7 +15,7 @@
 //! Vulkan half: `post_device.rs` implements `gfx::post::PostPassDevice`,
 //! `pass_cache.rs` caches the render passes and framebuffers a draw needs, and
 //! `set_arena.rs` hands out descriptor sets per frame instead of per effect.
-//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind `VkUpscaleBackend`
+//!   upscale/    temporal upscaling (FSR / DLSS / XeSS) behind `UpscaleBackend`
 
 pub(in crate::vulkan) mod bloom;
 pub(in crate::vulkan) mod disocclusion;
@@ -68,6 +68,4 @@ impl PostSupport {
         })
     }
 }
-pub(in crate::vulkan) use upscale::{
-    ResolvedBackend, UpscaleSdk, VkUpscaleBackend, build_upscaler,
-};
+pub(in crate::vulkan) use upscale::{ResolvedBackend, UpscaleBackend, UpscaleSdk, build_upscaler};

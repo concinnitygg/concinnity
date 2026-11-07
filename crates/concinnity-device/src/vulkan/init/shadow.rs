@@ -10,7 +10,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::ShadowParams;
 
 use super::InitGpu;
-use crate::vulkan::context::{VkShadow, VkSpotShadow};
+use crate::vulkan::context::{ShadowState, SpotShadowState};
 use crate::vulkan::draw::upload_shadow_uniforms;
 use crate::vulkan::render_pass::create_shadow_render_pass;
 use crate::vulkan::resources::create_descriptor_set_layout;
@@ -20,7 +20,7 @@ use crate::vulkan::texture::{create_sampler_shadow, create_shadow_map_array};
 // Build the cascade shadow state. CSM is gated on `Shadows.map_size` (0
 // disables shadows); the casters draw through the GPU-driven
 // shadow pipeline the cull builds.
-pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<VkShadow> {
+pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderResult<ShadowState> {
     let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;
     // Shadow map: a 4-layer D32_SFLOAT array image, one slice per cascade.
@@ -68,7 +68,7 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
     for ubo in &ubos {
         upload_shadow_uniforms(ubo, &uniforms);
     }
-    Ok(VkShadow {
+    Ok(ShadowState {
         render_pass,
         map,
         map_size: shadows.map_size,
@@ -86,9 +86,9 @@ pub(super) fn build_shadow(gpu: &InitGpu<'_>, shadows: &ShadowParams) -> RenderR
 // so the main pass's bindings 12/13 are always valid.
 pub(super) fn build_spot_shadow(
     gpu: &InitGpu<'_>,
-    shadow: &VkShadow,
+    shadow: &ShadowState,
     spot_shadows: &[SpotShadowData],
-) -> RenderResult<VkSpotShadow> {
+) -> RenderResult<SpotShadowState> {
     let hw = gpu.hw;
     // Spot shadow map array: one layer per shadow-casting spot, at a quarter
     // the cascade resolution (a spot slice covers a single cone, not a

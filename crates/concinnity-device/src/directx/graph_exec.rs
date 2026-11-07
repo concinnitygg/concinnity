@@ -91,7 +91,7 @@ impl std::ops::Deref for ResourceRef {
 
 // One resolved barrier target: the D3D12 resource a graph resource backs, its
 // class, and its resting state (created / cross-frame-restored).
-struct DxBarrierTarget {
+struct BarrierTarget {
     object: DxTargetObject,
     class: GraphResourceClass,
     resting: D3D12_RESOURCE_STATES,
@@ -111,12 +111,12 @@ enum DxTargetObject {
 // (`None` for every resource the executor doesn't graph-drive). Refilled on the
 // main thread by `refill_graph_tables`, where the only field-naming of the
 // graph-driven resources lives; the parallel emit path stays field-agnostic.
-type DxBarrierRegistry = BarrierTable<DxBarrierTarget, ResourceRef>;
+type BarrierRegistry = BarrierTable<BarrierTarget, ResourceRef>;
 
 // The resources one target names: a single object, or the whole set.
 fn target_objects<'r>(
-    registry: &'r DxBarrierRegistry,
-    target: &'r DxBarrierTarget,
+    registry: &'r BarrierRegistry,
+    target: &'r BarrierTarget,
 ) -> &'r [ResourceRef] {
     match &target.object {
         DxTargetObject::One(r) => std::slice::from_ref(r),
@@ -139,8 +139,8 @@ struct DxAliasBarrier {
 // The per-frame tables the executor builds, kept across frames on `DxContext`
 // so their backing allocations are reused.
 #[derive(Default)]
-pub(in crate::directx) struct DxGraphScratch {
-    registry: DxBarrierRegistry,
+pub(in crate::directx) struct GraphScratch {
+    registry: BarrierRegistry,
     alias: AliasRows<DxAliasBarrier>,
     passes: PassScratch<SendableCmdList>,
 }
@@ -152,7 +152,7 @@ struct DxPassRecorder<'a, 'p> {
     params: &'a GraphFrameParams<'p>,
     particle: Option<&'a ParticleFrame>,
     grass: Option<&'a super::grass::GrassFrame>,
-    registry: &'a DxBarrierRegistry,
+    registry: &'a BarrierRegistry,
     alias: &'a AliasRows<DxAliasBarrier>,
 }
 
@@ -279,7 +279,7 @@ impl<'a> BarrierBatch<'a> {
 // has just discarded is taken on from `DISCARD_STATE` rather than from rest.
 fn stage_graph_barrier(
     batch: &mut BarrierBatch<'_>,
-    registry: &DxBarrierRegistry,
+    registry: &BarrierRegistry,
     op: &BarrierOp,
     opened_at: Option<D3D12_RESOURCE_STATES>,
 ) {
@@ -317,7 +317,7 @@ fn frame_slot(
 // Whether the pass's own graph transition takes a reclaimed resource on from the
 // discard, so the prologue does not have to put it back at rest itself.
 fn graph_takes_over(
-    registry: &DxBarrierRegistry,
+    registry: &BarrierRegistry,
     pass: &CompiledPass,
     resource_index: usize,
 ) -> bool {
@@ -347,7 +347,7 @@ fn graph_takes_over(
 // resource declared there.
 fn emit_pass_prologue(
     cmd: &ID3D12GraphicsCommandList,
-    registry: &DxBarrierRegistry,
+    registry: &BarrierRegistry,
     aliased: &[DxAliasBarrier],
     pass: &CompiledPass,
 ) {
@@ -414,7 +414,7 @@ fn emit_pass_prologue(
 // to happen on the direct queue before the signal; nothing creates one yet.
 fn emit_pass_epilogue(
     cmd: &ID3D12GraphicsCommandList,
-    registry: &DxBarrierRegistry,
+    registry: &BarrierRegistry,
     pass: &CompiledPass,
 ) {
     if pass.barriers_after.is_empty() {
@@ -434,7 +434,7 @@ fn emit_pass_epilogue(
 // rest emits nothing.
 fn emit_graph_restores(
     cmd: &ID3D12GraphicsCommandList,
-    registry: &DxBarrierRegistry,
+    registry: &BarrierRegistry,
     graph: &CompiledGraph,
 ) {
     let mut batch = BarrierBatch::new(cmd);
@@ -470,7 +470,7 @@ fn emit_graph_restores(
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself.
 #[cfg(debug_assertions)]
-fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &DxBarrierRegistry) {
+fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &BarrierRegistry) {
     use super::barrier_translate::d3d12_state;
     use concinnity_engine::render::render_graph::{
         ResourceState, barrier_coverage_gaps_for_driven,
@@ -757,7 +757,7 @@ impl DxContext {
         #[cfg(debug_assertions)]
         render_graph::assert_serial_order_honors_schedule(graph, "directx");
 
-        let DxGraphScratch {
+        let GraphScratch {
             registry,
             alias,
             passes,
@@ -859,17 +859,17 @@ impl DxContext {
     // falls back to sampled, which is where the pool creates a color target.
     fn refill_graph_tables(
         &self,
-        scratch: &mut DxGraphScratch,
+        scratch: &mut GraphScratch,
         graph: &CompiledGraph,
         frame_idx: usize,
     ) {
-        let DxGraphScratch {
+        let GraphScratch {
             registry, alias, ..
         } = scratch;
         registry.refill(graph, |res, arena| {
             let class = res.class()?;
             let (object, resting) = self.barrier_objects_for_label(res.label, frame_idx, arena)?;
-            Some(DxBarrierTarget {
+            Some(BarrierTarget {
                 object,
                 class,
                 resting,
@@ -901,7 +901,7 @@ impl DxContext {
     // rests as a depth attachment. `None` means the owning feature is inactive,
     // and the graph carries no node for it either.
     //
-    // The resource is borrowed rather than cloned; see `DxBarrierTarget`.
+    // The resource is borrowed rather than cloned; see `BarrierTarget`.
     fn barrier_objects_for_label(
         &self,
         label: &str,

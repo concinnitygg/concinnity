@@ -43,7 +43,7 @@ const MAX_SHADOW_VIEWS: usize =
 // One shadow view of one frame: the shadow kernel's set over the view's group
 // counts and status, the packing's set over them and the view's lists, and
 // the lists its draws read.
-pub(in crate::vulkan) struct VkShadowView {
+pub(in crate::vulkan) struct ShadowCullView {
     pub(in crate::vulkan) cull_set: vk::DescriptorSet,
     pub(in crate::vulkan) compact_set: vk::DescriptorSet,
     pub(in crate::vulkan) lists: PooledBuffer,
@@ -53,7 +53,7 @@ pub(in crate::vulkan) struct VkShadowView {
     pub(in crate::vulkan) commands: usize,
 }
 
-impl VkShadowView {
+impl ShadowCullView {
     pub(in crate::vulkan) fn lists(&self) -> DrawLists {
         DrawLists {
             buffer: self.lists.buffer(),
@@ -283,7 +283,7 @@ impl VkContext {
 
     // What a shadow view's cull and packing cover: this frame's records, at
     // most as many as the view holds, one stream and the skinned tail.
-    pub(in crate::vulkan) fn shadow_layout(&self, view: &VkShadowView) -> StreamLayout<'_> {
+    pub(in crate::vulkan) fn shadow_layout(&self, view: &ShadowCullView) -> StreamLayout<'_> {
         StreamLayout {
             regions: &self.cull.variants.regions,
             bucket_count: 1,
@@ -300,7 +300,7 @@ impl VkContext {
     fn encode_view_culls(
         &self,
         rec: &Recorder<'_>,
-        views: &[Option<(&VkShadowView, Frustum)>],
+        views: &[Option<(&ShadowCullView, Frustum)>],
         cam_pos: [f32; 3],
     ) {
         let (Some(pipeline), Some(layout)) = (

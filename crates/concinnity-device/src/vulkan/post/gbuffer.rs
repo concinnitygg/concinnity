@@ -273,7 +273,7 @@ fn prepass_attributes(read: &[u32]) -> RenderResult<Vec<vk::VertexInputAttribute
 }
 
 // The G-buffer pre-pass's model history and its per-frame sets, built when the
-// bindless cull path is active AND the G-buffer is enabled. Stored on `VkCull`.
+// bindless cull path is active AND the G-buffer is enabled. Stored on `CullState`.
 // The per-frame set (`PrepassLayout`'s set 2) binds the G-buffer view UBO, the
 // PREVIOUS frame's history slot and this frame's draw args; the per-frame
 // model-history SSBOs are filled on the GPU by the snapshot kernel below.

@@ -3,7 +3,7 @@
 //! `PassId::Upscale` pass reconstructs a swapchain-resolution image the bloom +
 //! composite stack consumes.
 //!
-//! Three interchangeable backends sit behind the `VkUpscaleBackend` trait:
+//! Three interchangeable backends sit behind the `UpscaleBackend` trait:
 //!   fsr   AMD FidelityFX FSR (cross-vendor; `ffx_api` VK)
 //!   dlss  NVIDIA DLSS via raw NGX (RTX only; `cfg(ngx_sdk_bundled)`)
 //!   xess  Intel XeSS (cross-vendor; runtime libxess)
@@ -70,7 +70,7 @@ pub(in crate::vulkan) struct UpscaleInputs<'a> {
 // One temporal-upscaling backend. `encode_upscale` transitions the inputs and
 // the output, then calls `dispatch`; each backend records its vendor upscale
 // onto the supplied command buffer.
-pub(in crate::vulkan) trait VkUpscaleBackend: Send {
+pub(in crate::vulkan) trait UpscaleBackend: Send {
     // The vendor upscaler this is.
     fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.
@@ -388,7 +388,7 @@ pub(in crate::vulkan) fn build_upscaler(
     output: (u32, u32),
     upscale_scale: f32,
     requested: &mut UpscaleRequest,
-) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, ResolvedBackend)> {
+) -> RenderResult<(Option<Box<dyn UpscaleBackend>>, ResolvedBackend)> {
     let extent = UpscaleExtent::resolve(output, upscale_scale);
     let (built, resolved) = requested.build_first_available(
         availability(),
@@ -410,11 +410,11 @@ pub(in crate::vulkan) fn build_upscaler(
             })
         },
     )?;
-    requested.adopt_running_preset(built.as_deref().and_then(VkUpscaleBackend::dlss_preset));
+    requested.adopt_running_preset(built.as_deref().and_then(UpscaleBackend::dlss_preset));
     Ok((built, resolved))
 }
 
-fn boxed(backend: impl VkUpscaleBackend + 'static) -> Box<dyn VkUpscaleBackend> {
+fn boxed(backend: impl UpscaleBackend + 'static) -> Box<dyn UpscaleBackend> {
     Box::new(backend)
 }
 

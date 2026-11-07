@@ -45,7 +45,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
 use concinnity_engine::render::planar_reflection::PixelRect;
 use concinnity_engine::render::probe::bake::{
-    CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
+    self as bake, CAPTURE_FACES, ProbeBakeDevice, capture_ring_slot,
 };
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
@@ -133,7 +133,7 @@ pub(crate) struct PrefilteringBake {
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
 // into its cube.
-pub(super) type DxProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
+pub(super) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 // Color + depth attachments for a probe-face / planar mirror capture.
 #[derive(Clone, Copy)]
@@ -208,7 +208,7 @@ impl DxContext {
 
     // Run `f` over the bake with this context as its device. The slots are lent
     // to `f`, so the context reads them as empty for the call.
-    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut DxProbeBake, &mut Self) -> R) -> R {
+    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut ProbeBake, &mut Self) -> R) -> R {
         let mut bake = std::mem::take(&mut self.probe.bake);
         let out = f(&mut bake, self);
         self.probe.bake = bake;

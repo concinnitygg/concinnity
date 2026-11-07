@@ -156,7 +156,7 @@ pub(in crate::directx) struct DxAttachment<'a> {
 
 // The world's reflection-probe set, as a probe-reading program binds it.
 #[derive(Clone, Copy)]
-pub(in crate::directx) struct DxPostProbes {
+pub(in crate::directx) struct PostProbes {
     // The cube array's SRV.
     pub cube_table: SrvSlot,
     // This frame's ProbeSet constant buffer.
@@ -169,7 +169,7 @@ pub(in crate::directx) struct DxPostProbes {
     pub cluster_list: u64,
 }
 
-impl DxPostProbes {
+impl PostProbes {
     // Bind the set at five consecutive root parameters from `first`: the cube
     // array table, the ProbeSet CBV, the records, the cluster params and the
     // cluster lists.
@@ -215,7 +215,7 @@ pub(in crate::directx) struct DxPostDevice<'a> {
     pub info_queue: Option<&'a ID3D12InfoQueue>,
     // The probe set a probe-reading program binds. Absent at init, where no
     // draw is encoded.
-    pub probes: Option<DxPostProbes>,
+    pub probes: Option<PostProbes>,
     pub hot_reload: bool,
 }
 
@@ -520,8 +520,8 @@ impl crate::directx::context::DxContext {
 
     // Frame slot `frame`'s live reflection-probe set and the main camera's
     // cluster grid binning it.
-    pub(in crate::directx) fn probe_bindings(&self, frame: usize) -> DxPostProbes {
-        DxPostProbes {
+    pub(in crate::directx) fn probe_bindings(&self, frame: usize) -> PostProbes {
+        PostProbes {
             cube_table: self.probe_cube_table_gpu(),
             set_cbv: com::gpu_va(&self.uniforms.probe_set_cbvs[frame]),
             records: self.probe.gpu.records[frame].gpu_va(),

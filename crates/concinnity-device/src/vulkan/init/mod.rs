@@ -16,15 +16,15 @@
 //!   composite.rs     composite pass, pipeline and input sets.
 //!   text.rs          text atlases, pipeline and atlas sets.
 
-use crate::vulkan::atmosphere::{AtmosphereCubes, VkAtmosphere};
-use crate::vulkan::light_cull::VkLightCull;
+use crate::vulkan::atmosphere::{AtmosphereCubes, AtmosphereState};
+use crate::vulkan::light_cull::LightCullState;
 use crate::vulkan::particle::ParticleState;
 use crate::vulkan::pipeline_builder::PipelineGate;
 use crate::vulkan::post::bloom::VkBloomPass;
 use crate::vulkan::post::reflection_composite::VkReflectionCompositePass;
 use crate::vulkan::post::taa::TaaResources;
-use crate::vulkan::post::upscale::VkUpscaleBackend;
-use crate::vulkan::wireframe::VkWireframe;
+use crate::vulkan::post::upscale::UpscaleBackend;
+use crate::vulkan::wireframe::Wireframe;
 use ash::vk;
 use concinnity_engine::gfx::render_types::PostProcessParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
@@ -48,9 +48,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use super::context::{
-    CompositeState, HDR_FORMAT, ProbeState, StreamState, SwapchainState, TextState, VkContext,
-    VkCull, VkDescriptors, VkGeometry, VkHardware, VkInstanced, VkSceneAssets, VkShadow, VkSkinned,
-    VkTargets, record_main_thread,
+    CompositeState, CullState, Descriptors, Geometry, HDR_FORMAT, InstancedState, ProbeState,
+    SceneAssets, ShadowState, SkinnedState, StreamState, SwapchainState, Targets, TextState,
+    VkContext, VkHardware, record_main_thread,
 };
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
@@ -433,10 +433,10 @@ impl VkContext {
             frame_stats: Cell::default(),
             draw_calls_accum: std::sync::atomic::AtomicU32::default(),
             descriptors,
-            instanced: VkInstanced::new(world.instanced_clusters),
+            instanced: InstancedState::new(world.instanced_clusters),
             geometry,
             geometry_uploads: core::cell::RefCell::new(GeometryUploads::new(frames)),
-            skinned: VkSkinned::new(),
+            skinned: SkinnedState::new(),
             uniforms,
             frame_sync,
             frame_capture: crate::frame_capture::FrameCaptures::new(capture),
@@ -459,7 +459,7 @@ impl VkContext {
             ),
             graph_scratch: None,
             submit_scratch: Vec::new(),
-            wireframe: VkWireframe::default(),
+            wireframe: Wireframe::default(),
             probe: ProbeState::new(probe_prefilter, probe_gpu),
             stream: StreamState::new(frames),
             // A freshly built context owns its hardware outright; only
@@ -530,7 +530,7 @@ impl VkContext {
 fn build_atmosphere_cubes(
     gpu: &InitGpu<'_>,
     wanted: bool,
-    scene: &mut VkSceneAssets,
+    scene: &mut SceneAssets,
 ) -> RenderResult<Option<AtmosphereCubes>> {
     if !wanted {
         return Ok(None);
@@ -547,7 +547,7 @@ fn build_atmosphere_cubes(
 // clustered light cull.
 fn build_probe_set(
     gpu: &InitGpu<'_>,
-    light_cull: &VkLightCull,
+    light_cull: &LightCullState,
 ) -> RenderResult<crate::vulkan::probe_set::ProbeSetGpu> {
     let probe_gpu = crate::vulkan::probe_set::ProbeSetGpu::new(&gpu.upload(), gpu.frames)?;
     for (frame, records) in probe_gpu.records.iter().enumerate() {
@@ -559,8 +559,8 @@ fn build_probe_set(
 // What the sky and atmosphere draw into, plus the atmosphere settings paired
 // with the cubes `build_atmosphere_cubes` made for them.
 struct SkyInputs<'a> {
-    targets: &'a VkTargets,
-    descriptors: &'a VkDescriptors,
+    targets: &'a Targets,
+    descriptors: &'a Descriptors,
     env_map_background: bool,
     atmosphere: Option<(AtmosphereSettings, AtmosphereCubes)>,
     render_extent: vk::Extent2D,
@@ -571,7 +571,7 @@ struct SkyInputs<'a> {
 fn build_sky(
     gpu: &InitGpu<'_>,
     inputs: SkyInputs<'_>,
-) -> RenderResult<(crate::vulkan::sky::VkSky, Option<VkAtmosphere>)> {
+) -> RenderResult<(crate::vulkan::sky::SkyState, Option<AtmosphereState>)> {
     let SkyInputs {
         targets,
         descriptors,
@@ -579,7 +579,7 @@ fn build_sky(
         atmosphere,
         render_extent,
     } = inputs;
-    let sky = crate::vulkan::sky::VkSky::build(
+    let sky = crate::vulkan::sky::SkyState::build(
         &gpu.hw.device,
         descriptors.global_set_layout.handle(),
         targets.main_render_pass.handle(),
@@ -596,7 +596,7 @@ fn build_sky(
         .map(|img| img.view)
         .collect();
     let depth_views: Vec<vk::ImageView> = targets.depth_images.iter().map(|img| img.view).collect();
-    let atmosphere = VkAtmosphere::new(
+    let atmosphere = AtmosphereState::new(
         &gpu.upload(),
         &settings,
         cube,
@@ -623,12 +623,12 @@ fn build_sky(
 struct PresentInputs<'a> {
     swapchain: &'a SwapchainState,
     features: &'a Features,
-    targets: &'a VkTargets,
-    scene: &'a VkSceneAssets,
-    descriptors: &'a VkDescriptors,
+    targets: &'a Targets,
+    scene: &'a SceneAssets,
+    descriptors: &'a Descriptors,
     screen: &'a effects::ScreenSpace,
     reflection_composite: Option<&'a VkReflectionCompositePass>,
-    upscale: Option<&'a dyn VkUpscaleBackend>,
+    upscale: Option<&'a dyn UpscaleBackend>,
     media: &'a MediaPayloads<'a>,
 }
 
@@ -700,16 +700,16 @@ fn build_present_chain(gpu: &InitGpu<'_>, inputs: PresentInputs<'_>) -> RenderRe
 // What the grass draws extend and render into.
 #[derive(Clone, Copy)]
 struct GrassInit<'a> {
-    descriptors: &'a VkDescriptors,
-    cull: &'a VkCull,
-    targets: &'a VkTargets,
-    shadow: &'a VkShadow,
+    descriptors: &'a Descriptors,
+    cull: &'a CullState,
+    targets: &'a Targets,
+    shadow: &'a ShadowState,
 }
 
 fn build_grass(
     gpu: &InitGpu<'_>,
     field: Option<concinnity_engine::render::environment::grass::GrassField>,
-    geometry: &VkGeometry,
+    geometry: &Geometry,
     passes: GrassInit<'_>,
 ) -> RenderResult<Option<super::grass::GrassResources>> {
     let GrassInit {

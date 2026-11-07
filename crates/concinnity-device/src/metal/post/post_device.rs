@@ -46,20 +46,20 @@ fn probe_slots(sources: usize) -> ProbeSlots {
 
 // A built fullscreen post pipeline plus what its program declares, so a draw
 // can check what it was handed.
-pub(crate) struct MtlPostPipeline {
+pub(crate) struct PostPipeline {
     state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     bindings: PostProgramBindings,
 }
 
 // A persistent post target: the texture, and a single-level view of each of its
 // mip levels when it has more than one.
-pub(crate) struct MtlPostTarget {
+pub(crate) struct PostTarget {
     label: &'static str,
     texture: Retained<ProtocolObject<dyn MTLTexture>>,
     levels: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
 }
 
-impl MtlPostTarget {
+impl PostTarget {
     // The whole texture, for a consumer that binds it directly.
     pub(crate) fn texture(&self) -> &Retained<ProtocolObject<dyn MTLTexture>> {
         &self.texture
@@ -156,8 +156,8 @@ impl MtlPostDevice<'_> {
 
 impl PostPassDevice for MtlPostDevice<'_> {
     type Recorder = ProtocolObject<dyn MTLCommandBuffer>;
-    type Pipeline = MtlPostPipeline;
-    type Target = MtlPostTarget;
+    type Pipeline = PostPipeline;
+    type Target = PostTarget;
     type TextureRef<'a> = &'a ProtocolObject<dyn MTLTexture>;
     type Attachment<'a> = &'a ProtocolObject<dyn MTLTexture>;
 
@@ -174,7 +174,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
             blend(blend_mode),
             self.hot_reload,
         )?;
-        Ok(MtlPostPipeline {
+        Ok(PostPipeline {
             state,
             bindings: program.bindings(),
         })
@@ -193,7 +193,7 @@ impl PostPassDevice for MtlPostDevice<'_> {
             .newTextureWithDescriptor(&desc)
             .ok_or_else(|| allocation_failed(format_args!("the {label} post target")))?;
         let levels = level_views(&texture, label, spec.mip_levels)?;
-        Ok(MtlPostTarget {
+        Ok(PostTarget {
             label,
             texture,
             levels,

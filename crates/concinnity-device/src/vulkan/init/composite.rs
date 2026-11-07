@@ -7,9 +7,7 @@ use concinnity_engine::gfx::render_types::CompositeParams;
 use concinnity_engine::render::backend::error::RenderResult;
 
 use super::InitGpu;
-use crate::vulkan::context::{
-    CompositeState, SwapchainState, VkDescriptors, VkSceneAssets, VkTargets,
-};
+use crate::vulkan::context::{CompositeState, Descriptors, SceneAssets, SwapchainState, Targets};
 use crate::vulkan::owned::OwnedSampler;
 use crate::vulkan::pipeline::{compile_composite_shaders, create_composite_pipeline};
 use crate::vulkan::post::bloom::composite_bloom_view;
@@ -27,9 +25,9 @@ pub(super) const COMPOSITE_SOURCES: u32 = 8;
 #[derive(Clone, Copy)]
 pub(super) struct CompositeInputs<'a> {
     pub(super) swapchain: &'a SwapchainState,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) targets: &'a VkTargets,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) targets: &'a Targets,
     pub(super) sampler: &'a OwnedSampler,
     pub(super) reflection_composite: Option<&'a VkReflectionCompositePass>,
 }

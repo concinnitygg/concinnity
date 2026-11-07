@@ -21,11 +21,11 @@ struct MappedCopy {
     ptr: *mut u8,
 }
 
-pub(in crate::directx) struct DxMaterialParams {
+pub(in crate::directx) struct MaterialParams {
     copies: Vec<MappedCopy>,
 }
 
-impl DxMaterialParams {
+impl MaterialParams {
     // One mapped copy of `table` per copy it tracks.
     pub(in crate::directx) fn new(
         alloc: &DeviceAllocator,

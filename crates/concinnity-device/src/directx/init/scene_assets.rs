@@ -14,7 +14,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::InitGpu;
 use crate::directx::allocator::PooledTexture;
 use crate::directx::com;
-use crate::directx::context::{AreaLightState, DxDescriptors, DxGeometry, DxSceneAssets, align256};
+use crate::directx::context::{AreaLightState, Descriptors, Geometry, SceneAssets, align256};
 use crate::directx::draw::upload_static_records;
 use crate::directx::texture::{
     EnvironmentMapDescriptors, EnvironmentMapPayload, EnvironmentMapTextures,
@@ -25,11 +25,11 @@ use crate::directx::texture::{
 
 pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     media: &MediaPayloads<'_>,
     area_lights: &[AreaLightData],
     world: &SceneData<'_>,
-) -> RenderResult<DxSceneAssets> {
+) -> RenderResult<SceneAssets> {
     let hw = gpu.hw;
     let layout = &descriptors.layout;
     let area_light = build_area_light(gpu, descriptors, area_lights)?;
@@ -154,7 +154,7 @@ pub(super) fn build_scene_assets(
     };
 
     let geometry = build_geometry(gpu, world)?;
-    Ok(DxSceneAssets {
+    Ok(SceneAssets {
         env_map,
         color_lut,
         area_light,
@@ -166,7 +166,7 @@ pub(super) fn build_scene_assets(
 
 fn build_area_light(
     gpu: &InitGpu<'_>,
-    descriptors: &DxDescriptors,
+    descriptors: &Descriptors,
     area_lights: &[AreaLightData],
 ) -> RenderResult<AreaLightState> {
     let hw = gpu.hw;
@@ -219,7 +219,7 @@ fn build_area_light(
     })
 }
 
-fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGeometry> {
+fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<Geometry> {
     let hw = gpu.hw;
     let vert_bytes_raw = bytemuck::cast_slice(world.vertices);
     let idx_bytes_raw = bytemuck::cast_slice(world.indices);
@@ -245,7 +245,7 @@ fn build_geometry(gpu: &InitGpu<'_>, world: &SceneData<'_>) -> RenderResult<DxGe
         // vertices and shearing every static prop's geometry.
         Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R32_UINT,
     };
-    Ok(DxGeometry {
+    Ok(Geometry {
         vertex_buffer,
         index_buffer,
         vertex_buffer_view,

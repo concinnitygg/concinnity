@@ -267,7 +267,7 @@ fn encode_signals(
 // The per-frame tables the executor builds, kept across frames on
 // `MtlContext` so their allocations are reused.
 #[derive(Default)]
-pub(in crate::metal) struct MtlGraphScratch {
+pub(in crate::metal) struct GraphScratch {
     events: graph_events::FramePlan,
     batches: Vec<std::ops::Range<usize>>,
     passes: PassScratch<SendableCmdBuf>,

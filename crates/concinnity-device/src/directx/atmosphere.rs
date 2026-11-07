@@ -35,7 +35,7 @@ use super::builtin_shaders::{
     ATMOSPHERE_SKY_CUBE, ATMOSPHERE_SKY_VIEW, ATMOSPHERE_TRANSMITTANCE, CompileProgram,
     FULLSCREEN_VERT, SKY_ATMOSPHERE_FRAG,
 };
-use super::clouds::{DxClouds, MarchInputs};
+use super::clouds::{CloudState, MarchInputs};
 use super::com;
 use super::context::{DxContext, align256};
 use super::descriptor_slot::{DescriptorTables, SrvSlot};
@@ -79,7 +79,7 @@ pub(in crate::directx) struct AtmosphereSlots {
     pub depth_srv_gpu: SrvSlot,
 }
 
-pub(in crate::directx) struct DxAtmosphere {
+pub(in crate::directx) struct AtmosphereState {
     settings: AtmosphereSettings,
     // This frame's inputs; `None` leaves the passes out of the graph.
     pub(in crate::directx) frame: Option<AtmosphereFrame>,
@@ -103,9 +103,9 @@ pub(in crate::directx) struct DxAtmosphere {
     aerial_pso: ID3D12PipelineState,
     // `None` on a device that cannot load the capture's format through a
     // UAV, which the prefilter needs; the surfaces then reflect no sky.
-    sky_cube: Option<DxSkyCube>,
+    sky_cube: Option<SkyCube>,
     // The clouds, when the air has cloud layers.
-    pub(in crate::directx) clouds: Option<DxClouds>,
+    pub(in crate::directx) clouds: Option<CloudState>,
     // The ground the tables that depend on the air alone were built over.
     air_tables: AirTables,
     // The frames that recorded the tables, for work recorded outside the frame.
@@ -115,7 +115,7 @@ pub(in crate::directx) struct DxAtmosphere {
 /// The sky drawn into a capture cube and convolved by the reflection-probe
 /// kernels into the cube whose SRV takes the environment's prefilter slot, a
 /// few steps a frame. Both cubes rest readable by any shader stage.
-pub(in crate::directx) struct DxSkyCube {
+pub(in crate::directx) struct SkyCube {
     kernel: ID3D12PipelineState,
     prefilter: ProbePrefilterPipelines,
     capture: ID3D12Resource,
@@ -127,7 +127,7 @@ pub(in crate::directx) struct DxSkyCube {
     work: Cell<SkyCubeWork>,
 }
 
-impl DxSkyCube {
+impl SkyCube {
     /// The two cubes and their descriptors in `slots`, the cube's SRV in the
     /// environment's prefilter slot `prefilter_srv_cpu`. `None` when the
     /// device cannot run the prefilter.
@@ -431,7 +431,7 @@ fn aerial_pso(
         .build(device, "aerial perspective")
 }
 
-impl DxAtmosphere {
+impl AtmosphereState {
     // The tables, pipelines and parameter ring, and the irradiance cube,
     // whose SRV replaces the environment's in its slot.
     #[expect(
@@ -442,8 +442,8 @@ impl DxAtmosphere {
         alloc: &DeviceAllocator,
         settings: AtmosphereSettings,
         slots: AtmosphereSlots,
-        sky_cube: Option<DxSkyCube>,
-        clouds: Option<DxClouds>,
+        sky_cube: Option<SkyCube>,
+        clouds: Option<CloudState>,
         msaa_samples: u32,
         hot_reload: bool,
     ) -> RenderResult<Self> {
@@ -794,7 +794,7 @@ impl DxContext {
     // mip, the mirror copy and the pyramid, then the GGX mips. The capture is
     // open for unordered access only while the sky and the pyramid are
     // written, the cube while any of its mips are.
-    fn encode_sky_cube(&self, cmd: &ID3D12GraphicsCommandList, cube: &DxSkyCube) {
+    fn encode_sky_cube(&self, cmd: &ID3D12GraphicsCommandList, cube: &SkyCube) {
         let work = cube.work.get();
         if work.is_empty() {
             return;

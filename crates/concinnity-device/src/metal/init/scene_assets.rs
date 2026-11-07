@@ -16,7 +16,7 @@ use objc2_metal::{
 };
 
 use super::InitGpu;
-use crate::metal::context::{BINDLESS_TEXTURE_COUNT, MtlSceneAssets, bytes_of_slice};
+use crate::metal::context::{BINDLESS_TEXTURE_COUNT, SceneAssets, bytes_of_slice};
 use crate::metal::texture::{
     EnvironmentMapTextures, create_fallback_color_lut, create_fallback_cubemap,
     create_fallback_texture, create_lut_texture, upload_color_lut, upload_environment_map,
@@ -39,7 +39,7 @@ pub(super) struct SceneInputs<'a> {
 pub(super) fn build_scene_assets(
     gpu: &InitGpu<'_>,
     inputs: SceneInputs<'_>,
-) -> RenderResult<MtlSceneAssets> {
+) -> RenderResult<SceneAssets> {
     let device = &*gpu.hw.device;
     let allocator = &gpu.hw.allocator;
     let SceneInputs {
@@ -233,7 +233,7 @@ pub(super) fn build_scene_assets(
         create_fallback_color_lut(allocator)?
     };
 
-    Ok(MtlSceneAssets {
+    Ok(SceneAssets {
         vertex_buffer,
         index_buffer,
         textures,

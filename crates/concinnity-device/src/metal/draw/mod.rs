@@ -591,7 +591,7 @@ impl MtlContext {
             }
             _ => None,
         };
-        let mut steps = super::raytrace::MtlRtSteps {
+        let mut steps = super::raytrace::RtSteps {
             accel,
             gpu: super::raytrace::RtGpu {
                 device: &self.hw.device,

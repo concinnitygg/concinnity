@@ -11,7 +11,7 @@ use concinnity_engine::render::material_params::MaterialParamTable;
 
 use super::InitGpu;
 use crate::vulkan::context::{
-    VkCull, VkCullKernels, VkDescriptors, VkSceneAssets, VkShadow, VkTargets,
+    CullKernels, CullState, Descriptors, SceneAssets, ShadowState, Targets,
 };
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::probe_prefilter::ProbePrefilterPipelines;
@@ -111,11 +111,11 @@ pub(super) struct CullInputs<'a> {
     pub(super) material_params: &'a MaterialParamTable,
     pub(super) plan: &'a CullPlan,
     pub(super) occlusion_two_pass: bool,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) targets: &'a VkTargets,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) geometry: &'a crate::vulkan::context::VkGeometry,
-    pub(super) shadow: &'a VkShadow,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) geometry: &'a crate::vulkan::context::Geometry,
+    pub(super) shadow: &'a ShadowState,
     // Spot shadow slices the world assigned; each gets a cull set and buffer.
     pub(super) spot_slices: usize,
     pub(super) gbuffer: Option<&'a GbufferResources>,
@@ -127,7 +127,7 @@ pub(super) struct CullInputs<'a> {
 pub(super) fn build_cull(
     gpu: &InitGpu<'_>,
     inputs: CullInputs<'_>,
-) -> RenderResult<(VkCull, Option<ProbePrefilterPipelines>)> {
+) -> RenderResult<(CullState, Option<ProbePrefilterPipelines>)> {
     let CullInputs {
         world,
         world_shaders,
@@ -207,11 +207,11 @@ pub(super) fn build_cull(
         targets.msaa_samples,
         occlusion_two_pass,
     )?;
-    let cull_kernels = compute.kernels.map(|kernels| VkCullKernels {
+    let cull_kernels = compute.kernels.map(|kernels| CullKernels {
         pipeline_late: two_pass.pipeline,
         ..kernels
     });
-    let cull = VkCull {
+    let cull = CullState {
         packer: crate::record_pack::RecordPacker::default(),
         bindless_pipeline: bindless.pipeline,
         bindless_pipeline_layout: bindless.pipeline_layout,

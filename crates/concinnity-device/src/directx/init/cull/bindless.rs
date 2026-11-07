@@ -17,7 +17,7 @@ use crate::directx::init::pipelines::{
     BindlessMainShaders, BucketPipelineTargets, BucketPsos, BucketRootSigs, build_bucket_pipeline,
     compile_main_bindless_shaders, create_main_bindless_root_signature,
 };
-use crate::directx::material_params::DxMaterialParams;
+use crate::directx::material_params::MaterialParams;
 
 pub(super) struct BindlessPass {
     pub(super) root_sigs: BucketRootSigs,
@@ -31,7 +31,7 @@ pub(super) struct BindlessPass {
     pub(super) shaders: BindlessMainShaders,
     pub(super) object_buffers: Vec<PooledBuffer>,
     pub(super) object_ptrs: Vec<*mut u8>,
-    pub(super) material_params: Option<DxMaterialParams>,
+    pub(super) material_params: Option<MaterialParams>,
 }
 
 // The world's Shaders, one per bucket (`BackendInit::shaders`): entry 0 is the
@@ -123,7 +123,7 @@ pub(super) fn build_bindless_pass(
     // object buffers.
     let material_params = match n_cull {
         0 => None,
-        _ => Some(DxMaterialParams::new(&gpu.hw.alloc, material_params)?),
+        _ => Some(MaterialParams::new(&gpu.hw.alloc, material_params)?),
     };
 
     Ok(BindlessPass {

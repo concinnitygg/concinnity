@@ -16,11 +16,11 @@ pub(in crate::vulkan) const MATERIAL_PARAMS_BINDING: u32 = 2;
 /// where a planet tile's morph reads its neighbors.
 pub(in crate::vulkan) const MESH_VERTICES_BINDING: u32 = 3;
 
-pub(in crate::vulkan) struct VkMaterialParams {
+pub(in crate::vulkan) struct MaterialParams {
     buffers: Vec<PooledBuffer>,
 }
 
-impl VkMaterialParams {
+impl MaterialParams {
     // One copy of `table` per copy it tracks, one per frame in flight.
     pub(in crate::vulkan) fn new(
         alloc: &DeviceAllocator,

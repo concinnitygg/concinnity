@@ -21,7 +21,7 @@ use super::texture::HDR_FORMAT;
 // mirrors is not live either (or the build failed), in which case the pass
 // keeps the solid PSO.
 #[derive(Default)]
-pub(super) struct DxWireframe {
+pub(super) struct Wireframe {
     pub(super) bindless: Option<ID3D12PipelineState>,
     // Set once a build has run so a failure is not retried every frame.
     built: bool,
@@ -47,14 +47,14 @@ impl DxContext {
     // current shaders. Called wherever a main-pass pipeline is rebuilt
     // (shader hot-reload, world shader swap).
     pub(super) fn invalidate_wireframe_pipelines(&mut self) {
-        self.wireframe = DxWireframe::default();
+        self.wireframe = Wireframe::default();
     }
 
     fn build_wireframe_pipelines(&mut self) -> RenderResult<()> {
         let device = self.hw.device.clone();
         let iq = self.hw.info_queue.clone();
         let msaa = self.targets.hdr.msaa_samples;
-        let mut built = DxWireframe {
+        let mut built = Wireframe {
             built: true,
             ..Default::default()
         };

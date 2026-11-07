@@ -6,7 +6,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::MediaPayloads;
 
 use super::InitGpu;
-use crate::vulkan::context::{CompositeState, TextState, VkDescriptors};
+use crate::vulkan::context::{CompositeState, Descriptors, TextState};
 use crate::vulkan::pipeline::{compile_text_shaders, create_text_pipeline};
 use crate::vulkan::resources::{
     alloc_descriptor_sets, create_descriptor_set_layout, source_set_bindings, write_source_set,
@@ -18,7 +18,7 @@ pub(super) fn build_text(
     gpu: &InitGpu<'_>,
     media: &MediaPayloads<'_>,
     composite: &CompositeState,
-    descriptors: &VkDescriptors,
+    descriptors: &Descriptors,
 ) -> RenderResult<TextState> {
     let InitGpu {
         hw,

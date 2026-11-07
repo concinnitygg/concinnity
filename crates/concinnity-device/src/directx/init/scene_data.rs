@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 
 use super::InitGpu;
 use crate::directx::allocator::PooledBuffer;
-use crate::directx::context::{DxUniforms, align256, dump_on_err};
+use crate::directx::context::{Uniforms, align256, dump_on_err};
 use crate::directx::draw::{upload_light_uniforms, upload_static_records};
 use crate::directx::error::map_hresult;
 use crate::directx::light_cull::{self as lc, LightCullState};
@@ -18,7 +18,7 @@ pub(super) fn build_uniforms(
     gpu: &InitGpu<'_>,
     light_uniforms: &LightUniforms,
     local_lights: &[GpuLight],
-) -> RenderResult<DxUniforms> {
+) -> RenderResult<Uniforms> {
     let hw = gpu.hw;
     let frames = hw.frames();
     // ProbeSet constant buffers: a frames-in-flight ring the main pass binds at root
@@ -176,7 +176,7 @@ pub(super) fn build_uniforms(
         buf
     };
 
-    Ok(DxUniforms {
+    Ok(Uniforms {
         view_ubo_resources,
         view_ubo_ptrs,
         light_ubo_resources,

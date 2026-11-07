@@ -181,10 +181,10 @@ pub(super) struct AreaLightState {
 }
 
 // The main-pass constant buffers, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `VkUniforms`. The view, light and shadow buffers are all per-frame
+// Vulkan's `Uniforms`. The view, light and shadow buffers are all per-frame
 // and persistently mapped. The COM resources auto-release on drop; only the
 // persistent mappings need an explicit `unmap`.
-pub(super) struct DxUniforms {
+pub(super) struct Uniforms {
     pub view_ubo_resources: Vec<PooledBuffer>,
     pub view_ubo_ptrs: Vec<*mut u8>,
     // Per-frame-in-flight `LightUniforms` CBV ring. Every pass that binds the
@@ -209,7 +209,7 @@ pub(super) struct DxUniforms {
     pub probe_set_empty_cbv: PooledBuffer,
 }
 
-impl DxUniforms {
+impl Uniforms {
     // Unmap the persistent view + light + shadow CBV mappings. Called from
     // `DxContext::drop`; the COM resources themselves auto-release.
     pub(super) fn unmap(&self) {
@@ -247,7 +247,7 @@ impl DxUniforms {
 //     Holds the composite pass + the final timestamp `EndQuery` +
 //     `ResolveQueryData`. Submitted after every per-pass cmd list so the resolve
 //     sees every prior pass's `EndQuery` writes. One per frame in flight.
-pub(super) struct DxCommands {
+pub(super) struct Commands {
     pub command_allocators: Vec<ID3D12CommandAllocator>,
     pub command_lists: Vec<ID3D12GraphicsCommandList>,
     pub pass_allocators: Vec<ID3D12CommandAllocator>,
@@ -257,12 +257,12 @@ pub(super) struct DxCommands {
 }
 
 // CPU/GPU frame synchronization, grouped off the flat `DxContext`. Mirrors
-// Vulkan's `VkFrameSync` (D3D12 uses one monotonic fence + per-slot signaled
+// Vulkan's `FrameSync` (D3D12 uses one monotonic fence + per-slot signaled
 // values instead of per-frame semaphores). The ring cursor (`current_frame`)
 // and the per-frame draw-call accumulator stay flat on `DxContext`. All COM /
 // plain fields auto-release on drop; only `fence_event` needs an explicit
 // `CloseHandle` (done in `DxContext::drop`).
-pub(super) struct DxFrameSync {
+pub(super) struct FrameSync {
     pub fence: ID3D12Fence,
     // Per-slot fence value last signaled for that slot's submission. Compared
     // against `fence.GetCompletedValue()` to gate the slot's allocator reset.
@@ -277,7 +277,7 @@ pub(super) struct DxFrameSync {
 
 // Shared static-mesh geometry buffers + their views, grouped off the flat
 // `DxContext`.
-pub(super) struct DxGeometry {
+pub(super) struct Geometry {
     pub vertex_buffer: PooledBuffer,
     pub index_buffer: PooledBuffer,
     pub vertex_buffer_view: D3D12_VERTEX_BUFFER_VIEW,
@@ -287,7 +287,7 @@ pub(super) struct DxGeometry {
 // Instanced-prop clusters, grouped off the flat `DxContext`. Every instance
 // folds into the GPU-driven cull records, so no pass walks the instances on the
 // CPU.
-pub(super) struct DxInstanced {
+pub(super) struct InstancedState {
     pub clusters: Vec<InstancedCluster>,
     // Whether any cluster declares LOD alternates. False skips the per-frame
     // per-instance LOD patch: without alternates the base slice written into
@@ -295,7 +295,7 @@ pub(super) struct DxInstanced {
     pub any_lod: bool,
 }
 
-impl DxInstanced {
+impl InstancedState {
     pub(super) fn new(clusters: Vec<InstancedCluster>) -> Self {
         Self {
             any_lod: concinnity_engine::gfx::lod::any_cluster_has_lod(&clusters),
@@ -307,7 +307,7 @@ impl DxInstanced {
 // The shader-visible descriptor heaps and the static sampler handles, grouped
 // off the flat `DxContext`. The SRV heap's slot map is `layout`, which every
 // pass addresses its descriptors through.
-pub(super) struct DxDescriptors {
+pub(super) struct Descriptors {
     // CBV/SRV/UAV descriptor heap (shader-visible). The slot map is
     // `init/heap_layout.rs`.
     pub srv_heap: ID3D12DescriptorHeap,
@@ -343,7 +343,7 @@ pub(super) struct ProbeState {
     // per frame, into the reserved-ring-slot capture resources) and one prior
     // probe whose capture is convolving into its cube, one destination mip per
     // frame.
-    pub bake: super::probe::DxProbeBake,
+    pub bake: super::probe::ProbeBake,
     // The three convolution kernels and their root signatures, built at init under
     // the same gate the bake needs. `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -360,7 +360,7 @@ impl ProbeState {
     ) -> Self {
         Self {
             gpu,
-            bake: super::probe::DxProbeBake::default(),
+            bake: super::probe::ProbeBake::default(),
             prefilter,
             prop: super::prop_probe::PropProbe::default(),
         }
@@ -495,7 +495,7 @@ pub(super) struct Diagnostics {
 // The render-resolution scene targets: the HDR color target, the main depth
 // buffer and its sampling SRV, the two pipeline resolutions, and the render
 // graph's transient pool. The resize path rebuilds all of it.
-pub(super) struct DxTargets {
+pub(super) struct Targets {
     pub hdr: HdrState,
     pub depth: DepthState,
     // GPU handle of the main-depth SRV. Written at init (and rewritten on
@@ -515,7 +515,7 @@ pub(super) struct DxTargets {
 // The world's scene assets: the IBL cubes and color-grading LUT, the area-light
 // tables, and the shared static-mesh geometry. None of it depends on the
 // swapchain.
-pub(super) struct DxSceneAssets {
+pub(super) struct SceneAssets {
     // IBL resources. The fragment shader always samples these; when no
     // EnvironmentMap was supplied, both are 1x1 gray fallback cubes and
     // ViewUniforms::prefilter_mip_count is 0, so the shader uses the flat albedo
@@ -526,7 +526,7 @@ pub(super) struct DxSceneAssets {
     // the world declares none. Resolution-independent, so it is never rebuilt.
     pub color_lut: GpuResource,
     pub area_light: AreaLightState,
-    pub geometry: DxGeometry,
+    pub geometry: Geometry,
     // Shared texture pool (kept alive). Every texture -- albedo, normal map,
     // emissive/ORM, terrain secondary -- lives here once at its handle, matching
     // Metal/Vulkan, so `DrawObject::texture_slot` and a real `normal_map_slot`
@@ -541,7 +541,7 @@ pub(super) struct DxSceneAssets {
 
 // The hardware ray-tracing scene: the acceleration structures and the policy
 // that keeps them current as the draw set changes.
-pub(super) struct DxRayTracing {
+pub(super) struct RtState {
     // BLAS/TLAS + geometry table. `Some` only when RT reflections are on, the
     // GPU reports the DXR tier, and the build succeeded.
     pub accel: Option<super::raytrace::RtAccelData>,
@@ -658,8 +658,8 @@ impl DxHardware {
 pub(crate) struct DxContext {
     pub(super) swapchain: SwapchainState,
 
-    // Render-resolution scene targets. See [`DxTargets`].
-    pub(super) targets: DxTargets,
+    // Render-resolution scene targets. See [`Targets`].
+    pub(super) targets: Targets,
 
     // Temporal upscaling (AMD FidelityFX FSR3). See [`UpscaleState`].
     pub(super) upscale: UpscaleState,
@@ -670,12 +670,12 @@ pub(crate) struct DxContext {
     // Spot shadow map resources. See [`SpotShadowState`].
     pub(super) spot_shadow: SpotShadowState,
 
-    // Scene assets. See [`DxSceneAssets`].
-    pub(super) scene: DxSceneAssets,
+    // Scene assets. See [`SceneAssets`].
+    pub(super) scene: SceneAssets,
 
     // Shader-visible descriptor heaps + samplers + scene texture pools. See
-    // `DxDescriptors`.
-    pub(super) descriptors: DxDescriptors,
+    // `Descriptors`.
+    pub(super) descriptors: Descriptors,
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
@@ -683,7 +683,7 @@ pub(crate) struct DxContext {
     // targets, the per-pass aliasing barriers and the per-pass recording slots.
     // Only the allocations carry over; taken during `execute_graph` and put back
     // after.
-    pub(super) graph_scratch: Cell<Option<super::graph_exec::DxGraphScratch>>,
+    pub(super) graph_scratch: Cell<Option<super::graph_exec::GraphScratch>>,
     // The frame's per-pass command lists in submission order, and the list the
     // submit call takes, kept across frames so building them allocates nothing.
     pub(super) pass_lists: Cell<Vec<ID3D12GraphicsCommandList>>,
@@ -697,8 +697,8 @@ pub(crate) struct DxContext {
     pub(super) skinned: SkinnedState,
 
     // Constant buffers (view + shadow per-frame persistent-mapped, light once).
-    // See `DxUniforms`.
-    pub(super) uniforms: DxUniforms,
+    // See `Uniforms`.
+    pub(super) uniforms: Uniforms,
 
     // Root signatures + PSOs
     // GPU-driven cull + main pass. All `Some`/non-empty only when the world has
@@ -785,8 +785,8 @@ pub(crate) struct DxContext {
     // post stack consumes via `scene_srv_for_post`. `FrameGraphInputs::
     // rt_reflections_enabled` is gated on both being `Some`.
     pub(super) rt_reflections: Option<super::post::rt_reflections::RtReflectionsResources>,
-    // The ray-tracing scene. See [`DxRayTracing`].
-    pub(super) rt: DxRayTracing,
+    // The ray-tracing scene. See [`RtState`].
+    pub(super) rt: RtState,
 
     // Projected decals. See [`DecalState`].
     pub(super) decal: DecalState,
@@ -802,13 +802,13 @@ pub(crate) struct DxContext {
     pub(super) raymarch: Option<super::raymarch::RaymarchResources>,
 
     // The environment drawn behind the opaque scene. See `directx/sky.rs`.
-    pub(super) sky: super::sky::DxSky,
+    pub(super) sky: super::sky::SkyState,
     // The world's atmosphere, when it declares one: the sky, the haze and the
     // ambient light. See `directx/atmosphere.rs`.
-    pub(super) atmosphere: Option<super::atmosphere::DxAtmosphere>,
+    pub(super) atmosphere: Option<super::atmosphere::AtmosphereState>,
     // The simulated oceans' cascade arrays, which every water draw binds.
     // `Some` whenever the world declared a `WaterSurface`.
-    pub(super) water_sim: Option<super::water_sim::DxOceanSim>,
+    pub(super) water_sim: Option<super::water_sim::OceanSim>,
     // The wake's history, and this frame's block and lane once a frame that
     // runs it has advanced it.
     pub(super) wake: concinnity_engine::render::environment::water::wake::WakeHistory,
@@ -847,18 +847,18 @@ pub(crate) struct DxContext {
     pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
     // The far field's canopy block, one copy per frame in flight. See
     // [`super::canopy`].
-    pub(super) canopy: super::canopy::DxCanopy,
+    pub(super) canopy: super::canopy::CanopyState,
 
     // Per-frame command allocators + lists (start / per-pass / end). See
-    // `DxCommands`.
-    pub(super) commands: DxCommands,
+    // `Commands`.
+    pub(super) commands: Commands,
     pub(super) diagnostics: Diagnostics,
     // CPU/GPU frame synchronization (one monotonic fence + per-slot values).
-    // See `DxFrameSync`.
-    pub(super) frame_sync: DxFrameSync,
+    // See `FrameSync`.
+    pub(super) frame_sync: FrameSync,
     // Frame captures asked of `draw_frame`: their read-back buffers, the
     // captures awaiting their frame's fence, and the writer.
-    pub(super) frame_capture: super::screenshot::DxFrameCaptures,
+    pub(super) frame_capture: super::screenshot::FrameCaptures,
     pub(super) current_frame: usize,
     // `prepare_frame` already took the next frame's turn on the swapchain's
     // frame-latency waitable, which counts, so the draw must not wait on it again.
@@ -866,11 +866,11 @@ pub(crate) struct DxContext {
 
     pub(super) stream: StreamState,
 
-    // Instanced-prop per-frame upload buffers + LOD buckets. See `DxInstanced`.
-    pub(super) instanced: DxInstanced,
+    // Instanced-prop per-frame upload buffers + LOD buckets. See `InstancedState`.
+    pub(super) instanced: InstancedState,
     // Lazily-built wireframe twin of the main-pass pipeline; empty until the
     // first Wireframe frame. See [`super::wireframe`].
-    pub(super) wireframe: super::wireframe::DxWireframe,
+    pub(super) wireframe: super::wireframe::Wireframe,
 
     // Auto-exposure (EV adaptation) state. See [`AutoExposureState`].
     pub(super) auto_exposure: AutoExposureState,

@@ -521,7 +521,7 @@ impl DxContext {
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
-                .is_some_and(super::super::clouds::DxClouds::live),
+                .is_some_and(super::super::clouds::CloudState::live),
             water_sim: self.water_sim_live(),
             grass: self.grass.is_some(),
             ssgi_motion: self.ssgi.as_ref().is_some_and(|s| s.settings.contributes()),

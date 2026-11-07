@@ -14,11 +14,11 @@ use concinnity_engine::render::post::ssao::{SsaoInputs, SsaoPass};
 use objc2::runtime::ProtocolObject;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{PostPipeline, PostTarget};
 
 // The shared depth copy, kernel and blur, holding Metal's own pipeline and
 // target handles.
-pub(crate) type MtlSsaoPass = SsaoPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlSsaoPass = SsaoPass<PostPipeline, PostTarget>;
 
 // All SSAO (GTAO) state grouped into one feature unit: the resolved settings,
 // the shared pass, and the 1×1 white fallback. `settings` and `pass` are `Some`

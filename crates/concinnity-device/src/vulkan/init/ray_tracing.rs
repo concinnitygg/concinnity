@@ -9,9 +9,7 @@ use concinnity_engine::settings::ResolvedGraphics;
 
 use super::InitGpu;
 use super::effects::shared_post_device;
-use crate::vulkan::context::{
-    VkCull, VkDescriptors, VkGeometry, VkRayTracing, VkSceneAssets, VkTargets,
-};
+use crate::vulkan::context::{CullState, Descriptors, Geometry, RtState, SceneAssets, Targets};
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::gbuffer::GbufferResources;
 use crate::vulkan::post::reflection_composite::{
@@ -23,12 +21,12 @@ use concinnity_engine::render::post::reflection_path::ReflectionPath;
 #[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
-    pub(super) geometry: &'a VkGeometry,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) targets: &'a VkTargets,
+    pub(super) geometry: &'a Geometry,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) targets: &'a Targets,
     pub(super) gbuffer: Option<&'a GbufferResources>,
-    pub(super) descriptors: &'a VkDescriptors,
-    pub(super) cull: &'a VkCull,
+    pub(super) descriptors: &'a Descriptors,
+    pub(super) cull: &'a CullState,
     pub(super) graphics: &'a ResolvedGraphics,
     pub(super) launch: RenderLaunch,
     pub(super) post_support: &'a PostSupport,
@@ -36,7 +34,7 @@ pub(super) struct RtInputs<'a> {
 }
 
 pub(super) struct RtResources {
-    pub(super) state: VkRayTracing,
+    pub(super) state: RtState,
     pub(super) reflections: Option<RtReflectionsResources>,
     pub(super) composite: Option<VkReflectionCompositePass>,
     pub(super) seethrough_mesh_indices: Vec<usize>,
@@ -207,7 +205,7 @@ pub(super) fn build_rt_reflections(
         None
     };
     Ok(RtResources {
-        state: VkRayTracing {
+        state: RtState {
             accel: rt_accel_opt,
             retired: RetirePool::new(),
             retire_tick: 0,

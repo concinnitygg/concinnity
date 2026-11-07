@@ -8,7 +8,7 @@ use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
 use concinnity_engine::settings::ResolvedGraphics;
 
 use super::InitGpu;
-use crate::directx::context::{DxRayTracing, DxSceneAssets, DxTargets};
+use crate::directx::context::{RtState, SceneAssets, Targets};
 use crate::directx::post::descriptors::PostDescriptors;
 use crate::directx::post::post_device::DxPostDevice;
 use crate::directx::post::reflection_composite::{
@@ -24,7 +24,7 @@ use crate::directx::transparent::TransparentResources;
 // enable builds it the same way.
 pub(super) fn build_reflection_composite(
     device: &DxPostDevice<'_>,
-    targets: &DxTargets,
+    targets: &Targets,
     graphics: &ResolvedGraphics,
 ) -> RenderResult<Option<DxReflectionCompositePass>> {
     if graphics.ssr().is_none() && graphics.rt_reflections().is_none() {
@@ -47,7 +47,7 @@ pub(super) fn build_reflection_composite(
 pub(super) fn build_rt_reflections(
     gpu: &InitGpu<'_>,
     post: &PostDescriptors,
-    targets: &DxTargets,
+    targets: &Targets,
     graphics: &ResolvedGraphics,
 ) -> Option<RtReflectionsResources> {
     let hw = gpu.hw;
@@ -78,7 +78,7 @@ pub(super) fn build_rt_reflections(
 #[derive(Clone, Copy)]
 pub(super) struct RtInputs<'a> {
     pub(super) world: &'a SceneData<'a>,
-    pub(super) scene: &'a DxSceneAssets,
+    pub(super) scene: &'a SceneAssets,
     pub(super) reflections: Option<&'a RtReflectionsResources>,
     pub(super) transparent: Option<&'a TransparentResources>,
     pub(super) launch: RenderLaunch,
@@ -92,7 +92,7 @@ pub(super) struct RtInputs<'a> {
 // and the resources being `Some`. Skinned meshes upload after init, so this
 // build covers static geometry; the first dynamic frame adds the skinned
 // BLAS (`rebuild_skinned`), or seeds a BVH for them when there is none.
-pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRayTracing {
+pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> RtState {
     let RtInputs {
         world,
         scene,
@@ -128,7 +128,7 @@ pub(super) fn build_ray_tracing(gpu: &InitGpu<'_>, inputs: RtInputs<'_>) -> DxRa
         .is_some()
         .then(|| raytrace::build_rt_skin(&hw.device, gpu.hot_reload))
         .flatten();
-    DxRayTracing {
+    RtState {
         accel,
         dynamic_mode: launch.rt_dynamic,
         update_streak: concinnity_engine::render::rt_accel::FailureStreak::default(),

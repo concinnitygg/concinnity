@@ -37,7 +37,7 @@ const PROBE_RECORDS_BINDING: u32 = 3;
 // uniform buffers. All of it always exists (the forward shaders reference
 // bindings 10 + 11 unconditionally, guarded by `use_clusters`); the kernel runs
 // only on frames with a light or a probe to bin.
-pub(in crate::vulkan) struct VkLightCull {
+pub(in crate::vulkan) struct LightCullState {
     pub pipeline: OwnedPipeline,
     pub pipeline_layout: OwnedPipelineLayout,
     pub set_layout: OwnedSetLayout,
@@ -57,7 +57,7 @@ pub(in crate::vulkan) struct VkLightCull {
     pub unclustered_buffer: PooledBuffer,
 }
 
-impl VkLightCull {
+impl LightCullState {
     // Point frame `frame`'s kernel set at that frame's probe records. Called
     // when the set is first wired and whenever the frame's records buffer is
     // replaced; the caller guarantees no submission still reads the set.
@@ -120,7 +120,7 @@ pub(in crate::vulkan) fn write_probe_records(
         .apply(device);
 }
 
-// Point a binning set (one allocated with `VkLightCull::set_layout`) at `inputs`.
+// Point a binning set (one allocated with `LightCullState::set_layout`) at `inputs`.
 pub(in crate::vulkan) fn write_light_cull_set(
     device: &VkDevice,
     set: vk::DescriptorSet,
@@ -145,7 +145,7 @@ pub(in crate::vulkan) fn build_light_cull(
     frames: usize,
     local_light_buffer: vk::Buffer,
     hot_reload: bool,
-) -> RenderResult<VkLightCull> {
+) -> RenderResult<LightCullState> {
     // Per-cluster light lists: device-local, written by compute, read by the
     // fragment stage.
     let cluster_buffer = alloc.create_buffer(
@@ -216,7 +216,7 @@ pub(in crate::vulkan) fn build_light_cull(
         );
     }
 
-    Ok(VkLightCull {
+    Ok(LightCullState {
         pipeline,
         pipeline_layout,
         set_layout,

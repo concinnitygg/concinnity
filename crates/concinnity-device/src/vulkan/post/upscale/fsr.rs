@@ -18,7 +18,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
-    OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend, open_library,
+    OutputWrites, UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerGpu, open_library,
 };
 use crate::upscale_sdk::fsr::{FfxContext, FfxDispatchHandles, ffxApiHeader};
 use crate::upscale_sdk::{UpscaleCamera, UpscaleExtent};
@@ -108,7 +108,7 @@ impl FsrUpscaler {
     }
 }
 
-impl VkUpscaleBackend for FsrUpscaler {
+impl UpscaleBackend for FsrUpscaler {
     fn vendor(&self) -> VendorUpscaler {
         VendorUpscaler::Fsr
     }

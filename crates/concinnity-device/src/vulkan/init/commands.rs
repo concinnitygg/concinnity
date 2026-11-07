@@ -8,7 +8,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::{backend::pass_timing, render_graph};
 
 use super::InitGpu;
-use crate::vulkan::context::{SwapchainState, VkCommands, VkFrameSync, VkHardware};
+use crate::vulkan::context::{Commands, FrameSync, SwapchainState, VkHardware};
 use crate::vulkan::owned::VkDevice;
 
 pub(super) fn create_command_pool(hw: &VkHardware) -> RenderResult<vk::CommandPool> {
@@ -51,7 +51,7 @@ pub(super) fn reset_timestamp_queries(gpu: &InitGpu<'_>) -> RenderResult<()> {
 pub(super) fn build_frame_commands(
     gpu: &InitGpu<'_>,
     swapchain: &SwapchainState,
-) -> RenderResult<(VkCommands, VkFrameSync)> {
+) -> RenderResult<(Commands, FrameSync)> {
     let InitGpu {
         hw,
         command_pool,
@@ -152,7 +152,7 @@ pub(super) fn build_frame_commands(
         );
     }
     Ok((
-        VkCommands {
+        Commands {
             command_pool,
             command_buffers,
             start_command_pools,
@@ -160,7 +160,7 @@ pub(super) fn build_frame_commands(
             pass_command_pools,
             pass_command_buffers,
         },
-        VkFrameSync {
+        FrameSync {
             image_available,
             render_finished,
             in_flight,

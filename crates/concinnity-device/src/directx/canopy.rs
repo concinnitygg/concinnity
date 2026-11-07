@@ -43,7 +43,7 @@ impl MappedCopy {
     }
 }
 
-pub(in crate::directx) struct DxCanopy {
+pub(in crate::directx) struct CanopyState {
     // This frame's block, which the probe bake snapshots.
     pub(in crate::directx) params: std::cell::Cell<CanopyParams>,
     copies: Vec<MappedCopy>,
@@ -54,7 +54,7 @@ pub(in crate::directx) struct DxCanopy {
     table_copies: Vec<(MappedCopy, std::cell::Cell<u64>)>,
 }
 
-impl DxCanopy {
+impl CanopyState {
     // `slots` mapped copies of an empty block and of room for every layer's
     // table.
     pub(in crate::directx) fn new(alloc: &DeviceAllocator, slots: usize) -> RenderResult<Self> {

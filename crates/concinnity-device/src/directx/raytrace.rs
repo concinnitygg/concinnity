@@ -61,7 +61,7 @@ use windows::core::Interface;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::com;
-use super::context::DxGeometry;
+use super::context::Geometry;
 use super::error::map_hresult;
 use super::texture::{create_acceleration_structure_buffer, create_uav_buffer, transition_barrier};
 use crate::directx::builtin_shaders::CompileProgram;
@@ -161,7 +161,7 @@ fn triangle_geometry(
 }
 
 // The shared static vertex / index buffers every draw-object and cluster BLAS is
-// built over, read from the live `DxGeometry` at each build: chunk streaming and
+// built over, read from the live `Geometry` at each build: chunk streaming and
 // geometry rebuilds replace both buffers, so an address or vertex count captured
 // earlier can point at a released heap or bound streamed geometry short.
 #[derive(Clone, Copy)]
@@ -173,7 +173,7 @@ pub(super) struct SharedGeometry {
 }
 
 impl SharedGeometry {
-    pub(super) fn of(geometry: &DxGeometry) -> Self {
+    pub(super) fn of(geometry: &Geometry) -> Self {
         Self {
             vertex_gva: com::gpu_va(&geometry.vertex_buffer),
             index_gva: com::gpu_va(&geometry.index_buffer),
@@ -410,7 +410,7 @@ fn blas_bytes(blas: &ID3D12Resource) -> u64 {
 // (`rt_skin.hlsl`): a root SRV for the bind-pose skinned vertices (t0), a root
 // SRV for the per-object joint palette (t1), a root UAV for the deformed output
 // (u0), and a 4-DWORD `SkinParams` root-constant block (b0). Built alongside the
-// RT PSO and held on `DxRayTracing`; mirrors Metal's `skin_pipeline`.
+// RT PSO and held on `RtState`; mirrors Metal's `skin_pipeline`.
 pub(super) struct SkinPipeline {
     pub(super) root_sig: ID3D12RootSignature,
     pub(super) pso: ID3D12PipelineState,
@@ -1063,7 +1063,7 @@ impl RtAccelData {
             alloc.retire(spare);
         }
         let skinned_objects = skinned.as_ref().map(|s| s.objects);
-        let mut steps = DxRtSteps {
+        let mut steps = RtSteps {
             accel: self,
             alloc,
             cmd,
@@ -1787,7 +1787,7 @@ struct SkinnedRebuild<'a> {
 
 // One frame's update of the live accel, recorded onto the frame's start command
 // list: the steps `drive_update` schedules, over this frame's geometry.
-struct DxRtSteps<'a> {
+struct RtSteps<'a> {
     accel: &'a mut RtAccelData,
     alloc: &'a DeviceAllocator,
     cmd: &'a ID3D12GraphicsCommandList,
@@ -1798,7 +1798,7 @@ struct DxRtSteps<'a> {
     skinned: Option<&'a SkinnedRtInputs<'a>>,
 }
 
-impl RtAccelSteps for DxRtSteps<'_> {
+impl RtAccelSteps for RtSteps<'_> {
     type Blas = ID3D12Resource;
     type Instance = D3D12_RAYTRACING_INSTANCE_DESC;
 

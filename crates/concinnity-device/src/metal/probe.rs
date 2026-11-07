@@ -58,7 +58,7 @@
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::bake::{
-    CAPTURE_FACES, ProbeBake, ProbeBakeDevice, capture_ring_slot,
+    self as bake, CAPTURE_FACES, ProbeBakeDevice, capture_ring_slot,
 };
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
@@ -116,7 +116,7 @@ pub(crate) struct PrefilteringBake {
 
 // The bake's two slots: a capture rendering its faces and a capture convolving
 // into its cube.
-pub(in crate::metal) type MtlProbeBake = ProbeBake<RenderingBake, PrefilteringBake>;
+pub(in crate::metal) type ProbeBake = bake::ProbeBake<RenderingBake, PrefilteringBake>;
 
 // What the frame hands the bake: the time a capture starting this frame
 // animates its faces with, and the frame's bindless texture arguments every face
@@ -198,7 +198,7 @@ impl MtlContext {
 
     // Run `f` over the bake with this context as its device. The slots are lent
     // to `f`, so the context reads them as empty for the call.
-    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut MtlProbeBake, &mut Self) -> R) -> R {
+    fn with_probe_bake<R>(&mut self, f: impl FnOnce(&mut ProbeBake, &mut Self) -> R) -> R {
         let mut bake = std::mem::take(&mut self.probe.bake);
         let out = f(&mut bake, self);
         self.probe.bake = bake;

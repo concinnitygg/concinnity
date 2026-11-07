@@ -93,7 +93,7 @@ pub(super) struct ProbeState {
     // whose capture is convolving into its cube, one destination mip per frame. The
     // convolution overlaps the next probe's render, which shortens the bake
     // warm-up.
-    pub bake: super::probe::MtlProbeBake,
+    pub bake: super::probe::ProbeBake,
     // The three convolution kernels, built at init under the same gate the bake
     // needs (the bindless cull pipeline). `None` disables baking.
     pub prefilter: Option<super::probe_prefilter::ProbePrefilterPipelines>,
@@ -431,7 +431,7 @@ impl MtlHardware {
 
 // Render-resolution scene targets, rebuilt on resize, plus the depth tests the
 // scene passes run against them.
-pub(super) struct MtlTargets {
+pub(super) struct Targets {
     // Off-screen HDR render targets (MSAA RGBA16Float + resolve + MSAA
     // Depth32Float). Re-created lazily in `draw_frame` whenever the
     // drawable size changes. The main + instanced pipelines render into
@@ -472,7 +472,7 @@ pub(super) struct MtlTargets {
 // The world's scene assets: the shared geometry buffers, the texture pool, the
 // light tables, the IBL cubes and color-grading LUT, and the samplers they are
 // read through. None of it depends on the drawable.
-pub(super) struct MtlSceneAssets {
+pub(super) struct SceneAssets {
     // Single shared vertex buffer containing geometry for all draw objects.
     pub vertex_buffer: PooledBuffer,
     // Single shared index buffer containing indices for all draw objects.
@@ -521,7 +521,7 @@ pub(super) struct MtlSceneAssets {
 // See `metal/bindless_args.rs`. The texture block is written as plain resource
 // ids (argument-buffer tier 2), so it needs no encoder; only the sampler block,
 // written once, goes through one.
-pub(super) struct MtlArgumentBuffers {
+pub(super) struct ArgumentBuffers {
     // Per-ring-slot change gates for the texture block: the block's contents
     // and its unused tail, gated apart because a stream-in moves the former
     // every time and the latter almost never. See `build_bindless_texture_args`.
@@ -565,7 +565,7 @@ pub(crate) struct MtlContext {
     pub(super) last_present_texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     // Frame captures asked of `draw_frame`: their read-back buffers and the
     // writer they are handed to once their command buffer completes.
-    pub(super) frame_capture: super::screenshot::MtlFrameCaptures,
+    pub(super) frame_capture: super::screenshot::FrameCaptures,
     // GPU-driven main pass + cull feature state: the main and world-shader
     // pipelines, the early and late cull pipelines, their indirect command
     // buffers + argument encoders/buffers, the per-object status buffer, the
@@ -573,18 +573,18 @@ pub(crate) struct MtlContext {
     // snapshots the occlusion test reprojects through. All `Some`/active only
     // when the world has 3D scene content. See [`CullState`].
     pub(super) cull: CullState,
-    // Argument encoders and their re-encode gates. See [`MtlArgumentBuffers`].
-    pub(super) arg_buffers: MtlArgumentBuffers,
+    // Argument encoders and their re-encode gates. See [`ArgumentBuffers`].
+    pub(super) arg_buffers: ArgumentBuffers,
     // The CPU-side scene: draw list, view, skinned slots, model history and
     // streamed-geometry placement. See [`SceneState`].
     pub(super) state: SceneState,
     // Scratch the graph executor refills each frame: the event plan and the
     // per-pass recording slots. Only the allocations carry over.
-    pub(super) graph_scratch: Option<super::graph_exec::MtlGraphScratch>,
+    pub(super) graph_scratch: Option<super::graph_exec::GraphScratch>,
     // InstancedProp clusters. See [`InstancedState`].
     pub(super) instanced: InstancedState,
-    // Scene assets. See [`MtlSceneAssets`].
-    pub(super) scene: MtlSceneAssets,
+    // Scene assets. See [`SceneAssets`].
+    pub(super) scene: SceneAssets,
     // What the canopy block is filled from: the grass's far fields and the
     // planet's ground. `None` when the world has neither.
     pub(super) canopy_field: Option<concinnity_engine::render::environment::grass::CanopyField>,
@@ -606,8 +606,8 @@ pub(crate) struct MtlContext {
     // visible sky. See [`ProbeState`].
     pub(super) probe: ProbeState,
     pub(super) text: TextState,
-    // Render-resolution scene targets. See [`MtlTargets`].
-    pub(super) targets: MtlTargets,
+    // Render-resolution scene targets. See [`Targets`].
+    pub(super) targets: Targets,
     // Composite pass. See [`CompositeState`].
     pub(super) composite: CompositeState,
     // The bloom chain. None for a world with no 3D scene content: the graph

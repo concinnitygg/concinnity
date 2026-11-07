@@ -28,7 +28,7 @@ use objc2_metal::{MTLBuffer, MTLDevice, MTLResourceOptions};
 use super::InitGpu;
 use crate::metal::allocator::DeviceAllocator;
 use crate::metal::auto_exposure::{AutoExposureGpu, build_auto_exposure_pipelines};
-use crate::metal::context::{CompositeState, MtlSceneAssets};
+use crate::metal::context::{CompositeState, SceneAssets};
 use crate::metal::error::allocation_failed;
 use crate::metal::post::post_device::MtlPostDevice;
 use crate::metal::post::{
@@ -145,7 +145,7 @@ pub(super) fn build_upscale(
 pub(super) fn post_device<'a>(
     gpu: &InitGpu<'a>,
     composite: &'a CompositeState,
-    scene: &'a MtlSceneAssets,
+    scene: &'a SceneAssets,
 ) -> MtlPostDevice<'a> {
     MtlPostDevice {
         device: &gpu.hw.device,

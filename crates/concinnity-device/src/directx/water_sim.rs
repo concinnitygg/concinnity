@@ -73,7 +73,7 @@ pub(in crate::directx) struct OceanSlots<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HA
 
 // The world's simulated oceans, or a stand-in pair of arrays for a world
 // whose water is all summed, which the water draw binds and never samples.
-pub(in crate::directx) struct DxOceanSim {
+pub(in crate::directx) struct OceanSim {
     displacement: ID3D12Resource,
     slopes: ID3D12Resource,
     // The two array SRVs and the wake field's, one table.
@@ -102,7 +102,7 @@ struct OceanKernels {
     mips: u32,
 }
 
-impl DxOceanSim {
+impl OceanSim {
     pub(in crate::directx) fn new<F: Fn(usize) -> D3D12_CPU_DESCRIPTOR_HANDLE>(
         alloc: &DeviceAllocator,
         plan: &OceanPlan,

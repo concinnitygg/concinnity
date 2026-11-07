@@ -5,7 +5,7 @@
 use ash::vk;
 
 use super::context::{
-    VkAreaLight, VkContext, VkSceneAssets, VkShadow, VkSpotShadow, VkTargets, VkUniforms,
+    AreaLightState, SceneAssets, ShadowState, SpotShadowState, Targets, Uniforms, VkContext,
 };
 use super::descriptor_layout::{
     AREA_LIGHT_SSBO_BINDING, CANOPY_TABLES_SSBO_BINDING, CANOPY_UBO_BINDING, CLOUD_SHADOW_BINDING,
@@ -16,7 +16,7 @@ use super::descriptor_layout::{
     SHADOW_SAMPLER_BINDING, SHADOW_UBO_BINDING, SPOT_SHADOW_DATA_SSBO_BINDING,
     SPOT_SHADOW_MAP_BINDING, VIEW_UBO_BINDING,
 };
-use super::light_cull::VkLightCull;
+use super::light_cull::LightCullState;
 use super::owned::VkDevice;
 use super::probe_set::{PROBE_CUBES_LAYOUT, ProbeSetGpu};
 use super::set_writes::SetWrites;
@@ -30,7 +30,7 @@ struct GlobalSamplers {
 }
 
 impl GlobalSamplers {
-    fn of(shadow: &VkShadow, scene: &VkSceneAssets) -> Self {
+    fn of(shadow: &ShadowState, scene: &SceneAssets) -> Self {
         Self {
             shadow: shadow.sampler.handle(),
             cube: scene.cube_sampler.handle(),
@@ -57,13 +57,13 @@ impl CanopyBuffers {
 // from, which fog, raymarched volumes and planar reflections bind as well.
 #[derive(Clone, Copy)]
 pub(in crate::vulkan) struct GlobalBindings<'a> {
-    pub(in crate::vulkan) uniforms: &'a VkUniforms,
-    pub(in crate::vulkan) light_cull: &'a VkLightCull,
-    pub(in crate::vulkan) shadow: &'a VkShadow,
-    pub(in crate::vulkan) spot_shadow: &'a VkSpotShadow,
-    pub(in crate::vulkan) area_light: &'a VkAreaLight,
-    pub(in crate::vulkan) scene: &'a VkSceneAssets,
-    pub(in crate::vulkan) targets: &'a VkTargets,
+    pub(in crate::vulkan) uniforms: &'a Uniforms,
+    pub(in crate::vulkan) light_cull: &'a LightCullState,
+    pub(in crate::vulkan) shadow: &'a ShadowState,
+    pub(in crate::vulkan) spot_shadow: &'a SpotShadowState,
+    pub(in crate::vulkan) area_light: &'a AreaLightState,
+    pub(in crate::vulkan) scene: &'a SceneAssets,
+    pub(in crate::vulkan) targets: &'a Targets,
     pub(in crate::vulkan) probes: &'a ProbeSetGpu,
     // SSGI's resolved visibility and bounce, which the main camera samples in
     // place of the occlusion while SSGI is built.
@@ -205,7 +205,7 @@ impl VkContext {
                 .atmosphere
                 .as_ref()
                 .and_then(|a| a.clouds.as_ref())
-                .map(super::clouds::VkClouds::shadow_view),
+                .map(super::clouds::CloudState::shadow_view),
         }
     }
 }

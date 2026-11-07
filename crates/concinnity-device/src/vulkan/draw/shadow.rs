@@ -37,7 +37,7 @@ use crate::vulkan::record::Recorder;
 pub(in crate::vulkan) struct ShadowView<'a> {
     pub uniforms_set: vk::DescriptorSet,
     pub vp_index: u32,
-    pub view: &'a crate::vulkan::cull::VkShadowView,
+    pub view: &'a crate::vulkan::cull::ShadowCullView,
 }
 
 impl VkContext {

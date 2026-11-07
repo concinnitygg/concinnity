@@ -13,20 +13,20 @@ use concinnity_engine::settings::ResolvedGraphics;
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};
 use crate::vulkan::context::{
-    AutoExposureState, CompositeState, DecalState, FogState, HDR_FORMAT, VkCull, VkDescriptors,
-    VkGeometry, VkSceneAssets, VkTargets,
+    AutoExposureState, CompositeState, CullState, DecalState, Descriptors, FogState, Geometry,
+    HDR_FORMAT, SceneAssets, Targets,
 };
 use crate::vulkan::global_set::GlobalBindings;
 use crate::vulkan::planar::PlanarReflectionSet;
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::bloom::composite_bloom_view;
 use crate::vulkan::post::gbuffer::GbufferResources;
-use crate::vulkan::post::post_device::{PostQueue, VkPostDevice, VkPostProbes};
+use crate::vulkan::post::post_device::{PostProbes, PostQueue, VkPostDevice};
 use crate::vulkan::post::ssao::SsaoResources;
 use crate::vulkan::post::ssgi::SsgiResources;
 use crate::vulkan::post::ssr::SsrResources;
 use crate::vulkan::post::taa::TaaResources;
-use crate::vulkan::post::upscale::VkUpscaleBackend;
+use crate::vulkan::post::upscale::UpscaleBackend;
 use crate::vulkan::raymarch::RaymarchResources;
 use crate::vulkan::swapchain::{
     composite_channels, write_composite_channel_set, write_composite_set,
@@ -49,7 +49,7 @@ pub(super) fn build_upscale(
     swapchain_extent: vk::Extent2D,
     graphics: &ResolvedGraphics,
     requested: &mut crate::upscale_sdk::UpscaleRequest,
-) -> RenderResult<(Option<Box<dyn VkUpscaleBackend>>, vk::Extent2D)> {
+) -> RenderResult<(Option<Box<dyn UpscaleBackend>>, vk::Extent2D)> {
     let InitGpu {
         hw, command_pool, ..
     } = *gpu;
@@ -101,8 +101,8 @@ pub(super) fn build_upscale(
 pub(super) fn shared_post_device<'a>(
     gpu: &InitGpu<'a>,
     post_support: &'a PostSupport,
-    scene: &'a VkSceneAssets,
-    descriptors: &'a VkDescriptors,
+    scene: &'a SceneAssets,
+    descriptors: &'a Descriptors,
 ) -> VkPostDevice<'a> {
     let InitGpu {
         hw,
@@ -121,7 +121,7 @@ pub(super) fn shared_post_device<'a>(
         arena: &post_support.arena,
         sampler: post_support.sampler.handle(),
         cube_sampler: scene.cube_sampler.handle(),
-        probes: VkPostProbes {
+        probes: PostProbes {
             layout: descriptors.global_set_layout.handle(),
             sets: &[],
         },
@@ -134,9 +134,9 @@ pub(super) fn shared_post_device<'a>(
 pub(super) struct ScreenSpaceInputs<'a> {
     pub(super) graphics: &'a ResolvedGraphics,
     pub(super) features: &'a Features,
-    pub(super) targets: &'a VkTargets,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) descriptors: &'a Descriptors,
 }
 
 pub(super) struct ScreenSpace {
@@ -249,12 +249,12 @@ pub(super) fn build_screen_space(
 #[derive(Clone, Copy)]
 pub(super) struct SceneInputWiring<'a> {
     pub(super) features: &'a Features,
-    pub(super) targets: &'a VkTargets,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) descriptors: &'a Descriptors,
     pub(super) composite: &'a CompositeState,
     pub(super) screen: &'a ScreenSpace,
-    pub(super) upscale: Option<&'a dyn VkUpscaleBackend>,
+    pub(super) upscale: Option<&'a dyn UpscaleBackend>,
 }
 
 pub(super) fn build_taa_and_wire_scene_inputs(
@@ -333,14 +333,14 @@ pub(super) fn build_taa_and_wire_scene_inputs(
 
 #[derive(Clone, Copy)]
 pub(super) struct WorldEffectInputs<'a> {
-    pub(super) targets: &'a VkTargets,
-    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) targets: &'a Targets,
+    pub(super) descriptors: &'a Descriptors,
     pub(super) fx: &'a WorldFx,
     pub(super) planar: PlanarBudget,
-    pub(super) cull: &'a VkCull,
+    pub(super) cull: &'a CullState,
     pub(super) n_cull: usize,
     pub(super) rt: &'a RtResources,
-    pub(super) geometry: &'a VkGeometry,
+    pub(super) geometry: &'a Geometry,
     pub(super) graphics: &'a ResolvedGraphics,
 }
 

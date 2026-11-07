@@ -21,7 +21,7 @@ use crate::directx::root_sig::{RootSig, Visibility};
 use crate::directx::texture::uav_barrier;
 
 // The scan and the scatter over one root signature.
-pub(in crate::directx) struct DxCompactKernels {
+pub(in crate::directx) struct CompactKernels {
     root_sig: ID3D12RootSignature,
     scan: ID3D12PipelineState,
     scatter: ID3D12PipelineState,
@@ -33,7 +33,7 @@ pub(in crate::directx) struct DxCompactKernels {
 pub(in crate::directx) fn build_compact_kernels(
     device: &ID3D12Device,
     hot_reload: bool,
-) -> RenderResult<DxCompactKernels> {
+) -> RenderResult<CompactKernels> {
     use Visibility::All;
     let root_sig = RootSig::new()
         .constants::<GpuCompactParams>(0, All)
@@ -55,7 +55,7 @@ pub(in crate::directx) fn build_compact_kernels(
         &builtin_shaders::CULL_SCATTER.compile(hot_reload)?,
         "cull scatter",
     )?;
-    Ok(DxCompactKernels {
+    Ok(CompactKernels {
         root_sig,
         scan,
         scatter,

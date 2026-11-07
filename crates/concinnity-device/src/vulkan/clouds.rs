@@ -227,7 +227,7 @@ pub(in crate::vulkan) struct CloudInputs<'a> {
     pub(in crate::vulkan) msaa: bool,
 }
 
-pub(in crate::vulkan) struct VkClouds {
+pub(in crate::vulkan) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Option<CloudParams>,
     noise: Image,
@@ -274,7 +274,7 @@ pub(in crate::vulkan) struct VkClouds {
     scenes: Vec<Option<(vk::ImageView, vk::Extent2D, OwnedFramebuffer)>>,
 }
 
-impl VkClouds {
+impl CloudState {
     // The volume, the target, the pipelines and one set of each per frame
     // slot.
     pub(in crate::vulkan) fn new(

@@ -22,8 +22,8 @@ use concinnity_engine::render::temporal::history_reset::UpscalerResetLatch;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
-    ImageViewInfo, OutputWrites, UpscaleImage, UpscaleInputs, UpscaleOutput, UpscalerGpu,
-    VkUpscaleBackend, copy_ext_names,
+    ImageViewInfo, OutputWrites, UpscaleBackend, UpscaleImage, UpscaleInputs, UpscaleOutput,
+    UpscalerGpu, copy_ext_names,
 };
 use crate::upscale_sdk::dlss::{
     ENGINE_VERSION, NVSDK_NGX_ENGINE_TYPE_CUSTOM, NVSDK_NGX_FEATURE_SUPERSAMPLING,
@@ -313,7 +313,7 @@ impl DlssUpscaler {
     }
 }
 
-impl VkUpscaleBackend for DlssUpscaler {
+impl UpscaleBackend for DlssUpscaler {
     fn vendor(&self) -> VendorUpscaler {
         VendorUpscaler::Dlss
     }

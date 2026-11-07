@@ -264,7 +264,7 @@ impl DxContext {
             && self
                 .water_sim
                 .as_ref()
-                .is_some_and(super::water_sim::DxOceanSim::wakes);
+                .is_some_and(super::water_sim::OceanSim::wakes);
         let sea = self
             .transparent
             .as_ref()
@@ -304,7 +304,7 @@ impl DxContext {
     pub(in crate::directx) fn water_sim_live(&self) -> bool {
         self.water_sim
             .as_ref()
-            .is_some_and(super::water_sim::DxOceanSim::simulates)
+            .is_some_and(super::water_sim::OceanSim::simulates)
             && self
                 .transparent
                 .as_ref()

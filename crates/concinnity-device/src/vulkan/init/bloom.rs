@@ -7,7 +7,7 @@ use concinnity_engine::render::post::bloom::BloomPass;
 
 use super::InitGpu;
 use super::effects::shared_post_device;
-use crate::vulkan::context::{VkDescriptors, VkSceneAssets};
+use crate::vulkan::context::{Descriptors, SceneAssets};
 use crate::vulkan::post::PostSupport;
 use crate::vulkan::post::bloom::VkBloomPass;
 use crate::vulkan::post::post_device::post_extent;
@@ -16,8 +16,8 @@ use crate::vulkan::post::post_device::post_extent;
 pub(super) struct BloomInputs<'a> {
     pub(super) extent: vk::Extent2D,
     pub(super) post: &'a PostSupport,
-    pub(super) scene: &'a VkSceneAssets,
-    pub(super) descriptors: &'a VkDescriptors,
+    pub(super) scene: &'a SceneAssets,
+    pub(super) descriptors: &'a Descriptors,
 }
 
 pub(super) fn build_bloom(gpu: &InitGpu<'_>, inputs: BloomInputs<'_>) -> RenderResult<VkBloomPass> {

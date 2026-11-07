@@ -6,7 +6,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::render_graph::{PoolGates, plan_pool_slots};
 
 use super::{Features, InitGpu};
-use crate::vulkan::context::{HDR_FORMAT, SwapchainState, VkTargets};
+use crate::vulkan::context::{HDR_FORMAT, SwapchainState, Targets};
 use crate::vulkan::render_pass::create_main_render_pass;
 use crate::vulkan::swapchain::{AttachmentDeviceCtx, create_attachments, create_main_framebuffers};
 use crate::vulkan::texture::GpuUploadContext;
@@ -22,7 +22,7 @@ pub(super) struct TargetInputs<'a> {
 pub(super) fn build_render_targets(
     gpu: &InitGpu<'_>,
     inputs: TargetInputs<'_>,
-) -> RenderResult<VkTargets> {
+) -> RenderResult<Targets> {
     let InitGpu {
         hw,
         command_pool,
@@ -93,7 +93,7 @@ pub(super) fn build_render_targets(
         render_extent,
         frames,
     )?;
-    Ok(VkTargets {
+    Ok(Targets {
         render_extent,
         main_render_pass,
         msaa_samples,

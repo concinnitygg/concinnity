@@ -124,7 +124,7 @@ pub(in crate::vulkan) struct VkAttachment {
 // The forward global set, as a probe-reading program binds it for the probe
 // count (binding 7), the cube array (binding 8) and the records (binding 17).
 #[derive(Clone, Copy)]
-pub(in crate::vulkan) struct VkPostProbes<'a> {
+pub(in crate::vulkan) struct PostProbes<'a> {
     pub layout: vk::DescriptorSetLayout,
     // One set per frame in flight. Empty at init, where no draw is encoded.
     pub sets: &'a [vk::DescriptorSet],
@@ -156,7 +156,7 @@ pub(in crate::vulkan) struct VkPostDevice<'a> {
     // The trilinear clamp-to-edge state an environment cube is sampled through.
     pub cube_sampler: vk::Sampler,
     // The global set a probe-reading program binds.
-    pub probes: VkPostProbes<'a>,
+    pub probes: PostProbes<'a>,
     // Which frame in flight is recording.
     pub frame: usize,
     pub hot_reload: bool,
@@ -182,7 +182,7 @@ impl VkPostDevice<'_> {
     }
 
     // The probe set a program that declares one binds.
-    fn probes_for(&self, bindings: PostProgramBindings) -> Option<VkPostProbes<'_>> {
+    fn probes_for(&self, bindings: PostProgramBindings) -> Option<PostProbes<'_>> {
         bindings.probes.then_some(self.probes)
     }
 
@@ -476,7 +476,7 @@ impl crate::vulkan::context::VkContext {
             arena: &self.post.arena,
             sampler: self.post.sampler.handle(),
             cube_sampler: self.scene.cube_sampler.handle(),
-            probes: VkPostProbes {
+            probes: PostProbes {
                 layout: self.descriptors.global_set_layout.handle(),
                 sets: &self.descriptors.global_sets,
             },

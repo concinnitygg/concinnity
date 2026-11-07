@@ -8,7 +8,7 @@ use concinnity_engine::render::backend::error::RenderResult;
 
 use super::InitGpu;
 use super::cull::CullPlan;
-use crate::vulkan::context::{VkDescriptors, VkHardware, VkShadow};
+use crate::vulkan::context::{Descriptors, ShadowState, VkHardware};
 use crate::vulkan::descriptor_layout::{
     PoolSizes, StageDescriptors, global_set, shadow_global_set,
 };
@@ -41,14 +41,14 @@ pub(super) fn build_descriptors(
     gpu: &InitGpu<'_>,
     pool: SetPoolInputs<'_>,
     bindings: &GlobalBindings<'_>,
-) -> RenderResult<VkDescriptors> {
+) -> RenderResult<Descriptors> {
     let global_set_layout = create_descriptor_set_layout(&gpu.hw.device, &global_set())?;
     let shadow_views =
         u32::saturating_from(render_types::NUM_SHADOW_CASCADES) + bindings.spot_shadow.count();
     let descriptor_pool = create_descriptor_pool(gpu, pool, bindings.shadow, shadow_views)?;
     let global_sets = write_global_sets(gpu, &global_set_layout, &descriptor_pool, bindings)?;
     let shadow_global_sets = write_shadow_global_sets(gpu, &descriptor_pool, bindings.shadow)?;
-    Ok(VkDescriptors {
+    Ok(Descriptors {
         global_set_layout,
         descriptor_pool,
         global_sets,
@@ -62,7 +62,7 @@ pub(super) fn build_descriptors(
 fn create_descriptor_pool(
     gpu: &InitGpu<'_>,
     pool: SetPoolInputs<'_>,
-    shadow: &VkShadow,
+    shadow: &ShadowState,
     // Cascades plus spot slices: each gets a cull set per frame.
     shadow_views: u32,
 ) -> RenderResult<OwnedDescriptorPool> {
@@ -214,7 +214,7 @@ fn write_global_sets(
 fn write_shadow_global_sets(
     gpu: &InitGpu<'_>,
     pool: &OwnedDescriptorPool,
-    shadow: &VkShadow,
+    shadow: &ShadowState,
 ) -> RenderResult<Vec<vk::DescriptorSet>> {
     let InitGpu { hw, frames, .. } = *gpu;
     let device = &hw.device;

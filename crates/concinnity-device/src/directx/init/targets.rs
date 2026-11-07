@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use super::heap_layout::{DSV_MAIN_DEPTH_SLOT, RtvHeapLayout};
 use super::{Features, InitGpu, heaps};
 use crate::directx::context::{
-    DepthState, DxDescriptors, DxTargets, Extents, HdrState, SwapchainState,
+    DepthState, Descriptors, Extents, HdrState, SwapchainState, Targets,
 };
 use crate::directx::post::upscale::UpscaleState;
 use crate::directx::reactive_mask::{ReactiveMask, ReactiveMaskSlots};
@@ -21,7 +21,7 @@ use crate::directx::transient_pool::TransientResourcePool;
 
 #[derive(Clone, Copy)]
 pub(super) struct TargetInputs<'a> {
-    pub(super) descriptors: &'a DxDescriptors,
+    pub(super) descriptors: &'a Descriptors,
     pub(super) swapchain: &'a SwapchainState,
     pub(super) rtv: &'a RtvHeapLayout,
     pub(super) upscale: &'a UpscaleState,
@@ -30,10 +30,7 @@ pub(super) struct TargetInputs<'a> {
     pub(super) clear_color: [f32; 4],
 }
 
-pub(super) fn build_targets(
-    gpu: &InitGpu<'_>,
-    inputs: TargetInputs<'_>,
-) -> RenderResult<DxTargets> {
+pub(super) fn build_targets(gpu: &InitGpu<'_>, inputs: TargetInputs<'_>) -> RenderResult<Targets> {
     let TargetInputs {
         descriptors,
         swapchain,
@@ -156,7 +153,7 @@ pub(super) fn build_targets(
         },
     )?;
 
-    Ok(DxTargets {
+    Ok(Targets {
         hdr: HdrState {
             color: hdr_color,
             color_rtv: hdr_color_rtv,

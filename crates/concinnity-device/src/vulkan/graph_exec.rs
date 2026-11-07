@@ -82,7 +82,7 @@ enum VkTargetObject {
 // `build_barrier_registry`. `vk::Image` / `vk::Buffer` are plain `Send + Sync`
 // handles, so the registry shares into the parallel pass workers with no wrapper
 // (unlike the DirectX side's COM handles).
-struct VkBarrierTarget {
+struct BarrierTarget {
     object: VkTargetObject,
     class: GraphResourceClass,
     resting: VkResting,
@@ -93,7 +93,7 @@ struct VkBarrierTarget {
 // the `VkTargetObject::BufferSet` ranges. Refilled on the main thread by
 // `refill_graph_tables`, where the only field-naming of the graph-driven
 // resources lives; the parallel emit path stays field-agnostic.
-type VkBarrierRegistry = BarrierTable<VkBarrierTarget, vk::Buffer>;
+type BarrierRegistry = BarrierTable<BarrierTarget, vk::Buffer>;
 
 // The per-frame tables the executor builds, kept across frames on `VkContext`
 // so their backing allocations are reused. Only the allocations survive: every
@@ -104,8 +104,8 @@ type VkBarrierRegistry = BarrierTable<VkBarrierTarget, vk::Buffer>;
 // fields `barrier_objects_for_label` reads, and a missed one would put a
 // destroyed handle in a barrier.
 #[derive(Default)]
-pub(in crate::vulkan) struct VkGraphScratch {
-    registry: VkBarrierRegistry,
+pub(in crate::vulkan) struct GraphScratch {
+    registry: BarrierRegistry,
     // The pooled images to alias-barrier before each graph pass.
     alias: AliasRows<vk::Image>,
     passes: PassScratch<vk::CommandBuffer>,
@@ -119,7 +119,7 @@ struct VkPassRecorder<'a, 'p> {
     params: &'a GraphFrameParams<'p>,
     particle: Option<&'a ParticleFrame>,
     grass: Option<&'a super::grass::GrassFrame>,
-    registry: &'a VkBarrierRegistry,
+    registry: &'a BarrierRegistry,
     alias: &'a AliasRows<vk::Image>,
 }
 
@@ -180,7 +180,7 @@ impl PassRecorder for VkPassRecorder<'_, '_> {
 // producer's no-op Undefined -> Write) is skipped too. Takes `&ash::Device`, not
 // `&VkContext`: the field-to-image mapping was already resolved into the
 // registry, so this parallel path is field-agnostic.
-fn emit_graph_barriers(rec: &Recorder<'_>, registry: &VkBarrierRegistry, ops: &[BarrierOp]) {
+fn emit_graph_barriers(rec: &Recorder<'_>, registry: &BarrierRegistry, ops: &[BarrierOp]) {
     for op in ops {
         let Some(target) = registry.target(op.resource_index()) else {
             continue;
@@ -206,8 +206,8 @@ const BUFFER_BARRIER_BATCH: usize = 16;
 // array layer the target declares.
 fn emit_one(
     rec: &Recorder<'_>,
-    registry: &VkBarrierRegistry,
-    target: &VkBarrierTarget,
+    registry: &BarrierRegistry,
+    target: &BarrierTarget,
     transition: (
         vk::ImageLayout,
         vk::ImageLayout,
@@ -293,7 +293,7 @@ fn emit_one(
 // Recorded into the frame's outer "end" command buffer, which is submitted after
 // every pass buffer, so these run last. A frame that ends every resource at rest
 // (the common case: nothing needs one) emits nothing.
-fn emit_graph_restores(rec: &Recorder<'_>, registry: &VkBarrierRegistry, graph: &CompiledGraph) {
+fn emit_graph_restores(rec: &Recorder<'_>, registry: &BarrierRegistry, graph: &CompiledGraph) {
     for (idx, &(state, stages)) in graph.final_states().iter().enumerate() {
         let Some(target) = registry.target(idx) else {
             continue;
@@ -362,7 +362,7 @@ fn emit_alias_barriers(rec: &Recorder<'_>, images: &[vk::Image]) {
 // silently dropping any a driven resource declared there.
 fn emit_pass_prologue(
     rec: &Recorder<'_>,
-    registry: &VkBarrierRegistry,
+    registry: &BarrierRegistry,
     alias: &[vk::Image],
     pass: &CompiledPass,
 ) {
@@ -376,7 +376,7 @@ fn emit_pass_prologue(
 // pass it follows, so the flattened serial stream is command-for-command what a
 // transition on the run's first reader produced. A queue-family release barrier
 // belongs here too once a compute queue exists; nothing emits one yet.
-fn emit_pass_epilogue(rec: &Recorder<'_>, registry: &VkBarrierRegistry, pass: &CompiledPass) {
+fn emit_pass_epilogue(rec: &Recorder<'_>, registry: &BarrierRegistry, pass: &CompiledPass) {
     emit_graph_barriers(rec, registry, &pass.barriers_after);
 }
 
@@ -395,7 +395,7 @@ fn emit_pass_epilogue(rec: &Recorder<'_>, registry: &VkBarrierRegistry, pass: &C
 // cover shows up; the headless sweep in `render_graph::validate` covers the
 // deriver itself.
 #[cfg(debug_assertions)]
-fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &VkBarrierRegistry) {
+fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &BarrierRegistry) {
     use super::barrier_translate::vk_state;
     use concinnity_engine::render::render_graph::{
         ResourceState, barrier_coverage_gaps_for_driven,
@@ -617,7 +617,7 @@ impl VkContext {
         #[cfg(debug_assertions)]
         render_graph::assert_serial_order_honors_schedule(graph, "vulkan");
 
-        let VkGraphScratch {
+        let GraphScratch {
             registry,
             alias,
             passes,
@@ -693,14 +693,14 @@ impl VkContext {
     // for it either.
     fn refill_graph_tables(
         &self,
-        scratch: &mut VkGraphScratch,
+        scratch: &mut GraphScratch,
         graph: &CompiledGraph,
         frame_idx: usize,
     ) {
         scratch.registry.refill(graph, |res, arena| {
             let class = res.class()?;
             let (object, resting) = self.barrier_objects_for_label(res.label, frame_idx, arena)?;
-            Some(VkBarrierTarget {
+            Some(BarrierTarget {
                 object,
                 class,
                 resting,

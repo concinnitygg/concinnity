@@ -25,7 +25,7 @@ use super::super::record::Recorder;
 use super::super::upload_ring::UPLOAD_ALIGN;
 
 // Per-invocation binding context for the composite pass.
-pub(in crate::vulkan) struct VkCompositeArgs {
+pub(in crate::vulkan) struct CompositeArgs {
     image_index: usize,
     frame_idx: usize,
     // Whether a particle or transparent pass wrote the reactive mask this frame.
@@ -33,11 +33,11 @@ pub(in crate::vulkan) struct VkCompositeArgs {
 }
 
 // The context, recording the composite through a `Recorder` borrowed from it.
-pub(in crate::vulkan) struct VkComposite<'a> {
+pub(in crate::vulkan) struct CompositePass<'a> {
     ctx: &'a VkContext,
 }
 
-impl core::ops::Deref for VkComposite<'_> {
+impl core::ops::Deref for CompositePass<'_> {
     type Target = VkContext;
 
     fn deref(&self) -> &VkContext {
@@ -50,9 +50,9 @@ impl core::ops::Deref for VkComposite<'_> {
 // texture via `composite.sets[frame_idx]` (wired at init / on resize) and writes
 // the ACES + gamma + FXAA tonemap into `composite.framebuffers[image_index]`;
 // text is drawn after in the same render pass so it sits on top in LDR space.
-impl<'a> fullscreen::CompositeEncoder for VkComposite<'a> {
+impl<'a> fullscreen::CompositeEncoder for CompositePass<'a> {
     type Rec = Recorder<'a>;
-    type Args = VkCompositeArgs;
+    type Args = CompositeArgs;
 
     fn begin_composite(&self, rec: &Self::Rec, args: &Self::Args) {
         let extent = self.swapchain.extent;
@@ -251,11 +251,11 @@ impl VkContext {
             .upload
             .reserve(&self.hw.alloc, frame_idx, text_bytes)?;
 
-        let args = VkCompositeArgs {
+        let args = CompositeArgs {
             image_index: image_index as usize,
             frame_idx,
             reactive_valid,
         };
-        fullscreen::encode_composite_chain(&VkComposite { ctx: self }, rec, &args, text_calls)
+        fullscreen::encode_composite_chain(&CompositePass { ctx: self }, rec, &args, text_calls)
     }
 }

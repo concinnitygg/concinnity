@@ -27,14 +27,14 @@ use super::pso::{Blend, Depth, GraphicsPso, Raster};
 use super::root_sig::{RootSig, SamplerState, Visibility};
 use super::texture::HDR_FORMAT;
 
-pub(in crate::directx) struct DxSky {
+pub(in crate::directx) struct SkyState {
     root_sig: ID3D12RootSignature,
     pso: ID3D12PipelineState,
     // The world draws its environment map as the background.
     background: bool,
 }
 
-impl DxSky {
+impl SkyState {
     pub(in crate::directx) fn build(
         device: &ID3D12Device,
         msaa_samples: u32,

@@ -9,9 +9,9 @@ use concinnity_engine::render::backend::init::SceneData;
 use concinnity_engine::render::light::ltc;
 
 use super::InitGpu;
-use crate::vulkan::context::{VkAreaLight, VkGeometry, VkUniforms};
+use crate::vulkan::context::{AreaLightState, Geometry, Uniforms};
 use crate::vulkan::draw::{upload_light_uniforms, upload_static_records};
-use crate::vulkan::light_cull::VkLightCull;
+use crate::vulkan::light_cull::LightCullState;
 use crate::vulkan::resources::upload_geometry_buffer;
 use crate::vulkan::texture::upload_float_lut;
 
@@ -24,7 +24,7 @@ use crate::vulkan::texture::upload_float_lut;
 pub(super) fn build_area_lights(
     gpu: &InitGpu<'_>,
     area_lights: &[AreaLightData],
-) -> RenderResult<VkAreaLight> {
+) -> RenderResult<AreaLightState> {
     let hw = gpu.hw;
     let area_light_data = if area_lights.is_empty() {
         vec![AreaLightData::ZERO]
@@ -42,7 +42,7 @@ pub(super) fn build_area_lights(
     let ltc_upload = gpu.upload();
     let ltc_matrix = upload_float_lut(&ltc_upload, ltc_size, 4, ltc::matrix_texels())?;
     let ltc_magnitude = upload_float_lut(&ltc_upload, ltc_size, 2, ltc::magnitude_texels())?;
-    Ok(VkAreaLight {
+    Ok(AreaLightState {
         buffer,
         ltc_matrix,
         ltc_magnitude,
@@ -61,7 +61,7 @@ pub(super) struct SceneInputs<'a> {
 pub(super) fn build_scene_resources(
     gpu: &InitGpu<'_>,
     inputs: SceneInputs<'_>,
-) -> RenderResult<(VkGeometry, VkUniforms, VkLightCull)> {
+) -> RenderResult<(Geometry, Uniforms, LightCullState)> {
     let InitGpu {
         hw,
         command_pool,
@@ -157,7 +157,7 @@ pub(super) fn build_scene_resources(
         ubo.write_val(0, &canopy);
         canopy_buffers.push(ubo);
     }
-    let canopy_tables = crate::vulkan::canopy::VkCanopyTables::new(alloc, frames)?;
+    let canopy_tables = crate::vulkan::canopy::CanopyTables::new(alloc, frames)?;
     // Static per-scene local-light SSBO; uploaded once below, never per-frame.
     let local_light_buffer = alloc.create_buffer(
         local_light_size,
@@ -182,13 +182,13 @@ pub(super) fn build_scene_resources(
         hot_reload,
     )?;
     Ok((
-        VkGeometry {
+        Geometry {
             vertex_buffer,
             index_buffer,
             vertex_buffer_bytes,
             index_buffer_bytes,
         },
-        VkUniforms {
+        Uniforms {
             view_ubo_buffers,
             probe_set_ubo_buffers,
             light_ubo_buffers,

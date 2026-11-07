@@ -21,13 +21,13 @@ use concinnity_engine::render::backend::error::RenderResult;
 // it mirrors is not live either (or the build failed), in which case the pass
 // keeps the solid pipeline.
 #[derive(Default)]
-pub(super) struct VkWireframe {
+pub(super) struct Wireframe {
     pub(super) bindless: Option<OwnedPipeline>,
     // Set once a build has run so a failure is not retried every frame.
     built: bool,
 }
 
-impl VkWireframe {
+impl Wireframe {
     // Retire every built pipeline, leaving the set unbuilt.
     pub(super) fn destroy(&mut self) {
         *self = Self::default();
@@ -74,7 +74,7 @@ impl VkContext {
         let msaa = self.targets.msaa_samples;
         let format = self.swapchain.format;
         let render_pass = self.targets.main_render_pass.handle();
-        let mut built = VkWireframe {
+        let mut built = Wireframe {
             built: true,
             ..Default::default()
         };

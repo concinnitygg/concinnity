@@ -55,7 +55,7 @@ pub(in crate::vulkan) fn compact_set() -> [Binding; 6] {
 }
 
 // The scan and the scatter over one layout.
-pub(in crate::vulkan) struct VkCompactKernels {
+pub(in crate::vulkan) struct CompactKernels {
     scan: OwnedPipeline,
     scatter: OwnedPipeline,
     layout: OwnedPipelineLayout,
@@ -65,7 +65,7 @@ pub(in crate::vulkan) struct VkCompactKernels {
 pub(in crate::vulkan) fn build_compact_kernels(
     device: &super::owned::VkDevice,
     hot_reload: bool,
-) -> RenderResult<VkCompactKernels> {
+) -> RenderResult<CompactKernels> {
     use super::builtin_shaders::{CULL_SCAN, CULL_SCATTER, CompileProgram as _};
     let set_layout = create_descriptor_set_layout(device, &compact_set())?;
     let push = vk::PushConstantRange::default()
@@ -90,7 +90,7 @@ pub(in crate::vulkan) fn build_compact_kernels(
         &CULL_SCATTER.compile(hot_reload)?,
         "cull scatter",
     )?;
-    Ok(VkCompactKernels {
+    Ok(CompactKernels {
         scan,
         scatter,
         layout,

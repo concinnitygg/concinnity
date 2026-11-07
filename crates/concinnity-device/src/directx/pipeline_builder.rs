@@ -28,7 +28,7 @@ pub(super) struct VolumeRootSigs {
 // What a pipeline is built against beyond the device. A prepared pipeline is
 // swapped in only while the context still matches the targets it was built for.
 #[derive(Clone, PartialEq)]
-pub(super) struct Targets<R> {
+pub(super) struct PipelineTargets<R> {
     pub root_sigs: R,
     pub msaa_samples: u32,
     pub hot_reload: bool,
@@ -40,22 +40,22 @@ pub(super) struct DxPipelineBuilder {
     pub device: ID3D12Device,
     pub info_queue: Option<ID3D12InfoQueue>,
     // `None` when the GPU-driven main pass is not live.
-    pub world: Option<Targets<BucketRootSigs>>,
+    pub world: Option<PipelineTargets<BucketRootSigs>>,
     // `None` when the world declares no volume.
-    pub volumes: Option<Targets<VolumeRootSigs>>,
+    pub volumes: Option<PipelineTargets<VolumeRootSigs>>,
     // Per bucket: which of its Shader's main fragments it draws with.
     pub variants: Vec<SurfaceVariant>,
 }
 
 // A world Shader's main-pass and pre-pass PSOs and what they were built for.
 pub(super) struct PreparedWorldShader {
-    pub targets: Targets<BucketRootSigs>,
+    pub targets: PipelineTargets<BucketRootSigs>,
     pub psos: BucketPsos,
 }
 
 // A volume's PSOs and what they were built for.
 pub(super) struct PreparedVolume {
-    pub targets: Targets<VolumeRootSigs>,
+    pub targets: PipelineTargets<VolumeRootSigs>,
     pub flags: VolumeFlags,
     pub psos: VolumePsos,
 }
@@ -125,7 +125,7 @@ impl PipelineBuilder for DxPipelineBuilder {
 // The world Shader PSOs in `prepared` when they were built for `targets`.
 pub(super) fn world_shader_for(
     prepared: Option<PreparedPipelines>,
-    targets: &Targets<BucketRootSigs>,
+    targets: &PipelineTargets<BucketRootSigs>,
 ) -> Option<BucketPsos> {
     prepared?
         .downcast::<PreparedWorldShader>()
@@ -137,7 +137,7 @@ pub(super) fn world_shader_for(
 // against `targets`.
 pub(super) fn volume_for(
     prepared: Option<PreparedPipelines>,
-    targets: &Targets<VolumeRootSigs>,
+    targets: &PipelineTargets<VolumeRootSigs>,
     flags: VolumeFlags,
 ) -> Option<VolumePsos> {
     prepared?
@@ -154,7 +154,7 @@ mod tests {
     // so one a worker finished after a reload is rebuilt instead.
     #[test]
     fn targets_differ_across_a_template_reload() {
-        let targets = |template_generation| Targets {
+        let targets = |template_generation| PipelineTargets {
             root_sigs: (),
             msaa_samples: 4,
             hot_reload: true,

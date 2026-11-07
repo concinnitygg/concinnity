@@ -20,7 +20,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveReader;
 
 use super::{
-    ImageViewInfo, OutputWrites, UpscaleInputs, UpscaleOutput, UpscalerGpu, VkUpscaleBackend,
+    ImageViewInfo, OutputWrites, UpscaleBackend, UpscaleInputs, UpscaleOutput, UpscalerGpu,
     copy_ext_names, open_library,
 };
 use crate::upscale_sdk::xess::{
@@ -309,7 +309,7 @@ impl XessUpscaler {
     }
 }
 
-impl VkUpscaleBackend for XessUpscaler {
+impl UpscaleBackend for XessUpscaler {
     fn vendor(&self) -> VendorUpscaler {
         VendorUpscaler::Xess
     }

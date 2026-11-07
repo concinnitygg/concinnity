@@ -29,7 +29,9 @@ use super::init::pipelines::{
     BindlessMainShaders, BucketPipelineTargets, BucketPsos, BucketRootSigs, PrepassSource,
     WorldPsoTargets, build_bucket_pipeline, build_prepass_for, build_world_shader_pso,
 };
-use super::pipeline_builder::{DxPipelineBuilder, Targets, VolumeRootSigs, world_shader_for};
+use super::pipeline_builder::{
+    DxPipelineBuilder, PipelineTargets, VolumeRootSigs, world_shader_for,
+};
 
 impl DxContext {
     // One shader bucket's PSOs to replace a bucket that has a pre-pass when
@@ -217,8 +219,8 @@ impl DxContext {
 
     // What a world Shader's PSOs are built against here, or `None` when the
     // GPU-driven main pass is not live.
-    pub(in crate::directx) fn world_pso_targets(&self) -> Option<Targets<BucketRootSigs>> {
-        Some(Targets {
+    pub(in crate::directx) fn world_pso_targets(&self) -> Option<PipelineTargets<BucketRootSigs>> {
+        Some(PipelineTargets {
             root_sigs: BucketRootSigs {
                 main: self.cull.main_bindless_root_sig.clone()?,
                 prepass: self
@@ -235,9 +237,9 @@ impl DxContext {
 
     // What a volume's PSOs are built against here, or `None` when the world
     // has no raymarch pass.
-    pub(in crate::directx) fn volume_pso_targets(&self) -> Option<Targets<VolumeRootSigs>> {
+    pub(in crate::directx) fn volume_pso_targets(&self) -> Option<PipelineTargets<VolumeRootSigs>> {
         let rm = self.raymarch.as_ref()?;
-        Some(Targets {
+        Some(PipelineTargets {
             root_sigs: VolumeRootSigs {
                 root_sig: rm.root_sig.clone(),
                 shadow_root_sig: rm.shadow_root_sig.clone(),

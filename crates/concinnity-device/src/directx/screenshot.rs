@@ -29,11 +29,11 @@ use super::com;
 use super::context::DxContext;
 use super::texture::{one_shot_submit, transition_barrier};
 use crate::directx::error::map_hresult;
-use crate::frame_capture::{self, CaptureImage, FrameCaptures, Mapped, PendingCapture};
+use crate::frame_capture::{self, CaptureImage, Mapped, PendingCapture};
 
 /// The D3D12 backend's frame captures, parked under the fence value their
 /// frame signals.
-pub(crate) type DxFrameCaptures = FrameCaptures<PooledBuffer, u64>;
+pub(crate) type FrameCaptures = frame_capture::FrameCaptures<PooledBuffer, u64>;
 
 impl DxContext {
     // Keep a read-back buffer for the swapchain's footprint ready, so the frame

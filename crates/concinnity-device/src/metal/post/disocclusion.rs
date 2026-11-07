@@ -9,10 +9,10 @@ use concinnity_engine::render::post::disocclusion::{DisocclusionInputs, Disocclu
 
 use crate::metal::context::MtlContext;
 use crate::metal::post::UpscaleState;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 
 // The shared pass, holding Metal's own pipeline and target handles.
-pub(crate) type MtlDisocclusionPass = DisocclusionPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlDisocclusionPass = DisocclusionPass<PostPipeline, PostTarget>;
 
 // The pass, when the scaler reads the reactive mask and the G-buffer pre-pass
 // that the mark reads is built.

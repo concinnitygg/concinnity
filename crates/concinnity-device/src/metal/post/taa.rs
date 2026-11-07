@@ -13,10 +13,10 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;
 
 use crate::metal::context::MtlContext;
-use crate::metal::post::post_device::{MtlPostDevice, MtlPostPipeline, MtlPostTarget};
+use crate::metal::post::post_device::{MtlPostDevice, PostPipeline, PostTarget};
 
 // The shared temporal resolve, holding Metal's own pipeline and target handles.
-pub(crate) type MtlTaaPass = TaaPass<MtlPostPipeline, MtlPostTarget>;
+pub(crate) type MtlTaaPass = TaaPass<PostPipeline, PostTarget>;
 
 // Temporal-anti-aliasing state: whether the effect runs, the shared resolve when
 // it does, and the frame counter driving the Halton projection jitter. The
