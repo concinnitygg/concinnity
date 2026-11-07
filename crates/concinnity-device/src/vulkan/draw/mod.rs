@@ -620,17 +620,9 @@ impl FrameDevice for VkContext {
         frame_params: &FrameParams<'_>,
     ) -> RenderResult<()> {
         let FrameParams {
-            elapsed,
             water_time,
-            fov_y_radians,
-            near,
             cam_pos,
-            text_calls,
-            lines,
-            world_hidden,
-            grass_benders,
             water_stirs,
-            particle_bursts,
             ..
         } = *frame_params;
         let VkFrame {
@@ -705,32 +697,16 @@ impl FrameDevice for VkContext {
         }
 
         let params = GraphFrameParams {
+            plan,
+            frame: frame_params,
             cmd,
             image_index,
             frame_idx,
-            text_calls,
-            lines,
-            world_hidden,
-            frustum: &plan.camera.frustum,
-            cam_pos,
-            vp_mat: plan.camera.vp,
-            cur_vp: plan.camera.cur_vp,
-            fov_y_radians,
-            elapsed,
-            water_time,
-            near,
-            grass_benders,
-            particle_bursts,
             planar: self
                 .planar_reflection
                 .as_ref()
                 .map(|set| set.frame_plan(plan.camera.vp))
                 .unwrap_or_default(),
-            cluster_params: plan.cluster,
-            fog: plan.fog,
-            gbuffer_view: plan.gbuffer_view,
-            effects: plan.effects,
-            reactive: plan.reactive,
         };
         // The per-frame submission order, excluding the outer "end" buffer
         // (`cmd`) the caller appends: the `start` buffer (leading timestamp)

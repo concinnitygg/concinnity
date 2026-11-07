@@ -368,11 +368,11 @@ impl crate::directx::context::DxContext {
         // resting sampled and holding an earlier frame. An upscaler that must
         // have one gets it cleared and moved to the compute read here instead.
         let mask = &self.targets.reactive_mask;
-        let local_mask = !params.reactive.readable && upscaler.reactive_reader().requires();
+        let local_mask = !params.plan.reactive.readable && upscaler.reactive_reader().requires();
         if local_mask {
             mask.clear_outside_graph(cmd);
         }
-        let reactive = (params.reactive.readable || local_mask).then_some(&mask.resource);
+        let reactive = (params.plan.reactive.readable || local_mask).then_some(&mask.resource);
         let dispatched = upscaler.dispatch(
             cmd,
             UpscaleInputs {
@@ -383,9 +383,9 @@ impl crate::directx::context::DxContext {
             },
             UpscaleCamera::new(
                 self.upscale.jitter.get(),
-                narrow_f32(params.elapsed),
-                params.near,
-                params.fov_y_radians,
+                narrow_f32(params.frame.elapsed),
+                params.frame.near,
+                params.frame.fov_y_radians,
                 self.upscale.exposure.value(),
             ),
         );

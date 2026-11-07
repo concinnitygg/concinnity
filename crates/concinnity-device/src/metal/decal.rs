@@ -56,8 +56,8 @@ impl MtlContext {
         &self,
         cmd_buf: &ProtocolObject<dyn objc2_metal::MTLCommandBuffer>,
         vp: [[f32; 4]; 4],
-        // Inverse of `vp`, computed once in `draw_frame` and shared across the
-        // depth-reconstruction passes; see `GraphFrameParams::inv_vp`.
+        // Inverse of `vp`, computed once by the frame plan and shared across the
+        // depth-reconstruction passes; see `FrameCamera::inv_vp`.
         inv_vp: [[f32; 4]; 4],
         frustum: &Frustum,
     ) -> RenderResult<u32> {

@@ -205,7 +205,7 @@ impl DxContext {
             vp: [[0.0; 4]; 4],
             view: [[0.0; 4]; 4],
             cam_pos: eye,
-            elapsed: narrow_f32(params.elapsed),
+            elapsed: narrow_f32(params.frame.elapsed),
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),

@@ -179,7 +179,7 @@ impl MtlContext {
                     resolve_slice: face,
                 },
                 MainPassCamera {
-                    elapsed: narrow_f32(params.elapsed),
+                    elapsed: narrow_f32(params.frame.elapsed),
                     vp: capture::face_view_projection(eye, face),
                     view: capture::face_view_matrix(eye, face),
                     cam_pos: eye,

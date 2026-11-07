@@ -9,9 +9,7 @@
 //!   ../post/{bloom,taa,ssao}.rs    pipeline + targets + encoder, co-located
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::gfx::render_types::{
-    LightUniforms, LineVertex, ShadowUniforms, TextDrawCall,
-};
+use concinnity_engine::gfx::render_types::{LightUniforms, ShadowUniforms};
 use concinnity_engine::profile::FrameSpans;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::pass_timing;
@@ -49,26 +47,6 @@ pub(super) struct RecordFrameTargets<'a> {
     pub back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
     // Frame-in-flight slot for per-frame resource indexing.
     pub frame_idx: usize,
-}
-
-// Per-frame camera / view state plus the overlay text drawn with it.
-#[derive(Clone, Copy)]
-pub(super) struct RecordFrameView<'a> {
-    // Seconds since the world started, narrowed to f32 where a pass needs no
-    // more.
-    pub elapsed: f64,
-    // The simulated instant the water is drawn at.
-    pub water_time: f64,
-    pub fov_y_radians: f32,
-    pub near: f32,
-    pub cam_pos: [f32; 3],
-    pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons. Empty whenever nothing published
-    // lines, which also drops the pass from the graph.
-    pub lines: &'a [LineVertex],
-    // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
-    pub particle: Option<concinnity_engine::render::particles::ParticleFrame>,
 }
 
 // Scene render resolution (every scene pass) plus output resolution (composite).
@@ -180,10 +158,10 @@ impl DxContext {
     pub(super) fn record_frame(
         &self,
         targets: RecordFrameTargets<'_>,
-        view: RecordFrameView<'_>,
         resolution: RecordFrameResolution,
         plan: &FramePlan,
-        world_hidden: bool,
+        frame: &FrameParams<'_>,
+        particle: Option<concinnity_engine::render::particles::ParticleFrame>,
     ) -> RenderResult<RecordedFrame> {
         let RecordFrameTargets {
             cmd: end_cmd,
@@ -191,17 +169,13 @@ impl DxContext {
             back_buffer_rtv,
             frame_idx,
         } = targets;
-        let RecordFrameView {
-            elapsed,
-            water_time,
+        let FrameParams {
             fov_y_radians,
-            near,
+            water_time,
             cam_pos,
-            text_calls,
             lines,
-            grass_benders,
-            particle,
-        } = view;
+            ..
+        } = *frame;
         let RecordFrameResolution {
             width,
             height,
@@ -327,43 +301,29 @@ impl DxContext {
         let prime_model_history = frame_graph.pass(PassId::GBufferPrepass).is_some()
             && self.state.model_history.borrow_mut().take_prime();
         let frame_params = GraphFrameParams {
+            plan,
+            frame,
             cmd: end_cmd,
             frame_idx,
             back_buffer,
             back_buffer_rtv,
-            text_calls,
             lines,
-            world_hidden,
             scene_srv,
             width,
             height,
             output_width,
             output_height,
-            cam_pos,
             shadow_ubo_gva,
             view_gva,
             light_gva,
             local_lights_gva,
-            vp_mat: plan.camera.vp,
-            cur_vp: plan.camera.cur_vp,
-            frustum: &plan.camera.frustum,
-            fov_y_radians,
-            elapsed,
-            water_time,
-            near,
             prime_model_history,
-            grass_benders,
             particle,
             planar: self
                 .planar_reflection
                 .as_ref()
                 .map(|set| set.frame_plan(plan.camera.vp))
                 .unwrap_or_default(),
-            cluster_params: plan.cluster,
-            fog: plan.fog,
-            gbuffer_view: plan.gbuffer_view,
-            effects: plan.effects,
-            reactive: plan.reactive,
         };
         let mut pass_cmd_lists = self.pass_lists.take();
         pass_cmd_lists.clear();

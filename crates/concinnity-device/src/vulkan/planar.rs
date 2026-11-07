@@ -813,14 +813,14 @@ impl VkContext {
         // reflection aligned with the reflective fragment's screen-space sample.
         let frame = MirrorFrame::new(
             self.state.view.matrix,
-            params.vp_mat,
-            params.cam_pos,
+            params.plan.camera.vp,
+            params.plan.cam_pos,
             self.state.view.view_distance,
             (set.width, set.height),
         );
         let storage = FaceStorage::mirror(&self.pre_exposure);
         let shading = MirrorShading {
-            elapsed: narrow_f32(params.elapsed),
+            elapsed: narrow_f32(params.frame.elapsed),
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),
@@ -867,7 +867,7 @@ impl VkContext {
             );
             let cluster_params = mirror.cluster_params(
                 &frame,
-                &params.cluster_params,
+                &params.plan.cluster,
                 self.state.lights.cluster_reach(),
                 self.state.probes.records(),
             );

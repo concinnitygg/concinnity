@@ -1304,13 +1304,7 @@ impl FrameDevice for DxContext {
         let FrameParams {
             elapsed: elapsed_f64,
             water_time,
-            fov_y_radians,
-            near,
             cam_pos,
-            text_calls,
-            lines,
-            world_hidden,
-            grass_benders,
             water_stirs,
             particle_bursts,
             ..
@@ -1369,17 +1363,6 @@ impl FrameDevice for DxContext {
                 back_buffer_rtv,
                 frame_idx: frame,
             },
-            crate::directx::draw::RecordFrameView {
-                elapsed: elapsed_f64,
-                water_time,
-                fov_y_radians,
-                near,
-                cam_pos,
-                text_calls,
-                lines,
-                grass_benders,
-                particle,
-            },
             crate::directx::draw::RecordFrameResolution {
                 width: self.targets.extent.render_width.max(1),
                 height: self.targets.extent.render_height.max(1),
@@ -1387,7 +1370,8 @@ impl FrameDevice for DxContext {
                 output_height: self.targets.extent.output_height.max(1),
             },
             plan,
-            world_hidden,
+            frame_params,
+            particle,
         )?;
 
         let end_cmd = self.commands.end_command_lists[frame].clone();

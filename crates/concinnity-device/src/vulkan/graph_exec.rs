@@ -30,19 +30,17 @@
 
 use ash::{Device, vk};
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::gfx::frustum::Frustum;
-use concinnity_engine::gfx::render_types::{ClusterParams, LineVertex, TextDrawCall};
 use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
+use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_engine::render::temporal::reactive_mask::{ReactiveMaskPlan, ReactiveWrite};
-use concinnity_engine::render::uniforms::GBufferView;
+use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::{backend::pass_timing, render_graph};
 use concinnity_host::thread::jobs;
 
@@ -468,73 +466,18 @@ fn debug_assert_graph_drives(graph: &CompiledGraph, registry: &BarrierRegistry) 
 }
 
 // Per-frame params the executor threads into each pass's `encode_*`
-// method. Composite needs the swapchain image index + text calls, Shadow
-// needs neither (it reads per-frame state straight off `&self`), Cull needs
-// the frustum + camera position.
+// method.
 pub(in crate::vulkan) struct GraphFrameParams<'a> {
-    // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
-    // The particle bursts systems asked for this frame.
-    pub particle_bursts: &'a [concinnity_engine::render::particles::ParticleBurst],
+    // The frame as planned, and the host's inputs it was planned from.
+    pub plan: &'a FramePlan,
+    pub frame: &'a FrameParams<'a>,
     pub cmd: vk::CommandBuffer,
     pub image_index: u32,
     pub frame_idx: usize,
-    pub text_calls: &'a [TextDrawCall],
-    // This frame's expanded line ribbons, consumed by the Lines pass. Empty
-    // whenever nothing published lines, in which case the graph carries no
-    // Lines node either.
-    pub lines: &'a [LineVertex],
-    // An opaque menu backdrop hides the scene: the Main pass clears its target
-    // and skips every draw (the masked graph drops all other world passes), so
-    // nothing of the world renders behind the menu.
-    pub world_hidden: bool,
-    // Camera frustum, culling the cull dispatch's records and the decal and
-    // planar-reflection passes' own per-object lists.
-    pub frustum: &'a Frustum,
-    // Camera world-space position, for the same passes' distance culls and LOD
-    // picks.
-    pub cam_pos: [f32; 3],
-    // Jittered view-projection matrix (with TAA Halton jitter when
-    // TAA is on). Consumed by the G-buffer pre-pass to rasterize the
-    // normal+depth / roughness / velocity MRT.
-    pub vp_mat: [[f32; 4]; 4],
-    // Un-jittered current-frame view-projection matrix. The G-buffer
-    // pre-pass uses it (alongside `vp_mat` for the jittered VP and the
-    // prior frame's `view_history` stored on `GbufferResources`) so the
-    // stored motion vector is free of sub-pixel jitter. `Default::default()`
-    // for frames where the velocity channel isn't dispatched.
-    pub cur_vp: [[f32; 4]; 4],
-    // Vertical FOV in radians, which the temporal upscaler linearizes depth
-    // with.
-    pub fov_y_radians: f32,
-    // Frame-global elapsed seconds. The particle encoder needs it to
-    // derive `dt` from the last-frame snapshot it stashed in a `Cell`;
-    // the compute kernel multiplies dt against `spawn_rate` and the
-    // integration step. Narrowed at each use.
-    pub elapsed: f64,
-    // The simulated instant the water is drawn at.
-    pub water_time: f64,
-    // Camera near-plane in view units. The FogFroxel kernel needs it to map
-    // each Z slab onto the linear-Z `[near, max_distance]` volume range, and
-    // the temporal-upscale dispatch (FSR; DLSS / XeSS ignore it) needs it with
-    // the FOV to linearize depth for its reprojection.
-    pub near: f32,
     // Which planar mirrors this frame renders, and the screen rectangle each
-    // covers; computed once from `vp_mat` so the mirror pass and the transparent
-    // pass that samples it agree.
+    // covers; computed once from the camera so the mirror pass and the
+    // transparent pass that samples it agree.
     pub planar: PlanarFramePlan,
-    // The main camera's cluster params, which each mirror render re-aims
-    // through its reflected view.
-    pub cluster_params: ClusterParams,
-    // The fog's blocks, when fog contributes.
-    pub fog: Option<FogBlocks>,
-    // The G-buffer pre-pass's view block.
-    pub gbuffer_view: GBufferView,
-    // The screen-space effects' blocks.
-    pub effects: EffectBlocks,
-    // How the particle and transparent passes treat the reactive mask, and
-    // whether TAA, the upscaler or the reactive view reads it.
-    pub reactive: ReactiveMaskPlan,
 }
 
 impl VkContext {
@@ -559,10 +502,10 @@ impl VkContext {
         // worker) never mutates the particle `Cell`s. `None` when the pass is
         // inert.
         let particle_frame = self.prepare_particle_pass(
-            narrow_f32(params.elapsed),
-            params.particle_bursts,
+            narrow_f32(params.frame.elapsed),
+            params.frame.particle_bursts,
             params.frame_idx,
-            params.vp_mat,
+            params.plan.camera.vp,
         );
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
@@ -574,11 +517,11 @@ impl VkContext {
             .then(|| {
                 self.prepare_grass_frame(super::grass::GrassRequest {
                     frame_idx: params.frame_idx,
-                    cam_pos: params.cam_pos,
-                    vp: params.cur_vp,
-                    elapsed: narrow_f32(params.elapsed),
+                    cam_pos: params.plan.cam_pos,
+                    vp: params.plan.camera.cur_vp,
+                    elapsed: narrow_f32(params.frame.elapsed),
                     cast: graph.pass(PassId::GrassShadow).is_some(),
-                    benders: params.grass_benders,
+                    benders: params.frame.grass_benders,
                 })
             })
             .flatten();
@@ -904,7 +847,12 @@ impl VkContext {
     ) -> RenderResult<()> {
         match pass_id {
             PassId::Cull => {
-                self.encode_cull(rec, params.frame_idx, params.frustum, params.cam_pos);
+                self.encode_cull(
+                    rec,
+                    params.frame_idx,
+                    &params.plan.camera.frustum,
+                    params.plan.cam_pos,
+                );
                 // Pose the skinned objects' deformed-vertex buffer for this frame
                 // (a no-op when no skinned mesh is folded in). Independent of the
                 // cull; both feed Main, which the toposort orders after Cull.
@@ -923,7 +871,7 @@ impl VkContext {
                 // The single graph node for the bundled `encode_ssao`
                 // dispatch: encodes the GTAO depth copy, kernel + depth-aware
                 // blur over the unified pre-pass's normal+depth.
-                self.encode_ssao(rec, params.frame_idx, params.effects.ssao.as_ref())?;
+                self.encode_ssao(rec, params.frame_idx, params.plan.effects.ssao.as_ref())?;
             }
             PassId::Grass => {
                 if let Some(frame) = grass_frame {
@@ -941,13 +889,13 @@ impl VkContext {
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(rec, params.frame_idx, params.effects.ssr.as_ref());
+                self.encode_ssr_resolve(rec, params.frame_idx, params.plan.effects.ssr.as_ref());
             }
             PassId::Ssgi => {
-                self.encode_ssgi(rec, params.frame_idx, params.effects.ssgi.as_ref());
+                self.encode_ssgi(rec, params.frame_idx, params.plan.effects.ssgi.as_ref());
             }
             PassId::SsgiResolve => {
-                self.encode_ssgi_resolve(rec, params.frame_idx, params.effects.ssgi.as_ref());
+                self.encode_ssgi_resolve(rec, params.frame_idx, params.plan.effects.ssgi.as_ref());
             }
             PassId::Disocclusion => self.encode_disocclusion(rec, params.frame_idx)?,
             PassId::RtReflections => {
@@ -958,10 +906,10 @@ impl VkContext {
                 // `FrameGraphInputs::rt_reflections_enabled`
                 // (`ReflectionPath::rt_node`). The per-frame TLAS update +
                 // descriptor re-point already ran on the outer "start" buffer.
-                self.encode_rt_reflections(rec, params.frame_idx, params.effects.rt.as_ref());
+                self.encode_rt_reflections(rec, params.frame_idx, params.plan.effects.rt.as_ref());
             }
             PassId::TaaResolve => {
-                self.encode_taa(rec, params.frame_idx, params.reactive.readable);
+                self.encode_taa(rec, params.frame_idx, params.plan.reactive.readable);
             }
             PassId::Upscale => {
                 self.encode_upscale(rec, params)?;
@@ -973,8 +921,8 @@ impl VkContext {
                 self.encode_shadow_pass(
                     rec,
                     params.frame_idx,
-                    params.cam_pos,
-                    narrow_f32(params.elapsed),
+                    params.plan.cam_pos,
+                    narrow_f32(params.frame.elapsed),
                     grass_frame,
                 );
             }
@@ -982,31 +930,46 @@ impl VkContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(rec, params.frame_idx, params.cam_pos);
+                self.encode_spot_shadow_pass(rec, params.frame_idx, params.plan.cam_pos);
             }
             PassId::Main => {
-                self.encode_main_pass(rec, params.frame_idx, params.world_hidden, grass_frame);
+                self.encode_main_pass(
+                    rec,
+                    params.frame_idx,
+                    params.frame.world_hidden,
+                    grass_frame,
+                );
             }
             PassId::Composite => {
                 self.encode_composite_and_text(
                     rec,
                     params.image_index,
                     params.frame_idx,
-                    params.text_calls,
-                    params.reactive.readable,
+                    params.frame.text_calls,
+                    params.plan.reactive.readable,
                 )?;
             }
             PassId::Decals => {
-                self.encode_decals(rec, params.frame_idx, params.vp_mat, params.frustum);
+                self.encode_decals(
+                    rec,
+                    params.frame_idx,
+                    params.plan.camera.vp,
+                    &params.plan.camera.frustum,
+                );
             }
             PassId::Lines => {
-                self.encode_lines(rec, params.frame_idx, params.vp_mat, params.lines);
+                self.encode_lines(
+                    rec,
+                    params.frame_idx,
+                    params.plan.camera.vp,
+                    params.frame.lines,
+                );
             }
             PassId::FogFroxel => {
                 // Populate the screen-aligned 3D scatter/transmittance volume
                 // the `Fog` render pass samples. The shared graph seeds this
                 // before `Fog` (RAW edge on the froxel volume handle).
-                let blocks = params.fog.as_ref().ok_or_else(|| {
+                let blocks = params.plan.fog.as_ref().ok_or_else(|| {
                     RenderError::Other(
                         "graph executor (vulkan): FogFroxel without fog blocks".into(),
                     )
@@ -1017,7 +980,9 @@ impl VkContext {
                 self.encode_fog(rec, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(rec, params.frame_idx)?,
-            PassId::WaterSim => self.encode_water_sim(rec, params.frame_idx, params.water_time),
+            PassId::WaterSim => {
+                self.encode_water_sim(rec, params.frame_idx, params.frame.water_time);
+            }
             PassId::AerialPerspective => self.encode_aerial_perspective(rec, params.frame_idx),
             PassId::Clouds => self.encode_clouds(rec, params.frame_idx),
             PassId::CloudComposite => self.encode_cloud_composite(rec, params.frame_idx),
@@ -1035,13 +1000,13 @@ impl VkContext {
                 }
             }
             PassId::ParticlesDraw => {
-                let write = params.reactive.particles;
+                let write = params.plan.reactive.particles;
                 let drew = particle_frame.is_some_and(|frame| {
                     self.encode_particles_draw(
                         rec,
                         params.frame_idx,
                         *frame,
-                        params.frustum,
+                        &params.plan.camera.frustum,
                         ParticleStage {
                             mask: write,
                             late: false,
@@ -1060,9 +1025,9 @@ impl VkContext {
                         rec,
                         params.frame_idx,
                         *frame,
-                        params.frustum,
+                        &params.plan.camera.frustum,
                         ParticleStage {
-                            mask: params.reactive.late_particles,
+                            mask: params.plan.reactive.late_particles,
                             late: true,
                         },
                     );
@@ -1073,11 +1038,11 @@ impl VkContext {
                 // jittered VP (the matrix the main pass rasterized depth with)
                 // so the reprojected hit depth shares the scene's depth space.
                 let view = self.build_raymarch_view(
-                    params.vp_mat,
-                    params.cam_pos,
-                    narrow_f32(params.elapsed),
+                    params.plan.camera.vp,
+                    params.plan.cam_pos,
+                    narrow_f32(params.frame.elapsed),
                 );
-                self.encode_raymarch(rec, params.frame_idx, &view, params.frustum)?;
+                self.encode_raymarch(rec, params.frame_idx, &view, &params.plan.camera.frustum)?;
             }
             PassId::PropProbe => self.encode_prop_probe(rec, params)?,
             PassId::PlanarReflection => {
@@ -1097,17 +1062,21 @@ impl VkContext {
                 // record's clip-space depth matches the stored main-depth the
                 // fragment shader tests against.
                 let view = self.build_transparent_view(
-                    params.vp_mat,
-                    params.cam_pos,
-                    narrow_f32(params.elapsed),
+                    params.plan.camera.vp,
+                    params.plan.cam_pos,
+                    narrow_f32(params.frame.elapsed),
                 );
-                let write = params.reactive.transparent;
-                self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
+                let write = params.plan.reactive.transparent;
+                self.advance_transparent_water(
+                    params.frame_idx,
+                    params.frame.water_time,
+                    params.plan.cam_pos,
+                );
                 let drew = self.encode_transparent(
                     rec,
                     params.frame_idx,
                     &view,
-                    params.effects.rt.as_ref(),
+                    params.plan.effects.rt.as_ref(),
                     write,
                 )?;
                 if !drew && write == ReactiveWrite::Clear {
@@ -1126,9 +1095,9 @@ impl VkContext {
                 self.encode_cull_late(
                     rec,
                     params.frame_idx,
-                    params.frustum,
-                    params.cam_pos,
-                    params.cur_vp,
+                    &params.plan.camera.frustum,
+                    params.plan.cam_pos,
+                    params.plan.camera.cur_vp,
                 );
             }
             PassId::MainLate => {
@@ -1138,9 +1107,9 @@ impl VkContext {
                 // Unified geometry pre-pass: one jittered traversal writes
                 // normal+depth, roughness, and motion for every screen-space
                 // consumer (SSR / SSAO / SSGI / TAA / FSR), replacing the
-                // separate SSR / SSAO / velocity pre-passes. `params.vp_mat` is
+                // separate SSR / SSAO / velocity pre-passes. `params.plan.camera.vp` is
                 // the jittered VP (rasterization, matching the main pass);
-                // `params.cur_vp` is the un-jittered VP the shader uses with the
+                // `params.plan.camera.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel carries
                 // real motion only when a consumer reads it (TAA, FSR or SSGI);
                 // otherwise cur == prev and it stays a harmless zero. The merged
@@ -1158,12 +1127,12 @@ impl VkContext {
                     rec,
                     params.frame_idx,
                     GbufferPrepassView {
-                        jittered_vp: params.vp_mat,
-                        elapsed: narrow_f32(params.elapsed),
-                        cam_pos: params.cam_pos,
-                        frustum: params.frustum,
+                        jittered_vp: params.plan.camera.vp,
+                        elapsed: narrow_f32(params.frame.elapsed),
+                        cam_pos: params.plan.cam_pos,
+                        frustum: &params.plan.camera.frustum,
                     },
-                    &params.gbuffer_view,
+                    &params.plan.gbuffer_view,
                     grass_frame,
                 );
             }

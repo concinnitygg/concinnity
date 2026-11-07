@@ -75,12 +75,9 @@
 
 use concinnity_core::fanout::FanOut as _;
 use concinnity_core::math::narrow_f32;
-use concinnity_engine::gfx::frustum::Frustum;
-use concinnity_engine::gfx::render_types::{
-    ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams, SsrParams,
-    TextDrawCall,
-};
+use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 #[cfg(debug_assertions)]
@@ -89,8 +86,7 @@ use concinnity_engine::render::render_graph::{
     BatchRecorder, CompiledGraph, CompiledPass, PassId, PassQueue, PassScratch, batch_budget,
     execute_batches, plan_batches, presenter_index,
 };
-use concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan;
-use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::render::uniforms::PassCamera;
 use concinnity_host::thread::jobs;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -127,36 +123,20 @@ pub(in crate::metal) struct GraphSubmission {
 // solely on the main thread for the Composite pass and the present /
 // completion handler attached by `draw_frame`.
 pub(in crate::metal) struct GraphFrameParams<'a> {
+    // The frame as planned, and the host's inputs it was planned from.
+    pub plan: &'a FramePlan,
+    pub frame: &'a FrameParams<'a>,
     pub cmd_buf: &'a ProtocolObject<dyn MTLCommandBuffer>,
-    // The particle bursts systems asked for this frame.
-    pub particle_bursts: &'a [concinnity_engine::render::particles::ParticleBurst],
-    pub cam_pos: [f32; 3],
     pub skinned_joint_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     // Per-skinned-object morph weights for this frame, from the same ring slot
     // as `skinned_joint_bufs`. Read only by the Cull pass's skin fold.
     pub skinned_morph_weight_bufs: &'a [Retained<ProtocolObject<dyn MTLBuffer>>],
     pub scene_color: Option<&'a Retained<ProtocolObject<dyn MTLTexture>>>,
-    pub text_calls: &'a [TextDrawCall],
     // This frame's transient-buffer ring slot (`frame_ring_index % frames_in_flight`).
     // The auto-exposure pass writes the readback buffer at this slot.
     pub ring_slot: usize,
-    // An opaque menu backdrop hides the scene: the Main pass runs as a bare
-    // clear (it is the only surviving world pass in the masked graph), skipping
-    // every geometry sub-path so nothing of the world draws behind the menu.
-    pub world_hidden: bool,
-    // Seconds since the world started, which each pass narrows to f32 where
-    // it needs no more.
-    pub elapsed: f64,
-    // The simulated instant the water is drawn at.
-    pub water_time: f64,
-    pub vp: [[f32; 4]; 4],
-    // Inverse of `vp`, computed once in `draw_frame` and shared by every pass
-    // that reconstructs world-space position from depth (fog / decals /
-    // raymarch / transparent) instead of each re-inverting `vp`.
-    pub inv_vp: [[f32; 4]; 4],
-    pub frustum: &'a Frustum,
     // Which planar mirrors this frame renders, and the screen rectangle each
-    // covers; computed once from `vp` so the mirror pass and the transparent
+    // covers; computed once from the camera so the mirror pass and the transparent
     // pass that samples it agree.
     pub planar: PlanarFramePlan,
     pub object_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
@@ -185,11 +165,6 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // executeCommandsInBuffer. `Some` only when bindless cull ran this
     // frame (i.e. matches `FrameGraphInputs::bindless_cull_enabled`).
     pub draw_args_buffer: Option<&'a Retained<ProtocolObject<dyn MTLBuffer>>>,
-    // The G-buffer pre-pass's view block: motion matrices and the previous
-    // clock, collapsed onto this frame's own when `velocity_active` is unset.
-    pub gbuffer_view: &'a GBufferView,
-    // A consumer reads the pre-pass's motion this frame.
-    pub velocity_active: bool,
     // This frame's grass inputs. `Some` only when the `Grass` pass is in the
     // graph this frame (matches `FrameGraphInputs::grass_enabled`).
     pub grass: Option<&'a super::grass::GrassFrame>,
@@ -197,40 +172,13 @@ pub(in crate::metal) struct GraphFrameParams<'a> {
     // output when SSR is on, otherwise the raw `hdr_resolve`). `Some`
     // only when the `TaaResolve` pass is in the graph this frame.
     pub scene_pre_taa: Option<&'a Retained<ProtocolObject<dyn MTLTexture>>>,
-    // SSR ray-march params (96 B, copy-able). `Some` only when the
-    // `SsrResolve` pass is in the graph this frame (matches
-    // `FrameGraphInputs::ssr_enabled`).
-    pub ssr_params: Option<&'a SsrParams>,
-    // Volumetric-fog pass uniforms. `Some` only when the `Fog` pass is
-    // in the graph this frame (matches `FrameGraphInputs::fog_enabled`).
-    pub fog_params: Option<&'a FogParams>,
-    // Metal-only froxel-volume extras (view matrix + volume dims +
-    // near/far). `Some` only when `Fog` is in the graph this frame; the
-    // FogFroxel compute pass + the Fog fragment shader sample path both
-    // consume it.
-    pub fog_froxel_params: Option<&'a FogFroxelParams>,
-    // Clustered light-binning params. `Some` only when the `LightCull` pass is
-    // in the graph this frame (matches `FrameGraphInputs::clustering_enabled`).
-    pub cluster_params: Option<&'a ClusterParams>,
-    // SSAO kernel + blur params. `Some` only when the `SsaoBlur` pass
-    // is in the graph this frame (matches `FrameGraphInputs::ssao_enabled`).
-    pub ssao_params: Option<&'a SsaoParams>,
-    // SSGI resolve, pyramid and trace params. `Some` whenever SSGI is built,
-    // which covers every frame its `SsgiResolve` or `Ssgi` pass is in the graph.
-    pub ssgi_params: Option<&'a SsgiParams>,
-    // RT-reflection params (camera + sun + tunables). `Some` only when the
-    // `RtReflections` pass is in the graph this frame (matches
-    // `FrameGraphInputs::rt_reflections_enabled`).
-    pub rt_reflection_params: Option<&'a RtParams>,
-    // How the particle and transparent passes treat the reactive mask, and
-    // whether TAA or the upscaler reads it.
-    pub reactive: ReactiveMaskPlan,
 }
 
 // SAFETY: see the type-level docs. The non-Sync `cmd_buf` field is used
 // exclusively on the main thread (Composite + present + completion
 // handler); every worker spawned by `execute_graph` mints its own cmd buf.
-// All other fields are Sync (POD or thread-safe Apple Metal handles).
+// All other fields are Sync (POD, thread-safe Apple Metal handles, or shared
+// engine frame borrows).
 unsafe impl Send for GraphFrameParams<'_> {}
 // SAFETY: as for `Send` above.
 unsafe impl Sync for GraphFrameParams<'_> {}
@@ -371,8 +319,8 @@ impl MtlContext {
         // build the (dt, frame_index, per-emitter spawn budgets) tuple
         // once here and stash it for the match arm below.
         let particle_frame = self.prepare_particle_pass(
-            narrow_f32(params.elapsed),
-            params.particle_bursts,
+            narrow_f32(params.frame.elapsed),
+            params.frame.particle_bursts,
             params.ring_slot,
         );
         self.diagnostics
@@ -533,14 +481,14 @@ impl MtlContext {
     // frame's IBL and sky rotation.
     fn pass_camera(&self, params: &GraphFrameParams<'_>) -> PassCamera {
         PassCamera {
-            vp: params.vp,
-            inv_vp: params.inv_vp,
-            cam_pos: params.cam_pos,
+            vp: params.plan.camera.vp,
+            inv_vp: params.plan.camera.inv_vp,
+            cam_pos: params.plan.cam_pos,
             viewport: [
                 self.targets.hdr.width as f32,
                 self.targets.hdr.height as f32,
             ],
-            time: narrow_f32(params.elapsed),
+            time: narrow_f32(params.frame.elapsed),
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
@@ -582,17 +530,17 @@ impl MtlContext {
                     cmd_buf,
                     object_buffer,
                     draw_args_buffer,
-                    params.frustum,
-                    params.cam_pos,
+                    &params.plan.camera.frustum,
+                    params.plan.cam_pos,
                 )?
             }
             PassId::MainLate => self.encode_main_pass_late(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
-                    elapsed: narrow_f32(params.elapsed),
-                    vp: params.vp,
+                    elapsed: narrow_f32(params.frame.elapsed),
+                    vp: params.plan.camera.vp,
                     view: self.state.view.matrix,
-                    cam_pos: params.cam_pos,
+                    cam_pos: params.plan.cam_pos,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,
@@ -630,10 +578,10 @@ impl MtlContext {
             PassId::Main => self.encode_main_pass(
                 cmd_buf,
                 crate::metal::draw::main::MainPassCamera {
-                    elapsed: narrow_f32(params.elapsed),
-                    vp: params.vp,
+                    elapsed: narrow_f32(params.frame.elapsed),
+                    vp: params.plan.camera.vp,
                     view: self.state.view.matrix,
-                    cam_pos: params.cam_pos,
+                    cam_pos: params.plan.cam_pos,
                 },
                 crate::metal::draw::main::GpuFrameBuffers {
                     object_buffer: params.object_buffer,
@@ -644,7 +592,7 @@ impl MtlContext {
                     regions: self.main_regions(),
                 },
                 crate::metal::draw::main::MainPassExtras {
-                    world_hidden: params.world_hidden,
+                    world_hidden: params.frame.world_hidden,
                     grass: params.grass,
                 },
             )?,
@@ -674,22 +622,22 @@ impl MtlContext {
                 // un-jittered cur/prev VPs drive the motion vector.
                 let main_view =
                     self.main_view_uniforms(&crate::metal::draw::main::MainPassCamera {
-                        elapsed: narrow_f32(params.elapsed),
-                        vp: params.vp,
+                        elapsed: narrow_f32(params.frame.elapsed),
+                        vp: params.plan.camera.vp,
                         view: self.state.view.matrix,
-                        cam_pos: params.cam_pos,
+                        cam_pos: params.plan.cam_pos,
                     });
                 let raymarch_view = super::raymarch::RaymarchView::for_gbuffer(
                     &self.pass_camera(params),
-                    params.gbuffer_view,
+                    &params.plan.gbuffer_view,
                 );
                 self.encode_gbuffer_prepass(
                     cmd_buf,
                     crate::metal::post::gbuffer::GbufferPrepassViews {
-                        gbuffer: params.gbuffer_view,
+                        gbuffer: &params.plan.gbuffer_view,
                         main: &main_view,
                         raymarch: &raymarch_view,
-                        frustum: params.frustum,
+                        frustum: &params.plan.camera.frustum,
                     },
                     crate::metal::post::gbuffer::GbufferGpuBuffers {
                         object_buffer: params.object_buffer,
@@ -702,31 +650,42 @@ impl MtlContext {
                         deformed_prev: params.deformed_prev,
                         grass: params.grass,
                     },
-                    params.velocity_active,
+                    params.plan.motion_read,
                 )?
             }
             PassId::TaaResolve => {
                 let scene_pre_taa =
                     pass_input(params.scene_pre_taa, PassId::TaaResolve, "scene_pre_taa")?;
-                self.encode_taa(cmd_buf, scene_pre_taa, params.reactive.readable)?
+                self.encode_taa(cmd_buf, scene_pre_taa, params.plan.reactive.readable)?
             }
             PassId::SsrResolve => {
-                let ssr_params = pass_input(params.ssr_params, PassId::SsrResolve, "ssr_params")?;
+                let ssr_params = pass_input(
+                    params.plan.effects.ssr.as_ref(),
+                    PassId::SsrResolve,
+                    "ssr_params",
+                )?;
                 self.encode_ssr_resolve(cmd_buf, ssr_params)?
             }
             PassId::Ssgi => {
-                let ssgi_params = pass_input(params.ssgi_params, PassId::Ssgi, "ssgi_params")?;
+                let ssgi_params = pass_input(
+                    params.plan.effects.ssgi.as_ref(),
+                    PassId::Ssgi,
+                    "ssgi_params",
+                )?;
                 self.encode_ssgi(cmd_buf, ssgi_params)?
             }
             PassId::SsgiResolve => {
-                let ssgi_params =
-                    pass_input(params.ssgi_params, PassId::SsgiResolve, "ssgi_params")?;
+                let ssgi_params = pass_input(
+                    params.plan.effects.ssgi.as_ref(),
+                    PassId::SsgiResolve,
+                    "ssgi_params",
+                )?;
                 self.encode_ssgi_resolve(cmd_buf, ssgi_params)?
             }
             PassId::Disocclusion => self.encode_disocclusion(cmd_buf)?,
             PassId::RtReflections => {
                 let rt_params = pass_input(
-                    params.rt_reflection_params,
+                    params.plan.effects.rt.as_ref(),
                     PassId::RtReflections,
                     "rt_reflection_params",
                 )?;
@@ -738,38 +697,41 @@ impl MtlContext {
                 // G-buffer pre-pass output, so SSAO runs no geometry redraw of
                 // its own; per-pass timing for the sub-passes is wired inline
                 // inside `encode_ssao`.
-                let ssao_params = pass_input(params.ssao_params, PassId::SsaoBlur, "ssao_params")?;
+                let ssao_params = pass_input(
+                    params.plan.effects.ssao.as_ref(),
+                    PassId::SsaoBlur,
+                    "ssao_params",
+                )?;
                 self.encode_ssao(cmd_buf, ssao_params)?
             }
-            PassId::Decals => {
-                self.encode_decals(cmd_buf, params.vp, params.inv_vp, params.frustum)?
-            }
+            PassId::Decals => self.encode_decals(
+                cmd_buf,
+                params.plan.camera.vp,
+                params.plan.camera.inv_vp,
+                &params.plan.camera.frustum,
+            )?,
             PassId::Atmosphere => self.encode_atmosphere(cmd_buf)?,
             PassId::WaterSim => {
-                self.encode_water_sim(cmd_buf, params.water_time)?;
+                self.encode_water_sim(cmd_buf, params.frame.water_time)?;
                 0
             }
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd_buf)?,
             PassId::Clouds => self.encode_clouds(cmd_buf)?,
             PassId::CloudComposite => self.encode_cloud_composite(cmd_buf, params.scene_pre_taa)?,
             PassId::Fog => {
-                let fog_params = pass_input(params.fog_params, PassId::Fog, "fog_params")?;
-                let fog_froxel_params =
-                    pass_input(params.fog_froxel_params, PassId::Fog, "fog_froxel_params")?;
-                self.encode_fog(cmd_buf, fog_params, fog_froxel_params)?
+                let fog = pass_input(params.plan.fog.as_ref(), PassId::Fog, "fog")?;
+                self.encode_fog(cmd_buf, &fog.params, &fog.froxel)?
             }
             PassId::FogFroxel => {
-                let fog_params = pass_input(params.fog_params, PassId::FogFroxel, "fog_params")?;
-                let fog_froxel_params = pass_input(
-                    params.fog_froxel_params,
-                    PassId::FogFroxel,
-                    "fog_froxel_params",
-                )?;
-                self.encode_fog_froxel(cmd_buf, fog_params, fog_froxel_params)?
+                let fog = pass_input(params.plan.fog.as_ref(), PassId::FogFroxel, "fog")?;
+                self.encode_fog_froxel(cmd_buf, &fog.params, &fog.froxel)?
             }
             PassId::LightCull => {
-                let cluster_params =
-                    pass_input(params.cluster_params, PassId::LightCull, "cluster_params")?;
+                let cluster_params = pass_input(
+                    params.plan.clustered.then_some(&params.plan.cluster),
+                    PassId::LightCull,
+                    "cluster_params",
+                )?;
                 self.encode_light_cull(
                     cmd_buf,
                     ClusterGrid {
@@ -794,13 +756,13 @@ impl MtlContext {
                 0
             }
             PassId::ParticlesDraw => {
-                let write = params.reactive.particles;
+                let write = params.plan.reactive.particles;
                 let draws = if let Some(frame) = particle_frame {
                     self.encode_particles_draw(
                         cmd_buf,
                         *frame,
-                        params.vp,
-                        params.frustum,
+                        params.plan.camera.vp,
+                        &params.plan.camera.frustum,
                         write,
                         None,
                     )?
@@ -822,28 +784,28 @@ impl MtlContext {
                     Some(frame) => self.encode_particles_draw(
                         cmd_buf,
                         *frame,
-                        params.vp,
-                        params.frustum,
-                        params.reactive.late_particles,
+                        params.plan.camera.vp,
+                        &params.plan.camera.frustum,
+                        params.plan.reactive.late_particles,
                         Some(scene_pre_taa),
                     )?,
                     None => 0,
                 }
             }
-            PassId::Lines => self.encode_lines(cmd_buf, params.vp)?,
+            PassId::Lines => self.encode_lines(cmd_buf, params.plan.camera.vp)?,
             PassId::Composite => {
                 let scene_color = pass_input(params.scene_color, PassId::Composite, "scene_color")?;
                 self.encode_composite_and_text(
                     cmd_buf,
                     scene_color,
-                    params.text_calls,
-                    params.reactive.readable,
+                    params.frame.text_calls,
+                    params.plan.reactive.readable,
                 )?
             }
             PassId::Upscale => {
                 let scene_pre_taa =
                     pass_input(params.scene_pre_taa, PassId::Upscale, "scene_pre_taa")?;
-                self.encode_upscale(cmd_buf, scene_pre_taa, params.reactive.readable)?
+                self.encode_upscale(cmd_buf, scene_pre_taa, params.plan.reactive.readable)?
             }
             PassId::Transparent => self.encode_transparent_stage(cmd_buf, params)?,
             PassId::PropProbe => {
@@ -859,7 +821,7 @@ impl MtlContext {
             }
             PassId::Raymarch => {
                 let view = self.build_raymarch_view(params);
-                self.encode_raymarch(cmd_buf, &view, params.frustum)?
+                self.encode_raymarch(cmd_buf, &view, &params.plan.camera.frustum)?
             }
         })
     }
@@ -893,8 +855,8 @@ impl MtlContext {
             object_buffer,
             draw_args_buffer,
             super::cull::CullView {
-                frustum: params.frustum,
-                cam_pos: params.cam_pos,
+                frustum: &params.plan.camera.frustum,
+                cam_pos: params.plan.cam_pos,
                 daylight: &self.state.view.daylight,
                 variants: &self.cull.variants,
                 exclude: [0, 0],
@@ -939,7 +901,7 @@ impl MtlContext {
         let mut draws = Vec::new();
         self.collect_water_transparent_draws(
             &view,
-            params.water_time,
+            params.frame.water_time,
             params.bindless_tex_args.is_some(),
             &mirrors,
             &mut draws,
@@ -960,9 +922,9 @@ impl MtlContext {
             &draws,
             super::transparent::TransparentFrame {
                 view: &view,
-                rt_params: params.rt_reflection_params,
+                rt_params: params.plan.effects.rt.as_ref(),
                 bindless_tex_args: params.bindless_tex_args,
-                reactive: params.reactive.transparent,
+                reactive: params.plan.reactive.transparent,
             },
         )
     }

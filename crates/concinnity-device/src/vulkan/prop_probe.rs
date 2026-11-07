@@ -255,7 +255,7 @@ impl VkContext {
             vp: [[0.0; 4]; 4],
             view: [[0.0; 4]; 4],
             cam_pos: eye,
-            elapsed: concinnity_core::math::narrow_f32(params.elapsed),
+            elapsed: concinnity_core::math::narrow_f32(params.frame.elapsed),
             prefilter_mip_count: self.scene.prefilter_mip_count as f32,
             sky_rot: self.state.view.sky_rot,
             irradiance: self.irradiance_lane(),

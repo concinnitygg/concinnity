@@ -42,18 +42,17 @@
 //! derived from the graph rather than emitted inline.
 
 use concinnity_core::math::narrow_f32;
-use concinnity_engine::gfx::frustum::Frustum;
-use concinnity_engine::gfx::render_types::{ClusterParams, TextDrawCall};
 use concinnity_engine::profile::FrameSpans;
+use concinnity_engine::render::backend::FrameParams;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::frame::plan::{EffectBlocks, FogBlocks};
+use concinnity_engine::render::frame::plan::FramePlan;
 use concinnity_engine::render::particles::ParticleFrame;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::render_graph::{
     AliasRows, BarrierOp, BarrierTable, CompiledGraph, CompiledPass, GraphResourceClass, PassId,
     PassRecorder, PassScratch, execute_passes,
 };
-use concinnity_engine::render::uniforms::{GBufferView, PassCamera};
+use concinnity_engine::render::uniforms::PassCamera;
 use concinnity_engine::render::{backend::pass_timing, render_graph};
 use concinnity_engine::transform::mat4_inverse;
 use concinnity_host::thread::jobs;
@@ -573,20 +572,18 @@ pub(in crate::directx) struct FrameGpuBuffers {
 
 // Per-frame params the executor threads into each pass's `encode_*` method.
 pub(in crate::directx) struct GraphFrameParams<'a> {
+    // The frame as planned, and the host's inputs it was planned from.
+    pub plan: &'a FramePlan,
+    pub frame: &'a FrameParams<'a>,
     pub cmd: &'a ID3D12GraphicsCommandList,
     pub frame_idx: usize,
     pub back_buffer: &'a ID3D12Resource,
     pub back_buffer_rtv: D3D12_CPU_DESCRIPTOR_HANDLE,
-    pub text_calls: &'a [TextDrawCall],
     // This frame's line ribbons, uploaded on the main thread before the fan-out
     // so the Lines pass never touches the upload ring or the allocator. `None`
     // when there is nothing to draw, including whenever the graph carries no
     // Lines node.
     pub lines: Option<LineUpload>,
-    // An opaque menu backdrop hides the scene: the Main pass clears its target
-    // and skips every draw (the masked graph drops all other world passes), so
-    // nothing of the world renders behind the menu.
-    pub world_hidden: bool,
     // Scene SRV the composite shader samples: TAA history when TAA is
     // on, SSR output when SSR is on and TAA is off, raw HDR scene SRV
     // otherwise. Computed in `record_frame` once before the dispatch;
@@ -608,10 +605,6 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // it needs no dim param. Equals `width`/`height` when upscaling is off.
     pub output_width: u32,
     pub output_height: u32,
-    // Camera world-space position. Shadow uses it for CSM cascade
-    // distance bookkeeping inside `encode_shadow_pass`; Main uses it
-    // for per-cluster distance culling and the SSAO bundle's pre-pass.
-    pub cam_pos: [f32; 3],
     // GPU virtual address of this frame's `ShadowUniforms` constant
     // buffer (the cached cascade VPs + light direction). Consumed by
     // Shadow and Main.
@@ -626,54 +619,14 @@ pub(in crate::directx) struct GraphFrameParams<'a> {
     // GPU virtual address of the static per-scene `GpuLight` storage
     // buffer. Consumed by Main's bindless pass as a root SRV.
     pub local_lights_gva: u64,
-    // Jittered camera view-projection matrix (sub-pixel Halton jitter
-    // applied when TAA is on). Consumed by Main and Velocity (the
-    // jittered VP path).
-    pub vp_mat: [[f32; 4]; 4],
-    // Un-jittered camera view-projection matrix. Velocity uses it
-    // alongside `vp_mat` (jittered) and the prior frame's `prev_vp`
-    // stored on the context, so the stored motion vector is free of
-    // sub-pixel jitter.
-    pub cur_vp: [[f32; 4]; 4],
-    // Camera frustum derived from `vp_mat`. Consumed by Main's
-    // per-cluster culling and the bundled SSAO pre-pass.
-    pub frustum: &'a Frustum,
-    // Vertical FOV in radians, which the temporal upscaler linearizes depth
-    // with.
-    pub fov_y_radians: f32,
-    // Seconds since the engine started. Consumed by ParticlesDraw's
-    // bundled compute sim (delta-time computed against the last
-    // per-emitter elapsed snapshot stored on `DxContext`).
-    // Narrowed at each use.
-    pub elapsed: f64,
-    // The simulated instant the water is drawn at.
-    pub water_time: f64,
-    // Camera near-plane in view units. Consumed by `FogFroxel` to map the
-    // front edge of the froxel volume onto view-space depth, and by
-    // `Upscale` (FSR3 dispatch's `cameraNear`).
-    pub near: f32,
     // Whether this frame's model-history snapshot fills every ring slot rather
     // than only its own: the rebuild's prime request, taken from the tracker
     // before the fan-out. Consumed by GBufferPrepass.
     pub prime_model_history: bool,
     // Which planar mirrors this frame renders, and the screen rectangle each
-    // covers; computed once from `vp_mat` so the mirror pass and the transparent
+    // covers; computed once from the camera so the mirror pass and the transparent
     // pass that samples it agree.
     pub planar: PlanarFramePlan,
-    // The main camera's cluster params, which each mirror render re-aims
-    // through its reflected view.
-    pub cluster_params: ClusterParams,
-    // The fog's blocks, when fog contributes.
-    pub fog: Option<FogBlocks>,
-    // The G-buffer pre-pass's view block.
-    pub gbuffer_view: GBufferView,
-    // The screen-space effects' blocks.
-    pub effects: EffectBlocks,
-    // How the particle and transparent passes treat the reactive mask, and
-    // whether TAA, the upscaler or the reactive view reads it.
-    pub reactive: concinnity_engine::render::temporal::reactive_mask::ReactiveMaskPlan,
-    // What may be trampling the grass this frame.
-    pub grass_benders: &'a [concinnity_engine::render::environment::grass::GrassBender],
     // This frame's particle clock, advanced before recording; `None` when the
     // particle passes are inert.
     pub particle: Option<ParticleFrame>,
@@ -707,7 +660,7 @@ impl DxContext {
         // one consistent frame. `None` when the pass is inert.
         let particle_ref = params.particle.as_ref();
         if let Some(frame) = particle_ref {
-            self.write_particle_params(params.frame_idx, frame, params.vp_mat);
+            self.write_particle_params(params.frame_idx, frame, params.plan.camera.vp);
         }
         // The grass block for the kernel and both draws, written once here and
         // only on a frame whose graph runs the kernel, so the draw-argument
@@ -719,11 +672,11 @@ impl DxContext {
             .then(|| {
                 self.prepare_grass_frame(super::grass::GrassRequest {
                     frame_idx: params.frame_idx,
-                    cam_pos: params.cam_pos,
-                    vp: params.cur_vp,
-                    elapsed: narrow_f32(params.elapsed),
+                    cam_pos: params.plan.cam_pos,
+                    vp: params.plan.camera.cur_vp,
+                    elapsed: narrow_f32(params.frame.elapsed),
                     cast: graph.pass(PassId::GrassShadow).is_some(),
-                    benders: params.grass_benders,
+                    benders: params.frame.grass_benders,
                 })
             })
             .flatten();
@@ -808,10 +761,10 @@ impl DxContext {
                     back_buffer: params.back_buffer,
                     back_buffer_rtv: params.back_buffer_rtv,
                 },
-                params.text_calls,
+                params.frame.text_calls,
                 crate::directx::draw::composite::CompositeSources {
                     scene_srv: params.scene_srv,
-                    reactive_valid: params.reactive.readable,
+                    reactive_valid: params.plan.reactive.readable,
                 },
                 // Composite runs at drawable resolution; it samples the
                 // (output-sized) upscaler result / scene SRV through a
@@ -1096,21 +1049,21 @@ impl DxContext {
     }
 
     // The per-frame `RaymarchView` payload. Its VP is the jittered one the Main
-    // pass rasterizes with (`vp_mat`), so raymarched surfaces share their NDC
+    // pass rasterizes with (`plan.camera.vp`), so raymarched surfaces share their NDC
     // depth space with rasterized geometry and take the same TAA jitter.
     fn build_raymarch_view(&self, params: &GraphFrameParams<'_>) -> super::raymarch::RaymarchView {
-        super::raymarch::RaymarchView::new(&self.pass_camera(params, params.vp_mat))
+        super::raymarch::RaymarchView::new(&self.pass_camera(params, params.plan.camera.vp))
     }
 
     // The per-frame `TransparentView` payload. Its VP is the jittered one
-    // (`vp_mat`) the Main pass rasterized with, so the glass quad's clip-space
+    // (`plan.camera.vp`) the Main pass rasterized with, so the glass quad's clip-space
     // depth matches the stored main-depth the fragment shader tests against.
     fn build_transparent_view(
         &self,
         params: &GraphFrameParams<'_>,
     ) -> super::transparent::TransparentView {
         super::transparent::TransparentView::new(
-            &self.pass_camera(params, params.vp_mat),
+            &self.pass_camera(params, params.plan.camera.vp),
             self.state.lights.uniforms(),
             &self.state.view.daylight,
         )
@@ -1122,9 +1075,9 @@ impl DxContext {
         PassCamera {
             vp,
             inv_vp: mat4_inverse(vp),
-            cam_pos: params.cam_pos,
+            cam_pos: params.plan.cam_pos,
             viewport: [params.width as f32, params.height as f32],
-            time: narrow_f32(params.elapsed),
+            time: narrow_f32(params.frame.elapsed),
             prefilter_mip_count: self.scene.env_map.prefilter_mip_count as f32,
             irradiance: self.irradiance_lane(),
             sky_rot: self.state.view.sky_rot,
@@ -1148,14 +1101,19 @@ impl DxContext {
     ) -> RenderResult<()> {
         match pass_id {
             PassId::Cull => {
-                self.encode_cull(cmd, params.frame_idx, params.frustum, params.cam_pos);
+                self.encode_cull(
+                    cmd,
+                    params.frame_idx,
+                    &params.plan.camera.frustum,
+                    params.plan.cam_pos,
+                );
                 // Pose the skinned objects' deformed-vertex buffer for this frame
                 // (a no-op when no skinned mesh is folded in). Independent of the
                 // cull; both feed Main, which the toposort orders after Cull.
                 self.encode_skin(cmd, params.frame_idx);
             }
             PassId::SsaoBlur => {
-                self.encode_ssao(cmd, params.frame_idx, params.effects.ssao.as_ref())?;
+                self.encode_ssao(cmd, params.frame_idx, params.plan.effects.ssao.as_ref())?;
             }
             PassId::Grass => {
                 if let Some(frame) = grass_frame {
@@ -1201,7 +1159,7 @@ impl DxContext {
                     cmd,
                     params.frame_idx,
                     params.shadow_ubo_gva,
-                    params.cam_pos,
+                    params.plan.cam_pos,
                     raymarch_view.as_ref(),
                     grass_frame,
                 );
@@ -1210,7 +1168,7 @@ impl DxContext {
                 // One depth-only render per scheduled spot slice. The builder
                 // emits this node only when the world has shadow-casting spots,
                 // and the RAW edge on `spot_shadow_map` pins it before Main.
-                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.cam_pos);
+                self.encode_spot_shadow_pass(cmd, params.frame_idx, params.plan.cam_pos);
             }
             PassId::AutoExposure => {
                 self.encode_auto_exposure(cmd, params.frame_idx);
@@ -1229,21 +1187,28 @@ impl DxContext {
                         local_lights_gva: params.local_lights_gva,
                         shadow_ubo_gva: params.shadow_ubo_gva,
                     },
-                    params.world_hidden,
+                    params.frame.world_hidden,
                     grass_frame,
                 );
             }
             PassId::Decals => {
-                self.encode_decals(cmd, params.frame_idx, params.vp_mat, params.frustum);
+                self.encode_decals(
+                    cmd,
+                    params.frame_idx,
+                    params.plan.camera.vp,
+                    &params.plan.camera.frustum,
+                );
             }
             PassId::Lines => {
-                self.encode_lines(cmd, params.frame_idx, params.vp_mat, params.lines);
+                self.encode_lines(cmd, params.frame_idx, params.plan.camera.vp, params.lines);
             }
             PassId::Fog => {
                 self.encode_fog(cmd, params.frame_idx);
             }
             PassId::Atmosphere => self.encode_atmosphere(cmd, params.frame_idx),
-            PassId::WaterSim => self.encode_water_sim(cmd, params.frame_idx, params.water_time),
+            PassId::WaterSim => {
+                self.encode_water_sim(cmd, params.frame_idx, params.frame.water_time);
+            }
             PassId::AerialPerspective => self.encode_aerial_perspective(cmd, params.frame_idx),
             PassId::Clouds => self.encode_atmosphere_clouds(cmd, params.frame_idx),
             PassId::CloudComposite => {
@@ -1262,9 +1227,9 @@ impl DxContext {
             PassId::ParticlesDraw | PassId::ParticlesLateDraw => {
                 let late = pass_id == PassId::ParticlesLateDraw;
                 let reactive = if late {
-                    params.reactive.late_particles
+                    params.plan.reactive.late_particles
                 } else {
-                    params.reactive.particles
+                    params.plan.reactive.particles
                 };
                 self.targets.reactive_mask.clear(cmd, reactive);
                 if let Some(frame) = particle_frame {
@@ -1272,16 +1237,16 @@ impl DxContext {
                         cmd,
                         params.frame_idx,
                         frame,
-                        params.frustum,
+                        &params.plan.camera.frustum,
                         super::particle::ParticleStage { reactive, late },
                     );
                 }
             }
             PassId::SsrResolve => {
-                self.encode_ssr_resolve(cmd, params.frame_idx, params.effects.ssr.as_ref());
+                self.encode_ssr_resolve(cmd, params.frame_idx, params.plan.effects.ssr.as_ref());
             }
             PassId::TaaResolve => {
-                self.encode_taa(cmd, params.frame_idx, params.reactive.readable);
+                self.encode_taa(cmd, params.frame_idx, params.plan.reactive.readable);
             }
             PassId::Bloom => {
                 self.encode_bloom(cmd, params.frame_idx, params.scene_srv)?;
@@ -1300,10 +1265,10 @@ impl DxContext {
             }
             PassId::Raymarch => {
                 let view = self.build_raymarch_view(params);
-                self.encode_raymarch(cmd, params.frame_idx, &view, params.frustum)?;
+                self.encode_raymarch(cmd, params.frame_idx, &view, &params.plan.camera.frustum)?;
             }
             PassId::FogFroxel => {
-                let blocks = params.fog.as_ref().ok_or_else(|| {
+                let blocks = params.plan.fog.as_ref().ok_or_else(|| {
                     RenderError::Other(
                         "graph executor (directx): FogFroxel without fog blocks".into(),
                     )
@@ -1336,15 +1301,19 @@ impl DxContext {
                 // world declared a visible `GlassPanel` or `WaterSurface`.
                 self.targets
                     .reactive_mask
-                    .clear(cmd, params.reactive.transparent);
+                    .clear(cmd, params.plan.reactive.transparent);
                 let view = self.build_transparent_view(params);
-                self.advance_transparent_water(params.frame_idx, params.water_time, params.cam_pos);
+                self.advance_transparent_water(
+                    params.frame_idx,
+                    params.frame.water_time,
+                    params.plan.cam_pos,
+                );
                 self.encode_transparent(
                     cmd,
                     params.frame_idx,
                     &view,
-                    params.effects.rt.as_ref(),
-                    params.reactive.transparent,
+                    params.plan.effects.rt.as_ref(),
+                    params.plan.reactive.transparent,
                 )?;
             }
             PassId::HizEarly | PassId::HizFinal => {
@@ -1356,7 +1325,12 @@ impl DxContext {
                 self.encode_hiz_build(cmd);
             }
             PassId::CullLate => {
-                self.encode_cull_late(cmd, params.frame_idx, params.frustum, params.cur_vp);
+                self.encode_cull_late(
+                    cmd,
+                    params.frame_idx,
+                    &params.plan.camera.frustum,
+                    params.plan.camera.cur_vp,
+                );
             }
             PassId::MainLate => {
                 self.encode_main_pass_late(
@@ -1373,10 +1347,10 @@ impl DxContext {
                 );
             }
             PassId::Ssgi => {
-                self.encode_ssgi(cmd, params.frame_idx, params.effects.ssgi.as_ref());
+                self.encode_ssgi(cmd, params.frame_idx, params.plan.effects.ssgi.as_ref());
             }
             PassId::SsgiResolve => {
-                self.encode_ssgi_resolve(cmd, params.frame_idx, params.effects.ssgi.as_ref());
+                self.encode_ssgi_resolve(cmd, params.frame_idx, params.plan.effects.ssgi.as_ref());
             }
             PassId::Disocclusion => self.encode_disocclusion(cmd, params.frame_idx)?,
             PassId::RtReflections => {
@@ -1387,14 +1361,14 @@ impl DxContext {
                 // by `FrameGraphInputs::rt_reflections_enabled`
                 // (`DxContext::rt_reflections_active`). The per-frame TLAS update
                 // already ran on the outer "start" cmd list before this trace.
-                self.encode_rt_reflections(cmd, params.frame_idx, params.effects.rt.as_ref());
+                self.encode_rt_reflections(cmd, params.frame_idx, params.plan.effects.rt.as_ref());
             }
             PassId::GBufferPrepass => {
                 // Unified geometry pre-pass: one jittered traversal writes
                 // normal+depth, roughness, and motion for every screen-space
-                // consumer (SSR / SSAO / SSGI / TAA / FSR). `params.vp_mat` is
+                // consumer (SSR / SSAO / SSGI / TAA / FSR). `params.plan.camera.vp` is
                 // the jittered VP (rasterization, matching the main pass);
-                // `params.cur_vp` is the un-jittered VP the shader uses with the
+                // `params.plan.camera.cur_vp` is the un-jittered VP the shader uses with the
                 // previous VP for the motion vector. The velocity channel
                 // carries real motion only when a consumer reads it (TAA, FSR
                 // or SSGI); otherwise cur == prev and it stays a harmless zero.
@@ -1402,13 +1376,13 @@ impl DxContext {
                     cmd,
                     params.frame_idx,
                     crate::directx::post::gbuffer::GbufferPrepassView {
-                        jittered_vp: params.vp_mat,
-                        elapsed: narrow_f32(params.elapsed),
-                        cam_pos: params.cam_pos,
-                        frustum: params.frustum,
+                        jittered_vp: params.plan.camera.vp,
+                        elapsed: narrow_f32(params.frame.elapsed),
+                        cam_pos: params.plan.cam_pos,
+                        frustum: &params.plan.camera.frustum,
                     },
                     crate::directx::post::gbuffer::GbufferPrepassFrame {
-                        block: &params.gbuffer_view,
+                        block: &params.plan.gbuffer_view,
                         prime_history: params.prime_model_history,
                         grass: grass_frame,
                     },

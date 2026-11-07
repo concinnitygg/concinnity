@@ -233,8 +233,8 @@ impl MtlContext {
         // the reflection aligned with the reflective fragment's screen-space sample.
         let frame = MirrorFrame::new(
             self.state.view.matrix,
-            params.vp,
-            params.cam_pos,
+            params.plan.camera.vp,
+            params.plan.cam_pos,
             self.state.view.view_distance,
             (set.width, set.height),
         );
@@ -297,7 +297,7 @@ impl MtlContext {
                     resolve_slice: 0,
                 },
                 MainPassCamera {
-                    elapsed: narrow_f32(params.elapsed),
+                    elapsed: narrow_f32(params.frame.elapsed),
                     vp: m.view_proj,
                     view: m.view,
                     cam_pos: m.eye,

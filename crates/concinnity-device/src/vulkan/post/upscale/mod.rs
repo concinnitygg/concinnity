@@ -696,7 +696,7 @@ impl VkContext {
         // cleared one for a backend that must have one.
         let mask = self.reactive_mask(frame);
         let reactive = match mask {
-            Some(m) if params.reactive.readable => Some(m),
+            Some(m) if params.plan.reactive.readable => Some(m),
             Some(m) if upscaler.reactive_reader().requires() => {
                 crate::vulkan::reactive_mask::clear_outside_pass(rec, m.image);
                 Some(m)
@@ -713,7 +713,7 @@ impl VkContext {
         });
         let written_mask = reactive
             .as_ref()
-            .filter(|_| params.reactive.readable)
+            .filter(|_| params.plan.reactive.readable)
             .map(|m| m.image);
         for image in [color.image, motion.image].into_iter().chain(written_mask) {
             image_barrier(
@@ -770,9 +770,9 @@ impl VkContext {
             },
             UpscaleCamera::new(
                 upscaler.jitter().get(),
-                narrow_f32(params.elapsed),
-                params.near,
-                params.fov_y_radians,
+                narrow_f32(params.frame.elapsed),
+                params.frame.near,
+                params.frame.fov_y_radians,
                 self.upscale_exposure.value(),
             ),
         )?;

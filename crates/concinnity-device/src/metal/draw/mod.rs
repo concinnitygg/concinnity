@@ -234,7 +234,6 @@ impl FrameDevice for MtlContext {
             world_hidden,
             grass_benders,
             water_stirs,
-            particle_bursts,
             input_sampled_us,
             ..
         } = *frame_params;
@@ -336,20 +335,13 @@ impl FrameDevice for MtlContext {
             .upload(&self.hw.device, ring_slot, text_calls)?;
 
         let params = GraphFrameParams {
+            plan,
+            frame: frame_params,
             cmd_buf: &cmd_buf,
-            particle_bursts,
-            cam_pos,
             skinned_joint_bufs: &skinned_joint_bufs,
             skinned_morph_weight_bufs: &skinned_morph_weight_bufs,
             scene_color: Some(&scene_color),
-            text_calls,
             ring_slot,
-            world_hidden,
-            elapsed: elapsed_f64,
-            water_time,
-            vp: plan.camera.vp,
-            inv_vp: plan.camera.inv_vp,
-            frustum: &plan.camera.frustum,
             planar: self
                 .planar_reflection
                 .as_ref()
@@ -363,8 +355,6 @@ impl FrameDevice for MtlContext {
             prev_model_buffer: prev_model_buffer.as_ref(),
             history_targets: &history_targets,
             draw_args_buffer: cull_draw_args.as_ref(),
-            gbuffer_view: &plan.gbuffer_view,
-            velocity_active: plan.motion_read,
             grass: grass_frame.as_ref(),
             scene_pre_taa: if self.taa.enabled
                 || self.upscale.scaler.is_some()
@@ -375,14 +365,6 @@ impl FrameDevice for MtlContext {
             } else {
                 None
             },
-            ssr_params: plan.effects.ssr.as_ref(),
-            fog_params: plan.fog.as_ref().map(|f| &f.params),
-            fog_froxel_params: plan.fog.as_ref().map(|f| &f.froxel),
-            cluster_params: plan.clustered.then_some(&plan.cluster),
-            ssao_params: plan.effects.ssao.as_ref(),
-            ssgi_params: plan.effects.ssgi.as_ref(),
-            rt_reflection_params: plan.effects.rt.as_ref(),
-            reactive: plan.reactive,
         };
         // The frame's completion join. Every command buffer the frame submits
         // registers a part before it is committed and arrives from its
