@@ -1,8 +1,8 @@
 //! The CPU-side scene every graphics backend draws from: the draw list, the
 //! camera view, the skinned slots, the material parameter table, the live
-//! fog, the model-history tracker, the placement of streamed geometry in the shared
-//! vertex and index buffers, and the flags that tell the GPU side what to
-//! rebuild.
+//! fog, the reflection-probe book, the model-history tracker, the placement of
+//! streamed geometry in the shared vertex and index buffers, and the flags
+//! that tell the GPU side what to rebuild.
 //!
 //! None of it is a device object. A backend embeds one [`SceneState`], reads it
 //! while recording a frame, and lends it to the
@@ -22,6 +22,7 @@ use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodVi
 use crate::render::environment::volumetric_fog::SceneFog;
 use crate::render::frame::plan::FramePlanner;
 use crate::render::material_params::MaterialParamTable;
+use crate::render::probe::book::ProbeBook;
 use crate::render::slots::skinned_slots::SkinnedSlots;
 use crate::render::temporal::model_history::ModelHistory;
 use crate::render::uniforms::canopy::CanopyParams;
@@ -49,6 +50,10 @@ pub struct SceneState {
     pub material_params: MaterialParamTable,
     /// The live volumetric fog.
     pub fog: SceneFog,
+    /// The reflection probes placed, which have baked, and the placements
+    /// asked for and not yet placed, which the backend's bake places on its
+    /// next step.
+    pub probes: ProbeBook,
     /// Which cull records hold a usable previous-frame transform. Interior
     /// mutability because a backend records its draw-args build from `&self`.
     pub model_history: RefCell<ModelHistory>,
@@ -84,6 +89,7 @@ impl SceneState {
             skinned: SkinnedSlots::new(),
             material_params,
             fog,
+            probes: ProbeBook::new(),
             model_history: RefCell::new(ModelHistory::new()),
             placement: GeometryPlacement::default(),
             gpu_dirty: GpuDirty::default(),

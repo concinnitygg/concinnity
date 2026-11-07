@@ -8,7 +8,6 @@ use concinnity_engine::gfx::lod;
 use concinnity_engine::gfx::render_types::{GpuDrawArgs, InstancedCluster, draw_args_flags};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::WorldShader;
-use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::transform::IDENTITY;
 use objc2_metal::MTLVertexDescriptor;
 
@@ -104,7 +103,6 @@ pub(super) fn build_probe(gpu: &InitGpu<'_>, cull: &CullState) -> RenderResult<P
         None
     };
     Ok(ProbeState {
-        book: ProbeBook::new(),
         cubes: ProbeCubeArray::placeholder(&gpu.hw.device)?,
         records_buf: None,
         bake: crate::metal::probe::MtlProbeBake::default(),

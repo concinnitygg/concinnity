@@ -11,7 +11,6 @@ use concinnity_engine::gfx::render_types::{
 };
 use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
@@ -698,11 +697,6 @@ pub(super) struct TextState {
 // Scene-captured reflection probes and the staggered bake that fills them,
 // driven each frame by `bake_pending_probes` through the shared `ProbeBake`.
 pub(super) struct ProbeState {
-    // Placements (declared `ReflectionProbe`s or an auto-seeded grid), supplied
-    // once after construction via `set_reflection_probes`, the record of every
-    // installed probe (the live count the forward / SSR / RT / transparent
-    // shaders read) and the queue handing placements to the bake.
-    pub book: ProbeBook,
     // The cube array the bake writes a cube of per placement, and the per-frame
     // record buffers. Distinct from `env_map`; sampled only by the specular
     // reflection term.
@@ -726,7 +720,6 @@ impl ProbeState {
         gpu: super::probe_set::ProbeSetGpu,
     ) -> Self {
         Self {
-            book: ProbeBook::new(),
             gpu,
             bake: super::probe::VkProbeBake::default(),
             prefilter,

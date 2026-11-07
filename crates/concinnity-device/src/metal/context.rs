@@ -6,7 +6,6 @@ use concinnity_engine::gfx::render_types::{ClusterParams, InstancedCluster, NUM_
 use concinnity_engine::profile;
 use concinnity_engine::render::backend::{BackendProbe, RenderBackend};
 use concinnity_engine::render::environment::water::wake::{WakeFrame, WakeHistory};
-use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
@@ -82,12 +81,8 @@ pub(super) struct InstancedState {
 // the nearest probe whose box contains it, while the background + diffuse keep
 // the sky. See metal/probe.rs and metal/probe_set.rs.
 pub(super) struct ProbeState {
-    // The placements (declared `ReflectionProbe` assets or `auto_seed_probes`),
-    // the record of every installed probe (the live count the shaders read) and
-    // the staggered bake's queue, which spreads the load cost over several
-    // frames instead of one.
-    pub book: ProbeBook,
-    // One cube per placement; the first `book.count()` hold baked probes.
+    // One cube per placement; the first `SceneState::probes` count hold baked
+    // probes.
     pub cubes: super::probe_set::ProbeCubeArray,
     // This frame's copy of the book's records, written by `build_probe_records`.
     // `None` before the first frame builds one.

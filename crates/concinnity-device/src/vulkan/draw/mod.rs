@@ -442,7 +442,7 @@ impl VkContext {
             content,
             upscaler_jitter,
             lights: &self.uniforms.lights,
-            probes: self.probe.book.records(),
+            probes: self.state.probes.records(),
             fog: self.state.fog.settings(),
             pre_exposure: self.pre_exposure,
             adaptation: self.auto_exposure.adaptation.as_ref(),

@@ -58,7 +58,7 @@ mod skinned;
 mod streaming;
 // The texture pool, the color-grading LUT and the environment map.
 mod textures;
-// The lights and probes the world feeds.
+// The lights the world feeds.
 mod tuning;
 // The presentation surface and its input, as the settings menu sees it.
 mod window;
@@ -92,7 +92,7 @@ pub use scene_host::{GeometryEdit, SceneHost};
 pub use skinned::{SkinnedDraws, SkinnedFrame};
 pub use streaming::{ChunkMesh, DrawStreaming, PlanetChunk};
 pub use textures::TextureUploads;
-pub use tuning::{ReflectionProbes, SceneLights};
+pub use tuning::SceneLights;
 pub use window::WindowControl;
 pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
@@ -203,7 +203,6 @@ pub trait RenderBackend:
     + FrameCapture
     + GeometryRebuild
     + PlanetReshape
-    + ReflectionProbes
     + SettingsTarget
     + RuntimeDecals
     + RuntimeEmitters
@@ -338,6 +337,23 @@ pub trait RenderBackend:
     fn set_material_params(&mut self, row: u32, params: [f32; MATERIAL_PARAM_COUNT]) {
         if let Some(scene) = self.scene_mut() {
             scene.material_params.set(row, params);
+        }
+    }
+
+    /// Supply the reflection-probe placements: declared `ReflectionProbe`
+    /// assets, or a grid the caller auto-seeded over the scene. An empty list
+    /// bakes none. The backend's bake places them on its next step, growing its
+    /// cube array to a cube per placement (and one after theirs for the
+    /// world's prop probe when `prop_probe`), and bakes them over the frames
+    /// that follow; until a cube installs, its probe reflects the sky, as every
+    /// probe does on a backend without a bake. Pushed once after construction.
+    fn set_reflection_probes(
+        &mut self,
+        probes: &[crate::render::probe::capture::ProbePlacement],
+        prop_probe: bool,
+    ) {
+        if let Some(scene) = self.scene_mut() {
+            scene.probes.request(probes.to_vec(), prop_probe);
         }
     }
 

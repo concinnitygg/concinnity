@@ -30,6 +30,7 @@ pub struct ProbeBook {
     prop_subject: [u32; 2],
     prop_ground: [f32; 4],
     revision: u64,
+    requested: Option<(Vec<ProbePlacement>, bool)>,
 }
 
 /// How far the bake has come: probes installed out of probes placed.
@@ -64,7 +65,21 @@ impl ProbeBook {
             prop_subject: [0; 2],
             prop_ground: [0.0; 4],
             revision: 0,
+            requested: None,
         }
+    }
+
+    /// Ask for `placements` (and a prop probe's cube when `prop_probe`) to
+    /// replace the current ones. The bake places them on its next step, which
+    /// is when the cube array is grown for them; a later request before then
+    /// replaces this one.
+    pub fn request(&mut self, placements: Vec<ProbePlacement>, prop_probe: bool) {
+        self.requested = Some((placements, prop_probe));
+    }
+
+    /// The placements [`Self::request`] asked for and the bake has not placed.
+    pub fn take_request(&mut self) -> Option<(Vec<ProbePlacement>, bool)> {
+        self.requested.take()
     }
 
     /// Replace the placements, forgetting every installed probe and queueing

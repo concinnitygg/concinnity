@@ -646,3 +646,32 @@ fn bake_action_never_starts_a_second_bake_while_one_is_in_flight() {
         }
     }
 }
+
+// Requested placements wait in the book until the bake's next step places them.
+#[test]
+fn a_request_is_placed_on_the_next_step() {
+    let mut bake = Bake::default();
+    let mut mock = Mock::new();
+    mock.book.request(placements(2), true);
+    assert!(!mock.book.pending());
+    assert_eq!(mock.reserved, 0);
+    let report = bake.advance(&mut mock, &());
+    assert!(report.dropped.is_none());
+    assert_eq!(mock.reserved, 3);
+    assert!(mock.book.take_request().is_none());
+    run_to_idle(&mut bake, &mut mock);
+    assert_eq!(mock.book.count(), 2);
+}
+
+// A request the cube array cannot hold is dropped, and the step says why.
+#[test]
+fn a_request_the_cube_array_cannot_hold_is_dropped() {
+    let mut bake = Bake::default();
+    let mut mock = Mock::new();
+    mock.reserve_fails = true;
+    mock.book.request(placements(3), false);
+    let report = bake.advance_prefilter(&mut mock);
+    assert!(report.dropped.is_some());
+    assert!(!mock.book.pending());
+    assert_eq!(mock.book.header().count, 0);
+}

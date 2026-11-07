@@ -1,10 +1,13 @@
 //! How the reflection-probe bake's progress and failures are reported.
 
-use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::probe::bake::BakeReport;
 
-/// Log a probe that installed and a failure that abandoned the rest of the bake.
+/// Log placements dropped because the cube array could not hold them, a probe
+/// that installed, and a failure that abandoned the rest of the bake.
 pub(crate) fn report_probe_bake(report: BakeReport) {
+    if let Some(e) = report.dropped {
+        tracing::warn!("reflection probes: {e}; keeping the sky");
+    }
     if let Some(progress) = report.installed {
         tracing::info!("reflection probes: {progress}");
     }
@@ -14,12 +17,5 @@ pub(crate) fn report_probe_bake(report: BakeReport) {
             failure.kept,
             failure.error
         );
-    }
-}
-
-/// Log placements dropped because the cube array could not hold them.
-pub(crate) fn report_probe_placement(placed: RenderResult<()>) {
-    if let Err(e) = placed {
-        tracing::warn!("reflection probes: {e}; keeping the sky");
     }
 }

@@ -65,7 +65,7 @@ impl MtlContext {
     pub(in crate::metal) fn prop_probe_supported(&self) -> bool {
         self.cull.bindless
             && self.probe.prefilter.is_some()
-            && self.probe.prop.schedule.available(&self.probe.book)
+            && self.probe.prop.schedule.available(&self.state.probes)
     }
 
     // The mirror slot the prop probe culls into: the one after the planar
@@ -87,12 +87,12 @@ impl MtlContext {
     ) {
         let ready = enabled && self.prop_probe_supported();
         let schedule = &mut self.probe.prop.schedule;
-        let Some(frame) = schedule.admit(&mut self.probe.book, frame, ready) else {
+        let Some(frame) = schedule.admit(&mut self.state.probes, frame, ready) else {
             return;
         };
         let built = self.ensure_prop_capture(frame.resolution);
         let schedule = &mut self.probe.prop.schedule;
-        if !schedule.settle(&mut self.probe.book, frame, built) {
+        if !schedule.settle(&mut self.state.probes, frame, built) {
             self.probe.prop.capture = None;
         }
     }
@@ -108,8 +108,8 @@ impl MtlContext {
             return Ok(());
         }
         let cube = self
-            .probe
-            .book
+            .state
+            .probes
             .prop_cube()
             .ok_or_else(|| RenderError::Other("probe: no cube for the prop probe".into()))?;
         let plan = prop_probe_plan(resolution);

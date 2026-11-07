@@ -5,9 +5,9 @@
 
 use super::{
     BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
-    GeometryEdit, GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend, RenderResult,
-    RuntimeDecals, RuntimeEmitters, SceneHost, SceneLights, SdfVolumeShaders, SkinnedDraws,
-    TextureUploads, WindowControl, WorldReload, WorldShaders,
+    GeometryEdit, GeometryRebuild, PlanetReshape, RenderBackend, RenderResult, RuntimeDecals,
+    RuntimeEmitters, SceneHost, SceneLights, SdfVolumeShaders, SkinnedDraws, TextureUploads,
+    WindowControl, WorldReload, WorldShaders,
 };
 use crate::gfx::render_types::TextureSlot;
 use crate::input::snapshot::InputSnapshot;
@@ -89,7 +89,6 @@ impl CullReadback for NullBackend {}
 impl FrameCapture for NullBackend {}
 impl GeometryRebuild for NullBackend {}
 impl PlanetReshape for NullBackend {}
-impl ReflectionProbes for NullBackend {}
 impl SettingsTarget for NullBackend {}
 impl RuntimeDecals for NullBackend {}
 impl RuntimeEmitters for NullBackend {}

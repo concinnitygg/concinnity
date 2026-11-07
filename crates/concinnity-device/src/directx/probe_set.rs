@@ -400,7 +400,7 @@ impl DxContext {
     // once per placement list; its fence has retired, and the old buffer's free is
     // deferred behind the frames in flight anyway.
     pub(in crate::directx) fn upload_probe_set(&mut self, frame_idx: usize) -> RenderResult<()> {
-        let set = self.probe.book.header();
+        let set = self.state.probes.header();
         // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant
         // buffer that init sized for this payload, and the source is a separate live
         // value, so the ranges cannot overlap.
@@ -413,20 +413,20 @@ impl DxContext {
         }
         let floor = self.probe.gpu.bound_cubes().capacity();
         let have = self.probe.gpu.records[frame_idx].capacity;
-        let grown = grown_probe_capacity(have, self.probe.book.count(), floor);
+        let grown = grown_probe_capacity(have, self.state.probes.count(), floor);
         if let Some(capacity) = grown {
             self.probe.gpu.records[frame_idx] = ProbeRecords::new(&self.hw.alloc, capacity)?;
         }
         // The records change only when a probe installs or the placements are
         // replaced, so a buffer already holding this revision is left alone.
-        let revision = self.probe.book.revision();
+        let revision = self.state.probes.revision();
         if self
             .probe
             .gpu
             .records_current
             .take(frame_idx, revision, grown.is_some())
         {
-            self.probe.gpu.records[frame_idx].write(self.probe.book.records());
+            self.probe.gpu.records[frame_idx].write(self.state.probes.records());
         }
         Ok(())
     }

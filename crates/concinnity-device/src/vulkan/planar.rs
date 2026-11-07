@@ -869,7 +869,7 @@ impl VkContext {
                 &frame,
                 &params.cluster_params,
                 self.uniforms.lights.cluster_reach(),
-                self.probe.book.records(),
+                self.state.probes.records(),
             );
             set.cluster_params_bufs[ring].write_val(0, &cluster_params);
             if cluster_params.use_clusters != 0 {

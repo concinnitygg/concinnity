@@ -579,7 +579,7 @@ impl DxContext {
                 &frame,
                 &params.cluster_params,
                 self.uniforms.lights.cluster_reach(),
-                self.probe.book.records(),
+                self.state.probes.records(),
             );
             clustered[slot] = cluster_params.use_clusters != 0;
             // SAFETY: the ring entry is `MIRROR_CBV_SIZE` bytes, so `MIRROR_CLUSTER_OFFSET`

@@ -12,7 +12,6 @@ use concinnity_engine::render::backend::{BackendProbe, FrameParams, RenderBacken
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
 use concinnity_engine::render::frame::plan::{FrameDevice, FramePlan};
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
-use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::scene_state::SceneState;
 use concinnity_engine::render::shader::reload::ShaderReload;
 use concinnity_engine::render::{
@@ -340,11 +339,6 @@ pub(super) struct DxDescriptors {
 // Scene-captured reflection probes and the staggered bake that fills them.
 // See [`super::probe`].
 pub(super) struct ProbeState {
-    // Placements (declared `ReflectionProbe` assets or an auto-seeded grid), the
-    // record of every installed probe (the live count the forward / SSR / RT /
-    // transparent shaders read) and the staggered bake's queue: a not-yet-baked
-    // probe falls back to the sky until its turn.
-    pub book: ProbeBook,
     // The cube array the bake writes a cube of per placement, and the per-frame
     // record buffers. Distinct from `env_map` so the background + diffuse
     // irradiance keep the sky.
@@ -369,7 +363,6 @@ impl ProbeState {
         gpu: super::probe_set::ProbeSetGpu,
     ) -> Self {
         Self {
-            book: ProbeBook::new(),
             gpu,
             bake: super::probe::DxProbeBake::default(),
             prefilter,

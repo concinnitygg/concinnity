@@ -349,8 +349,8 @@ impl VkContext {
     // grows once per placement list; its fence has retired, so the old buffer and
     // this frame's global set are free to replace and rewrite.
     pub(super) fn upload_probe_set(&mut self, frame_idx: usize) -> RenderResult<()> {
-        let count = self.probe.book.count();
-        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.probe.book.header());
+        let count = self.state.probes.count();
+        self.uniforms.probe_set_ubo_buffers[frame_idx].write_val(0, &self.state.probes.header());
         let floor = self.probe.gpu.bound_cubes().capacity();
         let grown = grown_probe_capacity(self.probe.gpu.records[frame_idx].capacity, count, floor);
         if let Some(capacity) = grown {
@@ -375,7 +375,7 @@ impl VkContext {
         }
         // The records change only when a probe installs or the placements are
         // replaced, so a buffer already holding this revision is left alone.
-        let revision = self.probe.book.revision();
+        let revision = self.state.probes.revision();
         if self
             .probe
             .gpu
@@ -384,7 +384,7 @@ impl VkContext {
         {
             self.probe.gpu.records[frame_idx]
                 .buffer
-                .write_slice(0, self.probe.book.records());
+                .write_slice(0, self.state.probes.records());
         }
         Ok(())
     }

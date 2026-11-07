@@ -135,7 +135,7 @@ impl DxContext {
             && self.cull.cull_kernels.is_some()
             && self.probe.prefilter.is_some()
             && self.probe.gpu.cubes.is_some()
-            && self.probe.prop.schedule.available(&self.probe.book)
+            && self.probe.prop.schedule.available(&self.state.probes)
     }
 
     // This frame's prop probe, ahead of the probe records and the graph: where
@@ -149,12 +149,12 @@ impl DxContext {
     ) {
         let ready = enabled && self.prop_probe_supported();
         let schedule = &mut self.probe.prop.schedule;
-        let Some(frame) = schedule.admit(&mut self.probe.book, frame, ready) else {
+        let Some(frame) = schedule.admit(&mut self.state.probes, frame, ready) else {
             return;
         };
         let built = self.ensure_prop_capture(frame.resolution);
         let schedule = &mut self.probe.prop.schedule;
-        if !schedule.settle(&mut self.probe.book, frame, built) {
+        if !schedule.settle(&mut self.state.probes, frame, built) {
             self.probe.prop.gpu = None;
         }
     }
@@ -374,7 +374,11 @@ impl PropProbeGpu {
             .cubes
             .as_ref()
             .ok_or_else(|| missing("cube array"))?;
-        let cube = ctx.probe.book.prop_cube().ok_or_else(|| missing("cube"))?;
+        let cube = ctx
+            .state
+            .probes
+            .prop_cube()
+            .ok_or_else(|| missing("cube"))?;
         let plan = prop_probe_plan(key.resolution);
         let size = plan.face_size();
         let multisampled = key.samples > 1;

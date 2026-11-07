@@ -122,6 +122,9 @@ pub trait ProbeBakeDevice {
 #[derive(Debug, Default)]
 #[must_use]
 pub struct BakeReport {
+    /// Why requested placements were dropped, keeping reflections on the sky:
+    /// the cube array could not grow to hold them.
+    pub dropped: Option<RenderError>,
     /// The progress after a probe installed.
     pub installed: Option<ProbeProgress>,
     /// The error that abandoned the rest of the queue.
@@ -217,19 +220,28 @@ impl<C, P> ProbeBake<C, P> {
         let prefilter = self.advance_prefilter(device);
         let capture = self.advance_capture(device, frame);
         BakeReport {
+            dropped: prefilter.dropped.or(capture.dropped),
             installed: prefilter.installed.or(capture.installed),
             failed: prefilter.failed.or(capture.failed),
         }
     }
 
-    /// Advance the convolution slot one frame: convolve the next mip, or
-    /// install a cube whose convolution has retired.
+    /// Advance the convolution slot one frame: place the placements the book
+    /// was asked for, then convolve the next mip, or install a cube whose
+    /// convolution has retired.
     pub fn advance_prefilter<D>(&mut self, device: &mut D) -> BakeReport
     where
         D: ProbeBakeDevice<Capture = C, Prefilter = P>,
     {
+        let dropped = device
+            .book()
+            .take_request()
+            .and_then(|(placements, prop_probe)| self.place(device, placements, prop_probe).err());
         if !self.admit(device) {
-            return BakeReport::default();
+            return BakeReport {
+                dropped,
+                ..BakeReport::default()
+            };
         }
         let (phase, signals) = match &self.prefilter {
             Some(slot) => {
@@ -243,11 +255,12 @@ impl<C, P> ProbeBake<C, P> {
             }
             None => (BakePhase::Idle, BakeSignals::default()),
         };
-        match next_bake_action(phase, signals) {
+        let report = match next_bake_action(phase, signals) {
             BakeAction::PrefilterMip => self.prefilter_next_mip(device),
             BakeAction::Install => self.install(device),
             _ => BakeReport::default(),
-        }
+        };
+        BakeReport { dropped, ..report }
     }
 
     /// Advance the capture slot one frame: render the next face, hand a
@@ -344,7 +357,7 @@ impl<C, P> ProbeBake<C, P> {
         match device.book().install(slot.index) {
             Ok(progress) => BakeReport {
                 installed: Some(progress),
-                failed: None,
+                ..BakeReport::default()
             },
             Err(e) => self.fail(device, e),
         }
@@ -419,11 +432,11 @@ impl<C, P> ProbeBake<C, P> {
         let book = device.book();
         book.abort();
         BakeReport {
-            installed: None,
             failed: Some(BakeFailure {
                 error,
                 kept: book.count(),
             }),
+            ..BakeReport::default()
         }
     }
 }

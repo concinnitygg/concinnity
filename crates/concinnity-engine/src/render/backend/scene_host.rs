@@ -44,9 +44,9 @@ mod tests {
     use crate::input::snapshot::InputSnapshot;
     use crate::render::backend::{
         BackendProbe, CullReadback, DeviceCapabilities, DrawStreaming, FrameCapture, FrameParams,
-        GeometryRebuild, PlanetReshape, ReflectionProbes, RenderBackend, RuntimeDecals,
-        RuntimeEmitters, SceneLights, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads,
-        WindowControl, WorldReload, WorldShaders,
+        GeometryRebuild, PlanetReshape, RenderBackend, RuntimeDecals, RuntimeEmitters, SceneLights,
+        SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl, WorldReload,
+        WorldShaders,
     };
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
@@ -182,7 +182,6 @@ mod tests {
     impl FrameCapture for Hosted {}
     impl GeometryRebuild for Hosted {}
     impl PlanetReshape for Hosted {}
-    impl ReflectionProbes for Hosted {}
     impl SettingsTarget for Hosted {}
     impl RuntimeDecals for Hosted {}
     impl RuntimeEmitters for Hosted {}

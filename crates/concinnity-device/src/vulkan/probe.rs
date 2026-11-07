@@ -10,10 +10,10 @@
 //! (`concinnity_engine::render::probe::capture`); this module drives the placement intake + the
 //! GPU capture, mirroring `crate::directx::probe` / `crate::metal::probe`.
 //!
-//! `set_reflection_probes` converts the graphics-system placements (auto-seeding a
-//! grid from the scene bounds when a world declares none) into the stored placement
-//! list + an EMPTY `ProbeSet`, then enqueues them. `bake_pending_probes` (driven each
-//! frame from `draw_frame`) advances the shared `ProbeBake` sequencing, which this
+//! `RenderBackend::set_reflection_probes` asks the scene's probe book for the
+//! graphics-system placements (declared, or a grid auto-seeded from the scene
+//! bounds). `bake_pending_probes` (driven each frame from `draw_frame`) advances the
+//! shared `ProbeBake` sequencing, which places them on its next step and which this
 //! module serves as a `ProbeBakeDevice`:
 //! it renders one cube face per frame into a bake-owned target on a per-face fence
 //! and copies it into a cube layer, convolves that capture into the probe cube with
@@ -29,8 +29,8 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::render_types::TileMorphView;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::backend::{ReflectionProbes, RenderBackend};
 use concinnity_engine::render::probe::bake::{CAPTURE_FACES, ProbeBake, ProbeBakeDevice};
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
@@ -647,7 +647,7 @@ impl ProbeBakeDevice for VkContext {
     type Frame<'f> = f32;
 
     fn book(&mut self) -> &mut ProbeBook {
-        &mut self.probe.book
+        &mut self.state.probes
     }
 
     // The capture renders through the bindless GPU cull, which never comes or
@@ -665,7 +665,12 @@ impl ProbeBakeDevice for VkContext {
         self.state.draw.record_count() > 0 && self.atmosphere_tables_ready()
     }
 
+    // Idle first when probes are installed: the frames in flight may sample
+    // the cubes the next bake overwrites.
     fn reserve_cubes(&mut self, count: usize) -> RenderResult<()> {
+        if self.state.probes.count() > 0 {
+            self.wait_idle();
+        }
         self.reserve_probe_cubes(&PLAN, count)
     }
 
@@ -1396,25 +1401,6 @@ fn probe_pool_sizes(faces: u32, tex_pool: u32, has_hiz: u32) -> PoolSizes {
             faces * tex_pool + has_hiz,
         )
         .add(vk::DescriptorType::UNIFORM_BUFFER, has_hiz)
-}
-
-impl ReflectionProbes for VkContext {
-    // Set the reflection-probe placements the graphics system resolved
-    // (declared `ReflectionProbe` assets, or a grid auto-seeded over the
-    // scene); an empty list bakes none. The cube array grows to hold every
-    // placement; a world whose array cannot grow keeps the sky. Pushed once
-    // after construction; the cube capture that fills the probe set runs across
-    // later frames.
-    fn set_reflection_probes(&mut self, placements: &[ProbePlacement], prop_probe: bool) {
-        let placements = placements.to_vec();
-        // Idle first when probes are installed: the frames in flight may sample
-        // the cubes the next bake overwrites.
-        if self.probe.book.count() > 0 {
-            self.wait_idle();
-        }
-        let placed = self.with_probe_bake(|bake, ctx| bake.place(ctx, placements, prop_probe));
-        crate::probe_report::report_probe_placement(placed);
-    }
 }
 
 #[cfg(test)]

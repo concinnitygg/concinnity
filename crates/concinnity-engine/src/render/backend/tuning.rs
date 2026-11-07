@@ -1,4 +1,4 @@
-//! The lights and reflection probes the world feeds a running backend.
+//! The lights the world feeds a running backend.
 //!
 //! The resolved graphics settings reach the backend through
 //! [`SettingsTarget`](crate::settings::apply::SettingsTarget), carried out by
@@ -54,23 +54,5 @@ pub trait SceneLights {
     ) -> RenderResult<()> {
         let _ = (lights, uniforms);
         Ok(())
-    }
-}
-
-/// The reflection-probe placements the backend bakes.
-pub trait ReflectionProbes {
-    /// Supply the reflection-probe placements: declared `ReflectionProbe`
-    /// assets, or a grid the caller auto-seeded over the scene. An empty list
-    /// bakes none. The backend bakes a cube per placement and samples the
-    /// nearest for the specular reflection, and keeps a cube after theirs for
-    /// the world's prop probe when `prop_probe`.
-    /// Pushed once after construction. Default no-op: a backend without probe
-    /// support keeps the sky reflection.
-    fn set_reflection_probes(
-        &mut self,
-        probes: &[crate::render::probe::capture::ProbePlacement],
-        prop_probe: bool,
-    ) {
-        let _ = (probes, prop_probe);
     }
 }

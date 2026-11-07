@@ -191,7 +191,7 @@ impl MtlContext {
 
     // The header the shaders read the live count from.
     pub(in crate::metal) fn probe_set(&self) -> ProbeSet {
-        self.probe.book.header()
+        self.state.probes.header()
     }
 
     // Write this frame's parallax records into a ring slot. The slot always
@@ -201,10 +201,10 @@ impl MtlContext {
         ring_slot: usize,
     ) -> RenderResult<Retained<ProtocolObject<dyn MTLBuffer>>> {
         let empty = [<ProbeUniforms as bytemuck::Zeroable>::zeroed()];
-        let records: &[ProbeUniforms] = if self.probe.book.count() == 0 {
+        let records: &[ProbeUniforms] = if self.state.probes.count() == 0 {
             &empty
         } else {
-            self.probe.book.records()
+            self.state.probes.records()
         };
         let bytes: &[u8] = bytemuck::cast_slice(records);
         let (buf, fresh) =
@@ -213,7 +213,7 @@ impl MtlContext {
                 .slot_fresh(&self.hw.device, ring_slot, bytes.len())?;
         // The records change only when a probe installs or the placements are
         // replaced, so a slot already holding this revision is left alone.
-        let revision = self.probe.book.revision();
+        let revision = self.state.probes.revision();
         if self.rings.probe_tail.take(ring_slot, revision, fresh) {
             write_buffer_region(&buf, 0, bytes)?;
         }
