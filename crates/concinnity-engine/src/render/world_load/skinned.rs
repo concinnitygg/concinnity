@@ -10,11 +10,6 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 use hashbrown::HashMap;
 
-use crate::animation::character_shape;
-use crate::animation::skeleton::Skeleton;
-use crate::animation::skinned_mesh_map::{
-    SkinnedMeshMorphNames, SkinnedMeshNameIndex, SkinnedMeshSkinIndex,
-};
 use crate::components::{
     CharacterCapsule, CharacterRig, GlobalTransform, SkeletonJoint, SkinnedMesh, Transform,
     build_skeleton_from_joint_defs,
@@ -28,6 +23,11 @@ use crate::render::draw_list::append_lod_slices;
 use crate::render::frame::extract::PickCandidate;
 use crate::render::material_entry::{MaterialEntry, resolve_material_slots};
 use crate::resource::SkinnedMeshTable;
+use crate::simulation::animation::character_shape;
+use crate::simulation::animation::skeleton::Skeleton;
+use crate::simulation::animation::skinned_mesh_map::{
+    SkinnedMeshMorphNames, SkinnedMeshNameIndex, SkinnedMeshSkinIndex,
+};
 
 /// One skinned mesh's decoded geometry, in the order the cook assigned handles
 /// (the table index is the `SkinnedMeshHandle` keying the animation

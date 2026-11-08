@@ -5,9 +5,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use core::fmt;
 
-use crate::camera::track::CameraTrackStatus;
 use crate::ecs::PipelineContext;
 use crate::render::frame::snapshot::RenderSnapshot;
+use crate::simulation::camera::track::CameraTrackStatus;
 
 /// A screenshot action still saving frames.
 #[derive(Debug, Clone, PartialEq)]

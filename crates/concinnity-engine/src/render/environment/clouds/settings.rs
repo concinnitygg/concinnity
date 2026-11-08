@@ -4,7 +4,7 @@
 use super::noise::hash_unit3;
 use super::params::CloudMarch;
 use crate::components::Cloud;
-use crate::wind::WindField;
+use crate::environment::wind::WindField;
 use concinnity_core::math::SaturatingFrom;
 
 /// The most cloud layers one atmosphere draws. `CLOUD_MAX_LAYERS` in

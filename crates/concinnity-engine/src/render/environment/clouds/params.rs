@@ -307,7 +307,7 @@ mod tests {
     fn one_layer() -> CloudSettings {
         CloudSettings::resolve(
             &[crate::components::Cloud::default()],
-            &crate::wind::WindField::STILL,
+            &crate::environment::wind::WindField::STILL,
             CloudMarch::FULL,
         )
         .expect("a default cloud resolves")

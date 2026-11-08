@@ -10,8 +10,8 @@
 //! roots on.
 
 #[cfg(test)]
-use crate::planet::TileId;
-use crate::planet::{CubeFace, FINEST_CELL_SIZE, PlanetShape, TileLod};
+use crate::environment::planet::TileId;
+use crate::environment::planet::{CubeFace, FINEST_CELL_SIZE, PlanetShape, TileLod};
 use crate::render::environment::grass::tiles::{GRASS_TILE_SIZE, MAX_GRASS_DENSITY};
 use concinnity_core::math::{SaturatingFrom, dvec3, narrow_f32};
 
@@ -196,7 +196,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 4,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         }
     }

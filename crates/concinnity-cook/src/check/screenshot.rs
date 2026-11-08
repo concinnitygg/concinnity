@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::authoring::registry::RegisteredType;
 use crate::authoring::world::WorldJsonlAsset;
-use concinnity_engine::screenshot::{is_contained_file, normal_file};
+use concinnity_engine::presentation::screenshot::{is_contained_file, normal_file};
 
 /// A screenshot's `file` must be a relative path that stays inside the
 /// screenshot directory.

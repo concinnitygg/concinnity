@@ -28,6 +28,7 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
+use crate::presentation::window::display_mode;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::{backend, frame::snapshot, scene::flow};
@@ -37,7 +38,6 @@ use crate::settings::{
     GraphicsApiTrial, QualityCeiling, QualityPreset, ResolvedGraphics, ResolvedSettings,
     SettingKey, SettingsLayers, SettingsRevision, UserGraphicsSettings, WorldSettings,
 };
-use crate::window::display_mode;
 use concinnity_core::platform::GraphicsApiStatus;
 
 mod apply;

@@ -15,9 +15,10 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use crate::environment::planet::{HorizonOccluder, TileMorphFrame, tile_morph_row};
+use crate::environment::sky::SkyOrientation;
 use crate::gfx::render_types::{DrawIndex, DrawObject, clone_reserve, runtime_reserve_full};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
-use crate::planet::{HorizonOccluder, TileMorphFrame, tile_morph_row};
 use crate::render::backend::PlanetChunk;
 use crate::render::decal::DecalSet;
 use crate::render::environment::grass::{CanopyField, DrawnPlanetTile, GrassLodView};
@@ -30,7 +31,6 @@ use crate::render::probe::book::ProbeBook;
 use crate::render::slots::skinned_slots::SkinnedSlots;
 use crate::render::temporal::model_history::ModelHistory;
 use crate::render::uniforms::canopy::CanopyParams;
-use crate::sky::SkyOrientation;
 use crate::transform::IDENTITY;
 
 // Per-slot edits of the draw list: transforms, visibility, clones, materials.
@@ -126,7 +126,11 @@ impl SceneState {
 
     /// Set where planet tile `draw` meets tiles of other levels. A no-op for
     /// a draw that is not a planet tile.
-    pub fn set_planet_tile_seams(&mut self, draw: DrawIndex, seams: crate::planet::TileSeams) {
+    pub fn set_planet_tile_seams(
+        &mut self,
+        draw: DrawIndex,
+        seams: crate::environment::planet::TileSeams,
+    ) {
         if let Some(tile) = self
             .draw
             .objects

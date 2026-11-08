@@ -5,7 +5,7 @@
 //! alive across it keep their place in the world.
 
 use crate::ecs::asset_id::AssetId;
-use crate::planet::Rebase;
+use crate::environment::planet::Rebase;
 use crate::transform::{Mat4, mat4_mul};
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

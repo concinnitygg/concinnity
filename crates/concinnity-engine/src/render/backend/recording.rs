@@ -20,6 +20,7 @@ use crate::gfx::render_types::{
 };
 use crate::gfx::{render_types, view_modes};
 use crate::input::snapshot::InputSnapshot;
+use crate::presentation::window::display_mode;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::{BackendInit, ShadowCadence, ShadowParams, SwapchainConfig};
 use crate::render::backend::{
@@ -32,7 +33,6 @@ use crate::render::scene_state::SceneState;
 use crate::render::{backend, environment::volumetric_fog, probe::capture, slots::draw_slot};
 use crate::settings::ResolvedGraphics;
 use crate::settings::apply::{RebuildSet, SettingsTarget};
-use crate::window::display_mode;
 
 /// The parts of an assembled `BackendInit` worth asserting on, captured before
 /// the backend is handed back. `draw_objects` is moved out wholesale so tests
@@ -123,7 +123,7 @@ pub enum Call {
         view_mode: view_modes::ViewMode,
         show: view_modes::ShowFlags,
         history_reset: bool,
-        rebase: Option<crate::planet::Rebase>,
+        rebase: Option<crate::environment::planet::Rebase>,
         capture: Option<String>,
     },
     FinishCaptures,
@@ -745,7 +745,7 @@ impl SettingsTarget for RecordingBackend {
 }
 
 impl PlanetReshape for RecordingBackend {
-    fn reshape_planet(&mut self, _shape: &crate::planet::PlanetShape) {
+    fn reshape_planet(&mut self, _shape: &crate::environment::planet::PlanetShape) {
         self.record(Call::ReshapePlanet);
     }
 }

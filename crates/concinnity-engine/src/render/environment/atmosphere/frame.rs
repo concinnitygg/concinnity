@@ -222,7 +222,7 @@ mod tests {
                 s.night.as_ref().expect("night"),
                 [1.0, 0.0, 0.0],
                 [0.0, 0.0, 1.0],
-                &crate::sky::SkyOrientation::default(),
+                &crate::environment::sky::SkyOrientation::default(),
             );
             if let Some(m) = n.moon.as_mut() {
                 m.direction = moon_dir;

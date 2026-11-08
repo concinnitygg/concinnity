@@ -13,7 +13,7 @@ use concinnity_core::math::SaturatingFrom;
 
 use super::GrassBladeLook;
 use crate::components::{Grass, GroundRule};
-use crate::planet::PlanetShape;
+use crate::environment::planet::PlanetShape;
 use crate::render::uniforms::ground::GroundRuleGpu;
 use cells::PlanetGrassGrid;
 use concinnity_core::math::noise::lcg_hash;
@@ -101,7 +101,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 4,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         }
     }

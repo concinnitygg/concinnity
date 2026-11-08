@@ -5,8 +5,8 @@
 //! the setter (`apply_reloaded_clip`). Mirrors the path the desugar pass takes at
 //! build time, so a hot-reloaded clip is byte-identical to a fresh `cn cook`.
 
-use concinnity_engine::animation::AnimationSystem;
-use concinnity_engine::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
+use concinnity_engine::simulation::animation::AnimationSystem;
+use concinnity_engine::simulation::animation::skeleton::{AnimationClip, JointTrack, Keyframe};
 use std::collections::HashMap;
 
 use super::signals::ReloadSignals;

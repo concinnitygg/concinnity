@@ -23,13 +23,13 @@ use super::planet::PlanetGrass;
 use super::planet::density::meadow_density;
 use super::planet::tiles::{DrawnPlanetTile, ground_reference, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
-use crate::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
+use crate::environment::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
+use crate::environment::water::sea::shore::ShoreWaves;
 use crate::render::environment::ground::GroundCovers;
 use crate::render::uniforms::canopy::{
     CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS, ShoreSwashGpu,
 };
 use crate::render::uniforms::ground::GroundRuleGpu;
-use crate::water::sea::shore::ShoreWaves;
 
 /// Most layers one terrain's far field shades: its vertex colors carry one
 /// layer's density per channel.
@@ -607,9 +607,9 @@ fn meadow_mean(scale: f32, seeds: &[u32]) -> f32 {
 mod tests {
     use super::*;
     use crate::components::Grass;
-    use crate::planet::{CubeFace, TileId};
+    use crate::environment::planet::{CubeFace, TileId};
+    use crate::environment::terrain::TerrainGrid;
     use crate::render::environment::grass::litter::litter_color;
-    use crate::terrain::TerrainGrid;
     use alloc::vec;
     use concinnity_core::math::vec3::{add, cross, dot, normalize_or, scale};
 
@@ -1105,7 +1105,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 1,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         };
         let grass = PlanetGrass::everywhere(
@@ -1131,7 +1131,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 1,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         };
         let grass = PlanetGrass::everywhere(shape.clone(), &[Grass::default()]).unwrap();
@@ -1195,8 +1195,8 @@ mod tests {
     #[test]
     fn the_block_carries_the_shores_wash() {
         use crate::components::Planet;
+        use crate::environment::water::spectrum::SeaShape;
         use crate::render::uniforms::canopy::ShoreSwashGpu;
-        use crate::water::spectrum::SeaShape;
         let planet = Planet {
             land_share: 0.4,
             ..Planet::default()
@@ -1215,10 +1215,10 @@ mod tests {
             x: 512,
             y: 511,
         };
-        let mesh = crate::planet::tile_mesh(&shape, id);
+        let mesh = crate::environment::planet::tile_mesh(&shape, id);
         let tile = DrawnPlanetTile {
             id,
-            model: crate::planet::LocalFrame::AUTHORED.model_at(mesh.origin),
+            model: crate::environment::planet::LocalFrame::AUTHORED.model_at(mesh.origin),
             vertex_base: 0,
             radial: mesh.radial,
             origin_altitude: mesh.origin_altitude,
@@ -1260,7 +1260,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 1,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         };
         let above = GroundRule {
@@ -1294,10 +1294,10 @@ mod tests {
             x: 512,
             y: 511,
         };
-        let tile_mesh = crate::planet::tile_mesh(&shape, id);
+        let tile_mesh = crate::environment::planet::tile_mesh(&shape, id);
         let tile = DrawnPlanetTile {
             id,
-            model: crate::planet::LocalFrame::AUTHORED.model_at(tile_mesh.origin),
+            model: crate::environment::planet::LocalFrame::AUTHORED.model_at(tile_mesh.origin),
             vertex_base: 0,
             radial: tile_mesh.radial,
             origin_altitude: tile_mesh.origin_altitude,
@@ -1350,8 +1350,8 @@ mod tests {
     #[test]
     fn a_grassless_planet_lays_its_ground() {
         use crate::components::{GroundCover, GroundRule, Planet};
+        use crate::environment::water::spectrum::SeaShape;
         use crate::render::uniforms::canopy::ShoreSwashGpu;
-        use crate::water::spectrum::SeaShape;
         let sand = GroundCover {
             rule: GroundRule {
                 altitude: [None, Some(2.0)],
@@ -1387,10 +1387,10 @@ mod tests {
             x: 512,
             y: 511,
         };
-        let mesh = crate::planet::tile_mesh(&shape, id);
+        let mesh = crate::environment::planet::tile_mesh(&shape, id);
         let tile = DrawnPlanetTile {
             id,
-            model: crate::planet::LocalFrame::AUTHORED.model_at(mesh.origin),
+            model: crate::environment::planet::LocalFrame::AUTHORED.model_at(mesh.origin),
             vertex_base: 0,
             radial: mesh.radial,
             origin_altitude: mesh.origin_altitude,
@@ -1627,7 +1627,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 8,
             seed: 4,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         }
     }
@@ -1662,7 +1662,9 @@ mod tests {
     #[test]
     fn a_fine_pixel_near_a_coast_shades_with_the_exact_ground_normal() {
         let shape = PlanetShape {
-            continents: crate::planet::Continents::new(50_000.0, 4, 20_000.0, 0.4, 60.0, 60.0),
+            continents: crate::environment::planet::Continents::new(
+                50_000.0, 4, 20_000.0, 0.4, 60.0, 60.0,
+            ),
             ..ground_shape()
         };
         let mut p = CanopyParams {
@@ -1696,9 +1698,12 @@ mod tests {
     // shades with the ground's exact edited normal, inland and on the coast.
     #[test]
     fn edited_corners_shade_with_the_exact_ground_normal() {
-        use crate::planet::{EditPage, EditPages, PAGE_SAMPLES, PAGE_SIDE, TILE_CELLS, TileId};
-        let coast = crate::planet::Continents::new(50_000.0, 4, 20_000.0, 0.4, 60.0, 60.0);
-        for continents in [crate::planet::Continents::NONE, coast] {
+        use crate::environment::planet::{
+            EditPage, EditPages, PAGE_SAMPLES, PAGE_SIDE, TILE_CELLS, TileId,
+        };
+        let coast =
+            crate::environment::planet::Continents::new(50_000.0, 4, 20_000.0, 0.4, 60.0, 60.0);
+        for continents in [crate::environment::planet::Continents::NONE, coast] {
             let generated = PlanetShape {
                 continents,
                 ..ground_shape()
@@ -1724,7 +1729,7 @@ mod tests {
             let pages = EditPages::new([(page_tile, EditPage::from_samples(&e, &w).unwrap())]);
             let shape = generated.with_edits(Some(alloc::sync::Arc::new(pages)));
             let tile = page_tile.children()[1].children()[2];
-            let mesh = crate::planet::tile_mesh(&shape, tile);
+            let mesh = crate::environment::planet::tile_mesh(&shape, tile);
             let side = TILE_CELLS as usize + 1;
             let mut corrected = 0;
             for j in 0..side {

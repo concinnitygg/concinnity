@@ -2,8 +2,8 @@
 //! device headroom and draw records a voxel world's chunk window or a planet's
 //! tiles need.
 
+use crate::environment::planet::MAX_RESIDENT_TILES;
 use crate::gfx::mesh_payload::Vertex;
-use crate::planet::MAX_RESIDENT_TILES;
 use crate::render::streaming::chunk_window::{max_full_detail_chunks, max_resident_chunks};
 use crate::render::streaming::pools::tile_mesh_size;
 use concinnity_core::math::SaturatingFrom;
@@ -58,7 +58,9 @@ pub fn chunk_record_reserve(voxel_far_radius: Option<u32>, planet: bool) -> usiz
 /// with the coarse grid a capture draws them through after it.
 pub fn planet_tile_headroom() -> (usize, usize) {
     let (vertices, full) = tile_mesh_size();
-    let indices = full + crate::planet::tile_indices(crate::planet::CAPTURE_TILE_STRIDE).len();
+    let indices = full
+        + crate::environment::planet::tile_indices(crate::environment::planet::CAPTURE_TILE_STRIDE)
+            .len();
     let bytes = |tiles: u64, count: usize, size: usize| {
         usize::try_from(tiles * count as u64 * size as u64).unwrap_or(usize::MAX)
     };
@@ -160,7 +162,10 @@ mod tests {
     #[test]
     fn the_planet_headroom_holds_every_tiles_vertices_and_one_shared_grid() {
         let (vertices, indices) = tile_mesh_size();
-        let coarse = crate::planet::tile_indices(crate::planet::CAPTURE_TILE_STRIDE).len();
+        let coarse = crate::environment::planet::tile_indices(
+            crate::environment::planet::CAPTURE_TILE_STRIDE,
+        )
+        .len();
         let (vtx, idx) = planet_tile_headroom();
         assert_eq!(vtx, MAX_RESIDENT_TILES * vertices * size_of::<Vertex>());
         assert_eq!(idx, (indices + coarse) * size_of::<u32>());

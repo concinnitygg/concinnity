@@ -319,7 +319,7 @@ fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
     use concinnity_engine::ecs::System;
     let mut ctx = world.context();
     concinnity_engine::render::overlay::OverlaySystem::new().step(&mut ctx);
-    concinnity_engine::spawn::SpawnSystem::new().step(&mut ctx);
+    concinnity_engine::simulation::spawn::SpawnSystem::new().step(&mut ctx);
     concinnity_engine::settings::system::SettingsSystem::new().step(&mut ctx);
     concinnity_engine::render::streaming::pools::StreamingSystem::default().step(&mut ctx);
     let result = gs.run_step(&mut ctx);

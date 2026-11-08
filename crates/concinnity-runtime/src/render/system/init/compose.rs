@@ -4,8 +4,8 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components::Planet;
 use concinnity_engine::ecs::{MaterialHandle, PipelineContext};
+use concinnity_engine::environment::planet::MAX_GROUND_COVERS;
 use concinnity_engine::gfx::render_types::DrawIndex;
-use concinnity_engine::planet::MAX_GROUND_COVERS;
 use concinnity_engine::render::environment::ground::GroundCovers;
 use concinnity_engine::render::environment::terrain::grass_by_id;
 use concinnity_engine::render::material_entry::MaterialEntry;

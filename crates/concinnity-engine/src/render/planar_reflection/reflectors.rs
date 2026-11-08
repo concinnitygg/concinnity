@@ -5,11 +5,11 @@ use super::MAX_PLANAR_PLANES;
 use super::slots::{PlanarAssignment, assign_planar_slots};
 use super::visibility::{PlanarFramePlan, PlanarReflector, ReflectorHull};
 use crate::components::{GlassPanel, PassResolution, WaterSurface};
+use crate::environment::water::WaterBody;
 use crate::geometry::glass_quad::plane_basis;
 use crate::render::backend::init::PlanarBudget;
 use crate::render::uniforms::WaterParams;
 use crate::transform::Mat4;
-use crate::water::WaterBody;
 use alloc::vec::Vec;
 use concinnity_core::math::vec3::normalize_or;
 
@@ -144,9 +144,9 @@ impl PlanarReflectors {
 mod tests {
     use super::*;
     use crate::components::WaterWave;
+    use crate::environment::wind::WindField;
     use crate::render::depth::camera_projection;
     use crate::transform::mat4_mul;
-    use crate::wind::WindField;
     use alloc::vec;
 
     fn looking_down_z_from(eye: [f32; 3]) -> Mat4 {
@@ -191,7 +191,7 @@ mod tests {
     // first one.
     #[test]
     fn a_planet_sea_takes_no_mirror() {
-        let sea = crate::water::PlanetWater {
+        let sea = crate::environment::water::PlanetWater {
             planet: crate::components::Planet::default().shape(),
             level: 0.0,
             surface: &WaterSurface::default(),
@@ -199,7 +199,7 @@ mod tests {
         let (mut water, _) = WaterBody::resolve_all(
             [],
             &WindField::STILL,
-            crate::water::ocean::OceanQuality::FULL,
+            crate::environment::water::ocean::OceanQuality::FULL,
             Some(sea),
         );
         water.push(pool([0.0, 2.0, 0.0]));

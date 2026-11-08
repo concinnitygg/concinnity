@@ -6,9 +6,9 @@
 //! backend context.
 
 use concinnity_core::platform::Platform;
+use concinnity_engine::presentation::window::display_mode::DisplayProbe;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::{backend, backend::init};
-use concinnity_engine::window::display_mode::DisplayProbe;
 
 /// The graphics APIs this build can render with, the target's native one
 /// first. Empty on a target with no window layer.

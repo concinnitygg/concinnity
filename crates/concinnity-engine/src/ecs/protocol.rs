@@ -167,7 +167,7 @@ pub enum TraceStep {
 pub type TracePath = Vec<TraceStep>;
 
 /// A behavior-body value in its cross-boundary form: what
-/// [`Val`](crate::behavior::Val) publishes to an observer. Entities travel as
+/// [`Val`](crate::simulation::behavior::Val) publishes to an observer. Entities travel as
 /// their id bits.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TraceVal {
@@ -512,7 +512,7 @@ pub struct DisabledSettingRows(pub hashbrown::HashSet<crate::settings::SettingKe
 /// the graphics system at init and read by the UI input system to seed the
 /// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
 #[derive(Debug, Clone, Default)]
-pub struct DisplayModes(pub Vec<crate::window::display_mode::DisplayMode>);
+pub struct DisplayModes(pub Vec<crate::presentation::window::display_mode::DisplayMode>);
 
 #[cfg(test)]
 mod tests {

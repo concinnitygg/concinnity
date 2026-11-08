@@ -1,9 +1,9 @@
 use super::*;
 use concinnity_engine::components::{KeyBinding, Screenshot, UiAction, WindowMode};
 use concinnity_engine::launch::LaunchArgs;
+use concinnity_engine::presentation::window::display_mode::DisplayMode;
 use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_engine::render::rt_accel::geom::RtDynamicMode;
-use concinnity_engine::window::display_mode::DisplayMode;
 
 // The `--graphics-quality` launch flag has to reach the CEILING, not merely the
 // menu label. On an entry-tier GPU `Auto` resolves to the `Medium` ceiling,

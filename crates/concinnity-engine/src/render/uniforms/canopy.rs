@@ -3,8 +3,8 @@
 //! `shaders/canopy.hlsl`.
 
 use super::ground::{GroundCoverGpu, GroundRuleGpu};
-use crate::planet::MAX_GROUND_COVERS;
-use crate::water::sea::shore::{PHASE_NOISE_RADIANS, SWELL_VARIATION, ShoreWaves};
+use crate::environment::planet::MAX_GROUND_COVERS;
+use crate::environment::water::sea::shore::{PHASE_NOISE_RADIANS, SWELL_VARIATION, ShoreWaves};
 use concinnity_core::math::narrow_f32;
 
 /// Most layers the canopy block describes: every far field in the world

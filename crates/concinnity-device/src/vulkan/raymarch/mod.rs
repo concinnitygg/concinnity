@@ -1315,7 +1315,7 @@ impl VkContext {
             viewport: [0.0, 0.0],
             time: elapsed,
             prefilter_mip_count: 0.0,
-            sky_rot: concinnity_engine::sky::SkyOrientation::IDENTITY_ROWS,
+            sky_rot: concinnity_engine::environment::sky::SkyOrientation::IDENTITY_ROWS,
             cur_vp: [[0.0; 4]; 4],
             prev_vp: [[0.0; 4]; 4],
             view_mat: [[0.0; 4]; 4],

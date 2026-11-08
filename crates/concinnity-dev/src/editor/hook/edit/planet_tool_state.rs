@@ -2,7 +2,7 @@
 //! and brush, where the brush is on the ground and the rings drawn around it,
 //! the stroke a drag is laying, and the brush slider being dragged.
 
-use concinnity_engine::planet::{GeoPosition, GroundPick};
+use concinnity_engine::environment::planet::{GeoPosition, GroundPick};
 
 use crate::editor::planet_tools::ring::RING_POINTS;
 use crate::editor::planet_tools::stroke::Spacer;

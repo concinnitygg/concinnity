@@ -231,8 +231,8 @@ mod tests {
 /// skeleton-shape change path.
 pub fn build_skeleton_from_joint_defs(
     defs: &[SkeletonJoint],
-) -> crate::animation::skeleton::Skeleton {
-    use crate::animation::skeleton as skinning;
+) -> crate::simulation::animation::skeleton::Skeleton {
+    use crate::simulation::animation::skeleton as skinning;
     let joints = defs
         .iter()
         .map(|jd| skinning::Joint {
@@ -252,7 +252,7 @@ impl SkinnedMesh {
     /// Column-major world matrix built from the mesh's transform, in the same
     /// construction order (scale, YXZ rotation, translate) as `Prop::model_matrix`.
     pub fn model_matrix(&self) -> [[f32; 4]; 4] {
-        crate::animation::skeleton::JointPose {
+        crate::simulation::animation::skeleton::JointPose {
             translation: self.position,
             rotation_deg: self.rotation_deg,
             scale: self.scale,

@@ -63,7 +63,7 @@ pub fn far_fields(terrains: &[GrassTerrain]) -> Vec<Option<FarField>> {
 mod tests {
     use super::*;
     use crate::components::Grass;
-    use crate::terrain::{DensityMask, TerrainGrid};
+    use crate::environment::terrain::{DensityMask, TerrainGrid};
     use alloc::vec;
 
     fn terrain(layers: Vec<(Grass, Option<DensityMask>)>) -> GrassTerrain {

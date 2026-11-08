@@ -2,7 +2,7 @@
 //!
 //! The host's workers build each tile's mesh from the planet's shape; the
 //! meshes ride the chunk pool like a voxel world's chunks. Which tiles to build, keep,
-//! show and drop is the quadtree policy in `crate::planet`
+//! show and drop is the quadtree policy in `crate::environment::planet`
 //! ([`TileLod`]); this module applies it to what is resident each frame.
 //!
 //! A tile's vertices are relative to its own origin, held in double precision,
@@ -22,12 +22,12 @@ mod edits;
 
 use super::state::PlanetView;
 use super::{LoadPool, Mailbox};
-use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms};
-use crate::planet::{
+use crate::environment::planet::{
     DVec3, EditArea, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame,
     MAX_RESIDENT_TILES, PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh,
     TileMorphFrame, TileSeams, TileView, tile_mesh,
 };
+use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms};
 use crate::render::backend::{ChunkMesh, PlanetChunk};
 use crate::render::environment::grass::CanopyRange;
 use crate::render::frame::ops::{OpFailure, RenderOps};
@@ -372,7 +372,7 @@ impl TileMaterial {
 
 /// The largest mesh a tile builds: `(vertices, indices)`.
 pub fn tile_mesh_size() -> (usize, usize) {
-    let n = crate::planet::TILE_CELLS as usize;
+    let n = crate::environment::planet::TILE_CELLS as usize;
     ((n + 1) * (n + 1), n * n * 6)
 }
 
@@ -428,10 +428,13 @@ impl LoadPool for PlanetTiles {
 impl PlanetTiles {
     /// Tiles of `planet` drawn with `material`.
     pub fn new(planet: &PlanetFrame, material: TileMaterial) -> Self {
-        let lod = TileLod::new(planet.shape.clone(), crate::planet::FINEST_CELL_SIZE);
+        let lod = TileLod::new(
+            planet.shape.clone(),
+            crate::environment::planet::FINEST_CELL_SIZE,
+        );
         Self {
             lod,
-            finest_cell_size: crate::planet::FINEST_CELL_SIZE,
+            finest_cell_size: crate::environment::planet::FINEST_CELL_SIZE,
             mail: Mailbox::default(),
             generation: 0,
             tiles: BTreeMap::new(),

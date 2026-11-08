@@ -12,13 +12,13 @@ use hashbrown::HashMap;
 use crate::components::{Grass, Identity, Terrain};
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::environment::terrain::payload::TerrainPayload;
+use crate::environment::terrain::{terrain_chunks, terrain_chunks_colored};
 use crate::gfx::frustum;
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawObject, FarFieldTint};
 use crate::render::environment::grass::GrassTerrain;
 use crate::render::environment::grass::tint::{FarField, far_fields};
-use crate::terrain::payload::TerrainPayload;
-use crate::terrain::{terrain_chunks, terrain_chunks_colored};
 use crate::transform::trs_matrix;
 
 use crate::render::material_entry::MaterialEntry;
@@ -161,8 +161,8 @@ mod tests {
     use super::*;
     use crate::components::TerrainLayer;
     use crate::ecs::Ref;
+    use crate::environment::terrain::{DensityMask, TERRAIN_CHUNK_CELLS, TerrainGrid};
     use crate::render::environment::grass::CanopyRange;
-    use crate::terrain::{DensityMask, TERRAIN_CHUNK_CELLS, TerrainGrid};
     use alloc::vec;
 
     fn loaded(resolution: u32, layers: Vec<TerrainLayer>) -> LoadedTerrain {

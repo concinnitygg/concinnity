@@ -1,11 +1,11 @@
 use super::*;
-use crate::camera::camera3d::Camera3DArgs;
 use crate::components::{
     Behavior, Camera3D, CameraController, CameraTrack, DebugHud, FollowController, FpsCounter,
     PhysicsConfig, RigidBody, Screen, SkyRotation, StatHud, Story, TextInput,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{PipelineContext, StepResult};
+use crate::simulation::camera::camera3d::Camera3DArgs;
 use alloc::vec::Vec;
 
 // Every core entry at once, for the gates that only a rendering host's table

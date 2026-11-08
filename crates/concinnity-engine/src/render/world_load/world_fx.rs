@@ -10,7 +10,10 @@ use crate::components::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::planet::PlanetShape;
+use crate::environment::planet::PlanetShape;
+use crate::environment::water::sea::shore::ShoreWaves;
+use crate::environment::water::{WaterBody, split_water};
+use crate::environment::wind::WindField;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
 use crate::render::environment::atmosphere::{AtmosphereSettings, SeaLook, SurfacePalette};
 use crate::render::environment::clouds::CloudSettings;
@@ -20,9 +23,6 @@ use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
 use crate::render::{decal, environment::volumetric_fog, particles};
 use crate::settings::QualityCeiling;
-use crate::water::sea::shore::ShoreWaves;
-use crate::water::{WaterBody, split_water};
-use crate::wind::WindField;
 
 /// What a planet's ground is laid with: the tint of its material, the grass
 /// its layers grow and the covers over it.
@@ -31,7 +31,7 @@ pub struct PlanetSurface {
     /// The mean albedo of the planet's material.
     pub albedo: [f32; 3],
     /// The mean albedo of each cover's material, in the covers' order.
-    pub cover_albedo: [[f32; 3]; crate::planet::MAX_GROUND_COVERS],
+    pub cover_albedo: [[f32; 3]; crate::environment::planet::MAX_GROUND_COVERS],
     /// The grass, `None` when no layer grows any.
     pub grass: Option<PlanetGrass>,
     /// The covers.
@@ -242,8 +242,8 @@ mod tests {
     use super::*;
     use crate::components::{Terrain, TerrainLayer};
     use crate::ecs::{PayloadLocator, Ref, TextureHandle, World};
-    use crate::terrain::TerrainGrid;
-    use crate::terrain::payload::TerrainPayload;
+    use crate::environment::terrain::TerrainGrid;
+    use crate::environment::terrain::payload::TerrainPayload;
     use crate::test_support::OneSection;
     use alloc::boxed::Box;
     use alloc::string::ToString;
@@ -369,7 +369,7 @@ mod tests {
     }
 
     fn shore() -> ShoreWaves {
-        let sea = crate::water::spectrum::SeaShape::new(7.0, 50_000.0).unwrap();
+        let sea = crate::environment::water::spectrum::SeaShape::new(7.0, 50_000.0).unwrap();
         ShoreWaves::new(&planet_shape(), 0.0, &sea, None).unwrap()
     }
 

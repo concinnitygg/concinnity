@@ -11,11 +11,11 @@
 //! `builtin_shaders`; the ray-traced fragment needs shader model 6.5 for its
 //! inline ray query, the base pair 6.0.
 
-use concinnity_engine::planet::Rebase;
+use concinnity_engine::environment::planet::Rebase;
+use concinnity_engine::environment::water::WaterBody;
 use concinnity_engine::render::backend::PlanetReshape;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
-use concinnity_engine::water::WaterBody;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::DeviceAllocator;
@@ -258,7 +258,7 @@ impl DxContext {
         &mut self,
         camera: [f32; 3],
         time: f64,
-        stirs: &[concinnity_engine::water::stir::WaterStir],
+        stirs: &[concinnity_engine::environment::water::stir::WaterStir],
     ) {
         let wakes = self.water_sim_live()
             && self
@@ -316,7 +316,7 @@ impl DxContext {
 impl PlanetReshape for DxContext {
     // Bring the planet's sea, grass and ground's far field to its reshaped
     // `shape`.
-    fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape) {
+    fn reshape_planet(&mut self, shape: &concinnity_engine::environment::planet::PlanetShape) {
         let water = self
             .transparent
             .as_mut()

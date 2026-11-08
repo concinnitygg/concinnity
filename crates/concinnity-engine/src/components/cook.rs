@@ -12,10 +12,8 @@
 //! `concinnity_cook::authoring::registry::build_only`.
 
 pub use crate::app::config::AppConfigArgs as AppConfig;
-pub use crate::camera::camera3d::Camera3DArgs as Camera3D;
-pub use crate::camera::track::CameraTrackArgs as CameraTrack;
+pub use crate::environment::planet::PlanetGroundArgs as PlanetGround;
 pub use crate::geometry::room::RoomArgs as Room;
-pub use crate::planet::PlanetGroundArgs as PlanetGround;
 pub use crate::resource::audio_clip::AudioClip;
 pub use crate::resource::color_lut::ColorLut;
 pub use crate::resource::cubemap_texture::CubemapTexture;
@@ -29,4 +27,6 @@ pub use crate::resource::skinned_mesh::{
     CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
 };
 pub use crate::resource::texture::Texture;
-pub use crate::spawn::spawner::SpawnerArgs as Spawner;
+pub use crate::simulation::camera::camera3d::Camera3DArgs as Camera3D;
+pub use crate::simulation::camera::track::CameraTrackArgs as CameraTrack;
+pub use crate::simulation::spawn::spawner::SpawnerArgs as Spawner;

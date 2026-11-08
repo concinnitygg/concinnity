@@ -5,10 +5,10 @@
 //! export form so a baked file needs no shape work in the target tool.
 
 use concinnity_core::math::vec3;
-use concinnity_engine::animation::proportions::ProportionLayer;
 use concinnity_engine::components::{
     CharacterShape, SkeletonJoint, build_skeleton_from_joint_defs,
 };
+use concinnity_engine::simulation::animation::proportions::ProportionLayer;
 use concinnity_engine::transform::{Mat4, decompose, euler_yxz_from_quat, mat4_transform_point};
 
 use super::ExportMesh;

@@ -6,7 +6,7 @@
 
 use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
 use concinnity_engine::ecs::World;
-use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::presentation::window::clipboard::Clipboard;
 
 use crate::editor::hook::EditorHook;
 use crate::editor::hook::tests::fixtures::hook;

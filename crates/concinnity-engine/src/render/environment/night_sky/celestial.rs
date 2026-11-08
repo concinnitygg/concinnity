@@ -83,7 +83,7 @@ mod tests {
         assert!(dot(b.toward_sun, b.sun) > 0.9);
         // The sky's turn carries the sun away from east, so a body east of
         // it follows it across the sky.
-        let sun_then = crate::sky::SkyOrientation::new(b.pole, 10.0).rotate(b.sun);
+        let sun_then = crate::environment::sky::SkyOrientation::new(b.pole, 10.0).rotate(b.sun);
         assert!(dot(sun_then, b.east) < 0.0, "{sun_then:?}");
         // A sun on the pole still gets a basis.
         let on = CelestialBasis::new([0.0, 1.0, 0.0], [0.0, 3.0, 0.0]);

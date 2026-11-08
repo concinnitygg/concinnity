@@ -239,9 +239,9 @@ mod tests {
     // still sees it, where the box it was built with would now be culled.
     #[test]
     fn a_static_draw_moved_with_the_frame_stays_culled_right() {
+        use crate::environment::planet::LocalFrame;
         use crate::gfx::camera::view_matrix;
         use crate::gfx::frustum::{Frustum, transform_aabb};
-        use crate::planet::LocalFrame;
         use crate::render::depth::camera_projection;
         use crate::transform::mat4_mul;
 

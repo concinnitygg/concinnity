@@ -6,7 +6,7 @@
 //! about the surface and its input, never about the scene drawn on it.
 
 use crate::input::snapshot::InputSnapshot;
-use crate::window::clipboard::Clipboard;
+use crate::presentation::window::clipboard::Clipboard;
 use alloc::vec::Vec;
 
 /// The presentation surface and its input: the close request, input, vsync,
@@ -119,22 +119,24 @@ pub trait WindowControl {
     /// backend renders to supports, unshaped (the caller dedups + sorts).
     /// Default empty: a backend that cannot enumerate (or has no window) makes
     /// the Resolution row fall back to the static preset list.
-    fn display_modes(&self) -> Vec<crate::window::display_mode::DisplayMode> {
+    fn display_modes(&self) -> Vec<crate::presentation::window::display_mode::DisplayMode> {
         Vec::new()
     }
 
     /// The mode the display is currently running, if the backend can read it.
     /// Shown by the Resolution row when the user has never chosen a mode (the
     /// display keeps its desktop mode until one is chosen). Default `None`.
-    fn current_display_mode(&self) -> Option<crate::window::display_mode::DisplayMode> {
+    fn current_display_mode(
+        &self,
+    ) -> Option<crate::presentation::window::display_mode::DisplayMode> {
         None
     }
 
     /// How fast the display this backend renders to can refresh. Default: the
     /// current mode's rate, with no variable range.
-    fn display_refresh(&self) -> Option<crate::window::display_mode::DisplayRefresh> {
+    fn display_refresh(&self) -> Option<crate::presentation::window::display_mode::DisplayRefresh> {
         self.current_display_mode()
-            .and_then(crate::window::display_mode::DisplayRefresh::from_mode)
+            .and_then(crate::presentation::window::display_mode::DisplayRefresh::from_mode)
     }
 
     /// Select the display mode to hold while the window is in fullscreen. The
@@ -142,7 +144,7 @@ pub trait WindowControl {
     /// restores the display's original mode when the window leaves fullscreen
     /// or shuts down; outside fullscreen the choice is only remembered. Default
     /// no-op: a backend without mode switching leaves the display alone.
-    fn set_display_mode(&mut self, mode: crate::window::display_mode::DisplayMode) {
+    fn set_display_mode(&mut self, mode: crate::presentation::window::display_mode::DisplayMode) {
         let _ = mode;
     }
 

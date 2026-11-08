@@ -27,15 +27,15 @@ pub mod window;
 #[cfg(test)]
 mod model;
 
-use crate::planet::Rebase;
+use crate::environment::planet::Rebase;
+use crate::environment::water::spectrum::GRAVITY;
+use crate::environment::water::stir::WaterStir;
 use crate::render::environment::grass::{map_at_height, map_then};
 use crate::render::uniforms::grass::GRASS_IDENTITY_MAP;
 use crate::render::uniforms::wake::{
     MAX_WAKE_STIRS, WAKE_CARRIED, WAKE_LAST_VALID, WAKE_WRITE_SECOND, WaterWakeGpu,
     WaterWakeParams, WaterWakeStirGpu,
 };
-use crate::water::spectrum::GRAVITY;
-use crate::water::stir::WaterStir;
 use concinnity_core::math::{SaturatingFrom, exp, sqrt};
 use core::cell::Cell;
 use stirs::StirMemory;
@@ -386,8 +386,8 @@ fn narrow(v: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physics::MAX_FLUID_PIECES;
-    use crate::water::stir::StirPiece;
+    use crate::environment::water::stir::StirPiece;
+    use crate::simulation::physics::MAX_FLUID_PIECES;
 
     fn bob(x: f32, volume: f32) -> WaterStir {
         let mut pieces = [StirPiece::default(); MAX_FLUID_PIECES];

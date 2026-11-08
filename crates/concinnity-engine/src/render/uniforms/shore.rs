@@ -1,12 +1,12 @@
 //! What a planet sea's shader reads its shore waves from. Matches
 //! `WaterShore` in `shaders/water.hlsl`.
 
-use crate::planet::{CONTINENT_OCTAVES, octave_weight_sum};
-use crate::render::environment::water::sea::SeaShoreMotion;
-use crate::water::sea::shore::{
+use crate::environment::planet::{CONTINENT_OCTAVES, octave_weight_sum};
+use crate::environment::water::sea::shore::{
     PHASE_NOISE_RADIANS, SHORE_NODES, SHORE_OCTAVES, SHORE_TRAINS, SURF_LACE_PERIOD,
     SWELL_VARIATION, ShoreWaves,
 };
+use crate::render::environment::water::sea::SeaShoreMotion;
 use concinnity_core::math::narrow_f32;
 
 /// A planet sea's shore waves: where the coast lies (the continent field the
@@ -36,7 +36,7 @@ pub struct WaterShoreGpu {
     /// radius, 1 / sea radius]`.
     pub noise: [f32; 4],
     /// `[sea level, waterline, ocean depth, shelf]`, in meters
-    /// ([`CoastProfile`](crate::water::sea::shore::CoastProfile)).
+    /// ([`CoastProfile`](crate::environment::water::sea::shore::CoastProfile)).
     pub coast: [f32; 4],
     /// `[beach width, beach rise, table reach, peak wavelength]`, in meters.
     pub beach: [f32; 4],

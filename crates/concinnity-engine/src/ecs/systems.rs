@@ -9,33 +9,33 @@
 
 use alloc::boxed::Box;
 
-use crate::animation::AnimationSystem;
 use crate::audio::out::AudioOut;
 use crate::audio::system::AudioSystem;
-use crate::behavior::{BehaviorStore, BehaviorSystem};
-use crate::camera::track::CameraTrackSystem;
-use crate::controller::camera::Camera3DSystem;
-use crate::controller::third_person::ThirdPersonSystem;
 use crate::ecs::{Phase, System, SystemEntry, SystemTable, World, boxed};
+use crate::environment::planet::{PlanetSystem, StartBuilder, inline_ground};
+use crate::environment::sky::SkyRotationSystem;
+use crate::environment::water::spray::WaterSpraySystem;
 use crate::frame_report::FrameReportSystem;
-use crate::hud::debug_hud::DebugHudSystem;
-use crate::hud::fps_counter::FpsCounterSystem;
-use crate::hud::loading_overlay::LoadingOverlaySystem;
-use crate::hud::stat_hud::StatHudSystem;
 use crate::input::system::{InputSystem, PadSource};
 use crate::input::text_input::TextInputSystem;
 use crate::launch::LaunchRequest;
-use crate::physics::PhysicsSystem;
-use crate::planet::{PlanetSystem, StartBuilder, inline_ground};
+use crate::presentation::hud::debug_hud::DebugHudSystem;
+use crate::presentation::hud::fps_counter::FpsCounterSystem;
+use crate::presentation::hud::loading_overlay::LoadingOverlaySystem;
+use crate::presentation::hud::stat_hud::StatHudSystem;
+use crate::presentation::screenshot::ScreenshotSystem;
+use crate::presentation::ui::UiInputSystem;
 use crate::render::overlay::OverlaySystem;
 use crate::render::streaming::pools::StreamingSystem;
-use crate::screenshot::ScreenshotSystem;
 use crate::settings::system::{SettingsStore, SettingsSystem};
-use crate::sky::SkyRotationSystem;
-use crate::spawn::SpawnSystem;
+use crate::simulation::animation::AnimationSystem;
+use crate::simulation::behavior::{BehaviorStore, BehaviorSystem};
+use crate::simulation::camera::track::CameraTrackSystem;
+use crate::simulation::controller::camera::Camera3DSystem;
+use crate::simulation::controller::third_person::ThirdPersonSystem;
+use crate::simulation::physics::PhysicsSystem;
+use crate::simulation::spawn::SpawnSystem;
 use crate::story::{StoryStore, StorySystem};
-use crate::ui::UiInputSystem;
-use crate::water::spray::WaterSpraySystem;
 use concinnity_core::fanout::{FanOut, Inline, Lent};
 
 /// What a host lends this crate's systems when their gates build them: always

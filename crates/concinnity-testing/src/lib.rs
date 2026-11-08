@@ -47,5 +47,5 @@ pub use wait::eventually;
 /// lifts it afterwards. Call this directly from a test binary that should never
 /// open a window at all.
 pub fn forbid_windows() {
-    concinnity_engine::window::policy::forbid_windows();
+    concinnity_engine::presentation::window::policy::forbid_windows();
 }

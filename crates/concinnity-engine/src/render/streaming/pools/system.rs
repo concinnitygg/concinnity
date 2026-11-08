@@ -13,7 +13,7 @@ use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::components::{Camera3D, FrameInput};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{Clock, PipelineContext, StepResult, System, World};
-use crate::planet::{PlanetEdited, PlanetFrame, points_per_radian};
+use crate::environment::planet::{PlanetEdited, PlanetFrame, points_per_radian};
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::frame::extract::CameraRelativeView;
 use crate::render::frame::ops::OpFailure;

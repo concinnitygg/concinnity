@@ -11,6 +11,7 @@ use crate::components::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
 use crate::input::keymap::{Bindable, KeyMap};
+use crate::presentation::window::display_mode::DisplayMode;
 use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
@@ -19,7 +20,6 @@ use crate::settings::UserGraphicsSettings;
 use crate::settings::system::EventCursor;
 use crate::settings::system::RenderOps;
 use crate::settings::system::Window;
-use crate::window::display_mode::DisplayMode;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;

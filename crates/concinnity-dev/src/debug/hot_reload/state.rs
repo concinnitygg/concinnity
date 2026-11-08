@@ -3,7 +3,6 @@
 //! side-effect bundle, and `run_frame`, the per-frame entry the debug drive
 //! calls. Built from `HotReloadSources` (captured in the lib at init).
 
-use concinnity_engine::animation::skeleton;
 use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::components::{SkeletonJoint, Story};
 use concinnity_engine::gfx::mesh_payload;
@@ -14,6 +13,7 @@ use concinnity_engine::render::world_load::source_maps::{
     ColorLutSource, EnvironmentMapSource, MeshSourceMap, ProceduralMeshSourceMap,
     SkinnedMeshSourceMap, TextureSourceMap,
 };
+use concinnity_engine::simulation::animation::skeleton;
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use std::sync::{Arc, Mutex};
 

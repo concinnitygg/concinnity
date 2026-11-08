@@ -30,8 +30,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::environment::planet::Rebase;
+use concinnity_engine::environment::water::WaterBody;
+use concinnity_engine::environment::water::stir::WaterStir;
 use concinnity_engine::gfx::mesh_payload::Vertex;
-use concinnity_engine::planet::Rebase;
 use concinnity_engine::render::backend::PlanetReshape;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
@@ -39,8 +41,6 @@ use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
 use concinnity_engine::render::transparent;
 use concinnity_engine::render::uniforms::{TransparentView, WaterParams};
-use concinnity_engine::water::WaterBody;
-use concinnity_engine::water::stir::WaterStir;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice, MTLRenderPipelineState, MTLResourceOptions};
@@ -438,7 +438,7 @@ fn build_water_pipeline_with(
 impl PlanetReshape for MtlContext {
     // Bring the planet's sea, grass and ground's far field to its reshaped
     // `shape`.
-    fn reshape_planet(&mut self, shape: &concinnity_engine::planet::PlanetShape) {
+    fn reshape_planet(&mut self, shape: &concinnity_engine::environment::planet::PlanetShape) {
         concinnity_engine::render::environment::reshape::reshape_planet(
             shape,
             self.water.surfaces.iter_mut().map(|s| &mut s.motion),

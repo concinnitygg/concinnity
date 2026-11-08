@@ -4,7 +4,7 @@
 use super::celestial::CelestialBasis;
 use super::moon::{face_up, lambert_phase};
 use super::settings::NightSkySettings;
-use crate::sky::SkyOrientation;
+use crate::environment::sky::SkyOrientation;
 use concinnity_core::math::vec3::dot;
 
 /// The moon this frame.

@@ -19,7 +19,7 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::planet::Rebase;
+use concinnity_engine::environment::planet::Rebase;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::environment::grass::bend::GRASS_BEND_WORDS;
 use concinnity_engine::render::environment::grass::lod::{

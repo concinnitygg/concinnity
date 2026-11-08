@@ -1677,8 +1677,8 @@ fn cloud_target_desc(inputs: &FrameGraphInputs) -> TextureDesc {
 fn water_cascades_desc() -> TextureDesc {
     // Stands for both cascade arrays of every simulation, at the finest
     // quality; the backend owns them and transitions them itself.
+    use crate::environment::water::ocean::OceanQuality;
     use crate::render::uniforms::ocean::ocean_mip_levels;
-    use crate::water::ocean::OceanQuality;
     let size = OceanQuality::FULL.size;
     TextureDesc::texture_2d(
         TextureSize::Absolute(size),

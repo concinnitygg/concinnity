@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, floor, sqrt};
 
 use super::tiles::GroundRect;
-use crate::terrain::{DensityMask, TerrainGrid};
+use crate::environment::terrain::{DensityMask, TerrainGrid};
 
 /// The heights and mask texels every layer's ground and mask index into.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -192,7 +192,7 @@ impl GrassGround {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terrain::{noise_heights, terrain_chunks};
+    use crate::environment::terrain::{noise_heights, terrain_chunks};
     use alloc::vec;
 
     const CENTER: [f32; 3] = [-7.0, 2.5, 11.0];

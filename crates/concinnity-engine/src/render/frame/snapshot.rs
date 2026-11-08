@@ -51,7 +51,7 @@ pub struct FrameScalars {
     pub history_reset: crate::render::temporal::history_reset::HistoryResetCauses,
     /// The move of the simulated frame since the last drawn frame, if it
     /// moved: what the temporal history is carried through.
-    pub rebase: Option<crate::planet::Rebase>,
+    pub rebase: Option<crate::environment::planet::Rebase>,
     /// Where the camera and the sun are about the planet, for a world with an
     /// `Atmosphere`.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereFrame>,
@@ -82,7 +82,7 @@ impl Default for FrameScalars {
             show: ShowFlags::default(),
             world_hidden: false,
             menu_active: false,
-            sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+            sky_rot: crate::environment::sky::SkyOrientation::IDENTITY_ROWS,
             directional: None,
             history_reset: crate::render::temporal::history_reset::HistoryResetCauses::NONE,
             rebase: None,
@@ -206,7 +206,7 @@ pub struct RenderSnapshot {
     /// Everything that may be trampling grass this frame.
     pub grass_benders: Vec<crate::render::environment::grass::GrassBender>,
     /// What the floating bodies push aside, for the water's wake.
-    pub water_stirs: Vec<crate::water::stir::WaterStir>,
+    pub water_stirs: Vec<crate::environment::water::stir::WaterStir>,
     /// The particle bursts systems asked for this frame.
     pub particle_bursts: Vec<crate::render::particles::ParticleBurst>,
     /// Save the frame to this PNG path once it is presented.

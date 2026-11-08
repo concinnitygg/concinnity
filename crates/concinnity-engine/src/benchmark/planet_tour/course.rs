@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 
 use crate::components::{CameraBoom, CameraTravel, CameraTurn, Ease};
-use crate::planet::PlanetShape;
+use crate::environment::planet::PlanetShape;
 use concinnity_core::math::narrow_f32;
 
 use super::framing::Framing;

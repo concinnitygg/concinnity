@@ -6,9 +6,9 @@
 //! must match the target's clip count. `anim-param` writes one graph parameter,
 //! and `anim-state` reports the graph's state as of the last animation step.
 
-use concinnity_engine::animation::AnimationSystem;
 use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
+use concinnity_engine::simulation::animation::AnimationSystem;
 use concinnity_host::thread::asset_id;
 use serde_json::{Map, Value, json};
 

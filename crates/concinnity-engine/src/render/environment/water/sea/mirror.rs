@@ -74,7 +74,7 @@ pub(super) fn ripple_cell(params: &WaterParams, face: usize, r: usize, s: [f32; 
     } else {
         [row[2], row[3]]
     };
-    let crest = crate::water::ripples::RIPPLE_CREST;
+    let crest = crate::environment::water::ripples::RIPPLE_CREST;
     [
         (s[0] * dir[0] + s[1] * dir[1]) / wavelength + offset[0],
         (s[0] * across[0] + s[1] * across[1]) * crest / wavelength + offset[1],
@@ -85,12 +85,12 @@ pub(super) fn ripple_cell(params: &WaterParams, face: usize, r: usize, s: [f32; 
 mod tests {
     use super::*;
     use crate::components::{Planet, WaterSurface, Wind};
-    use crate::planet::{DVec3, LocalFrame};
+    use crate::environment::planet::{DVec3, LocalFrame};
+    use crate::environment::water::WaterBody;
+    use crate::environment::water::ocean::OceanQuality;
+    use crate::environment::water::ripples::NOISE_PERIOD;
+    use crate::environment::wind::WindField;
     use crate::render::environment::water::frame::WaterMotion;
-    use crate::water::WaterBody;
-    use crate::water::ocean::OceanQuality;
-    use crate::water::ripples::NOISE_PERIOD;
-    use crate::wind::WindField;
     use concinnity_core::math::dvec3;
     use concinnity_core::math::{SaturatingFrom, narrow_f32};
 
@@ -103,7 +103,7 @@ mod tests {
             strength: 9.0,
             ..Wind::default()
         }));
-        let sea = crate::water::PlanetWater {
+        let sea = crate::environment::water::PlanetWater {
             planet: Planet::default().shape(),
             level: 12.0,
             surface: &surface,
@@ -246,7 +246,7 @@ mod tests {
                 let q = on_sea(&body, top, heading, meters);
                 let gpu = read(&p, &moved, q);
                 let d = dvec3::normalize_or(dvec3::sub(q, center), [0.0, 1.0, 0.0]);
-                for (f, (face, w)) in crate::water::sea::SeaFace::shares(d, rate)
+                for (f, (face, w)) in crate::environment::water::sea::SeaFace::shares(d, rate)
                     .iter()
                     .enumerate()
                 {

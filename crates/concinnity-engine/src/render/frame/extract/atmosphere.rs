@@ -6,8 +6,9 @@
 
 use crate::components::{DirectionalLight, SkyRotation};
 use crate::ecs::{PipelineContext, SimTiming};
+use crate::environment::planet::PlanetFrame;
+use crate::environment::sky::SkyOrientation;
 use crate::gfx::render_types::LightUniforms;
-use crate::planet::PlanetFrame;
 use crate::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, SeaLook, SurfaceBelow,
     SurfaceView, sun_light,
@@ -16,7 +17,6 @@ use crate::render::environment::clouds::{CloudFrame, CloudView};
 use crate::render::environment::night_sky::{NightFrame, shadowed_first, shadowed_pair};
 use crate::render::light::lights::DirectionalLightSet;
 use crate::render::uniforms::{DaylightBlock, DaylightBody, DaylightView};
-use crate::sky::SkyOrientation;
 use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3::{length, normalize_or};
 use concinnity_core::math::{acos, atan2, cos, smoothstep, sqrt};
@@ -489,7 +489,7 @@ mod tests {
         let planet = crate::components::Planet::default();
         world.insert_resource(PlanetFrame {
             shape: planet.shape(),
-            frame: crate::planet::LocalFrame::AUTHORED,
+            frame: crate::environment::planet::LocalFrame::AUTHORED,
         });
         let palette = SurfacePalette::new([0.3, 0.2, 0.1], GroundCovers::default(), None, None);
         drive.settings = drive.settings.with_surface(Some(palette));

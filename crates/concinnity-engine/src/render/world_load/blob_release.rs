@@ -4,9 +4,9 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use crate::ecs::PipelineContext;
+use crate::environment::terrain;
 use crate::render::sdf::volume as sdf_volume;
 use crate::resource::AudioClipTable;
-use crate::terrain;
 
 /// Blobs another consumer still reads after graphics has consumed its own payloads.
 pub fn retained_blobs(ctx: &PipelineContext<'_>) -> BTreeSet<u32> {

@@ -13,7 +13,7 @@
 // a warning instead of silently mis-posing.
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::animation::skeleton;
+use concinnity_engine::simulation::animation::skeleton;
 use concinnity_engine::transform::{decompose, euler_yxz_from_quat, mat4_mul};
 use fbxcel::tree::v7400::NodeHandle;
 use std::collections::{BTreeMap, HashMap};

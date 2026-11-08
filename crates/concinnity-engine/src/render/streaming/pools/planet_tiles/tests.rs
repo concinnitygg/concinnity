@@ -5,7 +5,7 @@ fn pending(tile: TileId) -> Tile {
         touch: Touch::new(tile),
     }
 }
-use crate::planet::{CubeFace, tile_mesh};
+use crate::environment::planet::{CubeFace, tile_mesh};
 use alloc::vec;
 use concinnity_core::math::SaturatingFrom;
 
@@ -18,10 +18,10 @@ fn lod() -> TileLod {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 5,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         },
-        crate::planet::FINEST_CELL_SIZE,
+        crate::environment::planet::FINEST_CELL_SIZE,
     )
 }
 
@@ -30,7 +30,8 @@ const CAMERA: DVec3 = [0.0, 40.0, 0.0];
 // The camera's view of the ground decides how far its levels reach.
 #[test]
 fn the_camera_s_view_sets_its_ranges() {
-    let cells = f64::from(crate::planet::TILE_CELLS) * crate::planet::RANGE_CELL_POINTS;
+    let cells = f64::from(crate::environment::planet::TILE_CELLS)
+        * crate::environment::planet::RANGE_CELL_POINTS;
     let camera = |ppr| TileCamera {
         position: [0.0, 40.0, 0.0],
         points_per_radian: ppr,

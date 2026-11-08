@@ -10,8 +10,8 @@ use crate::components::{
 };
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
+use crate::presentation::window::display_mode;
 use crate::settings::{SettingKey, StoredSettings, registry};
-use crate::window::display_mode;
 
 use super::{PadRebindViz, RebindViz, SettingsState, SliderViz};
 

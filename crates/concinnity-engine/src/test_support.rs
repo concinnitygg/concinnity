@@ -283,8 +283,8 @@ pub(crate) fn open_sea(center: [f32; 3]) -> crate::components::WaterSurface {
 }
 
 // A steady 9 m/s wind.
-pub(crate) fn fresh_breeze() -> crate::wind::WindField {
-    crate::wind::WindField::new(Some(&crate::components::Wind {
+pub(crate) fn fresh_breeze() -> crate::environment::wind::WindField {
+    crate::environment::wind::WindField::new(Some(&crate::components::Wind {
         strength: 9.0,
         ..Default::default()
     }))

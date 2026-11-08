@@ -295,7 +295,7 @@ pub struct PlanetTileDraw {
     /// The tile's quadtree level.
     pub level: u8,
     /// Where it meets coarser or finer tiles.
-    pub seams: crate::planet::TileSeams,
+    pub seams: crate::environment::planet::TileSeams,
 }
 
 /// How a planet tile's vertices morph toward its parent's mesh, as its
@@ -305,7 +305,7 @@ pub struct PlanetTileDraw {
 ///
 /// The camera the morph is measured from rides the frame's
 /// [`TileMorphView`]: a vertex `d` meters from its eye morphs from none at
-/// [`crate::planet::MORPH_START`] of the level's range to all of the way at
+/// [`crate::environment::planet::MORPH_START`] of the level's range to all of the way at
 /// the range.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -314,7 +314,7 @@ pub struct GpuTileMorph {
     /// reads its neighbors.
     pub vertex_base: u32,
     /// The sides beside a coarser tile in the low four bits (by
-    /// [`crate::planet::TileSide::bit`]), beside finer tiles in the next four.
+    /// [`crate::environment::planet::TileSide::bit`]), beside finer tiles in the next four.
     pub seams: u32,
     /// The tile's quadtree level.
     pub level: u32,

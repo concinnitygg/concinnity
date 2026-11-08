@@ -30,7 +30,7 @@ pub fn frame_params(
         world_hidden: true,
         view_mode: ViewMode::default(),
         show: ShowFlags::default(),
-        sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+        sky_rot: crate::environment::sky::SkyOrientation::IDENTITY_ROWS,
         history_reset: false,
         rebase: None,
         grass_benders: &[],

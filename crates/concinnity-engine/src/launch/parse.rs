@@ -8,10 +8,10 @@ use super::{
     run_millis, short_flag,
 };
 use crate::gfx::view_modes::ShowFlags;
+use crate::presentation::window::WindowMode;
 use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::QualityPreset;
-use crate::window::WindowMode;
 use concinnity_core::platform::Platform;
 
 // The flag `name` names, without its `--`, and the state it sets: `false` for

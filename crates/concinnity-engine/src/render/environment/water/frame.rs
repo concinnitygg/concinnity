@@ -3,12 +3,12 @@
 //! frame's copy of the surface's params.
 
 use crate::ecs::SimTiming;
-use crate::planet::{LocalFrame, Rebase};
+use crate::environment::planet::{LocalFrame, Rebase};
+use crate::environment::water::WaterBody;
 use crate::render::environment::grass::map_then;
 use crate::render::uniforms::WaterParams;
 use crate::render::uniforms::grass::GRASS_IDENTITY_MAP;
 use crate::render::uniforms::wake::WaterWakeGpu;
-use crate::water::WaterBody;
 use concinnity_core::math::dvec3;
 
 /// A surface's params as built at init, and the body whose waves, ripples
@@ -47,7 +47,7 @@ impl WaterMotion {
 
     /// A planet sea's shore laid on the reshaped `planet` (see
     /// [`WaterBody::reshape`]).
-    pub fn reshape(&mut self, planet: &crate::planet::PlanetShape) {
+    pub fn reshape(&mut self, planet: &crate::environment::planet::PlanetShape) {
         self.body.reshape(planet);
     }
 
@@ -109,8 +109,8 @@ pub fn water_time(timing: &SimTiming) -> f64 {
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, Wind};
-    use crate::water::ocean::OceanQuality;
-    use crate::wind::WindField;
+    use crate::environment::water::ocean::OceanQuality;
+    use crate::environment::wind::WindField;
 
     // A pond moves the same wherever the camera is; an ocean's anchor
     // follows the camera.
@@ -150,7 +150,7 @@ mod tests {
     fn a_planet_sea_carries_its_gusts_like_the_grass() {
         use crate::render::environment::grass::GrassHistory;
         let wind = WindField::new(Some(&Wind::default()));
-        let sea = crate::water::PlanetWater {
+        let sea = crate::environment::water::PlanetWater {
             planet: crate::components::Planet::default().shape(),
             level: 10.0,
             surface: &WaterSurface::default(),

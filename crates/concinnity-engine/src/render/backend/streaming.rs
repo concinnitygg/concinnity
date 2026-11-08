@@ -43,7 +43,7 @@ pub struct ChunkMesh<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlanetChunk {
     /// The tile.
-    pub tile: crate::planet::TileId,
+    pub tile: crate::environment::planet::TileId,
     /// The lowest and highest its surface lies along the up at its origin, in
     /// meters from the origin.
     pub radial: [f32; 2],

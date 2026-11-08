@@ -3,7 +3,7 @@
 //! the history, so each one can be taken back.
 
 use concinnity_engine::components::KeyEvent;
-use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::presentation::window::clipboard::Clipboard;
 
 use super::buffer::{Pos, normalize_newlines, ordered};
 use super::history::{Change, Cursor, EditKind};

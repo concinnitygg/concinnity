@@ -138,9 +138,9 @@ impl SsrSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::sky::SkyOrientation;
     use crate::gfx::camera::MIN_ASPECT;
     use crate::render::shader::consts;
-    use crate::sky::SkyOrientation;
     use crate::transform::IDENTITY;
 
     #[test]

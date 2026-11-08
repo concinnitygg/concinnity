@@ -4,7 +4,7 @@
 use concinnity_core::math::dvec3;
 
 use super::{MAX_IN_FLIGHT, PlanetTiles, Tile, TileBuild, in_flight};
-use crate::planet::{DVec3, EditArea, PlanetShape, TileId};
+use crate::environment::planet::{DVec3, EditArea, PlanetShape, TileId};
 
 /// Where a tile lies, for the areas edits change, and whether edits changed
 /// its ground since its mesh was asked for.
@@ -86,7 +86,7 @@ impl PlanetTiles {
 mod tests {
     use super::super::{TileCamera, TileMaterial};
     use super::*;
-    use crate::planet::{
+    use crate::environment::planet::{
         CubeFace, EditPage, EditPages, LocalFrame, PAGE_SAMPLES, PlanetEdited, PlanetFrame,
     };
     use crate::render::frame::ops::RenderOps;
@@ -103,7 +103,7 @@ mod tests {
             feature_size: 2_000.0,
             octaves: 6,
             seed: 5,
-            continents: crate::planet::Continents::NONE,
+            continents: crate::environment::planet::Continents::NONE,
             edits: None,
         }
     }
@@ -136,7 +136,7 @@ mod tests {
                     draw: slots.allocate_draw().slot(),
                     origin: [0.0; 3],
                     visible: true,
-                    seams: crate::planet::TileSeams::default(),
+                    seams: crate::environment::planet::TileSeams::default(),
                     touch: Touch::new(id),
                 },
             );
@@ -160,7 +160,7 @@ mod tests {
             camera: TileCamera {
                 position: [0.0, 40.0, 0.0],
                 points_per_radian: 2_000.0,
-                finest_cell_size: crate::planet::FINEST_CELL_SIZE,
+                finest_cell_size: crate::environment::planet::FINEST_CELL_SIZE,
             },
             edited,
         }

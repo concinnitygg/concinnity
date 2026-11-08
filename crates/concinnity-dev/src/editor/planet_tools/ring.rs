@@ -3,7 +3,7 @@
 //! function and lifted a little off it, in the simulated frame.
 
 use concinnity_core::math::dvec3;
-use concinnity_engine::planet::{DVec3, PlanetFrame, geo_axes};
+use concinnity_engine::environment::planet::{DVec3, PlanetFrame, geo_axes};
 
 /// The points one ring is drawn through.
 pub(crate) const RING_POINTS: usize = 64;
@@ -37,7 +37,7 @@ pub(crate) fn lay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::planet::{Continents, LocalFrame, PlanetShape};
+    use concinnity_engine::environment::planet::{Continents, LocalFrame, PlanetShape};
 
     fn planet(frame: LocalFrame) -> PlanetFrame {
         PlanetFrame {

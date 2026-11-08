@@ -12,8 +12,8 @@ pub(crate) mod fields;
 #[cfg(test)]
 mod shader_tests;
 
+use crate::environment::water::{WaterBody, cell_size};
 use crate::gfx::mesh_payload::Vertex;
-use crate::water::{WaterBody, cell_size};
 use alloc::string::String;
 use alloc::vec::Vec;
 use concinnity_core::math::narrow_f32;
@@ -44,7 +44,7 @@ impl WaterBody {
     /// The grid the body is drawn on, relative to its anchor: the surface's
     /// own tessellation for a summed body, the camera-centered grid for a
     /// simulated one, in rings out from the anchor for a planet's sea (see
-    /// [`SeaBody::sky_split`](crate::water::sea::SeaBody::sky_split)).
+    /// [`SeaBody::sky_split`](crate::environment::water::sea::SeaBody::sky_split)).
     ///
     /// # Errors
     ///
@@ -80,8 +80,8 @@ impl WaterBody {
 mod tests {
     use super::*;
     use crate::components::WaterSurface;
+    use crate::environment::water::ocean::OceanQuality;
     use crate::test_support::{fresh_breeze, open_sea};
-    use crate::water::ocean::OceanQuality;
 
     // A pond's mesh is its own tessellation; an ocean's is the
     // camera-centered grid.

@@ -154,7 +154,7 @@ pub enum WorldError {
 
     /// A planet's compiled ground page did not read as a page.
     #[error("the planet's sculpted ground does not read: {0}")]
-    PlanetGround(#[from] crate::planet::PagePayloadError),
+    PlanetGround(#[from] crate::environment::planet::PagePayloadError),
 
     /// The world is meant to be seen and the machine has a GPU, but the
     /// renderer could not be built on it. Distinct from a machine with no GPU

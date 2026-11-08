@@ -6,10 +6,12 @@
 //! body, the snapped camera for a simulated ocean (see [`WaterBody::anchor`]),
 //! so a sea kilometers across stays precise at its edges too.
 
-use crate::water::ocean::MAX_OCEAN_CASCADES;
-use crate::water::ocean::clock::tile_offset;
-use crate::water::ripples::{NOISE_PERIOD, RIPPLE_CREST, RIPPLES, WARP_DRIFT, WARP_FREQUENCY};
-use crate::water::{MAX_WAVES, WaterBody};
+use crate::environment::water::ocean::MAX_OCEAN_CASCADES;
+use crate::environment::water::ocean::clock::tile_offset;
+use crate::environment::water::ripples::{
+    NOISE_PERIOD, RIPPLE_CREST, RIPPLES, WARP_DRIFT, WARP_FREQUENCY,
+};
+use crate::environment::water::{MAX_WAVES, WaterBody};
 use concinnity_core::math::narrow_f32;
 use core::f64::consts::TAU;
 
@@ -112,7 +114,7 @@ fn wrap(x: f64, period: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, Wind};
-    use crate::wind::WindField;
+    use crate::environment::wind::WindField;
 
     fn far_body() -> WaterBody {
         let surface = WaterSurface {
@@ -242,8 +244,8 @@ mod tests {
     // phases at the anchor still match the unwrapped formula there.
     #[test]
     fn an_ocean_is_anchored_at_the_snapped_camera() {
-        use crate::water::ocean::OceanQuality;
-        use crate::water::ocean::clock::tile_offset;
+        use crate::environment::water::ocean::OceanQuality;
+        use crate::environment::water::ocean::clock::tile_offset;
         let surface = WaterSurface {
             center: [4.0e5, 0.0, -2.5e5],
             extent: [6000.0, 6000.0],

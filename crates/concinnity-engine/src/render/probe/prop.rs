@@ -5,8 +5,8 @@
 
 use crate::components::{GlobalTransform, PropReflectionProbe, RenderHandle};
 use crate::ecs::{Entity, PipelineContext};
+use crate::environment::planet::PlanetFrame;
 use crate::gfx::frustum::transform_aabb;
-use crate::planet::PlanetFrame;
 use crate::render::draw_list::DrawListData;
 use crate::render::probe::capture::PrefilterPlan;
 use crate::render::probe::prop_reflection_probe::MAX_PROP_PROBE_RESOLUTION;

@@ -17,7 +17,7 @@ use super::form::{self, FieldKind, FormField};
 pub(crate) const TY: &str = "Planet";
 
 /// The most covers a planet lays.
-pub(crate) const MAX_COVERS: usize = concinnity_engine::planet::MAX_GROUND_COVERS;
+pub(crate) const MAX_COVERS: usize = concinnity_engine::environment::planet::MAX_GROUND_COVERS;
 
 /// The most grass layers the panel adds: as many as the grass pass draws.
 pub(crate) const MAX_LAYERS: usize = concinnity_engine::render::uniforms::grass::MAX_GRASS_LAYERS;

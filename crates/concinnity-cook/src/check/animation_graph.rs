@@ -5,7 +5,7 @@
 // world-global passes in crate::check::cross_reference.
 
 use crate::world_builder::Diagnostic;
-use concinnity_engine::animation::anim_graph::CmpOp;
+use concinnity_engine::simulation::animation::anim_graph::CmpOp;
 use serde_json::Value;
 
 pub(crate) fn check(name: &str, args: &Value) -> Result<(), Diagnostic> {

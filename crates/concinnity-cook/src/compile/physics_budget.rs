@@ -9,7 +9,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::blob::PhysicsBudgetRecord;
-use concinnity_engine::physics::{PhysicsBudget, PhysicsCounts};
+use concinnity_engine::simulation::physics::{PhysicsBudget, PhysicsCounts};
 use std::collections::HashSet;
 
 use crate::authoring::registry::RegisteredType;

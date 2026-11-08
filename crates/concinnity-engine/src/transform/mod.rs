@@ -161,7 +161,7 @@ pub type Mat3 = [[f32; 3]; 3];
 pub(crate) use concinnity_core::math::Quat;
 
 // Column-major 3x3 rotation matrix from YXZ Euler degrees. Identical trig to
-// [`JointPose::to_matrix`](crate::animation::skeleton::JointPose::to_matrix),
+// [`JointPose::to_matrix`](crate::simulation::animation::skeleton::JointPose::to_matrix),
 // without the scale or translation.
 pub(crate) fn rotation_mat3(rotation_deg: [f32; 3]) -> Mat3 {
     let [pitch, yaw, roll] = rotation_deg;
@@ -341,7 +341,7 @@ pub fn blend_matrices(a: Mat4, b: Mat4, f: f32) -> Mat4 {
 /// YXZ Euler angles in degrees recovered from a unit rotation quaternion: the
 /// inverse of `rotation_mat3` composed with `quat_to_mat3`. glTF stores node
 /// rotations as quaternions; the glTF importer converts them to the Euler
-/// [`JointPose`](crate::animation::skeleton::JointPose) representation this engine's
+/// [`JointPose`](crate::simulation::animation::skeleton::JointPose) representation this engine's
 /// joints use. The conversion is matrix-exact for non-degenerate rotations; at
 /// gimbal lock (pitch ±90°) it folds the rotation onto the yaw axis with zero
 /// roll.

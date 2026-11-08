@@ -30,19 +30,6 @@ mod component_tests;
 #[cfg(test)]
 mod registry_tests;
 
-pub use crate::animation::character_rig::CharacterRig;
-pub use crate::animation::character_shape::{
-    CharacterShape, JointProportion, ResolvedSliders, ShapeSlider,
-};
-pub use crate::animation::clip::{Animation, AnimationTrack, Keyframe, MorphKey};
-pub use crate::animation::graph::{
-    AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph, AnimationIkChain,
-    AnimationParam, AnimationState, AnimationTransition,
-};
-pub use crate::animation::ground_probes::{GroundProbe, GroundProbes};
-pub use crate::animation::params::AnimationParams;
-pub use crate::animation::root_motion_event::RootMotionEvent;
-pub use crate::animation::skeleton_pose::SkeletonPose;
 pub use crate::app::config::{AppConfig, FramePriority};
 pub use crate::audio::bus::AudioBus;
 pub use crate::audio::command::{AudioCommand, AudioTarget};
@@ -50,26 +37,18 @@ pub use crate::audio::cue::{AudioCue, CueKind};
 pub use crate::audio::emitter::{AudioEmitter, Rolloff};
 pub use crate::audio::occlusion_probe::AudioOcclusionProbe;
 pub use crate::audio::play_cue::PlayCue;
-pub use crate::behavior::definition::{
-    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
-    BehaviorSource,
-};
-pub use crate::behavior::variables::{VariableDecl, Variables};
-pub use crate::camera::camera3d::{Camera3D, CameraController, FollowController, FollowDrive};
-pub use crate::camera::probe::{CameraProbe, Followed};
-pub use crate::camera::track::{
-    CameraBoom, CameraBoomKey, CameraTrack, CameraTrackArgs, CameraTravel, CameraTravelKey,
-    CameraTurn, CameraTurnKey, Ease,
-};
-pub use crate::controller::interact_event::InteractEvent;
 pub use crate::defaults::engine::EngineDefaults;
 pub use crate::ecs::entity_target::EntityTarget;
+pub use crate::environment::planet::{GroundCover, Planet, PlanetGround, PlanetSea};
+pub use crate::environment::sky::rotation::SkyRotation;
+pub use crate::environment::terrain::{GroundRule, Terrain, TerrainLayer};
+pub use crate::environment::water::{MAX_WATER_WAVES, WaterSurface, WaterWave};
+pub use crate::environment::wind::Wind;
 pub use crate::geometry::block_type::BlockType;
 pub use crate::geometry::procedural_mesh::ProceduralMesh;
 pub use crate::geometry::room::Room;
 pub use crate::geometry::voxel_chunk::VoxelChunk;
 pub use crate::geometry::voxel_world::VoxelWorld;
-pub use crate::hud::loading_overlay::LoadingOverlay;
 pub use crate::input::controls_command::ControlsCommand;
 pub use crate::input::frame_input::FrameInput;
 pub use crate::input::gamepad_button::GamepadButton;
@@ -78,18 +57,25 @@ pub use crate::input::input_key::InputKey;
 pub use crate::input::key_binding::KeyBinding;
 pub use crate::input::key_event::{KeyEvent, KeyMods, KeyPress};
 pub use crate::input::nav_direction::NavDirection;
-pub use crate::physics::buoyancy::Buoyancy;
-pub use crate::physics::config::PhysicsConfig;
-pub use crate::physics::contact_event::ContactEvent;
-pub use crate::physics::drive_script::{DriveKey, DriveScript};
-pub use crate::physics::joint::{PhysicsJoint, PhysicsJointKind};
-pub use crate::physics::prop_body::PropBody;
-pub use crate::physics::rigid_body::RigidBody;
-pub use crate::physics::rolling_drive::{RollingControl, RollingDrive};
-pub use crate::physics::trigger_volume::{TriggerFilter, TriggerVolume};
-pub use crate::physics::volume_event::VolumeEvent;
-pub use crate::physics::wake_request::WakeRequest;
-pub use crate::planet::{GroundCover, Planet, PlanetGround, PlanetSea};
+pub use crate::presentation::hud::loading_overlay::LoadingOverlay;
+pub use crate::presentation::ui::authored_action::{AuthoredAction, NamedAction};
+pub use crate::presentation::ui::hit_region::HitRegion;
+pub use crate::presentation::ui::layout_container::{
+    Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow,
+};
+pub use crate::presentation::ui::screen::{Screen, ScreenInput};
+pub use crate::presentation::ui::screen_command::ScreenCommand;
+pub use crate::presentation::ui::screen_shown::ScreenShown;
+pub use crate::presentation::ui::scroll_panel::{
+    ScrollElement, ScrollGroup, ScrollPanel, ScrollRow,
+};
+pub use crate::presentation::ui::sprite::{Sprite, SpriteFit};
+pub use crate::presentation::ui::text_input::TextInput;
+pub use crate::presentation::ui::text_label::{
+    ColorRun, ColorRunError, TextAlign, TextLabel, color_run_error,
+};
+pub use crate::presentation::ui::ui_action::{SettingVerb, UiAction};
+pub use crate::presentation::window::{Window, WindowMode};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::clouds::Cloud;
@@ -152,53 +138,75 @@ pub use crate::settings::graphics::texture_filtering::{
     TextureFiltering, TextureFilteringOverrides,
 };
 pub use crate::settings::graphics::vignette::{Vignette, VignetteOverrides};
-pub use crate::sky::rotation::SkyRotation;
-pub use crate::spawn::despawn_request::DespawnRequest;
-pub use crate::spawn::lifetime::Lifetime;
-pub use crate::spawn::prop::{PrefabTemplate, Prop, PropCollider, PropColliderShape, PropParent};
-pub use crate::spawn::reparent_request::ReparentRequest;
-pub use crate::spawn::spawn_request::SpawnRequest;
-pub use crate::spawn::spawner::Spawner;
-pub use crate::spawn::visibility_request::VisibilityRequest;
+pub use crate::simulation::animation::character_rig::CharacterRig;
+pub use crate::simulation::animation::character_shape::{
+    CharacterShape, JointProportion, ResolvedSliders, ShapeSlider,
+};
+pub use crate::simulation::animation::clip::{Animation, AnimationTrack, Keyframe, MorphKey};
+pub use crate::simulation::animation::graph::{
+    AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph, AnimationIkChain,
+    AnimationParam, AnimationState, AnimationTransition,
+};
+pub use crate::simulation::animation::ground_probes::{GroundProbe, GroundProbes};
+pub use crate::simulation::animation::params::AnimationParams;
+pub use crate::simulation::animation::root_motion_event::RootMotionEvent;
+pub use crate::simulation::animation::skeleton_pose::SkeletonPose;
+pub use crate::simulation::behavior::definition::{
+    Behavior, BehaviorExpr, BehaviorLiteral, BehaviorLocal, BehaviorNode, BehaviorQuery,
+    BehaviorSource,
+};
+pub use crate::simulation::behavior::variables::{VariableDecl, Variables};
+pub use crate::simulation::camera::camera3d::{
+    Camera3D, CameraController, FollowController, FollowDrive,
+};
+pub use crate::simulation::camera::probe::{CameraProbe, Followed};
+pub use crate::simulation::camera::track::{
+    CameraBoom, CameraBoomKey, CameraTrack, CameraTrackArgs, CameraTravel, CameraTravelKey,
+    CameraTurn, CameraTurnKey, Ease,
+};
+pub use crate::simulation::controller::interact_event::InteractEvent;
+pub use crate::simulation::physics::buoyancy::Buoyancy;
+pub use crate::simulation::physics::config::PhysicsConfig;
+pub use crate::simulation::physics::contact_event::ContactEvent;
+pub use crate::simulation::physics::drive_script::{DriveKey, DriveScript};
+pub use crate::simulation::physics::joint::{PhysicsJoint, PhysicsJointKind};
+pub use crate::simulation::physics::prop_body::PropBody;
+pub use crate::simulation::physics::rigid_body::RigidBody;
+pub use crate::simulation::physics::rolling_drive::{RollingControl, RollingDrive};
+pub use crate::simulation::physics::trigger_volume::{TriggerFilter, TriggerVolume};
+pub use crate::simulation::physics::volume_event::VolumeEvent;
+pub use crate::simulation::physics::wake_request::WakeRequest;
+pub use crate::simulation::spawn::despawn_request::DespawnRequest;
+pub use crate::simulation::spawn::lifetime::Lifetime;
+pub use crate::simulation::spawn::prop::{
+    PrefabTemplate, Prop, PropCollider, PropColliderShape, PropParent,
+};
+pub use crate::simulation::spawn::reparent_request::ReparentRequest;
+pub use crate::simulation::spawn::spawn_request::SpawnRequest;
+pub use crate::simulation::spawn::spawner::Spawner;
+pub use crate::simulation::spawn::visibility_request::VisibilityRequest;
 pub use crate::story::command::StoryCommand;
 pub use crate::story::definition::{
     Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
-pub use crate::terrain::{GroundRule, Terrain, TerrainLayer};
-pub use crate::ui::authored_action::{AuthoredAction, NamedAction};
-pub use crate::ui::hit_region::HitRegion;
-pub use crate::ui::layout_container::{
-    Justify, LabelBox, LabelPlacement, LayoutContainer, LayoutRow,
-};
-pub use crate::ui::screen::{Screen, ScreenInput};
-pub use crate::ui::screen_command::ScreenCommand;
-pub use crate::ui::screen_shown::ScreenShown;
-pub use crate::ui::scroll_panel::{ScrollElement, ScrollGroup, ScrollPanel, ScrollRow};
-pub use crate::ui::sprite::{Sprite, SpriteFit};
-pub use crate::ui::text_input::TextInput;
-pub use crate::ui::text_label::{ColorRun, ColorRunError, TextAlign, TextLabel, color_run_error};
-pub use crate::ui::ui_action::{SettingVerb, UiAction};
-pub use crate::water::{MAX_WATER_WAVES, WaterSurface, WaterWave};
-pub use crate::wind::Wind;
-pub use crate::window::{Window, WindowMode};
 pub use concinnity_derive::Vocabulary;
 pub use vocabulary::Vocabulary;
 pub(crate) use vocabulary::vocabulary_synonyms;
 
 // Per-instance components an entity is composed from.
-pub use crate::controller::held::Held;
-pub use crate::controller::interactable::Interactable;
-pub use crate::controller::pickup::Pickup;
 pub use crate::ecs::identity::Identity;
-pub use crate::physics::body_dynamics::BodyDynamics;
-pub use crate::physics::collider::Collider;
 pub use crate::render::mesh_renderer::MeshRenderer;
 pub use crate::render::model_renderer::ModelRenderer;
 pub use crate::render::scene::member::SceneMember;
 pub use crate::render::slots::render_handle::RenderHandle;
-pub use crate::spawn::hidden::Hidden;
-pub use crate::spawn::prop_instance::PropInstance;
+pub use crate::simulation::controller::held::Held;
+pub use crate::simulation::controller::interactable::Interactable;
+pub use crate::simulation::controller::pickup::Pickup;
+pub use crate::simulation::physics::body_dynamics::BodyDynamics;
+pub use crate::simulation::physics::collider::Collider;
+pub use crate::simulation::spawn::hidden::Hidden;
+pub use crate::simulation::spawn::prop_instance::PropInstance;
 pub use crate::transform::GlobalTransform;
 pub use crate::transform::Transform;
 pub use crate::transform::children::Children;
@@ -206,12 +214,12 @@ pub use crate::transform::parent::Parent;
 
 pub use crate::benchmark::PlanetTour;
 pub use crate::benchmark::config::{BenchmarkConfig, BenchmarkPhase, BenchmarkRoute, CameraPose};
-pub use crate::screenshot::Screenshot;
+pub use crate::presentation::screenshot::Screenshot;
 
-// HUD-overlay request components; their behavior lives in `crate::hud`.
-pub use crate::hud::debug_hud::DebugHud;
-pub use crate::hud::fps_counter::FpsCounter;
-pub use crate::hud::stat_hud::StatHud;
+// HUD-overlay request components; their behavior lives in `crate::presentation::hud`.
+pub use crate::presentation::hud::debug_hud::DebugHud;
+pub use crate::presentation::hud::fps_counter::FpsCounter;
+pub use crate::presentation::hud::stat_hud::StatHud;
 
 // Bounds and capacities the engine reads off the schema. Not vocabulary: they
 // declare nothing, so they stay out of both namespaces.

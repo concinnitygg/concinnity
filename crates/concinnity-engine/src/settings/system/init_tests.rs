@@ -8,12 +8,12 @@ use crate::components::{
 };
 use crate::ecs::Resources;
 use crate::launch::{LaunchArgs, LaunchRequest};
+use crate::presentation::window::display_mode::{DisplayMode, DisplayProbe};
 use crate::render::backend::{DeviceCapabilities, GpuProfile, GpuTier, GpuVendor};
 use crate::settings::quality::{ceiling_preset, resolve_ceiling};
 use crate::settings::{
     QualityPreset, ResolvedGraphics, StoredSettings, WorldAssets, WorldSettings,
 };
-use crate::window::display_mode::{DisplayMode, DisplayProbe};
 use alloc::vec::Vec;
 
 use super::{SettingsInit, SettingsState};

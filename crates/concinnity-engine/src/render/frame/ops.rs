@@ -45,7 +45,7 @@ pub enum OpFailure {
     /// roll back, and the tile is built again if still wanted.
     PlanetTileAdd {
         /// The tile whose mesh add failed.
-        tile: crate::planet::TileId,
+        tile: crate::environment::planet::TileId,
     },
 }
 

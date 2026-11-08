@@ -106,7 +106,7 @@ impl DecalSet {
 
     /// Carry every live decal into the frame `rebase` moves the world to,
     /// keeping its id; each slot is re-uploaded for every frame in flight.
-    pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+    pub fn rebase(&mut self, rebase: &crate::environment::planet::Rebase) {
         let frames = self.frames;
         for (_, slot) in self.slots.iter_mut() {
             let mut record = slot.record;
@@ -184,7 +184,7 @@ mod tests {
     // the move says, keeps ids and tombstones, and re-arms the uploads.
     #[test]
     fn a_frame_move_carries_every_live_decal() {
-        use crate::planet::Rebase;
+        use crate::environment::planet::Rebase;
         let rebase = Rebase {
             rotation: concinnity_core::math::quat_from_axis_angle([1.0, 0.0, 0.0], 0.02),
             translation: [-1_000.0, 5.0, 3.0],

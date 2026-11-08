@@ -48,17 +48,17 @@ pub use shadow::GrassShadowView;
 use alloc::vec::Vec;
 
 use crate::components::Wind;
+use crate::environment::planet::{Rebase, TileMorphFrame};
+use crate::environment::terrain::{DensityMask, TerrainGrid};
+use crate::environment::wind::WindField;
 use crate::gfx::frustum::Frustum;
-use crate::planet::{Rebase, TileMorphFrame};
 use crate::render::uniforms::grass::{
     GRASS_ARGS_SLOTS, GRASS_GROUND_PLANET, GRASS_GROUND_TERRAIN, GRASS_IDENTITY_MAP,
     GrassBendParams, GrassLayerGpu, GrassParams, GrassTileGpu, MAX_GRASS_LAYERS, MAX_GRASS_STAMPS,
     MAX_GRASS_TILE_RECORDS, PlanetGrassTileGpu,
 };
 use crate::render::uniforms::ground::GroundRuleGpu;
-use crate::terrain::{DensityMask, TerrainGrid};
 use crate::transform::Mat4;
-use crate::wind::WindField;
 use bend::{BendStep, GRASS_BEND_CELL_SIZE, GRASS_BEND_RESOLUTION};
 use concinnity_core::math::noise::lcg_hash;
 use lod::{
@@ -1985,7 +1985,7 @@ mod tests {
 
     mod on_a_planet {
         use super::*;
-        use crate::planet::{LocalFrame, PlanetShape, TileLod, tile_mesh};
+        use crate::environment::planet::{LocalFrame, PlanetShape, TileLod, tile_mesh};
 
         fn shape() -> PlanetShape {
             PlanetShape {
@@ -1995,7 +1995,7 @@ mod tests {
                 feature_size: 2_000.0,
                 octaves: 8,
                 seed: 4,
-                continents: crate::planet::Continents::NONE,
+                continents: crate::environment::planet::Continents::NONE,
                 edits: None,
             }
         }
@@ -2009,14 +2009,14 @@ mod tests {
         // authored frame.
         fn standing() -> (Vec<DrawnPlanetTile>, [f32; 3]) {
             let s = shape();
-            let lod = TileLod::new(s.clone(), crate::planet::FINEST_CELL_SIZE);
+            let lod = TileLod::new(s.clone(), crate::environment::planet::FINEST_CELL_SIZE);
             let cam = [0.0, narrow_f32(s.height([0.0, 1.0, 0.0])) + 1.7, 0.0];
             let cam_world = LocalFrame::AUTHORED.to_world(cam);
             let tiles = lod
                 .select(
-                    &crate::planet::TileView::nearest(cam_world),
+                    &crate::environment::planet::TileView::nearest(cam_world),
                     &|_| true,
-                    &mut crate::planet::TileBoundsCache::new(s.clone()),
+                    &mut crate::environment::planet::TileBoundsCache::new(s.clone()),
                 )
                 .draw
                 .into_iter()

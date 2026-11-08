@@ -113,7 +113,7 @@ pub const GRAPHICS_API_VALUES: &[&str] = &["metal", "directx", "vulkan"];
 
 /// The window modes `--window-mode` names, by their authored names.
 pub const WINDOW_MODE_VALUES: &[&str] =
-    <crate::window::WindowMode as crate::components::Vocabulary>::VARIANTS;
+    <crate::presentation::window::WindowMode as crate::components::Vocabulary>::VARIANTS;
 
 /// The modes `--rt-dynamic` names, in
 /// [`RtDynamicMode::ALL`](crate::render::rt_accel::geom::RtDynamicMode::ALL) order.

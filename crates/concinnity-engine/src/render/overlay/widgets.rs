@@ -43,7 +43,7 @@ impl WidgetScratch {
 // sprite / text shapers as the menu but with no clip bands, so the list draws
 // unclipped on top of the menu (escaping the scroll band's scissor). Geometry
 // is reference space for a screen-owned row (and window pixels otherwise),
-// matching the input hit-test in `crate::ui`.
+// matching the input hit-test in `crate::presentation::ui`.
 pub(super) fn build_dropdown_overlay(
     screen: &DropdownView,
     loaded_fonts: &text::FontSet,
@@ -60,7 +60,7 @@ pub(super) fn build_dropdown_overlay(
     const TEXT_PAD: f32 = 10.0;
     const BORDER_PX: f32 = 2.0;
 
-    use crate::ui::dropdown;
+    use crate::presentation::ui::dropdown;
     let count = screen.options.len();
     let layout = dropdown::layout(screen.anchor, count);
     // The layout windows a long list; rows show options `first..`, so the

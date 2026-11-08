@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 
 use crate::components::{DirectionalLight, PointLight, RectAreaLight, SpotLight};
 use crate::ecs::PipelineContext;
+use crate::environment::planet::Rebase;
+use crate::environment::sky::SkyOrientation;
 use crate::gfx::render_types::LightUniforms;
-use crate::planet::Rebase;
 use crate::render::light::lights::{self, DirectionalLightSet, LightData};
-use crate::sky::SkyOrientation;
 
 /// Pack every light into the local-light buffers and the shared uniforms, whose
 /// `ambient_intensity` scales each backend's IBL / flat-fallback ambient. Lights

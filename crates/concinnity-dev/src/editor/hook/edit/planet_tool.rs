@@ -6,8 +6,8 @@
 
 use concinnity_engine::components::FrameInput;
 use concinnity_engine::ecs::World;
+use concinnity_engine::environment::planet::{PlanetFrame, geo_direction};
 use concinnity_engine::gfx::lines::Line;
-use concinnity_engine::planet::{PlanetFrame, geo_direction};
 use serde_json::Value;
 
 use super::planet_tool_state::Stroke;

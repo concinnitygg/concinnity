@@ -9,11 +9,11 @@ use concinnity_core::math::{SaturatingFrom, narrow_f32, round, round_f64};
 use core::fmt::{self, Write};
 
 use crate::benchmark::BenchmarkRun;
-use crate::camera::track::CameraTrackStatus;
-use crate::camera::track::status::TrackPickup;
-use crate::planet::FrameRebases;
+use crate::environment::planet::FrameRebases;
+use crate::presentation::window::display_mode::DisplayRefresh;
 use crate::profile::RenderStats;
-use crate::window::display_mode::DisplayRefresh;
+use crate::simulation::camera::track::CameraTrackStatus;
+use crate::simulation::camera::track::status::TrackPickup;
 
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};
@@ -265,10 +265,10 @@ impl Drop for FrameReportSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::track::CameraTrackSystem;
     use crate::components::cook::{Camera3D as Camera3DArgs, CameraTrack as CameraTrackArgs};
     use crate::components::{BenchmarkConfig, BenchmarkPhase, Camera3D, CameraTrack, CameraTravel};
     use crate::ecs::World;
+    use crate::simulation::camera::track::CameraTrackSystem;
     use alloc::string::ToString;
     use alloc::vec;
     use core::cell::Cell;
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn samples_carry_the_track_time_each_frame_showed_and_the_frame_moves() {
         use crate::ecs::SimTiming;
-        use crate::planet::Rebase;
+        use crate::environment::planet::Rebase;
 
         let (mut world, mut camera, mut system) = world_with(
             track(vec![leg(60.0, 1.0)]),

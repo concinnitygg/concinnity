@@ -5,7 +5,7 @@
 
 use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
 use concinnity_engine::ecs::{World, WorldLines};
-use concinnity_engine::planet::{Continents, LocalFrame, PlanetFrame, PlanetShape};
+use concinnity_engine::environment::planet::{Continents, LocalFrame, PlanetFrame, PlanetShape};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;

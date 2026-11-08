@@ -4,7 +4,7 @@
 //! they make on its datum sphere.
 
 use concinnity_core::math::dvec3;
-use concinnity_engine::planet::DVec3;
+use concinnity_engine::environment::planet::DVec3;
 
 /// The spacing between a stroke's points, as a share of the brush radius.
 pub(crate) const SPACING: f64 = 0.25;

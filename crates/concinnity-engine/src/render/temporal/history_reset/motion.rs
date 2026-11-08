@@ -136,7 +136,7 @@ pub(super) struct MotionReference {
 
 impl MotionReference {
     /// The last step's travel turned into the frame the world moved to.
-    pub(super) fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+    pub(super) fn rebase(&mut self, rebase: &crate::environment::planet::Rebase) {
         self.last.translation = rebase.apply_vector(self.last.translation);
     }
 

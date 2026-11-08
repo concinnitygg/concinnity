@@ -222,7 +222,7 @@ impl SkyCubeSchedule {
 mod tests {
     use super::*;
     use crate::components::{Atmosphere, DirectionalLight};
-    use crate::sky::SkyOrientation;
+    use crate::environment::sky::SkyOrientation;
     use alloc::vec::Vec;
 
     fn key(sun: [f32; 3], camera_km: [f32; 3], rows: [[f32; 4]; 3]) -> SkyCubeKey {

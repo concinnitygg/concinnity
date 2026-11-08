@@ -5,7 +5,7 @@
 
 use crate::components::Planet;
 use crate::ecs::{Entity, World};
-use crate::planet::PlanetEdit;
+use crate::environment::planet::PlanetEdit;
 
 /// Whether an edit changing `fields` of a running planet can be applied live:
 /// every one is in [`Planet::LIVE_FIELDS`].
@@ -58,7 +58,7 @@ mod tests {
     // planet's fields carry none.
     #[test]
     fn an_applied_edit_keeps_the_loaded_edits() {
-        let pages = alloc::sync::Arc::new(crate::planet::EditPages::default());
+        let pages = alloc::sync::Arc::new(crate::environment::planet::EditPages::default());
         let mut world = World::new();
         let entity = world.push(Planet {
             edit_pages: Some(alloc::sync::Arc::clone(&pages)),

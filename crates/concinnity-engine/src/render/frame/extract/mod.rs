@@ -15,9 +15,11 @@ use crate::ecs::{
     Entity, FlyCam, FrameCaptureRequest, FrameTime, HiddenAssets, InputSampledAt, MenuOverride,
     PickEntry, PickIndex, PipelineContext, SimTiming, ViewOverrides,
 };
+use crate::environment::planet::{FrameRebases, RebaseCursor};
+use crate::environment::sky::SkyOrientation;
+use crate::environment::water::stir::WaterStirs;
 use crate::gfx::frustum;
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
-use crate::planet::{FrameRebases, RebaseCursor};
 use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -29,9 +31,7 @@ use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
 use crate::render::temporal::history_reset::{
     FrameClock, HistoryResetCauses, HistoryResetTracker, HistoryView, PendingHistoryReset,
 };
-use crate::sky::SkyOrientation;
 use crate::transform::propagation::{self, TransformCache};
-use crate::water::stir::WaterStirs;
 use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3;
 

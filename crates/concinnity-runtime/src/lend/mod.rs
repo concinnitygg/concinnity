@@ -22,14 +22,14 @@
 
 use concinnity_core::fanout::Lent;
 use concinnity_engine::audio::out::AudioOut;
-use concinnity_engine::behavior::BehaviorStore;
 use concinnity_engine::ecs::{
     CoreSystems, Phase, PipelineContext, SystemEntry, SystemHost, SystemTable, TransientSaves,
     World, boxed,
 };
+use concinnity_engine::environment::planet::StartBuilder;
 use concinnity_engine::input::system::PadSource;
-use concinnity_engine::planet::StartBuilder;
 use concinnity_engine::settings::system::SettingsStore;
+use concinnity_engine::simulation::behavior::BehaviorStore;
 use concinnity_engine::story::StoryStore;
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::jobs::{self, JobPool};

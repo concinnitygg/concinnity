@@ -91,7 +91,7 @@ pub(crate) fn face_light(moon: [f32; 3], up: [f32; 3], sun: [f32; 3], x: f32, y:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sky::SkyOrientation;
+    use crate::environment::sky::SkyOrientation;
 
     fn basis() -> CelestialBasis {
         CelestialBasis::new([0.0, 0.0, -1.0], [1.0, 0.0, 0.35])

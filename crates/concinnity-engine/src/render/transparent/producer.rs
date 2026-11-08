@@ -6,7 +6,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use crate::planet::Rebase;
+use crate::environment::planet::Rebase;
 use crate::render::environment::water::frame::WaterMotion;
 use crate::render::transparent::Producer;
 use crate::render::uniforms::wake::WaterWakeGpu;
@@ -288,9 +288,9 @@ impl<P, R> TransparentProducers<P, R> {
 mod tests {
     use super::*;
     use crate::components::WaterSurface;
-    use crate::water::WaterBody;
-    use crate::water::sea::{SeaBody, SeaSphere};
-    use crate::wind::WindField;
+    use crate::environment::water::WaterBody;
+    use crate::environment::water::sea::{SeaBody, SeaSphere};
+    use crate::environment::wind::WindField;
     use concinnity_core::math::SaturatingFrom;
     use core::cell::Cell;
 

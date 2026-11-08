@@ -1,7 +1,7 @@
 //! A planet reshaped while the world runs: what a renderer keeps of its shape,
 //! brought to the new one together.
 
-use crate::planet::PlanetShape;
+use crate::environment::planet::PlanetShape;
 use crate::render::environment::grass::{CanopyField, GrassField};
 use crate::render::environment::water::frame::WaterMotion;
 
@@ -33,10 +33,10 @@ pub fn reshape_planet<'a>(
 mod tests {
     use super::*;
     use crate::components::{Planet, WaterSurface, Wind};
+    use crate::environment::water::ocean::OceanQuality;
+    use crate::environment::water::{PlanetWater, WaterBody};
+    use crate::environment::wind::WindField;
     use crate::render::environment::ground::GroundCovers;
-    use crate::water::ocean::OceanQuality;
-    use crate::water::{PlanetWater, WaterBody};
-    use crate::wind::WindField;
     use alloc::vec::Vec;
 
     fn coast(seed: u32) -> PlanetShape {

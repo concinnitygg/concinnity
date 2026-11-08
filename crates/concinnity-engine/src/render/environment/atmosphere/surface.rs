@@ -10,7 +10,7 @@
 //! the ground is seen, and one color for the land among it.
 
 use crate::components::WaterSurface;
-use crate::planet::{DVec3, PlanetFrame, PlanetShape};
+use crate::environment::planet::{DVec3, PlanetFrame, PlanetShape};
 use crate::render::environment::grass::PlanetGrass;
 use crate::render::environment::ground::GroundCovers;
 use crate::render::uniforms::ground::GroundRuleGpu;
@@ -517,7 +517,7 @@ mod tests {
     fn the_east_is_level_at_the_camera() {
         let planet = PlanetFrame {
             shape: crate::components::Planet::default().shape(),
-            frame: crate::planet::LocalFrame::AUTHORED,
+            frame: crate::environment::planet::LocalFrame::AUTHORED,
         };
         for cam in [[0.0, 2.0, 0.0], [300.0, 5.0, -40.0]] {
             let v = SurfaceView::of(&planet, cam);

@@ -59,7 +59,7 @@ pub(crate) fn check_squares(assets: &[WorldJsonlAsset], errors: &mut Vec<Diagnos
 mod tests {
     use super::*;
     use crate::test_support::asset;
-    use concinnity_engine::planet::PAGE_SAMPLES;
+    use concinnity_engine::environment::planet::PAGE_SAMPLES;
 
     fn ground(id: &str, tile: [u32; 4]) -> WorldJsonlAsset {
         asset(

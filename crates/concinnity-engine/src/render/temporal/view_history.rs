@@ -55,7 +55,7 @@ impl ViewHistory {
 
     /// Carry the history into the frame the world moved to, so a point that
     /// stayed put reprojects to where the previous frame drew it.
-    pub(crate) fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+    pub(crate) fn rebase(&mut self, rebase: &crate::environment::planet::Rebase) {
         if let Some(prev) = self.prev.as_mut() {
             prev.vp = rebase.reproject(prev.vp);
             prev.cam_pos = rebase.apply_point(prev.cam_pos);
@@ -101,7 +101,7 @@ mod tests {
     // recorded frame saw the point at before it was carried.
     #[test]
     fn a_rebased_history_reprojects_a_still_point_where_it_was() {
-        use crate::planet::Rebase;
+        use crate::environment::planet::Rebase;
         let rebase = Rebase {
             rotation: concinnity_core::math::quat_from_axis_angle([1.0, 0.0, 0.0], 0.02),
             translation: [-900.0, 4.0, 10.0],
@@ -140,7 +140,7 @@ mod tests {
     // after them carries nothing.
     #[test]
     fn the_carry_composes_the_rebases_since_the_previous_frame() {
-        use crate::planet::Rebase;
+        use crate::environment::planet::Rebase;
         let first = Rebase {
             rotation: concinnity_core::math::quat_from_axis_angle([0.0, 0.0, 1.0], 0.03),
             translation: [-1_000.0, 2.0, 0.0],

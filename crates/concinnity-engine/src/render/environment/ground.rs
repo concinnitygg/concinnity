@@ -11,14 +11,14 @@
 //! `ground_rule_noise` line for line.
 
 use crate::components::GroundRule;
+use crate::environment::terrain::GROUND_RULE_OPEN;
+#[cfg(test)]
+use crate::environment::terrain::{GROUND_RULE_WANDER, steepness};
 use crate::gfx::render_types::{
     MaterialUniforms, NO_ALBEDO_SLOT, albedo_pool_index, normal_pool_index,
 };
 use crate::render::material_entry::MaterialEntry;
 use crate::render::uniforms::ground::{GroundCoverGpu, GroundRuleGpu};
-use crate::terrain::GROUND_RULE_OPEN;
-#[cfg(test)]
-use crate::terrain::{GROUND_RULE_WANDER, steepness};
 
 /// How much shorter than its look grass grows where its rule fades to
 /// nothing: its height scales by `1 - (1 - weight) * GROUND_RULE_SHORTENING`.
@@ -76,7 +76,7 @@ impl GroundRuleGpu {
     }
 
     /// How fully the rule holds at `altitude` meters above sea level on
-    /// ground of steepness `steep` (see [`steepness`](crate::terrain::steepness)),
+    /// ground of steepness `steep` (see [`steepness`](crate::environment::terrain::steepness)),
     /// the edge noise there being `noise`, in [0, 1]. The noise moves each
     /// ramp along its measure's rising direction; an open ramp stays put.
     pub fn weight(&self, altitude: f32, steep: f32, noise: f32) -> f32 {
@@ -174,11 +174,11 @@ impl GroundCoverGpu {
 }
 
 /// A planet's covers as the canopy block carries them, in order, at most
-/// [`MAX_GROUND_COVERS`](crate::planet::MAX_GROUND_COVERS).
+/// [`MAX_GROUND_COVERS`](crate::environment::planet::MAX_GROUND_COVERS).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GroundCovers {
     /// The covers; the first `count` are laid.
-    pub covers: [GroundCoverGpu; crate::planet::MAX_GROUND_COVERS],
+    pub covers: [GroundCoverGpu; crate::environment::planet::MAX_GROUND_COVERS],
     /// Covers laid.
     pub count: u32,
     /// The pool index of the planet's own albedo texture, or
@@ -508,12 +508,15 @@ mod tests {
                     material: Some(MaterialHandle::new(3)),
                     rule,
                 };
-                crate::planet::MAX_GROUND_COVERS + 1
+                crate::environment::planet::MAX_GROUND_COVERS + 1
             ],
             ..Planet::default()
         };
         let covers = GroundCovers::of(&planet, |h| (h.index() == 3).then_some(sand), 5);
-        assert_eq!(covers.count as usize, crate::planet::MAX_GROUND_COVERS);
+        assert_eq!(
+            covers.count as usize,
+            crate::environment::planet::MAX_GROUND_COVERS
+        );
         let c = covers.covers[0];
         assert_eq!(c.tint, [0.7, 0.6, 0.4]);
         assert_eq!(c.roughness, 0.9);

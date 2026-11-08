@@ -261,7 +261,7 @@ mod tests {
             world_hidden: false,
             view_mode: ViewMode::Unlit,
             show: ShowFlags::default(),
-            sky_rot: crate::sky::SkyOrientation::IDENTITY_ROWS,
+            sky_rot: crate::environment::sky::SkyOrientation::IDENTITY_ROWS,
             history_reset,
             rebase: None,
             grass_benders: &[],

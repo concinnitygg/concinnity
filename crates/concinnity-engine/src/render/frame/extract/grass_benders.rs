@@ -10,8 +10,8 @@ use crate::components::{
 use alloc::vec::Vec;
 
 use crate::ecs::PipelineContext;
+use crate::environment::planet::PlanetFrame;
 use crate::gfx::frustum::transform_aabb;
-use crate::planet::PlanetFrame;
 use crate::render::environment::grass::GrassBender;
 
 // Refill `out` with this frame's benders.

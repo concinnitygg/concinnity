@@ -1,9 +1,9 @@
 use super::*;
 use crate::bake::texture::TextureImage;
-use crate::camera::camera3d::Camera3DArgs;
 use crate::render::frame::ops::RenderOps;
 use crate::render::slots::render_slots::RenderSlots;
 use crate::render::streaming::pools::{LoadPool, StreamPool, StreamingPools, StreamingPressure};
+use crate::simulation::camera::camera3d::Camera3DArgs;
 use alloc::vec;
 
 // Answers every texture request with a 1x1 texture on the next delivery, as a

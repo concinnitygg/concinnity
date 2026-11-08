@@ -27,7 +27,7 @@ pub(crate) fn check(name: &str, args: &serde_json::Value) -> Result<(), Diagnost
 
 // What a planet's args set that the planet drops.
 fn warnings(name: &str, args: &serde_json::Value) -> Vec<String> {
-    let max = concinnity_engine::planet::MAX_GROUND_COVERS;
+    let max = concinnity_engine::environment::planet::MAX_GROUND_COVERS;
     let covers = args
         .get("covers")
         .and_then(|v| v.as_array())

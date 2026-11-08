@@ -1,15 +1,15 @@
-use crate::animation::pose_scratch::PoseScratch;
-use crate::animation::proportions::ProportionLayer;
+use crate::simulation::animation::pose_scratch::PoseScratch;
+use crate::simulation::animation::proportions::ProportionLayer;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use super::*;
-use crate::animation::skeleton;
 use crate::components::{GlobalTransform, RenderHandle, SkeletonPose};
 use crate::ecs::{SkinnedMeshHandle, World};
 use crate::render::frame::snapshot::SceneOp;
 use crate::render::overlay::OverlayFrame;
+use crate::simulation::animation::skeleton;
 
 fn extract_once(fx: &mut FrameExtractor, world: &mut World) -> RenderSnapshot {
     let mut snap = RenderSnapshot::default();

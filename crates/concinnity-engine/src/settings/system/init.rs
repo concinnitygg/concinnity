@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use crate::components::{HitRegion, ScrollPanel, TextLabel, UiAction, Window};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{DisplayModes, FrameRateCap, PipelineContext};
+use crate::presentation::window::display_mode;
 use crate::render::backend;
 use crate::settings::quality::{auto_upscaling, ceiling_preset, preset_label};
 use crate::settings::registry::{self, DEFAULT_VOLUME};
@@ -18,7 +19,6 @@ use crate::settings::{
     QualityCeiling, QualityPreset, SettingKey, StoredSettings, UserGraphicsSettings, WorldSettings,
     levels, options,
 };
-use crate::window::display_mode;
 use concinnity_core::platform::{CompiledPlatforms, GraphicsApiStatus};
 
 use super::SettingsState;

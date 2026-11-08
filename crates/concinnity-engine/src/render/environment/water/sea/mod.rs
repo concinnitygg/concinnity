@@ -10,10 +10,12 @@ mod mirror;
 mod shore_mirror;
 
 use super::motion::BodyMotion;
-use crate::planet::LocalFrame;
-use crate::water::WaterBody;
-use crate::water::sea::SeaFace;
-use crate::water::sea::shore::{LatticePlace, SHORE_OCTAVES, SHORE_TRAINS, SURF_LACE_PERIOD};
+use crate::environment::planet::LocalFrame;
+use crate::environment::water::WaterBody;
+use crate::environment::water::sea::SeaFace;
+use crate::environment::water::sea::shore::{
+    LatticePlace, SHORE_OCTAVES, SHORE_TRAINS, SURF_LACE_PERIOD,
+};
 use core::f64::consts::FRAC_PI_2;
 
 use concinnity_core::math::{dvec3, narrow_f32};
@@ -47,7 +49,7 @@ pub struct SeaShoreMotion {
     /// axis wrapped into one [`SURF_LACE_PERIOD`] centered on zero.
     pub lace_origin: [f32; 3],
     /// Where the anchor's direction lies in each noise octave the shore
-    /// reads ([`ShoreWaves::lattice_at`](crate::water::sea::shore::ShoreWaves::lattice_at)).
+    /// reads ([`ShoreWaves::lattice_at`](crate::environment::water::sea::shore::ShoreWaves::lattice_at)).
     pub lattice: [LatticePlace; SHORE_OCTAVES],
 }
 
@@ -162,9 +164,9 @@ impl WaterBody {
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, Wind};
-    use crate::planet::PlanetShape;
-    use crate::water::ocean::OceanQuality;
-    use crate::wind::WindField;
+    use crate::environment::planet::PlanetShape;
+    use crate::environment::water::ocean::OceanQuality;
+    use crate::environment::wind::WindField;
 
     fn planet() -> PlanetShape {
         crate::components::Planet::default().shape()
@@ -179,7 +181,7 @@ mod tests {
             strength: 9.0,
             ..Wind::default()
         }));
-        let sea = crate::water::PlanetWater {
+        let sea = crate::environment::water::PlanetWater {
             planet: planet(),
             level: 12.0,
             surface: &surface,

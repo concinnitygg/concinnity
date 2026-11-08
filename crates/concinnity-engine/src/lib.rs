@@ -48,45 +48,33 @@ extern crate std;
 /// exactly, so a stale record fails the load on its own.
 pub const SCHEMA_VERSION: u32 = 3;
 
-pub mod animation;
 mod app;
 pub mod audio;
 pub mod bake;
-pub mod behavior;
 pub mod benchmark;
 pub mod blob;
 pub mod budget;
-pub mod camera;
 pub mod components;
-pub mod controller;
 pub mod defaults;
 pub mod ecs;
+pub mod environment;
 pub mod error;
 pub(crate) mod frame_report;
 pub mod geometry;
 pub mod gfx;
-pub(crate) mod hud;
 pub mod input;
 pub mod launch;
-pub mod physics;
-pub mod planet;
+pub mod presentation;
 pub mod profile;
 pub mod render;
 pub mod resource;
-pub mod screenshot;
 pub mod settings;
 pub mod shutdown;
-pub mod sky;
-pub mod spawn;
+pub mod simulation;
 pub mod story;
-pub mod terrain;
 #[cfg(test)]
 mod test_support;
 pub mod transform;
-pub(crate) mod ui;
-pub mod water;
-pub(crate) mod wind;
-pub mod window;
 
 // The headless driver over a world and the trait any loop that runs one
 // implements, named at the crate root because they are the counterpart to

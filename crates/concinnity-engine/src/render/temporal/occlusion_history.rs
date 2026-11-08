@@ -3,7 +3,7 @@
 //! depth was rendered through, which the draw cull and the grass tile test
 //! reproject through.
 
-use crate::planet::Rebase;
+use crate::environment::planet::Rebase;
 use crate::render::environment::grass::GrassHiz;
 use crate::transform::{IDENTITY, Mat4};
 

@@ -208,9 +208,9 @@ impl CloudFrame {
 mod tests {
     use super::*;
     use crate::components::Cloud;
+    use crate::environment::wind::WindField;
     use crate::render::environment::clouds::CloudMarch;
     use crate::render::uniforms::{DaylightBody, DaylightView};
-    use crate::wind::WindField;
     use concinnity_core::approx::close;
 
     const IDENTITY: [DVec3; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];

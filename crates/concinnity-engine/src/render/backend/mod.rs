@@ -152,13 +152,13 @@ pub struct FrameParams<'a> {
     /// planet world following its camera): everything this frame draws is in
     /// the new frame, so every temporal pass carries what it remembers of the
     /// previous frame into it instead of reading the move as motion.
-    pub rebase: Option<crate::planet::Rebase>,
+    pub rebase: Option<crate::environment::planet::Rebase>,
     /// The characters and bodies that may be trampling grass this frame,
     /// stamped into the grass's bend field near the camera.
     pub grass_benders: &'a [crate::render::environment::grass::GrassBender],
     /// What the floating bodies push aside this frame, which a planet sea's
     /// wake turns into waves near the camera.
-    pub water_stirs: &'a [crate::water::stir::WaterStir],
+    pub water_stirs: &'a [crate::environment::water::stir::WaterStir],
     /// The particle bursts systems asked for this frame, by emitter.
     pub particle_bursts: &'a [crate::render::particles::ParticleBurst],
     /// Where the camera and the sun are about the planet, in a world with an
@@ -256,7 +256,10 @@ pub trait RenderBackend:
     /// Set the planet ground draws are hidden behind once wholly past its
     /// horizon, or `None` for a world without one. Re-sent whenever the
     /// simulated frame moves, since the planet's center moves with it.
-    fn set_horizon_occluder(&mut self, occluder: Option<crate::planet::HorizonOccluder>) {
+    fn set_horizon_occluder(
+        &mut self,
+        occluder: Option<crate::environment::planet::HorizonOccluder>,
+    ) {
         if let Some(scene) = self.scene_mut() {
             scene.horizon_occluder = occluder;
         }
@@ -265,14 +268,18 @@ pub trait RenderBackend:
     /// Set the camera a planet's tiles morph by, which their vertices
     /// morph by, or `None` for a world without one. Re-sent whenever it or
     /// the simulated frame moves.
-    fn set_tile_morph(&mut self, morph: Option<crate::planet::TileMorphFrame>) {
+    fn set_tile_morph(&mut self, morph: Option<crate::environment::planet::TileMorphFrame>) {
         if let Some(scene) = self.scene_mut() {
             scene.view.tile_morph = morph;
         }
     }
 
     /// Set where planet tile `draw` meets tiles of other levels.
-    fn set_planet_tile_seams(&mut self, draw: DrawIndex, seams: crate::planet::TileSeams) {
+    fn set_planet_tile_seams(
+        &mut self,
+        draw: DrawIndex,
+        seams: crate::environment::planet::TileSeams,
+    ) {
         if let Some(scene) = self.scene_mut() {
             scene.set_planet_tile_seams(draw, seams);
         }
@@ -635,7 +642,7 @@ mod tests {
         backend.set_vsync(true);
         backend.set_window_mode(crate::components::WindowMode::Fullscreen);
         backend.set_window_size(1280, 720);
-        backend.set_display_mode(crate::window::display_mode::DisplayMode {
+        backend.set_display_mode(crate::presentation::window::display_mode::DisplayMode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,

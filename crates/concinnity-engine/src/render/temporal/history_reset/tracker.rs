@@ -104,7 +104,7 @@ impl HistoryResetTracker {
 
     /// Carry the previous frame's view, and the motion learned from it, into
     /// the frame the world moved to, so the move is not taken for a jump.
-    pub fn rebase(&mut self, rebase: &crate::planet::Rebase) {
+    pub fn rebase(&mut self, rebase: &crate::environment::planet::Rebase) {
         if let Some(prev) = self.prev.as_mut() {
             prev.position = rebase.apply_point(prev.position);
             prev.view = rebase.reproject(prev.view);
@@ -399,7 +399,7 @@ mod tests {
     // while the same move unannounced is.
     #[test]
     fn a_frame_rebase_is_not_a_cut() {
-        use crate::planet::Rebase;
+        use crate::environment::planet::Rebase;
         let dt = 1.0 / 60.0;
         let rebase = Rebase {
             rotation: [0.0, 0.0, 0.0, 1.0],

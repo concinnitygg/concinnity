@@ -101,7 +101,7 @@ impl NightLanes {
 mod tests {
     use super::*;
     use crate::components::NightSky;
-    use crate::sky::SkyOrientation;
+    use crate::environment::sky::SkyOrientation;
 
     #[test]
     fn the_lanes_scale_with_the_sun_and_carry_the_moon() {

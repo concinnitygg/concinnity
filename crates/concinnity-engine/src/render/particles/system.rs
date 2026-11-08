@@ -4,9 +4,9 @@
 //! pipelines and encoding, and its per-emitter GPU state in an
 //! [`EmitterGpu`](super::EmitterGpu) by the same id.
 
+use crate::environment::planet::Rebase;
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::ParticleParams;
-use crate::planet::Rebase;
 use crate::render::particles::burst::{FrameRows, MAX_EMITTER_BURSTS};
 use crate::render::particles::{
     EmitterBursts, MAX_EMITTERS, ParticleBurst, ParticleEmitterRecord, ParticleSpawnState,

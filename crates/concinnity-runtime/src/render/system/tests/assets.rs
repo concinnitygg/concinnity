@@ -6,9 +6,9 @@ use concinnity_engine::components::{
     VolumetricFog, WaterSurface, Wind,
 };
 use concinnity_engine::ecs::ResourceKind;
+use concinnity_engine::environment::terrain::TerrainGrid;
+use concinnity_engine::environment::terrain::payload::TerrainPayload;
 use concinnity_engine::render::probe::capture::ProbePlacement;
-use concinnity_engine::terrain::TerrainGrid;
-use concinnity_engine::terrain::payload::TerrainPayload;
 
 // A w x h font atlas in the compiled payload format, carrying one glyph so the
 // cap-height derivation has metrics to read.

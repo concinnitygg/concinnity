@@ -2,7 +2,7 @@
 //! vectors reproject to, and the view the occlusion test reprojects last
 //! frame's pyramid through.
 
-use crate::planet::Rebase;
+use crate::environment::planet::Rebase;
 use crate::render::temporal::occlusion_history::OcclusionHistory;
 use crate::render::temporal::view_history::{ViewFrame, ViewHistory};
 use crate::transform::Mat4;

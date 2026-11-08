@@ -22,7 +22,7 @@ use crate::ecs::{
     AudioClipHandle, Entity, EventCursor, PayloadLocator, PipelineContext, Ref, SimTiming,
     StepResult, System, World,
 };
-use crate::planet::{FrameRebases, Rebase, RebaseCursor};
+use crate::environment::planet::{FrameRebases, Rebase, RebaseCursor};
 use crate::resource::AudioClipTable;
 use crate::settings::StoredSettings;
 

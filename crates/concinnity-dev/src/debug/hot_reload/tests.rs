@@ -2,7 +2,6 @@
 //! module). Pull each submodule's items in explicitly.
 
 use super::watch_dirs::WatchDirs;
-use concinnity_engine::animation::skeleton;
 use concinnity_engine::bake::texture::TextureImage;
 use concinnity_engine::components::{ProceduralMesh, SkeletonJoint, Story, StoryReload};
 use concinnity_engine::ecs::asset_id::AssetId;
@@ -16,6 +15,7 @@ use concinnity_engine::render::{
     backend, backend::error, environment::volumetric_fog, scene_state, slots::draw_slot,
 };
 use concinnity_engine::settings::apply::SettingsTarget;
+use concinnity_engine::simulation::animation::skeleton;
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};
 use std::path::PathBuf;
@@ -2367,8 +2367,8 @@ fn armed_driver_survives_a_drive_over_an_empty_world() {
 
 #[test]
 fn apply_effects_splices_the_matching_skeleton_pose_only() {
-    use concinnity_engine::animation::skeleton::{Joint, JointPose, Skeleton};
     use concinnity_engine::components::SkeletonPose;
+    use concinnity_engine::simulation::animation::skeleton::{Joint, JointPose, Skeleton};
 
     let mut world = World::new();
     world.add_component(SkeletonPose::new(

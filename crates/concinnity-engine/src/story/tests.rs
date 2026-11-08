@@ -23,7 +23,7 @@ fn start(world: &mut World) {
     world.add_system(
         Phase::PreRender,
         "UiInputSystem",
-        crate::ui::UiInputSystem::new(),
+        crate::presentation::ui::UiInputSystem::new(),
     );
     world
         .start(HEADLESS_SYSTEMS)

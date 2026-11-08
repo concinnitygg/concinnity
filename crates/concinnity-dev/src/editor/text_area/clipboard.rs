@@ -3,7 +3,7 @@
 //! editor still pastes inside the editor.
 
 use concinnity_engine::ecs::World;
-use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::presentation::window::clipboard::Clipboard;
 
 #[derive(Debug, Default)]
 pub(crate) struct InternalClipboard {

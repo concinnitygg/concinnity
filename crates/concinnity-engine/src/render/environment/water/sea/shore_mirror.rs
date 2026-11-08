@@ -9,8 +9,8 @@ use concinnity_core::math::vec3::{dot, length, scale, sub};
 use concinnity_core::math::{narrow_f32, smoothstep};
 use core::f32::consts::TAU;
 
-use crate::planet::{CONTINENT_OCTAVES, octave_weight_sum};
-use crate::water::sea::shore::{FOAM_RIDE, PHASE_NOISE_OCTAVES, SHORE_TRAINS};
+use crate::environment::planet::{CONTINENT_OCTAVES, octave_weight_sum};
+use crate::environment::water::sea::shore::{FOAM_RIDE, PHASE_NOISE_OCTAVES, SHORE_TRAINS};
 const SHORE_NODES: u32 = 32;
 
 // `ground_lcg` / `ground_lattice` / `ground_noise` in planet_noise.hlsl.
@@ -58,7 +58,7 @@ type Mat = [[f32; 3]; 3];
 
 // `WATER_OCTAVE_TURN`, row by row.
 fn turn() -> Mat {
-    let t = crate::planet::OCTAVE_TURN;
+    let t = crate::environment::planet::OCTAVE_TURN;
     core::array::from_fn(|r| core::array::from_fn(|c| narrow_f32(t[c][r])))
 }
 
@@ -395,18 +395,20 @@ pub(super) fn surface(p: &WaterParams, pt: &Point, n: [f32; 4], swell: f32) -> S
 mod tests {
     use super::*;
     use crate::components::{WaterSurface, Wind};
-    use crate::planet::PlanetShape;
-    use crate::planet::{DVec3, LocalFrame};
-    use crate::render::environment::water::frame::WaterMotion;
-    use crate::water::WaterBody;
-    use crate::water::ocean::OceanQuality;
-    use crate::water::sea::shore::tests::{coast_planet, coast_planet_of, coast_point};
-    use crate::water::sea::shore::{
+    use crate::environment::planet::PlanetShape;
+    use crate::environment::planet::{DVec3, LocalFrame};
+    use crate::environment::water::WaterBody;
+    use crate::environment::water::ocean::OceanQuality;
+    use crate::environment::water::sea::shore::tests::{
+        coast_planet, coast_planet_of, coast_point,
+    };
+    use crate::environment::water::sea::shore::{
         BREAKER_INDEX, FOAM_LEAD, FOAM_RIDE, FOAM_TRAIL, GRADIENT_FADE, MAX_LEAN, MAX_PINCH,
         RESIDUAL_FOAM, SHALLOWEST, SHORE_OCTAVES,
     };
-    use crate::water::spectrum::GRAVITY;
-    use crate::wind::WindField;
+    use crate::environment::water::spectrum::GRAVITY;
+    use crate::environment::wind::WindField;
+    use crate::render::environment::water::frame::WaterMotion;
     use alloc::format;
     use concinnity_core::math::dvec3;
 
@@ -424,7 +426,7 @@ mod tests {
             strength: 4.0,
             ..Wind::default()
         }));
-        let sea = crate::water::PlanetWater {
+        let sea = crate::environment::water::PlanetWater {
             planet: planet.clone(),
             level: 0.0,
             surface: &surface,
@@ -487,7 +489,7 @@ mod tests {
         ] {
             assert!(src.contains(&line), "{line}");
         }
-        for column in crate::planet::OCTAVE_TURN {
+        for column in crate::environment::planet::OCTAVE_TURN {
             for x in column {
                 assert!(src.contains(&format!("{x:.12}")), "{x}");
             }
@@ -726,7 +728,8 @@ mod tests {
         for k in [0.05_f32, 0.2, 0.6] {
             for step in 0..=200 {
                 let age = step as f32 / 200.0;
-                let want = crate::water::sea::shore::foam_drift(f64::from(age), f64::from(k));
+                let want =
+                    crate::environment::water::sea::shore::foam_drift(f64::from(age), f64::from(k));
                 assert!((f64::from(surf_drift(age, k)) - want).abs() < 1e-4 * (1.0 + want));
             }
             let toward = [0.6, 0.0, 0.8];

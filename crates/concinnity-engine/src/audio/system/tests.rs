@@ -3,7 +3,7 @@
 // state the system tracks: cue bindings, queued-clip and match counters,
 // emitter bindings, the occlusion probes and the requested mix.
 
-use crate::camera::camera3d::Camera3DArgs;
+use crate::simulation::camera::camera3d::Camera3DArgs;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
@@ -232,7 +232,7 @@ fn init_binds_emitters_and_publishes_occlusion_probes() {
 // component and its occlusion ray's end to where the move says.
 #[test]
 fn a_frame_move_carries_free_standing_emitters() {
-    use crate::planet::{FrameRebases, Rebase};
+    use crate::environment::planet::{FrameRebases, Rebase};
     let mut clips = AudioClips::new();
     let clip = clips.clip(b"loop-bytes");
     let mut world = clips.seal();

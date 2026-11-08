@@ -93,7 +93,7 @@ pub fn meadow_density(dir: [f32; 3], scale: f32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::planet::CubeFace;
+    use crate::environment::planet::CubeFace;
     use crate::render::environment::grass::planet::cells::face_direction;
 
     const SCALE: f32 = 50_000.0 / MEADOW_PATCH_SIZE;

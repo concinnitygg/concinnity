@@ -1,4 +1,4 @@
-//! The simulated ocean on D3D12 (see `concinnity_engine::water::ocean`):
+//! The simulated ocean on D3D12 (see `concinnity_engine::environment::water::ocean`):
 //! the cascade arrays the water draw samples, and the `WaterSim` node that
 //! fills them each frame from the shared `water_fft.hlsl` kernels.
 //!
@@ -13,13 +13,13 @@
 //! access and is bound as a root UAV.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::environment::water::ocean::foam::FoamClock;
+use concinnity_engine::environment::water::ocean::initial::initial_spectrum;
+use concinnity_engine::environment::water::ocean::{MAX_OCEAN_CASCADES, OceanPlan, OceanQuality};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::uniforms::ocean::{
     OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
-use concinnity_engine::water::ocean::foam::FoamClock;
-use concinnity_engine::water::ocean::initial::initial_spectrum;
-use concinnity_engine::water::ocean::{MAX_OCEAN_CASCADES, OceanPlan, OceanQuality};
 use std::cell::Cell;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

@@ -274,7 +274,8 @@ fn the_hover_holds_still_against_the_stars() {
     let center = [0.0, -50_000.0, 0.0];
     let against_stars = |seconds: f32| {
         let (p, t) = subject_at(&held, seconds);
-        crate::sky::SkyOrientation::new([0.0, 0.0, -1.0], -1.5 * t).rotate(vec3::sub(p, center))
+        crate::environment::sky::SkyOrientation::new([0.0, 0.0, -1.0], -1.5 * t)
+            .rotate(vec3::sub(p, center))
     };
     let drift = vec3::length(vec3::sub(against_stars(to), against_stars(from)));
     let over_ground = vec3::length(vec3::sub(

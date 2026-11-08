@@ -12,8 +12,8 @@
 //! `crate::import::gltf` and call into here.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::animation::skeleton::JointPose;
 use concinnity_engine::components::{MorphDelta, SkeletonJoint, SkinnedVertexData, VertexData};
+use concinnity_engine::simulation::animation::skeleton::JointPose;
 use concinnity_engine::transform::euler_yxz_from_quat;
 use concinnity_host::store::source::resolve_source_path;
 use std::collections::HashMap;

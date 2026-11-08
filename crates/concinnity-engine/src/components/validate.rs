@@ -113,7 +113,7 @@ pub fn camera_track(mut args: CameraTrackArgs) -> CameraTrackArgs {
             }
         }
         if length(leg.direction) < 1e-6 {
-            leg.seconds = crate::camera::track::travel_seconds(leg);
+            leg.seconds = crate::simulation::camera::track::travel_seconds(leg);
             leg.distance = 0.0;
         }
     }
@@ -232,9 +232,9 @@ pub fn terrain(mut args: Terrain) -> Terrain {
         *c = finite_or(*c, 0.0);
     }
     for e in &mut args.extent {
-        *e = finite_at_least(*e, crate::terrain::MIN_TERRAIN_EXTENT, 50.0);
+        *e = finite_at_least(*e, crate::environment::terrain::MIN_TERRAIN_EXTENT, 50.0);
     }
-    args.resolution = crate::terrain::clamp_resolution(args.resolution);
+    args.resolution = crate::environment::terrain::clamp_resolution(args.resolution);
     args.amplitude = finite_at_least(args.amplitude, 0.0, 0.0);
     args.elevation_min = finite_or(args.elevation_min, 0.0);
     args.elevation_max = finite_or(args.elevation_max, args.elevation_min);
@@ -249,14 +249,15 @@ pub fn planet(mut args: Planet) -> Planet {
     }
     args.radius = finite_at_least(
         args.radius,
-        crate::planet::MIN_PLANET_RADIUS,
+        crate::environment::planet::MIN_PLANET_RADIUS,
         defaults.radius,
     );
     args.amplitude = finite_at_least(args.amplitude, 0.0, 0.0).min(args.radius * 0.25);
     args.feature_size = finite_at_least(args.feature_size, 1.0, defaults.feature_size);
-    args.octaves = args
-        .octaves
-        .clamp(crate::planet::MIN_OCTAVES, crate::planet::MAX_OCTAVES);
+    args.octaves = args.octaves.clamp(
+        crate::environment::planet::MIN_OCTAVES,
+        crate::environment::planet::MAX_OCTAVES,
+    );
     args.gravity = finite_at_least(args.gravity, 0.0, defaults.gravity);
     args.air_scale_height = finite_at_least(args.air_scale_height, 0.0, defaults.air_scale_height);
     args.land_share = finite_or(args.land_share, defaults.land_share).clamp(0.0, 1.0);
@@ -264,7 +265,8 @@ pub fn planet(mut args: Planet) -> Planet {
     args.ocean_depth =
         finite_at_least(args.ocean_depth, 0.0, defaults.ocean_depth).min(args.radius * 0.25);
     args.beach_width = finite_at_least(args.beach_width, 1.0, defaults.beach_width);
-    args.covers.truncate(crate::planet::MAX_GROUND_COVERS);
+    args.covers
+        .truncate(crate::environment::planet::MAX_GROUND_COVERS);
     for cover in &mut args.covers {
         cover.rule = cover.rule.validated();
     }
@@ -595,14 +597,17 @@ mod tests {
             ..GroundCover::default()
         };
         let p = planet(Planet {
-            covers: alloc::vec![cover; crate::planet::MAX_GROUND_COVERS + 2],
+            covers: alloc::vec![cover; crate::environment::planet::MAX_GROUND_COVERS + 2],
             layers: alloc::vec![TerrainLayer {
                 rule: inverted,
                 ..TerrainLayer::default()
             }],
             ..Planet::default()
         });
-        assert_eq!(p.covers.len(), crate::planet::MAX_GROUND_COVERS);
+        assert_eq!(
+            p.covers.len(),
+            crate::environment::planet::MAX_GROUND_COVERS
+        );
         for rule in p.covers.iter().map(|c| c.rule).chain([p.layers[0].rule]) {
             assert_eq!(rule.altitude, [Some(-1.0), Some(3.0)]);
             assert_eq!(rule.slope, [None, None]);
@@ -718,17 +723,23 @@ mod tests {
         assert_eq!(t.center, [0.0, 2.0, 3.0]);
         assert_eq!(
             t.extent,
-            [crate::terrain::MIN_TERRAIN_EXTENT, 50.0],
+            [crate::environment::terrain::MIN_TERRAIN_EXTENT, 50.0],
             "a negative extent floors, a non-finite one takes the default"
         );
-        assert_eq!(t.resolution, crate::terrain::MIN_TERRAIN_RESOLUTION);
+        assert_eq!(
+            t.resolution,
+            crate::environment::terrain::MIN_TERRAIN_RESOLUTION
+        );
         assert_eq!(t.amplitude, 0.0);
         assert_eq!((t.elevation_min, t.elevation_max), (0.0, 0.0));
         let huge = terrain(Terrain {
             resolution: u32::MAX,
             ..Terrain::default()
         });
-        assert_eq!(huge.resolution, crate::terrain::MAX_TERRAIN_RESOLUTION);
+        assert_eq!(
+            huge.resolution,
+            crate::environment::terrain::MAX_TERRAIN_RESOLUTION
+        );
     }
 
     #[test]

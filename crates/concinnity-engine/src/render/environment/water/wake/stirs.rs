@@ -4,9 +4,9 @@
 
 use super::window::WakeWindow;
 use super::{STIR_SPREAD, WAKE_COUPLING, WAKE_JUMP_RADII};
-use crate::planet::Rebase;
+use crate::environment::planet::Rebase;
+use crate::environment::water::stir::{StirPiece, WaterStir};
 use crate::render::uniforms::wake::{MAX_WAKE_STIRS, WaterWakeStirGpu};
-use crate::water::stir::{StirPiece, WaterStir};
 use alloc::vec::Vec;
 
 /// The stirs the wake has taken in, kept to pair the next frame's with.
@@ -130,7 +130,7 @@ fn lane(p: &StirPiece) -> [f32; 4] {
 mod tests {
     use super::*;
     use crate::ecs::Entity;
-    use crate::physics::MAX_FLUID_PIECES;
+    use crate::simulation::physics::MAX_FLUID_PIECES;
 
     fn piece(x: f32, volume: f32) -> StirPiece {
         StirPiece {

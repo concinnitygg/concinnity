@@ -14,9 +14,9 @@ use concinnity_core::math::SaturatingFrom;
 use core::mem::size_of;
 
 use super::SceneState;
+use crate::environment::planet::{CAPTURE_TILE_STRIDE, tile_indices};
 use crate::gfx::mesh_payload::Vertex;
 use crate::gfx::render_types::{DrawIndex, DrawObject, PlanetTileDraw};
-use crate::planet::{CAPTURE_TILE_STRIDE, tile_indices};
 use crate::render::backend::ChunkMesh;
 use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::buffers::range_alloc::RangeAllocator;
@@ -87,7 +87,7 @@ pub struct GeometryPlacement {
 
 /// The index range a capture draws each planet tile through in place of its
 /// full grid, at the tile's own `base_vertex`: the same corners stepped
-/// [`crate::planet::CAPTURE_TILE_STRIDE`] at a time, far fewer triangles for a
+/// [`crate::environment::planet::CAPTURE_TILE_STRIDE`] at a time, far fewer triangles for a
 /// view that cannot resolve them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureTiles {
@@ -509,7 +509,7 @@ impl SceneState {
             index_count: idxs.len(),
             planet_tile: planet_tile.map(|t| PlanetTileDraw {
                 level: t.tile.level,
-                seams: crate::planet::TileSeams::default(),
+                seams: crate::environment::planet::TileSeams::default(),
             }),
             base_vertex: i32::saturating_from(vertex_base(v_off)),
             geometry_generation,
@@ -1056,7 +1056,7 @@ mod tests {
     // and first vertex its draw renders with, and forgotten when removed.
     #[test]
     fn a_planet_chunk_is_listed_while_drawn() {
-        use crate::planet::{CubeFace, TileId};
+        use crate::environment::planet::{CubeFace, TileId};
         use crate::render::backend::PlanetChunk;
         let mut scene = chunked(8, 8);
         let tile = TileId {
@@ -1090,7 +1090,7 @@ mod tests {
             scene.draw.objects[0].planet_tile,
             Some(PlanetTileDraw {
                 level: 7,
-                seams: crate::planet::TileSeams::default(),
+                seams: crate::environment::planet::TileSeams::default(),
             })
         );
         assert_eq!(scene.draw.objects[1].planet_tile, None);
@@ -1116,7 +1116,7 @@ mod tests {
     }
 
     fn tile_chunk<'a>(verts: &'a [Vertex], idxs: &'a [u16], level: u8) -> ChunkMesh<'a> {
-        use crate::planet::{CubeFace, TileId};
+        use crate::environment::planet::{CubeFace, TileId};
         ChunkMesh {
             planet_tile: Some(crate::render::backend::PlanetChunk {
                 tile: TileId {
@@ -1227,7 +1227,7 @@ mod tests {
     fn the_first_full_grid_tile_writes_the_capture_grid_once() {
         let fine = tile_indices(1);
         let coarse = tile_indices(CAPTURE_TILE_STRIDE);
-        let side = crate::planet::TILE_CELLS as usize + 1;
+        let side = crate::environment::planet::TILE_CELLS as usize + 1;
         let mut scene = chunked(2 * side * side, fine.len() + coarse.len());
         let verts = vertices(side * side);
         let mut w = Recorder::default();
@@ -1266,7 +1266,7 @@ mod tests {
     #[test]
     fn a_tile_without_room_for_the_capture_grid_still_places() {
         let fine = tile_indices(1);
-        let side = crate::planet::TILE_CELLS as usize + 1;
+        let side = crate::environment::planet::TILE_CELLS as usize + 1;
         let mut scene = chunked(side * side, fine.len());
         let verts = vertices(side * side);
         scene

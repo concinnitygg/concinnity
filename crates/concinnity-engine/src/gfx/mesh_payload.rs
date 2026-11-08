@@ -214,7 +214,7 @@ const SKINNED_MAGIC: &[u8; 4] = b"SKMV";
 // Magic for the optional sparse morph-target block after the joint block.
 const MORPH_MAGIC: &[u8; 4] = b"MRPS";
 
-pub use crate::animation::morph_targets::{
+pub use crate::simulation::animation::morph_targets::{
     MORPH_DELTA_EPSILON, MorphDelta, MorphEntry, PayloadMorphs,
 };
 

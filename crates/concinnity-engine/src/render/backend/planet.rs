@@ -8,7 +8,7 @@ pub trait PlanetReshape {
     /// [`reshape_planet`](crate::render::environment::reshape::reshape_planet)).
     /// The tiles stream again on their own. Driven by the editor's live planet
     /// seam. Default no-op, for a backend that draws no planet.
-    fn reshape_planet(&mut self, shape: &crate::planet::PlanetShape) {
+    fn reshape_planet(&mut self, shape: &crate::environment::planet::PlanetShape) {
         let _ = shape;
     }
 }

@@ -5,11 +5,11 @@
 // is a plain SkinnedMesh with no shape work left for the runtime.
 
 use concinnity_core::math::vec3;
-use concinnity_engine::animation::proportions::ProportionLayer;
 use concinnity_engine::components::{
     CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
     build_skeleton_from_joint_defs,
 };
+use concinnity_engine::simulation::animation::proportions::ProportionLayer;
 use concinnity_engine::transform::{self, Mat4, mat4_transform_point};
 
 use crate::authoring::registry::RegisteredType;

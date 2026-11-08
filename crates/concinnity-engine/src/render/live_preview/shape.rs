@@ -1,5 +1,5 @@
 //! Live `CharacterShape` re-resolution. Every shape resolves once at init
-//! ([`crate::animation::character_shape`]); an editor dragging a slider needs
+//! ([`crate::simulation::animation::character_shape`]); an editor dragging a slider needs
 //! the same resolution against the running world's `SkeletonPose` each frame,
 //! without rebuilding the world. This is that seam: what a mesh exposes to a
 //! shape (its morph-target and joint names) and a re-seed of its pose through
@@ -8,11 +8,11 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::animation::character_shape;
-use crate::animation::skinned_mesh_map::{SkinnedMeshMorphNames, SkinnedMeshNameIndex};
 use crate::components::{CharacterCapsule, CharacterRig, CharacterShape, SkeletonPose};
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{SkinnedMeshHandle, World};
+use crate::simulation::animation::character_shape;
+use crate::simulation::animation::skinned_mesh_map::{SkinnedMeshMorphNames, SkinnedMeshNameIndex};
 
 /// The names a shape targeting one mesh can reference.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -101,9 +101,9 @@ mod tests {
     use alloc::vec;
 
     use super::*;
-    use crate::animation::character_shape::tests::chain;
     use crate::components::{JointProportion, ShapeSlider};
     use crate::gfx::render_types::SkinnedIndex;
+    use crate::simulation::animation::character_shape::tests::chain;
 
     fn world_with_pose() -> World {
         let mut world = World::new();

@@ -41,7 +41,7 @@ pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};
 /// one applies would be arbitrary), baking an injected payload fails, or a
 /// planet's edits do not read.
 pub fn run(ctx: &mut PipelineContext<'_>) -> Result<(), WorldError> {
-    crate::planet::load_edits(ctx)?;
+    crate::environment::planet::load_edits(ctx)?;
     let toggles = take_toggles(ctx)?;
     let mut minter = Minter::resume(ctx);
     let result = inject_defaults(ctx, &toggles, &mut minter);

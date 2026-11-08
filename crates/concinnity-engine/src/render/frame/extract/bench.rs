@@ -9,8 +9,8 @@
 //     cargo test -p concinnity-engine --release -- --ignored --nocapture \
 //         --test-threads=1 render_extraction
 
-use crate::animation::pose_scratch::PoseScratch;
-use crate::animation::proportions::ProportionLayer;
+use crate::simulation::animation::pose_scratch::PoseScratch;
+use crate::simulation::animation::proportions::ProportionLayer;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -18,11 +18,11 @@ use concinnity_core::math::SaturatingFrom;
 use std::println;
 
 use super::FrameExtractor;
-use crate::animation::skeleton;
 use crate::components::{GlobalTransform, Prop, RenderHandle, SkeletonPose};
 use crate::ecs::{Entity, SkinnedMeshHandle, World};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
 use crate::render::frame::snapshot::RenderSnapshot;
+use crate::simulation::animation::skeleton;
 use crate::test_support::{Pace, bench};
 
 const SMALL: usize = 100;

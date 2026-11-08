@@ -1,11 +1,11 @@
 //! The static draws' records, packed a chunk at a time.
 
+use crate::environment::planet::{Horizon, tile_morph_row};
 use crate::gfx::lod;
 use crate::gfx::render_types::{
     DrawObject, GpuDrawArgs, GpuObjectData, GpuTileMorph, albedo_pool_index, draw_args_flags,
     draw_args_planet_tile, normal_pool_index, pack_object_record,
 };
-use crate::planet::{Horizon, tile_morph_row};
 use crate::render::shader::world_pipelines::ShaderRoutes;
 use crate::render::temporal::model_history::HistoryWindow;
 use concinnity_core::math::SaturatingFrom;
@@ -169,11 +169,11 @@ mod tests {
     use core::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+    use crate::environment::planet::HorizonOccluder;
     use crate::gfx::render_types::{
         DrawArgsFlags, DrawIndex, FarFieldTint, LodSlice, PlanetTileDraw, draw_args_bucket_bits,
         draw_args_no_history,
     };
-    use crate::planet::HorizonOccluder;
     use crate::render::record_pack::MAX_PACK_CHUNKS;
     use crate::render::temporal::model_history::{HistoryMode, ModelHistory};
     use crate::test_support;
@@ -478,7 +478,7 @@ mod tests {
         let mut objs = objects(2);
         objs[0].planet_tile = Some(PlanetTileDraw {
             level: 4,
-            seams: crate::planet::TileSeams {
+            seams: crate::environment::planet::TileSeams {
                 coarser: 1,
                 finer: 2,
             },

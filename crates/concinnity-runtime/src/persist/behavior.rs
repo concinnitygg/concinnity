@@ -1,10 +1,10 @@
 // Persisted behavior state, the one thing this crate lends
-// `concinnity_engine::behavior::BehaviorSystem`: a `state` file under the host's
+// `concinnity_engine::simulation::behavior::BehaviorSystem`: a `state` file under the host's
 // save directory. The state's shape and its keying are the system's (see
-// `concinnity_engine::behavior::BehaviorState`); what this owns is the file,
+// `concinnity_engine::simulation::behavior::BehaviorState`); what this owns is the file,
 // written off the sim thread.
 
-use concinnity_engine::behavior::{BehaviorState, BehaviorStore};
+use concinnity_engine::simulation::behavior::{BehaviorState, BehaviorStore};
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::store::writer::FileWriter;
 use std::path::{Path, PathBuf};
@@ -58,9 +58,9 @@ mod tests {
     // constructible.
     #[test]
     fn a_saving_world_restores_its_variable_through_the_file_store() {
-        use concinnity_engine::behavior::{BehaviorStore, BehaviorSystem};
         use concinnity_engine::components::{BehaviorLiteral, VariableDecl};
         use concinnity_engine::ecs::System;
+        use concinnity_engine::simulation::behavior::{BehaviorStore, BehaviorSystem};
 
         let tree = concinnity_testing::TempTree::new();
         let dir = tree.join("state");
@@ -113,8 +113,8 @@ mod tests {
     // A written state reads back from its file.
     #[test]
     fn state_round_trips_through_the_file() {
-        use concinnity_engine::behavior::{BehaviorState, BehaviorStore};
         use concinnity_engine::components::BehaviorLiteral;
+        use concinnity_engine::simulation::behavior::{BehaviorState, BehaviorStore};
 
         let tree = concinnity_testing::TempTree::new();
         let dir = tree.join("state");

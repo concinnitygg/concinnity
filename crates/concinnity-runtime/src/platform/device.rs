@@ -7,10 +7,10 @@
 //! probe reports.
 
 use concinnity_core::platform::Platform;
+use concinnity_engine::presentation::window::display_mode::DisplayProbe;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::BackendInit;
 use concinnity_engine::render::backend::{DeviceProbe, RenderBackend};
-use concinnity_engine::window::display_mode::DisplayProbe;
 use std::sync::OnceLock;
 
 /// Whether a rendering backend compiles into this build. False leaves the

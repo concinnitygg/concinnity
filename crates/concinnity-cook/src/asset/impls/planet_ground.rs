@@ -1,6 +1,6 @@
 use concinnity_engine::components::PlanetGround;
 use concinnity_engine::components::cook::PlanetGround as PlanetGroundArgs;
-use concinnity_engine::planet::encode_page;
+use concinnity_engine::environment::planet::encode_page;
 
 use crate::asset::BuildCtx;
 
@@ -25,7 +25,7 @@ impl crate::asset::BuildAsset for PlanetGround {
 mod tests {
     use super::*;
     use crate::asset::BuildAsset;
-    use concinnity_engine::planet::{PAGE_SAMPLES, decode_page};
+    use concinnity_engine::environment::planet::{PAGE_SAMPLES, decode_page};
 
     fn ctx() -> BuildCtx<'static> {
         BuildCtx {

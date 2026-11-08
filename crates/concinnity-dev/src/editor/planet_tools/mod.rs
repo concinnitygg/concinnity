@@ -7,7 +7,7 @@ pub(crate) mod ring;
 pub(crate) mod stroke;
 
 use concinnity_engine::components::{InputKey, KeyPress};
-use concinnity_engine::planet::GeoPosition;
+use concinnity_engine::environment::planet::GeoPosition;
 
 use super::icons::{self, Glyph};
 use super::panels::planet::List;

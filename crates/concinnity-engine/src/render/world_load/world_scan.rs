@@ -89,7 +89,7 @@ pub fn color_lut_strength(ctx: &mut PipelineContext<'_>) -> Option<f32> {
 /// exit screenshot does.
 pub fn declares_frame_captures(ctx: &PipelineContext<'_>) -> bool {
     let screenshot = |action: Option<&UiAction>| matches!(action, Some(UiAction::Screenshot(_)));
-    crate::screenshot::takes_screenshots(ctx)
+    crate::presentation::screenshot::takes_screenshots(ctx)
         || ctx
             .query::<KeyBinding>()
             .any(|kb| screenshot(kb.action.as_ref()))
