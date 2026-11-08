@@ -25,7 +25,7 @@ use crate::editor::viewport::{gizmo, snap};
 // undo restores the original position.
 #[test]
 fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box_near");
     // Down-left of the camera axis so the pick, the handles, and the drag all
     // land in screen regions no default panel covers.
@@ -114,7 +114,7 @@ fn gizmo_drag_moves_the_prop_and_commits_one_undo_step() {
 // camera axis (panel-free screen region), its live Transform entity, and the
 // `EntityById` index the gizmo resolves through.
 fn gizmo_rig(start: [f32; 3]) -> (World, Entity, EditorHook) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box_near");
     let mut world = pick_world(
         [0.0; 3],
@@ -483,7 +483,7 @@ fn gizmo_mode_keys_switch_unless_typing() {
 // commits the SkinnedMesh entry's position as one undo step.
 #[test]
 fn gizmo_drag_moves_a_skinned_mesh_and_commits_its_position() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("body");
     let start = [-6.11f32, -3.3, -5.0];
     let mut world = pick_world(

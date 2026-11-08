@@ -22,7 +22,7 @@ use crate::editor::panels::registry::PanelKey;
 // below the cursor), release commits ONE undoable entry and selects it.
 #[test]
 fn drag_out_places_a_prop_where_the_ghost_lands() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let ground = asset_id::intern("ground");
     let mut world = pick_world(
         [0.0; 3],
@@ -117,7 +117,7 @@ fn align_rotation_maps_up_onto_every_face_normal() {
 // prop to that face: a straight-on hit of the +Z face carries +Y onto +Z.
 #[test]
 fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let wall = asset_id::intern("wall");
     let mut world = pick_world([0.0; 3], vec![(wall, [-2.0, -2.0, -6.0], [2.0, 2.0, -4.0])]);
     let mut h = hook(vec![
@@ -178,7 +178,7 @@ fn aligned_drag_out_orients_the_drop_to_the_struck_face() {
 // A press that never travels past the slop is just the selecting click.
 #[test]
 fn a_still_cell_press_places_nothing() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
         "type": "ProceduralMesh", "args": { "$id": "demo_ball", "generator": "box" }
@@ -201,7 +201,7 @@ fn a_still_cell_press_places_nothing() {
 // Dragging a Material onto a Prop assigns it instead of placing anything.
 #[test]
 fn material_drag_assigns_to_the_prop_under_the_cursor() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let crate_id = asset_id::intern("crate_prop");
     let mut world = pick_world(
         [0.0; 3],

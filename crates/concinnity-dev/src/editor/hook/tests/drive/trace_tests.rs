@@ -39,7 +39,7 @@ fn traced_world(id: AssetId, hit: bool) -> World {
 
 #[test]
 fn trace_events_become_pulses_and_live_values() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
@@ -86,7 +86,7 @@ fn trace_events_become_pulses_and_live_values() {
 // window keep it, and the frame that crosses it drops it.
 #[test]
 fn pulses_decay_by_frame_time() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
@@ -113,7 +113,7 @@ fn pulses_decay_by_frame_time() {
 
 #[test]
 fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",
@@ -134,7 +134,7 @@ fn a_breakpoint_hit_pauses_and_lands_on_the_node() {
 
 #[test]
 fn stopping_clears_the_live_state() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("b");
     let mut h = playing_hook(vec![behavior(
         "b",

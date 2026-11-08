@@ -68,7 +68,7 @@ mod tests {
     use concinnity_host::thread::asset_id;
 
     fn handles_for(assets: &[WorldJsonlAsset]) -> ResourceHandles {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
         asset_id::intern_all(&names);
         ResourceHandles::from_assets(assets.iter().filter_map(|a| {

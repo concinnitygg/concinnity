@@ -323,7 +323,7 @@ mod tests {
     // A world holding one named entity carrying `component`, resolvable
     // through the same `EntityById` path the gizmo and billboards use.
     fn world_with<C: ComponentSlot>(name: &str, component: C) -> World {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let id = asset_id::intern(name);
         let mut world = World::new();
         let entity = world.push(component);

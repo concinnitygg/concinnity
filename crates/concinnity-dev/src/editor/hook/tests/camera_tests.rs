@@ -24,7 +24,7 @@ fn hook() -> EditorHook {
 // A world with a camera at `pos` facing -Z, and a PickIndex holding one unit
 // box at the origin under the interned name "box".
 fn camera_world(pos: [f32; 3]) -> (World, AssetId) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box");
     let mut world = World::new();
     world.add_component(Camera3D {
@@ -346,7 +346,7 @@ fn a_recall_cancels_an_in_flight_tumble() {
 // to frame a light or a camera.
 #[test]
 fn selection_bounds_fall_back_to_a_billboards_transform() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("lamp");
     let mut world = World::new();
     let entity = world.push(Transform {

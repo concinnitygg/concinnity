@@ -78,6 +78,8 @@ pub fn prepare_world<'a>(
     source: impl Into<WorldSource<'a>>,
     assets_dir: Option<&std::path::Path>,
 ) -> Result<LoadedWorld, WorldValidationError> {
+    // Ids the checks intern are throwaway; the compile assigns the build's own.
+    let _check = concinnity_host::thread::asset_id::BuildScope::fresh();
     prepare(source.into(), assets_dir).map_err(WorldValidationError::new)
 }
 

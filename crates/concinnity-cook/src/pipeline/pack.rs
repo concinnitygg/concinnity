@@ -970,7 +970,7 @@ mod tests {
         ];
 
         let names: Vec<&str> = assets.iter().map(|a| a.id.as_str()).collect();
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(&names);
         let handles = concinnity_engine::resource::ResourceHandles::from_assets(
             assets.iter().enumerate().filter_map(|(i, a)| {
@@ -979,8 +979,7 @@ mod tests {
                     .map(|kind| (AssetId(u32::saturating_from(i)), kind))
             }),
         );
-        crate::resource_handles::reset_resource_handles();
-        crate::resource_handles::install_resource_handles(handles.clone());
+        asset_id::set_resource_handles(handles.clone());
         let resource_jobs: Vec<ResourceJob> = (2..assets.len())
             .map(|i| {
                 let rt = assets[i].asset_type;

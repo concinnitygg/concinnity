@@ -33,13 +33,12 @@ pub fn validate_asset(
 }
 
 fn check_one(asset_type: &str, name: &str, args: &serde_json::Value) -> Result<(), Diagnostic> {
-    // Single-asset validation has no surrounding world to intern against; the
-    // resulting ids are throwaway. Reset so calls do not accumulate entries.
-    // Clear the resource handle map too: with no world there are no handles, so
-    // a resource reference falls back to the interner (parses without resolving
-    // to a real slot, which single-asset validation never needs).
-    asset_id::reset_interner();
-    crate::resource_handles::reset_resource_handles();
+    // Single-asset validation has no surrounding world to intern against, so it
+    // resolves through throwaway tables the caller's are restored over. With no
+    // world there are no handles, so a resource reference falls back to the
+    // interner (parses without resolving to a real slot, which single-asset
+    // validation never needs).
+    let _build = asset_id::BuildScope::fresh();
     let registered = RegisteredType::parse(asset_type);
 
     // Build-only types are valid in world.jsonl; they are consumed by expansion

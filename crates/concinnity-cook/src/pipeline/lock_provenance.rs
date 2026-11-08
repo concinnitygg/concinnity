@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn sources_ride_only_their_own_kind_and_payload_blob_follows_the_record() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![
             wja(
                 "tex",

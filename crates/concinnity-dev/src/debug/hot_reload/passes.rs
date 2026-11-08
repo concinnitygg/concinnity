@@ -9,7 +9,6 @@ use concinnity_engine::components::{ProceduralMesh, Story, VolumetricFog};
 use concinnity_engine::gfx::mesh_payload;
 use concinnity_engine::render::world_load::source_maps::ProceduralMeshSourceMap;
 use concinnity_engine::render::{backend, environment::volumetric_fog};
-use concinnity_host::thread::asset_id;
 use std::path::Path;
 
 // Per-reload tally for the volumetric-fog path. Counts are surfaced separately
@@ -364,11 +363,6 @@ pub(super) fn reload_stories(
     path: &Path,
     snapshots: &mut std::collections::HashMap<String, serde_json::Value>,
 ) -> Vec<Story> {
-    // Each expanded Story deserializes its scaffold name-references, so the
-    // name resolver must be installed. In a running editor the initial build
-    // already set it up; installing it here too is a cheap no-op and keeps a
-    // standalone reload correct.
-    asset_id::ensure_name_resolver();
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -410,7 +404,7 @@ pub(super) fn reload_stories(
         if snapshots.get(&name) == Some(&args) {
             continue;
         }
-        match serde_json::from_value::<Story>(args.clone()) {
+        match concinnity_cook::authoring::from_authored::<Story>(&args) {
             Ok(story) => {
                 snapshots.insert(name.clone(), args);
                 out.push(story);

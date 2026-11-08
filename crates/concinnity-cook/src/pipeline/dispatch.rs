@@ -329,7 +329,7 @@ fn skinned_mesh_resource_compile_paths() {
 
     // The baked data tuple: name id first, then the clamped mesh with its
     // geometry cleared.
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let name_id = asset_id::intern("hero");
     let data = rt
         .compile_data(

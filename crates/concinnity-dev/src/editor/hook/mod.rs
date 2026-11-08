@@ -252,7 +252,7 @@ pub(crate) struct EditorHook {
     template_index: Option<overrides::TemplateIndex>,
     // The viewport selection set (`editor/selection.rs`), held as
     // `AssetHandle`s and re-resolved against the entry list every frame
-    // (`hook/handles.rs`): a live-preview rebuild resets the interner, so a
+    // (`hook/handles.rs`): a live-preview rebuild begins a fresh build, so a
     // stored AssetId would drift onto another asset, and a name is content the
     // user renames. `pick_last` is the transient repeat-click cycle;
     // `marquee` an in-flight box select.

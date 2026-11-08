@@ -3,8 +3,6 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::math::narrow_f32;
-use concinnity_host::thread::asset_id;
-use serde::Deserialize;
 use std::path::Path;
 
 use super::skin_index_arg;
@@ -203,12 +201,6 @@ pub(in crate::pipeline) fn desugar_root_motion(
 ) -> std::io::Result<()> {
     use concinnity_engine::components::Animation;
 
-    // This deserializes each flagged clip (whose `target` is a name reference),
-    // so the name resolver must be installed. The full pipeline resets the
-    // interner before reaching here; installing it again is a cheap no-op and
-    // keeps this pass correct when called on its own.
-    asset_id::ensure_name_resolver();
-
     for asset in assets.iter_mut() {
         if asset.asset_type != RegisteredType::Animation
             || asset
@@ -219,7 +211,7 @@ pub(in crate::pipeline) fn desugar_root_motion(
         {
             continue;
         }
-        let mut anim: Animation = Deserialize::deserialize(&asset.args).map_err(|e| {
+        let mut anim: Animation = crate::authoring::from_authored(&asset.args).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(

@@ -53,7 +53,7 @@ fn click_menu_row(
 // shared path (one undo step) and selects it.
 #[test]
 fn right_click_creates_a_positioned_type_at_the_surface_point() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let ground = asset_id::intern("ground");
     let mut world = pick_world(
         [0.0; 3],
@@ -97,7 +97,7 @@ fn right_click_creates_a_positioned_type_at_the_surface_point() {
 // Prop instancing it at the captured point.
 #[test]
 fn prefab_rows_create_a_prop_instance() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(vec![serde_json::json!({
         "type": "Prefab", "args": {"$id": "door_set"}
@@ -132,7 +132,7 @@ fn prefab_rows_create_a_prop_instance() {
 // bar / a floating panel never open it.
 #[test]
 fn the_create_menu_dismisses_on_click_away_and_respects_claimed_regions() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], vec![]);
     let mut h = hook(Vec::new());
 

@@ -61,7 +61,7 @@ fn camera(controller: Option<CameraController>) -> Camera3D {
 // the shots frame). `bounds` false leaves the index empty, which is the seeded
 // empty scene.
 fn preview_world(controller: Option<CameraController>, bounds: bool) -> World {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = world_with_name_field();
     world.add_component(camera(controller));
     for &id in std::iter::once(&cinematic::FADE).chain(&worlds::loading::ids().sprites) {

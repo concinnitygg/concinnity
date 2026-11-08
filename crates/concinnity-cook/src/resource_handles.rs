@@ -6,13 +6,11 @@
 //! producers -- are `concinnity_engine::resource::ResourceHandles`, shared with
 //! the typed bake builder so the two producers of a world can never drift. What
 //! lives here is the authored-world half: classifying JSON assets into those
-//! spaces, and the resolver seams a reference name deserializes through.
+//! spaces. The map a reference name resolves through lives in the build's
+//! `concinnity_host::thread::asset_id::BuildTables`.
 
-use concinnity_engine::ecs::{HandleKind, HandleResolver};
 use concinnity_engine::resource::ResourceHandles;
 use concinnity_host::thread::asset_id;
-use std::cell::RefCell;
-use std::sync::Arc;
 
 use crate::authoring::registry::RegisteredType;
 
@@ -45,58 +43,6 @@ pub(crate) fn assign_mesh_source_handles(
         crate::authoring::resource_type::mesh_source_block(a.asset_type, &a.args)
             .map(|block| (asset_id::intern(&a.id), block))
     }));
-}
-
-// The current build's handle map, consulted by the resource-handle resolver.
-// One map holds every space's handles. Each thread resolves through the map it
-// was given, which the threads of one build share, so parallel builds stay
-// isolated, as `concinnity_host::thread::asset_id`'s interner does.
-thread_local! {
-    static RESOURCE_HANDLES: RefCell<Arc<ResourceHandles>> = RefCell::default();
-}
-
-// The seam's view of the calling thread's handle map: a name resolves to its
-// `AssetId` through the shared build interner, then to that resource's handle
-// in the requested space. An unknown name yields `None`, letting the
-// deserializer fall back or fail as its context requires.
-struct ThreadHandles;
-
-impl HandleResolver for ThreadHandles {
-    fn resolve(&self, kind: HandleKind, name: &str) -> Option<u32> {
-        let id = asset_id::resolve_reference(name);
-        RESOURCE_HANDLES.with(|h| h.borrow().handle(kind, id))
-    }
-}
-
-// Install the resource-handle resolver, so a reference name deserializes to
-// its dense handle value. Idempotent and cheap after the first call.
-pub(crate) fn ensure_resource_handle_resolvers() {
-    static RESOLVER: ThreadHandles = ThreadHandles;
-    concinnity_engine::ecs::install_handle_resolver(&RESOLVER);
-}
-
-// Install this build's handle map so resource references resolve to handles
-// during the component reserialize pass. Call after `from_assets` over the
-// expanded + injected world, before reserializing any component.
-pub(crate) fn install_resource_handles(handles: ResourceHandles) {
-    adopt_resource_handles(Arc::new(handles));
-}
-
-// This thread's handle map, for handing to the threads a build gives work.
-pub(crate) fn current_resource_handles() -> Arc<ResourceHandles> {
-    RESOURCE_HANDLES.with(|h| Arc::clone(&h.borrow()))
-}
-
-// Resolve through `handles` on the calling thread.
-pub(crate) fn adopt_resource_handles(handles: Arc<ResourceHandles>) {
-    ensure_resource_handle_resolvers();
-    RESOURCE_HANDLES.with(|h| *h.borrow_mut() = handles);
-}
-
-// Start this thread on an empty handle map. Call at the start of a build so a
-// prior build's map cannot leak into this one (mirrors `reset_interner`).
-pub(crate) fn reset_resource_handles() {
-    adopt_resource_handles(Arc::default());
 }
 
 #[cfg(test)]
@@ -156,7 +102,7 @@ mod tests {
         ];
 
         // Intern in declaration order, mirroring the pipeline.
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let names: Vec<&str> = assets.iter().map(|x| x.id.as_str()).collect();
         asset_id::intern_all(&names);
 
@@ -193,11 +139,10 @@ mod tests {
                 .is_empty()
         );
 
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let stone = asset_id::intern("stone");
         let wood = asset_id::intern("wood");
-        reset_resource_handles();
-        install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (stone, ResourceKind::Material),
             (wood, ResourceKind::Material),
         ]));
@@ -229,7 +174,7 @@ mod tests {
     // `assign_shader_handles` over the asset list, not by kind classification.
     #[test]
     fn a_shader_reference_name_bakes_to_its_declaration_order_handle() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let world_asset = |name: &str, asset_type: RegisteredType| WorldJsonlAsset {
             id: name.to_string(),
             asset_type,
@@ -241,14 +186,12 @@ mod tests {
             world_asset("tex", RegisteredType::Texture),
             world_asset("shader_b", RegisteredType::Shader),
         ];
-
-        reset_resource_handles();
         let mut handles = ResourceHandles::default();
         assign_shader_handles(&mut handles, &assets);
         assert_eq!(handles.shader_count(), 2);
         assert_eq!(handles.shader(asset_id::intern("shader_a")), Some(0));
         assert_eq!(handles.shader(asset_id::intern("shader_b")), Some(1));
-        install_resource_handles(handles);
+        asset_id::set_resource_handles(handles);
 
         let bytes = RegisteredType::Material
             .compile_payload(&serde_json::json!({"shader": "shader_b"}), None)
@@ -272,12 +215,10 @@ mod tests {
     #[test]
     fn a_texture_reference_name_reserializes_to_its_declaration_order_handle() {
         // Declaration order: tex_a -> Texture handle 0, tex_b -> Texture 1.
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let a = asset_id::intern("tex_a");
         let b = asset_id::intern("tex_b");
-
-        reset_resource_handles();
-        install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (a, ResourceKind::Texture),
             (b, ResourceKind::Texture),
         ]));
@@ -317,13 +258,11 @@ mod tests {
         // Declaration order interleaves a texture so the per-kind counting is
         // exercised: clip_a -> AudioClip 0, clip_b -> AudioClip 1 (the texture
         // does not consume an AudioClip handle).
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let clip_a = asset_id::intern("clip_a");
         let tex = asset_id::intern("tex");
         let clip_b = asset_id::intern("clip_b");
-
-        reset_resource_handles();
-        install_resource_handles(ResourceHandles::from_assets([
+        asset_id::set_resource_handles(ResourceHandles::from_assets([
             (clip_a, ResourceKind::AudioClip),
             (tex, ResourceKind::Texture),
             (clip_b, ResourceKind::AudioClip),
@@ -362,7 +301,7 @@ mod tests {
     // depend on whether the payload came from the cache.
     #[test]
     fn skinned_mesh_data_is_the_same_before_and_after_the_geometry_is_inlined() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let authored = serde_json::json!({
             "source": "hero.glb",
             "position": [1.0, 2.0, 3.0],

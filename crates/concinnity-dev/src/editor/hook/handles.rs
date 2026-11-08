@@ -213,7 +213,7 @@ mod tests {
             json!({"type": "Prop", "args": {"$id": "floor"}}),
             json!({"type": "Prop", "args": {}}),
         ]);
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::prime_name_table(&[(0, "floor".to_string()), (1, "Prop#0".to_string())]);
         let handle = h.handle_for("Prop#0");
         assert_eq!(h.handle_asset_id(&handle), Some(AssetId(1)));

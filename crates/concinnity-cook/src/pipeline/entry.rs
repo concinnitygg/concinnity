@@ -245,6 +245,8 @@ fn compile_world(
     progress: Option<ProgressFn<'_>>,
 ) -> std::io::Result<PipelineResult> {
     let progress = Progress::new(progress);
+    // The build's tables, which the passes below resolve references through.
+    let tables = asset_id::begin_build();
 
     // Cache probe runs before desugar. For every glTF-sourced Mesh /
     // SkinnedMesh, hash the un-desugared args + referenced .glb and look up
@@ -280,7 +282,7 @@ fn compile_world(
             })
     })?;
 
-    assign_asset_ids(&assets);
+    assign_asset_ids(&tables, &assets);
 
     // Assign each resource its dense per-kind handle in declaration order and
     // install the map so resource references resolve during the reserialize pass
@@ -291,7 +293,6 @@ fn compile_world(
     // blob is emitted from, so a resource's handle equals the position the
     // runtime encounters it (a texture's albedo pool slot, an audio clip's drain
     // index / resource-table slot).
-    crate::resource_handles::reset_resource_handles();
     let resource_assets = assets.iter().enumerate().filter_map(|(i, a)| {
         crate::authoring::resource_type::asset_resource_kind(a.asset_type)
             .map(|kind| (AssetId(u32::saturating_from(i)), kind))
@@ -308,7 +309,7 @@ fn compile_world(
     crate::resource_handles::assign_shader_handles(&mut resource_handles, &assets);
     // Install a clone; the original is kept to look up each resource asset's
     // handle while partitioning below.
-    crate::resource_handles::install_resource_handles(resource_handles.clone());
+    tables.set_resource_handles(resource_handles.clone());
 
     // Component assets become `BlobAssetDef`s; resource assets become
     // resource-stream jobs, keyed by the handles assigned above.
@@ -388,14 +389,13 @@ fn compile_world(
 // and a dev tool can print one. An anonymous asset's handle is its label,
 // which no reference can name: validation resolves references against the
 // declared ids.
-fn assign_asset_ids(assets: &[WorldJsonlAsset]) {
-    asset_id::reset_interner();
+fn assign_asset_ids(tables: &asset_id::BuildTables, assets: &[WorldJsonlAsset]) {
     let handles: Vec<(u32, String)> = assets
         .iter()
         .enumerate()
         .map(|(i, a)| (u32::saturating_from(i), a.id.clone()))
         .collect();
-    asset_id::prime_name_table(&handles);
+    tables.assign_names(&handles);
 }
 
 #[cfg(test)]

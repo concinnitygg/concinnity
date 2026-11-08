@@ -68,7 +68,7 @@ mod tests {
 
         #[test]
         fn deserializes_with_all_fields() {
-            asset_id::reset_interner();
+            asset_id::begin_build();
             let json = r#"{
                 "texture":"tex_bullet",
                 "position":[1.0,2.0,3.0],
@@ -154,7 +154,7 @@ mod tests {
 
         #[test]
         fn deserializes_all_fields() {
-            asset_id::reset_interner();
+            asset_id::begin_build();
             let json = r#"{
                 "kind":"revolute",
                 "body_a":"door",
@@ -223,7 +223,7 @@ mod tests {
 
         #[test]
         fn deserializes_with_all_fields() {
-            asset_id::reset_interner();
+            asset_id::begin_build();
             let json = r#"{
                 "texture":"tex_spark","position":[1,2,3],"direction":[0,1,0],
                 "spread_deg":30,"speed_min":1.5,"speed_max":4.0,

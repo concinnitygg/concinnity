@@ -236,7 +236,7 @@ mod tests {
     }
 
     fn engine_with(names: &[&str]) -> Engine {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(names);
         Engine::new(World::new())
     }
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn spawn_template_resolves_labels_and_refuses_a_taken_name() {
         let _guard = test_support::lock();
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::prime_name_table(&[(0, "crate".to_string()), (1, "Prop#0".to_string())]);
         assert_eq!(spawn_template("Prop#0", "crate_copy"), Ok(AssetId(1)));
         assert!(

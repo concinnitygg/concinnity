@@ -12,7 +12,7 @@ use crate::editor::hook::tests::fixtures::select;
 // commits the batch as one undo step.
 #[test]
 fn drop_to_floor_lands_the_selection_on_the_surface_below() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let a = asset_id::intern("box_a");
     let ground = asset_id::intern("ground");
     let lamp_id = asset_id::intern("lamp");

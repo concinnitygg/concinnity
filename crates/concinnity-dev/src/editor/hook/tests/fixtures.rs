@@ -357,7 +357,7 @@ pub(in crate::editor::hook) fn two_prop_rig(
     s2: [f32; 3],
     half: f32,
 ) -> (World, Entity, Entity, EditorHook) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let a = asset_id::intern("box_a");
     let b = asset_id::intern("box_b");
     let bb = |s: [f32; 3]| {

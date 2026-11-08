@@ -18,7 +18,7 @@ use crate::editor::panels::registry::PanelKey;
 // hidden set publishing as ids each tick) and never touch the entries.
 #[test]
 fn hide_and_lock_are_session_state_not_edits() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("box");
     let mut world = world_with_input(FrameInput::default());
     let mut h = hook(vec![entry("box", "Sprite")]);

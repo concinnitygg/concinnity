@@ -24,7 +24,6 @@ use concinnity_engine::ecs::{
     ActionField, AssetFields, ComponentTag, EnumField, FieldTable, RefField, ResourceKind,
 };
 pub use concinnity_engine::ecs::{AssetOrigin, AssetPayload};
-use concinnity_host::thread::asset_id;
 use std::sync::OnceLock;
 
 /// Static authoring metadata for an asset type: how it is declared, whether it
@@ -388,17 +387,11 @@ macro_rules! define_registered_type {
                 self,
                 args: &serde_json::Value,
             ) -> Result<Vec<u8>, AuthoringError> {
-                // Deserializing the args interns any name-string cross-reference,
-                // which needs the name resolver installed. The build pipeline
-                // resets the interner before it gets here; installing it again is
-                // a cheap no-op and lets standalone callers (e.g. `cn check`
-                // validation) deserialize without doing their own setup.
-                asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
-                            let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
-                                args.clone(),
+                            let typed = crate::authoring::from_authored::<__meta_args_ty!($ty; $($meta)*)>(
+                                args,
                             )
                             .map_err(|source| AuthoringError::Args {
                                 asset: stringify!($variant),
@@ -433,7 +426,6 @@ macro_rules! define_registered_type {
                 self,
                 args: &serde_json::Value,
             ) -> Result<serde_json::Value, AuthoringError> {
-                asset_id::ensure_name_resolver();
                 match self {
                     $(
                         Self::$variant => {
@@ -441,8 +433,8 @@ macro_rules! define_registered_type {
                                 asset: stringify!($variant),
                                 source,
                             };
-                            let typed = serde_json::from_value::<__meta_args_ty!($ty; $($meta)*)>(
-                                args.clone(),
+                            let typed = crate::authoring::from_authored::<__meta_args_ty!($ty; $($meta)*)>(
+                                args,
                             )
                             .map_err(args_err)?;
                             let typed = crate::authoring::param_clamp::clamp_authored(
@@ -778,13 +770,10 @@ pub fn bake_divergent(
     ct: RegisteredType,
     args: &serde_json::Value,
 ) -> Result<Option<Vec<u8>>, AuthoringError> {
-    // Deserializing the args interns name-string cross-references, exactly as
-    // `reserialize_args` does.
-    asset_id::ensure_name_resolver();
     macro_rules! bake {
         ($ty:ty, $args_ty:ty) => {{
             let asset = ct.as_str();
-            let typed = serde_json::from_value::<$args_ty>(args.clone())
+            let typed = crate::authoring::from_authored::<$args_ty>(args)
                 .map_err(|source| AuthoringError::Args { asset, source })?;
             postcard::to_allocvec(&<$ty>::bake(typed))
                 .map(Some)
@@ -884,7 +873,7 @@ mod tests {
         // The kind derived from the extension at bake time.
         assert!(baked.kind.is_some());
 
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let args = serde_json::json!({"template": "crate", "interval": -1.0, "lifetime": 2.0});
         let bytes = bake_divergent(RegisteredType::Spawner, &args)
             .unwrap()
@@ -1105,7 +1094,6 @@ mod tests {
     // name serde does not know would write an asset that no longer loads.
     #[test]
     fn every_declared_enum_name_round_trips_through_its_field() {
-        asset_id::ensure_name_resolver();
         let mut checked = 0;
         for &ty in RegisteredType::all() {
             let Some(defaults) = ty.registration().default_args else {

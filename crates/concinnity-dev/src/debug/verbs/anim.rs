@@ -158,8 +158,7 @@ mod tests {
     use concinnity_engine::components::{Animation, AnimationGraph};
 
     fn anim_clip(name: &str, duration: f32) -> (AssetId, Animation) {
-        asset_id::ensure_name_resolver();
-        let a: Animation = serde_json::from_value(json!({
+        let a: Animation = concinnity_cook::authoring::from_authored(&json!({
             "target": "hero",
             "duration": duration,
             "looping": true,
@@ -169,8 +168,7 @@ mod tests {
     }
 
     fn hero_graph() -> (AssetId, AnimationGraph) {
-        asset_id::ensure_name_resolver();
-        let g: AnimationGraph = serde_json::from_value(json!({
+        let g: AnimationGraph = concinnity_cook::authoring::from_authored(&json!({
             "target": "hero",
             "parameters": [{"name": "speed", "default": 0.0}],
             "initial": "idle",
@@ -195,7 +193,7 @@ mod tests {
 
     // A started world whose `hero` mesh is driven by an idle/run graph.
     fn graph_world() -> World {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let mut world = World::new();
         add(&mut world, anim_clip("idle_clip", 1.0));
         add(&mut world, anim_clip("run_clip", 0.8));
@@ -206,7 +204,7 @@ mod tests {
 
     // A started world whose `hero` mesh blends two clips by weight.
     fn flat_world() -> World {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let mut world = World::new();
         add(&mut world, anim_clip("wave_clip", 1.0));
         add(&mut world, anim_clip("bow_clip", 0.5));
@@ -283,7 +281,7 @@ mod tests {
     #[test]
     fn a_world_without_an_animation_system_is_an_error() {
         let _guard = test_support::lock();
-        asset_id::reset_interner();
+        asset_id::begin_build();
         asset_id::intern_all(&["hero"]);
         let mut engine = Engine::new(World::new());
         assert_eq!(

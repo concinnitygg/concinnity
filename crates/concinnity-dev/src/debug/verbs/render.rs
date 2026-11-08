@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn texture_slot_covers_every_case() {
         let _guard = test_support::lock();
-        asset_id::reset_interner();
+        asset_id::begin_build();
 
         assert_eq!(texture_slot(None, None), Ok(0));
 

@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn a_generator_texture_has_nothing_to_watch() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![wja(
             "noise",
             RegisteredType::Texture,
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn a_file_texture_fills_the_slot_at_its_handle() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![
             wja(
                 "clip",
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn mesh_sources_default_to_one_lod_level() {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         let assets = vec![
             wja(
                 "plain",

@@ -24,7 +24,7 @@ const ON_BOX: [f32; 2] = [300.0, 600.0];
 // A camera 10 m over a smooth planet whose ground is at y = 0, a box on the
 // ground ahead, and an open Planet panel.
 fn rig() -> (EditorHook, World) {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let id = asset_id::intern("crate");
     let mut world = pick_world(
         [0.0, 10.0, 0.0],

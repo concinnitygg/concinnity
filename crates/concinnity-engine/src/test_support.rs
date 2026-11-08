@@ -56,14 +56,12 @@ type HandlePolicy = fn(crate::ecs::handle::HandleKind, &str) -> Option<u32>;
 
 struct ThreadResolver;
 
-impl crate::ecs::resolver::NameResolver for ThreadResolver {
-    fn resolve(&self, name: &str) -> u32 {
+impl crate::ecs::resolver::ReferenceResolver for ThreadResolver {
+    fn name(&self, name: &str) -> u32 {
         NAME_POLICY.with(core::cell::Cell::get)(name)
     }
-}
 
-impl crate::ecs::resolver::HandleResolver for ThreadResolver {
-    fn resolve(&self, kind: crate::ecs::handle::HandleKind, name: &str) -> Option<u32> {
+    fn handle(&self, kind: crate::ecs::handle::HandleKind, name: &str) -> Option<u32> {
         HANDLE_POLICY.with(core::cell::Cell::get)(kind, name)
     }
 }
@@ -72,8 +70,7 @@ impl crate::ecs::resolver::HandleResolver for ThreadResolver {
 // `handles` on this thread.
 fn install_policies(names: fn(&str) -> u32, handles: HandlePolicy) {
     static RESOLVER: ThreadResolver = ThreadResolver;
-    crate::ecs::resolver::install_name_resolver(&RESOLVER);
-    crate::ecs::resolver::install_handle_resolver(&RESOLVER);
+    crate::ecs::resolver::install_reference_resolver(&RESOLVER);
     NAME_POLICY.with(|p| p.set(names));
     HANDLE_POLICY.with(|p| p.set(handles));
 }

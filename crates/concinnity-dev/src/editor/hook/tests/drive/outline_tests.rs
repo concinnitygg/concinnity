@@ -21,7 +21,7 @@ use crate::editor::viewport::billboards;
 // leaves only the axes.
 #[test]
 fn selected_trigger_volume_publishes_its_line_outline() {
-    asset_id::reset_interner();
+    asset_id::begin_build();
     let mut world = pick_world([0.0; 3], Vec::new());
     for (id, s) in billboards::sprites() {
         world.push_identified(id, s);

@@ -37,7 +37,7 @@ mod tests {
 
     // A 1s clip whose root (joint 0) walks +2 X while bobbing 1.0 -> 1.2 Y.
     fn walking_clip() -> Animation {
-        asset_id::reset_interner();
+        asset_id::begin_build();
         serde_json::from_value(serde_json::json!({
             "target": "hero",
             "duration": 1.0,
