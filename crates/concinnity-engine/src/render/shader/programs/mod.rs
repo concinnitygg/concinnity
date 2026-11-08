@@ -22,6 +22,9 @@ use alloc::vec::Vec;
 
 use concinnity_core::platform::Platform;
 
+/// Where the DirectX and Metal hosts bind each program's resources.
+pub mod abi;
+
 pub mod dx;
 
 /// What the Metal backend compiles to metallibs.

@@ -65,10 +65,12 @@ impl<T> ThreadBound<T> {
     /// Unwrap the value, or `None` off its owner thread, where it is leaked.
     #[track_caller]
     pub fn into_inner(self) -> Option<T> {
-        if !self.checked() {
+        // Never dropped through `Drop`, so a misuse is reported once and the
+        // value leaks off its owner thread.
+        let mut this = ManuallyDrop::new(self);
+        if !this.checked() {
             return None;
         }
-        let mut this = ManuallyDrop::new(self);
         // SAFETY: `this` is never used or dropped again, so the value is
         // taken out exactly once, on its owner thread.
         Some(unsafe { ManuallyDrop::take(&mut this.value) })
