@@ -35,9 +35,10 @@
 
 use concinnity_cook::authoring::world::{entry_type, entry_type_name};
 use concinnity_engine::components::FrameInput;
-use concinnity_engine::ecs::{
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{
     CursorShape, DesiredCursor, FlyCam, HiddenAssets, HudLayers, MenuOverride, ViewOverrides,
-    World, WorldLines,
+    WorldLines,
 };
 use concinnity_engine::shutdown::ShutdownToken;
 use concinnity_runtime::Runtime;

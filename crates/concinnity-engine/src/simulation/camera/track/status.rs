@@ -15,7 +15,7 @@ pub(crate) struct CameraTrackStatus {
     pub elapsed_seconds: f32,
     /// Track time the camera is posed at this frame: up to one fixed step
     /// behind `elapsed_seconds`, blended by the frame's
-    /// [`SimTiming::alpha`](crate::ecs::SimTiming::alpha) so the camera moves
+    /// [`SimTiming::alpha`](crate::protocol::SimTiming::alpha) so the camera moves
     /// as far as the frame took.
     pub pose_seconds: f32,
     /// Seconds the whole track runs for, the longer of its two lists.

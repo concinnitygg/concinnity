@@ -194,7 +194,7 @@ fn system_manifest_matches_started_systems() {
     let built: Vec<&str> = world
         .systems()
         .iter()
-        .map(super::super::built_system::BuiltSystem::name)
+        .map(crate::ecs::BuiltSystem::name)
         .collect();
     assert_eq!(manifest, built);
 }

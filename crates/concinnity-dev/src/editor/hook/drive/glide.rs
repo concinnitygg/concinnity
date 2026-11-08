@@ -4,7 +4,8 @@
 //! the selection's world bounds and steps the interpolation.
 
 use concinnity_engine::components::{Camera3D, FrameInput, Transform};
-use concinnity_engine::ecs::{FrameTime, PickIndex, World};
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{FrameTime, PickIndex};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::{EditorHook, camera_pose};

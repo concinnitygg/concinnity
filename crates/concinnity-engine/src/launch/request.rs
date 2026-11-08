@@ -1,8 +1,9 @@
 use alloc::string::{String, ToString};
 
 use super::LaunchArgs;
-use crate::ecs::{Resources, ViewOverrides, World};
+use crate::ecs::{Resources, World};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
+use crate::protocol::ViewOverrides;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::{QualityPreset, SettingKey, StoredSettings, UserGraphicsSettings};
 
@@ -59,7 +60,7 @@ impl LaunchRequest {
             world.insert_resource(view);
         }
         if self.args.hud == Some(false) {
-            world.insert_resource(crate::ecs::HudHidden(true));
+            world.insert_resource(crate::protocol::HudHidden(true));
         }
     }
 
@@ -195,7 +196,7 @@ mod tests {
     fn publishing_no_hud_hides_the_stats_hud() {
         let mut world = World::new();
         LaunchRequest::default().publish(&mut world);
-        assert!(world.resource::<crate::ecs::HudHidden>().is_none());
+        assert!(world.resource::<crate::protocol::HudHidden>().is_none());
 
         let mut world = World::new();
         let mut request = LaunchRequest {
@@ -207,8 +208,8 @@ mod tests {
         };
         request.publish(&mut world);
         assert_eq!(
-            world.resource::<crate::ecs::HudHidden>(),
-            Some(&crate::ecs::HudHidden(true))
+            world.resource::<crate::protocol::HudHidden>(),
+            Some(&crate::protocol::HudHidden(true))
         );
     }
 

@@ -7,7 +7,8 @@ use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
-use concinnity_engine::ecs::{BlobMeshBounds, BlobSceneGroups, ComponentAsset, World};
+use concinnity_engine::ecs::{ComponentAsset, World};
+use concinnity_engine::protocol::{BlobMeshBounds, BlobSceneGroups};
 use concinnity_engine::resource::{
     ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
     MeshSources, TextureSource, TextureSources,
@@ -126,7 +127,7 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
     world.insert_resource(BlobSceneGroups(result.scene_groups));
     world.insert_resource(BlobMeshBounds(result.mesh_bounds));
     if let Some(budget) = result.physics_budget {
-        world.insert_resource(concinnity_engine::ecs::WorldPhysicsBudget(budget));
+        world.insert_resource(concinnity_engine::protocol::WorldPhysicsBudget(budget));
     }
     // Dev-only source catalogs for the hot-reload watcher (see the scan above).
     world.insert_resource(ColorLutSources(color_lut_source));

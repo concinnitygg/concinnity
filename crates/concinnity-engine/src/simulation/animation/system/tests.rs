@@ -2,8 +2,9 @@ use crate::components::{
     Animation, AnimationGraph, AnimationParams, CharacterRig, PhysicsConfig, Prop, PropCollider,
     RootMotionEvent, SkeletonPose,
 };
-use crate::ecs::{ComponentSlot, EventCursor, FrameTime, MenuActive, SkinnedMeshHandle, World};
+use crate::ecs::{ComponentSlot, EventCursor, SkinnedMeshHandle, World};
 use crate::gfx::render_types::SkinnedIndex;
+use crate::protocol::{FrameTime, MenuActive};
 use crate::simulation::animation::skeleton;
 use crate::test_support::intern;
 use crate::transform;
@@ -16,7 +17,7 @@ use super::AnimationSystem;
 // Start `world` on the headless table, which builds its AnimationSystem.
 fn start(world: &mut World) {
     world
-        .start(crate::ecs::HEADLESS_SYSTEMS)
+        .start(crate::schedule::HEADLESS_SYSTEMS)
         .expect("the test world starts");
 }
 

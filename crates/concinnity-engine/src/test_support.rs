@@ -219,7 +219,7 @@ pub(crate) fn start_with<S: crate::ecs::System>(
 ) {
     world.add_system(phase, name, system);
     world
-        .start(crate::ecs::HEADLESS_SYSTEMS)
+        .start(crate::schedule::HEADLESS_SYSTEMS)
         .expect("the test world starts");
 }
 

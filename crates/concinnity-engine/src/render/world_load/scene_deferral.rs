@@ -9,7 +9,8 @@ use concinnity_core::math::SaturatingFrom;
 use hashbrown::HashSet;
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{BlobMeshBounds, BlobSceneGroups, PipelineContext, ResourceKind};
+use crate::ecs::{PipelineContext, ResourceKind};
+use crate::protocol::{BlobMeshBounds, BlobSceneGroups};
 use crate::render::draw_list::DeferredMeshSources;
 use crate::render::scene::flow::start_scene;
 

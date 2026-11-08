@@ -8,9 +8,9 @@
 //! The speed chip reads what the follow camera follows.
 //! Developer readouts (passes / cursor / camera) live on `DebugHud`.
 
-use crate::ecs::{
-    Access, FrameTime, HudHidden, HudPrefs, PipelineContext, Ref, StepResult, System, World,
-};
+use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
+
+use crate::protocol::{FrameTime, HudHidden, HudPrefs};
 use concinnity_core::math::SaturatingFrom;
 use core::fmt::{self, Display, Write as _};
 

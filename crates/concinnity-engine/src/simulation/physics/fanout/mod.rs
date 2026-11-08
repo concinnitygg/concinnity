@@ -9,7 +9,7 @@
 // order afterwards, so which thread solved what is not observable in the world
 // state; a fan-out decides only how long the step takes.
 
-use crate::ecs::ScheduleMode;
+use crate::protocol::ScheduleMode;
 use crate::simulation::physics::Simulation;
 use concinnity_core::fanout::{FanOut, Inline, Lent};
 

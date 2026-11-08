@@ -10,9 +10,10 @@
 //! the only way to reach an occluded object without gizmos.
 
 use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{PickIndex, World};
 use concinnity_engine::gfx::pick::{PickRay, ray_aabb, screen_ray};
+use concinnity_engine::protocol::PickIndex;
 use concinnity_host::thread::asset_id;
 
 use super::EditorHook;

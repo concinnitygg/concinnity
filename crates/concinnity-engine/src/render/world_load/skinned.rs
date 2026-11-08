@@ -15,10 +15,11 @@ use crate::components::{
     build_skeleton_from_joint_defs,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{MaterialHandle, PickIndex, PipelineContext, SkinnedMeshHandle};
+use crate::ecs::{MaterialHandle, PipelineContext, SkinnedMeshHandle};
 use crate::geometry::payload_joints_to_defs;
 use crate::gfx::mesh_payload::{self, PayloadMorphs, SkinnedVertex};
 use crate::gfx::render_types::{MAX_JOINTS, SkinnedDrawObject, SkinnedIndex};
+use crate::protocol::PickIndex;
 use crate::render::draw_list::append_lod_slices;
 use crate::render::frame::extract::PickCandidate;
 use crate::render::material_entry::{MaterialEntry, resolve_material_slots};

@@ -7,7 +7,8 @@
 use concinnity_engine::components::{
     Camera3D, CameraController, FollowController, Sprite, TextLabel,
 };
-use concinnity_engine::ecs::{FrameTime, PickEntry, PickIndex, World};
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::tests::fixtures::{

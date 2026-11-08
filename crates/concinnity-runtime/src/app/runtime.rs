@@ -197,12 +197,12 @@ impl Runtime {
         for (id, asset) in assets {
             world.add(asset, id);
         }
-        world.insert_resource(concinnity_engine::ecs::BlobSceneGroups(scene_groups));
-        world.insert_resource(concinnity_engine::ecs::BlobMeshBounds(mesh_bounds));
+        world.insert_resource(concinnity_engine::protocol::BlobSceneGroups(scene_groups));
+        world.insert_resource(concinnity_engine::protocol::BlobMeshBounds(mesh_bounds));
         // Absent for a world with no physics content, which is also a world
         // with no PhysicsSystem to read it.
         if let Some(budget) = physics_budget {
-            world.insert_resource(concinnity_engine::ecs::WorldPhysicsBudget(budget));
+            world.insert_resource(concinnity_engine::protocol::WorldPhysicsBudget(budget));
         }
         // Load the blob's resource stream into the per-kind tables the systems
         // read by handle. AudioSystem reads the AudioClipTable at init; the

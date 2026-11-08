@@ -8,9 +8,10 @@
 //! request, so the running world records nothing.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{
-    ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest, World,
+use concinnity_engine::protocol::{
+    ExecutionTrace, FrameTime, TraceEvent, TracePaths, TraceRequest,
 };
 
 use crate::editor::behavior::path::Path;

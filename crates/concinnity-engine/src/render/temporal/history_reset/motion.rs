@@ -11,7 +11,7 @@
 // this, and one extra reset costs less than a missed cut.
 
 use super::tracker::HistoryView;
-use crate::ecs::SimTiming;
+use crate::protocol::SimTiming;
 use crate::transform::Mat4;
 use concinnity_core::math::vec3::{length, scale, sub};
 use concinnity_core::math::{acos, half_life_decay, ln};

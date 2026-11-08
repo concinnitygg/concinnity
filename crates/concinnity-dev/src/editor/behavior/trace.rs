@@ -4,7 +4,7 @@
 //! world.
 
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{TraceStep, TraceVal};
+use concinnity_engine::protocol::{TraceStep, TraceVal};
 use concinnity_host::thread::asset_id;
 
 use super::path::{Path, Step};

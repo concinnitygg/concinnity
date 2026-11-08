@@ -7,9 +7,9 @@
 
 // `build_cursor_calls` below is test-only, and it is the only Vec here.
 use crate::components::Sprite;
-use crate::ecs::CursorShape;
 use crate::gfx::overlay::OverlayTransform;
 use crate::gfx::render_types::{TextDrawCall, TextVertex};
+use crate::protocol::CursorShape;
 #[cfg(test)]
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;

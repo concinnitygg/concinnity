@@ -9,8 +9,9 @@ use crate::components::{
     Camera3D, Collider, ContactEvent, Held, RigidBody, Transform, TriggerFilter, VolumeEvent,
     WakeRequest,
 };
-use crate::ecs::{Entity, PipelineContext, ScheduleMode, SimTiming};
+use crate::ecs::{Entity, PipelineContext};
 use crate::environment::planet::{LocalFrame, PlanetFrame};
+use crate::protocol::{ScheduleMode, SimTiming};
 use crate::simulation::physics::{CharacterMoveInput, Simulation, probes, rig};
 
 use super::drive;
@@ -96,7 +97,7 @@ impl PhysicsSystem {
         let camera = CameraInput::read(ctx, self.floor_y);
         // Whichever pool the schedule names, read once for the frame. Both
         // land in the same place; only how long the step takes differs.
-        let mode = crate::ecs::schedule_mode(ctx.resources);
+        let mode = crate::protocol::schedule_mode(ctx.resources);
 
         let planet = ctx.resource::<PlanetFrame>().cloned();
         let frame = planet.as_ref().map_or(LocalFrame::AUTHORED, |p| p.frame);

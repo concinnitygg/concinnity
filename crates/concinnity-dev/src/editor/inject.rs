@@ -13,7 +13,8 @@ use concinnity_cook::authoring::spec::{AssetSpec, asset};
 use concinnity_engine::components::{
     DebugHud, EngineDefaults, Sprite, TextInput, TextLabel, Window, WindowMode,
 };
-use concinnity_engine::ecs::{FontHandle, PickIndex, TransientSaves, World};
+use concinnity_engine::ecs::{FontHandle, World};
+use concinnity_engine::protocol::{PickIndex, TransientSaves};
 
 use super::hud_ids::HudIds;
 use super::panels::registry::{self, PanelKey};

@@ -8,10 +8,9 @@ use super::Screenshot;
 use super::asset::{is_contained_file, normal_file};
 use super::schedule::{Shot, ShotSchedule};
 use crate::benchmark::BenchmarkRun;
-use crate::ecs::{
-    FrameCaptureRequest, PipelineContext, SimTiming, StepResult, System, WindowMinimized, World,
-};
+use crate::ecs::{PipelineContext, StepResult, System, World};
 use crate::launch::{LaunchRequest, screenshot_path};
+use crate::protocol::{FrameCaptureRequest, SimTiming, WindowMinimized};
 use concinnity_core::math::narrow_f32;
 
 /// Takes a run's screenshots: the launch's `--screenshot-at` shots, and the

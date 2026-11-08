@@ -8,7 +8,8 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use core::num::NonZeroU32;
 
-use super::{FrameTime, MenuActive, SimTiming, World};
+use crate::ecs::World;
+use crate::protocol::{FrameTime, MenuActive, SimTiming};
 
 /// Accumulates frame time into fixed simulation ticks, advanced once per world
 /// step with that frame's elapsed seconds. The caller owns the time source.

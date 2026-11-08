@@ -17,10 +17,9 @@ use super::{despawn, template, visibility};
 use crate::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SkeletonPose, SpawnRequest, VisibilityRequest,
 };
-use crate::ecs::{
-    Entity, EventCursor, FrameTime, MenuActive, PipelineContext, StepResult, System, World,
-};
+use crate::ecs::{Entity, EventCursor, PipelineContext, StepResult, System, World};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
+use crate::protocol::{FrameTime, MenuActive};
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;

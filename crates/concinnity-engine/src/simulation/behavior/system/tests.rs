@@ -5,10 +5,11 @@
 // restore and write-back semantics, which are the same whatever the state is
 // kept in. A host's own store (a file, say) covers the medium itself.
 
-use crate::ecs::{
-    ExecutionTrace, HEADLESS_SYSTEMS, Ref, TraceEvent, TracePaths, TraceStep, TraceVal, World,
-    asset_id::AssetId,
-};
+use crate::ecs::{Ref, World, asset_id::AssetId};
+
+use crate::protocol::{ExecutionTrace, TraceEvent, TracePaths, TraceStep, TraceVal};
+
+use crate::schedule::HEADLESS_SYSTEMS;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;

@@ -1,8 +1,10 @@
 // The I/O half of a `screenshot` action: the burst the engine's extraction names and
 // schedules starts here, with its directory made and its time stamp taken.
 
-use concinnity_engine::ecs::{PipelineContext, ScreenshotRequest};
+use concinnity_engine::ecs::PipelineContext;
+
 use concinnity_engine::launch::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest};
+use concinnity_engine::protocol::ScreenshotRequest;
 use concinnity_engine::render::frame::extract::{FrameExtractor, ScreenshotBurst};
 
 use crate::crash::utc_now;

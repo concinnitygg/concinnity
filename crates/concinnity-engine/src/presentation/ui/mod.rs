@@ -24,9 +24,10 @@ pub(crate) mod text_label;
 pub(crate) mod ui_action;
 
 use crate::ecs::{
-    Access, DropdownView, EventCursor, FontHandle, OpenDropdown, PipelineContext, Ref, ScreenStack,
-    StepResult, System, World, by_asset_id,
+    Access, EventCursor, FontHandle, PipelineContext, Ref, StepResult, System, World, by_asset_id,
 };
+
+use crate::protocol::{DropdownView, OpenDropdown, ScreenStack};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
@@ -338,8 +339,8 @@ impl System for UiInputSystem {
             .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
-                crate::ecs::DisabledSettingRows,
-                crate::ecs::DisplayModes,
+                crate::protocol::DisabledSettingRows,
+                crate::protocol::DisplayModes,
                 CompiledPlatforms,
             ])
             .writes_resources(crate::resource_mask![
@@ -350,8 +351,8 @@ impl System for UiInputSystem {
                 SettingCommand,
                 SceneCommand,
                 StoryCommand,
-                crate::ecs::ScreenshotRequest,
-                crate::ecs::HudHidden,
+                crate::protocol::ScreenshotRequest,
+                crate::protocol::HudHidden,
             ])
     }
 
@@ -726,7 +727,7 @@ impl UiInputSystem {
                 .collect()
         } else if settings::is_dynamic_dropdown(req.setting) {
             // `resolution`'s modes, which the renderer publishes at init.
-            let modes = ctx.resource::<crate::ecs::DisplayModes>()?;
+            let modes = ctx.resource::<crate::protocol::DisplayModes>()?;
             if modes.0.is_empty() {
                 return None;
             }
@@ -1395,11 +1396,13 @@ fn fire_action(
         UiAction::Screen(cmd) => ctx.events_mut::<ScreenCommand>().send(*cmd),
         UiAction::Story(cmd) => ctx.events_mut::<StoryCommand>().send(cmd.clone()),
         UiAction::Screenshot(frames) => {
-            ctx.insert_resource(crate::ecs::ScreenshotRequest(*frames));
+            ctx.insert_resource(crate::protocol::ScreenshotRequest(*frames));
         }
         UiAction::ToggleHud => {
-            let hidden = ctx.resource::<crate::ecs::HudHidden>().is_some_and(|h| h.0);
-            ctx.insert_resource(crate::ecs::HudHidden(!hidden));
+            let hidden = ctx
+                .resource::<crate::protocol::HudHidden>()
+                .is_some_and(|h| h.0);
+            ctx.insert_resource(crate::protocol::HudHidden(!hidden));
         }
         UiAction::Setting {
             key,
@@ -1817,7 +1820,7 @@ mod tests {
             fit: SpriteFit::Fit,
         });
         start(&mut world);
-        world.insert_resource(crate::ecs::DisplayModes(modes));
+        world.insert_resource(crate::protocol::DisplayModes(modes));
         world
     }
 
@@ -2559,7 +2562,7 @@ mod tests {
 
         // Master off: the show_fps row is in the runtime-disabled set, so a click
         // over it fires nothing.
-        world.insert_resource(crate::ecs::DisabledSettingRows(
+        world.insert_resource(crate::protocol::DisabledSettingRows(
             [SettingKey::ShowFps].into_iter().collect(),
         ));
         world.add_component(make_frame_input(50.0, 50.0, true));
@@ -3544,14 +3547,18 @@ mod tests {
             });
             world.step();
             world
-                .remove_resource::<crate::ecs::ScreenshotRequest>()
+                .remove_resource::<crate::protocol::ScreenshotRequest>()
                 .map(|r| r.0)
         };
         assert_eq!(press(KeyMods::NONE), Some(1));
         assert_eq!(press(KeyMods::SHIFT), Some(8));
         world.add_component(FrameInput::default());
         world.step();
-        assert!(world.resource::<crate::ecs::ScreenshotRequest>().is_none());
+        assert!(
+            world
+                .resource::<crate::protocol::ScreenshotRequest>()
+                .is_none()
+        );
     }
 
     // Each press of a `toggle_hud` binding flips the stats HUD's visibility.
@@ -3570,10 +3577,10 @@ mod tests {
                 ..Default::default()
             });
             world.step();
-            world.resource::<crate::ecs::HudHidden>().copied()
+            world.resource::<crate::protocol::HudHidden>().copied()
         };
-        assert_eq!(press(), Some(crate::ecs::HudHidden(true)));
-        assert_eq!(press(), Some(crate::ecs::HudHidden(false)));
+        assert_eq!(press(), Some(crate::protocol::HudHidden(true)));
+        assert_eq!(press(), Some(crate::protocol::HudHidden(false)));
     }
 
     // A KeyBinding scoped to a screen fires only while that screen is on top.

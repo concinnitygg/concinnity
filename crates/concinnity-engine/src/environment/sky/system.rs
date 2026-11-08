@@ -1,4 +1,5 @@
-use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
+use crate::ecs::{Entity, PipelineContext, StepResult, System, World};
+use crate::protocol::{MenuActive, SimTiming};
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 

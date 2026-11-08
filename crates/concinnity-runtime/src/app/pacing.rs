@@ -4,7 +4,9 @@
 //! `frame_cap`, lowered to a background rate while the `WindowMinimized`
 //! resource says nothing drawn can be seen.
 
-use concinnity_engine::ecs::{WindowMinimized, World};
+use concinnity_engine::ecs::World;
+
+use concinnity_engine::protocol::WindowMinimized;
 use concinnity_engine::render::frame::submit::{FramePace, PaceWait, frame_cap};
 use std::time::Instant;
 

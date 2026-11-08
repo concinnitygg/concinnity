@@ -23,6 +23,7 @@ mod runtime;
 pub(crate) mod skinned_mesh;
 mod sources;
 pub(crate) mod texture;
+mod world_add;
 
 use concinnity_core::math::SaturatingFrom;
 pub use environment_map::EnvironmentMapRecord;

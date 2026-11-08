@@ -8,7 +8,8 @@ use concinnity_cook::authoring::world::replace_args;
 use concinnity_engine::components::{
     Behavior, BehaviorLiteral, FrameInput, InputKey, KeyEvent, KeyMods, KeyPress, Sprite, Variables,
 };
-use concinnity_engine::ecs::{ComponentAsset, TraceRequest, World};
+use concinnity_engine::ecs::{ComponentAsset, World};
+use concinnity_engine::protocol::TraceRequest;
 use concinnity_host::thread::asset_id;
 use std::collections::BTreeMap;
 

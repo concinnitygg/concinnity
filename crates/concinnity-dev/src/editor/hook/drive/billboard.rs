@@ -8,8 +8,9 @@
 //! uses, so the form, tree, and gizmo all follow for free.
 
 use concinnity_engine::components::{Camera3D, FrameInput, Transform};
-use concinnity_engine::ecs::{Entity, PickIndex, World};
+use concinnity_engine::ecs::{Entity, World};
 use concinnity_engine::gfx::pick::ray_aabb;
+use concinnity_engine::protocol::PickIndex;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::{EditorHook, entry_type_name, pick};

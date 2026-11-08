@@ -9,7 +9,8 @@
 
 use crate::components::ScrollPanel;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{FontHandle, OverlayImage, PipelineContext, TextureHandle};
+use crate::ecs::{FontHandle, PipelineContext, TextureHandle};
+use crate::protocol::OverlayImage;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 use hashbrown::HashMap;

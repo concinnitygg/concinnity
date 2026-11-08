@@ -7,8 +7,9 @@ use crate::components::{
     ReparentRequest, SkeletonPose, SpawnRequest, Spawner, Transform, VisibilityRequest,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, MenuActive, SkinnedMeshHandle, System, World};
+use crate::ecs::{Entity, SkinnedMeshHandle, System, World};
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
+use crate::protocol::MenuActive;
 use crate::render::backend::recording::{Call, RecordingBackend, recording_backend};
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::{ActiveRenderQueues, RenderQueues};

@@ -11,7 +11,8 @@ use crate::components::{
     PropInstance, Transform,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{HEADLESS_SYSTEMS, MeshHandle, Ref, World};
+use crate::ecs::{MeshHandle, Ref, World};
+use crate::schedule::HEADLESS_SYSTEMS;
 
 // The core tests drive a bare component storage, where decomposition never
 // runs, so they cannot show that a scope survives it. This goes through

@@ -5,10 +5,11 @@
 // the daylight curves.
 
 use crate::components::{DirectionalLight, SkyRotation};
-use crate::ecs::{PipelineContext, SimTiming};
+use crate::ecs::PipelineContext;
 use crate::environment::planet::PlanetFrame;
 use crate::environment::sky::SkyOrientation;
 use crate::gfx::render_types::LightUniforms;
+use crate::protocol::SimTiming;
 use crate::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, DAYLIGHT_KNOTS, DaylightCurves, SeaLook, SurfaceBelow,
     SurfaceView, sun_light,

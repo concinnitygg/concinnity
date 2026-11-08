@@ -7,7 +7,8 @@
 //! pose, so entering play mode afterwards continues from there.
 
 use concinnity_engine::components::{Camera3D, FrameInput};
-use concinnity_engine::ecs::{FrameTime, World};
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::FrameTime;
 
 use super::EditorHook;
 

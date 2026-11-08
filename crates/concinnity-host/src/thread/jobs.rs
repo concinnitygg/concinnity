@@ -14,7 +14,7 @@
 
 use concinnity_core::fanout::FanOut;
 use concinnity_engine::components::FramePriority;
-use concinnity_engine::ecs::ScheduleMode;
+use concinnity_engine::protocol::ScheduleMode;
 use rayon::prelude::*;
 use std::sync::OnceLock;
 

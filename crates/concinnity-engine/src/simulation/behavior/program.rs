@@ -7,7 +7,8 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
 use crate::components::{Behavior, CueKind, SceneTransition, StoryPlayback};
-use crate::ecs::{AudioClipHandle, TracePath, asset_id::AssetId};
+use crate::ecs::{AudioClipHandle, asset_id::AssetId};
+use crate::protocol::TracePath;
 use crate::simulation::behavior::value::{Arith, Cmp, Val};
 
 /// A slot-resolved expression.

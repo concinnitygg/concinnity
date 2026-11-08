@@ -19,10 +19,11 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    AudioClipHandle, Entity, EventCursor, PayloadLocator, PipelineContext, Ref, SimTiming,
-    StepResult, System, World,
+    AudioClipHandle, Entity, EventCursor, PayloadLocator, PipelineContext, Ref, StepResult, System,
+    World,
 };
 use crate::environment::planet::{FrameRebases, Rebase, RebaseCursor};
+use crate::protocol::SimTiming;
 use crate::resource::AudioClipTable;
 use crate::settings::StoredSettings;
 

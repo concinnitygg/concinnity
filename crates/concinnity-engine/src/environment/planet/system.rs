@@ -18,13 +18,14 @@ use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 use crate::components::{Camera3D, Planet, SkyRotation};
-use crate::ecs::{MenuActive, PipelineContext, StepResult, System};
+use crate::ecs::{PipelineContext, StepResult, System};
 use crate::environment::planet::{
     CameraGeo, EditArea, EditPages, FrameRebases, GroundPatch, LocalFrame, PATCH_HALF_WIDTH,
     PatchPurpose, PlanetFrame, PlanetGravity, PlanetGroundPatch, PlanetShape, Rebase, build_patch,
     carry_world, next_patch,
 };
 use crate::environment::sky::{SkyFrame, SkyOrientation};
+use crate::protocol::MenuActive;
 
 /// One ground patch to build: around local point `around` of `frame`, tagged
 /// `id`, on the ground with `edits` stored over it.

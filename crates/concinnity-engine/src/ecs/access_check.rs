@@ -12,7 +12,7 @@
 use core::any::TypeId;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::ecs::access_id::{self, ACCESS_IDS};
+use crate::ecs::access_id::{self, AccessEntry};
 use crate::ecs::{Access, ComponentId};
 
 /// What a context accessor touched. Component ids are the registry
@@ -102,9 +102,10 @@ pub fn set_active(active: Option<(Access, &'static str)>) {
     hook(active);
 }
 
-/// Assert `touch` against the `access` that `system` declared. An exclusive
-/// system passes everything; structural change and blob access need
-/// exclusivity; a resource outside [`ACCESS_IDS`] can only be touched
+/// Assert `touch` against the `access` that `system` declared, resolving a
+/// resource's id through the access-id `tables` its world registers. An
+/// exclusive system passes everything; structural change and blob access need
+/// exclusivity; a resource in none of the tables can only be touched
 /// exclusively.
 ///
 /// # Panics
@@ -114,7 +115,7 @@ pub fn set_active(active: Option<(Access, &'static str)>) {
     clippy::panic,
     reason = "a failed access check is a bug in the system that made the touch"
 )]
-pub fn verify(access: Access, system: &str, touch: &Touch) {
+pub fn verify(access: Access, system: &str, touch: &Touch, tables: &[&[AccessEntry]]) {
     if access.is_exclusive() {
         return;
     }
@@ -137,7 +138,7 @@ pub fn verify(access: Access, system: &str, touch: &Touch) {
             type_id,
             type_name,
             write,
-        } => match access_id::resolve(&[ACCESS_IDS], *type_id) {
+        } => match access_id::resolve(tables, *type_id) {
             Some(id) if *write => assert!(
                 access.may_write_resource(id),
                 "{system} writes resource {type_name} without declaring it",
@@ -150,7 +151,7 @@ pub fn verify(access: Access, system: &str, touch: &Touch) {
                 "{system} touches resource {type_name}, which is not in the \
                  access-id registry; register it or keep the system exclusive \
                  (registry holds {} entries)",
-                ACCESS_IDS.len(),
+                tables.iter().map(|t| t.len()).sum::<usize>(),
             ),
         },
     }

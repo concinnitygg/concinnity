@@ -10,8 +10,10 @@
 //! same-queue systems in table order and keep event order bit-identical to
 //! serial.
 //!
-//! This crate registers its own types in [`ACCESS_IDS`], from id 0. A crate
-//! registering more types starts at [`ACCESS_ID_COUNT`] with
+//! The engine registers its own types in
+//! [`ACCESS_IDS`](crate::access_ids::ACCESS_IDS), from id 0. A crate
+//! registering more types starts at
+//! [`ACCESS_ID_COUNT`](crate::access_ids::ACCESS_ID_COUNT) with
 //! [`define_access_ids!`](crate::define_access_ids) and resolves a runtime
 //! `TypeId` across both tables with [`resolve`].
 
@@ -73,13 +75,6 @@ pub fn ensure_event_queues(tables: &[&[AccessEntry]], store: &mut EventStore, ac
     }
 }
 
-/// Create every event queue `access` may touch among this crate's
-/// [`ACCESS_IDS`]: the table's `prepare_events` for a host with no ids of its
-/// own.
-pub fn prepare_events(store: &mut EventStore, access: Access) {
-    ensure_event_queues(&[ACCESS_IDS], store, access);
-}
-
 /// Register resource and event types for access declaration: each gets an
 /// [`AccessId`] by list position from `base`, and the named table lists them
 /// for runtime resolution, and the named const is the first id past them. More ids than the 128-bit mask holds is a compile
@@ -87,7 +82,8 @@ pub fn prepare_events(store: &mut EventStore, access: Access) {
 ///
 /// ```
 /// use concinnity_engine::define_access_ids;
-/// use concinnity_engine::ecs::access_id::{self, ACCESS_ID_COUNT, ACCESS_IDS, AccessId};
+/// use concinnity_engine::access_ids::{ACCESS_ID_COUNT, ACCESS_IDS};
+/// use concinnity_engine::ecs::access_id::{self, AccessId};
 /// use concinnity_engine::resource_mask;
 ///
 /// pub struct Budget;
@@ -161,7 +157,8 @@ macro_rules! define_access_ids {
 ///
 /// ```
 /// use concinnity_engine::components::ScreenCommand;
-/// use concinnity_engine::ecs::{Access, MenuActive};
+/// use concinnity_engine::ecs::Access;
+/// use concinnity_engine::protocol::MenuActive;
 /// use concinnity_engine::resource_mask;
 ///
 /// let access = Access::new()
@@ -177,73 +174,12 @@ macro_rules! resource_mask {
     }};
 }
 
-crate::define_access_ids! {
-    /// The resource and event types this crate defines.
-    pub static ACCESS_IDS;
-    /// The first access id past [`ACCESS_IDS`], where another registry starts.
-    pub const ACCESS_ID_COUNT;
-    base: 0,
-    resources: [
-        crate::components::FrameInput,
-        crate::ecs::MenuActive,
-        crate::ecs::SimTiming,
-        crate::ecs::FrameTime,
-        crate::ecs::MenuOverride,
-        crate::ecs::DesiredCursor,
-        crate::ecs::HudLayers,
-        crate::ecs::ScreenStack,
-        crate::ecs::FlyCam,
-        crate::ecs::CursorState,
-        crate::ecs::WindowMinimized,
-        crate::ecs::HudPrefs,
-        crate::ecs::HudHidden,
-        crate::ecs::OpenDropdown,
-        crate::ecs::ScheduleMode,
-        crate::ecs::EntityById,
-        crate::environment::planet::FrameRebases,
-        crate::environment::planet::PlanetFrame,
-        crate::simulation::camera::track::CameraTrackStatus,
-        crate::ecs::DisabledSettingRows,
-        crate::ecs::DisplayModes,
-        crate::ecs::InputSampledAt,
-        crate::ecs::ScreenshotRequest,
-        crate::ecs::FrameCaptureRequest,
-        crate::render::scene::flow::ActiveSceneFlow,
-        crate::render::streaming::scene_residency::SceneResidencyStatus,
-        crate::budget::MemoryBudget,
-        crate::budget::ThreadBudget,
-        crate::budget::ResidentMemory,
-        concinnity_core::platform::CompiledPlatforms,
-        concinnity_core::platform::GraphicsApiStatus,
-        crate::benchmark::BenchmarkRun,
-        crate::render::streaming::pools::StreamingRuntime,
-        crate::settings::StoredSettings,
-        crate::settings::SettingsRevision,
-        crate::render::overlay::OverlayFrame,
-        crate::render::overlay::OverlayAssets,
-        crate::render::overlay::OverlayRecycle,
-        crate::input::mailbox::InputMailbox,
-    ],
-    events: [
-        crate::components::ControlsCommand,
-        crate::components::InteractEvent,
-        crate::components::RootMotionEvent,
-        crate::components::ScreenCommand,
-        crate::components::ScreenShown,
-        crate::components::SettingCommand,
-        crate::components::SceneCommand,
-        crate::components::StoryCommand,
-        crate::components::StoryReload,
-        crate::components::PlayCue,
-        crate::components::AudioCommand,
-    ],
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::access_ids::{ACCESS_ID_COUNT, ACCESS_IDS};
     use crate::components::{PlayCue, ScreenCommand};
-    use crate::ecs::{FlyCam, MenuActive, ScreenStack};
+    use crate::protocol::{FlyCam, MenuActive, ScreenStack};
 
     struct Extra;
     struct ExtraEvent;

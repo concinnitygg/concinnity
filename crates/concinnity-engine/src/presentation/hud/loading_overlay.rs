@@ -5,7 +5,9 @@
 //! before `UiInputSystem` (its screen commands apply the same tick); the elements
 //! it writes are drawn by the next overlay build, like every HUD system.
 
-use crate::ecs::{Access, FrameTime, PipelineContext, Ref, ScreenStack, StepResult, System, World};
+use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
+
+use crate::protocol::{FrameTime, ScreenStack};
 use alloc::format;
 
 use crate::components::Screen;

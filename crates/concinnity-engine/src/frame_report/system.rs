@@ -1,7 +1,9 @@
 // The system a benchmarked run gates in: records one row per frame, and
 // reports what the run cost when it ends.
 
-use crate::ecs::{Clock, FrameTime, PipelineContext, StepResult, System, WindowMinimized, World};
+use crate::ecs::{Clock, PipelineContext, StepResult, System, World};
+
+use crate::protocol::{FrameTime, WindowMinimized};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -192,7 +194,7 @@ impl System for FrameReportSystem {
         let rebased = rebases != self.previous_rebases;
         self.previous_pose_seconds = pose_seconds;
         self.previous_rebases = rebases;
-        if let Some(sampled) = ctx.resource::<crate::ecs::InputSampledAt>() {
+        if let Some(sampled) = ctx.resource::<crate::protocol::InputSampledAt>() {
             self.shown.posed(sampled.0, pose_seconds);
         }
         let shown = ctx
@@ -440,7 +442,7 @@ mod tests {
             (88_100, 1.088),
         ];
         for (n, (sampled, pose)) in ticks.into_iter().enumerate() {
-            world.insert_resource(crate::ecs::InputSampledAt(sampled));
+            world.insert_resource(crate::protocol::InputSampledAt(sampled));
             world.insert_resource(CameraTrackStatus {
                 pose_seconds: pose,
                 ..Default::default()
@@ -506,8 +508,8 @@ mod tests {
 
     #[test]
     fn samples_carry_the_track_time_each_frame_showed_and_the_frame_moves() {
-        use crate::ecs::SimTiming;
         use crate::environment::planet::Rebase;
+        use crate::protocol::SimTiming;
 
         let (mut world, mut camera, mut system) = world_with(
             track(vec![leg(60.0, 1.0)]),

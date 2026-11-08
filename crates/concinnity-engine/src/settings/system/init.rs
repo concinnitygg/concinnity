@@ -8,9 +8,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::components::{HitRegion, ScrollPanel, TextLabel, UiAction, Window};
+use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{DisplayModes, FrameRateCap, PipelineContext};
 use crate::presentation::window::display_mode;
+use crate::protocol::{DisplayModes, FrameRateCap};
 use crate::render::backend;
 use crate::settings::quality::{auto_upscaling, ceiling_preset, preset_label};
 use crate::settings::registry::{self, DEFAULT_VOLUME};

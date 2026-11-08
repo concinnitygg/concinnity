@@ -23,9 +23,8 @@ use crate::components::{
     Animation, AnimationParams, CharacterRig, GroundProbes, RootMotionEvent, SkeletonPose,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    Access, FrameTime, MenuActive, PipelineContext, SkinnedMeshHandle, StepResult, System,
-};
+use crate::ecs::{Access, PipelineContext, SkinnedMeshHandle, StepResult, System};
+use crate::protocol::{FrameTime, MenuActive};
 use crate::simulation::animation::anim_graph;
 use crate::simulation::animation::flat_blend::{self, ClipEntry, FlatState, Transition};
 use crate::simulation::animation::pose_blend::PoseBlend;
@@ -390,7 +389,7 @@ impl System for AnimationSystem {
         // Each `SkeletonPose` is sampled and skinned independently, so the
         // per-pose work fans across the job pool and joins before returning.
         let targets = &self.targets;
-        let mode = crate::ecs::schedule_mode(ctx.resources);
+        let mode = crate::protocol::schedule_mode(ctx.resources);
         let poses = ctx.query_slice_mut::<SkeletonPose>();
         self.poses.for_each(mode, poses, &|pose| {
             let Some(state) = targets.get(&pose.mesh_id) else {

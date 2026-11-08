@@ -10,7 +10,8 @@ use crate::components::{
     TextInput, TextLabel, UiAction,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{MenuOverride, PipelineContext, Ref};
+use crate::ecs::{PipelineContext, Ref};
+use crate::protocol::MenuOverride;
 use crate::render::environment::grass::PlanetGrass;
 use crate::resource::ColorLutTable;
 

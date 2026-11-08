@@ -5,9 +5,10 @@
 //! emitter through [`ParticleBursts`].
 
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, PipelineContext, SimTiming, StepResult, System, World};
+use crate::ecs::{Entity, PipelineContext, StepResult, System, World};
 use crate::environment::water::WaterSurface;
 use crate::environment::water::stir::{WaterStir, WaterStirs};
+use crate::protocol::SimTiming;
 use crate::render::particles::{ParticleBurst, ParticleBursts};
 use alloc::vec::Vec;
 use concinnity_core::math::vec3::{cross, dot, length, normalize_or, scale, sub};

@@ -2,9 +2,8 @@ use crate::components::{
     Screen, Story, StoryChoice, StoryCondition, StoryGate, StoryNode, StoryOp, StoryPage,
     StoryScaffold, StorySpeaker,
 };
-use crate::ecs::{
-    AudioClipHandle, EventCursor, HEADLESS_SYSTEMS, Phase, Ref, TextureHandle, World,
-};
+use crate::ecs::{AudioClipHandle, EventCursor, Phase, Ref, TextureHandle, World};
+use crate::schedule::HEADLESS_SYSTEMS;
 use crate::test_support::intern;
 use alloc::vec;
 use std::sync::{Arc, Mutex};

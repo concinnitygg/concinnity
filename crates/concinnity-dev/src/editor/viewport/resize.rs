@@ -5,7 +5,7 @@
 //! dimensions grow. The hook owns the drag state and the per-panel size override;
 //! this module is stateless geometry so it stays unit-testable.
 
-use concinnity_engine::ecs::CursorShape;
+use concinnity_engine::protocol::CursorShape;
 
 use crate::editor::panels::registry::PanelKey;
 

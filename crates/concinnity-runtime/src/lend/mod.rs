@@ -22,12 +22,11 @@
 
 use concinnity_core::fanout::Lent;
 use concinnity_engine::audio::out::AudioOut;
-use concinnity_engine::ecs::{
-    CoreSystems, Phase, PipelineContext, SystemEntry, SystemHost, SystemTable, TransientSaves,
-    World, boxed,
-};
+use concinnity_engine::ecs::{Phase, PipelineContext, SystemEntry, SystemTable, World, boxed};
 use concinnity_engine::environment::planet::StartBuilder;
 use concinnity_engine::input::system::PadSource;
+use concinnity_engine::protocol::TransientSaves;
+use concinnity_engine::schedule::{CoreSystems, SystemHost};
 use concinnity_engine::settings::system::SettingsStore;
 use concinnity_engine::simulation::behavior::BehaviorStore;
 use concinnity_engine::story::StoryStore;
@@ -159,7 +158,7 @@ pub const SYSTEMS: &SystemTable = &SystemTable {
     ],
     complete_world: Some(concinnity_engine::defaults::run),
     before_init: Some(before_init),
-    prepare_events: Some(concinnity_engine::ecs::access_id::prepare_events),
+    prepare_events: Some(concinnity_engine::access_ids::prepare_events),
 };
 
 #[cfg(test)]

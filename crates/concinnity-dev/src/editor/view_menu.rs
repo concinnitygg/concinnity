@@ -4,8 +4,10 @@
 //! and draw, on the same non-panel overlay pattern as `create_menu.rs`; the
 //! hook (`hook/drive/view_menu.rs`) owns the open state and routing.
 
-use concinnity_engine::ecs::{ViewOverrides, World};
+use concinnity_engine::ecs::World;
+
 pub(crate) use concinnity_engine::gfx::view_modes::{ShowFlags, ViewMode};
+use concinnity_engine::protocol::ViewOverrides;
 
 use super::hud_ids::{Family, family_base, hud_ids};
 use super::outlines::{Category, CategorySet};

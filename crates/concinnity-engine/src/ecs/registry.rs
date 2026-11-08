@@ -28,7 +28,7 @@
 //! Components are pure data, registered with one entry each. Systems are not in
 //! this list at all: a system is code, never declared in a world or serialized to
 //! a blob. An engine system is constructed at runtime from world content by its
-//! table entry's gate (see `World::start` and `ecs::systems`), and a system
+//! table entry's gate (see `World::start` and `crate::schedule`), and a system
 //! written outside the engine is registered on the world with
 //! `World::add_system`, which is why neither needs a discriminant here.
 //!

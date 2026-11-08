@@ -13,7 +13,8 @@ use concinnity_engine::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorQuery, BehaviorSource, BodyDynamics, Collider,
     ContactEvent, PhysicsConfig, Prop, PropCollider, Transform,
 };
-use concinnity_engine::ecs::{ScheduleMode, StepResult, World};
+use concinnity_engine::ecs::{StepResult, World};
+use concinnity_engine::protocol::ScheduleMode;
 
 use concinnity_core::fnv::Fnv1a;
 use concinnity_runtime::SYSTEMS;

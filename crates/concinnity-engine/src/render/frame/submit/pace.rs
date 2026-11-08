@@ -5,8 +5,9 @@
 use core::time::Duration;
 
 use crate::benchmark::BenchmarkRun;
-use crate::ecs::{FrameRateCap, SimTiming, World};
+use crate::ecs::World;
 use crate::launch::LaunchRequest;
+use crate::protocol::{FrameRateCap, SimTiming};
 
 // The rate a minimized window is held to whatever the cap: few enough frames
 // to idle the GPU, enough that every frame's simulation ticks fit under the

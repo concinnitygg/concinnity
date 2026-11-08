@@ -9,10 +9,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::BehaviorSystem;
-use crate::ecs::{
-    Entity, ExecutionTrace, PipelineContext, TraceEvent, TracePaths, TraceRequest, TraceVal,
-    asset_id::AssetId,
-};
+use crate::ecs::{Entity, PipelineContext, asset_id::AssetId};
+use crate::protocol::{ExecutionTrace, TraceEvent, TracePaths, TraceRequest, TraceVal};
 
 impl BehaviorSystem {
     // Publish this tick's observation. `fired` holds each run's executed node

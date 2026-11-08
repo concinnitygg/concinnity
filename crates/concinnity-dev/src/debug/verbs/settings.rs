@@ -6,10 +6,11 @@
 //! `ViewOverrides`.
 
 use concinnity_engine::components::{InputKey, SettingCommand, SettingOp};
-use concinnity_engine::ecs::{ViewOverrides, World};
+use concinnity_engine::ecs::World;
 use concinnity_engine::gfx::view_modes::{ShowFlags, ViewMode};
 use concinnity_engine::input::keymap::Bindable;
 use concinnity_engine::launch::LaunchRequest;
+use concinnity_engine::protocol::ViewOverrides;
 use concinnity_engine::settings::SettingKey;
 use serde_json::{Value, json};
 

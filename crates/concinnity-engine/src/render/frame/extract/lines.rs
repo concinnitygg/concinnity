@@ -6,9 +6,11 @@
 
 use alloc::vec::Vec;
 
-use crate::ecs::{PipelineContext, WorldLines};
+use crate::ecs::PipelineContext;
+
 use crate::gfx::lines::{Line, LineCamera, build_vertices_into};
 use crate::gfx::render_types::LineVertex;
+use crate::protocol::WorldLines;
 
 // The camera + space this frame draws with.
 #[derive(Clone, Copy)]

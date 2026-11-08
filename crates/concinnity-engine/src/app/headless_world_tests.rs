@@ -15,7 +15,8 @@ use crate::components::{
     Behavior, BehaviorExpr, BehaviorNode, BehaviorSource, BodyDynamics, Collider, PhysicsConfig,
     PropCollider, PropInstance, StoryCommand, StoryPlayback, Transform,
 };
-use crate::ecs::{Entity, HEADLESS_SYSTEMS, StepResult, World};
+use crate::ecs::{Entity, StepResult, World};
+use crate::schedule::HEADLESS_SYSTEMS;
 
 // Each tick this behavior drifts every prop one unit along x and asks the story
 // to advance, so the world's own state counts the ticks two ways: a component

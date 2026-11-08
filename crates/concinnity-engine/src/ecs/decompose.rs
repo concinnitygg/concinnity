@@ -142,7 +142,8 @@ mod tests {
     use super::*;
     use crate::components::{Prop, PropCollider};
     use crate::ecs::asset_id::AssetId;
-    use crate::ecs::{HEADLESS_SYSTEMS, MaterialHandle, MeshHandle, Ref, World};
+    use crate::ecs::{MaterialHandle, MeshHandle, Ref, World};
+    use crate::schedule::HEADLESS_SYSTEMS;
     use alloc::vec;
 
     fn prop() -> Prop {

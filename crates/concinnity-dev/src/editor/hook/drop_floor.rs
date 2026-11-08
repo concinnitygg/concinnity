@@ -7,9 +7,10 @@
 //! ONE undo step.
 
 use concinnity_engine::components::Transform;
+use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{PickIndex, World};
 use concinnity_engine::gfx::pick::{PickRay, ray_aabb};
+use concinnity_engine::protocol::PickIndex;
 
 use super::EditorHook;
 use crate::editor::viewport::gizmo::GizmoMode;

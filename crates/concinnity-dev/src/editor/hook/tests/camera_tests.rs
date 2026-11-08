@@ -7,8 +7,9 @@
 //! and what hands control back.
 
 use concinnity_engine::components::{Camera3D, FrameInput, InputKey, Transform};
+use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{FrameTime, PickEntry, PickIndex, World};
+use concinnity_engine::protocol::{FrameTime, PickEntry, PickIndex};
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::VP;

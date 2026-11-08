@@ -12,8 +12,9 @@ use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
 use crate::components::{Behavior, BehaviorExpr, BehaviorNode, BehaviorSource};
+use crate::ecs::ComponentTag;
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{ComponentTag, TracePath, TraceStep};
+use crate::protocol::{TracePath, TraceStep};
 use crate::simulation::behavior::program::{CExpr, CNode, COp, Program, VarTable};
 use crate::simulation::behavior::value::{Arith, Cmp, Val};
 

@@ -23,10 +23,10 @@
 //! [`BlobAssetDef`]), the [`System`] behavior trait, and the
 //! [`World`]: the components, resources, events, payloads, profile, and frame
 //! scratch a tick reads and writes, plus the systems that run over them and
-//! their schedule. A [`SystemTable`] lists a host's systems, so each host
-//! writes its own from the entries [`CoreSystems`] lends plus its own
-//! (concinnity-runtime's is `lend::SYSTEMS`); [`HEADLESS_SYSTEMS`] is the one
-//! for a world with no host.
+//! their schedule. A [`SystemTable`] lists a host's systems; the engine's own
+//! entries and the table for a world with no host live in
+//! [`schedule`](crate::schedule), and the resources its systems coordinate
+//! through in [`protocol`](crate::protocol).
 //!
 //! The interner that assigns asset identities keeps a per-thread table and
 //! lives in concinnity-host. The authoring `Registration` record lives in
@@ -66,15 +66,12 @@ mod mask;
 mod parked;
 mod payload_store;
 mod phase;
-mod protocol;
 mod registry;
 mod resource;
 mod storage;
 mod system;
 mod system_entry;
-mod systems;
 mod tick;
-mod tick_accumulator;
 mod user_system;
 mod waves;
 mod world;
@@ -99,7 +96,6 @@ pub use mask::{ComponentId, ComponentMask};
 pub use parked::Parked;
 pub use resource::Resources;
 pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
-pub use tick_accumulator::TickAccumulator;
 
 // The runtime-facing component contract and the metadata enums the registry and
 // the blob format are built from.
@@ -122,20 +118,6 @@ pub use context::PipelineContext;
 pub use concinnity_core::memory::Arena;
 pub use frame::{FrameContext, FrameVec};
 
-// Renderer-free resources the runtime systems publish and read to coordinate a
-// tick (menu state, frame-rate cap, HUD prefs, cursor + dropdown views), plus
-// the world's cook-counted physics reservation. They name no renderer type, so
-// the physics and audio systems read them without depending on a backend.
-pub use protocol::{
-    BlobMeshBounds, BlobSceneGroups, CursorShape, CursorState, DesiredCursor, DisabledSettingRows,
-    DisplayModes, DropdownView, ExecutionTrace, FlyCam, FrameCaptureRequest, FrameRateCap,
-    FrameTime, GpuMemoryPressure, HiddenAssets, HudHidden, HudLayers, HudPrefs, InputSampledAt,
-    MenuActive, MenuOverride, OpenDropdown, OverlayImage, OverlayImages, PickEntry, PickIndex,
-    ScheduleMode, ScreenStack, ScreenshotRequest, SimTiming, TraceEvent, TracePath, TracePaths,
-    TraceRequest, TraceStep, TraceVal, TransientSaves, ViewOverrides, WindowMinimized, WorldLines,
-    WorldPhysicsBudget, schedule_mode,
-};
-
 // The runtime behavior trait every engine system implements + its per-step
 // control signal. Renderer-free (they name only `PipelineContext`), so they live
 // here; each system's table entry names the gate that builds it.
@@ -151,12 +133,9 @@ pub use payload_store::{NoPayloads, PayloadStore};
 
 // A world, the systems built over it, and the table a host starts it from: one
 // entry per system in run order, plus the load-time passes bracketing them.
-// This crate writes one such table itself, listing the simulation systems it
-// owns, for a world that runs with no host beyond it.
 pub use built_system::BuiltSystem;
 pub use phase::Phase;
 pub use system_entry::{CompleteWorld, SystemEntry, SystemTable, boxed};
-pub use systems::{CoreSystems, HEADLESS_SYSTEMS, SystemHost};
 pub use world::{ScratchStats, World};
 
 // The host-installed monotonic clock the step loop times systems with.

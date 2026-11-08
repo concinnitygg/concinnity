@@ -306,7 +306,7 @@ fn the_query_is_deterministic() {
 // moves continuously, across a move of the simulated frame too.
 #[test]
 fn the_water_runs_on_the_simulation_clock() {
-    use crate::ecs::TickAccumulator;
+    use crate::TickAccumulator;
     use crate::render::environment::water::frame::water_time;
     let mut clock = TickAccumulator::default();
     let mut q = sea_query();

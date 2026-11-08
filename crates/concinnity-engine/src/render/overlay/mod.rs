@@ -15,11 +15,12 @@
 
 use crate::components::{FrameInput, Identity, LayoutContainer, Sprite, TextInput, TextLabel};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    Access, CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride,
-    OpenDropdown, PipelineContext, ScreenStack, StepResult, System, World,
-};
+use crate::ecs::{Access, PipelineContext, StepResult, System, World};
 use crate::gfx::render_types;
+use crate::protocol::{
+    CursorState, DesiredCursor, FrameTime, HudLayers, MenuActive, MenuOverride, OpenDropdown,
+    ScreenStack,
+};
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::overlay::maps::Placement;
 
@@ -405,8 +406,9 @@ impl OverlaySystem {
 mod tests {
     use super::*;
     use crate::components::{SpriteFit, TextAlign};
-    use crate::ecs::{
-        CursorState, DropdownView, HudLayers, MenuOverride, OpenDropdown, Ref, ScreenStack, World,
+    use crate::ecs::{Ref, World};
+    use crate::protocol::{
+        CursorState, DropdownView, HudLayers, MenuOverride, OpenDropdown, ScreenStack,
     };
     use crate::render::overlay::test_fonts::{FONT, loaded_fonts};
     use alloc::string::ToString;

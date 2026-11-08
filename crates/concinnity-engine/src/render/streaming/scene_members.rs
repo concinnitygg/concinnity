@@ -11,8 +11,9 @@ use hashbrown::HashMap;
 
 use crate::components::{RenderHandle, SceneMember};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{BlobSceneGroups, PipelineContext, ResourceKind};
+use crate::ecs::{PipelineContext, ResourceKind};
 use crate::gfx::render_types::DrawIndex;
+use crate::protocol::BlobSceneGroups;
 use crate::render::streaming::scene_residency::{
     CHANNEL_MESH, CHANNEL_SHADER, CHANNEL_TEXTURE, SceneResidency,
 };

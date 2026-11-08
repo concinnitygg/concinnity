@@ -167,13 +167,13 @@ impl UiInputSystem {
     // Refresh the owned copy of `DisabledSettingRows` only when the published
     // set changed, so the region pass reads it without a per-frame clone.
     pub(super) fn refresh_disabled_rows(&mut self, ctx: &PipelineContext<'_>) {
-        let changed = match ctx.resource::<crate::ecs::DisabledSettingRows>() {
+        let changed = match ctx.resource::<crate::protocol::DisabledSettingRows>() {
             Some(d) => d.0 != self.disabled_rows_cache,
             None => !self.disabled_rows_cache.is_empty(),
         };
         if changed {
             self.disabled_rows_cache = ctx
-                .resource::<crate::ecs::DisabledSettingRows>()
+                .resource::<crate::protocol::DisabledSettingRows>()
                 .map(|d| d.0.clone())
                 .unwrap_or_default();
         }

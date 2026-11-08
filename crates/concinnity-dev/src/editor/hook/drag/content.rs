@@ -10,8 +10,9 @@
 use concinnity_cook::authoring::registry::RegisteredType;
 use concinnity_cook::authoring::world::find_entry;
 use concinnity_engine::components::{Camera3D, FrameInput, Transform};
-use concinnity_engine::ecs::{PickIndex, World};
+use concinnity_engine::ecs::World;
 use concinnity_engine::gfx::pick::PickRay;
+use concinnity_engine::protocol::PickIndex;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::{EditorHook, entry_type, pick};

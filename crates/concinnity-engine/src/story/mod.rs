@@ -13,9 +13,9 @@ use crate::components::{
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{
-    Access, AudioClipHandle, EventCursor, FrameTime, PipelineContext, Ref, StepResult, System,
-    World,
+    Access, AudioClipHandle, EventCursor, PipelineContext, Ref, StepResult, System, World,
 };
+use crate::protocol::FrameTime;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};

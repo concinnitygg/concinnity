@@ -21,11 +21,10 @@ use crate::components::{
     ControlsCommand, FollowDrive, FrameInput, RollingControl, Transform,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    Access, EventCursor, FrameTime, PipelineContext, SkinnedMeshHandle, StepResult, System,
-};
+use crate::ecs::{Access, EventCursor, PipelineContext, SkinnedMeshHandle, StepResult, System};
 use crate::environment::planet::{FrameRebases, PlanetFrame, RebaseCursor};
 use crate::gfx::camera::view_axes;
+use crate::protocol::FrameTime;
 use crate::simulation::camera::probe::Followed;
 use concinnity_core::math;
 use concinnity_core::math::vec3::{add, length, scale, sub};
@@ -550,7 +549,7 @@ mod tests {
             world.add_component(PhysicsConfig::default());
         }
         world
-            .start(crate::ecs::HEADLESS_SYSTEMS)
+            .start(crate::schedule::HEADLESS_SYSTEMS)
             .expect("the test world starts");
         world
     }

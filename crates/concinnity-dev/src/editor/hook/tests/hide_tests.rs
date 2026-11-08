@@ -3,7 +3,7 @@
 //! with them and with unhide.
 
 use concinnity_engine::components::FrameInput;
-use concinnity_engine::ecs::HiddenAssets;
+use concinnity_engine::protocol::HiddenAssets;
 use concinnity_host::thread::asset_id;
 
 use super::fixtures::{entry, hook, row_of, seed_tree, world_with_input};

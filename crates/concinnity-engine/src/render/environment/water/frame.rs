@@ -2,9 +2,9 @@
 //! frame. Every backend keeps one per surface and writes `params_at` into the
 //! frame's copy of the surface's params.
 
-use crate::ecs::SimTiming;
 use crate::environment::planet::{LocalFrame, Rebase};
 use crate::environment::water::WaterBody;
+use crate::protocol::SimTiming;
 use crate::render::environment::grass::map_then;
 use crate::render::uniforms::WaterParams;
 use crate::render::uniforms::grass::GRASS_IDENTITY_MAP;

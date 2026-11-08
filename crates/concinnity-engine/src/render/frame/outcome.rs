@@ -3,8 +3,10 @@
 //! frame's render stats for the profiler, and the frame count a launch's cap
 //! stops the run at.
 
-use crate::ecs::{GpuMemoryPressure, PipelineContext, StepResult};
+use crate::ecs::{PipelineContext, StepResult};
+
 use crate::profile::RenderStats;
+use crate::protocol::GpuMemoryPressure;
 use crate::render::frame::extract::FrameExtractor;
 use crate::render::frame::ops::ReplayOutcome;
 use crate::render::frame::queues::ActiveRenderQueues;

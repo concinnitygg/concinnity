@@ -15,14 +15,14 @@
 use alloc::boxed::Box;
 
 use crate::components::{ControlsCommand, FrameInput, GamepadButton};
-use crate::ecs::{
-    Access, CursorState, EventCursor, FlyCam, FrameTime, InputSampledAt, MenuActive,
-    PipelineContext, ScreenStack, StepResult, System, WindowMinimized, World,
-};
+use crate::ecs::{Access, EventCursor, PipelineContext, StepResult, System, World};
 use crate::input::compose::{Bindings, compose_frame_input, nav_dt};
 use crate::input::mailbox::InputMailbox;
 use crate::input::nav::NavRepeat;
 use crate::input::pad::PadState;
+use crate::protocol::{
+    CursorState, FlyCam, FrameTime, InputSampledAt, MenuActive, ScreenStack, WindowMinimized,
+};
 use crate::render::backend::render_mode::RenderMode;
 use crate::settings::StoredSettings;
 use crate::settings::registry::DEFAULT_GAMEPAD_DEADZONE;

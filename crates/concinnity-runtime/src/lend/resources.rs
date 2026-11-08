@@ -5,7 +5,8 @@
 
 use concinnity_core::platform::CompiledPlatforms;
 use concinnity_engine::budget::ResidentMemory;
-use concinnity_engine::ecs::{Clock, PipelineContext, ScheduleMode};
+use concinnity_engine::ecs::{Clock, PipelineContext};
+use concinnity_engine::protocol::ScheduleMode;
 use concinnity_engine::settings::{SettingsRevision, StoredSettings};
 use concinnity_host::store::paths::StateTree;
 

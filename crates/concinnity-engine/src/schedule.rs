@@ -1,11 +1,11 @@
-// This crate's systems as table entries, written once. A host's table lists
-// these same entries among its own systems, so a core system's phase, edges,
-// gate and description are one definition in every table. `HEADLESS_SYSTEMS`
-// is the table for a world with no host beyond this crate.
-//
-// Edges here name only this crate's systems; a host's own entries declare
-// their edges to these. A schedule ignores an edge to a system its table does
-// not hold, so the headless table takes the same entries as a rendering host.
+//! This crate's systems as table entries, written once. A host's table lists
+//! these same entries among its own systems, so a core system's phase, edges,
+//! gate and description are one definition in every table. `HEADLESS_SYSTEMS`
+//! is the table for a world with no host beyond this crate.
+//!
+//! Edges here name only this crate's systems; a host's own entries declare
+//! their edges to these. A schedule ignores an edge to a system its table does
+//! not hold, so the headless table takes the same entries as a rendering host.
 
 use alloc::boxed::Box;
 

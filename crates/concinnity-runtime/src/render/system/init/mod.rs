@@ -8,9 +8,10 @@ use concinnity_engine::components::{
     VoxelWorld, Window,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{OverlayImages, PayloadLocator, PipelineContext};
+use concinnity_engine::ecs::{PayloadLocator, PipelineContext};
 use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::gfx::render_types::{DrawIndex, DrawObject, FarFieldTint, InstancedCluster};
+use concinnity_engine::protocol::OverlayImages;
 use concinnity_engine::render::backend::init::EmbeddedSurface;
 use concinnity_engine::render::frame::queues::ActiveDeviceCaps;
 use concinnity_engine::render::world_load::stream_seed::{

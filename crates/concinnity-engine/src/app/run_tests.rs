@@ -12,10 +12,9 @@ use concinnity_core::math::SaturatingFrom;
 
 use crate::app::App;
 use crate::components::Transform;
-use crate::ecs::{
-    Phase, PipelineContext, SimTiming, StepResult, System, SystemEntry, SystemTable, World,
-};
+use crate::ecs::{Phase, PipelineContext, StepResult, System, SystemEntry, SystemTable, World};
 use crate::error::WorldError;
+use crate::protocol::SimTiming;
 
 // The step count the halting world stops at.
 const STOP_AT: f32 = 3.0;

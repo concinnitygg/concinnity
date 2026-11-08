@@ -2,7 +2,9 @@
 //! `World::start` constructs one from the world's `FpsCounter` component and it
 //! updates that component's `label` with the current rate once per second.
 
-use crate::ecs::{Access, FrameTime, PipelineContext, Ref, StepResult, System, World};
+use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
+
+use crate::protocol::FrameTime;
 use alloc::format;
 
 use crate::components::TextLabel;

@@ -8,8 +8,9 @@
 //! mode capture the cursor, so `left_click` never arms a marquee there.
 
 use concinnity_engine::components::{Camera3D, FrameInput};
+use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{PickIndex, World};
+use concinnity_engine::protocol::PickIndex;
 
 use crate::editor::asset_handle::AssetHandle;
 use crate::editor::hook::EditorHook;

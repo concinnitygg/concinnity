@@ -6,8 +6,9 @@ use hashbrown::HashMap;
 
 use crate::components::{GlobalTransform, InstancedProp, PropInstance, RenderHandle, SubMeshRef};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, MaterialHandle, PickIndex, PipelineContext};
+use crate::ecs::{Entity, MaterialHandle, PipelineContext};
 use crate::gfx::render_types::DrawIndex;
+use crate::protocol::PickIndex;
 use crate::render::draw_list::{self, DrawListData, LoadedMesh, RoomGeometry};
 use crate::render::environment::terrain::LoadedTerrain;
 use crate::render::frame::extract::PickCandidate;

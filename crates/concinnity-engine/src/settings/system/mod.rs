@@ -16,9 +16,9 @@
 //! [`SettingsSlot`] resource; each step takes it and puts it back, so the state
 //! and the `PipelineContext` are never borrowed together.
 
-use crate::ecs::{
-    EventCursor, HudPrefs, Parked, PipelineContext, Resources, StepResult, System, World,
-};
+use crate::ecs::{EventCursor, Parked, PipelineContext, Resources, StepResult, System, World};
+
+use crate::protocol::HudPrefs;
 use crate::render::backend::render_mode::RenderMode;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -455,7 +455,7 @@ impl SettingsState {
         let mut scratch = flow::SceneVisibilityScratch::default();
         flow::refresh_visibility_snapshot(ctx, &mut scratch);
         let now = ctx
-            .resource::<crate::ecs::FrameTime>()
+            .resource::<crate::protocol::FrameTime>()
             .copied()
             .unwrap_or_default()
             .elapsed;
@@ -524,7 +524,7 @@ impl SettingsState {
             if !is_fullscreen {
                 disabled_rows.insert(SettingKey::Resolution);
             }
-            ctx.insert_resource(crate::ecs::DisabledSettingRows(disabled_rows));
+            ctx.insert_resource(crate::protocol::DisabledSettingRows(disabled_rows));
             self.published_disabled_inputs = Some(inputs);
         }
     }

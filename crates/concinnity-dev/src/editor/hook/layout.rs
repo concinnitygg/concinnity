@@ -2,8 +2,9 @@
 //! each panel's on-screen origin -- all derived from the panel registry.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::ecs::World;
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{CursorShape, HudLayers, World};
+use concinnity_engine::protocol::{CursorShape, HudLayers};
 
 use super::{EditorHook, TOP_BAR_LAYER};
 use crate::editor::panels::asset_list::{self, ListRow};

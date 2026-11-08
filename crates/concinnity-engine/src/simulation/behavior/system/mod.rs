@@ -40,9 +40,10 @@ mod test_world;
 mod tests;
 
 use crate::ecs::{
-    Entity, EntityById, EventCursor, FrameContext, MenuActive, PipelineContext, ScheduleMode,
-    SimTiming, StepResult, System, TraceRequest, TransientSaves, World,
+    Entity, EntityById, EventCursor, FrameContext, PipelineContext, StepResult, System, World,
 };
+
+use crate::protocol::{MenuActive, ScheduleMode, SimTiming, TraceRequest, TransientSaves};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use concinnity_core::math::narrow_f32;
@@ -468,7 +469,7 @@ impl BehaviorSystem {
         let scheduler = self
             .scheduler
             .as_deref()
-            .filter(|_| crate::ecs::schedule_mode(ctx.resources) == ScheduleMode::Parallel);
+            .filter(|_| crate::protocol::schedule_mode(ctx.resources) == ScheduleMode::Parallel);
         let workers = scheduler.map_or(1, |s| s.workers(ScheduleMode::Parallel).max(1));
         let used = if self.gate.fans_out(jobs.len(), workers) {
             workers

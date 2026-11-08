@@ -10,12 +10,13 @@
 //! [`Driver`] is that seam: [`App`] implements it with nothing underneath, and
 //! a host with an operating system implements it over its own loop.
 //!
-//! [`SimTiming`]: crate::ecs::SimTiming
+//! [`SimTiming`]: crate::protocol::SimTiming
 
 #[cfg(debug_assertions)]
 mod alloc_guard;
 mod driver;
 mod fixed_timestep;
+mod tick_accumulator;
 
 pub(crate) mod config;
 #[cfg(test)]
@@ -27,11 +28,14 @@ mod run_tests;
 #[cfg(test)]
 mod system_tests;
 
-use crate::ecs::{HEADLESS_SYSTEMS, Phase, StepResult, System, SystemTable, World};
+use crate::ecs::{Phase, StepResult, System, SystemTable, World};
+
 use crate::error::WorldError;
+use crate::schedule::HEADLESS_SYSTEMS;
 use fixed_timestep::FixedTimestep;
 
 pub use driver::Driver;
+pub use tick_accumulator::TickAccumulator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppStatus {

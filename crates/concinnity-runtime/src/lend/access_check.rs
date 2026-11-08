@@ -30,7 +30,12 @@ pub(crate) fn install_hook() {
 
 fn check(touch: &Touch) {
     if let Some((access, system)) = ACTIVE.with(std::cell::Cell::get) {
-        access_check::verify(access, system, touch);
+        access_check::verify(
+            access,
+            system,
+            touch,
+            &[concinnity_engine::access_ids::ACCESS_IDS],
+        );
     }
 }
 
@@ -39,7 +44,8 @@ mod tests {
     use super::*;
     use concinnity_engine::components::{Sprite, TextLabel};
     use concinnity_engine::ecs::access_check::set_active;
-    use concinnity_engine::ecs::{Access, MenuActive, World};
+    use concinnity_engine::ecs::{Access, World};
+    use concinnity_engine::protocol::MenuActive;
     use concinnity_engine::{component_mask, resource_mask};
 
     #[test]

@@ -2,7 +2,7 @@
 //! `FrameInput`, under the gameplay gate.
 
 use crate::components::{FrameInput, GamepadButton, GamepadMap, InputKey, KeyEvent, NavDirection};
-use crate::ecs::FrameTime;
+use crate::protocol::FrameTime;
 
 use super::keymap::KeyMap;
 use super::pad::PadSnapshot;

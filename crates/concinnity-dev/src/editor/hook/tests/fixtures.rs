@@ -11,7 +11,8 @@ use concinnity_engine::components::{
     Camera3D, FrameInput, InputKey, KeyEvent, TextInput, Transform,
 };
 use concinnity_engine::ecs::asset_id::AssetId;
-use concinnity_engine::ecs::{Entity, PickEntry, PickIndex, World};
+use concinnity_engine::ecs::{Entity, World};
+use concinnity_engine::protocol::{PickEntry, PickIndex};
 use concinnity_host::store::paths::StateTree;
 use concinnity_host::thread::asset_id;
 

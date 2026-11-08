@@ -4,8 +4,9 @@
 //! tool keys and Escape pick and put it down.
 
 use concinnity_engine::components::{FrameInput, InputKey, KeyEvent, KeyMods, KeyPress};
-use concinnity_engine::ecs::{World, WorldLines};
+use concinnity_engine::ecs::World;
 use concinnity_engine::environment::planet::{Continents, LocalFrame, PlanetFrame, PlanetShape};
+use concinnity_engine::protocol::WorldLines;
 use concinnity_host::thread::asset_id;
 
 use crate::editor::hook::EditorHook;

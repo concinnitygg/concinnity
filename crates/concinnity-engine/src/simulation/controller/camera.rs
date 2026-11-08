@@ -9,9 +9,10 @@ use alloc::vec::Vec;
 use crate::components::{
     Camera3D, CameraController, ControlsCommand, FrameInput, InteractEvent, Interactable, Transform,
 };
-use crate::ecs::{Access, Entity, EventCursor, FrameTime, PipelineContext, StepResult, System};
+use crate::ecs::{Access, Entity, EventCursor, PipelineContext, StepResult, System};
 use crate::environment::planet::{FrameRebases, RebaseCursor};
 use crate::gfx::camera;
+use crate::protocol::FrameTime;
 use concinnity_core::math;
 
 // Reach distance for interacting with a Prop, in world units.
@@ -347,7 +348,7 @@ mod tests {
     // the world's camera.
     fn start(world: &mut World) {
         world
-            .start(crate::ecs::HEADLESS_SYSTEMS)
+            .start(crate::schedule::HEADLESS_SYSTEMS)
             .expect("the test world starts");
     }
 

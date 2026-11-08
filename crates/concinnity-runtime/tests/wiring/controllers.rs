@@ -167,8 +167,8 @@ fn interact_rotates_transform() {
 #[test]
 fn wall_behind_the_camera_pulls_it_in() {
     use concinnity_engine::components::CharacterRig;
-    use concinnity_engine::ecs::FrameTime;
     use concinnity_engine::gfx::render_types::SkinnedIndex;
+    use concinnity_engine::protocol::FrameTime;
 
     let mut world = World::new();
     world.add_component(follow_camera());

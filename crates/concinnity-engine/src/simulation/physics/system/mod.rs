@@ -17,16 +17,14 @@ use crate::components::{
     RigidBody, RollingControl, Transform, TriggerFilter, TriggerVolume,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    Entity, EventCursor, MenuActive, PipelineContext, SimTiming, StepResult, System, World,
-    WorldPhysicsBudget,
-};
+use crate::ecs::{Entity, EventCursor, PipelineContext, StepResult, System, World};
 use crate::environment::planet::{
     FrameRebases, PlanetFrame, PlanetGravity, PlanetGroundPatch, RebaseCursor,
 };
 use crate::environment::water::query::WaterQuery;
 use crate::environment::water::stir::WaterStirs;
 use crate::environment::wind::WindField;
+use crate::protocol::{MenuActive, SimTiming, WorldPhysicsBudget};
 use crate::simulation::camera::track::CameraTrackStatus;
 use concinnity_core::math::vec3::{normalize_or, sub};
 
@@ -487,7 +485,7 @@ impl System for PhysicsSystem {
         // is what a simulation that is never lent threads keeps.
         world.reserve_workers(
             self.fanout
-                .worker_count(crate::ecs::schedule_mode(ctx.resources)),
+                .worker_count(crate::protocol::schedule_mode(ctx.resources)),
         );
         let world_mask = self.layers.mask(LAYER_WORLD);
 

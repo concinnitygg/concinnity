@@ -1,7 +1,7 @@
 use super::*;
 use concinnity_engine::budget::{MemoryBudget, ThreadBudget};
 use concinnity_engine::components::{AppConfig, FramePriority};
-use concinnity_engine::ecs::FrameRateCap;
+use concinnity_engine::protocol::FrameRateCap;
 
 fn thread_budget(runtime: &Runtime) -> ThreadBudget {
     *runtime.world().resource().expect("thread budget published")

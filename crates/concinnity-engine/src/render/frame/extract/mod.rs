@@ -11,15 +11,16 @@ use crate::components::{
     SkeletonPose, Transform,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    Entity, FlyCam, FrameCaptureRequest, FrameTime, HiddenAssets, InputSampledAt, MenuOverride,
-    PickEntry, PickIndex, PipelineContext, SimTiming, ViewOverrides,
-};
+use crate::ecs::{Entity, PipelineContext};
 use crate::environment::planet::{FrameRebases, RebaseCursor};
 use crate::environment::sky::SkyOrientation;
 use crate::environment::water::stir::WaterStirs;
 use crate::gfx::frustum;
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
+use crate::protocol::{
+    FlyCam, FrameCaptureRequest, FrameTime, HiddenAssets, InputSampledAt, MenuOverride, PickEntry,
+    PickIndex, SimTiming, ViewOverrides,
+};
 use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};

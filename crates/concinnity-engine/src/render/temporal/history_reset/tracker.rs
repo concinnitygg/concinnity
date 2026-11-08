@@ -269,12 +269,12 @@ mod tests {
         }
     }
 
-    const TICK: f32 = crate::ecs::SimTiming::TICK_DT;
+    const TICK: f32 = crate::protocol::SimTiming::TICK_DT;
 
     // A frame of `dt` seconds over which the simulation ran its share of ticks
     // (at least one, at most its catch-up limit).
     fn ran(dt: f32) -> FrameClock {
-        let max = crate::ecs::SimTiming::MAX_TICKS_PER_FRAME;
+        let max = crate::protocol::SimTiming::MAX_TICKS_PER_FRAME;
         ticks_over(dt, u32::saturating_from((dt / TICK).round()).clamp(1, max))
     }
 

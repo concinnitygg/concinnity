@@ -48,6 +48,7 @@ extern crate std;
 /// exactly, so a stale record fails the load on its own.
 pub const SCHEMA_VERSION: u32 = 3;
 
+pub mod access_ids;
 mod app;
 pub mod audio;
 pub mod bake;
@@ -66,8 +67,10 @@ pub mod input;
 pub mod launch;
 pub mod presentation;
 pub mod profile;
+pub mod protocol;
 pub mod render;
 pub mod resource;
+pub mod schedule;
 pub mod settings;
 pub mod shutdown;
 pub mod simulation;
@@ -79,4 +82,4 @@ pub mod transform;
 // The headless driver over a world and the trait any loop that runs one
 // implements, named at the crate root because they are the counterpart to
 // `ecs::World` rather than a corner of the module tree.
-pub use app::{App, Driver};
+pub use app::{App, Driver, TickAccumulator};

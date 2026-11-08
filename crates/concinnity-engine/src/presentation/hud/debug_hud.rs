@@ -6,7 +6,9 @@
 //! the top-right of the window by the renderer (it owns the font metrics and
 //! live window size needed to right-align and stack them).
 
-use crate::ecs::{Access, FrameTime, PipelineContext, Ref, StepResult, System, World};
+use crate::ecs::{Access, PipelineContext, Ref, StepResult, System, World};
+
+use crate::protocol::FrameTime;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;

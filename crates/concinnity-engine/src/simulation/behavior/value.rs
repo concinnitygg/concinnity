@@ -2,7 +2,8 @@
 // its arithmetic and comparisons are expressed in.
 
 use crate::components::BehaviorLiteral;
-use crate::ecs::{Entity, TraceVal};
+use crate::ecs::Entity;
+use crate::protocol::TraceVal;
 
 /// A value flowing through a behavior body.
 #[derive(Clone, Copy, Debug, PartialEq)]

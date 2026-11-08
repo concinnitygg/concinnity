@@ -9,9 +9,10 @@ use crate::components::{
     TextLabel, UpscalerBackend, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{FrameRateCap, HudPrefs, StepResult, System, World};
+use crate::ecs::{StepResult, System, World};
 use crate::input::keymap::{Bindable, KeyMap};
 use crate::presentation::window::display_mode::DisplayMode;
+use crate::protocol::{FrameRateCap, HudPrefs};
 use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
@@ -1546,7 +1547,7 @@ fn disabled_rows_publish_alongside_the_gray_out() {
     let rows = f
         .world
         .context()
-        .resource::<crate::ecs::DisabledSettingRows>()
+        .resource::<crate::protocol::DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
     assert!(rows.is_empty(), "every row is live in fullscreen");
@@ -1557,7 +1558,7 @@ fn disabled_rows_publish_alongside_the_gray_out() {
     let rows = f
         .world
         .context()
-        .resource::<crate::ecs::DisabledSettingRows>()
+        .resource::<crate::protocol::DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
     assert!(rows.contains(&SettingKey::ShowFps));

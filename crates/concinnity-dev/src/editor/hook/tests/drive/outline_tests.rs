@@ -2,7 +2,7 @@
 //! `TriggerVolume` publishes for its own shape.
 
 use concinnity_engine::components::{Sprite, TriggerVolume};
-use concinnity_engine::ecs::WorldLines;
+use concinnity_engine::protocol::WorldLines;
 use concinnity_host::thread::asset_id;
 
 use crate::frame_hook::FrameHook;

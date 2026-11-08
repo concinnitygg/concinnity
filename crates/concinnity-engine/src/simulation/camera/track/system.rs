@@ -2,9 +2,10 @@ use alloc::vec::Vec;
 
 use crate::components::{Camera3D, CameraBoomKey, CameraTrack, CameraTurnKey, Parent, Transform};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, MenuActive, PipelineContext, SimTiming, StepResult, System, World};
+use crate::ecs::{Entity, PipelineContext, StepResult, System, World};
 use crate::environment::planet::{FrameRebases, RebaseCursor};
 use crate::gfx::camera::view_axes;
+use crate::protocol::{MenuActive, SimTiming};
 use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use crate::simulation::camera::track::CameraTrackStatus;
 use crate::simulation::camera::track::carry::{CarryBlend, Filmed};

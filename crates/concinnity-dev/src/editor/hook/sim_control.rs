@@ -5,7 +5,8 @@
 //! before the world step, so a publish here gates that same frame's systems.
 
 use concinnity_engine::components::{FrameInput, InputKey};
-use concinnity_engine::ecs::{MenuOverride, World};
+use concinnity_engine::ecs::World;
+use concinnity_engine::protocol::MenuOverride;
 
 use super::EditorHook;
 

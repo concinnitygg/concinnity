@@ -2,7 +2,8 @@
 //! the frame pacer and before the world steps: each frame's wall delta feeds
 //! the engine's [`TickAccumulator`], which publishes the frame's clock.
 
-use concinnity_engine::ecs::{TickAccumulator, World};
+use concinnity_engine::TickAccumulator;
+use concinnity_engine::ecs::World;
 use std::num::NonZeroU32;
 use std::time::Instant;
 
@@ -39,7 +40,7 @@ impl SimClock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use concinnity_engine::ecs::{FrameTime, SimTiming};
+    use concinnity_engine::protocol::{FrameTime, SimTiming};
 
     #[test]
     fn first_frame_has_no_elapsed_time() {
