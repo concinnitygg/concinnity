@@ -261,49 +261,64 @@ fn create_targets(
 }
 
 // The noise kernel's root signature:
-//   [0] table  u0     the noise volume
+//   [0] table      the noise volume
 fn noise_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     RootSig::new()
-        .uav_table(0, 1, Visibility::All)
+        .uav_table(
+            concinnity_engine::render::shader::programs::abi::clouds::dx::noise::NOISE_OUT,
+            1,
+            Visibility::All,
+        )
         .build(device, "cloud noise root sig")
 }
 
 // The march's root signature:
-//   [0] root CBV b0   AtmosphereParams
-//   [1] root CBV b1   CloudParams
-//   [2] table  t0     scene depth
-//   [3] table  t1     aerial volume
-//   [4] table  t2-t3  transmittance and multiple scattering
-//   [5] table  t4     the noise volume
-//   [6] table  u0     the target written
-//   [7] table  t6     the march, which the reconstruction reads
-//   [8] table  t7     the previous frame's target
-// Static linear-clamp sampler s0, linear-wrap sampler s1.
+//   [0] root CBV   AtmosphereParams
+//   [1] root CBV   CloudParams
+//   [2] table      scene depth
+//   [3] table      aerial volume
+//   [4] table      transmittance and multiple scattering
+//   [5] table      the noise volume
+//   [6] table      the target written
+//   [7] table      the march, which the reconstruction reads
+//   [8] table      the previous frame's target
+// A static linear-clamp sampler for the tables and a linear-wrap one for the
+// noise.
 fn march_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::clouds::dx::march;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .cbv(1, Visibility::All)
-        .srv_table(0, 1, Visibility::All)
-        .srv_table(1, 1, Visibility::All)
-        .srv_table(2, 2, Visibility::All)
-        .srv_table(4, 1, Visibility::All)
-        .uav_table(0, 1, Visibility::All)
-        .srv_table(6, 1, Visibility::All)
-        .srv_table(7, 1, Visibility::All)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::All)
-        .static_sampler(SamplerState::LinearWrap, 1, Visibility::All)
+        .cbv(march::ATMOSPHERE, Visibility::All)
+        .cbv(march::CLOUDS, Visibility::All)
+        .srv_table(march::SCENE_DEPTH, 1, Visibility::All)
+        .srv_table(march::AERIAL_VOLUME, 1, Visibility::All)
+        .srv_table(march::TRANSMITTANCE, 2, Visibility::All)
+        .srv_table(march::NOISE, 1, Visibility::All)
+        .uav_table(march::OUTPUT, 1, Visibility::All)
+        .srv_table(march::MARCHED, 1, Visibility::All)
+        .srv_table(march::PREVIOUS, 1, Visibility::All)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            march::LUT_SAMPLER,
+            Visibility::All,
+        )
+        .static_sampler(
+            SamplerState::LinearWrap,
+            march::NOISE_SAMPLER,
+            Visibility::All,
+        )
         .build(device, "cloud march root sig")
 }
 
 // The composite's root signature:
-//   [0] root CBV b0   CloudParams
-//   [1] table  t0     scene depth
-//   [2] table  t1     the target
+//   [0] root CBV   CloudParams
+//   [1] table      scene depth
+//   [2] table      the target
 fn composite_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::clouds::dx::composite;
     RootSig::new()
-        .cbv(0, Visibility::Pixel)
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
+        .cbv(composite::CLOUDS, Visibility::Pixel)
+        .srv_table(composite::SCENE_DEPTH, 1, Visibility::Pixel)
+        .srv_table(composite::TARGET, 1, Visibility::Pixel)
         .build(device, "cloud composite root sig")
 }
 

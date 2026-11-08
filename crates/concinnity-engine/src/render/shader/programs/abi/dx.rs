@@ -2,9 +2,31 @@
 //! build checks against the registers the HLSL declares.
 
 use super::DxilAbi;
+use super::atmosphere::dx as atmosphere;
+use super::clouds::dx as clouds;
+use super::composite::dx as composite;
 use super::cull::dx as cull;
+use super::decal::dx as decal;
+use super::exposure::dx as exposure;
+use super::fog::dx as fog;
+use super::gbuffer_sky::dx as gbuffer_sky;
+use super::grass::dx as grass;
+use super::history::dx as history;
+use super::hiz::dx as hiz;
+use super::light_cull::dx as light_cull;
+use super::line::dx as line;
 use super::main::dx as main;
-use super::register::{DxBinding, cbv, sampler, srv, uav};
+use super::ocean::dx as ocean;
+use super::particle::dx as particle;
+use super::probe::dx as probe;
+use super::register::DxBinding;
+use super::rt_reflections::dx as rt;
+use super::shadow::dx as shadow;
+use super::skin::dx as skin;
+use super::sky::dx as sky;
+use super::text::dx as text;
+use super::transparent::dx as transparent;
+use super::wake::dx as wake;
 use crate::render::shader::programs::{commands, shared, spd};
 
 // Every register the bindless main root signature declares.
@@ -97,9 +119,211 @@ const CULL_SCATTER_REGISTERS: &[DxBinding] = &[
 /// DirectX root signature at all. A DirectX build checks them, which is where
 /// such an edit gets caught.
 pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
+    // The clouds: the noise, the march kernels under one root signature, the
+    // reconstruction that also reads the march and last frame, and the composite.
+    DxilAbi {
+        program: &shared::CLOUD_NOISE,
+        registers: &[clouds::noise::NOISE_OUT.binding()],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_MARCH,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_PANORAMA,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_SHADOW,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_RECONSTRUCT,
+        registers: &[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+            clouds::march::MARCHED.binding(),
+            clouds::march::PREVIOUS.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::CLOUD_COMPOSITE_FRAG,
+        registers: &[
+            clouds::composite::CLOUDS.binding(),
+            clouds::composite::SCENE_DEPTH.binding(),
+            clouds::composite::TARGET.binding(),
+        ],
+    },
+    // The atmosphere's table kernels, one root signature declaring what each
+    // reads, the sky drawn from the sky-view table, and the haze.
+    DxilAbi {
+        program: &shared::ATMOSPHERE_TRANSMITTANCE,
+        registers: &[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::ATMOSPHERE_MULTISCATTER,
+        registers: &[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::ATMOSPHERE_SKY_VIEW,
+        registers: &[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::MULTISCATTER.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::ATMOSPHERE_AERIAL,
+        registers: &[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::MULTISCATTER.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::ATMOSPHERE_IRRADIANCE,
+        registers: &[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::SKY_VIEW.binding(),
+            atmosphere::kernel::CLOUD_PANORAMA.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::ATMOSPHERE_SKY_CUBE,
+        registers: &[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::SKY_VIEW.binding(),
+            atmosphere::kernel::CLOUD_PANORAMA.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::SKY_ATMOSPHERE_FRAG,
+        registers: &[
+            atmosphere::sky::VIEW.binding(),
+            atmosphere::sky::ATMOSPHERE.binding(),
+            atmosphere::sky::SKY_VIEW.binding(),
+            atmosphere::sky::LUT_SAMPLER.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::AERIAL_PERSPECTIVE_FRAG,
+        registers: &[
+            atmosphere::aerial::ATMOSPHERE.binding(),
+            atmosphere::aerial::SCENE_DEPTH.binding(),
+            atmosphere::aerial::AERIAL_VOLUME.binding(),
+            atmosphere::aerial::TRANSMITTANCE.binding(),
+            atmosphere::aerial::MULTISCATTER.binding(),
+            atmosphere::aerial::LUT_SAMPLER.binding(),
+        ],
+    },
+    // The composite, every source with its own sampler.
+    DxilAbi {
+        program: &shared::COMPOSITE_FRAG,
+        registers: &[
+            composite::PARAMS.binding(),
+            composite::HDR.binding(),
+            composite::BLOOM.binding(),
+            composite::LUT.binding(),
+            composite::GBUFFER_NORMAL_DEPTH.binding(),
+            composite::GBUFFER_ROUGHNESS.binding(),
+            composite::AO.binding(),
+            composite::GBUFFER_MOTION.binding(),
+            composite::REACTIVE.binding(),
+            composite::HDR_SAMPLER.binding(),
+            composite::BLOOM_SAMPLER.binding(),
+            composite::LUT_SAMPLER.binding(),
+            composite::GBUFFER_NORMAL_DEPTH_SAMPLER.binding(),
+            composite::GBUFFER_ROUGHNESS_SAMPLER.binding(),
+            composite::AO_SAMPLER.binding(),
+            composite::GBUFFER_MOTION_SAMPLER.binding(),
+            composite::REACTIVE_SAMPLER.binding(),
+        ],
+    },
+    // The volumetric fog's froxel kernel and fullscreen pass.
+    DxilAbi {
+        program: &shared::FOG_FROXEL,
+        registers: &[
+            fog::froxel::FOG.binding(),
+            fog::froxel::FROXEL.binding(),
+            fog::froxel::SHADOW.binding(),
+            fog::froxel::SHADOW_MAP.binding(),
+            fog::froxel::SHADOW_SAMPLER.binding(),
+            fog::froxel::VOLUME.binding(),
+        ],
+    },
+    DxilAbi {
+        program: &shared::FOG_FRAG,
+        registers: &[
+            fog::draw::FOG.binding(),
+            fog::draw::FROXEL.binding(),
+            fog::draw::SCENE_DEPTH.binding(),
+            fog::draw::VOLUME.binding(),
+            fog::draw::VOLUME_SAMPLER.binding(),
+        ],
+    },
     // The bindless main pair, whose layout is a contract with world Shaders as
-    // well: each builds its own PSO against the same root signature (see
-    // directx/world_shaders.rs), so a register that moves misbinds every one.
+    // well: each builds its own PSO against the same root signature, so a
+    // register that moves misbinds every one.
     // Both stages read the one declaration set.
     DxilAbi {
         program: &shared::MAIN_BINDLESS_FRAG,
@@ -153,43 +377,62 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::MODEL_HISTORY,
-        registers: &[cbv("params", 0), srv("objects", 0), uav("history", 0)],
+        registers: &[
+            history::PARAMS.binding(),
+            history::OBJECTS.binding(),
+            history::HISTORY.binding(),
+        ],
     },
-    // The Hi-Z pyramid's two SPD dispatches, from `directx/hiz.rs`: the params
-    // as root constants at b0, the main depth at t0 (phase 1 only) and the
-    // per-mip UAV table at u0.
+    // The Hi-Z pyramid's two SPD dispatches: the params as root constants, the
+    // main depth (phase 1 only) and the per-mip UAV table.
     DxilAbi {
         program: &spd::HIZ_SPD_SINGLE,
-        registers: &[cbv("params", 0), srv("src_depth", 0), uav("spd_mips", 0)],
+        registers: &[
+            hiz::PARAMS.binding(),
+            hiz::SRC_DEPTH.binding(),
+            hiz::SPD_MIPS.binding(),
+        ],
     },
     DxilAbi {
         program: &spd::HIZ_SPD_MSAA,
-        registers: &[cbv("params", 0), srv("src_depth", 0), uav("spd_mips", 0)],
+        registers: &[
+            hiz::PARAMS.binding(),
+            hiz::SRC_DEPTH.binding(),
+            hiz::SPD_MIPS.binding(),
+        ],
     },
     DxilAbi {
         program: &spd::HIZ_SPD_TAIL,
-        registers: &[cbv("params", 0), uav("spd_mips", 0)],
+        registers: &[hiz::PARAMS.binding(), hiz::SPD_MIPS.binding()],
     },
-    // The reflection-probe prefilter, from `directx/probe_prefilter.rs`. The
+    // The reflection-probe prefilter. The
     // mirror copy and the pyramid reduction share a signature whose UAV table
     // is u0 the source and u1 the destination; the GGX kernel binds one UAV, so
     // its destination is u0 and the capture pyramid takes t0 with the static
     // sampler at s0.
     DxilAbi {
         program: &shared::PROBE_MIP0,
-        registers: &[cbv("params", 0), uav("src_mip", 0), uav("dst_mip", 1)],
+        registers: &[
+            probe::mip::PARAMS.binding(),
+            probe::mip::SRC_MIP.binding(),
+            probe::mip::DST_MIP.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::PROBE_DOWNSAMPLE,
-        registers: &[cbv("params", 0), uav("src_mip", 0), uav("dst_mip", 1)],
+        registers: &[
+            probe::mip::PARAMS.binding(),
+            probe::mip::SRC_MIP.binding(),
+            probe::mip::DST_MIP.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::PROBE_GGX,
         registers: &[
-            cbv("params", 0),
-            srv("src_cube", 0),
-            sampler("src_sampler", 0),
-            uav("dst_mip", 0),
+            probe::ggx::PARAMS.binding(),
+            probe::ggx::SRC_CUBE.binding(),
+            probe::ggx::SRC_SAMPLER.binding(),
+            probe::ggx::DST_MIP.binding(),
         ],
     },
     // The pre-pass compiles from the main pass's file, so a world Shader's
@@ -198,31 +441,37 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::MAIN_PREPASS_VERT,
         registers: MAIN_PREPASS_REGISTERS,
     },
-    // The grass kernel, under its own root signature in `directx/grass.rs`.
+    // The grass kernel, under its own root signature.
     DxilAbi {
         program: &shared::GRASS_GENERATE,
         registers: &[
-            cbv("grass", 0),
-            uav("blades_out", 1),
-            uav("draw_args", 2),
-            srv("terrain_heights", 3),
-            srv("grass_masks", 4),
-            srv("grass_hiz", 5),
-            srv("grass_bend_field", 6),
-            srv("planet_tiles", 7),
-            srv("mesh_vertices", 8),
-            srv("grass_tiles", 9),
+            grass::generate::GRASS.binding(),
+            grass::generate::BLADES_OUT.binding(),
+            grass::generate::DRAW_ARGS.binding(),
+            grass::generate::TERRAIN_HEIGHTS.binding(),
+            grass::generate::GRASS_MASKS.binding(),
+            grass::generate::HIZ.binding(),
+            grass::generate::BEND_FIELD.binding(),
+            grass::generate::PLANET_TILES.binding(),
+            grass::generate::MESH_VERTICES.binding(),
+            grass::generate::TILES.binding(),
         ],
     },
     // The bend pass and the cascade's depth-only draw, each under its own root
-    // signature in `directx/grass.rs`.
+    // signature.
     DxilAbi {
         program: &shared::GRASS_BEND,
-        registers: &[cbv("bend", 0), uav("bend_field", 1)],
+        registers: &[
+            grass::bend::BEND.binding(),
+            grass::bend::BEND_FIELD.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::GRASS_SHADOW_VERT,
-        registers: &[cbv("grass", 0), srv("grass_blades", 1)],
+        registers: &[
+            grass::shadow::GRASS.binding(),
+            grass::shadow::BLADES.binding(),
+        ],
     },
     // The grass draws compile from the main pass's resources, so each stage
     // states those registers and the grass pair on top of them.
@@ -253,34 +502,34 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // The sky's motion, under its own root signature.
     DxilAbi {
         program: &shared::GBUFFER_SKY_VERT,
-        registers: &[cbv("gb_view", 1)],
+        registers: &[gbuffer_sky::GBUFFER_VIEW.binding()],
     },
     DxilAbi {
         program: &shared::GBUFFER_SKY_FRAG,
         registers: &[],
     },
-    // The sky, from `directx/sky.rs`: the pass's view block as a root CBV, the
+    // The sky: the pass's view block as a root CBV, the
     // prefilter cube in a one-entry table, and a static sampler.
     DxilAbi {
         program: &shared::SKY_VERT,
-        registers: &[cbv("view_cb", 0)],
+        registers: &[sky::VIEW.binding()],
     },
     DxilAbi {
         program: &shared::SKY_FRAG,
         registers: &[
-            cbv("view_cb", 0),
-            srv("prefilter_cube", 0),
-            sampler("cube_sampler", 0),
+            sky::VIEW.binding(),
+            sky::PREFILTER_CUBE.binding(),
+            sky::CUBE_SAMPLER.binding(),
         ],
     },
     DxilAbi {
         program: &shared::SHADOW_VERT_BINDLESS,
         registers: &[
-            cbv("objid_cb", 0),
-            cbv("shadow_cb", 1),
-            cbv("push", 2),
-            srv("objects", 0),
-            srv("mesh_vertices", 1),
+            shadow::OBJECT_ID.binding(),
+            shadow::SHADOW.binding(),
+            shadow::PUSH.binding(),
+            shadow::OBJECTS.binding(),
+            shadow::MESH_VERTICES.binding(),
         ],
     },
     DxilAbi {
@@ -297,7 +546,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     },
     DxilAbi {
         program: &shared::GLASS_VERT,
-        registers: &[cbv("view", 0)],
+        registers: &[transparent::VIEW.binding()],
     },
     DxilAbi {
         program: &shared::GLASS_FRAG,
@@ -325,7 +574,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // signature.
     DxilAbi {
         program: &shared::GLASS_MESH_VERT,
-        registers: &[cbv("view", 0), cbv("params", 1)],
+        registers: &[transparent::VIEW.binding(), transparent::PARAMS.binding()],
     },
     DxilAbi {
         program: &shared::GLASS_MESH_FRAG_RT,
@@ -350,7 +599,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // every water fragment the body's light (WATER_BODY_LIGHT_REGISTERS).
     DxilAbi {
         program: &shared::WATER_VERT,
-        registers: &[cbv("view", 0), cbv("params", 1)],
+        registers: &[transparent::VIEW.binding(), transparent::PARAMS.binding()],
     },
     DxilAbi {
         program: &shared::WATER_VERT,
@@ -372,7 +621,7 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
     // exactly what the rectangle's do.
     DxilAbi {
         program: &shared::WATER_SEA_VERT,
-        registers: &[cbv("view", 0), cbv("params", 1)],
+        registers: &[transparent::VIEW.binding(), transparent::PARAMS.binding()],
     },
     DxilAbi {
         program: &shared::WATER_SEA_VERT,
@@ -430,63 +679,79 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_WAKE_REGISTERS,
     },
-    // The simulated ocean's kernels, under their own root signature in
-    // `directx/water_sim.rs`: the root constants, the spectrum and row
+    // The simulated ocean's kernels, under their own root signature: the root
+    // constants, the spectrum and row
     // transforms as root views, and one table of the four mip UAVs.
-    // The wake's kernels, under their own root signature in
-    // `directx/water_sim.rs`: the block as a root CBV, the state and the
+    // The wake's kernels, under their own root signature: the block as a root
+    // CBV, the state and the
     // transform as root views, and a table of the field's two mip views.
     DxilAbi {
         program: &shared::WATER_WAKE_ROWS,
-        registers: &[cbv("params", 0), uav("state", 1), uav("work", 2)],
+        registers: &[
+            wake::PARAMS.binding(),
+            wake::STATE.binding(),
+            wake::WORK.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::WATER_WAKE_COLUMNS,
-        registers: &[cbv("params", 0), uav("work", 2)],
+        registers: &[wake::PARAMS.binding(), wake::WORK.binding()],
     },
     DxilAbi {
         program: &shared::WATER_WAKE_INVERSE,
-        registers: &[cbv("params", 0), uav("state", 1), uav("work", 2)],
+        registers: &[
+            wake::PARAMS.binding(),
+            wake::STATE.binding(),
+            wake::WORK.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::WATER_WAKE_SHADE,
-        registers: &[cbv("params", 0), uav("state", 1), uav("dst_field", 3)],
+        registers: &[
+            wake::PARAMS.binding(),
+            wake::STATE.binding(),
+            wake::DST_FIELD.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::WATER_WAKE_MIP,
-        registers: &[uav("dst_field", 3), srv("src_field", 4)],
+        registers: &[wake::DST_FIELD.binding(), wake::SRC_FIELD.binding()],
     },
     DxilAbi {
         program: &shared::WATER_FFT_ROWS,
-        registers: &[cbv("params", 0), srv("spectrum", 5), uav("rows", 6)],
+        registers: &[
+            ocean::PARAMS.binding(),
+            ocean::SPECTRUM.binding(),
+            ocean::ROWS.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::WATER_FFT_COLUMNS,
         registers: &[
-            cbv("params", 0),
-            uav("rows", 6),
-            uav("dst_displacement", 2),
-            uav("dst_slopes", 3),
+            ocean::PARAMS.binding(),
+            ocean::ROWS.binding(),
+            ocean::DST_DISPLACEMENT.binding(),
+            ocean::DST_SLOPES.binding(),
         ],
     },
     DxilAbi {
         program: &shared::WATER_FFT_COLUMNS_FOAM,
         registers: &[
-            cbv("params", 0),
-            uav("rows", 6),
-            uav("dst_displacement", 2),
-            uav("dst_slopes", 3),
-            uav("foam", 7),
+            ocean::PARAMS.binding(),
+            ocean::ROWS.binding(),
+            ocean::DST_DISPLACEMENT.binding(),
+            ocean::DST_SLOPES.binding(),
+            ocean::FOAM.binding(),
         ],
     },
     DxilAbi {
         program: &shared::WATER_MIP,
         registers: &[
-            cbv("params", 0),
-            srv("src_displacement", 0),
-            srv("src_slopes", 1),
-            uav("dst_displacement", 2),
-            uav("dst_slopes", 3),
+            ocean::PARAMS.binding(),
+            ocean::SRC_DISPLACEMENT.binding(),
+            ocean::SRC_SLOPES.binding(),
+            ocean::DST_DISPLACEMENT.binding(),
+            ocean::DST_SLOPES.binding(),
         ],
     },
     DxilAbi {
@@ -549,304 +814,324 @@ pub const DXIL_ENTRY_ABI: &[DxilAbi] = &[
         program: &shared::WATER_SEA_DAYLIGHT_FRAG_RT_TEXTURED,
         registers: WATER_RT_TEXTURED_REGISTERS,
     },
-    // The compute families whose root signatures live in
-    // `directx/{raytrace,light_cull,auto_exposure,particle}.rs`. Each
+    // The skinning, light-cull, auto-exposure and particle compute families.
+    // Each
     // states its registers in a `CN_BACKEND_DIRECTX` branch, so these rows are the
     // check that the branch and the root signature still name the same slots.
     DxilAbi {
         program: &shared::RT_SKIN,
         registers: &[
-            srv("src", 0),
-            srv("palette", 1),
-            uav("dst", 0),
-            srv("morph_data", 2),
-            srv("morph_weights", 3),
-            cbv("params", 0),
+            skin::SRC.binding(),
+            skin::PALETTE.binding(),
+            skin::DST.binding(),
+            skin::MORPH_DATA.binding(),
+            skin::MORPH_WEIGHTS.binding(),
+            skin::PARAMS.binding(),
         ],
     },
     DxilAbi {
         program: &shared::LIGHT_CULL,
         registers: &[
-            cbv("cluster", 0),
-            srv("lights", 0),
-            uav("cluster_list", 0),
-            srv("probe_records", 1),
+            light_cull::CLUSTER.binding(),
+            light_cull::LIGHTS.binding(),
+            light_cull::CLUSTER_LIST.binding(),
+            light_cull::PROBE_RECORDS.binding(),
         ],
     },
     DxilAbi {
         program: &shared::AUTO_EXPOSURE_BUILD,
-        registers: &[cbv("params", 0), srv("hdr_texture", 0), uav("histogram", 0)],
+        registers: &[
+            exposure::build::PARAMS.binding(),
+            exposure::build::HDR_TEXTURE.binding(),
+            exposure::build::HISTOGRAM.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::AUTO_EXPOSURE_AVERAGE,
-        registers: &[cbv("params", 0), uav("histogram", 0), uav("measurement", 1)],
+        registers: &[
+            exposure::average::PARAMS.binding(),
+            exposure::average::HISTOGRAM.binding(),
+            exposure::average::MEASUREMENT.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::PARTICLE_SIMULATE,
-        registers: &[cbv("params", 0), uav("pool", 0), srv("frame_rows", 1)],
+        registers: &[
+            particle::simulate::PARAMS.binding(),
+            particle::simulate::POOL.binding(),
+            particle::simulate::FRAME_ROWS.binding(),
+        ],
     },
-    // The raster remainder, from `directx/{particle,decal,line}.rs` and
-    // `pipeline.rs`. Only the particle pair has a `CN_BACKEND_DIRECTX` branch, and only
+    // The raster remainder: particles, decals, lines and text. Only the particle
+    // pair has a `CN_BACKEND_DIRECTX` branch, and only
     // to swap the two constant buffers; the rest are here so an edit to their
     // declarations cannot move a register the root signature binds without
     // failing the build.
     DxilAbi {
         program: &shared::PARTICLE_VERT,
-        registers: &[cbv("view", 0), cbv("params", 1), srv("pool", 0)],
+        registers: &[
+            particle::draw::VIEW.binding(),
+            particle::draw::PARAMS.binding(),
+            particle::draw::POOL.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::PARTICLE_FRAG,
         registers: &[
-            srv("albedo", 1),
-            sampler("albedo_sampler", 0),
-            srv("scene_depth", 2),
+            particle::draw::ALBEDO.binding(),
+            particle::draw::ALBEDO_SAMPLER.binding(),
+            particle::draw::SCENE_DEPTH.binding(),
         ],
     },
     DxilAbi {
         program: &shared::PARTICLE_LIT_VERT,
-        registers: &[cbv("view", 0), cbv("params", 1), srv("pool", 0)],
+        registers: &[
+            particle::draw::VIEW.binding(),
+            particle::draw::PARAMS.binding(),
+            particle::draw::POOL.binding(),
+        ],
     },
     DxilAbi {
         program: &shared::PARTICLE_LIT_FRAG,
         registers: &[
-            srv("albedo", 1),
-            sampler("albedo_sampler", 0),
-            srv("scene_depth", 2),
+            particle::draw::ALBEDO.binding(),
+            particle::draw::ALBEDO_SAMPLER.binding(),
+            particle::draw::SCENE_DEPTH.binding(),
         ],
     },
     DxilAbi {
         program: &shared::DECAL_VERT,
-        registers: &[cbv("view", 0), cbv("params", 1)],
+        registers: &[decal::VIEW.binding(), decal::PARAMS.binding()],
     },
     DxilAbi {
         program: &shared::DECAL_FRAG,
         registers: &[
-            cbv("view", 0),
-            cbv("params", 1),
-            srv("scene_depth", 0),
-            srv("decal_tex", 1),
-            sampler("decal_tex_sampler", 0),
+            decal::VIEW.binding(),
+            decal::PARAMS.binding(),
+            decal::SCENE_DEPTH.binding(),
+            decal::DECAL_TEX.binding(),
+            decal::DECAL_TEX_SAMPLER.binding(),
         ],
     },
     DxilAbi {
         program: &shared::LINE_VERT,
-        registers: &[cbv("view", 0)],
+        registers: &[line::VIEW.binding()],
     },
     DxilAbi {
         program: &shared::LINE_FRAG,
-        registers: &[cbv("view", 0), srv("scene_depth", 0)],
+        registers: &[line::VIEW.binding(), line::SCENE_DEPTH.binding()],
     },
     DxilAbi {
         program: &shared::TEXT_VERT,
-        registers: &[cbv("uni", 0)],
+        registers: &[text::UNIFORMS.binding()],
     },
     DxilAbi {
         program: &shared::TEXT_FRAG,
-        registers: &[srv("atlas", 0), sampler("atlas_sampler", 0)],
+        registers: &[text::ATLAS.binding(), text::ATLAS_SAMPLER.binding()],
     },
 ];
 
-// The ray-traced reflection resolve's root signature, from
-// `directx/post/rt_reflections.rs`. The probe cube array, its records and
+// The ray-traced reflection resolve's root signature. The probe cube array, its records and
 // the cluster lists binning them sit clear of the screen-space SRVs.
 const RT_REFLECTIONS_REGISTERS: &[DxBinding] = &[
-    cbv("rt_params", 0),
-    uav("output", 0),
-    srv("ray_list", 15),
-    srv("ray_args", 16),
-    cbv("probe_set", 4),
-    cbv("cluster", 5),
-    srv("scene_tlas", 0),
-    srv("verts", 1),
-    srv("indices", 2),
-    srv("geom", 3),
-    srv("scene_tex", 4),
-    srv("gbuffer", 5),
-    srv("rough_tex", 6),
-    srv("prefilter", 7),
-    srv("sverts", 8),
-    srv("sidx", 9),
-    srv("probe_cubes", 10),
-    srv("probe_records", 11),
-    srv("cluster_list", 12),
-    sampler("screen_sampler", 0),
-    sampler("cube_sampler", 1),
-    sampler("probe_cube_sampler", 3),
+    rt::PARAMS.binding(),
+    rt::OUTPUT.binding(),
+    rt::RAY_LIST.binding(),
+    rt::RAY_ARGS.binding(),
+    rt::PROBE_SET.binding(),
+    rt::CLUSTER.binding(),
+    rt::SCENE_TLAS.binding(),
+    rt::VERTICES.binding(),
+    rt::INDICES.binding(),
+    rt::GEOMETRY.binding(),
+    rt::SCENE.binding(),
+    rt::GBUFFER.binding(),
+    rt::ROUGHNESS.binding(),
+    rt::PREFILTER.binding(),
+    rt::SKINNED_VERTICES.binding(),
+    rt::SKINNED_INDICES.binding(),
+    rt::PROBE_CUBES.binding(),
+    rt::PROBE_RECORDS.binding(),
+    rt::CLUSTER_LIST.binding(),
+    rt::SCREEN_SAMPLER.binding(),
+    rt::CUBE_SAMPLER.binding(),
+    rt::PROBE_CUBE_SAMPLER.binding(),
 ];
 
 // The classify shares the trace's root signature: the screen sources, the probe
 // fallback and the output at the trace's registers, plus SSGI's pyramid and the
 // ray list and arguments it writes.
 const RT_CLASSIFY_REGISTERS: &[DxBinding] = &[
-    cbv("rt_params", 0),
-    cbv("probe_set", 4),
-    cbv("cluster", 5),
-    uav("output", 0),
-    uav("ray_list", 1),
-    uav("ray_args", 2),
-    srv("scene_tex", 4),
-    srv("gbuffer", 5),
-    srv("rough_tex", 6),
-    srv("prefilter", 7),
-    srv("probe_cubes", 10),
-    srv("probe_records", 11),
-    srv("cluster_list", 12),
-    srv("pyramid", 14),
-    sampler("screen_sampler", 0),
-    sampler("cube_sampler", 1),
-    sampler("probe_cube_sampler", 3),
+    rt::PARAMS.binding(),
+    rt::PROBE_SET.binding(),
+    rt::CLUSTER.binding(),
+    rt::OUTPUT.binding(),
+    rt::RAY_LIST_OUT.binding(),
+    rt::RAY_ARGS_OUT.binding(),
+    rt::SCENE.binding(),
+    rt::GBUFFER.binding(),
+    rt::ROUGHNESS.binding(),
+    rt::PREFILTER.binding(),
+    rt::PROBE_CUBES.binding(),
+    rt::PROBE_RECORDS.binding(),
+    rt::CLUSTER_LIST.binding(),
+    rt::PYRAMID.binding(),
+    rt::SCREEN_SAMPLER.binding(),
+    rt::CUBE_SAMPLER.binding(),
+    rt::PROBE_CUBE_SAMPLER.binding(),
 ];
 
 const RT_REFLECTIONS_TEXTURED_REGISTERS: &[DxBinding] = &[
-    srv("tex_pool", 0).in_space(1),
-    sampler("pool_sampler", 2),
-    cbv("canopy_cb", 6),
-    srv("canopy_tables_sb", 13),
+    rt::TEX_POOL.binding(),
+    rt::POOL_SAMPLER.binding(),
+    rt::CANOPY.binding(),
+    rt::CANOPY_TABLES.binding(),
 ];
 
-// The transparent pass's root signatures, from `directx/transparent.rs`,
-// which glass and water both draw under. The probe cube array, its records and
-// the cluster lists sit at t20 / t21 / t22 in every variant, clear of the
-// trace's SRVs at t4..t12, with the cluster params at b6.
+// The transparent pass's root signatures, which glass and water both draw
+// under. The probe cube array, its records and the cluster lists sit at the
+// same registers in every variant, clear of the trace's SRVs.
 const GLASS_REGISTERS: &[DxBinding] = &[
-    cbv("view", 0),
-    cbv("params", 1),
-    cbv("probe_set", 4),
-    srv("scene_color", 0),
-    srv("scene_depth", 1),
-    srv("prefilter_cube", 2),
-    srv("planar_reflection", 3),
-    srv("probe_cubes", 20),
-    srv("probe_records", 21),
-    cbv("cluster", 6),
-    srv("cluster_list", 22),
-    sampler("post_samp", 0),
-    sampler("cube_sampler", 2),
+    transparent::VIEW.binding(),
+    transparent::PARAMS.binding(),
+    transparent::PROBE_SET.binding(),
+    transparent::SCENE_COLOR.binding(),
+    transparent::SCENE_DEPTH.binding(),
+    transparent::PREFILTER_CUBE.binding(),
+    transparent::PLANAR_REFLECTION.binding(),
+    transparent::PROBE_CUBES.binding(),
+    transparent::PROBE_RECORDS.binding(),
+    transparent::CLUSTER.binding(),
+    transparent::CLUSTER_LIST.binding(),
+    transparent::POST_SAMPLER.binding(),
+    transparent::CUBE_SAMPLER.binding(),
 ];
 
 const GLASS_RT_REGISTERS: &[DxBinding] = &[
-    cbv("view", 0),
-    cbv("params", 1),
-    cbv("rt_params", 5),
-    cbv("probe_set", 4),
-    srv("scene_color", 0),
-    srv("scene_depth", 1),
-    srv("prefilter_cube", 2),
-    srv("scene_tlas", 4),
-    srv("verts", 5),
-    srv("indices", 6),
-    srv("sverts", 8),
-    srv("sidx", 9),
-    srv("geom", 10),
-    srv("probe_cubes", 20),
-    srv("probe_records", 21),
-    cbv("cluster", 6),
-    srv("cluster_list", 22),
-    srv("glass_reflection", 11),
-    srv("glass_reflection_back", 12),
+    transparent::VIEW.binding(),
+    transparent::PARAMS.binding(),
+    transparent::RT_PARAMS.binding(),
+    transparent::PROBE_SET.binding(),
+    transparent::SCENE_COLOR.binding(),
+    transparent::SCENE_DEPTH.binding(),
+    transparent::PREFILTER_CUBE.binding(),
+    transparent::SCENE_TLAS.binding(),
+    transparent::VERTICES.binding(),
+    transparent::INDICES.binding(),
+    transparent::SKINNED_VERTICES.binding(),
+    transparent::SKINNED_INDICES.binding(),
+    transparent::GEOMETRY.binding(),
+    transparent::PROBE_CUBES.binding(),
+    transparent::PROBE_RECORDS.binding(),
+    transparent::CLUSTER.binding(),
+    transparent::CLUSTER_LIST.binding(),
+    transparent::GLASS_REFLECTION.binding(),
+    transparent::GLASS_REFLECTION_BACK.binding(),
 ];
 
 // The reduced reflection pre-pass entries of both glass producers: the RT set,
 // without the refraction snapshot or the second layer, reading the layer it
 // peels behind at t11.
 const GLASS_REFLECTION_REGISTERS: &[DxBinding] = &[
-    cbv("view", 0),
-    cbv("params", 1),
-    cbv("rt_params", 5),
-    cbv("probe_set", 4),
-    srv("scene_depth", 1),
-    srv("prefilter_cube", 2),
-    srv("scene_tlas", 4),
-    srv("verts", 5),
-    srv("indices", 6),
-    srv("sverts", 8),
-    srv("sidx", 9),
-    srv("geom", 10),
-    srv("glass_reflection", 11),
-    srv("probe_cubes", 20),
-    srv("probe_records", 21),
-    cbv("cluster", 6),
-    srv("cluster_list", 22),
+    transparent::VIEW.binding(),
+    transparent::PARAMS.binding(),
+    transparent::RT_PARAMS.binding(),
+    transparent::PROBE_SET.binding(),
+    transparent::SCENE_DEPTH.binding(),
+    transparent::PREFILTER_CUBE.binding(),
+    transparent::SCENE_TLAS.binding(),
+    transparent::VERTICES.binding(),
+    transparent::INDICES.binding(),
+    transparent::SKINNED_VERTICES.binding(),
+    transparent::SKINNED_INDICES.binding(),
+    transparent::GEOMETRY.binding(),
+    transparent::GLASS_REFLECTION.binding(),
+    transparent::PROBE_CUBES.binding(),
+    transparent::PROBE_RECORDS.binding(),
+    transparent::CLUSTER.binding(),
+    transparent::CLUSTER_LIST.binding(),
 ];
 
-const GLASS_RT_TEXTURED_REGISTERS: &[DxBinding] =
-    &[srv("tex_pool", 0).in_space(1), sampler("pool_sampler", 1)];
+const GLASS_RT_TEXTURED_REGISTERS: &[DxBinding] = &[
+    transparent::TEX_POOL.binding(),
+    transparent::POOL_SAMPLER.binding(),
+];
 
 // Water's RT fragments, which are glass's set plus the planar resolve at t3: a
 // water surface with a mirror plane samples it in place of tracing, so unlike
 // glass the register survives into the RT variant and the RT root signature
 // carries a table for it.
 const WATER_RT_REGISTERS: &[DxBinding] = &[
-    cbv("view", 0),
-    cbv("params", 1),
-    cbv("rt_params", 5),
-    cbv("probe_set", 4),
-    srv("scene_color", 0),
-    srv("scene_depth", 1),
-    srv("prefilter_cube", 2),
-    srv("planar_reflection", 3),
-    srv("scene_tlas", 4),
-    srv("verts", 5),
-    srv("indices", 6),
-    srv("sverts", 8),
-    srv("sidx", 9),
-    srv("geom", 10),
-    srv("probe_cubes", 20),
-    srv("probe_records", 21),
-    cbv("cluster", 6),
-    srv("cluster_list", 22),
+    transparent::VIEW.binding(),
+    transparent::PARAMS.binding(),
+    transparent::RT_PARAMS.binding(),
+    transparent::PROBE_SET.binding(),
+    transparent::SCENE_COLOR.binding(),
+    transparent::SCENE_DEPTH.binding(),
+    transparent::PREFILTER_CUBE.binding(),
+    transparent::PLANAR_REFLECTION.binding(),
+    transparent::SCENE_TLAS.binding(),
+    transparent::VERTICES.binding(),
+    transparent::INDICES.binding(),
+    transparent::SKINNED_VERTICES.binding(),
+    transparent::SKINNED_INDICES.binding(),
+    transparent::GEOMETRY.binding(),
+    transparent::PROBE_CUBES.binding(),
+    transparent::PROBE_RECORDS.binding(),
+    transparent::CLUSTER.binding(),
+    transparent::CLUSTER_LIST.binding(),
 ];
 
 // The simulated oceans' cascade arrays and their sampler, a table and a static
 // sampler visible to every stage in both signatures.
 const WATER_OCEAN_REGISTERS: &[DxBinding] = &[
-    srv("ocean_displacement", 15),
-    srv("ocean_slopes", 16),
-    sampler("ocean_sampler", 4),
+    transparent::OCEAN_DISPLACEMENT.binding(),
+    transparent::OCEAN_SLOPES.binding(),
+    transparent::OCEAN_SAMPLER.binding(),
 ];
 
 // A planet sea's wake field, the third SRV of the oceans' table.
-const WATER_WAKE_REGISTERS: &[DxBinding] = &[srv("wake_field", 17)];
+const WATER_WAKE_REGISTERS: &[DxBinding] = &[transparent::WAKE_FIELD.binding()];
 
 // The light every water fragment's body is lit by: the cascaded shadow and the
 // sky irradiance cube, a table and a CBV past the probe set in both signatures.
 const WATER_BODY_LIGHT_REGISTERS: &[DxBinding] = &[
-    cbv("shadow_cb", 3),
-    srv("shadow_map", 13),
-    srv("irradiance_cube", 14),
-    srv("cloud_shadow", 18),
-    sampler("shadow_sampler", 3),
+    transparent::SHADOW.binding(),
+    transparent::SHADOW_MAP.binding(),
+    transparent::IRRADIANCE_CUBE.binding(),
+    transparent::CLOUD_SHADOW.binding(),
+    transparent::SHADOW_SAMPLER.binding(),
 ];
 
 const WATER_RT_TEXTURED_REGISTERS: &[DxBinding] = &[
-    srv("planar_reflection", 3),
-    srv("tex_pool", 0).in_space(1),
-    sampler("pool_sampler", 1),
+    transparent::PLANAR_REFLECTION.binding(),
+    transparent::TEX_POOL.binding(),
+    transparent::POOL_SAMPLER.binding(),
 ];
 
 // The see-through glass mesh fragment: the RT set above, minus the planar
 // resolve at t3 (a curved mesh has no mirror plane) and with the same t20 probe
 // cube base, so the pass's RT root signature covers it unchanged.
 const GLASS_MESH_RT_REGISTERS: &[DxBinding] = &[
-    cbv("view", 0),
-    cbv("params", 1),
-    cbv("rt_params", 5),
-    cbv("probe_set", 4),
-    srv("scene_color", 0),
-    srv("scene_depth", 1),
-    srv("prefilter_cube", 2),
-    srv("scene_tlas", 4),
-    srv("verts", 5),
-    srv("indices", 6),
-    srv("sverts", 8),
-    srv("sidx", 9),
-    srv("geom", 10),
-    srv("probe_cubes", 20),
-    srv("probe_records", 21),
-    cbv("cluster", 6),
-    srv("cluster_list", 22),
-    sampler("post_samp", 0),
-    sampler("cube_sampler", 2),
-    srv("glass_reflection", 11),
-    srv("glass_reflection_back", 12),
+    transparent::VIEW.binding(),
+    transparent::PARAMS.binding(),
+    transparent::RT_PARAMS.binding(),
+    transparent::PROBE_SET.binding(),
+    transparent::SCENE_COLOR.binding(),
+    transparent::SCENE_DEPTH.binding(),
+    transparent::PREFILTER_CUBE.binding(),
+    transparent::SCENE_TLAS.binding(),
+    transparent::VERTICES.binding(),
+    transparent::INDICES.binding(),
+    transparent::SKINNED_VERTICES.binding(),
+    transparent::SKINNED_INDICES.binding(),
+    transparent::GEOMETRY.binding(),
+    transparent::PROBE_CUBES.binding(),
+    transparent::PROBE_RECORDS.binding(),
+    transparent::CLUSTER.binding(),
+    transparent::CLUSTER_LIST.binding(),
+    transparent::POST_SAMPLER.binding(),
+    transparent::CUBE_SAMPLER.binding(),
+    transparent::GLASS_REFLECTION.binding(),
+    transparent::GLASS_REFLECTION_BACK.binding(),
 ];

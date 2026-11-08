@@ -127,35 +127,40 @@ pub(in crate::directx) struct ParticleEmitterGpuState {
 }
 
 // Compute root signature for `particle_simulate`:
-//   [0] root CBV b0 : ParticleParams (per-emitter, per-frame)
-//   [1] root UAV u0 : pool (RWStructuredBuffer<Particle>)
-//   [2] root SRV t1 : the frame's rows (per-frame)
+//   [0] root CBV   : ParticleParams (per-emitter, per-frame)
+//   [1] root UAV   : pool (RWStructuredBuffer<Particle>)
+//   [2] root SRV   : the frame's rows (per-frame)
 fn create_simulate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::particle::dx::simulate;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .uav(0, Visibility::All)
-        .srv(1, Visibility::All)
+        .cbv(simulate::PARAMS, Visibility::All)
+        .uav(simulate::POOL, Visibility::All)
+        .srv(simulate::FRAME_ROWS, Visibility::All)
         .build(device, "particle simulate root sig")
 }
 
 // Graphics root signature for `particle_vertex` + `particle_fragment`. The two
 // constant buffers are why `particle.hlsl` branches on `CN_BACKEND_DIRECTX`:
-// b0 / b1 here are Metal buffer indices 1 / 2 there.
-//   [0] root CBV b0   : ParticleView   (per-frame)
-//   [1] root CBV b1   : ParticleParams (per-emitter)
-//   [2] root SRV t0   : pool           (structured-buffer SRV)
-//   [3] descriptor table SRV t1 : emitter albedo texture
-//   [4] descriptor table SRV t2 : main depth (Texture2D[MS]<float>)
-//   static sampler s0 : linear clamp
+//   [0] root CBV   : ParticleView   (per-frame)
+//   [1] root CBV   : ParticleParams (per-emitter)
+//   [2] root SRV   : pool           (structured-buffer SRV)
+//   [3] descriptor table SRV   : emitter albedo texture
+//   [4] descriptor table SRV   : main depth (Texture2D[MS]<float>)
+//   static sampler : linear clamp
 // The vertex shader emits the quad from SV_VertexID; no input layout.
 fn create_render_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::particle::dx::draw;
     RootSig::new()
-        .cbv(0, Visibility::Vertex)
-        .cbv(1, Visibility::All)
-        .srv(0, Visibility::Vertex)
-        .srv_table(1, 1, Visibility::Pixel)
-        .srv_table(2, 1, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .cbv(draw::VIEW, Visibility::Vertex)
+        .cbv(draw::PARAMS, Visibility::All)
+        .srv(draw::POOL, Visibility::Vertex)
+        .srv_table(draw::ALBEDO, 1, Visibility::Pixel)
+        .srv_table(draw::SCENE_DEPTH, 1, Visibility::Pixel)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            draw::ALBEDO_SAMPLER,
+            Visibility::Pixel,
+        )
         .build(device, "particle render root sig")
 }
 

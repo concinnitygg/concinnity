@@ -389,26 +389,26 @@ unsafe impl Sync for TransparentResources {}
 
 // Root-signature layout (binds 1:1 with the `CN_BACKEND_DIRECTX` declarations
 // in glass.hlsl and water.hlsl, which are deliberately identical):
-//   [0] root CBV b0   TransparentView (per-frame)
-//   [1] root CBV b1   GlassParams / WaterParams (per-record)
-//   [2] table  t0     scene-copy SRV  (Texture2D<float4>)
-//   [3] table  t1     scene depth SRV (Texture2D[MS]<float>)
-//   [4] table  t2     sky prefilter cube SRV
-//   [5] table  t20    reflection-probe cube array
-//   [6] root CBV b4   ProbeSet
-//   [7] table  t3     planar reflection resolve SRV (per record)
-//   [8] root SRV t21  reflection-probe records
-//   [9] root CBV b6   ClusterParams (the main camera's cluster grid)
-//   [10] root SRV t22 per-cluster light lists and probe masks
-//   [11] table  t13..14 the cascaded shadow map and the sky irradiance cube
-//   [12] root CBV b3  ShadowUniforms
-//   [13] table  t15..17 the simulated oceans' displacement and slope arrays,
+//   [0] root CBV   TransparentView (per-frame)
+//   [1] root CBV   GlassParams / WaterParams (per-record)
+//   [2] table   scene-copy SRV  (Texture2D<float4>)
+//   [3] table   scene depth SRV (Texture2D[MS]<float>)
+//   [4] table   sky prefilter cube SRV
+//   [5] table   reflection-probe cube array
+//   [6] root CBV   ProbeSet
+//   [7] table   planar reflection resolve SRV (per record)
+//   [8] root SRV   reflection-probe records
+//   [9] root CBV   ClusterParams (the main camera's cluster grid)
+//   [10] root SRV   per-cluster light lists and probe masks
+//   [11] table   the cascaded shadow map and the sky irradiance cube
+//   [12] root CBV   ShadowUniforms
+//   [13] table   the simulated oceans' displacement and slope arrays,
 //                     and a planet sea's wake
-//   [14] table  t18    the clouds' shadow map
-//   static sampler s0 : linear clamp ; s2 : cube mip-linear clamp ;
-//   s3 : shadow compare ; s4 : anisotropic wrap (every stage)
+//   [14] table   the clouds' shadow map
+//   static samplers: linear clamp ; cube mip-linear clamp ; shadow compare ;
+//   anisotropic wrap (every stage)
 //
-// b1 is visible to every stage: the water vertex stage reads its wave table out
+// The params are visible to every stage: the water vertex stage reads its wave table out
 // of the params block, where the glass vertex stage reads only the view.
 // Root parameter index of the per-record planar resolve table: the one before
 // the probe records in the base signature and before the reflection layers in
@@ -439,30 +439,31 @@ const CLOUD_SHADOW_ROOT_RT: u32 = 23;
 
 fn create_transparent_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
+    use concinnity_engine::render::shader::programs::abi::transparent::dx as t;
     let sig = RootSig::new()
-        .cbv(0, All) // [0] b0 TransparentView
-        .cbv(1, All) // [1] b1 per-record params
-        .srv_table(0, 1, Pixel) // [2] t0 scene copy
-        .srv_table(1, 1, Pixel) // [3] t1 depth
-        .srv_table(2, 1, Pixel) // [4] t2 sky prefilter cube, the fallback where no probe covers
-        .srv_table(20, 1, Pixel) // [5] t20 probe cubes, box-projected when ProbeSet.count > 0
-        .cbv(4, Pixel) // [6] b4 ProbeSet
-        // [7] t3 planar resolve: a valid SRV is always bound (the scene snapshot
+        .cbv(t::VIEW, All) // [0] TransparentView
+        .cbv(t::PARAMS, All) // [1] per-record params
+        .srv_table(t::SCENE_COLOR, 1, Pixel) // [2] scene copy
+        .srv_table(t::SCENE_DEPTH, 1, Pixel) // [3] depth
+        // [4] sky prefilter cube, the fallback where no probe covers
+        .srv_table(t::PREFILTER_CUBE, 1, Pixel)
+        // [5] probe cubes, box-projected when ProbeSet.count > 0
+        .srv_table(t::PROBE_CUBES, 1, Pixel)
+        .cbv(t::PROBE_SET, Pixel) // [6]
+        // [7] planar resolve: a valid SRV is always bound (the scene snapshot
         // stands in for records with no planar slot); sampled only when `planar > 0.5`.
-        .srv_table(3, 1, Pixel)
-        .srv(21, Pixel) // [8] t21 probe records
-        .cbv(6, Pixel) // [9] b6 ClusterParams
-        .srv(22, Pixel) // [10] t22 cluster lists
-        .srv_table(13, 2, Pixel) // [11] t13..t14 shadow map + irradiance cube
-        .cbv(3, Pixel) // [12] b3 ShadowUniforms
-        .srv_table(15, 3, All) // [13] t15..t17 ocean arrays + a sea's wake
-        .srv_table(18, 1, Pixel) // [14] t18 the clouds' shadow map
-        // s0: the scene snapshot / depth. s2: the prefilter + probe cube array.
-        // s3: the shadow compare. s4: the ocean arrays.
-        .static_sampler(SamplerState::LinearClamp, 0, Pixel)
-        .static_sampler(SamplerState::LinearClamp, 2, Pixel)
-        .static_sampler(SamplerState::ShadowCompare, 3, Pixel)
-        .static_sampler(SamplerState::AnisotropicWrap, 4, All)
+        .srv_table(t::PLANAR_REFLECTION, 1, Pixel)
+        .srv(t::PROBE_RECORDS, Pixel) // [8]
+        .cbv(t::CLUSTER, Pixel) // [9]
+        .srv(t::CLUSTER_LIST, Pixel) // [10]
+        .srv_table(t::SHADOW_MAP, 2, Pixel) // [11] shadow map + irradiance cube
+        .cbv(t::SHADOW, Pixel) // [12]
+        .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [13] ocean arrays + a sea's wake
+        .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [14]
+        .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel)
+        .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
+        .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
+        .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All)
         .input_layout();
     debug_assert_eq!(sig.len() - 8, PLANAR_ROOT_BASE);
     debug_assert_eq!(sig.len() - 7, PROBE_RECORDS_ROOT_BASE);
@@ -538,73 +539,75 @@ fn transparent_pso(
 
 // Root signature for the RT PSOs (binds 1:1 with the `CN_BACKEND_DIRECTX`
 // declarations the RT producers take from `transparent_rt.hlsl`, plus their own):
-//   [0]  root CBV b0   TransparentView (per-frame, vertex + pixel)
-//   [1]  root CBV b1   GlassParams / WaterParams (per-record, every stage)
-//   [2]  table  t0     scene-copy SRV
-//   [3]  table  t1     scene depth SRV
-//   [4]  table  t2     sky prefilter cube SRV
-//   [5]  table  t20    reflection-probe cube array
-//   [6]  root CBV b4   ProbeSet
-//   [7]  root CBV b5   RtParams
-//   [8]  root SRV t4   scene TLAS
-//   [9]  root SRV t5   vertex buffer (raw)
-//   [10] root SRV t6   index buffer (u32, raw)
-//   [11] root SRV t10  geometry table (structured)
-//   [12] root SRV t8   deformed skinned verts (raw)
-//   [13] root SRV t9   skinned indices (raw)
-//   [14] table  t0,sp1 bindless texture pool (textured PSOs only)
-//   [15] table  t3     this record's planar reflection resolve
-//   [16] table  t11..12 the glass reflection layers (one window of
+//   [0]  root CBV   TransparentView (per-frame, vertex + pixel)
+//   [1]  root CBV   GlassParams / WaterParams (per-record, every stage)
+//   [2]  table   scene-copy SRV
+//   [3]  table   scene depth SRV
+//   [4]  table   sky prefilter cube SRV
+//   [5]  table   reflection-probe cube array
+//   [6]  root CBV   ProbeSet
+//   [7]  root CBV   RtParams
+//   [8]  root SRV   scene TLAS
+//   [9]  root SRV   vertex buffer (raw)
+//   [10] root SRV   index buffer (u32, raw)
+//   [11] root SRV   geometry table (structured)
+//   [12] root SRV   deformed skinned verts (raw)
+//   [13] root SRV   skinned indices (raw)
+//   [14] table   bindless texture pool (textured PSOs only)
+//   [15] table   this record's planar reflection resolve
+//   [16] table   the glass reflection layers (one window of
 //                      `GlassReflectionSlots` per pass)
-//   [17] root SRV t21  reflection-probe records
-//   [18] root CBV b6   ClusterParams (the main camera's cluster grid)
-//   [19] root SRV t22  per-cluster light lists and probe masks
-//   [20] table  t13..14 the cascaded shadow map and the sky irradiance cube
-//   [21] root CBV b3   ShadowUniforms
-//   [22] table  t15..17 the simulated oceans' displacement and slope arrays,
+//   [17] root SRV   reflection-probe records
+//   [18] root CBV   ClusterParams (the main camera's cluster grid)
+//   [19] root SRV   per-cluster light lists and probe masks
+//   [20] table   the cascaded shadow map and the sky irradiance cube
+//   [21] root CBV   ShadowUniforms
+//   [22] table   the simulated oceans' displacement and slope arrays,
 //                     and a planet sea's wake
-//   [23] table  t18    the clouds' shadow map
-//   static samplers s0 linear-clamp, s1 linear-repeat, s2 cube linear-clamp,
-//                   s3 shadow compare, s4 anisotropic wrap (every stage)
+//   [23] table   the clouds' shadow map
+//   static samplers: linear-clamp, linear-repeat, cube linear-clamp,
+//                    shadow compare, anisotropic wrap (every stage)
 //
 // [15] is what the base signature carries at [7]: the water fragment samples its
 // mirror plane in place of tracing wherever it has one, so the resolve has to
-// reach the RT PSOs too. Glass never reads t3 on this path; the encoder still
+// reach the RT PSOs too. Glass never reads it on this path; the encoder still
 // binds the table for every draw so no PSO runs under an unset root parameter.
 fn create_transparent_rt_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
+    use concinnity_engine::render::shader::programs::abi::transparent::dx as t;
     let sig = RootSig::new()
-        .cbv(0, All) // [0] b0 TransparentView (vertex reads vp)
-        .cbv(1, All) // [1] b1 per-record params (water's vertex reads it)
-        .srv_table(0, 1, Pixel) // [2] t0 scene copy
-        .srv_table(1, 1, Pixel) // [3] t1 depth
-        .srv_table(2, 1, Pixel) // [4] t2 prefilter cube
-        .srv_table(20, 1, Pixel) // [5] t20 probe cubes
-        .cbv(4, Pixel) // [6] b4 ProbeSet
-        .cbv(5, Pixel) // [7] b5 RtParams
-        .srv(4, Pixel) // [8] t4 TLAS
-        .srv(5, Pixel) // [9] t5 verts
-        .srv(6, Pixel) // [10] t6 indices
-        .srv(10, Pixel) // [11] t10 geom table
-        .srv(8, Pixel) // [12] t8 skinned verts
-        .srv(9, Pixel) // [13] t9 skinned indices
-        .table(&[Range::bindless_srv(1)], Pixel) // [14] t0,space1 bindless pool
-        .srv_table(3, 1, Pixel) // [15] t3 planar resolve
-        .srv_table(11, 2, Pixel) // [16] t11..t12 glass reflection layers
-        .srv(21, Pixel) // [17] t21 probe records
-        .cbv(6, Pixel) // [18] b6 ClusterParams
-        .srv(22, Pixel) // [19] t22 cluster lists
-        .srv_table(13, 2, Pixel) // [20] t13..t14 shadow map + irradiance cube
-        .cbv(3, Pixel) // [21] b3 ShadowUniforms
-        .srv_table(15, 3, All) // [22] t15..t17 ocean arrays + a sea's wake
-        .srv_table(18, 1, Pixel) // [23] t18 the clouds' shadow map
-        .static_sampler(SamplerState::LinearClamp, 0, Pixel) // s0 scene / depth
-        .static_sampler(SamplerState::LinearWrap, 1, Pixel) // s1 hit albedo / normal map
-        .static_sampler(SamplerState::LinearClamp, 2, Pixel) // s2 prefilter + probe cubes
-        .static_sampler(SamplerState::ShadowCompare, 3, Pixel) // s3 shadow compare
-        .static_sampler(SamplerState::AnisotropicWrap, 4, All) // s4 ocean arrays
+        .cbv(t::VIEW, All) // [0] TransparentView (vertex reads vp)
+        .cbv(t::PARAMS, All) // [1] per-record params (water's vertex reads it)
+        .srv_table(t::SCENE_COLOR, 1, Pixel) // [2] scene copy
+        .srv_table(t::SCENE_DEPTH, 1, Pixel) // [3] depth
+        .srv_table(t::PREFILTER_CUBE, 1, Pixel) // [4]
+        .srv_table(t::PROBE_CUBES, 1, Pixel) // [5]
+        .cbv(t::PROBE_SET, Pixel) // [6]
+        .cbv(t::RT_PARAMS, Pixel) // [7]
+        .srv(t::SCENE_TLAS, Pixel) // [8]
+        .srv(t::VERTICES, Pixel) // [9]
+        .srv(t::INDICES, Pixel) // [10]
+        .srv(t::GEOMETRY, Pixel) // [11]
+        .srv(t::SKINNED_VERTICES, Pixel) // [12]
+        .srv(t::SKINNED_INDICES, Pixel) // [13]
+        .table(&[Range::bindless_srv(t::TEX_POOL)], Pixel) // [14]
+        .srv_table(t::PLANAR_REFLECTION, 1, Pixel) // [15]
+        .srv_table(t::GLASS_REFLECTION, 2, Pixel) // [16] both reflection layers
+        .srv(t::PROBE_RECORDS, Pixel) // [17]
+        .cbv(t::CLUSTER, Pixel) // [18]
+        .srv(t::CLUSTER_LIST, Pixel) // [19]
+        .srv_table(t::SHADOW_MAP, 2, Pixel) // [20] shadow map + irradiance cube
+        .cbv(t::SHADOW, Pixel) // [21]
+        .srv_table(t::OCEAN_DISPLACEMENT, 3, All) // [22] ocean arrays + a sea's wake
+        .srv_table(t::CLOUD_SHADOW, 1, Pixel) // [23]
+        .static_sampler(SamplerState::LinearClamp, t::POST_SAMPLER, Pixel) // scene / depth
+        .static_sampler(SamplerState::LinearWrap, t::POOL_SAMPLER, Pixel) // hit albedo / normal map
+        // The prefilter and probe cubes.
+        .static_sampler(SamplerState::LinearClamp, t::CUBE_SAMPLER, Pixel)
+        .static_sampler(SamplerState::ShadowCompare, t::SHADOW_SAMPLER, Pixel)
+        .static_sampler(SamplerState::AnisotropicWrap, t::OCEAN_SAMPLER, All) // ocean arrays
         .input_layout();
     debug_assert_eq!(sig.len() - 9, PLANAR_ROOT_RT);
     debug_assert_eq!(sig.len() - 8, GLASS_REFLECTION_ROOT_RT);

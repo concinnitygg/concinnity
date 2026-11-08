@@ -86,59 +86,59 @@ fn compile_rt_shaders(hot_reload: bool) -> RenderResult<RtShaders> {
 
 // Root signature
 //
-// One compute root signature both kernels share. Root CBV b0 (RtParams); four
-// root SRVs t0..t3 (TLAS / vertex / index / geometry table - all raw or
-// structured buffers bound by GPU virtual address, which inline ray tracing
-// supports for the acceleration structure too); five descriptor tables for the
-// textures: scene t4, gbuffer normal+depth t5, roughness t6, prefilter cube t7,
-// and the unbounded bindless pool at (t0, space1); and two more root SRVs t8/t9
-// (deformed skinned verts / skinned indices, for skinned hits). The miss
-// fallback's reflection probes follow: the cube array table t10, the ProbeSet
-// CBV b4, the records t11, and the main camera's cluster grid binning them (the
-// params CBV b5, the per-cluster lists t12). The textured trace's grass-covered
-// hits shade from the canopy CBV b6 and its view tables t13. Then the output's
-// UAV table u0, SSGI's pyramid table t14, and the ray list and arguments: root
-// UAVs u1 / u2 the classify writes, root SRVs t15 / t16 the trace reads. Four
-// static samplers: linear-clamp s0, cube linear-clamp s1, linear-repeat s2, and
-// the probe cube sampler s3.
+// One compute root signature both kernels share: the RtParams root CBV; the
+// TLAS, vertex, index and geometry table as root SRVs (raw or structured
+// buffers bound by GPU virtual address, which inline ray tracing supports for
+// the acceleration structure too); descriptor tables for the scene, the
+// G-buffer normal+depth, the roughness, the prefilter cube and the unbounded
+// bindless pool; root SRVs for the deformed skinned vertices and indices, for
+// skinned hits. The miss fallback's reflection probes follow: the cube array
+// table, the ProbeSet CBV, the records, and the main camera's cluster grid
+// binning them (its params CBV and per-cluster lists). The textured trace's
+// grass-covered hits shade from the canopy CBV and its view tables. Then the
+// output's UAV table, SSGI's pyramid table, and the ray list and arguments:
+// root UAVs the classify writes, root SRVs the trace reads. Four static
+// samplers: the screen sources', the prefilter cube's, the pool's and the probe
+// cube array's.
 fn create_rt_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
+    use concinnity_engine::render::shader::programs::abi::rt_reflections::dx as rt;
     RootSig::new()
-        .cbv(0, All) // [0] b0 RtParams
-        .srv(0, All) // [1] t0 TLAS
-        .srv(1, All) // [2] t1 vertex buffer (raw)
-        .srv(2, All) // [3] t2 index buffer (raw)
-        .srv(3, All) // [4] t3 geometry table (structured)
-        .srv_table(4, 1, All) // [5] t4 scene
-        .srv_table(5, 1, All) // [6] t5 gbuffer normal+depth
-        .srv_table(6, 1, All) // [7] t6 roughness
-        .srv_table(7, 1, All) // [8] t7 prefilter cube
-        .table(&[Range::bindless_srv(1)], All) // [9] t0,space1 bindless pool
-        .srv(8, All) // [10] t8 deformed skinned verts (raw)
-        .srv(9, All) // [11] t9 skinned indices (raw)
-        // [12] t10 reflection-probe cube array, clear of the trace's own SRVs;
+        .cbv(rt::PARAMS, All) // [0]
+        .srv(rt::SCENE_TLAS, All) // [1]
+        .srv(rt::VERTICES, All) // [2] raw
+        .srv(rt::INDICES, All) // [3] raw
+        .srv(rt::GEOMETRY, All) // [4] structured
+        .srv_table(rt::SCENE, 1, All) // [5]
+        .srv_table(rt::GBUFFER, 1, All) // [6] normal+depth
+        .srv_table(rt::ROUGHNESS, 1, All) // [7]
+        .srv_table(rt::PREFILTER, 1, All) // [8]
+        .table(&[Range::bindless_srv(rt::TEX_POOL)], All) // [9]
+        .srv(rt::SKINNED_VERTICES, All) // [10] raw
+        .srv(rt::SKINNED_INDICES, All) // [11] raw
+        // [12] the reflection-probe cube array, clear of the trace's own SRVs;
         // the miss fallback box-projects it when ProbeSet.count > 0.
-        .srv_table(10, 1, All)
-        .cbv(4, All) // [13] b4 ProbeSet
-        .srv(11, All) // [14] t11 reflection-probe records
-        .cbv(5, All) // [15] b5 ClusterParams
-        .srv(12, All) // [16] t12 cluster lists
-        .cbv(6, All) // [17] b6 canopy block
-        .srv(13, All) // [18] t13 canopy view tables
-        .uav_table(0, 1, All) // [19] u0 output
-        .srv_table(14, 1, All) // [20] t14 SSGI pyramid
-        .uav(1, All) // [21] u1 ray list, written
-        .uav(2, All) // [22] u2 ray arguments, written
-        .srv(15, All) // [23] t15 ray list, read
-        .srv(16, All) // [24] t16 ray arguments, read
-        .static_sampler(SamplerState::LinearClamp, 0, All)
-        .static_sampler(SamplerState::LinearClamp, 1, All)
-        .static_sampler(SamplerState::LinearWrap, 2, All)
-        // s3: cube mip-linear clamp for the reflection-probe cube array, matching
-        // the s1 prefilter sampler. The array rides split from its sampler here
+        .srv_table(rt::PROBE_CUBES, 1, All)
+        .cbv(rt::PROBE_SET, All) // [13]
+        .srv(rt::PROBE_RECORDS, All) // [14]
+        .cbv(rt::CLUSTER, All) // [15]
+        .srv(rt::CLUSTER_LIST, All) // [16]
+        .cbv(rt::CANOPY, All) // [17]
+        .srv(rt::CANOPY_TABLES, All) // [18]
+        .uav_table(rt::OUTPUT, 1, All) // [19]
+        .srv_table(rt::PYRAMID, 1, All) // [20]
+        .uav(rt::RAY_LIST_OUT, All) // [21]
+        .uav(rt::RAY_ARGS_OUT, All) // [22]
+        .srv(rt::RAY_LIST, All) // [23]
+        .srv(rt::RAY_ARGS, All) // [24]
+        .static_sampler(SamplerState::LinearClamp, rt::SCREEN_SAMPLER, All)
+        .static_sampler(SamplerState::LinearClamp, rt::CUBE_SAMPLER, All)
+        .static_sampler(SamplerState::LinearWrap, rt::POOL_SAMPLER, All)
+        // The cube mip-linear clamp for the reflection-probe cube array, matching
+        // the prefilter sampler. The array rides split from its sampler here
         // because D3D12 binds a shader sampler array only through a descriptor
         // table.
-        .static_sampler(SamplerState::LinearClamp, 3, All)
+        .static_sampler(SamplerState::LinearClamp, rt::PROBE_CUBE_SAMPLER, All)
         .build(device, "rt reflections root sig")
 }
 

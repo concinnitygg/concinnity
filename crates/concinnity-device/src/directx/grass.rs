@@ -54,34 +54,34 @@ use super::texture::{
     HDR_FORMAT, create_uav_buffer, one_shot_submit_nowait, transition_barrier, upload_buffer,
 };
 
-/// Where the main pass's root signature carries the grass block (b7) and the
-/// visible blades (t23).
+/// Where the main pass's root signature carries the grass block and the visible
+/// blades.
 pub(in crate::directx) const MAIN_GRASS_PARAMS_PARAM: u32 = 21;
 pub(in crate::directx) const MAIN_GRASS_BLADES_PARAM: u32 = 22;
-/// The b0 root constant both pass root signatures lead with, which carries each
+/// The object-id root constant both pass root signatures lead with, which carries each
 /// grass draw's first vertex: D3D's vertex ids ignore the draw's own.
 const FIRST_VERTEX_PARAM: u32 = 0;
 /// The same pair in the G-buffer pre-pass's root signature.
 pub(in crate::directx) const PREPASS_GRASS_PARAMS_PARAM: u32 = 9;
 pub(in crate::directx) const PREPASS_GRASS_BLADES_PARAM: u32 = 10;
 
-// The kernel's root signature: the block at b0, the blades it appends at u1,
-// the draw arguments at u2, the terrain heights and mask texels it reads at t3
-// and t4, last frame's depth pyramid at t5, the bend field at t6, the planet
-// tiles at t7, the shared vertex stream at t8 and the tile records at t9, as
-// `grass.hlsl` declares them.
+// The kernel's root signature: the block, the blades it appends, the draw
+// arguments, the terrain heights and mask texels it reads, last frame's depth
+// pyramid, the bend field, the planet tiles, the shared vertex stream and the
+// tile records.
 fn create_generate_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::grass::dx::generate;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .uav(1, Visibility::All)
-        .uav(2, Visibility::All)
-        .srv(3, Visibility::All)
-        .srv(4, Visibility::All)
-        .srv_table(5, 1, Visibility::All)
-        .srv(6, Visibility::All)
-        .srv(7, Visibility::All)
-        .srv(8, Visibility::All)
-        .srv(9, Visibility::All)
+        .cbv(generate::GRASS, Visibility::All)
+        .uav(generate::BLADES_OUT, Visibility::All)
+        .uav(generate::DRAW_ARGS, Visibility::All)
+        .srv(generate::TERRAIN_HEIGHTS, Visibility::All)
+        .srv(generate::GRASS_MASKS, Visibility::All)
+        .srv_table(generate::HIZ, 1, Visibility::All)
+        .srv(generate::BEND_FIELD, Visibility::All)
+        .srv(generate::PLANET_TILES, Visibility::All)
+        .srv(generate::MESH_VERTICES, Visibility::All)
+        .srv(generate::TILES, Visibility::All)
         .build(device, "grass generate root sig")
 }
 
@@ -96,20 +96,22 @@ const KERNEL_TILES_PARAM: u32 = 9;
 // Planet tile and tile records one frame holds: the view's run and the
 // cascade's.
 
-// The bend pass's root signature: its block at b0 and the field at u1.
+// The bend pass's root signature: its block and the field.
 fn create_bend_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::grass::dx::bend;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .uav(1, Visibility::All)
+        .cbv(bend::BEND, Visibility::All)
+        .uav(bend::BEND_FIELD, Visibility::All)
         .build(device, "grass bend root sig")
 }
 
-// The cascade draw's root signature: the shadow block at b0 and the cascade's
-// blades at t1.
+// The cascade draw's root signature: the shadow block and the cascade's
+// blades.
 fn create_shadow_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::grass::dx::shadow;
     RootSig::new()
-        .cbv(0, Visibility::Vertex)
-        .srv(1, Visibility::Vertex)
+        .cbv(shadow::GRASS, Visibility::Vertex)
+        .srv(shadow::BLADES, Visibility::Vertex)
         .build(device, "grass shadow root sig")
 }
 

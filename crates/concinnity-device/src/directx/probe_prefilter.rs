@@ -459,29 +459,32 @@ impl DxContext {
     }
 }
 
-// Root signature for the mirror-copy and downsample kernels: root constants at b0
-// plus one two-descriptor UAV table (u0 the source mip, u1 the destination). The
+// Root signature for the mirror-copy and downsample kernels: root constants
+// plus one two-descriptor UAV table (the source mip, then the destination). The
 // per-mip UAVs are contiguous in the heap, which is what lets one range cover the
 // pair.
 fn create_mip_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::probe::dx::mip;
     RootSig::new()
-        .constants::<ProbePrefilterParams>(0, Visibility::All)
-        .uav_table(0, 2, Visibility::All) // u0..u1
+        .constants::<ProbePrefilterParams>(mip::PARAMS, Visibility::All)
+        // The source mip and the destination after it.
+        .uav_table(mip::SRC_MIP, 2, Visibility::All)
         .build(device, "probe prefilter mip root sig")
 }
 
-// Root signature for the GGX kernel: root constants at b0, the sampled capture
-// pyramid at t0, the destination mip at u0, and the linear-clamp mipmapped
-// sampler at s0 as a static sampler (a shader sampler needs no heap of its own
+// Root signature for the GGX kernel: root constants, the sampled capture
+// pyramid, the destination mip, and the linear-clamp mipmapped sampler as a
+// static sampler (a shader sampler needs no heap of its own
 // when it never varies). The solid-angle lod the kernel computes is fractional,
 // so the trilinear filter is what makes the level selection continuous.
 fn create_ggx_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
+    use concinnity_engine::render::shader::programs::abi::probe::dx::ggx;
     RootSig::new()
-        .constants::<ProbePrefilterParams>(0, All)
-        .srv_table(0, 1, All) // t0
-        .uav_table(0, 1, All) // u0
-        .static_sampler(SamplerState::LinearClamp, 0, All)
+        .constants::<ProbePrefilterParams>(ggx::PARAMS, All)
+        .srv_table(ggx::SRC_CUBE, 1, All)
+        .uav_table(ggx::DST_MIP, 1, All)
+        .static_sampler(SamplerState::LinearClamp, ggx::SRC_SAMPLER, All)
         .build(device, "probe prefilter ggx root sig")
 }
 

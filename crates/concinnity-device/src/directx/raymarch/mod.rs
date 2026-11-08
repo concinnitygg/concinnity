@@ -248,21 +248,23 @@ pub(in crate::directx) struct RaymarchResources {
 
 // Root signature shared by every per-volume raymarch PSO.
 //
-//   [0] CBV b0 (RaymarchView)            : root descriptor
-//   [1] CBV b1 (SdfVolumeUniforms)       : root descriptor
-//   [2] CBV b2 (RaymarchLights)          : root descriptor
-//   [3] CBV b3 (RaymarchShadowUniforms)  : root descriptor
-//   [4] Descriptor table SRV  t0..t3     : shadow / IBL / scene fallback
-//   [5] Descriptor table Sampler s0..s2  : shadow_samp / cube_samp / scene_samp
+//   [0] CBV (RaymarchView)               : root descriptor
+//   [1] CBV (SdfVolumeUniforms)          : root descriptor
+//   [2] CBV (RaymarchLights)             : root descriptor
+//   [3] CBV (RaymarchShadowUniforms)     : root descriptor
+//   [4] Descriptor table SRV             : shadow / IBL / scene fallback
+//   [5] Descriptor table Sampler         : shadow_samp / cube_samp / scene_samp
 fn create_raymarch_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
+    use concinnity_engine::render::shader::programs::abi::raymarch::dx as raymarch;
     RootSig::new()
-        .cbv(0, All)
-        .cbv(1, All)
-        .cbv(2, Pixel)
-        .cbv(3, Pixel)
-        .srv_table(0, 4, Pixel) // t0..t3 (shadow_map, irradiance, prefilter, scene_color)
-        .sampler_table(0, 3, Pixel) // s0..s2
+        .cbv(raymarch::VIEW, All)
+        .cbv(raymarch::VOLUME, All)
+        .cbv(raymarch::LIGHTS, Pixel)
+        .cbv(raymarch::SHADOW, Pixel)
+        // shadow_map, irradiance, prefilter, scene_color
+        .srv_table(raymarch::SHADOW_MAP, 4, Pixel)
+        .sampler_table(raymarch::SHADOW_SAMPLER, 3, Pixel)
         .input_layout()
         .build(device, "raymarch root sig")
 }
@@ -435,24 +437,25 @@ fn compile_volume_volumetric_pso(
 // the main pass: no SRV / sampler tables since the shadow template
 // only marches the SDF and writes depth.
 //
-//   [0] CBV b0 (RaymarchView)            : root descriptor
-//   [1] CBV b1 (SdfVolumeUniforms)       : root descriptor
-//   [2] CBV b2 (RaymarchLights)          : root descriptor
-//   [3] CBV b3 (RaymarchShadowUniforms)  : root descriptor
-//   [4] Root constants b4 (cascade_idx)  : 4 DWORDs
+//   [0] CBV (RaymarchView)               : root descriptor
+//   [1] CBV (SdfVolumeUniforms)          : root descriptor
+//   [2] CBV (RaymarchLights)             : root descriptor
+//   [3] CBV (RaymarchShadowUniforms)     : root descriptor
+//   [4] Root constants (cascade_idx)     : 4 DWORDs
 fn create_raymarch_shadow_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel};
+    use concinnity_engine::render::shader::programs::abi::raymarch::dx as raymarch;
     RootSig::new()
-        .cbv(0, All)
-        .cbv(1, All)
+        .cbv(raymarch::VIEW, All)
+        .cbv(raymarch::VOLUME, All)
         // Lights cbuffer is read by the pixel stage only (ray dir).
-        .cbv(2, Pixel)
+        .cbv(raymarch::LIGHTS, Pixel)
         // Shadow VPs read by both stages (VS projects through the
         // cascade VP, PS reprojects the hit through the same matrix).
-        .cbv(3, All)
-        .constants::<[u32; 4]>(4, All)
+        .cbv(raymarch::SHADOW, All)
+        .constants::<[u32; 4]>(raymarch::CASCADE, All)
         .input_layout()
         .build(device, "raymarch shadow root sig")
 }

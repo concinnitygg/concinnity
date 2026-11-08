@@ -82,18 +82,23 @@ pub(in crate::directx) use concinnity_engine::render::uniforms::{DecalParams, De
 
 // Root-signature layout (binds 1:1 with the `decal.hlsl` declarations, whose
 // `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
-//   [0] root CBV b0   DecalView    (per-frame)
-//   [1] root CBV b1   DecalParams  (per-decal)
-//   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)
-//   [3] table  t1     decal albedo SRV
-//   static sampler s0 : linear clamp
+//   [0] root CBV   DecalView    (per-frame)
+//   [1] root CBV   DecalParams  (per-decal)
+//   [2] table   scene depth SRV (Texture2D[MS]<float>)
+//   [3] table   decal albedo SRV
+//   static sampler : linear clamp
 fn create_decal_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::decal::dx as decal;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .cbv(1, Visibility::All)
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .cbv(decal::VIEW, Visibility::All)
+        .cbv(decal::PARAMS, Visibility::All)
+        .srv_table(decal::SCENE_DEPTH, 1, Visibility::Pixel)
+        .srv_table(decal::DECAL_TEX, 1, Visibility::Pixel)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            decal::DECAL_TEX_SAMPLER,
+            Visibility::Pixel,
+        )
         .input_layout()
         .build(device, "decal root sig")
 }

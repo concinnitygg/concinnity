@@ -2,12 +2,12 @@
 //! (`render::post::device::PostPassDevice`).
 //!
 //! The root signature is derived from what the single source declares rather
-//! than hand-written per pass: N single-SRV descriptor tables at t0..tN-1, a
-//! 32-bit constant block at b0 when the program declares constants, and N
-//! static samplers at s0..sN-1. A probe-reading program adds the
-//! reflection-probe cube array at tN with its one static sampler at sN, the
-//! `ProbeSet` at b1, the probe records at tN+1, and the main camera's cluster
-//! grid binning them: its params at b2 and its lists at tN+2. The tables are
+//! than hand-written per pass, at the positions the post registers lay out: N
+//! single-SRV descriptor tables, a 32-bit constant block when the program
+//! declares constants, and N static samplers. A probe-reading program adds the
+//! reflection-probe cube array with its one static sampler, the `ProbeSet`,
+//! the probe records, and the main camera's cluster grid binning them: its
+//! params and its lists. The tables are
 //! single-SRV and separate because each source's texture and sampler sit at
 //! their own register, and because a pass's sources come from unrelated owners,
 //! so nothing makes them contiguous in the heap.
@@ -46,11 +46,6 @@ pub(in crate::directx) struct FullscreenExtent {
     pub width: u32,
     pub height: u32,
 }
-
-// The registers a probe-reading program declares its ProbeSet and the cluster
-// params at, after the constants at b0.
-const PROBE_SET_REGISTER: u32 = 1;
-const CLUSTER_PARAMS_REGISTER: u32 = 2;
 
 // A built fullscreen post pipeline: the PSO, the root signature it was derived
 // against, and the declaration that derivation used, so a draw can check what
@@ -229,39 +224,46 @@ fn compile(program: PostProgram, hot_reload: bool) -> RenderResult<(Vec<u8>, Vec
 }
 
 // A root signature for `bindings`: one single-SRV table per source, a 32-bit
-// constant block at b0 when the program declares constants, and for a
-// probe-reading program the cube array table, a root CBV for the ProbeSet, a
-// root SRV for the probe records at the register after the cube array, a root
-// CBV for the cluster params and a root SRV for the cluster lists after that.
-// Static samplers at s0..sN-1, plus sN for the cube array: every sampler kind
+// constant block when the program declares constants, and for a probe-reading
+// program the cube array table, a root CBV for the ProbeSet, a root SRV for the
+// probe records, a root CBV for the cluster params and a root SRV for the
+// cluster lists, placed as `post` lays them out. A static sampler per source,
+// plus one for the cube array: every sampler kind
 // the seam names resolves to the same trilinear clamp-to-edge state here, so the
 // signature does not depend on which kind a draw picks for a slot.
 fn create_root_signature(
     device: &ID3D12Device,
     bindings: PostProgramBindings,
 ) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::post::dx as post;
     let textures = u32::saturating_from(bindings.textures);
-    let mut sig = (0..textures).fold(RootSig::new(), |sig, reg| {
-        sig.srv_table(reg, 1, Visibility::Pixel)
+    let mut sig = (0..textures).fold(RootSig::new(), |sig, i| {
+        sig.srv_table(post::source(i), 1, Visibility::Pixel)
     });
     if bindings.constants > 0 {
         let dwords = u32::saturating_from(bindings.constants.div_ceil(4));
-        sig = sig.constant_dwords(0, dwords, Visibility::Pixel);
+        sig = sig.constant_dwords(post::PARAMS, dwords, Visibility::Pixel);
     }
     if bindings.probes {
-        // The cube array takes the next texture register after the declared sources.
         sig = sig
-            .srv_table(textures, 1, Visibility::Pixel)
-            .cbv(PROBE_SET_REGISTER, Visibility::Pixel)
-            .srv(textures + 1, Visibility::Pixel)
-            .cbv(CLUSTER_PARAMS_REGISTER, Visibility::Pixel)
-            .srv(textures + 2, Visibility::Pixel);
+            .srv_table(post::probe_cubes(textures), 1, Visibility::Pixel)
+            .cbv(post::PROBE_SET, Visibility::Pixel)
+            .srv(post::probe_records(textures), Visibility::Pixel)
+            .cbv(post::CLUSTER, Visibility::Pixel)
+            .srv(post::cluster_list(textures), Visibility::Pixel);
     }
-    (0..textures + u32::from(bindings.probes))
-        .fold(sig, |sig, reg| {
-            sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
-        })
-        .build(device, "post root sig")
+    sig = (0..textures).fold(sig, |sig, i| {
+        sig.static_sampler(
+            SamplerState::LinearClamp,
+            post::source_sampler(i),
+            Visibility::Pixel,
+        )
+    });
+    if bindings.probes {
+        let cubes = post::probe_cube_sampler(textures);
+        sig = sig.static_sampler(SamplerState::LinearClamp, cubes, Visibility::Pixel);
+    }
+    sig.build(device, "post root sig")
 }
 
 impl PostPassDevice for DxPostDevice<'_> {

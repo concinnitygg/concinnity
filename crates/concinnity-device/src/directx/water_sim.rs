@@ -202,12 +202,19 @@ impl OceanKernels {
         let spectrum = upload_buffer(alloc, bytes, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)?;
         let row_data = create_uav_buffer(device, 2 * bytes.len() as u64)?;
         let foam = create_uav_buffer(device, (texels.len() * size_of::<f32>()) as u64)?;
+        use concinnity_engine::render::shader::programs::abi::ocean::dx as ocean;
         let sig = RootSig::new()
-            .constants::<OceanFftParams>(0, Visibility::All)
-            .srv(5, Visibility::All)
-            .uav(6, Visibility::All)
-            .table(&[Range::srv(0, 2), Range::uav(2, 2)], Visibility::All)
-            .uav(7, Visibility::All);
+            .constants::<OceanFftParams>(ocean::PARAMS, Visibility::All)
+            .srv(ocean::SPECTRUM, Visibility::All)
+            .uav(ocean::ROWS, Visibility::All)
+            .table(
+                &[
+                    Range::srv(ocean::SRC_DISPLACEMENT, 2),
+                    Range::uav(ocean::DST_DISPLACEMENT, 2),
+                ],
+                Visibility::All,
+            )
+            .uav(ocean::FOAM, Visibility::All);
         debug_assert_eq!(sig.len(), FOAM_ROOT + 1);
         let root_sig = sig.build(device, "ocean root sig")?;
         let kernel = |program: &concinnity_engine::render::shader::programs::ShaderProgram,

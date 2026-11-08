@@ -1,0 +1,55 @@
+//! The volumetric clouds' bindings: the noise, the march kernels and the composite.
+
+/// The DirectX registers.
+pub mod dx {
+
+    /// The noise kernel.
+    pub mod noise {
+        use crate::render::shader::programs::abi::register::{Register, Uav};
+
+        /// The noise volume it writes.
+        pub const NOISE_OUT: Register<Uav> = Register::new("cloud_noise_out", 0);
+    }
+
+    /// The march kernels and the reconstruction, which share one root signature.
+    pub mod march {
+        use crate::render::shader::programs::abi::register::{Cbv, Register, Sampler, Srv, Uav};
+
+        /// The atmosphere block.
+        pub const ATMOSPHERE: Register<Cbv> = Register::new("atmo_cb", 0);
+        /// The clouds block.
+        pub const CLOUDS: Register<Cbv> = Register::new("cloud_cb", 1);
+        /// The scene depth.
+        pub const SCENE_DEPTH: Register<Srv> = Register::new("scene_depth", 0);
+        /// The aerial-perspective volume.
+        pub const AERIAL_VOLUME: Register<Srv> = Register::new("aerial_volume", 1);
+        /// The transmittance table, with the multiple-scattering table in the register after.
+        pub const TRANSMITTANCE: Register<Srv> = Register::new("transmittance_lut", 2);
+        /// The multiple-scattering table.
+        pub const MULTISCATTER: Register<Srv> = Register::new("multiscatter_lut", 3);
+        /// The noise volume.
+        pub const NOISE: Register<Srv> = Register::new("cloud_noise", 4);
+        /// The march, which the reconstruction reads.
+        pub const MARCHED: Register<Srv> = Register::new("cloud_marched", 6);
+        /// The previous frame's target.
+        pub const PREVIOUS: Register<Srv> = Register::new("cloud_previous", 7);
+        /// The target written.
+        pub const OUTPUT: Register<Uav> = Register::new("cloud_out", 0);
+        /// The tables' sampler.
+        pub const LUT_SAMPLER: Register<Sampler> = Register::new("lut_sampler", 0);
+        /// The noise's sampler.
+        pub const NOISE_SAMPLER: Register<Sampler> = Register::new("cloud_noise_sampler", 1);
+    }
+
+    /// The composite over the scene.
+    pub mod composite {
+        use crate::render::shader::programs::abi::register::{Cbv, Register, Srv};
+
+        /// The clouds block.
+        pub const CLOUDS: Register<Cbv> = Register::new("cloud_cb", 0);
+        /// The scene depth.
+        pub const SCENE_DEPTH: Register<Srv> = Register::new("scene_depth", 0);
+        /// The reconstructed clouds.
+        pub const TARGET: Register<Srv> = Register::new("cloud_target", 1);
+    }
+}

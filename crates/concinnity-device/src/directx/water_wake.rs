@@ -87,11 +87,18 @@ impl WakeSim {
                 slots.gpu.offset(base, slots.stride)
             })
             .collect();
+        use concinnity_engine::render::shader::programs::abi::wake::dx as wake;
         let sig = RootSig::new()
-            .cbv(0, Visibility::All)
-            .uav(1, Visibility::All)
-            .uav(2, Visibility::All)
-            .table(&[Range::uav(3, 1), Range::srv(4, 1)], Visibility::All);
+            .cbv(wake::PARAMS, Visibility::All)
+            .uav(wake::STATE, Visibility::All)
+            .uav(wake::WORK, Visibility::All)
+            .table(
+                &[
+                    Range::uav(wake::DST_FIELD, 1),
+                    Range::srv(wake::SRC_FIELD, 1),
+                ],
+                Visibility::All,
+            );
         debug_assert_eq!(sig.len(), MIPS_ROOT + 1);
         let root_sig = sig.build(device, "wake root sig")?;
         let kernel = |program: &concinnity_engine::render::shader::programs::ShaderProgram,

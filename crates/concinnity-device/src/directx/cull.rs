@@ -183,13 +183,13 @@ pub(in crate::directx) fn create_cull_root_signature(
     use Visibility::All;
     use concinnity_engine::render::shader::programs::abi::cull::dx as cull;
     RootSig::new()
-        .constants::<CullParams>(cull::CULL.index, All) // [0]
-        .srv(cull::OBJECTS.index, All) // [1]
-        .srv(cull::DRAW_ARGS.index, All) // [2]
-        .srv_table(cull::HIZ.index, 1, All) // [3] every mip
-        .uav(cull::GROUP_COUNTS.index, All) // [4]
-        .uav(cull::CULL_STATUS.index, All) // [5]
-        .srv(cull::VARIANTS.index, All) // [6]
+        .constants::<CullParams>(cull::CULL, All) // [0]
+        .srv(cull::OBJECTS, All) // [1]
+        .srv(cull::DRAW_ARGS, All) // [2]
+        .srv_table(cull::HIZ, 1, All) // [3] every mip
+        .uav(cull::GROUP_COUNTS, All) // [4]
+        .uav(cull::CULL_STATUS, All) // [5]
+        .srv(cull::VARIANTS, All) // [6]
         .build(device, "cull root sig")
 }
 

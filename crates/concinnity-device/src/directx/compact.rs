@@ -37,12 +37,12 @@ pub(in crate::directx) fn build_compact_kernels(
     use Visibility::All;
     use concinnity_engine::render::shader::programs::abi::cull::dx::compact;
     let root_sig = RootSig::new()
-        .constants::<GpuCompactParams>(compact::PARAMS.index, All)
-        .srv(compact::VARIANTS.index, All)
-        .srv(compact::DRAW_ARGS.index, All)
-        .uav(compact::GROUP_COUNTS.index, All)
-        .uav(compact::CULL_STATUS.index, All)
-        .uav(compact::COMMANDS.index, All)
+        .constants::<GpuCompactParams>(compact::PARAMS, All)
+        .srv(compact::VARIANTS, All)
+        .srv(compact::DRAW_ARGS, All)
+        .uav(compact::GROUP_COUNTS, All)
+        .uav(compact::CULL_STATUS, All)
+        .uav(compact::COMMANDS, All)
         .build(device, "cull compact root sig")?;
     let scan = compute_pso(
         device,

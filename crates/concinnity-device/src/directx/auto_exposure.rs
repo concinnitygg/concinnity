@@ -161,28 +161,27 @@ impl AutoExposureResources {
     }
 }
 
-// Root signature for the build kernel: 4 root constants (b0, AutoExposureParams),
-// a single-SRV descriptor table for the HDR texture (t0), and a root UAV for
-// the histogram (u0). The HDR SRV needs a descriptor table because root SRVs
+// Root signature for the build kernel: 4 root constants (AutoExposureParams),
+// a single-SRV descriptor table for the HDR texture, and a root UAV for the
+// histogram. The HDR SRV needs a descriptor table because root SRVs
 // are limited to raw / structured buffers, not Texture2D.
 fn create_build_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::exposure::dx::build;
     RootSig::new()
-        // [0] Root constants b0: AutoExposureParams.
-        .constants::<AutoExposureParams>(0, Visibility::All)
-        // [1] Descriptor table SRV t0: HDR texture.
-        .srv_table(0, 1, Visibility::All)
-        // [2] Root UAV u0: histogram.
-        .uav(0, Visibility::All)
+        .constants::<AutoExposureParams>(build::PARAMS, Visibility::All) // [0]
+        .srv_table(build::HDR_TEXTURE, 1, Visibility::All) // [1]
+        .uav(build::HISTOGRAM, Visibility::All) // [2]
         .build(device, "auto-exposure build root sig")
 }
 
-// Root signature for the average kernel: 4 root constants (b0), root UAV for
-// the histogram (u0, read + clear), root UAV for the output (u1, write-once).
+// Root signature for the average kernel: 4 root constants, a root UAV for the
+// histogram (read + clear), and a root UAV for the output (write-once).
 fn create_average_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::exposure::dx::average;
     RootSig::new()
-        .constants::<AutoExposureParams>(0, Visibility::All)
-        .uav(0, Visibility::All)
-        .uav(1, Visibility::All)
+        .constants::<AutoExposureParams>(average::PARAMS, Visibility::All)
+        .uav(average::HISTOGRAM, Visibility::All)
+        .uav(average::MEASUREMENT, Visibility::All)
         .build(device, "auto-exposure average root sig")
 }
 

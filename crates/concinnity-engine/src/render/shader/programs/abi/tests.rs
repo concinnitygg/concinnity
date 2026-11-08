@@ -1,7 +1,7 @@
 use alloc::collections::BTreeSet;
 use alloc::string::ToString;
 
-use super::register::{DxBinding, srv};
+use super::register::{DxBinding, Register, Srv};
 use super::slot::buffer;
 use super::*;
 
@@ -36,8 +36,11 @@ fn every_row_names_each_parameter_once() {
 // The spellings the build compares against the compiled declarations.
 #[test]
 fn bindings_spell_as_the_shaders_declare_them() {
-    let pool: DxBinding = srv("tex_pool", 0).in_space(1);
-    assert_eq!(srv("objects", 3).to_string(), "t3");
+    let pool: DxBinding = Register::<Srv>::new("tex_pool", 0).in_space(1).binding();
+    assert_eq!(
+        Register::<Srv>::new("objects", 3).binding().to_string(),
+        "t3"
+    );
     assert_eq!(pool.to_string(), "t0, space1");
     assert_eq!(buffer("objects", 9).to_string(), "buffer(9)");
 }
@@ -61,4 +64,26 @@ fn ranged_main_registers_are_adjacent() {
     assert_eq!(LTC_MAGNITUDE.index, LTC_MATRIX.index + 1);
     assert_eq!(CUBE_SAMPLER.index, LINEAR_SAMPLER.index + 1);
     assert_eq!(TEX_POOL.index, 0, "the bindless range starts its space");
+}
+
+// The volume's root signature binds its textures and its samplers as one
+// range each, so each must follow the one before.
+#[test]
+fn ranged_raymarch_registers_are_adjacent() {
+    use super::raymarch::dx::*;
+    assert_eq!(IRRADIANCE_CUBE.index, SHADOW_MAP.index + 1);
+    assert_eq!(PREFILTER_CUBE.index, SHADOW_MAP.index + 2);
+    assert_eq!(SCENE_COLOR.index, SHADOW_MAP.index + 3);
+    assert_eq!(CUBE_SAMPLER.index, SHADOW_SAMPLER.index + 1);
+    assert_eq!(SCENE_SAMPLER.index, SHADOW_SAMPLER.index + 2);
+}
+
+// The transparent root signatures bind these runs as one range each.
+#[test]
+fn ranged_transparent_registers_are_adjacent() {
+    use super::transparent::dx::*;
+    assert_eq!(IRRADIANCE_CUBE.index, SHADOW_MAP.index + 1);
+    assert_eq!(OCEAN_SLOPES.index, OCEAN_DISPLACEMENT.index + 1);
+    assert_eq!(WAKE_FIELD.index, OCEAN_DISPLACEMENT.index + 2);
+    assert_eq!(GLASS_REFLECTION_BACK.index, GLASS_REFLECTION.index + 1);
 }

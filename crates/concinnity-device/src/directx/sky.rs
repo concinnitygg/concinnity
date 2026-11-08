@@ -5,8 +5,8 @@
 // (`post/gbuffer_sky.rs`).
 //
 // Root signature:
-//   [0] root CBV b0   ViewUniforms of the pass it completes
-//   [1] table  t0     the environment's prefilter cube
+//   [0] root CBV   ViewUniforms of the pass it completes
+//   [1] table   the environment's prefilter cube
 // Static linear-clamp sampler s0, the cube sampler the main pass reads through.
 
 use concinnity_engine::gfx::view_modes::ViewMode;
@@ -41,10 +41,15 @@ impl SkyState {
         background: bool,
         hot_reload: bool,
     ) -> RenderResult<Self> {
+        use concinnity_engine::render::shader::programs::abi::sky::dx as sky;
         let root_sig = RootSig::new()
-            .cbv(0, Visibility::All)
-            .srv_table(0, 1, Visibility::Pixel)
-            .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+            .cbv(sky::VIEW, Visibility::All)
+            .srv_table(sky::PREFILTER_CUBE, 1, Visibility::Pixel)
+            .static_sampler(
+                SamplerState::LinearClamp,
+                sky::CUBE_SAMPLER,
+                Visibility::Pixel,
+            )
             .build(device, "sky root sig")?;
         let pso = build_sky_pso(
             device,

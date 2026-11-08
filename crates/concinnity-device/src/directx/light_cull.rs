@@ -77,15 +77,12 @@ pub(in crate::directx) fn compile_light_cull_shader(hot_reload: bool) -> RenderR
 pub(in crate::directx) fn create_light_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::light_cull::dx as light_cull;
     RootSig::new()
-        // [0] Root CBV b0: ClusterParams
-        .cbv(0, Visibility::All)
-        // [1] Root SRV t0: StructuredBuffer<GpuLight>
-        .srv(0, Visibility::All)
-        // [2] Root UAV u0: RWStructuredBuffer<uint> cluster_list
-        .uav(0, Visibility::All)
-        // [3] Root SRV t1: StructuredBuffer<ProbeUniforms> probe_records
-        .srv(1, Visibility::All)
+        .cbv(light_cull::CLUSTER, Visibility::All) // [0]
+        .srv(light_cull::LIGHTS, Visibility::All) // [1]
+        .uav(light_cull::CLUSTER_LIST, Visibility::All) // [2]
+        .srv(light_cull::PROBE_RECORDS, Visibility::All) // [3]
         .build(device, "light cull root sig")
 }
 

@@ -106,8 +106,8 @@ pub(in crate::directx) fn create_hiz_tail_root_signature(
 }
 
 // Root signatures for the two SPD dispatches. Both take the params as root
-// constants at b0 and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs at
-// u0..u6; phase 1 adds the main-depth SRV at t0 ahead of it. The per-mip UAVs
+// constants and a table of `HIZ_SPD_UAVS` contiguous per-mip UAVs; phase 1 adds
+// the main-depth SRV ahead of it. The per-mip UAVs
 // sit contiguously in the heap, which is what lets one range cover a whole
 // dispatch's levels: phase 1 bases its table on mip 0, the tail on mip 6.
 fn create_hiz_signature(
@@ -115,11 +115,12 @@ fn create_hiz_signature(
     with_srv: bool,
     label: &str,
 ) -> RenderResult<ID3D12RootSignature> {
-    let mut sig = RootSig::new().constants::<HizSpdParams>(0, Visibility::All);
+    use concinnity_engine::render::shader::programs::abi::hiz::dx as hiz;
+    let mut sig = RootSig::new().constants::<HizSpdParams>(hiz::PARAMS, Visibility::All);
     if with_srv {
-        sig = sig.srv_table(0, 1, Visibility::All);
+        sig = sig.srv_table(hiz::SRC_DEPTH, 1, Visibility::All);
     }
-    sig.uav_table(0, HIZ_SPD_UAVS, Visibility::All)
+    sig.uav_table(hiz::SPD_MIPS, HIZ_SPD_UAVS, Visibility::All)
         .build(device, label)
 }
 

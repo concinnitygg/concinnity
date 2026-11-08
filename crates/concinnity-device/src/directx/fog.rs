@@ -86,44 +86,50 @@ pub(in crate::directx) fn rebuild_fog_froxel_pso(
 }
 
 // Fog render-pass root signature:
-//   [0] root CBV b0   FogParams         (per-frame)
-//   [1] root CBV b1   FogFroxelParams   (per-frame)
-//   [2] table  t0     scene depth SRV (Texture2D[MS]<float>)
-//   [3] table  t1     froxel volume SRV (Texture3D<float4>)
-// Static linear-clamp sampler s0 for the trilinear volume sample.
+//   [0] root CBV   FogParams         (per-frame)
+//   [1] root CBV   FogFroxelParams   (per-frame)
+//   [2] table      scene depth SRV (Texture2D[MS]<float>)
+//   [3] table      froxel volume SRV (Texture3D<float4>)
+// A static linear-clamp sampler for the trilinear volume sample.
 fn create_fog_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     // The fullscreen pass uses SV_VertexID; no input assembler is needed.
+    use concinnity_engine::render::shader::programs::abi::fog::dx::draw;
     RootSig::new()
-        .cbv(0, Visibility::Pixel)
-        .cbv(1, Visibility::Pixel)
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
+        .cbv(draw::FOG, Visibility::Pixel)
+        .cbv(draw::FROXEL, Visibility::Pixel)
+        .srv_table(draw::SCENE_DEPTH, 1, Visibility::Pixel)
+        .srv_table(draw::VOLUME, 1, Visibility::Pixel)
         .static_sampler(
             SamplerState::LinearClampTransparentBorder,
-            0,
+            draw::VOLUME_SAMPLER,
             Visibility::Pixel,
         )
         .build(device, "fog root sig")
 }
 
 // Froxel compute root signature:
-//   [0] root CBV b0   FogParams         (per-frame)
-//   [1] root CBV b1   FogFroxelParams   (per-frame)
-//   [2] root CBV b2   ShadowUniforms    (per-frame, shared with Main / Shadow)
-//   [3] table  t0     shadow map SRV (Texture2DArray<float>)
-//   [4] table  u0     froxel volume UAV (RWTexture3D<float4>)
-// Static comparison sampler s0 for the shadow tap, matching the existing
+//   [0] root CBV   FogParams         (per-frame)
+//   [1] root CBV   FogFroxelParams   (per-frame)
+//   [2] root CBV   ShadowUniforms    (per-frame, shared with Main / Shadow)
+//   [3] table      shadow map SRV (Texture2DArray<float>)
+//   [4] table      froxel volume UAV (RWTexture3D<float4>)
+// A static comparison sampler for the shadow tap, matching the existing
 // `shadow_sampler_gpu` static sampler. Clamp on every axis so cascades that
 // fail their NDC bounds check fall back to 1.0 via the explicit
 // `if (any(uv < 0.0)...)` guard in the kernel anyway.
 fn create_fog_froxel_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::fog::dx::froxel;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .cbv(1, Visibility::All)
-        .cbv(2, Visibility::All)
-        .srv_table(0, 1, Visibility::All)
-        .uav_table(0, 1, Visibility::All)
-        .static_sampler(SamplerState::ShadowCompare, 0, Visibility::All)
+        .cbv(froxel::FOG, Visibility::All)
+        .cbv(froxel::FROXEL, Visibility::All)
+        .cbv(froxel::SHADOW, Visibility::All)
+        .srv_table(froxel::SHADOW_MAP, 1, Visibility::All)
+        .uav_table(froxel::VOLUME, 1, Visibility::All)
+        .static_sampler(
+            SamplerState::ShadowCompare,
+            froxel::SHADOW_SAMPLER,
+            Visibility::All,
+        )
         .build(device, "fog froxel root sig")
 }
 

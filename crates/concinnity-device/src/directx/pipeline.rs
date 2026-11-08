@@ -138,15 +138,13 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
     Ok((vs, ps))
 }
 
-// Root signature for the composite pass: a 1-SRV descriptor table at t0 (the
-// scene target: the HDR resolve, or the TAA output when TAA is on), a 1-SRV
-// table at t1 (the bloom top octave), `CompositeParams` as 32-bit root constants
-// at b0, a 1-SRV descriptor table at t2 (the 3D
-// color-grading LUT), one each at t3 / t4 / t5 / t6 / t7 (the G-buffer
-// normal+depth, roughness, SSAO and motion channels and the reactive mask the
-// debug view modes visualize), and static linear-clamp samplers at s0..s7 -- one
-// per source, each the sampler half of a
-// source's texture/sampler pair in the single source. The
+// Root signature for the composite pass: a 1-SRV descriptor table for the scene
+// target (the HDR resolve, or the TAA output when TAA is on), one for the bloom
+// top octave, `CompositeParams` as 32-bit root constants, one for the 3D
+// color-grading LUT, one each for the G-buffer normal+depth, roughness, SSAO and
+// motion channels and the reactive mask the debug view modes visualize, and a
+// static linear-clamp sampler per source, each the sampler half of a source's
+// texture/sampler pair in the single source. The
 // scene SRV is its own table (separate from the bloom top octave) so the runtime can
 // re-point it at the per-frame TAA output without the two needing to be
 // heap-contiguous. Clamp keeps the FXAA neighbor taps from wrapping at screen
@@ -154,35 +152,52 @@ pub(super) fn compile_composite_shaders(hot_reload: bool) -> RenderResult<(Vec<u
 pub(super) fn create_composite_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
-    // [0] scene (t0), [1] the bloom top octave (t1).
+    use concinnity_engine::render::shader::programs::abi::composite::dx as composite;
+    // [0] the scene, [1] the bloom top octave.
     let sig = RootSig::new()
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
+        .srv_table(composite::HDR, 1, Visibility::Pixel)
+        .srv_table(composite::BLOOM, 1, Visibility::Pixel)
         // [2] CompositeParams (the 9 PostProcessParams tunables, the
-        // scene-transition fade, the view mode and the depth view's range) at b0. The count
-        // must cover the whole struct: constants past `Num32BitValues` read as
-        // zero in the shader, which silently disabled the `fxaa` flag while this
-        // was 8.
-        .constants::<render_types::CompositeParams>(0, Visibility::Pixel)
-        // [3] The 3D color-grading LUT (t2) is a separate, non-contiguous heap
+        // scene-transition fade, the view mode and the depth view's range). The
+        // count must cover the whole struct: constants past `Num32BitValues`
+        // read as zero in the shader, which silently disabled the `fxaa` flag
+        // while this was 8.
+        .constants::<render_types::CompositeParams>(composite::PARAMS, Visibility::Pixel)
+        // [3] The 3D color-grading LUT is a separate, non-contiguous heap
         // slot, so it needs its own table.
-        .srv_table(2, 1, Visibility::Pixel);
-    // [4..7] The G-buffer channel sources the debug view modes visualize (t3
-    // normal + depth, t4 roughness, t5 the blurred SSAO occlusion, t6 motion).
-    // Each is a separate non-contiguous heap slot, so each needs its own table.
-    // The fragment references all four statically, so they are bound every
-    // frame (the SSAO white 1x1 stands in when no G-buffer was built).
-    // [8] The reactive mask (t7), the reactive view's source.
-    let sig = [3u32, 4, 5, 6, 7]
-        .into_iter()
-        .fold(sig, |sig, reg| sig.srv_table(reg, 1, Visibility::Pixel));
-    // s0..s7: scene, bloom, LUT, and the five channel-view sources. Identical
-    // descriptors; the split is the shader's, not the pass's.
-    (0u32..8)
-        .fold(sig, |sig, reg| {
-            sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
-        })
-        .build(device, "composite root sig")
+        .srv_table(composite::LUT, 1, Visibility::Pixel);
+    // [4..7] The G-buffer channel sources the debug view modes visualize
+    // (normal + depth, roughness, the blurred SSAO occlusion, motion). Each is
+    // a separate non-contiguous heap slot, so each needs its own table. The
+    // fragment references all four statically, so they are bound every frame
+    // (the SSAO white 1x1 stands in when no G-buffer was built).
+    // [8] The reactive mask, the reactive view's source.
+    let sig = [
+        composite::GBUFFER_NORMAL_DEPTH,
+        composite::GBUFFER_ROUGHNESS,
+        composite::AO,
+        composite::GBUFFER_MOTION,
+        composite::REACTIVE,
+    ]
+    .into_iter()
+    .fold(sig, |sig, reg| sig.srv_table(reg, 1, Visibility::Pixel));
+    // One sampler per source. Identical descriptors; the split is the
+    // shader's, not the pass's.
+    [
+        composite::HDR_SAMPLER,
+        composite::BLOOM_SAMPLER,
+        composite::LUT_SAMPLER,
+        composite::GBUFFER_NORMAL_DEPTH_SAMPLER,
+        composite::GBUFFER_ROUGHNESS_SAMPLER,
+        composite::AO_SAMPLER,
+        composite::GBUFFER_MOTION_SAMPLER,
+        composite::REACTIVE_SAMPLER,
+    ]
+    .into_iter()
+    .fold(sig, |sig, reg| {
+        sig.static_sampler(SamplerState::LinearClamp, reg, Visibility::Pixel)
+    })
+    .build(device, "composite root sig")
 }
 
 // PSO for the composite pass: a vertex-buffer-less fullscreen triangle that
@@ -214,13 +229,11 @@ pub(super) fn compile_text_shaders(hot_reload: bool) -> RenderResult<(Vec<u8>, V
 pub(super) fn create_text_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::text::dx as text;
     RootSig::new()
-        // [0] `TextUniforms` at b0
-        .constants::<render_types::TextUniforms>(0, Visibility::Vertex)
-        // [1] atlas SRV (t0)
-        .srv_table(0, 1, Visibility::Pixel)
-        // [2] text sampler (s0)
-        .sampler_table(0, 1, Visibility::Pixel)
+        .constants::<render_types::TextUniforms>(text::UNIFORMS, Visibility::Vertex) // [0]
+        .srv_table(text::ATLAS, 1, Visibility::Pixel) // [1]
+        .sampler_table(text::ATLAS_SAMPLER, 1, Visibility::Pixel) // [2]
         .input_layout()
         .build(device, "text root sig")
 }

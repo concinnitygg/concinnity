@@ -422,13 +422,14 @@ pub(super) struct SkinPipeline {
 // SRV (t2), and the morph weights as a root SRV (t3).
 fn create_skin_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
+    use concinnity_engine::render::shader::programs::abi::skin::dx as skin;
     RootSig::new()
-        .constants::<SkinParams>(0, All) // [0] b0 SkinParams
-        .srv(0, All) // [1] t0 skinned vertex buffer (raw)
-        .srv(1, All) // [2] t1 joint palette (structured)
-        .uav(0, All) // [3] u0 deformed output (raw)
-        .srv(2, All) // [4] t2 morph deltas (raw, dense target-major)
-        .srv(3, All) // [5] t3 morph weights (raw, one f32 per target)
+        .constants::<SkinParams>(skin::PARAMS, All) // [0]
+        .srv(skin::SRC, All) // [1] skinned vertex buffer (raw)
+        .srv(skin::PALETTE, All) // [2] joint palette (structured)
+        .uav(skin::DST, All) // [3] deformed output (raw)
+        .srv(skin::MORPH_DATA, All) // [4] morph deltas (raw, dense target-major)
+        .srv(skin::MORPH_WEIGHTS, All) // [5] morph weights (raw, one f32 per target)
         .build(device, "rt skin root sig")
 }
 

@@ -1,6 +1,6 @@
-//! DirectX registers, typed by the class of resource they hold: a register's
-//! type gives its table row its class, so a typed constant cannot be listed
-//! as another class than it was declared.
+//! DirectX registers, typed by the class of resource they hold. A register's
+//! type gives its table row its class, and a root signature built from typed
+//! registers binds each only as that class.
 
 use core::marker::PhantomData;
 
@@ -90,34 +90,6 @@ pub struct DxBinding {
     pub index: u32,
     /// The register space.
     pub space: u32,
-}
-
-/// A constant buffer row.
-pub const fn cbv(name: &'static str, index: u32) -> DxBinding {
-    Register::<Cbv>::new(name, index).binding()
-}
-
-/// A shader resource view row.
-pub const fn srv(name: &'static str, index: u32) -> DxBinding {
-    Register::<Srv>::new(name, index).binding()
-}
-
-/// An unordered access view row.
-pub const fn uav(name: &'static str, index: u32) -> DxBinding {
-    Register::<Uav>::new(name, index).binding()
-}
-
-/// A sampler row.
-pub const fn sampler(name: &'static str, index: u32) -> DxBinding {
-    Register::<Sampler>::new(name, index).binding()
-}
-
-impl DxBinding {
-    /// The same row in `space`.
-    #[must_use]
-    pub const fn in_space(self, space: u32) -> Self {
-        Self { space, ..self }
-    }
 }
 
 impl core::fmt::Display for DxBinding {

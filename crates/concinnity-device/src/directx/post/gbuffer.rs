@@ -93,7 +93,7 @@ fn prepass_input_layout() -> Vec<D3D12_INPUT_ELEMENT_DESC> {
 
 // Root signature every shader bucket's G-buffer pre-pass PSO binds: the
 // `SURFACE_PREPASS` declarations of `main_bindless.hlsl`, which keep the main
-// pass's registers for what both read. [0] is the per-command b0 object-id root
+// pass's registers for what both read. [0] is the per-command object-id root
 // constant (set by the `ExecuteIndirect` command signature, so it MUST stay at
 // root parameter 0).
 pub(in crate::directx) fn create_prepass_root_signature(
@@ -103,29 +103,29 @@ pub(in crate::directx) fn create_prepass_root_signature(
     use concinnity_engine::render::shader::programs::abi::main::dx as main;
     RootSig::new()
         // [0] the object id, set per command by the command signature.
-        .constant_dwords(main::OBJECT_ID.index, 1, All)
+        .constant_dwords(main::OBJECT_ID, 1, All)
         // [1] the main pass's view block, which the vertex hook reads.
-        .cbv(main::VIEW.index, Vertex)
+        .cbv(main::VIEW, Vertex)
         // [2] motion matrices, view matrix and the previous clock.
-        .cbv(main::GBUFFER_VIEW.index, All)
-        .srv(main::OBJECTS.index, All) // [3]
+        .cbv(main::GBUFFER_VIEW, All)
+        .srv(main::OBJECTS, All) // [3]
         // [4] the previous frame's model-history slot.
-        .srv(main::PREV_MODELS.index, Vertex)
+        .srv(main::PREV_MODELS, Vertex)
         // [5] this frame's draw args, read for `NO_HISTORY`.
-        .srv(main::DRAW_ARGS.index, Vertex)
+        .srv(main::DRAW_ARGS, Vertex)
         // [6] the material parameter table the vertex hook may read.
-        .srv(main::MATERIAL_PARAMS.index, Vertex)
+        .srv(main::MATERIAL_PARAMS, Vertex)
         // [7] the unbounded bindless texture pool.
-        .table(&[Range::bindless_srv(main::TEX_POOL.space)], Pixel)
+        .table(&[Range::bindless_srv(main::TEX_POOL)], Pixel)
         // [8] the linear repeat and cube samplers.
-        .sampler_table(main::LINEAR_SAMPLER.index, 2, Pixel)
+        .sampler_table(main::LINEAR_SAMPLER, 2, Pixel)
         // [9] the grass block and [10] the visible blades, which the grass
         // draw's vertex stage reads.
-        .cbv(main::GRASS.index, Vertex)
-        .srv(main::GRASS_BLADES.index, Vertex)
+        .cbv(main::GRASS, Vertex)
+        .srv(main::GRASS_BLADES, Vertex)
         // [11] the shared vertex stream, where a planet tile's morph reads its
         // neighbors.
-        .srv(main::MESH_VERTICES.index, Vertex)
+        .srv(main::MESH_VERTICES, Vertex)
         .input_layout()
         .build(device, "gbuffer prepass root sig")
 }
@@ -174,17 +174,16 @@ fn uav_barrier(resource: &ID3D12Resource) -> D3D12_RESOURCE_BARRIER {
     }
 }
 
-// Root signature for the model-history snapshot kernel: the `CN_BACKEND_DIRECTX` arm of
-// `model_history.hlsl` declares b0/t0/u0, which is what these three parameters
-// bind.
+// Root signature for the model-history snapshot kernel.
 fn create_model_history_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::history::dx as history;
     RootSig::new()
-        // [0] b0: ModelHistoryParams (record count + padding).
-        .constants::<ModelHistoryParams>(0, Visibility::All)
-        // [1] t0: this frame's StructuredBuffer<GpuObjectData>.
-        .srv(0, Visibility::All)
-        // [2] u0: this frame's model-history slot.
-        .uav(0, Visibility::All)
+        // [0] ModelHistoryParams (record count + padding).
+        .constants::<ModelHistoryParams>(history::PARAMS, Visibility::All)
+        // [1] this frame's StructuredBuffer<GpuObjectData>.
+        .srv(history::OBJECTS, Visibility::All)
+        // [2] this frame's model-history slot.
+        .uav(history::HISTORY, Visibility::All)
         .input_layout()
         .build(device, "model history root sig")
 }

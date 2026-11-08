@@ -148,13 +148,14 @@ pub(in crate::directx) fn rebuild_line_pso(
 
 // Root-signature layout (binds 1:1 with the `line.hlsl` declarations, whose
 // `register()` annotations `DXIL_ENTRY_ABI` in build.rs pins):
-//   [0] root CBV b0   LineView (per-frame)
-//   [1] table  t0     scene depth SRV (Texture2D[MS]<float>)
+//   [0] root CBV   LineView (per-frame)
+//   [1] table   scene depth SRV (Texture2D[MS]<float>)
 // No sampler: the fragment shader `Load`s the depth texel under the pixel.
 fn create_line_root_signature(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::line::dx as line;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .srv_table(0, 1, Visibility::Pixel)
+        .cbv(line::VIEW, Visibility::All)
+        .srv_table(line::SCENE_DEPTH, 1, Visibility::Pixel)
         .input_layout()
         .build(device, "line root sig")
 }

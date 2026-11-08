@@ -339,48 +339,63 @@ fn write_cube_views(
 }
 
 // The kernels' root signature:
-//   [0] root CBV b0   AtmosphereParams
-//   [1] table  t0..t2 transmittance, multiple scattering, sky view
-//   [2] table  u0     the table the kernel writes
-//   [3] table  t4     the clouds' panorama the cubes are drawn behind
-// Static linear-clamp sampler s0.
+//   [0] root CBV   AtmosphereParams
+//   [1] table      transmittance, multiple scattering, sky view
+//   [2] table      the table the kernel writes
+//   [3] table      the clouds' panorama the cubes are drawn behind
+// A static linear-clamp sampler.
 fn kernel_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::atmosphere::dx::kernel;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .srv_table(0, 3, Visibility::All)
-        .uav_table(0, 1, Visibility::All)
-        .srv_table(4, 1, Visibility::All)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::All)
+        .cbv(kernel::ATMOSPHERE, Visibility::All)
+        .srv_table(kernel::TRANSMITTANCE, 3, Visibility::All)
+        .uav_table(kernel::OUTPUT, 1, Visibility::All)
+        .srv_table(kernel::CLOUD_PANORAMA, 1, Visibility::All)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            kernel::LUT_SAMPLER,
+            Visibility::All,
+        )
         .build(device, "atmosphere kernel root sig")
 }
 
 // The atmosphere sky's root signature:
-//   [0] root CBV b0   ViewUniforms of the pass it completes
-//   [1] root CBV b1   AtmosphereParams
-//   [2] table  t0     the sky-view table
-// Static linear-clamp sampler s0.
+//   [0] root CBV   ViewUniforms of the pass it completes
+//   [1] root CBV   AtmosphereParams
+//   [2] table      the sky-view table
+// A static linear-clamp sampler.
 fn sky_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::atmosphere::dx::sky;
     RootSig::new()
-        .cbv(0, Visibility::All)
-        .cbv(1, Visibility::Pixel)
-        .srv_table(0, 1, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .cbv(sky::VIEW, Visibility::All)
+        .cbv(sky::ATMOSPHERE, Visibility::Pixel)
+        .srv_table(sky::SKY_VIEW, 1, Visibility::Pixel)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            sky::LUT_SAMPLER,
+            Visibility::Pixel,
+        )
         .build(device, "atmosphere sky root sig")
 }
 
 // The haze pass's root signature:
-//   [0] root CBV b0   AtmosphereParams
-//   [1] table  t0     scene depth
-//   [2] table  t1     aerial volume
-//   [3] table  t2-t3  transmittance and multiple scattering
-// Static linear-clamp sampler s0.
+//   [0] root CBV   AtmosphereParams
+//   [1] table      scene depth
+//   [2] table      aerial volume
+//   [3] table      transmittance and multiple scattering
+// A static linear-clamp sampler.
 fn aerial_root_sig(device: &ID3D12Device) -> RenderResult<ID3D12RootSignature> {
+    use concinnity_engine::render::shader::programs::abi::atmosphere::dx::aerial;
     RootSig::new()
-        .cbv(0, Visibility::Pixel)
-        .srv_table(0, 1, Visibility::Pixel)
-        .srv_table(1, 1, Visibility::Pixel)
-        .srv_table(2, 2, Visibility::Pixel)
-        .static_sampler(SamplerState::LinearClamp, 0, Visibility::Pixel)
+        .cbv(aerial::ATMOSPHERE, Visibility::Pixel)
+        .srv_table(aerial::SCENE_DEPTH, 1, Visibility::Pixel)
+        .srv_table(aerial::AERIAL_VOLUME, 1, Visibility::Pixel)
+        .srv_table(aerial::TRANSMITTANCE, 2, Visibility::Pixel)
+        .static_sampler(
+            SamplerState::LinearClamp,
+            aerial::LUT_SAMPLER,
+            Visibility::Pixel,
+        )
         .build(device, "aerial perspective root sig")
 }
 

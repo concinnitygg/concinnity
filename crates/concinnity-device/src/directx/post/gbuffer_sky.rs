@@ -3,8 +3,7 @@
 //! reads only the pre-pass's view block, through its own root signature, so it
 //! draws whether or not the world has cull records.
 //!
-//! Root signature: `[0]` root CBV b1, the pre-pass `GbView` (the DirectX register
-//! `gbuffer_sky.hlsl` gives it).
+//! Root signature: `[0]` a root CBV, the pre-pass `GbView`.
 
 use concinnity_engine::render::backend::error::RenderResult;
 use windows::Win32::Graphics::Direct3D12::{
@@ -33,7 +32,10 @@ impl GbufferSky {
         let root_sig = dump_on_err(
             info_queue,
             RootSig::new()
-                .cbv(1, Visibility::Vertex)
+                .cbv(
+                    concinnity_engine::render::shader::programs::abi::gbuffer_sky::dx::GBUFFER_VIEW,
+                    Visibility::Vertex,
+                )
                 .build(device, "gbuffer sky root sig"),
         )?;
         let pso = Self::build_pso(device, &root_sig, info_queue, hot_reload)?;

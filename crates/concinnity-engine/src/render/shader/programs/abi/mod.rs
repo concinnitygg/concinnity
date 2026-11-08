@@ -7,12 +7,36 @@
 //! binds through them too, so its table row and its host cannot disagree. Kept
 //! beside the program table so the build script reads it as data.
 
+pub mod atmosphere;
+pub mod clouds;
+pub mod composite;
 pub mod cull;
+pub mod decal;
 mod dx;
+pub mod exposure;
+pub mod fog;
+pub mod gbuffer_sky;
+pub mod grass;
+pub mod history;
+pub mod hiz;
+pub mod light_cull;
+pub mod line;
 pub mod main;
 mod metal;
+pub mod ocean;
+pub mod particle;
+pub mod post;
+pub mod probe;
+pub mod raymarch;
 pub mod register;
+pub mod rt_reflections;
+pub mod shadow;
+pub mod skin;
+pub mod sky;
 pub mod slot;
+pub mod text;
+pub mod transparent;
+pub mod wake;
 
 pub use dx::DXIL_ENTRY_ABI;
 pub use metal::METAL_ENTRY_ABI;
