@@ -27,21 +27,22 @@ pub(in crate::directx) struct CompactKernels {
     scatter: ID3D12PipelineState,
 }
 
-// [0] b0 GpuCompactParams, [1] t0 the variant block, [2] t1 the draw args,
-// [3] u0 the group counts, [4] u1 the cull status, [5] u2 the commands (the
-// scatter) or the list lengths behind them (the scan).
+// [0] the params, [1] the variant block, [2] the draw args, [3] the group
+// counts, [4] the cull status, [5] the commands (the scatter) or the list
+// lengths behind them (the scan).
 pub(in crate::directx) fn build_compact_kernels(
     device: &ID3D12Device,
     hot_reload: bool,
 ) -> RenderResult<CompactKernels> {
     use Visibility::All;
+    use concinnity_engine::render::shader::programs::abi::cull::dx::compact;
     let root_sig = RootSig::new()
-        .constants::<GpuCompactParams>(0, All)
-        .srv(0, All)
-        .srv(1, All)
-        .uav(0, All)
-        .uav(1, All)
-        .uav(2, All)
+        .constants::<GpuCompactParams>(compact::PARAMS.index, All)
+        .srv(compact::VARIANTS.index, All)
+        .srv(compact::DRAW_ARGS.index, All)
+        .uav(compact::GROUP_COUNTS.index, All)
+        .uav(compact::CULL_STATUS.index, All)
+        .uav(compact::COMMANDS.index, All)
         .build(device, "cull compact root sig")?;
     let scan = compute_pso(
         device,

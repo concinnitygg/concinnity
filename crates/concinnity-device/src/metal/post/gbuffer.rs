@@ -11,10 +11,7 @@ use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::error::allocation_failed;
 use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::shader::programs::metal::prepass_buffers::{
-    DRAW_ARGS as PREPASS_DRAW_ARGS_INDEX, PREV_MODELS as PREPASS_PREV_MODELS_INDEX,
-    VIEW as PREPASS_VIEW_INDEX,
-};
+use concinnity_engine::render::shader::programs::abi::main::metal as main;
 use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -395,11 +392,11 @@ impl MtlContext {
         // bindings; the cull baked base_instance = record id. The prefix binds
         // the static VB to BOTH streams (prev_pos == cur_pos), so its motion is
         // the model delta.
-        enc.set_vertex_value(views.main, 0);
-        enc.set_vertex_value(views.gbuffer, PREPASS_VIEW_INDEX);
-        enc.set_fragment_value(views.gbuffer, PREPASS_VIEW_INDEX);
-        enc.set_vertex_buffer(object_buffer, 0, 9);
-        enc.set_fragment_buffer(object_buffer, 0, 9);
+        enc.set_vertex_value(views.main, main::VIEW.index);
+        enc.set_vertex_value(views.gbuffer, main::GBUFFER_VIEW.index);
+        enc.set_fragment_value(views.gbuffer, main::GBUFFER_VIEW.index);
+        enc.set_vertex_buffer(object_buffer, 0, main::OBJECTS.index);
+        enc.set_fragment_buffer(object_buffer, 0, main::OBJECTS.index);
         if let Some(params) = material_params {
             enc.set_vertex_buffer(
                 params,
@@ -407,8 +404,8 @@ impl MtlContext {
                 crate::metal::material_params::MATERIAL_PARAMS_BUFFER_INDEX,
             );
         }
-        enc.set_vertex_buffer(prev_models, 0, PREPASS_PREV_MODELS_INDEX);
-        enc.set_vertex_buffer(draw_args, 0, PREPASS_DRAW_ARGS_INDEX);
+        enc.set_vertex_buffer(prev_models, 0, main::PREV_MODELS.index);
+        enc.set_vertex_buffer(draw_args, 0, main::DRAW_ARGS.index);
         enc.set_fragment_buffer(
             tex_args,
             0,
@@ -424,11 +421,7 @@ impl MtlContext {
         self.use_bindless_textures(enc);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 2);
-        enc.set_vertex_buffer(
-            &self.scene.vertex_buffer,
-            0,
-            concinnity_engine::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
-        );
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, main::MESH_VERTICES.index);
 
         let counts = self.draw_record_counts();
         let regions = self.main_regions();

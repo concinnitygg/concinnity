@@ -8,7 +8,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLBuffer, MTLDevice};
 
 // The Metal buffer index the main pass's fragment stage reads the tables from.
-pub(super) const CANOPY_TABLES_BUFFER_INDEX: usize = 22;
+pub(super) const CANOPY_TABLES_BUFFER_INDEX: usize =
+    concinnity_engine::render::shader::programs::abi::main::metal::CANOPY_TABLES.index;
 
 #[derive(Default)]
 pub(super) struct CanopyTables {

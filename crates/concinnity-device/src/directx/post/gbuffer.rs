@@ -100,32 +100,32 @@ pub(in crate::directx) fn create_prepass_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel, Vertex};
+    use concinnity_engine::render::shader::programs::abi::main::dx as main;
     RootSig::new()
-        // [0] b0: object id (set per command by the command sig).
-        .constant_dwords(0, 1, All)
-        // [1] b1: the main pass's view block, which the vertex hook reads.
-        .cbv(1, Vertex)
-        // [2] b6: GbView (motion matrices, view matrix, previous clock).
-        .cbv(6, All)
-        // [3] t3: per-frame StructuredBuffer<GpuObjectData>.
-        .srv(3, All)
-        // [4] t21: the previous frame's model-history slot.
-        .srv(21, Vertex)
-        // [5] t22: this frame's draw args, read for `NO_HISTORY`.
-        .srv(22, Vertex)
-        // [6] t20: the material parameter table the vertex hook may read.
-        .srv(20, Vertex)
-        // [7] the unbounded bindless texture pool at t0, space1.
-        .table(&[Range::bindless_srv(1)], Pixel)
-        // [8] linear repeat (s1) + cube sampler (s2).
-        .sampler_table(1, 2, Pixel)
-        // [9] the grass block at b7 and [10] the visible blades at t23, which
-        // the grass draw's vertex stage reads (`directx/grass.rs`).
-        .cbv(7, Vertex)
-        .srv(23, Vertex)
-        // [11] t9: the shared vertex stream, where a planet tile's morph reads
-        // its neighbors.
-        .srv(9, Vertex)
+        // [0] the object id, set per command by the command signature.
+        .constant_dwords(main::OBJECT_ID.index, 1, All)
+        // [1] the main pass's view block, which the vertex hook reads.
+        .cbv(main::VIEW.index, Vertex)
+        // [2] motion matrices, view matrix and the previous clock.
+        .cbv(main::GBUFFER_VIEW.index, All)
+        .srv(main::OBJECTS.index, All) // [3]
+        // [4] the previous frame's model-history slot.
+        .srv(main::PREV_MODELS.index, Vertex)
+        // [5] this frame's draw args, read for `NO_HISTORY`.
+        .srv(main::DRAW_ARGS.index, Vertex)
+        // [6] the material parameter table the vertex hook may read.
+        .srv(main::MATERIAL_PARAMS.index, Vertex)
+        // [7] the unbounded bindless texture pool.
+        .table(&[Range::bindless_srv(main::TEX_POOL.space)], Pixel)
+        // [8] the linear repeat and cube samplers.
+        .sampler_table(main::LINEAR_SAMPLER.index, 2, Pixel)
+        // [9] the grass block and [10] the visible blades, which the grass
+        // draw's vertex stage reads.
+        .cbv(main::GRASS.index, Vertex)
+        .srv(main::GRASS_BLADES.index, Vertex)
+        // [11] the shared vertex stream, where a planet tile's morph reads its
+        // neighbors.
+        .srv(main::MESH_VERTICES.index, Vertex)
         .input_layout()
         .build(device, "gbuffer prepass root sig")
 }

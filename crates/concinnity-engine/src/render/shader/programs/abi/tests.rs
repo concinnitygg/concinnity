@@ -1,5 +1,8 @@
 use alloc::collections::BTreeSet;
+use alloc::string::ToString;
 
+use super::register::{DxBinding, srv};
+use super::slot::buffer;
 use super::*;
 
 // A parameter a row names twice binds two ways, and only one of them can match
@@ -8,54 +11,54 @@ use super::*;
 fn every_row_names_each_parameter_once() {
     for abi in DXIL_ENTRY_ABI {
         let mut seen = BTreeSet::new();
-        for (param, _) in abi.registers {
+        for binding in abi.registers {
+            let name = binding.name;
             assert!(
-                seen.insert(*param),
-                "{}: `{param}` listed twice",
+                seen.insert(name),
+                "{}: `{name}` listed twice",
                 abi.program.entry
             );
         }
     }
     for abi in METAL_ENTRY_ABI {
         let mut seen = BTreeSet::new();
-        for (param, _) in abi.slots() {
+        for binding in abi.slots() {
+            let name = binding.name;
             assert!(
-                seen.insert(*param),
-                "{}: `{param}` listed twice",
+                seen.insert(name),
+                "{}: `{name}` listed twice",
                 abi.program.entry
             );
         }
     }
 }
 
-// The spellings the build compares against the compiled declarations: a DirectX
-// register class and index with an optional space, and a Metal attribute.
+// The spellings the build compares against the compiled declarations.
 #[test]
-fn every_binding_is_spelled_as_the_build_reads_it() {
-    for abi in DXIL_ENTRY_ABI {
-        for (param, register) in abi.registers {
-            let (slot, space) = register.split_once(", space").unwrap_or((register, "0"));
-            let (class, index) = slot.split_at(1);
-            assert!(
-                matches!(class, "b" | "t" | "u" | "s")
-                    && index.parse::<u32>().is_ok()
-                    && space.parse::<u32>().is_ok(),
-                "{}: `{param}` has register `{register}`",
-                abi.program.entry
-            );
-        }
-    }
-    for abi in METAL_ENTRY_ABI {
-        for (param, attribute) in abi.slots() {
-            let index = ["buffer(", "texture(", "sampler("]
-                .iter()
-                .find_map(|kind| attribute.strip_prefix(kind))
-                .and_then(|rest| rest.strip_suffix(')'));
-            assert!(
-                index.is_some_and(|i| i.parse::<u32>().is_ok()),
-                "{}: `{param}` has attribute `{attribute}`",
-                abi.program.entry
-            );
-        }
-    }
+fn bindings_spell_as_the_shaders_declare_them() {
+    let pool: DxBinding = srv("tex_pool", 0).in_space(1);
+    assert_eq!(srv("objects", 3).to_string(), "t3");
+    assert_eq!(pool.to_string(), "t0, space1");
+    assert_eq!(buffer("objects", 9).to_string(), "buffer(9)");
+}
+
+// The scan's list lengths and the scatter's commands ride one root parameter.
+#[test]
+fn the_scan_and_scatter_share_their_last_register() {
+    use super::cull::dx::compact::{COMMANDS, STREAM_COUNTS};
+    assert_eq!(
+        STREAM_COUNTS.binding().to_string(),
+        COMMANDS.binding().to_string()
+    );
+}
+
+// The root signatures bind these pairs as one two-register range, so each
+// second register must follow its first.
+#[test]
+fn ranged_main_registers_are_adjacent() {
+    use super::main::dx::*;
+    assert_eq!(PREFILTER_CUBE.index, IRRADIANCE_CUBE.index + 1);
+    assert_eq!(LTC_MAGNITUDE.index, LTC_MATRIX.index + 1);
+    assert_eq!(CUBE_SAMPLER.index, LINEAR_SAMPLER.index + 1);
+    assert_eq!(TEX_POOL.index, 0, "the bindless range starts its space");
 }

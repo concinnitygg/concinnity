@@ -45,17 +45,17 @@ pub(super) const BINDLESS_TEXTURE_COUNT: usize =
 // Fragment buffer index the bindless static pass binds its `BindlessTextures`
 // argument buffer at. Discrete `[[texture(n)]]` bindings make a fragment
 // shader unusable from an indirect command buffer on Apple GPUs, so the
-// texture pool + shadow/IBL maps travel in an argument buffer instead. Must
-// match the buffer(7) slot of the engine fragment in `main_bindless.hlsl`
-// (locked by the build script's ABI assertion), which every world Shader
-// compiles from.
-pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize = 7;
+// texture pool + shadow/IBL maps travel in an argument buffer instead. Every
+// world Shader compiles against the same slot.
+pub(super) const BINDLESS_TEXTURE_ARG_BUFFER_INDEX: usize =
+    concinnity_engine::render::shader::programs::abi::main::metal::TEXTURES.index;
 
 // Fragment buffer index of the engine sampler block: indirect-command
 // execution cannot see encoder-bound sampler state, so the engine's
 // single-source fragment reads its three static samplers from this argument
 // buffer.
-pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize = 10;
+pub(super) const BINDLESS_SAMPLER_ARG_BUFFER_INDEX: usize =
+    concinnity_engine::render::shader::programs::abi::main::metal::SAMPLERS.index;
 
 // InstancedProp clusters and the per-instance records they draw through.
 pub(super) struct InstancedState {

@@ -69,76 +69,62 @@ pub(in crate::directx) fn compile_main_bindless_shaders(
 //
 // Slot [0] is a single-DWORD root constant carrying the per-draw object id
 // (D3D12 `SV_InstanceID` does not include `StartInstanceLocation`, so the id
-// rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool
-// (`t0, space1`); slot [8] is a root SRV at `t3` carrying the per-frame
-// `StructuredBuffer<GpuObjectData>`.
+// rides a root constant); slot [5] is the unbounded bindless `Texture2D` pool;
+// slot [8] is a root SRV carrying the per-frame `StructuredBuffer<GpuObjectData>`.
 pub(super) fn create_main_bindless_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     use Visibility::{All, Pixel, Vertex};
+    use concinnity_engine::render::shader::programs::abi::main::dx as main;
     RootSig::new()
-        // [0] per-draw object id at b0 (1 DWORD).
-        .constant_dwords(0, 1, All)
-        // [1] view UBO at b1
-        .cbv(1, All)
-        // [2] light UBO at b2
-        .cbv(2, Pixel)
-        // [3] shadow UBO at b3
-        .cbv(3, Pixel)
-        // [4] shadow map array (t0) + IBL cubes (t5..t6)
-        .table(&[Range::srv(0, 1), Range::srv(5, 2)], Pixel)
-        // [5] Unbounded bindless pool: `Texture2D tex_pool[] : register(t0,
-        // space1)`. The table base GPU handle points at the per-object SRV region
-        // (heap slot `object_base_slot`), so pool index `2*i` / `2*i+1` resolves
-        // to object `i`'s albedo / normal SRV.
-        .table(&[Range::bindless_srv(1)], Pixel)
-        // [6] shadow comparison sampler (s0)
-        .sampler_table(0, 1, Pixel)
-        // [7] linear repeat (s1) + cube sampler (s2)
-        .sampler_table(1, 2, Pixel)
-        // [8] per-frame StructuredBuffer<GpuObjectData> at t3
-        .srv(3, All)
-        // [9] SSAO occlusion SRV (t4)
-        .srv_table(4, 1, Pixel)
-        // [10] the reflection-probe cube array at t7 (`TextureCubeArray
-        // probe_cubes : register(t7)`), one descriptor however many cubes it holds.
-        .srv_table(7, 1, Pixel)
-        // [11] the ProbeSet (live probe count) at b4.
-        .cbv(4, Pixel)
-        // [12] per-scene StructuredBuffer<GpuLight> at t1 (matches
-        // main_bindless.hlsl's CN_BACKEND_DIRECTX block).
-        .srv(1, Pixel)
-        // [13] ClusterParams at b5 (b4 is the ProbeSet cbuffer).
-        .cbv(5, Pixel)
-        // [14] per-cluster light-index lists at t2.
-        .srv(2, Pixel)
-        // [15] per-slice StructuredBuffer<SpotShadowData> at t15.
-        .srv(15, Pixel)
-        // [16] spot shadow depth array at t16, one register past the spot shadow
-        // records at t15.
-        .srv_table(16, 1, Pixel)
-        // [17] per-scene StructuredBuffer<AreaLightData> at t17.
-        .srv(17, Pixel)
-        // [18] the area-light LTC tables at t18..t19, past the spot shadow array.
-        .srv_table(18, 2, Pixel)
-        // [19] the reflection-probe records at t8.
-        .srv(8, Pixel)
-        // [20] the material parameter table at t20, which either world hook may
-        // read.
-        .srv(20, All)
-        // [21] the grass block at b7 and [22] the visible blades at t23, which
-        // the grass draw's vertex stage reads (`directx/grass.rs`).
-        .cbv(7, Vertex)
-        .srv(23, Vertex)
-        // [23] the far field's canopy block at b8 and [24] its view tables at
-        // t24 (`directx/canopy.rs`).
-        .cbv(8, Pixel)
-        .srv(24, Pixel)
-        // [25] the shared vertex stream at t9, where a planet tile's morph
-        // reads its neighbors.
-        .srv(9, Vertex)
-        // [26] the clouds' shadow map at t25.
-        .srv_table(25, 1, Pixel)
+        // [0] the per-draw object id, one DWORD.
+        .constant_dwords(main::OBJECT_ID.index, 1, All)
+        .cbv(main::VIEW.index, All) // [1]
+        .cbv(main::LIGHTS.index, Pixel) // [2]
+        .cbv(main::SHADOW.index, Pixel) // [3]
+        // [4] the shadow map array, and the irradiance and prefilter cubes.
+        .table(
+            &[
+                Range::srv(main::SHADOW_MAP.index, 1),
+                Range::srv(main::IRRADIANCE_CUBE.index, 2),
+            ],
+            Pixel,
+        )
+        // [5] the unbounded bindless pool. The table base GPU handle points at
+        // the per-object SRV region (heap slot `object_base_slot`), so pool
+        // index `2*i` / `2*i+1` resolves to object `i`'s albedo / normal SRV.
+        .table(&[Range::bindless_srv(main::TEX_POOL.space)], Pixel)
+        .sampler_table(main::SHADOW_SAMPLER.index, 1, Pixel) // [6]
+        // [7] the linear repeat and cube samplers.
+        .sampler_table(main::LINEAR_SAMPLER.index, 2, Pixel)
+        .srv(main::OBJECTS.index, All) // [8]
+        .srv_table(main::SCREEN_INDIRECT.index, 1, Pixel) // [9]
+        // [10] the reflection-probe cube array, one descriptor however many
+        // cubes it holds.
+        .srv_table(main::PROBE_CUBES.index, 1, Pixel)
+        .cbv(main::PROBE_SET.index, Pixel) // [11]
+        .srv(main::LOCAL_LIGHTS.index, Pixel) // [12]
+        .cbv(main::CLUSTER.index, Pixel) // [13]
+        .srv(main::CLUSTER_LIST.index, Pixel) // [14]
+        .srv(main::SPOT_SHADOWS.index, Pixel) // [15]
+        .srv_table(main::SPOT_SHADOW_MAP.index, 1, Pixel) // [16]
+        .srv(main::AREA_LIGHTS.index, Pixel) // [17]
+        // [18] the LTC matrix and magnitude tables.
+        .srv_table(main::LTC_MATRIX.index, 2, Pixel)
+        .srv(main::PROBE_RECORDS.index, Pixel) // [19]
+        // [20] the material parameter table, which either world hook may read.
+        .srv(main::MATERIAL_PARAMS.index, All)
+        // [21] the grass block and [22] the visible blades, which the grass
+        // draw's vertex stage reads.
+        .cbv(main::GRASS.index, Vertex)
+        .srv(main::GRASS_BLADES.index, Vertex)
+        // [23] the far field's canopy block and [24] its view tables.
+        .cbv(main::CANOPY.index, Pixel)
+        .srv(main::CANOPY_TABLES.index, Pixel)
+        // [25] the shared vertex stream, where a planet tile's morph reads its
+        // neighbors.
+        .srv(main::MESH_VERTICES.index, Vertex)
+        .srv_table(main::CLOUD_SHADOW.index, 1, Pixel) // [26]
         .input_layout()
         .build(device, "main bindless root sig")
 }

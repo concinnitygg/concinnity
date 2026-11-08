@@ -22,7 +22,7 @@ use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBendPass, GrassBender, GrassCamera,
     GrassField, GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
-use concinnity_engine::render::shader::programs::metal::prepass_buffers;
+use concinnity_engine::render::shader::programs::abi::main::metal as slots;
 use concinnity_engine::render::shadow::bias;
 use concinnity_engine::render::uniforms::grass::{
     GRASS_ARGS_BYTES, GRASS_ARGS_STRIDE, GpuGrassBlade, GrassTileGpu, PlanetGrassTileGpu,
@@ -597,9 +597,9 @@ impl MtlContext {
         };
         enc.pushDebugGroup(ns_string!("grass"));
         enc.set_depth_stencil(&self.targets.depth_state);
-        enc.set_vertex_value(main, 0);
-        enc.set_vertex_value(gbuffer, prepass_buffers::VIEW);
-        enc.set_fragment_value(gbuffer, prepass_buffers::VIEW);
+        enc.set_vertex_value(main, slots::VIEW.index);
+        enc.set_vertex_value(gbuffer, slots::GBUFFER_VIEW.index);
+        enc.set_fragment_value(gbuffer, slots::GBUFFER_VIEW.index);
         Self::draw_grass(enc, grass, &grass.pipelines.prepass, frame);
         enc.popDebugGroup();
         u32::saturating_from(GRASS_REGION_COUNT)
@@ -619,7 +619,7 @@ impl MtlContext {
         };
         enc.pushDebugGroup(ns_string!("grass"));
         enc.set_depth_stencil(&self.targets.depth_state);
-        enc.set_vertex_value(view, 0);
+        enc.set_vertex_value(view, slots::VIEW.index);
         Self::draw_grass(enc, grass, &grass.pipelines.main, frame);
         enc.popDebugGroup();
         u32::saturating_from(GRASS_REGION_COUNT)

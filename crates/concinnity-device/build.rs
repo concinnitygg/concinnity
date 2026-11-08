@@ -161,9 +161,10 @@ fn assert_metal_abi(emitted: &EmittedMsl) {
         let params = msl_entry_params(msl, program.entry).unwrap_or_else(|e| panic!("{e}"));
         assert_every_param_is_attributed(abi, &params);
         assert_every_resource_is_listed(abi, &params);
-        for (param, attribute) in abi.slots() {
+        for binding in abi.slots() {
+            let (param, attribute) = (binding.name, binding.to_string());
             assert!(
-                msl_binds(msl, param, attribute),
+                msl_binds(msl, param, &attribute),
                 "{}: Metal ABI drifted at `{}`: expected `{param}` on [[{attribute}]] in the \
                  emitted MSL. \
                  The Metal binding layout is what the encoder writes and what world shaders \
@@ -215,7 +216,7 @@ fn assert_every_resource_is_listed(abi: &MetalAbi, params: &[String]) {
         .iter()
         .filter(|p| msl_binds_a_resource(p))
         .map(|p| msl_param_name(p))
-        .filter(|name| !abi.slots().any(|(param, _)| param == name))
+        .filter(|name| !abi.slots().any(|binding| binding.name == *name))
         .collect();
     assert!(
         unlisted.is_empty(),
@@ -257,12 +258,14 @@ fn assert_hlsl_registers(
 ) {
     let program = abi.program;
     let declared = declared.unwrap_or_else(|e| panic!("DXIL ABI check ({}): {e}", program.entry));
-    for (param, register) in abi.registers {
-        let found = declared.iter().find(|d| d.name == *param);
+    for binding in abi.registers {
+        let param = binding.name;
+        let found = declared.iter().find(|d| d.name == param);
         let actual = found.map(|d| dxil_register(d.register));
+        let register = binding.to_string();
         assert_eq!(
             actual.as_deref(),
-            Some(*register),
+            Some(register.as_str()),
             "{}: `{param}` is declared at {actual:?}, not register({register}). Fix the \
              .hlsl declaration or the matching root signature under src/directx before \
              shipping.",
@@ -271,8 +274,8 @@ fn assert_hlsl_registers(
     }
 }
 
-// A register annotation as the tables above spell it: `t0`, or `t0, space1`
-// where the declaration names a space. The space is part of the D3D slot, so a
+// A register annotation as a table row spells it: `t0`, or `t0, space1` where
+// the declaration names a space. The space is part of the D3D slot, so a
 // row naming one asserts it.
 fn dxil_register(register: concinnity_shader::declarations::Register) -> String {
     match register.space {

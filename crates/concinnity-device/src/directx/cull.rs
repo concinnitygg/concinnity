@@ -169,11 +169,10 @@ pub(in crate::directx) const INDIRECT_COMMAND_STRIDE: u32 = 24;
 
 // Pipeline + command signature builders
 
-// Root signature for the GPU-cull compute kernel: a `CullParams` root-constant
-// block at b0, the `GpuObjectData` + `GpuDrawArgs` inputs as root SRVs (t0,
-// t1), an SRV descriptor table at t2 (Hi-Z texture covering all mips), the
-// indirect-command output as a root UAV (u0), and the per-object cull-status
-// output as a root UAV (u1). The Hi-Z table is the only reason this root
+// Root signature for the GPU-cull compute kernel: the `CullParams` root
+// constants, the records and draw arguments as root SRVs, the Hi-Z pyramid in
+// a descriptor table, the group counts and per-object cull status as root
+// UAVs, and the view's variants. The Hi-Z table is the only reason this root
 // signature needs a descriptor table: root SRVs can only carry raw / structured
 // buffers, not Texture2D. Shared by the early pass (`main`) and late
 // (`CULL_LATE`) cull kernels; the early pass writes both `commands` + `cull_status`,
@@ -182,15 +181,15 @@ pub(in crate::directx) fn create_cull_root_signature(
     device: &ID3D12Device,
 ) -> RenderResult<ID3D12RootSignature> {
     use Visibility::All;
+    use concinnity_engine::render::shader::programs::abi::cull::dx as cull;
     RootSig::new()
-        // [0] b0 CullParams (planes + cam_pos + object_count + prev_view_proj + hiz metadata)
-        .constants::<CullParams>(0, All)
-        .srv(0, All) // [1] t0 StructuredBuffer<GpuObjectData>
-        .srv(1, All) // [2] t1 StructuredBuffer<GpuDrawArgs>
-        .srv_table(2, 1, All) // [3] t2 Hi-Z Texture2D<float> covering all mips
-        .uav(0, All) // [4] u0 RWStructuredBuffer<IndirectCommand>
-        .uav(1, All) // [5] u1 RWStructuredBuffer<uint> cull_status (two-pass)
-        .srv(3, All) // [6] t3 StructuredBuffer<CullVariants> routes + bucket regions
+        .constants::<CullParams>(cull::CULL.index, All) // [0]
+        .srv(cull::OBJECTS.index, All) // [1]
+        .srv(cull::DRAW_ARGS.index, All) // [2]
+        .srv_table(cull::HIZ.index, 1, All) // [3] every mip
+        .uav(cull::GROUP_COUNTS.index, All) // [4]
+        .uav(cull::CULL_STATUS.index, All) // [5]
+        .srv(cull::VARIANTS.index, All) // [6]
         .build(device, "cull root sig")
 }
 

@@ -35,6 +35,7 @@ use crate::metal::depth::CLEAR_DEPTH;
 use crate::metal::encode::RenderEncode;
 use crate::metal::pass_timing::PassTimer;
 use crate::metal::scoped_encoder::ScopedEncoder;
+use concinnity_engine::render::shader::programs::abi::main::metal as main;
 
 // Camera state a main-pass encode builds its ViewUniforms from. `view` is
 // `self.view_matrix` for the on-screen main pass (and its late sibling) but
@@ -543,8 +544,8 @@ impl MtlContext {
         // by both ranges: the skinned records live in the same object buffer and
         // sample the same flat pool. The object id reaches the shader via each
         // command's [[base_instance]].
-        enc.set_vertex_buffer(obj_buf, 0, 9);
-        enc.set_fragment_buffer(obj_buf, 0, 9);
+        enc.set_vertex_buffer(obj_buf, 0, main::OBJECTS.index);
+        enc.set_fragment_buffer(obj_buf, 0, main::OBJECTS.index);
         // The material parameter table either hook may read.
         if let Some(params) = material_params {
             let slot = crate::metal::material_params::MATERIAL_PARAMS_BUFFER_INDEX;
@@ -678,8 +679,8 @@ impl MtlContext {
                 &*self.light_cull.cluster_buffer,
             ),
         };
-        enc.set_fragment_value(&params, 11);
-        enc.set_fragment_buffer(lists, 0, 12);
+        enc.set_fragment_value(&params, main::CLUSTER.index);
+        enc.set_fragment_buffer(lists, 0, main::CLUSTER_LIST.index);
     }
 
     // Apply the encoder state every main-pass encode needs: the pipeline and
@@ -701,43 +702,39 @@ impl MtlContext {
         enc.set_pipeline(&pipelines.main);
         enc.set_depth_stencil(&self.targets.depth_state);
 
-        enc.set_vertex_value(view_uniforms, 0);
-        enc.set_fragment_value(view_uniforms, 0);
+        enc.set_vertex_value(view_uniforms, main::VIEW.index);
+        enc.set_fragment_value(view_uniforms, main::VIEW.index);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
-        enc.set_vertex_buffer(
-            &self.scene.vertex_buffer,
-            0,
-            concinnity_engine::render::shader::programs::metal::MAIN_MESH_VERTICES_BUFFER,
-        );
-        enc.set_fragment_value(self.state.lights.uniforms(), 4);
-        enc.set_fragment_value(&self.canopy, 21);
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, main::MESH_VERTICES.index);
+        enc.set_fragment_value(self.state.lights.uniforms(), main::LIGHTS.index);
+        enc.set_fragment_value(&self.canopy, main::CANOPY.index);
         if let Some(tables) = self.canopy_tables.buffer() {
             enc.set_fragment_buffer(tables, 0, crate::metal::canopy::CANOPY_TABLES_BUFFER_INDEX);
         }
-        // Local-light storage buffer at fragment buffer(8). Encoder-bound
-        // buffers are inherited by the ICB-executed bindless draws (the same
-        // way the object buffer at binding 9 is), so this single bind covers
-        // the main pass and the planar / probe re-renders.
-        enc.set_fragment_buffer(&self.scene.local_light_buffer, 0, 8);
-        // Per-slice spot shadow projections at fragment buffer(13), inherited
+        // The local lights. Encoder-bound buffers are inherited by the
+        // ICB-executed bindless draws (the same way the object buffer is), so
+        // this single bind covers the main pass and the planar / probe
+        // re-renders.
+        enc.set_fragment_buffer(&self.scene.local_light_buffer, 0, main::LOCAL_LIGHTS.index);
+        // Per-slice spot shadow projections, inherited
         // by the ICB draws like the local lights above. The matching depth
         // array is not bound here: every texture the pass samples travels in
         // the BindlessTextures argument buffer, because discrete texture
         // bindings break ICB compatibility.
-        enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, 13);
-        // Rect area-light extents at fragment buffer(14), indexed by
+        enc.set_fragment_buffer(&self.spot_shadow.buffer, 0, main::SPOT_SHADOWS.index);
+        // Rect area-light extents, indexed by
         // GpuLight.data_index. Inherited by the ICB draws like the buffers
         // above, so this one bind covers every main-pass variant.
-        enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, 14);
-        enc.set_fragment_value(&self.state.planner.shadow.uniforms, 5);
-        // Reflection-probe count at fragment buffer(6) and one parallax record
-        // per baked probe at buffer(15); the cube array rides the texture
-        // argument buffer. The shader weights every box covering the surface.
+        enc.set_fragment_buffer(&self.scene.area_light_buffer, 0, main::AREA_LIGHTS.index);
+        enc.set_fragment_value(&self.state.planner.shadow.uniforms, main::SHADOW.index);
+        // The reflection-probe count and one parallax record per baked probe;
+        // the cube array rides the texture argument buffer. The shader weights
+        // every box covering the surface.
         self.probe_bindings().bind(
             enc,
             crate::metal::probe_set::ProbeSlots {
-                set: 6,
-                records: 15,
+                set: main::PROBE_SET.index,
+                records: main::PROBE_RECORDS.index,
                 cubes: None,
                 cluster: None,
             },

@@ -162,11 +162,6 @@ pub(super) static MAIN_PREPASS_VERT: Program = Program {
     splices: &[],
 };
 
-pub(super) static MAIN_PREPASS_FRAG: Program = Program {
-    row: &shared::MAIN_PREPASS_FRAG,
-    splices: &[],
-};
-
 pub(super) static SHADOW_VERT: Program = Program {
     row: &shared::SHADOW_VERT_BINDLESS,
     splices: &[],

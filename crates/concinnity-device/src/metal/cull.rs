@@ -9,6 +9,7 @@ use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::gfx::{lod, render_types};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::scene_state::CaptureTiles;
+use concinnity_engine::render::shader::programs::abi::cull::metal as cull;
 use concinnity_engine::render::shader::programs::metal::bindless_textures;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 use concinnity_engine::transform::IDENTITY;
@@ -230,19 +231,15 @@ pub(crate) struct CullSlot {
 // at. The argument encoder that fills that argument buffer is built for this
 // same index.
 pub(super) const CULL_ICB_BUFFER_INDEX: usize = 4;
-// Buffer index of the per-object status the decision kernel writes and the
-// encode kernel reads back.
-const CULL_STATUS_BUFFER_INDEX: usize = 5;
 // Buffer index of the scatter's inline `ScatterParams`.
 const CULL_SCATTER_PARAMS_INDEX: usize = 7;
-// Buffer index of the inline `GpuCullVariants` both cull kernels read.
-const CULL_VARIANTS_BUFFER_INDEX: usize = 8;
-// Buffer indices of the group-count scratch the decision writes and the
-// packing reads, the execution ranges the scan writes, and the scan's inline
-// `GpuCompactParams`.
-const CULL_GROUP_COUNTS_BUFFER_INDEX: usize = 9;
-const CULL_RANGES_BUFFER_INDEX: usize = 10;
-const CULL_COMPACT_PARAMS_INDEX: usize = 11;
+// The shared kernels' slots, which the scatter reads at the same indices on
+// the same encoder.
+const CULL_STATUS_BUFFER_INDEX: usize = cull::CULL_STATUS.index;
+const CULL_VARIANTS_BUFFER_INDEX: usize = cull::VARIANTS.index;
+const CULL_GROUP_COUNTS_BUFFER_INDEX: usize = cull::GROUP_COUNTS.index;
+const CULL_RANGES_BUFFER_INDEX: usize = cull::STREAM_COUNTS.index;
+const CULL_COMPACT_PARAMS_INDEX: usize = cull::SCAN_PARAMS.index;
 
 // The four texture-pool indices the Metal bindless fragment shader
 // (`fragment_main_bindless`, main_bindless.hlsl) reads for one surface. Albedo,
@@ -907,9 +904,9 @@ impl MtlContext {
             label,
         );
         enc.set_pipeline(pipeline);
-        enc.set_buffer(object_buffer, 0, 0);
-        enc.set_buffer(draw_args_buffer, 0, 1);
-        enc.set_value(&cull_uniforms, 2);
+        enc.set_buffer(object_buffer, 0, cull::OBJECTS.index);
+        enc.set_buffer(draw_args_buffer, 0, cull::DRAW_ARGS.index);
+        enc.set_value(&cull_uniforms, cull::CULL.index);
         enc.set_buffer(&self.scene.index_buffer, 0, 3);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         // Per-object cull status: the decision kernel writes it, the encode
@@ -933,7 +930,7 @@ impl MtlContext {
         // argument buffer), so Metal tracks its residency automatically.
         // Always bound when present; `hiz_enabled` decides whether it's read.
         if let Some(tex) = hiz_tex {
-            enc.set_texture(tex, 0);
+            enc.set_texture(tex, cull::HIZ.index);
         }
         // The encode kernel writes draw commands into the ICBs through the
         // argument buffer, so each must be declared resident for the pass.
@@ -1092,9 +1089,9 @@ impl MtlContext {
             ns_string!("cull late"),
         );
         enc.set_pipeline(pipeline);
-        enc.set_buffer(object_buffer, 0, 0);
-        enc.set_buffer(draw_args_buffer, 0, 1);
-        enc.set_value(&cull_uniforms, 2);
+        enc.set_buffer(object_buffer, 0, cull::OBJECTS.index);
+        enc.set_buffer(draw_args_buffer, 0, cull::DRAW_ARGS.index);
+        enc.set_value(&cull_uniforms, cull::CULL.index);
         enc.set_buffer(&self.scene.index_buffer, 0, 3);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
@@ -1106,7 +1103,7 @@ impl MtlContext {
             &self.view_variants(&self.cull.variants, &self.state.view.daylight),
             CULL_VARIANTS_BUFFER_INDEX,
         );
-        enc.set_texture(hiz.texture.as_ref(), 0);
+        enc.set_texture(hiz.texture.as_ref(), cull::HIZ.index);
         // The encode kernel writes draw commands into the late ICBs through
         // the argument buffer, so each must be declared resident here too.
         for icb in &self.cull.icbs_late {
@@ -1174,8 +1171,8 @@ impl MtlContext {
                 })?,
             ns_string!("shadow cull"),
         );
-        enc.set_buffer(object_buffer, 0, 0);
-        enc.set_buffer(draw_args_buffer, 0, 1);
+        enc.set_buffer(object_buffer, 0, cull::OBJECTS.index);
+        enc.set_buffer(draw_args_buffer, 0, cull::DRAW_ARGS.index);
         enc.set_buffer(&self.scene.index_buffer, 0, 3);
         // Skinned index buffer at buffer(6); the scatter bakes it into the
         // skinned-tail commands exactly like the main cull.
@@ -1277,7 +1274,7 @@ impl MtlContext {
                     hiz_enabled: 0,
                 },
             };
-            enc.set_value(&cull_uniforms, 2);
+            enc.set_value(&cull_uniforms, cull::CULL.index);
             dispatch_groups(
                 enc,
                 render_types::cull_groups(u32::saturating_from(object_count)) as usize,
