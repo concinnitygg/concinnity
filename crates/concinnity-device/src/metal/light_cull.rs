@@ -8,6 +8,7 @@
 
 use concinnity_engine::gfx::render_types::{CLUSTER_COUNT, CLUSTER_LIST_LEN};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::light_cull::metal as light_cull;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -59,12 +60,12 @@ impl MtlContext {
         );
         enc.set_pipeline(&self.light_cull.pipeline);
 
-        enc.set_value(grid.params, 0);
-        enc.set_buffer(&self.scene.local_light_buffer, 0, 1);
-        enc.set_buffer(grid.lists, 0, 2);
+        enc.set_value(grid.params, light_cull::CLUSTER.index);
+        enc.set_buffer(&self.scene.local_light_buffer, 0, light_cull::LIGHTS.index);
+        enc.set_buffer(grid.lists, 0, light_cull::CLUSTER_LIST.index);
         // This frame's probe records, built before any pass encodes.
         if let Some(records) = self.probe.records_buf.as_deref() {
-            enc.set_buffer(records, 0, 3);
+            enc.set_buffer(records, 0, light_cull::PROBE_RECORDS.index);
         }
 
         // One thread per cluster; the kernel builds one cluster's list.

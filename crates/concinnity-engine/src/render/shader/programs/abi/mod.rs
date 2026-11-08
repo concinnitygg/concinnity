@@ -3,8 +3,10 @@
 //!
 //! The device build script asserts every row against the compiled shaders, so
 //! a declaration that moves fails the build instead of binding garbage at draw
-//! time. A pass whose bindings have named constants here (`cull`, `main`)
-//! binds through them too, so its table row and its host cannot disagree. Kept
+//! time. Each pass names its bindings once, in its module here, and both its
+//! table rows and its host bind through those constants, so the two cannot
+//! disagree. The fullscreen post passes place their sources by position
+//! instead (`post`), so their rows spell each source at its position. Kept
 //! beside the program table so the build script reads it as data.
 
 pub mod atmosphere;

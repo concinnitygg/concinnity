@@ -52,6 +52,7 @@ use concinnity_engine::render::rt_accel::{
     AccelBook, EmptyHead, FailureStreak, InstanceBlas, RefreshMode, RefreshStep, RtAccelSteps,
     RtUpdate, SeedSet, SlotLiveness, StaticRing, empty_head,
 };
+use concinnity_engine::render::shader::programs::abi::skin::metal as skin;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSArray;
@@ -699,14 +700,14 @@ fn encode_skin_object(
         joint_count: u32::saturating_from(joint_count),
         target_count: 0,
     };
-    cenc.set_buffer(bufs.vertex, 0, 0);
-    cenc.set_buffer(bufs.deformed, 0, 1);
-    cenc.set_buffer(bufs.palette, 0, 2);
-    cenc.set_value(&params, 3);
+    cenc.set_buffer(bufs.vertex, 0, skin::SRC.index);
+    cenc.set_buffer(bufs.deformed, 0, skin::DST.index);
+    cenc.set_buffer(bufs.palette, 0, skin::PALETTE.index);
+    cenc.set_value(&params, skin::PARAMS.index);
     // Both morph slots take the vertex buffer as a dummy binding; the kernel
     // leaves them unread because `target_count` is zero.
-    cenc.set_buffer(bufs.vertex, 0, 4);
-    cenc.set_buffer(bufs.vertex, 0, 5);
+    cenc.set_buffer(bufs.vertex, 0, skin::MORPH_DATA.index);
+    cenc.set_buffer(bufs.vertex, 0, skin::MORPH_WEIGHTS.index);
     cenc.dispatchThreads_threadsPerThreadgroup(
         MTLSize {
             width: obj.vertex_count.max(1),
@@ -795,16 +796,17 @@ impl crate::metal::context::MtlContext {
                     _ => 0,
                 },
             };
-            cenc.set_buffer(svb.as_ref(), 0, 0);
-            cenc.set_buffer(deformed, 0, 1);
-            cenc.set_buffer(joint_buf.as_ref(), 0, 2);
-            cenc.set_value(&params, 3);
+            cenc.set_buffer(svb.as_ref(), 0, skin::SRC.index);
+            cenc.set_buffer(deformed, 0, skin::DST.index);
+            cenc.set_buffer(joint_buf.as_ref(), 0, skin::PALETTE.index);
+            cenc.set_value(&params, skin::PARAMS.index);
             cenc.set_buffer(
                 morph.map_or_else(|| svb.as_ref(), |m| m.buffer.as_ref()),
                 0,
-                4,
+                skin::MORPH_DATA.index,
             );
-            cenc.set_buffer(weights.map_or_else(|| svb.as_ref(), |b| b.as_ref()), 0, 5);
+            let weights = weights.map_or_else(|| svb.as_ref(), |b| b.as_ref());
+            cenc.set_buffer(weights, 0, skin::MORPH_WEIGHTS.index);
             cenc.dispatchThreads_threadsPerThreadgroup(
                 MTLSize {
                     width: obj.vertex_count.max(1),

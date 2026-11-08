@@ -18,6 +18,7 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::post::rt_reflections::{
     CLASSIFY_GROUP, RAY_ARGS_RESET, TRACE_GROUP, classify_groups, ray_list_len,
 };
+use concinnity_engine::render::shader::programs::abi::rt_reflections::metal as rt;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -33,24 +34,6 @@ use crate::metal::context::MtlContext;
 use crate::metal::encode::ComputeEncode;
 use crate::metal::error::allocation_failed;
 use crate::metal::scoped_encoder::ScopedEncoder;
-
-// Sampler index the textured trace reads the bindless pool through. The screen
-// sources split into texture + sampler pairs at 0..3 and the probe block's
-// sampler takes 4, so the pool's own sampler follows them; the shader's
-// `register(s5)` is what pins it.
-const RT_POOL_SAMPLER_INDEX: usize = 5;
-
-// Buffer indices of the textured trace's canopy block and view tables, past the
-// probe records at 11; the shader's `register(b12)` / `register(t13)` pin them.
-const RT_CANOPY_BUFFER_INDEX: usize = 12;
-const RT_CANOPY_TABLES_BUFFER_INDEX: usize = 13;
-
-// The classify's pyramid, the output both kernels write, and the ray list and
-// arguments between them; the shader's registers pin each.
-const RT_PYRAMID_TEXTURE_INDEX: usize = 5;
-const RT_OUTPUT_TEXTURE_INDEX: usize = 6;
-const RT_RAY_LIST_BUFFER_INDEX: usize = 14;
-const RT_RAY_ARGS_BUFFER_INDEX: usize = 15;
 
 type ComputePipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
@@ -211,7 +194,7 @@ impl MtlContext {
         );
         enc.set_pipeline(&pipelines.classify);
         self.bind_rt_screen(&enc, rt_params, &screen);
-        enc.set_texture(pyramid, RT_PYRAMID_TEXTURE_INDEX);
+        enc.set_texture(pyramid, rt::PYRAMID.index);
         let (groups_x, groups_y) = classify_groups(
             u32::saturating_from(reflection.width()),
             u32::saturating_from(reflection.height()),
@@ -255,28 +238,27 @@ impl MtlContext {
         // from; the TLAS at buffer(4); the deformed (posed) skinned vertices +
         // the skinned index buffer at 5 and 6, always bound (1-element
         // dummies when the scene has no skinned geometry).
-        enc.set_buffer(self.scene.vertex_buffer.as_ref(), 0, 1);
-        enc.set_buffer(self.scene.index_buffer.as_ref(), 0, 2);
-        enc.set_buffer(accel.geom_table.as_ref(), 0, 3);
-        enc.set_acceleration_structure(accel.tlas.as_ref(), 4);
-        enc.set_buffer(accel.deformed_verts.as_ref(), 0, 5);
-        enc.set_buffer(accel.skinned_indices.as_ref(), 0, 6);
+        enc.set_buffer(self.scene.vertex_buffer.as_ref(), 0, rt::VERTICES.index);
+        enc.set_buffer(self.scene.index_buffer.as_ref(), 0, rt::INDICES.index);
+        enc.set_buffer(accel.geom_table.as_ref(), 0, rt::GEOMETRY.index);
+        enc.set_acceleration_structure(accel.tlas.as_ref(), rt::SCENE_TLAS.index);
+        enc.set_buffer(accel.deformed_verts.as_ref(), 0, rt::SKINNED_VERTICES.index);
+        enc.set_buffer(accel.skinned_indices.as_ref(), 0, rt::SKINNED_INDICES.index);
         if textured && let Some(tex_args) = bindless_tex_args {
-            // The bindless albedo pool at buffer(7) (the same index the main
-            // pass uses), at the pool's offset in the main pass's block, its
-            // textures declared resident.
+            // The bindless albedo pool, at the pool's offset in the main pass's
+            // block, its textures declared resident.
             enc.set_buffer(
                 tex_args.as_ref(),
                 crate::metal::bindless_args::BINDLESS_POOL_OFFSET,
-                crate::metal::context::BINDLESS_TEXTURE_ARG_BUFFER_INDEX,
+                rt::TEXTURES.index,
             );
             self.use_bindless_textures_compute(&enc);
-            enc.set_sampler(self.scene.sampler.as_ref(), RT_POOL_SAMPLER_INDEX);
+            enc.set_sampler(self.scene.sampler.as_ref(), rt::POOL_SAMPLER.index);
             // The canopy block and view tables a hit on ground growing grass
             // shades from, as the main pass binds them.
-            enc.set_value(&self.canopy, RT_CANOPY_BUFFER_INDEX);
+            enc.set_value(&self.canopy, rt::CANOPY.index);
             if let Some(tables) = self.canopy_tables.buffer() {
-                enc.set_buffer(tables, 0, RT_CANOPY_TABLES_BUFFER_INDEX);
+                enc.set_buffer(tables, 0, rt::CANOPY_TABLES.index);
             }
         }
         // The TLAS references each BLAS indirectly, so the BLASes are not
@@ -310,35 +292,38 @@ impl MtlContext {
         rt_params: &render_types::RtParams,
         screen: &RtScreen<'_>,
     ) {
-        enc.set_value(rt_params, 0);
-        enc.set_texture(self.targets.hdr.hdr_resolve.as_ref(), 0);
-        enc.set_texture(screen.normal_depth, 1);
-        enc.set_texture(screen.roughness, 2);
-        enc.set_texture(self.scene.env_map.prefilter.as_ref(), 3);
+        enc.set_value(rt_params, rt::PARAMS.index);
+        enc.set_texture(self.targets.hdr.hdr_resolve.as_ref(), rt::SCENE.index);
+        enc.set_texture(screen.normal_depth, rt::GBUFFER.index);
+        enc.set_texture(screen.roughness, rt::ROUGHNESS.index);
+        enc.set_texture(self.scene.env_map.prefilter.as_ref(), rt::PREFILTER.index);
         // A missed ray reflects the box-projected scene capture (the source the
         // forward IBL specular term uses), blending the probes the main
-        // camera's cluster grid (buffers 9 and 10) bins at the pixel; count
-        // == 0 keeps the sky fallback.
+        // camera's cluster grid bins at the pixel; count == 0 keeps the sky
+        // fallback.
         self.probe_bindings().bind_compute(
             enc,
             crate::metal::probe_set::ProbeSlots {
-                set: 8,
-                records: 11,
-                cubes: Some(4),
-                cluster: Some((9, 10)),
+                set: rt::PROBE_SET.index,
+                records: rt::PROBE_RECORDS.index,
+                cubes: Some(rt::PROBE_CUBES.index),
+                cluster: Some((rt::CLUSTER.index, rt::CLUSTER_LIST.index)),
             },
         );
-        // The screen sources take the post sampler at 0..2; the prefilter cube
-        // at sampler(3) and the probe array's own sampler at sampler(4) take
-        // the cube sampler.
-        for i in 0..3 {
-            enc.set_sampler(&self.composite.sampler, i);
+        // The screen sources take the post sampler; the prefilter cube and the
+        // probe array's own sampler take the cube sampler.
+        for slot in [
+            rt::SCENE_SAMPLER,
+            rt::GBUFFER_SAMPLER,
+            rt::ROUGHNESS_SAMPLER,
+        ] {
+            enc.set_sampler(&self.composite.sampler, slot.index);
         }
-        for i in 3..5 {
-            enc.set_sampler(self.scene.cube_sampler.as_ref(), i);
+        for slot in [rt::PREFILTER_SAMPLER, rt::PROBE_CUBE_SAMPLER] {
+            enc.set_sampler(self.scene.cube_sampler.as_ref(), slot.index);
         }
-        enc.set_texture(screen.reflection, RT_OUTPUT_TEXTURE_INDEX);
-        enc.set_buffer(&screen.rays.list, 0, RT_RAY_LIST_BUFFER_INDEX);
-        enc.set_buffer(&screen.rays.args, 0, RT_RAY_ARGS_BUFFER_INDEX);
+        enc.set_texture(screen.reflection, rt::OUTPUT.index);
+        enc.set_buffer(&screen.rays.list, 0, rt::RAY_LIST.index);
+        enc.set_buffer(&screen.rays.args, 0, rt::RAY_ARGS.index);
     }
 }

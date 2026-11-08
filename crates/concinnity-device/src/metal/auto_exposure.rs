@@ -22,6 +22,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::auto_exposure::ExposureAdaptation;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::exposure::metal::{average, build};
 use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -148,9 +149,9 @@ impl MtlContext {
 
         // Build kernel: 16x16 threadgroups, one thread per metered pixel.
         enc.set_pipeline(&pipelines.build);
-        enc.set_texture(hdr_tex, 0);
-        enc.set_buffer(histogram, 0, 0);
-        enc.set_value(&params, 1);
+        enc.set_texture(hdr_tex, build::HDR_TEXTURE.index);
+        enc.set_buffer(histogram, 0, build::HISTOGRAM.index);
+        enc.set_value(&params, build::PARAMS.index);
         let tg = MTLSize {
             width: 16,
             height: 16,
@@ -171,9 +172,9 @@ impl MtlContext {
         // histogram and clears it for the next frame. The output buffer at
         // buffer(1) receives the frame's measurement.
         enc.set_pipeline(&pipelines.average);
-        enc.set_buffer(histogram, 0, 0);
-        enc.set_buffer(output, 0, 1);
-        enc.set_value(&params, 2);
+        enc.set_buffer(histogram, 0, average::HISTOGRAM.index);
+        enc.set_buffer(output, 0, average::MEASUREMENT.index);
+        enc.set_value(&params, average::PARAMS.index);
         let avg_grid = MTLSize {
             width: auto_exposure::HISTOGRAM_BINS,
             height: 1,

@@ -231,7 +231,10 @@ pub(crate) struct CullSlot {
 // at. The argument encoder that fills that argument buffer is built for this
 // same index.
 pub(super) const CULL_ICB_BUFFER_INDEX: usize = 4;
-// Buffer index of the scatter's inline `ScatterParams`.
+// The Metal-only scatter's own slots: the index buffers it bakes into each
+// command, and its inline `ScatterParams`.
+const CULL_INDEX_BUFFER_INDEX: usize = 3;
+const CULL_SKINNED_INDEX_BUFFER_INDEX: usize = 6;
 const CULL_SCATTER_PARAMS_INDEX: usize = 7;
 // The shared kernels' slots, which the scatter reads at the same indices on
 // the same encoder.
@@ -907,19 +910,23 @@ impl MtlContext {
         enc.set_buffer(object_buffer, 0, cull::OBJECTS.index);
         enc.set_buffer(draw_args_buffer, 0, cull::DRAW_ARGS.index);
         enc.set_value(&cull_uniforms, cull::CULL.index);
-        enc.set_buffer(&self.scene.index_buffer, 0, 3);
+        enc.set_buffer(&self.scene.index_buffer, 0, CULL_INDEX_BUFFER_INDEX);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         // Per-object cull status: the decision kernel writes it, the encode
         // kernel reads it back. The main cull's status is read again by the late pass
         // under two-pass occlusion; the mirror cull's shared scratch is not.
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
-        // Skinned index buffer at buffer(6): the encode kernel bakes it into
+        // The skinned index buffer: the encode kernel bakes it into
         // the indirect command for records at/after `skinned_base`. Bound
         // unconditionally (Metal requires a buffer the kernel references to be
         // bound even under a never-taken branch); the static index buffer is a
         // harmless placeholder when no skinned mesh is folded (skinned_base ==
         // object_count then, so the skinned branch never fires).
-        enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        enc.set_buffer(
+            self.skinned_index_or_placeholder(),
+            0,
+            CULL_SKINNED_INDEX_BUFFER_INDEX,
+        );
         // The routes and regions for this view: the decision kernel picks each
         // record's bucket, the encode kernel writes it where its regions say.
         enc.set_value(
@@ -1092,13 +1099,17 @@ impl MtlContext {
         enc.set_buffer(object_buffer, 0, cull::OBJECTS.index);
         enc.set_buffer(draw_args_buffer, 0, cull::DRAW_ARGS.index);
         enc.set_value(&cull_uniforms, cull::CULL.index);
-        enc.set_buffer(&self.scene.index_buffer, 0, 3);
+        enc.set_buffer(&self.scene.index_buffer, 0, CULL_INDEX_BUFFER_INDEX);
         enc.set_buffer(arg_buf, 0, CULL_ICB_BUFFER_INDEX);
         enc.set_buffer(status, 0, CULL_STATUS_BUFFER_INDEX);
         // Skinned index buffer at buffer(6); see encode_cull. The late pass
         // of two-pass occlusion re-tests the same records, so the skinned
         // tail is handled here too.
-        enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        enc.set_buffer(
+            self.skinned_index_or_placeholder(),
+            0,
+            CULL_SKINNED_INDEX_BUFFER_INDEX,
+        );
         enc.set_value(
             &self.view_variants(&self.cull.variants, &self.state.view.daylight),
             CULL_VARIANTS_BUFFER_INDEX,
@@ -1173,10 +1184,14 @@ impl MtlContext {
         );
         enc.set_buffer(object_buffer, 0, cull::OBJECTS.index);
         enc.set_buffer(draw_args_buffer, 0, cull::DRAW_ARGS.index);
-        enc.set_buffer(&self.scene.index_buffer, 0, 3);
+        enc.set_buffer(&self.scene.index_buffer, 0, CULL_INDEX_BUFFER_INDEX);
         // Skinned index buffer at buffer(6); the scatter bakes it into the
         // skinned-tail commands exactly like the main cull.
-        enc.set_buffer(self.skinned_index_or_placeholder(), 0, 6);
+        enc.set_buffer(
+            self.skinned_index_or_placeholder(),
+            0,
+            CULL_SKINNED_INDEX_BUFFER_INDEX,
+        );
         // The scatter declares the variant block; a single stream never reads
         // it.
         enc.set_value(&self.cull.variants, CULL_VARIANTS_BUFFER_INDEX);

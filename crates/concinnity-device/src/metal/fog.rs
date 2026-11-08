@@ -15,6 +15,7 @@
 use concinnity_engine::gfx::render_types::{FogFroxelParams, FogParams};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::render_graph::{FOG_FROXEL_X, FOG_FROXEL_Y, FOG_FROXEL_Z};
+use concinnity_engine::render::shader::programs::abi::fog::metal::{draw, froxel};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -87,8 +88,8 @@ impl MtlContext {
         );
         enc.set_pipeline(pipeline);
 
-        enc.set_fragment_value(params, 0);
-        enc.set_fragment_value(froxel_params, 1);
+        enc.set_fragment_value(params, draw::FOG.index);
+        enc.set_fragment_value(froxel_params, draw::FROXEL.index);
         // Read the single-sample `depth_resolve` (post-
         // Main depth + any raymarched surface depth) so fog
         // attenuates raymarched surfaces by their true distance. It is
@@ -96,9 +97,12 @@ impl MtlContext {
         // sampler slot; the volume is trilinearly filtered and takes
         // sampler(0). `composite.sampler` is the linear clamp-to-edge state the
         // shader used to declare inline as a constexpr sampler.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_texture(volume.as_ref(), 1);
-        set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 1);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            draw::SCENE_DEPTH.index,
+        );
+        enc.set_fragment_texture(volume.as_ref(), draw::VOLUME.index);
+        set_fragment_sampler_range(&enc, &self.composite.sampler, draw::VOLUME_SAMPLER.index, 1);
         // Fullscreen triangle: 3 vertices, no vertex buffer.
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
@@ -143,18 +147,18 @@ impl MtlContext {
         );
         enc.set_pipeline(pipeline);
 
-        enc.set_value(params, 0);
-        enc.set_value(froxel_params, 1);
+        enc.set_value(params, froxel::FOG.index);
+        enc.set_value(froxel_params, froxel::FROXEL.index);
         // ShadowUniforms at buffer(2) so the kernel can pick a CSM cascade per
         // froxel.
-        enc.set_value(&self.state.planner.shadow.uniforms, 2);
-        enc.set_texture(self.shadow.map.as_ref(), 0);
-        enc.set_texture(volume.as_ref(), 1);
+        enc.set_value(&self.state.planner.shadow.uniforms, froxel::SHADOW.index);
+        enc.set_texture(self.shadow.map.as_ref(), froxel::SHADOW_MAP.index);
+        enc.set_texture(volume.as_ref(), froxel::VOLUME.index);
         // The per-slab CSM tap's comparison sampler, which the shader used
         // to declare inline as a constexpr sampler. `shadow.sampler` is the
         // same linear / clamp-to-edge / less-equal state the main pass taps
         // the cascades with.
-        enc.set_sampler(self.shadow.sampler.as_ref(), 0);
+        enc.set_sampler(self.shadow.sampler.as_ref(), froxel::SHADOW_SAMPLER.index);
 
         // One thread per (x, y) tile; the kernel walks Z internally.
         // Threadgroup of 8x8x1 keeps occupancy high without thrashing

@@ -24,6 +24,7 @@ use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
 use concinnity_engine::render::particles::{
     EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
 };
+use concinnity_engine::render::shader::programs::abi::particle::metal::{draw, simulate};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::uniforms::ParticleView;
 use objc2::rc::Retained;
@@ -143,7 +144,7 @@ impl MtlContext {
         );
         enc.set_pipeline(&pipelines.simulate);
         if let Some(rows) = pipelines.rows.get(self.particle.rows_slot) {
-            enc.set_buffer(rows, 0, 1);
+            enc.set_buffer(rows, 0, simulate::FRAME_ROWS.index);
         }
         // Every live pool ticks, visible or not, so an off-screen emitter stays
         // in a realistic mid-life state for when the camera turns back. The cost
@@ -154,8 +155,8 @@ impl MtlContext {
                 continue;
             };
             let (rec, params) = (emitter.record, emitter.params);
-            enc.set_buffer(gpu.pool.as_ref(), 0, 0);
-            enc.set_value(&params, 2);
+            enc.set_buffer(gpu.pool.as_ref(), 0, simulate::POOL.index);
+            enc.set_value(&params, simulate::PARAMS.index);
             let grid = MTLSize {
                 width: rec.max_particles as usize,
                 height: 1,
@@ -247,10 +248,13 @@ impl MtlContext {
         );
         let mut lit = false;
         enc.set_pipeline(&pipelines.render);
-        enc.set_vertex_value(&view, 1);
-        enc.set_fragment_sampler(&pipelines.sampler, 0);
+        enc.set_vertex_value(&view, draw::VIEW.index);
+        enc.set_fragment_sampler(&pipelines.sampler, draw::ALBEDO_SAMPLER.index);
         // Resolved scene depth at texture(2) for the manual depth test.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 2);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            draw::SCENE_DEPTH.index,
+        );
 
         let mut draw_calls: u32 = 0;
         for emitter in visible {
@@ -268,9 +272,9 @@ impl MtlContext {
                 });
             }
             let slot = rec.texture_slot.min(last_tex);
-            enc.set_vertex_buffer(gpu.pool.as_ref(), 0, 0);
-            enc.set_vertex_value(&params, 2);
-            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), 0);
+            enc.set_vertex_buffer(gpu.pool.as_ref(), 0, draw::POOL.index);
+            enc.set_vertex_value(&params, draw::PARAMS.index);
+            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), draw::ALBEDO.index);
             // SAFETY: the four strip vertices are generated from `[[vertex_id]]` in the shader.
             unsafe {
                 enc.drawPrimitives_vertexStart_vertexCount_instanceCount(

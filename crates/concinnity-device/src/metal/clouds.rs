@@ -17,6 +17,7 @@ use concinnity_engine::render::environment::clouds::{
     CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
     cloud_target_size,
 };
+use concinnity_engine::render::shader::programs::abi::clouds::metal::{composite, march, noise};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -179,20 +180,20 @@ impl CloudState {
         };
         if !self.noise_built.get() {
             enc.set_pipeline(&self.noise_kernel);
-            enc.set_texture(&self.noise, 0);
+            enc.set_texture(&self.noise, noise::NOISE_OUT.index);
             dispatch(enc, [NOISE_SIZE; 3], [4, 4, 4]);
             self.noise_built.set(true);
         }
-        enc.set_value(atmo_params, 0);
-        enc.set_value(params, 1);
+        enc.set_value(atmo_params, march::ATMOSPHERE.index);
+        enc.set_value(params, march::CLOUDS.index);
         bind_tables(enc);
-        enc.set_texture(&self.noise, 4);
-        enc.set_sampler(&self.noise_sampler, 1);
+        enc.set_texture(&self.noise, march::NOISE.index);
+        enc.set_sampler(&self.noise_sampler, march::NOISE_SAMPLER.index);
         enc.set_pipeline(&self.shadow_kernel);
-        enc.set_texture(&self.shadow, 5);
+        enc.set_texture(&self.shadow, march::OUTPUT.index);
         dispatch(enc, [SHADOW_SIZE, SHADOW_SIZE, 1], [8, 8, 1]);
         enc.set_pipeline(&self.panorama_kernel);
-        enc.set_texture(&self.panorama, 5);
+        enc.set_texture(&self.panorama, march::OUTPUT.index);
         let [bw, bh] = cloud_march_size(PANORAMA_SIZE);
         dispatch(enc, [bw, bh, 1], [8, 8, 1]);
     }
@@ -286,22 +287,25 @@ impl MtlContext {
             ns_string!("clouds"),
         );
         enc.set_pipeline(&clouds.march_kernel);
-        enc.set_value(atmo_params, 0);
-        enc.set_value(params, 1);
-        enc.set_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_texture(atmo.aerial(), 1);
-        enc.set_texture(atmo.transmittance(), 2);
-        enc.set_texture(atmo.multiscatter(), 3);
-        enc.set_texture(&clouds.noise, 4);
-        enc.set_texture(&clouds.marched, 5);
-        enc.set_sampler(&self.composite.sampler, 0);
-        enc.set_sampler(&clouds.noise_sampler, 1);
+        enc.set_value(atmo_params, march::ATMOSPHERE.index);
+        enc.set_value(params, march::CLOUDS.index);
+        enc.set_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            march::SCENE_DEPTH.index,
+        );
+        enc.set_texture(atmo.aerial(), march::AERIAL_VOLUME.index);
+        enc.set_texture(atmo.transmittance(), march::TRANSMITTANCE.index);
+        enc.set_texture(atmo.multiscatter(), march::MULTISCATTER.index);
+        enc.set_texture(&clouds.noise, march::NOISE.index);
+        enc.set_texture(&clouds.marched, march::OUTPUT.index);
+        enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
+        enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
         let [mw, mh] = cloud_march_size(clouds.target_size);
         dispatch(&enc, [mw, mh, 1], [8, 8, 1]);
         enc.set_pipeline(&clouds.reconstruct_kernel);
-        enc.set_texture(clouds.target(), 5);
-        enc.set_texture(&clouds.marched, 6);
-        enc.set_texture(&clouds.targets[1 - clouds.write], 7);
+        enc.set_texture(clouds.target(), march::OUTPUT.index);
+        enc.set_texture(&clouds.marched, march::MARCHED.index);
+        enc.set_texture(&clouds.targets[1 - clouds.write], march::PREVIOUS.index);
         let [w, h] = clouds.target_size;
         dispatch(&enc, [w, h, 1], [8, 8, 1]);
         Ok(0)
@@ -345,9 +349,12 @@ impl MtlContext {
             ns_string!("cloud composite"),
         );
         enc.set_pipeline(&clouds.composite);
-        enc.set_fragment_value(params, 0);
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_texture(clouds.target(), 1);
+        enc.set_fragment_value(params, composite::CLOUDS.index);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            composite::SCENE_DEPTH.index,
+        );
+        enc.set_fragment_texture(clouds.target(), composite::TARGET.index);
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
         unsafe {

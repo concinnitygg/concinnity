@@ -22,6 +22,7 @@ use concinnity_engine::render::environment::grass::{
     FRAME_PLANET_TILE_RECORDS, FRAME_TILE_RECORDS, GrassBendPass, GrassBender, GrassCamera,
     GrassField, GrassFrameState, GrassPass, GrassShadowView, GrassView,
 };
+use concinnity_engine::render::shader::programs::abi::grass::metal as grass;
 use concinnity_engine::render::shader::programs::abi::main::metal as slots;
 use concinnity_engine::render::shadow::bias;
 use concinnity_engine::render::uniforms::grass::{
@@ -53,29 +54,29 @@ use concinnity_engine::render::shader::programs::ShaderProgram;
 
 // Where the grass draws read their block and blades (`grass.hlsl`), clear of
 // every main-pass and pre-pass slot.
-const PARAMS_INDEX: usize = 19;
-const BLADES_INDEX: usize = 20;
+const PARAMS_INDEX: usize = grass::draw::GRASS.index;
+const BLADES_INDEX: usize = grass::draw::BLADES.index;
 
 // The kernel's slots, by register.
-const KERNEL_PARAMS_INDEX: usize = 0;
-const KERNEL_BLADES_INDEX: usize = 1;
-const KERNEL_ARGS_INDEX: usize = 2;
-const KERNEL_HEIGHTS_INDEX: usize = 3;
-const KERNEL_MASKS_INDEX: usize = 4;
-const KERNEL_HIZ_TEXTURE_INDEX: usize = 5;
-const KERNEL_BEND_INDEX: usize = 6;
-const KERNEL_PLANET_TILES_INDEX: usize = 7;
-const KERNEL_VERTICES_INDEX: usize = 8;
-const KERNEL_TILES_INDEX: usize = 9;
+const KERNEL_PARAMS_INDEX: usize = grass::generate::GRASS.index;
+const KERNEL_BLADES_INDEX: usize = grass::generate::BLADES_OUT.index;
+const KERNEL_ARGS_INDEX: usize = grass::generate::DRAW_ARGS.index;
+const KERNEL_HEIGHTS_INDEX: usize = grass::generate::TERRAIN_HEIGHTS.index;
+const KERNEL_MASKS_INDEX: usize = grass::generate::GRASS_MASKS.index;
+const KERNEL_HIZ_TEXTURE_INDEX: usize = grass::generate::HIZ.index;
+const KERNEL_BEND_INDEX: usize = grass::generate::BEND_FIELD.index;
+const KERNEL_PLANET_TILES_INDEX: usize = grass::generate::PLANET_TILES.index;
+const KERNEL_VERTICES_INDEX: usize = grass::generate::MESH_VERTICES.index;
+const KERNEL_TILES_INDEX: usize = grass::generate::TILES.index;
 
 // Planet tile and tile records one frame holds: the view's run and the
 // cascade's.
 
 // The bend pass's slots, and the cascade draw's.
-const BEND_PARAMS_INDEX: usize = 0;
-const BEND_FIELD_INDEX: usize = 1;
-const SHADOW_PARAMS_INDEX: usize = 0;
-const SHADOW_BLADES_INDEX: usize = 1;
+const BEND_PARAMS_INDEX: usize = grass::bend::BEND.index;
+const BEND_FIELD_INDEX: usize = grass::bend::BEND_FIELD.index;
+const SHADOW_PARAMS_INDEX: usize = grass::shadow::GRASS.index;
+const SHADOW_BLADES_INDEX: usize = grass::shadow::BLADES.index;
 
 pub(super) struct GrassPipelines {
     generate: Retained<ProtocolObject<dyn MTLComputePipelineState>>,

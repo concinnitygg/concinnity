@@ -17,3 +17,21 @@ pub mod dx {
     /// The deformed vertices.
     pub const DST: Register<Uav> = Register::new("dst", 0);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Slot};
+
+    /// The skinned vertices.
+    pub const SRC: Slot<Buffer> = Slot::new("src", 0);
+    /// The deformed vertices.
+    pub const DST: Slot<Buffer> = Slot::new("dst", 1);
+    /// The joint palette.
+    pub const PALETTE: Slot<Buffer> = Slot::new("palette", 2);
+    /// The dispatch's parameters.
+    pub const PARAMS: Slot<Buffer> = Slot::new("params", 3);
+    /// The morph deltas.
+    pub const MORPH_DATA: Slot<Buffer> = Slot::new("morph_data", 4);
+    /// The morph weights.
+    pub const MORPH_WEIGHTS: Slot<Buffer> = Slot::new("morph_weights", 5);
+}

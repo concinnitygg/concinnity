@@ -7,3 +7,11 @@ pub mod dx {
     /// The pre-pass's view block.
     pub const GBUFFER_VIEW: Register<Cbv> = Register::new("gb_view", 1);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Slot};
+
+    /// The pre-pass's view block.
+    pub const GBUFFER_VIEW: Slot<Buffer> = Slot::new("gb_view", 0);
+}

@@ -38,6 +38,7 @@ use super::builtin_shaders::compute_pipeline;
 use super::error::allocation_failed;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::hiz::spd;
+use concinnity_engine::render::shader::programs::abi::hiz::metal::{downsample, init};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -243,9 +244,9 @@ impl MtlContext {
             sample_count: self.targets.hdr.sample_count,
         };
         enc.set_pipeline(&hiz.init_pipeline);
-        enc.set_value(&init_params, 0);
-        enc.set_texture(depth, 0);
-        enc.set_texture(hiz.mip_views[0].as_ref(), 1);
+        enc.set_value(&init_params, init::PARAMS.index);
+        enc.set_texture(depth, init::SRC_DEPTH.index);
+        enc.set_texture(hiz.mip_views[0].as_ref(), init::DST_MIP.index);
         dispatch_2d(&enc, hiz.width, hiz.height);
 
         // Downsample chain: each dispatch reads the prior mip through its
@@ -263,9 +264,15 @@ impl MtlContext {
                 sample_count: 0,
             };
             enc.set_pipeline(&hiz.downsample_pipeline);
-            enc.set_value(&params, 0);
-            enc.set_texture(hiz.mip_views[(mip - 1) as usize].as_ref(), 0);
-            enc.set_texture(hiz.mip_views[mip as usize].as_ref(), 1);
+            enc.set_value(&params, downsample::PARAMS.index);
+            enc.set_texture(
+                hiz.mip_views[(mip - 1) as usize].as_ref(),
+                downsample::SRC_HIZ.index,
+            );
+            enc.set_texture(
+                hiz.mip_views[mip as usize].as_ref(),
+                downsample::DST_MIP.index,
+            );
             dispatch_2d(&enc, next_w, next_h);
             cur_w = next_w;
             cur_h = next_h;

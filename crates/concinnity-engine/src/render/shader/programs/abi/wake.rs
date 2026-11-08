@@ -15,3 +15,19 @@ pub mod dx {
     /// The mip a downsample reads.
     pub const SRC_FIELD: Register<Srv> = Register::new("src_field", 4);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Slot, Texture};
+
+    /// The kernel's parameters.
+    pub const PARAMS: Slot<Buffer> = Slot::new("params", 0);
+    /// The wave state.
+    pub const STATE: Slot<Buffer> = Slot::new("state", 1);
+    /// The transform's scratch.
+    pub const WORK: Slot<Buffer> = Slot::new("work", 2);
+    /// The wake field written.
+    pub const DST_FIELD: Slot<Texture> = Slot::new("dst_field", 3);
+    /// The mip a downsample reads.
+    pub const SRC_FIELD: Slot<Texture> = Slot::new("src_field", 4);
+}

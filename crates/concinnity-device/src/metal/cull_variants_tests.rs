@@ -12,6 +12,7 @@ use concinnity_engine::gfx::render_types::{
     draw_args_bucket_bits, draw_args_flags, draw_args_route_bits, group_count_words, group_counts,
     scan_group_counts,
 };
+use concinnity_engine::render::shader::programs::abi::cull::metal as cull;
 use concinnity_engine::render::uniforms::DaylightBlock;
 use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
 use objc2::runtime::ProtocolObject;
@@ -207,14 +208,14 @@ fn run(
     let cmd = queue.commandBuffer().expect("command buffer");
     let enc = cmd.computeCommandEncoder().expect("encoder");
     enc.set_pipeline(&pipeline);
-    enc.set_buffer(&objects, 0, 0);
-    enc.set_buffer(&args, 0, 1);
-    enc.set_value(&uniforms, 2);
-    enc.set_buffer(&status, 0, 5);
-    enc.set_value(variants, 8);
-    enc.set_buffer(&counts, 0, 9);
-    enc.set_buffer(&ranges, 0, 10);
-    enc.set_texture(&hiz, 0);
+    enc.set_buffer(&objects, 0, cull::OBJECTS.index);
+    enc.set_buffer(&args, 0, cull::DRAW_ARGS.index);
+    enc.set_value(&uniforms, cull::CULL.index);
+    enc.set_buffer(&status, 0, cull::CULL_STATUS.index);
+    enc.set_value(variants, cull::VARIANTS.index);
+    enc.set_buffer(&counts, 0, cull::GROUP_COUNTS.index);
+    enc.set_buffer(&ranges, 0, cull::STREAM_COUNTS.index);
+    enc.set_texture(&hiz, cull::HIZ.index);
     groups(&enc, records.len().div_ceil(64));
     enc.set_pipeline(&scan);
     enc.set_value(

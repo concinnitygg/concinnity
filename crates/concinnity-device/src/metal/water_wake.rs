@@ -13,6 +13,7 @@ use concinnity_engine::render::environment::water::wake::{
     WAKE_COLUMN_GROUPS, WAKE_FFT_THREADS, WAKE_GROUP, WAKE_MIP_LEVELS, WAKE_RESOLUTION,
     WAKE_ROW_GROUPS, wake_groups,
 };
+use concinnity_engine::render::shader::programs::abi::wake::metal as wake;
 use concinnity_engine::render::uniforms::wake::WaterWakeParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -37,15 +38,11 @@ type Kernel = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 const FIELD_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
 // Slots pinned by `water_wake.hlsl`'s registers.
-const PARAMS_INDEX: usize = 0;
-const STATE_INDEX: usize = 1;
-const WORK_INDEX: usize = 2;
-const DST_FIELD_INDEX: usize = 3;
-const SRC_FIELD_INDEX: usize = 4;
-
-// The water draw's wake slot, pinned by `water.hlsl`'s register in both
-// stages.
-pub(in crate::metal) const WAKE_FIELD_TEXTURE_INDEX: usize = 11;
+const PARAMS_INDEX: usize = wake::PARAMS.index;
+const STATE_INDEX: usize = wake::STATE.index;
+const WORK_INDEX: usize = wake::WORK.index;
+const DST_FIELD_INDEX: usize = wake::DST_FIELD.index;
+const SRC_FIELD_INDEX: usize = wake::SRC_FIELD.index;
 
 // The wake's kernels, state and field.
 pub(in crate::metal) struct WakeSim {

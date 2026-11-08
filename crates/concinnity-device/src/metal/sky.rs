@@ -8,6 +8,9 @@
 use concinnity_engine::gfx::view_modes::ViewMode;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::sky;
+use concinnity_engine::render::shader::programs::abi::atmosphere::metal::sky as atmo_sky;
+use concinnity_engine::render::shader::programs::abi::gbuffer_sky::metal as gbuffer_sky;
+use concinnity_engine::render::shader::programs::abi::sky::metal as slots;
 use concinnity_engine::render::uniforms::{GBufferView, ViewUniforms};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -126,21 +129,21 @@ impl MtlContext {
     ) {
         enc.pushDebugGroup(objc2_foundation::ns_string!("sky"));
         enc.set_depth_stencil(&self.targets.depth_state_read_only);
-        enc.set_vertex_value(view, 0);
-        enc.set_fragment_value(view, 0);
+        enc.set_vertex_value(view, slots::VIEW.index);
+        enc.set_fragment_value(view, slots::VIEW.index);
         if let Some((atmo, params)) = self
             .atmosphere
             .as_ref()
             .and_then(|a| Some((a, a.params.as_ref()?)))
         {
             enc.set_pipeline(&atmo.sky_pipeline);
-            enc.set_fragment_value(params, 1);
-            enc.set_fragment_texture(&atmo.sky_view, 0);
-            enc.set_fragment_sampler(&self.composite.sampler, 0);
+            enc.set_fragment_value(params, atmo_sky::ATMOSPHERE.index);
+            enc.set_fragment_texture(&atmo.sky_view, atmo_sky::SKY_VIEW.index);
+            enc.set_fragment_sampler(&self.composite.sampler, atmo_sky::LUT_SAMPLER.index);
         } else {
             enc.set_pipeline(&self.sky.pipeline);
-            enc.set_fragment_texture(&self.scene.env_map.prefilter, 0);
-            enc.set_fragment_sampler(&self.scene.cube_sampler, 0);
+            enc.set_fragment_texture(&self.scene.env_map.prefilter, slots::PREFILTER_CUBE.index);
+            enc.set_fragment_sampler(&self.scene.cube_sampler, slots::CUBE_SAMPLER.index);
         }
         // SAFETY: the vertex stage generates all three vertices, so the draw reads no bound vertex
         // buffer.
@@ -159,7 +162,7 @@ impl MtlContext {
     ) {
         enc.set_pipeline(&self.sky.velocity_pipeline);
         enc.set_depth_stencil(&self.targets.depth_state_read_only);
-        enc.set_vertex_value(view, 0);
+        enc.set_vertex_value(view, gbuffer_sky::GBUFFER_VIEW.index);
         // SAFETY: the vertex stage generates all three vertices, so the draw reads no bound vertex
         // buffer.
         unsafe {

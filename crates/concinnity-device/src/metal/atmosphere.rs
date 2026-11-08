@@ -14,6 +14,8 @@ use concinnity_engine::render::environment::atmosphere::{
     SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
     TRANSMITTANCE_WIDTH, TableReadiness,
 };
+use concinnity_engine::render::shader::programs::abi::atmosphere::metal::{aerial, kernel};
+use concinnity_engine::render::shader::programs::abi::clouds::metal::march;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -333,51 +335,51 @@ impl MtlContext {
                 })?,
             ns_string!("atmosphere"),
         );
-        enc.set_value(params, 0);
-        enc.set_sampler(&self.composite.sampler, 0);
+        enc.set_value(params, kernel::ATMOSPHERE.index);
+        enc.set_sampler(&self.composite.sampler, kernel::LUT_SAMPLER.index);
         atmo.readiness.note_recorded();
         if atmo.air_tables.take_rebuild(params.radii[0]) {
             enc.set_pipeline(&atmo.kernels.transmittance);
-            enc.set_texture(&atmo.transmittance, 3);
+            enc.set_texture(&atmo.transmittance, kernel::OUTPUT.index);
             dispatch_texels(&enc, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT);
             enc.set_pipeline(&atmo.kernels.multiscatter);
-            enc.set_texture(&atmo.transmittance, 0);
-            enc.set_texture(&atmo.multiscatter, 3);
+            enc.set_texture(&atmo.transmittance, kernel::TRANSMITTANCE.index);
+            enc.set_texture(&atmo.multiscatter, kernel::OUTPUT.index);
             dispatch_groups(&enc, [MULTISCATTER_SIZE, MULTISCATTER_SIZE]);
         }
-        enc.set_texture(&atmo.transmittance, 0);
-        enc.set_texture(&atmo.multiscatter, 1);
+        enc.set_texture(&atmo.transmittance, kernel::TRANSMITTANCE.index);
+        enc.set_texture(&atmo.multiscatter, kernel::MULTISCATTER.index);
         enc.set_pipeline(&atmo.kernels.sky_view);
-        enc.set_texture(&atmo.sky_view, 3);
+        enc.set_texture(&atmo.sky_view, kernel::OUTPUT.index);
         dispatch_texels(&enc, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT);
         enc.set_pipeline(&atmo.kernels.aerial);
-        enc.set_texture(&atmo.aerial, 3);
+        enc.set_texture(&atmo.aerial, kernel::OUTPUT.index);
         dispatch_texels(&enc, AERIAL_SIZE, AERIAL_SIZE);
         // The clouds' maps read the tables at the haze pass's indices; the
         // irradiance and sky-cube kernels read their panorama.
         let panorama = match atmo.clouds.as_ref() {
             Some(clouds) => {
                 clouds.encode_maps(&enc, params, |enc| {
-                    enc.set_texture(&atmo.aerial, 1);
-                    enc.set_texture(&atmo.transmittance, 2);
-                    enc.set_texture(&atmo.multiscatter, 3);
+                    enc.set_texture(&atmo.aerial, march::AERIAL_VOLUME.index);
+                    enc.set_texture(&atmo.transmittance, march::TRANSMITTANCE.index);
+                    enc.set_texture(&atmo.multiscatter, march::MULTISCATTER.index);
                 });
-                enc.set_value(params, 0);
-                enc.set_texture(&atmo.transmittance, 0);
-                enc.set_texture(&atmo.multiscatter, 1);
+                enc.set_value(params, kernel::ATMOSPHERE.index);
+                enc.set_texture(&atmo.transmittance, kernel::TRANSMITTANCE.index);
+                enc.set_texture(&atmo.multiscatter, kernel::MULTISCATTER.index);
                 &clouds.panorama
             }
             None => &atmo.sky_view,
         };
-        enc.set_texture(panorama, 4);
+        enc.set_texture(panorama, kernel::CLOUD_PANORAMA.index);
         enc.set_pipeline(&atmo.kernels.irradiance);
-        enc.set_texture(&atmo.sky_view, 2);
-        enc.set_texture(&atmo.irradiance_slices, 3);
+        enc.set_texture(&atmo.sky_view, kernel::SKY_VIEW.index);
+        enc.set_texture(&atmo.irradiance_slices, kernel::OUTPUT.index);
         dispatch_groups(&enc, [1, 1]);
         let cube = &atmo.sky_cube;
         if cube.work.capture {
             enc.set_pipeline(&cube.kernel);
-            enc.set_texture(cube.gpu.capture_top(), 3);
+            enc.set_texture(cube.gpu.capture_top(), kernel::OUTPUT.index);
             dispatch_cube(&enc, SKY_CUBE_FACE);
             encode_pyramid(&enc, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN);
         }
@@ -426,12 +428,15 @@ impl MtlContext {
             ns_string!("aerial perspective"),
         );
         enc.set_pipeline(&atmo.aerial_pipeline);
-        enc.set_fragment_value(params, 0);
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_texture(&atmo.aerial, 1);
-        enc.set_fragment_texture(&atmo.transmittance, 2);
-        enc.set_fragment_texture(&atmo.multiscatter, 3);
-        set_fragment_sampler_range(&enc, &self.composite.sampler, 0, 1);
+        enc.set_fragment_value(params, aerial::ATMOSPHERE.index);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            aerial::SCENE_DEPTH.index,
+        );
+        enc.set_fragment_texture(&atmo.aerial, aerial::AERIAL_VOLUME.index);
+        enc.set_fragment_texture(&atmo.transmittance, aerial::TRANSMITTANCE.index);
+        enc.set_fragment_texture(&atmo.multiscatter, aerial::MULTISCATTER.index);
+        set_fragment_sampler_range(&enc, &self.composite.sampler, aerial::LUT_SAMPLER.index, 1);
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
         // vertex buffer.
         unsafe {

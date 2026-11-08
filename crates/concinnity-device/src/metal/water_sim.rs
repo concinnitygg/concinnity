@@ -10,6 +10,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::render_graph::PassId;
+use concinnity_engine::render::shader::programs::abi::ocean::metal as ocean;
 use concinnity_engine::render::uniforms::ocean::{
     OCEAN_FFT_THREADS, OCEAN_MIP_GROUP, OceanFftParams, ocean_mip_groups, ocean_mip_levels,
 };
@@ -44,20 +45,14 @@ type Kernel = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 const CASCADE_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
 // Slots pinned by `water_fft.hlsl`'s registers.
-const PARAMS_INDEX: usize = 0;
-const SPECTRUM_INDEX: usize = 5;
-const ROWS_INDEX: usize = 6;
-const FOAM_INDEX: usize = 7;
-const SRC_DISPLACEMENT_INDEX: usize = 0;
-const SRC_SLOPES_INDEX: usize = 1;
-const DST_DISPLACEMENT_INDEX: usize = 2;
-const DST_SLOPES_INDEX: usize = 3;
-
-// The water draw's ocean slots, pinned by `water.hlsl`'s registers in both
-// stages.
-pub(in crate::metal) const OCEAN_DISPLACEMENT_TEXTURE_INDEX: usize = 9;
-pub(in crate::metal) const OCEAN_SLOPES_TEXTURE_INDEX: usize = 10;
-pub(in crate::metal) const OCEAN_SAMPLER_INDEX: usize = 6;
+const PARAMS_INDEX: usize = ocean::PARAMS.index;
+const SPECTRUM_INDEX: usize = ocean::SPECTRUM.index;
+const ROWS_INDEX: usize = ocean::ROWS.index;
+const FOAM_INDEX: usize = ocean::FOAM.index;
+const SRC_DISPLACEMENT_INDEX: usize = ocean::SRC_DISPLACEMENT.index;
+const SRC_SLOPES_INDEX: usize = ocean::SRC_SLOPES.index;
+const DST_DISPLACEMENT_INDEX: usize = ocean::DST_DISPLACEMENT.index;
+const DST_SLOPES_INDEX: usize = ocean::DST_SLOPES.index;
 
 // What the water draw samples: both cascade arrays, the wake's field (a
 // stand-in where none runs) and their sampler.

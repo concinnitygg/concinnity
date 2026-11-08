@@ -31,3 +31,35 @@ pub mod dx {
     /// The scene color's sampler.
     pub const SCENE_SAMPLER: Register<Sampler> = Register::new("scene_samp", 2);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Sampler, Slot, Texture};
+
+    /// The pass's view block.
+    pub const VIEW: Slot<Buffer> = Slot::new("view_cb", 0);
+    /// The volume's block.
+    pub const VOLUME: Slot<Buffer> = Slot::new("vol_cb", 1);
+    /// The light block.
+    pub const LIGHTS: Slot<Buffer> = Slot::new("lights_cb", 2);
+    /// The cascaded shadow block.
+    pub const SHADOW: Slot<Buffer> = Slot::new("shadow_cb", 3);
+    /// The cascade a shadow draw renders.
+    pub const CASCADE: Slot<Buffer> = Slot::new("cascade_cb", 4);
+    /// The main pass's depth.
+    pub const MAIN_DEPTH: Slot<Texture> = Slot::new("main_depth", 0);
+    /// The cascaded shadow map array.
+    pub const SHADOW_MAP: Slot<Texture> = Slot::new("shadow_map", 1);
+    /// The sky irradiance cube.
+    pub const IRRADIANCE_CUBE: Slot<Texture> = Slot::new("irradiance_cube", 2);
+    /// The sky prefilter cube.
+    pub const PREFILTER_CUBE: Slot<Texture> = Slot::new("prefilter_cube", 3);
+    /// The scene color behind the volume.
+    pub const SCENE_COLOR: Slot<Texture> = Slot::new("scene_color", 4);
+    /// The shadow comparison sampler.
+    pub const SHADOW_SAMPLER: Slot<Sampler> = Slot::new("shadow_samp", 0);
+    /// The cubes' sampler.
+    pub const CUBE_SAMPLER: Slot<Sampler> = Slot::new("cube_samp", 1);
+    /// The scene color's sampler.
+    pub const SCENE_SAMPLER: Slot<Sampler> = Slot::new("scene_samp", 2);
+}

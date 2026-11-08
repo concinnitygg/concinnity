@@ -13,6 +13,7 @@ use concinnity_engine::geometry::glass_quad::build_glass_quad;
 use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
+use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
 use concinnity_engine::render::transparent;
 use concinnity_engine::render::transparent::SeeThroughMesh;
 use concinnity_engine::render::uniforms::{GlassParams, TransparentView};
@@ -430,8 +431,14 @@ impl MtlContext {
             // globally by `encode_transparent`.
             let mut params = panel.params;
             let mut fragment_textures = vec![
-                (0, self.targets.hdr.transparent_scene_copy.clone()),
-                (1, self.targets.hdr.depth_resolve.clone()),
+                (
+                    slots::SCENE_COLOR.index,
+                    self.targets.hdr.transparent_scene_copy.clone(),
+                ),
+                (
+                    slots::SCENE_DEPTH.index,
+                    self.targets.hdr.depth_resolve.clone(),
+                ),
             ];
             // Select the sharp planar reflection when this frame rendered the
             // pane's slot; bind that slot's resolve at the planar slot (overriding
@@ -442,10 +449,7 @@ impl MtlContext {
                     .and_then(|s| planar_set.and_then(|set| set.targets.get(s)))
             {
                 params.planar = GlassParams::planar_lane(true);
-                fragment_textures.push((
-                    super::transparent::GLASS_PLANAR_TEXTURE_INDEX,
-                    targets.resolve.clone(),
-                ));
+                fragment_textures.push((slots::PLANAR_REFLECTION.index, targets.resolve.clone()));
             }
             let c = panel.center;
             let sort_distance = transparent::sort_distance(c, [cam[0], cam[1], cam[2]]);
@@ -460,7 +464,10 @@ impl MtlContext {
                 base_vertex: 0,
                 params: bytes_of(&params),
                 fragment_textures,
-                fragment_samplers: vec![(0, self.composite.sampler.clone())],
+                fragment_samplers: vec![(
+                    slots::SCENE_COLOR_SAMPLER.index,
+                    self.composite.sampler.clone(),
+                )],
                 sort_distance,
                 then: None,
             });
@@ -592,10 +599,19 @@ impl MtlContext {
                 base_vertex: mesh.base_vertex,
                 params: bytes_of(&mesh.params),
                 fragment_textures: vec![
-                    (0, self.targets.hdr.transparent_scene_copy.clone()),
-                    (1, self.targets.hdr.depth_resolve.clone()),
+                    (
+                        slots::SCENE_COLOR.index,
+                        self.targets.hdr.transparent_scene_copy.clone(),
+                    ),
+                    (
+                        slots::SCENE_DEPTH.index,
+                        self.targets.hdr.depth_resolve.clone(),
+                    ),
                 ],
-                fragment_samplers: vec![(0, self.composite.sampler.clone())],
+                fragment_samplers: vec![(
+                    slots::SCENE_COLOR_SAMPLER.index,
+                    self.composite.sampler.clone(),
+                )],
                 sort_distance: mesh.distance,
                 then: None,
             });

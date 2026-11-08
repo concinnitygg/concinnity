@@ -33,3 +33,37 @@ pub mod dx {
         pub const ALBEDO_SAMPLER: Register<Sampler> = Register::new("albedo_sampler", 0);
     }
 }
+
+/// The Metal slots.
+pub mod metal {
+
+    /// The simulation.
+    pub mod simulate {
+        use crate::render::shader::programs::abi::slot::{Buffer, Slot};
+
+        /// The particle pool.
+        pub const POOL: Slot<Buffer> = Slot::new("pool", 0);
+        /// This frame's spawn rows.
+        pub const FRAME_ROWS: Slot<Buffer> = Slot::new("frame_rows", 1);
+        /// The simulation's block.
+        pub const PARAMS: Slot<Buffer> = Slot::new("params", 2);
+    }
+
+    /// The draw, lit or not.
+    pub mod draw {
+        use crate::render::shader::programs::abi::slot::{Buffer, Sampler, Slot, Texture};
+
+        /// The particle pool.
+        pub const POOL: Slot<Buffer> = Slot::new("pool", 0);
+        /// The view block.
+        pub const VIEW: Slot<Buffer> = Slot::new("view", 1);
+        /// The emitter's block.
+        pub const PARAMS: Slot<Buffer> = Slot::new("params", 2);
+        /// The sprite texture.
+        pub const ALBEDO: Slot<Texture> = Slot::new("albedo", 0);
+        /// The scene depth the sprites fade against.
+        pub const SCENE_DEPTH: Slot<Texture> = Slot::new("scene_depth", 2);
+        /// The sprite's sampler.
+        pub const ALBEDO_SAMPLER: Slot<Sampler> = Slot::new("albedo_sampler", 0);
+    }
+}

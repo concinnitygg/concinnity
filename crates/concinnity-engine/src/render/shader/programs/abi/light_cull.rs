@@ -13,3 +13,17 @@ pub mod dx {
     /// The reflection-probe records it bins.
     pub const PROBE_RECORDS: Register<Srv> = Register::new("probe_records", 1);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Slot};
+
+    /// The cluster grid's parameters.
+    pub const CLUSTER: Slot<Buffer> = Slot::new("cluster", 0);
+    /// The scene's local lights.
+    pub const LIGHTS: Slot<Buffer> = Slot::new("lights", 1);
+    /// The per-cluster lists the cull writes.
+    pub const CLUSTER_LIST: Slot<Buffer> = Slot::new("cluster_list", 2);
+    /// The reflection-probe records it bins.
+    pub const PROBE_RECORDS: Slot<Buffer> = Slot::new("probe_records", 3);
+}

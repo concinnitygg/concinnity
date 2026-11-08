@@ -23,6 +23,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;
 use concinnity_engine::render::transparent;
 use concinnity_engine::render::uniforms::TransparentView;
@@ -97,28 +98,6 @@ pub(in crate::metal) fn bytes_of<T: bytemuck::NoUninit>(value: &T) -> Vec<u8> {
     bytemuck::bytes_of(value).to_vec()
 }
 
-// The planar reflection resolve, declared after the probe block in every
-// transparent shader that samples it. Pinned here because the emitted MSL is
-// what numbers them.
-pub(in crate::metal) const GLASS_PLANAR_TEXTURE_INDEX: usize = 3;
-const GLASS_PLANAR_SAMPLER_INDEX: usize = 3;
-// Fragment sampler index the textured RT variants read the bindless pool
-// through, past the planar resolve's.
-const GLASS_POOL_SAMPLER_INDEX: usize = 4;
-// The reduced glass reflection layers, pinned by `register(t4)` / `(t5)` in the
-// glass shaders.
-const GLASS_REFLECTION_TEXTURE_INDEX: usize = 4;
-const GLASS_REFLECTION_BACK_TEXTURE_INDEX: usize = 5;
-// The light water.hlsl's body is lit by, pinned by its `register()`s: the
-// cascaded shadow's uniforms, map and compare sampler, and the sky irradiance
-// cube.
-const WATER_SHADOW_UNIFORMS_BUFFER_INDEX: usize = 14;
-const WATER_SHADOW_MAP_TEXTURE_INDEX: usize = 7;
-const WATER_IRRADIANCE_TEXTURE_INDEX: usize = 8;
-const WATER_SHADOW_SAMPLER_INDEX: usize = 5;
-// The clouds' shadow map, pinned by `register(t12)` in water.hlsl.
-const WATER_CLOUD_SHADOW_TEXTURE_INDEX: usize = 12;
-
 // What the transparent pass takes for the frame: the view and RT inputs its
 // encoders bind, and how it treats the reactive mask.
 #[derive(Clone, Copy)]
@@ -137,7 +116,7 @@ struct TransparentInputs<'a> {
 }
 
 // Issue one transparent draw with `pipeline`: its vertex buffer at buffer(1), its
-// params blob at vertex + fragment buffer(6), its own textures and samplers.
+// params blob on both stages, its own textures and samplers.
 fn encode_transparent_draw(
     enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     d: &TransparentDraw,
@@ -149,9 +128,9 @@ fn encode_transparent_draw(
         .ok_or_else(|| RenderError::Other("transparent draw params blob is null".to_string()))?;
     // SAFETY: `params_ptr`/`d.params.len()` describe the record's own parameter blob, which
     // Metal copies during the call.
-    unsafe { enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), 6) };
+    unsafe { enc.setVertexBytes_length_atIndex(params_ptr, d.params.len(), slots::PARAMS.index) };
     // SAFETY: the same live blob, copied again for the fragment stage.
-    unsafe { enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), 6) };
+    unsafe { enc.setFragmentBytes_length_atIndex(params_ptr, d.params.len(), slots::PARAMS.index) };
     for (slot, tex) in &d.fragment_textures {
         enc.set_fragment_texture(tex.as_ref(), *slot);
     }
@@ -227,91 +206,82 @@ impl MtlContext {
         enc: &ProtocolObject<dyn MTLRenderCommandEncoder>,
         inputs: &TransparentInputs<'_>,
     ) {
-        // Shared per-frame view at buffer(5) for both stages. The pass has no
+        // Shared per-frame view for both stages. The pass has no
         // depth attachment (translucents are not hardware depth-tested;
         // depth-aware effects sample `depth_resolve` instead), so no
         // depth-stencil state is bound.
-        enc.set_vertex_value(inputs.view, 5);
-        enc.set_fragment_value(inputs.view, 5);
+        enc.set_vertex_value(inputs.view, slots::VIEW.index);
+        enc.set_fragment_value(inputs.view, slots::VIEW.index);
 
         // Reflection sources shared by every transparent shader that samples
-        // them (glass + water): the sky prefilter cube at texture(2), the probe
-        // set (count at fragment buffer(7), records at buffer(11), cube array at
-        // texture(6)) with the cluster grid binning it, and the cube sampler at
-        // sampler(1) and (2).
+        // them (glass + water): the sky prefilter cube, the probe set (count,
+        // records and cube array) with the cluster grid binning it, and the cube
+        // sampler for both cubes.
         // Frame-constant, so bound once before the draw loop; a probe count of 0
         // keeps the sky-only fallback. The per-draw bindings never touch these
         // slots, so the state persists.
-        enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 2);
+        enc.set_fragment_texture(
+            self.scene.env_map.prefilter.as_ref(),
+            slots::PREFILTER_CUBE.index,
+        );
         // The water body's light, frame-constant like the sources above. Always
         // bound: a world with no shadow stage has the 1x1 fallback map and no
         // live cascade, and one with no sky the fallback irradiance cube.
-        enc.set_fragment_value(
-            &self.state.planner.shadow.uniforms,
-            WATER_SHADOW_UNIFORMS_BUFFER_INDEX,
-        );
-        enc.set_fragment_texture(self.shadow.map.as_ref(), WATER_SHADOW_MAP_TEXTURE_INDEX);
+        enc.set_fragment_value(&self.state.planner.shadow.uniforms, slots::SHADOW.index);
+        enc.set_fragment_texture(self.shadow.map.as_ref(), slots::SHADOW_MAP.index);
         enc.set_fragment_texture(
             self.scene.env_map.irradiance.as_ref(),
-            WATER_IRRADIANCE_TEXTURE_INDEX,
+            slots::IRRADIANCE_CUBE.index,
         );
-        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), WATER_SHADOW_SAMPLER_INDEX);
-        enc.set_fragment_texture(
-            self.cloud_shadow_texture(),
-            WATER_CLOUD_SHADOW_TEXTURE_INDEX,
-        );
+        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), slots::SHADOW_SAMPLER.index);
+        enc.set_fragment_texture(self.cloud_shadow_texture(), slots::CLOUD_SHADOW.index);
         // The simulated oceans' cascades, which the water's vertex stage
         // displaces by and its fragment stage shades from; frame-constant too.
         if let Some(ocean) = &self.water.ocean {
-            use super::water_sim::{
-                OCEAN_DISPLACEMENT_TEXTURE_INDEX, OCEAN_SAMPLER_INDEX, OCEAN_SLOPES_TEXTURE_INDEX,
-            };
             let a = &ocean.arrays;
             for (texture, index) in [
-                (&a.displacement, OCEAN_DISPLACEMENT_TEXTURE_INDEX),
-                (&a.slopes, OCEAN_SLOPES_TEXTURE_INDEX),
+                (&a.displacement, slots::OCEAN_DISPLACEMENT.index),
+                (&a.slopes, slots::OCEAN_SLOPES.index),
             ] {
                 enc.set_vertex_texture(texture, index);
                 enc.set_fragment_texture(texture, index);
             }
-            enc.set_vertex_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
-            enc.set_fragment_sampler(&a.sampler, OCEAN_SAMPLER_INDEX);
+            enc.set_vertex_sampler(&a.sampler, slots::OCEAN_SAMPLER.index);
+            enc.set_fragment_sampler(&a.sampler, slots::OCEAN_SAMPLER.index);
             // A sea's wake rides the same sampler; a rectangle never reads it.
-            use super::water_wake::WAKE_FIELD_TEXTURE_INDEX;
-            enc.set_vertex_texture(&a.wake, WAKE_FIELD_TEXTURE_INDEX);
-            enc.set_fragment_texture(&a.wake, WAKE_FIELD_TEXTURE_INDEX);
+            enc.set_vertex_texture(&a.wake, slots::WAKE_FIELD.index);
+            enc.set_fragment_texture(&a.wake, slots::WAKE_FIELD.index);
         }
         // The main camera's cluster grid, which bins the probes a surface
-        // blends, takes the params at buffer(12) and the lists at buffer(13).
+        // blends.
         self.probe_bindings().bind(
             enc,
             super::probe_set::ProbeSlots {
-                set: 7,
-                records: 11,
-                cubes: Some(6),
-                cluster: Some((12, 13)),
+                set: slots::PROBE_SET.index,
+                records: slots::PROBE_RECORDS.index,
+                cubes: Some(slots::PROBE_CUBES.index),
+                cluster: Some((slots::CLUSTER.index, slots::CLUSTER_LIST.index)),
             },
         );
-        // The cube sampler covers the prefilter cube's own sampler at 1 and the
-        // probe array's at 2; the planar resolve takes the post sampler after
-        // them, and the bindless pool the RT variants read takes the
-        // repeat-address sampler after that.
+        // The cube sampler covers the prefilter cube's own sampler and the probe
+        // array's; the planar resolve takes the post sampler, and the bindless
+        // pool the RT variants read takes the repeat-address sampler.
         super::post::fullscreen::set_fragment_sampler_range(
             enc,
             self.scene.cube_sampler.as_ref(),
-            1,
-            2,
+            slots::PREFILTER_CUBE_SAMPLER.index,
+            slots::PROBE_CUBE_SAMPLER.index + 1 - slots::PREFILTER_CUBE_SAMPLER.index,
         );
         super::post::fullscreen::set_fragment_sampler_range(
             enc,
             &self.composite.sampler,
-            GLASS_PLANAR_SAMPLER_INDEX,
+            slots::PLANAR_REFLECTION_SAMPLER.index,
             1,
         );
         super::post::fullscreen::set_fragment_sampler_range(
             enc,
             self.scene.sampler.as_ref(),
-            GLASS_POOL_SAMPLER_INDEX,
+            slots::POOL_SAMPLER.index,
             1,
         );
         // A planar reflection resolve at the planar texture slot, the default
@@ -324,7 +294,7 @@ impl MtlContext {
         if let Some(planar) = self.planar_reflection.as_ref()
             && let Some(first) = planar.targets.first()
         {
-            enc.set_fragment_texture(first.resolve.as_ref(), GLASS_PLANAR_TEXTURE_INDEX);
+            enc.set_fragment_texture(first.resolve.as_ref(), slots::PLANAR_REFLECTION.index);
         }
 
         // Ray-traced glass + water inputs. When the acceleration structure is
@@ -347,16 +317,18 @@ impl MtlContext {
             }),
             inputs.rt_params,
         ) {
-            enc.set_fragment_value(rt_params, 0);
-            enc.set_fragment_buffer(self.scene.vertex_buffer.as_ref(), 0, 1);
-            enc.set_fragment_buffer(self.scene.index_buffer.as_ref(), 0, 2);
-            enc.set_fragment_buffer(accel.geom_table.as_ref(), 0, 3);
-            enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), 4);
-            enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, 8);
-            enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, 9);
+            enc.set_fragment_value(rt_params, slots::RT_PARAMS.index);
+            enc.set_fragment_buffer(self.scene.vertex_buffer.as_ref(), 0, slots::VERTICES.index);
+            enc.set_fragment_buffer(self.scene.index_buffer.as_ref(), 0, slots::INDICES.index);
+            enc.set_fragment_buffer(accel.geom_table.as_ref(), 0, slots::GEOMETRY.index);
+            enc.set_fragment_acceleration_structure(accel.tlas.as_ref(), slots::SCENE_TLAS.index);
+            let skinned = slots::SKINNED_VERTICES.index;
+            enc.set_fragment_buffer(accel.deformed_verts.as_ref(), 0, skinned);
+            let skinned = slots::SKINNED_INDICES.index;
+            enc.set_fragment_buffer(accel.skinned_indices.as_ref(), 0, skinned);
             super::raytrace::use_blas_resident_fragment(enc, accel.traced_blas());
             // Textured variants (bindless world): the albedo / normal /
-            // emissive pool at buffer(10) + its textures declared resident.
+            // emissive pool + its textures declared resident.
             if let Some(tex_args) = inputs.bindless_tex_args.filter(|_| {
                 self.glass.pipeline_rt_textured.is_some()
                     || self.water.pipeline_rt_textured.is_some()
@@ -365,7 +337,7 @@ impl MtlContext {
                 enc.set_fragment_buffer(
                     tex_args.as_ref(),
                     super::bindless_args::BINDLESS_POOL_OFFSET,
-                    10,
+                    slots::TEXTURES.index,
                 );
                 self.use_bindless_textures(enc);
             }
@@ -479,7 +451,7 @@ impl MtlContext {
                 );
                 self.bind_transparent_inputs(&enc, &inputs);
                 enc.setDepthStencilState(Some(&targets.depth_state));
-                enc.set_fragment_texture(front, GLASS_REFLECTION_TEXTURE_INDEX);
+                enc.set_fragment_texture(front, slots::GLASS_REFLECTION.index);
                 for &i in &order {
                     if let Some(pipeline) = &draws[i].reflection_pipeline {
                         encode_transparent_draw(&enc, &draws[i], pipeline)?;
@@ -525,8 +497,8 @@ impl MtlContext {
         let stand_in = &self.targets.hdr.transparent_scene_copy;
         let (front, back) =
             reflection.map_or((stand_in, stand_in), |t| (&t.layers[0], &t.layers[1]));
-        enc.set_fragment_texture(front.as_ref(), GLASS_REFLECTION_TEXTURE_INDEX);
-        enc.set_fragment_texture(back.as_ref(), GLASS_REFLECTION_BACK_TEXTURE_INDEX);
+        enc.set_fragment_texture(front.as_ref(), slots::GLASS_REFLECTION.index);
+        enc.set_fragment_texture(back.as_ref(), slots::GLASS_REFLECTION_BACK.index);
 
         for &i in &order {
             encode_transparent_draw(&enc, &draws[i], &draws[i].pipeline)?;

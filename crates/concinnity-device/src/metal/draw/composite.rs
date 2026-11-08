@@ -22,6 +22,8 @@ use concinnity_engine::gfx::render_types::TextDrawCall;
 use concinnity_engine::render::backend::error::RenderError;
 use concinnity_engine::render::fullscreen;
 use concinnity_engine::render::fullscreen::TextBindCache;
+use concinnity_engine::render::shader::programs::abi::composite::metal as slots;
+use concinnity_engine::render::shader::programs::abi::text::metal as text;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -65,14 +67,14 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
 
     fn composite_draw(&self, enc: &Self::Rec, _args: &()) {
         enc.set_pipeline(&self.ctx.composite.pipeline);
-        enc.set_fragment_texture(self.scene_color, 0);
+        enc.set_fragment_texture(self.scene_color, slots::HDR.index);
         // The bloom chain's top octave at texture(1). Always bound so the
         // binding resolves; the shader skips the sample when
         // bloom_intensity == 0.
-        enc.set_fragment_texture(self.bloom_top, 1);
+        enc.set_fragment_texture(self.bloom_top, slots::BLOOM.index);
         // 3D color-grading LUT at texture(2). Always bound -- an identity
         // LUT stands in when the world declares no ColorLut.
-        enc.set_fragment_texture(self.ctx.scene.color_lut.as_ref(), 2);
+        enc.set_fragment_texture(self.ctx.scene.color_lut.as_ref(), slots::LUT.index);
         // The channel sources at texture(3..6), bound only while a channel
         // view will sample them. The SSAO white 1x1 stands in when a
         // G-buffer was never built.
@@ -85,21 +87,23 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
                 .ctx
                 .gbuffer_roughness()
                 .unwrap_or_else(|| self.ctx.ssao.white.as_ref());
-            enc.set_fragment_texture(nd, 3);
-            enc.set_fragment_texture(rough, 4);
-            enc.set_fragment_texture(self.ctx.ao_output_texture(), 5);
+            enc.set_fragment_texture(nd, slots::GBUFFER_NORMAL_DEPTH.index);
+            enc.set_fragment_texture(rough, slots::GBUFFER_ROUGHNESS.index);
+            enc.set_fragment_texture(self.ctx.ao_output_texture(), slots::AO.index);
             let motion = self
                 .ctx
                 .gbuffer_velocity()
                 .unwrap_or_else(|| self.ctx.ssao.white.as_ref());
-            enc.set_fragment_texture(motion, 6);
-            enc.set_fragment_texture(self.ctx.targets.hdr.reactive_mask.as_ref(), 7);
+            enc.set_fragment_texture(motion, slots::GBUFFER_MOTION.index);
+            let reactive = self.ctx.targets.hdr.reactive_mask.as_ref();
+            enc.set_fragment_texture(reactive, slots::REACTIVE.index);
         }
+        // One sampler per source, `HDR_SAMPLER` through `REACTIVE_SAMPLER`.
         crate::metal::post::fullscreen::set_fragment_sampler_range(
             enc,
             &self.ctx.composite.sampler,
-            0,
-            8,
+            slots::HDR_SAMPLER.index,
+            slots::REACTIVE_SAMPLER.index + 1 - slots::HDR_SAMPLER.index,
         );
         // Post-process tunables (bloom intensity) plus the scene-transition
         // fade at buffer(0).
@@ -125,7 +129,7 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
                 self.ctx.post_process.exposure,
             ),
         };
-        enc.set_fragment_value(&composite, 0);
+        enc.set_fragment_value(&composite, slots::PARAMS.index);
         // Fullscreen triangle: 3 vertices, no vertex buffer (the shared
         // fullscreen_vertex synthesizes position + UV from SV_VertexID).
         // SAFETY: the vertex shader generates all three vertices, so the draw reads no bound
@@ -153,8 +157,8 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         // Frame-invariant text state, set once for the whole run of labels:
         // the encoder keeps it bound across the draws below, and nothing in
         // the loop switches pipeline.
-        enc.set_fragment_sampler(&self.ctx.text.sampler, 0);
-        enc.set_vertex_value(&text_uniforms, 0);
+        enc.set_fragment_sampler(&self.ctx.text.sampler, text::ATLAS_SAMPLER.index);
+        enc.set_vertex_value(&text_uniforms, text::UNIFORMS.index);
         true
     }
 
@@ -206,7 +210,10 @@ impl fullscreen::CompositeEncoder for CompositePass<'_> {
         }
         let atlas_idx = call.atlas_slot.min(self.ctx.text.atlas_textures.len() - 1);
         if binds.atlas_changed(atlas_idx) {
-            enc.set_fragment_texture(self.ctx.text.atlas_textures[atlas_idx].as_ref(), 0);
+            enc.set_fragment_texture(
+                self.ctx.text.atlas_textures[atlas_idx].as_ref(),
+                text::ATLAS.index,
+            );
         }
 
         enc.set_vertex_buffer(text_buffer, range.vertex_offset, 1);

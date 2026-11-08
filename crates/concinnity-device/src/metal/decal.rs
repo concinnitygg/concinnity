@@ -13,6 +13,7 @@
 use concinnity_engine::gfx::frustum::Frustum;
 use concinnity_engine::render::backend::DecalPass;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::decal::metal as decal;
 use concinnity_engine::render::uniforms::DecalView;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -121,8 +122,8 @@ impl MtlContext {
         enc.set_pipeline(pipeline);
 
         // Per-frame view inputs at buffer(0); rebound once.
-        enc.set_vertex_value(&view, 0);
-        enc.set_fragment_value(&view, 0);
+        enc.set_vertex_value(&view, decal::VIEW.index);
+        enc.set_fragment_value(&view, decal::VIEW.index);
         // Unit-cube vertices at vertex buffer(2); the vertex shader declares
         // a single `[[attribute(0)]] float3` mapped to buffer(2) by the
         // pipeline's vertex descriptor.
@@ -133,8 +134,11 @@ impl MtlContext {
         // Main depth, plus any raymarched surface depth) instead
         // of the MSAA original. Lets decals project correctly onto
         // raymarched surfaces.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
-        enc.set_fragment_sampler(sampler, 0);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            decal::SCENE_DEPTH.index,
+        );
+        enc.set_fragment_sampler(sampler, decal::DECAL_TEX_SAMPLER.index);
 
         let last_tex = self.scene.textures.len().saturating_sub(1);
         let mut draw_calls: u32 = 0;
@@ -142,9 +146,9 @@ impl MtlContext {
         // re-supplies it; the set's copy is prebuilt, not rebuilt here.
         for decal in visible {
             let slot = decal.record.texture_slot.min(last_tex);
-            enc.set_vertex_value(decal.params, 1);
-            enc.set_fragment_value(decal.params, 1);
-            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), 1);
+            enc.set_vertex_value(decal.params, decal::PARAMS.index);
+            enc.set_fragment_value(decal.params, decal::PARAMS.index);
+            enc.set_fragment_texture(self.scene.textures[slot].as_ref(), decal::DECAL_TEX.index);
             // SAFETY: the draw's index range is this decal cube's own slice of the bound index
             // buffer.
             unsafe {

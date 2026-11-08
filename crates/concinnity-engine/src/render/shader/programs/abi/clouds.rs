@@ -53,3 +53,57 @@ pub mod dx {
         pub const TARGET: Register<Srv> = Register::new("cloud_target", 1);
     }
 }
+
+/// The Metal slots.
+pub mod metal {
+
+    /// The noise kernel.
+    pub mod noise {
+        use crate::render::shader::programs::abi::slot::{Slot, Texture};
+
+        /// The noise volume it writes.
+        pub const NOISE_OUT: Slot<Texture> = Slot::new("cloud_noise_out", 0);
+    }
+
+    /// The march kernels and the reconstruction.
+    pub mod march {
+        use crate::render::shader::programs::abi::slot::{Buffer, Sampler, Slot, Texture};
+
+        /// The atmosphere block.
+        pub const ATMOSPHERE: Slot<Buffer> = Slot::new("atmo_cb", 0);
+        /// The clouds block.
+        pub const CLOUDS: Slot<Buffer> = Slot::new("cloud_cb", 1);
+        /// The scene depth.
+        pub const SCENE_DEPTH: Slot<Texture> = Slot::new("scene_depth", 0);
+        /// The aerial-perspective volume.
+        pub const AERIAL_VOLUME: Slot<Texture> = Slot::new("aerial_volume", 1);
+        /// The transmittance table.
+        pub const TRANSMITTANCE: Slot<Texture> = Slot::new("transmittance_lut", 2);
+        /// The multiple-scattering table.
+        pub const MULTISCATTER: Slot<Texture> = Slot::new("multiscatter_lut", 3);
+        /// The noise volume.
+        pub const NOISE: Slot<Texture> = Slot::new("cloud_noise", 4);
+        /// The target written.
+        pub const OUTPUT: Slot<Texture> = Slot::new("cloud_out", 5);
+        /// The march, which the reconstruction reads.
+        pub const MARCHED: Slot<Texture> = Slot::new("cloud_marched", 6);
+        /// The previous frame's target.
+        pub const PREVIOUS: Slot<Texture> = Slot::new("cloud_previous", 7);
+        /// The tables' sampler.
+        pub const LUT_SAMPLER: Slot<Sampler> = Slot::new("lut_sampler", 0);
+        /// The noise's sampler.
+        pub const NOISE_SAMPLER: Slot<Sampler> = Slot::new("cloud_noise_sampler", 1);
+    }
+
+    /// The composite over the scene.
+    pub mod composite {
+        use crate::render::shader::programs::abi::slot::{Buffer, Slot, Texture};
+
+        /// The clouds block.
+        pub const CLOUDS: Slot<Buffer> = Slot::new("cloud_cb", 0);
+        /// The scene depth.
+        pub const SCENE_DEPTH: Slot<Texture> = Slot::new("scene_depth", 0);
+        /// The reconstructed clouds.
+        pub const TARGET: Slot<Texture> = Slot::new("cloud_target", 1);
+    }
+}

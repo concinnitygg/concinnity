@@ -72,3 +72,79 @@ pub mod dx {
     /// The oceans' sampler.
     pub const OCEAN_SAMPLER: Register<Sampler> = Register::new("ocean_sampler", 4);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Sampler, Slot, Texture};
+
+    /// The ray-traced producers' block.
+    pub const RT_PARAMS: Slot<Buffer> = Slot::new("rt_params", 0);
+    /// The static vertices.
+    pub const VERTICES: Slot<Buffer> = Slot::new("verts", 1);
+    /// The static indices.
+    pub const INDICES: Slot<Buffer> = Slot::new("indices", 2);
+    /// The geometry table.
+    pub const GEOMETRY: Slot<Buffer> = Slot::new("geom", 3);
+    /// The scene's acceleration structure.
+    pub const SCENE_TLAS: Slot<Buffer> = Slot::new("scene_tlas", 4);
+    /// The transparent view block.
+    pub const VIEW: Slot<Buffer> = Slot::new("view", 5);
+    /// The record's block, on both stages.
+    pub const PARAMS: Slot<Buffer> = Slot::new("params", 6);
+    /// The live probe count.
+    pub const PROBE_SET: Slot<Buffer> = Slot::new("probe_set", 7);
+    /// The deformed skinned vertices.
+    pub const SKINNED_VERTICES: Slot<Buffer> = Slot::new("sverts", 8);
+    /// The skinned indices.
+    pub const SKINNED_INDICES: Slot<Buffer> = Slot::new("sidx", 9);
+    /// The bindless pool's argument buffer, for the textured producers.
+    pub const TEXTURES: Slot<Buffer> = Slot::new("spvDescriptorSet6", 10);
+    /// The reflection-probe records.
+    pub const PROBE_RECORDS: Slot<Buffer> = Slot::new("probe_records", 11);
+    /// The main camera's cluster grid parameters.
+    pub const CLUSTER: Slot<Buffer> = Slot::new("cluster", 12);
+    /// The per-cluster lists.
+    pub const CLUSTER_LIST: Slot<Buffer> = Slot::new("cluster_list", 13);
+    /// The cascaded shadow block.
+    pub const SHADOW: Slot<Buffer> = Slot::new("shadow_cb", 14);
+    /// The scene copy behind the surface.
+    pub const SCENE_COLOR: Slot<Texture> = Slot::new("scene_color", 0);
+    /// The scene depth.
+    pub const SCENE_DEPTH: Slot<Texture> = Slot::new("scene_depth", 1);
+    /// The sky prefilter cube.
+    pub const PREFILTER_CUBE: Slot<Texture> = Slot::new("prefilter_cube", 2);
+    /// The record's planar mirror resolve.
+    pub const PLANAR_REFLECTION: Slot<Texture> = Slot::new("planar_reflection", 3);
+    /// The front glass reflection layer.
+    pub const GLASS_REFLECTION: Slot<Texture> = Slot::new("glass_reflection", 4);
+    /// The back glass reflection layer.
+    pub const GLASS_REFLECTION_BACK: Slot<Texture> = Slot::new("glass_reflection_back", 5);
+    /// The reflection-probe cube array.
+    pub const PROBE_CUBES: Slot<Texture> = Slot::new("probe_cubes", 6);
+    /// The cascaded shadow map.
+    pub const SHADOW_MAP: Slot<Texture> = Slot::new("shadow_map", 7);
+    /// The sky irradiance cube.
+    pub const IRRADIANCE_CUBE: Slot<Texture> = Slot::new("irradiance_cube", 8);
+    /// The oceans' displacement arrays.
+    pub const OCEAN_DISPLACEMENT: Slot<Texture> = Slot::new("ocean_displacement", 9);
+    /// The oceans' slope arrays.
+    pub const OCEAN_SLOPES: Slot<Texture> = Slot::new("ocean_slopes", 10);
+    /// A planet sea's wake field.
+    pub const WAKE_FIELD: Slot<Texture> = Slot::new("wake_field", 11);
+    /// The clouds' shadow map.
+    pub const CLOUD_SHADOW: Slot<Texture> = Slot::new("cloud_shadow", 12);
+    /// The scene copy's sampler.
+    pub const SCENE_COLOR_SAMPLER: Slot<Sampler> = Slot::new("scene_color_sampler", 0);
+    /// The prefilter cube's sampler, with the probe array's after it.
+    pub const PREFILTER_CUBE_SAMPLER: Slot<Sampler> = Slot::new("prefilter_cube_sampler", 1);
+    /// The probe cube array's sampler.
+    pub const PROBE_CUBE_SAMPLER: Slot<Sampler> = Slot::new("probe_cube_sampler", 2);
+    /// The planar resolve's sampler.
+    pub const PLANAR_REFLECTION_SAMPLER: Slot<Sampler> = Slot::new("planar_reflection_sampler", 3);
+    /// The pool's sampler.
+    pub const POOL_SAMPLER: Slot<Sampler> = Slot::new("pool_sampler", 4);
+    /// The shadow comparison sampler.
+    pub const SHADOW_SAMPLER: Slot<Sampler> = Slot::new("shadow_sampler", 5);
+    /// The oceans' sampler.
+    pub const OCEAN_SAMPLER: Slot<Sampler> = Slot::new("ocean_sampler", 6);
+}

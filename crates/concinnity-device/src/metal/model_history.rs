@@ -10,6 +10,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::history::metal as history;
 use concinnity_engine::render::uniforms::ModelHistoryParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -63,8 +64,8 @@ impl MtlContext {
             ns_string!("model history"),
         );
         enc.set_pipeline(pipeline);
-        enc.set_value(&params, 0);
-        enc.set_buffer(object_buffer, 0, 1);
+        enc.set_value(&params, history::PARAMS.index);
+        enc.set_buffer(object_buffer, 0, history::OBJECTS.index);
         let grid = MTLSize {
             width: record_count,
             height: 1,
@@ -76,7 +77,7 @@ impl MtlContext {
             depth: 1,
         };
         for target in targets {
-            enc.set_buffer(target, 0, 2);
+            enc.set_buffer(target, 0, history::HISTORY.index);
             enc.dispatchThreads_threadsPerThreadgroup(grid, tg);
         }
         Ok(())

@@ -18,6 +18,7 @@ use concinnity_engine::gfx::render_types::{
     NUM_SHADOW_CASCADES, SKINNED_STREAM, ShadowPassPush, ShadowUniforms,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::shadow::metal as shadow;
 use concinnity_engine::render::shadow::bias;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -204,22 +205,18 @@ impl MtlContext {
         // (vbuf 9), static vertex buffer (vbuf 1). The ICB commands inherit
         // these bindings; the cull baked base_instance = record id, so the VS
         // reads `objects[id].model`.
-        enc.set_vertex_value(view.uniforms, 0);
+        enc.set_vertex_value(view.uniforms, shadow::SHADOW.index);
         enc.set_vertex_value(
             &ShadowPassPush {
                 cascade_idx: view.vp_index,
                 _pad: [0; 3],
                 tile_morph: self.state.tile_morph_view(),
             },
-            7,
+            shadow::CASCADE.index,
         );
-        enc.set_vertex_buffer(object_buffer, 0, 9);
+        enc.set_vertex_buffer(object_buffer, 0, shadow::OBJECTS.index);
         enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, 1);
-        enc.set_vertex_buffer(
-            &self.scene.vertex_buffer,
-            0,
-            concinnity_engine::render::shader::programs::metal::SHADOW_MESH_VERTICES_BUFFER,
-        );
+        enc.set_vertex_buffer(&self.scene.vertex_buffer, 0, shadow::MESH_VERTICES.index);
 
         let counts = self.draw_record_counts();
         let mut draw_calls = 0u32;

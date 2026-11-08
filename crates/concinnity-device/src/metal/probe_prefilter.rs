@@ -19,6 +19,7 @@
 
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::probe::capture::PrefilterPlan;
+use concinnity_engine::render::shader::programs::abi::probe::metal::{ggx, mip};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, ns_string};
@@ -252,17 +253,18 @@ pub(in crate::metal) fn encode_pyramid(
 ) {
     let params = plan.mip0_params();
     enc.set_pipeline(&pipelines.mip0);
-    enc.set_value(&params, 0);
-    enc.set_texture(gpu.capture_mip_views[0].as_ref(), 0);
-    enc.set_texture(gpu.probe_mip_views[0].as_ref(), 1);
+    enc.set_value(&params, mip::PARAMS.index);
+    enc.set_texture(gpu.capture_mip_views[0].as_ref(), mip::SRC_MIP.index);
+    enc.set_texture(gpu.probe_mip_views[0].as_ref(), mip::DST_MIP.index);
     dispatch_cube(enc, plan.face_size());
 
     for mip in 1..plan.mips() {
         let params = plan.downsample_params(mip);
         enc.set_pipeline(&pipelines.downsample);
-        enc.set_value(&params, 0);
-        enc.set_texture(gpu.capture_mip_views[(mip - 1) as usize].as_ref(), 0);
-        enc.set_texture(gpu.capture_mip_views[mip as usize].as_ref(), 1);
+        enc.set_value(&params, mip::PARAMS.index);
+        let (src, dst) = ((mip - 1) as usize, mip as usize);
+        enc.set_texture(gpu.capture_mip_views[src].as_ref(), mip::SRC_MIP.index);
+        enc.set_texture(gpu.capture_mip_views[dst].as_ref(), mip::DST_MIP.index);
         dispatch_cube(enc, plan.mip_face_size(mip));
     }
 }
@@ -279,10 +281,13 @@ pub(in crate::metal) fn encode_ggx_mip(
 ) {
     let params = plan.ggx_params(dst_mip);
     enc.set_pipeline(&pipelines.ggx);
-    enc.set_value(&params, 0);
-    enc.set_texture(gpu.capture.as_ref(), 0);
-    enc.set_sampler(sampler, 0);
-    enc.set_texture(gpu.probe_mip_views[dst_mip as usize].as_ref(), 1);
+    enc.set_value(&params, ggx::PARAMS.index);
+    enc.set_texture(gpu.capture.as_ref(), ggx::SRC_CUBE.index);
+    enc.set_sampler(sampler, ggx::SRC_SAMPLER.index);
+    enc.set_texture(
+        gpu.probe_mip_views[dst_mip as usize].as_ref(),
+        ggx::DST_MIP.index,
+    );
     dispatch_cube(enc, plan.mip_face_size(dst_mip));
 }
 

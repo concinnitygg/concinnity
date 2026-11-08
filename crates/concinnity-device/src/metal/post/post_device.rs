@@ -14,6 +14,7 @@ use concinnity_engine::render::post::device::{
 };
 use concinnity_engine::render::post::program::{PostProgram, PostProgramBindings};
 use concinnity_engine::render::render_graph::{PixelFormat, TextureDesc};
+use concinnity_engine::render::shader::programs::abi::post::metal as post;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSRange;
@@ -37,10 +38,10 @@ use crate::metal::transient_pool::{pixel_format, texture_descriptor_for};
 // the texture slot after the declared sources.
 fn probe_slots(sources: usize) -> ProbeSlots {
     ProbeSlots {
-        set: 1,
-        records: 5,
-        cubes: Some(sources),
-        cluster: Some((2, 6)),
+        set: post::PROBE_SET.index,
+        records: post::probe_records(sources).index,
+        cubes: Some(post::probe_cubes(sources).index),
+        cluster: Some((post::CLUSTER.index, post::cluster_list(sources).index)),
     }
 }
 
@@ -248,20 +249,17 @@ impl PostPassDevice for MtlPostDevice<'_> {
                 label: draw.label,
             },
             |enc| {
-                for (slot, bind) in draw.binds.iter().enumerate() {
-                    enc.set_fragment_texture(bind.texture, slot);
-                    // Every post source occupies a texture and a sampler at
-                    // the same index, so a source's sampler slot is its texture
-                    // slot.
-                    enc.set_fragment_sampler(self.sampler_for(bind.sampler), slot);
+                for (i, bind) in draw.binds.iter().enumerate() {
+                    enc.set_fragment_texture(bind.texture, post::source(i).index);
+                    let sampler = self.sampler_for(bind.sampler);
+                    enc.set_fragment_sampler(sampler, post::source_sampler(i).index);
                 }
                 if !draw.constants.is_empty() {
-                    enc.set_fragment_bytes(draw.constants, 0);
+                    enc.set_fragment_bytes(draw.constants, post::PARAMS.index);
                 }
                 if let Some(probes) = probes {
-                    // The cube array's sampler takes the sampler slot after the
-                    // declared sources, beside the array itself.
-                    enc.set_fragment_sampler(self.cube_sampler, draw.binds.len());
+                    let cubes = post::probe_cube_sampler(draw.binds.len());
+                    enc.set_fragment_sampler(self.cube_sampler, cubes.index);
                     probes.bind(enc, probe_slots(draw.binds.len()));
                 }
             },

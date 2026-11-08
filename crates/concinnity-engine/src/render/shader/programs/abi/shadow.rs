@@ -15,3 +15,17 @@ pub mod dx {
     /// The shared vertex stream.
     pub const MESH_VERTICES: Register<Srv> = Register::new("mesh_vertices", 1);
 }
+
+/// The Metal slots.
+pub mod metal {
+    use crate::render::shader::programs::abi::slot::{Buffer, Slot};
+
+    /// The cascaded shadow block.
+    pub const SHADOW: Slot<Buffer> = Slot::new("shadow_cb", 0);
+    /// The shared vertex stream.
+    pub const MESH_VERTICES: Slot<Buffer> = Slot::new("mesh_vertices", 2);
+    /// The cascade being drawn.
+    pub const CASCADE: Slot<Buffer> = Slot::new("cascade_cb", 7);
+    /// The frame's records.
+    pub const OBJECTS: Slot<Buffer> = Slot::new("objects", 9);
+}

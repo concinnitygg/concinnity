@@ -31,6 +31,7 @@ use concinnity_engine::gfx::render_types::LightUniforms;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::sdf::programs::SdfPrograms;
 use concinnity_engine::render::sdf::volume::SdfVolume;
+use concinnity_engine::render::shader::programs::abi::raymarch::metal as slots;
 use concinnity_engine::render::shader::programs::raymarch::{Family, ProxyFaces, VolumeFlags};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -763,17 +764,17 @@ impl MtlContext {
         enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
 
         // Per-frame view at buffer(0); same value for vertex + fragment.
-        enc.set_vertex_value(view, 0);
-        enc.set_fragment_value(view, 0);
+        enc.set_vertex_value(view, slots::VIEW.index);
+        enc.set_fragment_value(view, slots::VIEW.index);
         // Lights at buffer(2); rebound once.
-        enc.set_fragment_value(&lights_gpu, 2);
+        enc.set_fragment_value(&lights_gpu, slots::LIGHTS.index);
         // Cascade-shadow uniforms at buffer(3).
         // Always bound; the helper falls back to `shadow = 1.0`
         // when `vol.receive_shadows == 0` or when the world has no
         // shadow stage (in which case `shadow.map` is the 1×1
         // fallback texture and the cascade compare returns full
         // light).
-        enc.set_fragment_value(&shadow_uniforms, 3);
+        enc.set_fragment_value(&shadow_uniforms, slots::SHADOW.index);
         // Proxy-cube vertices at vertex buffer(2); index buffer
         // bound per-draw. The vertex descriptor declares the full
         // 56-byte Vertex layout at this binding.
@@ -782,13 +783,22 @@ impl MtlContext {
         // `main_depth.Load` in the template fragment for the shader-side
         // cone-march early-out. A separate texture from the writable
         // `depth_resolve` attachment, so no aliasing.
-        enc.set_fragment_texture(self.targets.hdr.depth_copy.as_ref(), 0);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_copy.as_ref(),
+            slots::MAIN_DEPTH.index,
+        );
         // CSM shadow map array + IBL cubes.
         // Always bound (1×1 fallback when the world has no shadow
         // stage / no EnvironmentMap), matching the Main pass.
-        enc.set_fragment_texture(self.shadow.map.as_ref(), 1);
-        enc.set_fragment_texture(self.scene.env_map.irradiance.as_ref(), 2);
-        enc.set_fragment_texture(self.scene.env_map.prefilter.as_ref(), 3);
+        enc.set_fragment_texture(self.shadow.map.as_ref(), slots::SHADOW_MAP.index);
+        enc.set_fragment_texture(
+            self.scene.env_map.irradiance.as_ref(),
+            slots::IRRADIANCE_CUBE.index,
+        );
+        enc.set_fragment_texture(
+            self.scene.env_map.prefilter.as_ref(),
+            slots::PREFILTER_CUBE.index,
+        );
         // Pre-raymarch scene snapshot for refraction
         // sampling. The blit at the top of this function populated
         // `hdr_resolve_copy` from `hdr_resolve` when some volume
@@ -796,16 +806,19 @@ impl MtlContext {
         // bound (even when no shader uses it, and even when the blit
         // was skipped) so the per-volume PSO doesn't need a
         // "refraction enabled" variant.
-        enc.set_fragment_texture(self.targets.hdr.hdr_resolve_copy.as_ref(), 4);
+        enc.set_fragment_texture(
+            self.targets.hdr.hdr_resolve_copy.as_ref(),
+            slots::SCENE_COLOR.index,
+        );
         // Samplers in the order the single source declares them. The depth
         // read needs none (`read` takes integer pixels), so there is no
         // sampler(0) standing in for one, which is what the hand-written MSL
         // used to leave bound and unused.
-        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), 0);
-        enc.set_fragment_sampler(self.scene.cube_sampler.as_ref(), 1);
+        enc.set_fragment_sampler(self.shadow.sampler.as_ref(), slots::SHADOW_SAMPLER.index);
+        enc.set_fragment_sampler(self.scene.cube_sampler.as_ref(), slots::CUBE_SAMPLER.index);
         // The linear-clamp post sampler for the scene-copy tap: the same
         // filter the water and bloom passes use.
-        enc.set_fragment_sampler(depth_sampler, 2);
+        enc.set_fragment_sampler(depth_sampler, slots::SCENE_SAMPLER.index);
 
         let mut draws: u32 = 0;
         for vol in &self.raymarch.volumes {
@@ -829,8 +842,8 @@ impl MtlContext {
             } else {
                 enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
             }
-            enc.set_vertex_value(&vol.uniforms, 1);
-            enc.set_fragment_value(&vol.uniforms, 1);
+            enc.set_vertex_value(&vol.uniforms, slots::VOLUME.index);
+            enc.set_fragment_value(&vol.uniforms, slots::VOLUME.index);
             // SAFETY: the 36 indices in `ibuf` address the 8-vertex proxy cube
             // bound at vertex buffer(2).
             unsafe {
@@ -875,17 +888,17 @@ impl MtlContext {
             }
             if draws == 0 {
                 enc.set_depth_stencil(self.targets.depth_state_inclusive.as_ref());
-                enc.set_vertex_value(view, 0);
-                enc.set_fragment_value(view, 0);
-                enc.set_fragment_value(self.state.lights.uniforms(), 2);
-                enc.set_fragment_value(&self.state.planner.shadow.uniforms, 3);
+                enc.set_vertex_value(view, slots::VIEW.index);
+                enc.set_fragment_value(view, slots::VIEW.index);
+                enc.set_fragment_value(self.state.lights.uniforms(), slots::LIGHTS.index);
+                enc.set_fragment_value(&self.state.planner.shadow.uniforms, slots::SHADOW.index);
                 enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
             }
             let faces = vol.faces(view);
             enc.setCullMode(cull_mode(faces));
             enc.set_pipeline(pipelines.get(faces));
-            enc.set_vertex_value(&vol.uniforms, 1);
-            enc.set_fragment_value(&vol.uniforms, 1);
+            enc.set_vertex_value(&vol.uniforms, slots::VOLUME.index);
+            enc.set_fragment_value(&vol.uniforms, slots::VOLUME.index);
             // SAFETY: the 36 indices in `ibuf` address the 8-vertex proxy cube
             // bound at the raymarch vertex stream.
             unsafe {
@@ -991,12 +1004,12 @@ impl MtlContext {
             // view.time), lights@2 (fragment), shadow uniforms@3 (vertex
             // projection + fragment reprojection), cascade selector@4
             // (both stages), proxy-cube vertices@2 (vertex).
-            enc.set_fragment_value(view, 0);
-            enc.set_fragment_value(&lights_gpu, 2);
-            enc.set_vertex_value(&shadow_uniforms, 3);
-            enc.set_fragment_value(&shadow_uniforms, 3);
-            enc.set_vertex_value(&cascade, 4);
-            enc.set_fragment_value(&cascade, 4);
+            enc.set_fragment_value(view, slots::VIEW.index);
+            enc.set_fragment_value(&lights_gpu, slots::LIGHTS.index);
+            enc.set_vertex_value(&shadow_uniforms, slots::SHADOW.index);
+            enc.set_fragment_value(&shadow_uniforms, slots::SHADOW.index);
+            enc.set_vertex_value(&cascade, slots::CASCADE.index);
+            enc.set_fragment_value(&cascade, slots::CASCADE.index);
             enc.set_vertex_buffer(vbuf, 0, RAYMARCH_VERTEX_BUFFER);
 
             for vol in &self.raymarch.volumes {
@@ -1007,8 +1020,8 @@ impl MtlContext {
                     continue;
                 };
                 enc.set_pipeline(pso);
-                enc.set_vertex_value(&vol.uniforms, 1);
-                enc.set_fragment_value(&vol.uniforms, 1);
+                enc.set_vertex_value(&vol.uniforms, slots::VOLUME.index);
+                enc.set_fragment_value(&vol.uniforms, slots::VOLUME.index);
                 // SAFETY: the 36 indices in `ibuf` address the 8-vertex proxy
                 // cube bound at vertex buffer(2).
                 unsafe {

@@ -29,3 +29,33 @@ pub mod dx {
         pub const DST_MIP: Register<Uav> = Register::new("dst_mip", 0);
     }
 }
+
+/// The Metal slots.
+pub mod metal {
+
+    /// The mip-0 copy and the downsample.
+    pub mod mip {
+        use crate::render::shader::programs::abi::slot::{Buffer, Slot, Texture};
+
+        /// The dispatch's parameters.
+        pub const PARAMS: Slot<Buffer> = Slot::new("params", 0);
+        /// The mip read.
+        pub const SRC_MIP: Slot<Texture> = Slot::new("src_mip", 0);
+        /// The mip written.
+        pub const DST_MIP: Slot<Texture> = Slot::new("dst_mip", 1);
+    }
+
+    /// The GGX convolution.
+    pub mod ggx {
+        use crate::render::shader::programs::abi::slot::{Buffer, Sampler, Slot, Texture};
+
+        /// The dispatch's parameters.
+        pub const PARAMS: Slot<Buffer> = Slot::new("params", 0);
+        /// The cube it convolves.
+        pub const SRC_CUBE: Slot<Texture> = Slot::new("src_cube", 0);
+        /// The cube's sampler.
+        pub const SRC_SAMPLER: Slot<Sampler> = Slot::new("src_sampler", 0);
+        /// The mip written.
+        pub const DST_MIP: Slot<Texture> = Slot::new("dst_mip", 1);
+    }
+}

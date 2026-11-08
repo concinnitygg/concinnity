@@ -2,9 +2,31 @@
 //! checks against the MSL the precompile emits.
 
 use super::MetalAbi;
+use super::atmosphere::metal as atmosphere;
+use super::clouds::metal as clouds;
+use super::composite::metal as composite;
 use super::cull::metal as cull;
+use super::decal::metal as decal;
+use super::exposure::metal as exposure;
+use super::fog::metal as fog;
+use super::gbuffer_sky::metal as gbuffer_sky;
+use super::grass::metal as grass;
+use super::history::metal as history;
+use super::hiz::metal as hiz;
+use super::light_cull::metal as light_cull;
+use super::line::metal as line;
 use super::main::metal as main;
+use super::ocean::metal as ocean;
+use super::particle::metal as particle;
+use super::probe::metal as probe;
+use super::rt_reflections::metal as rt;
+use super::shadow::metal as shadow;
+use super::skin::metal as skin;
+use super::sky::metal as sky;
 use super::slot::{MetalBinding, buffer, sampler, texture};
+use super::text::metal as text;
+use super::transparent::metal as transparent;
+use super::wake::metal as wake;
 use crate::render::shader::programs::metal::bindless_textures;
 use crate::render::shader::programs::{metal, shared};
 
@@ -50,6 +72,163 @@ const MAIN_BINDLESS_ARGUMENT_IDS: &[(&str, usize)] = &[
 /// The Metal programs whose slots their host encoders write by hand, every
 /// resource each binds.
 pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
+    // The atmosphere's table kernels on one encoder, the sky drawn from the
+    // sky-view table, and the haze.
+    MetalAbi {
+        program: &shared::ATMOSPHERE_TRANSMITTANCE,
+        slots: &[&[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::ATMOSPHERE_MULTISCATTER,
+        slots: &[&[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::ATMOSPHERE_SKY_VIEW,
+        slots: &[&[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::MULTISCATTER.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::ATMOSPHERE_AERIAL,
+        slots: &[&[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::MULTISCATTER.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::ATMOSPHERE_IRRADIANCE,
+        slots: &[&[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::SKY_VIEW.binding(),
+            atmosphere::kernel::CLOUD_PANORAMA.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::ATMOSPHERE_SKY_CUBE,
+        slots: &[&[
+            atmosphere::kernel::ATMOSPHERE.binding(),
+            atmosphere::kernel::TRANSMITTANCE.binding(),
+            atmosphere::kernel::SKY_VIEW.binding(),
+            atmosphere::kernel::CLOUD_PANORAMA.binding(),
+            atmosphere::kernel::OUTPUT.binding(),
+            atmosphere::kernel::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::SKY_ATMOSPHERE_FRAG,
+        slots: &[&[
+            atmosphere::sky::VIEW.binding(),
+            atmosphere::sky::ATMOSPHERE.binding(),
+            atmosphere::sky::SKY_VIEW.binding(),
+            atmosphere::sky::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::AERIAL_PERSPECTIVE_FRAG,
+        slots: &[&[
+            atmosphere::aerial::ATMOSPHERE.binding(),
+            atmosphere::aerial::SCENE_DEPTH.binding(),
+            atmosphere::aerial::AERIAL_VOLUME.binding(),
+            atmosphere::aerial::TRANSMITTANCE.binding(),
+            atmosphere::aerial::MULTISCATTER.binding(),
+            atmosphere::aerial::LUT_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    // The clouds: the noise, the march kernels, the reconstruction that also
+    // reads the march and last frame, and the composite.
+    MetalAbi {
+        program: &shared::CLOUD_NOISE,
+        slots: &[&[clouds::noise::NOISE_OUT.binding()]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_MARCH,
+        slots: &[&[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::AERIAL_VOLUME.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_PANORAMA,
+        slots: &[&[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::TRANSMITTANCE.binding(),
+            clouds::march::MULTISCATTER.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_SHADOW,
+        slots: &[&[
+            clouds::march::CLOUDS.binding(),
+            clouds::march::NOISE.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::NOISE_SAMPLER.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_RECONSTRUCT,
+        slots: &[&[
+            clouds::march::ATMOSPHERE.binding(),
+            clouds::march::CLOUDS.binding(),
+            clouds::march::SCENE_DEPTH.binding(),
+            clouds::march::OUTPUT.binding(),
+            clouds::march::LUT_SAMPLER.binding(),
+            clouds::march::MARCHED.binding(),
+            clouds::march::PREVIOUS.binding(),
+        ]],
+        argument_ids: &[],
+    },
+    MetalAbi {
+        program: &shared::CLOUD_COMPOSITE_FRAG,
+        slots: &[&[
+            clouds::composite::CLOUDS.binding(),
+            clouds::composite::SCENE_DEPTH.binding(),
+            clouds::composite::TARGET.binding(),
+        ]],
+        argument_ids: &[],
+    },
     // The draw cull's decision half. Its buffers are pinned by register() and
     // the Hi-Z texture takes texture(0) from declaration order; the cull's
     // encoder binds the slots once for this dispatch and the scan and scatter
@@ -105,13 +284,13 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     // The model-history snapshot: params, the object buffer it reads and the
     // ring slot it writes take buffer(0..2) from declaration order, which is
-    // what `metal/model_history.rs` binds.
+    // what its encoder binds.
     MetalAbi {
         program: &shared::MODEL_HISTORY,
         slots: &[&[
-            buffer("params", 0),
-            buffer("objects", 1),
-            buffer("history", 2),
+            history::PARAMS.binding(),
+            history::OBJECTS.binding(),
+            history::HISTORY.binding(),
         ]],
         argument_ids: &[],
     },
@@ -143,7 +322,7 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ]],
         argument_ids: &[("tex_pool", bindless_textures::pool(0)), ("tex_sampler", 0)],
     },
-    // The grass kernel, from `metal/grass.rs`: its block, the blades it
+    // The grass kernel: its block, the blades it
     // appends, the draw arguments, and the terrain heights and mask texels it
     // reads, at buffer(0..4) by register, last frame's depth pyramid at
     // texture(5), the bend field, the planet tiles, the shared vertex stream
@@ -151,94 +330,105 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::GRASS_GENERATE,
         slots: &[&[
-            buffer("grass", 0),
-            buffer("blades_out", 1),
-            buffer("draw_args", 2),
-            buffer("terrain_heights", 3),
-            buffer("grass_masks", 4),
-            texture("grass_hiz", 5),
-            buffer("grass_bend_field", 6),
-            buffer("planet_tiles", 7),
-            buffer("mesh_vertices", 8),
-            buffer("grass_tiles", 9),
+            grass::generate::GRASS.binding(),
+            grass::generate::BLADES_OUT.binding(),
+            grass::generate::DRAW_ARGS.binding(),
+            grass::generate::TERRAIN_HEIGHTS.binding(),
+            grass::generate::GRASS_MASKS.binding(),
+            grass::generate::HIZ.binding(),
+            grass::generate::BEND_FIELD.binding(),
+            grass::generate::PLANET_TILES.binding(),
+            grass::generate::MESH_VERTICES.binding(),
+            grass::generate::TILES.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::GRASS_BEND,
-        slots: &[&[buffer("bend", 0), buffer("bend_field", 1)]],
+        slots: &[&[
+            grass::bend::BEND.binding(),
+            grass::bend::BEND_FIELD.binding(),
+        ]],
         argument_ids: &[],
     },
-    // The simulated ocean's kernels, from `metal/water_sim.rs`: the constants
+    // The simulated ocean's kernels: the constants
     // at buffer(0), the spectrum and row transforms at buffer(5) and (6), and
     // the source and destination mips at texture(0..3), all by register.
     MetalAbi {
         program: &shared::WATER_FFT_ROWS,
         slots: &[&[
-            buffer("params", 0),
-            buffer("spectrum", 5),
-            buffer("rows", 6),
+            ocean::PARAMS.binding(),
+            ocean::SPECTRUM.binding(),
+            ocean::ROWS.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_WAKE_ROWS,
-        slots: &[&[buffer("params", 0), buffer("state", 1), buffer("work", 2)]],
+        slots: &[&[
+            wake::PARAMS.binding(),
+            wake::STATE.binding(),
+            wake::WORK.binding(),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_WAKE_COLUMNS,
-        slots: &[&[buffer("params", 0), buffer("work", 2)]],
+        slots: &[&[wake::PARAMS.binding(), wake::WORK.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_WAKE_INVERSE,
-        slots: &[&[buffer("params", 0), buffer("state", 1), buffer("work", 2)]],
+        slots: &[&[
+            wake::PARAMS.binding(),
+            wake::STATE.binding(),
+            wake::WORK.binding(),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_WAKE_SHADE,
         slots: &[&[
-            buffer("params", 0),
-            buffer("state", 1),
-            texture("dst_field", 3),
+            wake::PARAMS.binding(),
+            wake::STATE.binding(),
+            wake::DST_FIELD.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_WAKE_MIP,
-        slots: &[&[texture("dst_field", 3), texture("src_field", 4)]],
+        slots: &[&[wake::DST_FIELD.binding(), wake::SRC_FIELD.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_FFT_COLUMNS,
         slots: &[&[
-            buffer("params", 0),
-            buffer("rows", 6),
-            texture("dst_displacement", 2),
-            texture("dst_slopes", 3),
+            ocean::PARAMS.binding(),
+            ocean::ROWS.binding(),
+            ocean::DST_DISPLACEMENT.binding(),
+            ocean::DST_SLOPES.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_FFT_COLUMNS_FOAM,
         slots: &[&[
-            buffer("params", 0),
-            buffer("rows", 6),
-            texture("dst_displacement", 2),
-            texture("dst_slopes", 3),
-            buffer("foam", 7),
+            ocean::PARAMS.binding(),
+            ocean::ROWS.binding(),
+            ocean::DST_DISPLACEMENT.binding(),
+            ocean::DST_SLOPES.binding(),
+            ocean::FOAM.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::WATER_MIP,
         slots: &[&[
-            buffer("params", 0),
-            texture("src_displacement", 0),
-            texture("src_slopes", 1),
-            texture("dst_displacement", 2),
-            texture("dst_slopes", 3),
+            ocean::PARAMS.binding(),
+            ocean::SRC_DISPLACEMENT.binding(),
+            ocean::SRC_SLOPES.binding(),
+            ocean::DST_DISPLACEMENT.binding(),
+            ocean::DST_SLOPES.binding(),
         ]],
         argument_ids: &[],
     },
@@ -246,7 +436,10 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // which binds only the shadow block and the cascade's blades.
     MetalAbi {
         program: &shared::GRASS_SHADOW_VERT,
-        slots: &[&[buffer("grass", 0), buffer("grass_blades", 1)]],
+        slots: &[&[
+            grass::shadow::GRASS.binding(),
+            grass::shadow::BLADES.binding(),
+        ]],
         argument_ids: &[],
     },
     // The grass draws at the tail of the pre-pass and the main pass: the
@@ -255,29 +448,29 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::GRASS_PREPASS_VERT,
         slots: &[&[
-            buffer("view_cb", 0),
-            buffer("gb_view", 3),
-            buffer("grass", 19),
-            buffer("grass_blades", 20),
+            main::VIEW.binding(),
+            main::GBUFFER_VIEW.binding(),
+            grass::draw::GRASS.binding(),
+            grass::draw::BLADES.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::GRASS_PREPASS_FRAG,
-        slots: &[&[buffer("gb_view", 3)]],
+        slots: &[&[main::GBUFFER_VIEW.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::GRASS_PREPASS_CROSSFADE_FRAG,
-        slots: &[&[buffer("gb_view", 3)]],
+        slots: &[&[main::GBUFFER_VIEW.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::GRASS_VERT,
         slots: &[&[
-            buffer("view_cb", 0),
-            buffer("grass", 19),
-            buffer("grass_blades", 20),
+            main::VIEW.binding(),
+            grass::draw::GRASS.binding(),
+            grass::draw::BLADES.binding(),
         ]],
         argument_ids: &[],
     },
@@ -287,15 +480,15 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::GRASS_FRAG,
         slots: &[&[
-            buffer("view_cb", 0),
-            buffer("lights_cb", 4),
-            buffer("shadow_cb", 5),
-            buffer("spvDescriptorSet1", 7),
-            buffer("local_lights_sb", 8),
-            buffer("spvDescriptorSet2", 10),
-            buffer("cluster_cb", 11),
-            buffer("cluster_list_sb", 12),
-            buffer("spot_shadows_sb", 13),
+            main::VIEW.binding(),
+            main::LIGHTS.binding(),
+            main::SHADOW.binding(),
+            main::TEXTURES.binding(),
+            main::LOCAL_LIGHTS.binding(),
+            main::SAMPLERS.binding(),
+            main::CLUSTER.binding(),
+            main::CLUSTER_LIST.binding(),
+            main::SPOT_SHADOWS.binding(),
         ]],
         argument_ids: &[
             ("shadow_map", bindless_textures::SHADOW_MAP),
@@ -311,15 +504,15 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::GRASS_CROSSFADE_FRAG,
         slots: &[&[
-            buffer("view_cb", 0),
-            buffer("lights_cb", 4),
-            buffer("shadow_cb", 5),
-            buffer("spvDescriptorSet1", 7),
-            buffer("local_lights_sb", 8),
-            buffer("spvDescriptorSet2", 10),
-            buffer("cluster_cb", 11),
-            buffer("cluster_list_sb", 12),
-            buffer("spot_shadows_sb", 13),
+            main::VIEW.binding(),
+            main::LIGHTS.binding(),
+            main::SHADOW.binding(),
+            main::TEXTURES.binding(),
+            main::LOCAL_LIGHTS.binding(),
+            main::SAMPLERS.binding(),
+            main::CLUSTER.binding(),
+            main::CLUSTER_LIST.binding(),
+            main::SPOT_SHADOWS.binding(),
         ]],
         argument_ids: &[
             ("shadow_map", bindless_textures::SHADOW_MAP),
@@ -333,26 +526,26 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         ],
     },
     // The sky's motion, at the tail of the same pre-pass encoder. buffer(0) is
-    // the surfaces' main-pass view block until `metal/sky.rs` rebinds the
+    // the surfaces' main-pass view block until the sky's encoder rebinds the
     // sky's own there.
     MetalAbi {
         program: &shared::GBUFFER_SKY_VERT,
-        slots: &[&[buffer("gb_view", 0)]],
+        slots: &[&[gbuffer_sky::GBUFFER_VIEW.binding()]],
         argument_ids: &[],
     },
-    // The sky, from `metal/sky.rs`: the pass's view block, the prefilter cube
+    // The sky: the pass's view block, the prefilter cube
     // and the cube sampler, each at slot 0.
     MetalAbi {
         program: &shared::SKY_VERT,
-        slots: &[&[buffer("view_cb", 0)]],
+        slots: &[&[sky::VIEW.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::SKY_FRAG,
         slots: &[&[
-            buffer("view_cb", 0),
-            texture("prefilter_cube", 0),
-            sampler("cube_sampler", 0),
+            sky::VIEW.binding(),
+            sky::PREFILTER_CUBE.binding(),
+            sky::CUBE_SAMPLER.binding(),
         ]],
         argument_ids: &[],
     },
@@ -362,16 +555,16 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::SHADOW_VERT_BINDLESS,
         slots: &[&[
-            buffer("shadow_cb", 0),
-            buffer("mesh_vertices", 2),
-            buffer("cascade_cb", 7),
-            buffer("objects", 9),
+            shadow::SHADOW.binding(),
+            shadow::MESH_VERTICES.binding(),
+            shadow::CASCADE.binding(),
+            shadow::OBJECTS.binding(),
         ]],
         argument_ids: &[],
     },
     // The bindless main pass. Its two argument buffers are whole descriptor
     // sets, each at the index `[[cn::metal_argument_buffer(n)]]` names, and the
-    // ids inside the texture one are where `metal/cull.rs` writes each member:
+    // ids inside the texture one are where the cull writes each member:
     // the fixed shadow / IBL / screen-indirect / probe / spot / LTC members first, then
     // the unsized pool. `EngineSamplers` is written 0..2 by
     // `build_bindless_sampler_args`. Only the grass variants read the canopy
@@ -411,8 +604,8 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     // The SSR resolve: the probe cube array, its records and the cluster grid
-    // are discrete bindings beside the screen sources, which is what
-    // `metal/post/post_device.rs` binds.
+    // are discrete bindings beside the screen sources, which is what the post
+    // encoder binds.
     MetalAbi {
         program: &shared::SSR_RESOLVE,
         slots: &[&[
@@ -505,10 +698,10 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::WATER_VERT,
         slots: &[&[
-            buffer("view", 5),
-            buffer("params", 6),
-            texture("ocean_displacement", 9),
-            sampler("ocean_sampler", 6),
+            transparent::VIEW.binding(),
+            transparent::PARAMS.binding(),
+            transparent::OCEAN_DISPLACEMENT.binding(),
+            transparent::OCEAN_SAMPLER.binding(),
         ]],
         argument_ids: &[],
     },
@@ -530,11 +723,11 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::WATER_SEA_VERT,
         slots: &[&[
-            buffer("view", 5),
-            buffer("params", 6),
-            texture("ocean_displacement", 9),
-            sampler("ocean_sampler", 6),
-            texture("wake_field", 11),
+            transparent::VIEW.binding(),
+            transparent::PARAMS.binding(),
+            transparent::OCEAN_DISPLACEMENT.binding(),
+            transparent::OCEAN_SAMPLER.binding(),
+            transparent::WAKE_FIELD.binding(),
         ]],
         argument_ids: &[],
     },
@@ -570,8 +763,8 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     // The HLSL families. Their Metal indices come from the `register()`
     // annotations in the source rather than from declaration order, so these
-    // rows check the generated binding table against the slots the encoders in
-    // `metal/{post/bloom,text_upload,decal,particle}.rs` write.
+    // rows check the generated binding table against the slots the bloom, text,
+    // decal and particle encoders write.
     MetalAbi {
         program: &shared::BLOOM_PREFILTER,
         slots: &[&[
@@ -593,61 +786,69 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     },
     MetalAbi {
         program: &shared::TEXT_VERT,
-        slots: &[&[buffer("uni", 0)]],
+        slots: &[&[text::UNIFORMS.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::TEXT_FRAG,
-        slots: &[&[texture("atlas", 0), sampler("atlas_sampler", 0)]],
+        slots: &[&[text::ATLAS.binding(), text::ATLAS_SAMPLER.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::DECAL_VERT,
-        slots: &[&[buffer("view", 0), buffer("params", 1)]],
+        slots: &[&[decal::VIEW.binding(), decal::PARAMS.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::DECAL_FRAG,
         slots: &[&[
-            buffer("view", 0),
-            buffer("params", 1),
-            texture("scene_depth", 0),
-            texture("decal_tex", 1),
-            sampler("decal_tex_sampler", 0),
+            decal::VIEW.binding(),
+            decal::PARAMS.binding(),
+            decal::SCENE_DEPTH.binding(),
+            decal::DECAL_TEX.binding(),
+            decal::DECAL_TEX_SAMPLER.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PARTICLE_VERT,
-        slots: &[&[buffer("pool", 0), buffer("view", 1), buffer("params", 2)]],
+        slots: &[&[
+            particle::draw::POOL.binding(),
+            particle::draw::VIEW.binding(),
+            particle::draw::PARAMS.binding(),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PARTICLE_FRAG,
         slots: &[&[
-            texture("albedo", 0),
-            sampler("albedo_sampler", 0),
-            texture("scene_depth", 2),
+            particle::draw::ALBEDO.binding(),
+            particle::draw::ALBEDO_SAMPLER.binding(),
+            particle::draw::SCENE_DEPTH.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PARTICLE_LIT_VERT,
-        slots: &[&[buffer("pool", 0), buffer("view", 1), buffer("params", 2)]],
+        slots: &[&[
+            particle::draw::POOL.binding(),
+            particle::draw::VIEW.binding(),
+            particle::draw::PARAMS.binding(),
+        ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PARTICLE_LIT_FRAG,
         slots: &[&[
-            texture("albedo", 0),
-            sampler("albedo_sampler", 0),
-            texture("scene_depth", 2),
+            particle::draw::ALBEDO.binding(),
+            particle::draw::ALBEDO_SAMPLER.binding(),
+            particle::draw::SCENE_DEPTH.binding(),
         ]],
         argument_ids: &[],
     },
     // The fullscreen post fragments. Each source is one texture/sampler pair at
     // the index its register names, and the constants ride buffer(0), which is
-    // what `metal/post/{post_device,ssao}.rs` bind.
+    // what the post encoders bind.
     MetalAbi {
         program: &shared::TAA_FRAG,
         slots: &[&[
@@ -755,28 +956,28 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     // disagree: its destination volume is a UAV, which D3D numbers in a space of
     // its own and Metal folds into the texture namespace behind the cascades, so
     // the non-DXIL leg declares it `u1` and lands on texture(1) -- which is what
-    // `metal/fog.rs` binds, and the opposite of where the emitter would place it
-    // unaided.
+    // the fog encoder binds, and the opposite of where the emitter would place
+    // it unaided.
     MetalAbi {
         program: &shared::FOG_FROXEL,
         slots: &[&[
-            buffer("fog", 0),
-            buffer("froxel", 1),
-            buffer("shadow_uni", 2),
-            texture("shadow_map", 0),
-            sampler("shadow_samp", 0),
-            texture("fog_volume", 1),
+            fog::froxel::FOG.binding(),
+            fog::froxel::FROXEL.binding(),
+            fog::froxel::SHADOW.binding(),
+            fog::froxel::SHADOW_MAP.binding(),
+            fog::froxel::SHADOW_SAMPLER.binding(),
+            fog::froxel::VOLUME.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::FOG_FRAG,
         slots: &[&[
-            buffer("fog", 0),
-            buffer("froxel", 1),
-            texture("scene_depth", 0),
-            texture("fog_volume", 1),
-            sampler("fog_volume_samp", 0),
+            fog::draw::FOG.binding(),
+            fog::draw::FROXEL.binding(),
+            fog::draw::SCENE_DEPTH.binding(),
+            fog::draw::VOLUME.binding(),
+            fog::draw::VOLUME_SAMPLER.binding(),
         ]],
         argument_ids: &[],
     },
@@ -810,9 +1011,9 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
         argument_ids: &[],
     },
     // The reflection pair and the final composite, the heaviest source counts
-    // in the tree. `metal/post/ssr.rs` binds each source at its declaration
+    // in the tree. The reflection encoder binds each source at its declaration
     // index and repeats one sampler across the same range, and
-    // `metal/post/post_device.rs` puts the composite constants on buffer(0).
+    // the post encoder puts the composite constants on buffer(0).
     MetalAbi {
         program: &shared::REFLECTION_BLUR,
         slots: &[&[
@@ -842,82 +1043,81 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &shared::COMPOSITE_FRAG,
         slots: &[&[
-            buffer("post", 0),
-            texture("hdr_tex", 0),
-            sampler("hdr_tex_samp", 0),
-            texture("bloom_tex", 1),
-            sampler("bloom_tex_samp", 1),
-            texture("lut_tex", 2),
-            sampler("lut_tex_samp", 2),
-            texture("gbuf_nd_tex", 3),
-            sampler("gbuf_nd_tex_samp", 3),
-            texture("gbuf_rough_tex", 4),
-            sampler("gbuf_rough_tex_samp", 4),
-            texture("ao_tex", 5),
-            sampler("ao_tex_samp", 5),
-            texture("gbuf_motion_tex", 6),
-            sampler("gbuf_motion_tex_samp", 6),
-            texture("reactive_tex", 7),
-            sampler("reactive_tex_samp", 7),
+            composite::PARAMS.binding(),
+            composite::HDR.binding(),
+            composite::HDR_SAMPLER.binding(),
+            composite::BLOOM.binding(),
+            composite::BLOOM_SAMPLER.binding(),
+            composite::LUT.binding(),
+            composite::LUT_SAMPLER.binding(),
+            composite::GBUFFER_NORMAL_DEPTH.binding(),
+            composite::GBUFFER_NORMAL_DEPTH_SAMPLER.binding(),
+            composite::GBUFFER_ROUGHNESS.binding(),
+            composite::GBUFFER_ROUGHNESS_SAMPLER.binding(),
+            composite::AO.binding(),
+            composite::AO_SAMPLER.binding(),
+            composite::GBUFFER_MOTION.binding(),
+            composite::GBUFFER_MOTION_SAMPLER.binding(),
+            composite::REACTIVE.binding(),
+            composite::REACTIVE_SAMPLER.binding(),
         ]],
         argument_ids: &[],
     },
     // The compute families and the world-space line pair. Their Metal indices
     // come from the `register()` annotations too, and the slots below are what
-    // `metal/{auto_exposure,light_cull,particle,line}.rs` and the two skin
-    // dispatches in `metal/raytrace.rs` write.
+    // the exposure, light-cull, particle, line and skin encoders write.
     MetalAbi {
         program: &shared::AUTO_EXPOSURE_BUILD,
         slots: &[&[
-            texture("hdr_texture", 0),
-            buffer("histogram", 0),
-            buffer("params", 1),
+            exposure::build::HDR_TEXTURE.binding(),
+            exposure::build::HISTOGRAM.binding(),
+            exposure::build::PARAMS.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::AUTO_EXPOSURE_AVERAGE,
         slots: &[&[
-            buffer("histogram", 0),
-            buffer("measurement", 1),
-            buffer("params", 2),
+            exposure::average::HISTOGRAM.binding(),
+            exposure::average::MEASUREMENT.binding(),
+            exposure::average::PARAMS.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::LIGHT_CULL,
         slots: &[&[
-            buffer("cluster", 0),
-            buffer("lights", 1),
-            buffer("cluster_list", 2),
-            buffer("probe_records", 3),
+            light_cull::CLUSTER.binding(),
+            light_cull::LIGHTS.binding(),
+            light_cull::CLUSTER_LIST.binding(),
+            light_cull::PROBE_RECORDS.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PARTICLE_SIMULATE,
         slots: &[&[
-            buffer("pool", 0),
-            buffer("frame_rows", 1),
-            buffer("params", 2),
+            particle::simulate::POOL.binding(),
+            particle::simulate::FRAME_ROWS.binding(),
+            particle::simulate::PARAMS.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::RT_SKIN,
         slots: &[&[
-            buffer("src", 0),
-            buffer("dst", 1),
-            buffer("palette", 2),
-            buffer("params", 3),
-            buffer("morph_data", 4),
-            buffer("morph_weights", 5),
+            skin::SRC.binding(),
+            skin::DST.binding(),
+            skin::PALETTE.binding(),
+            skin::PARAMS.binding(),
+            skin::MORPH_DATA.binding(),
+            skin::MORPH_WEIGHTS.binding(),
         ]],
         argument_ids: &[],
     },
     // The Hi-Z pyramid's per-mip chain, which is Metal's half of the builder
-    // (Vulkan and DirectX run the SPD trio instead). The slots are what
-    // `metal/hiz.rs` writes for every dispatch of the chain.
+    // (Vulkan and DirectX run the SPD trio instead). The slots are what its
+    // encoder writes for every dispatch of the chain.
     MetalAbi {
         program: &metal::HIZ_INIT_MSAA,
         slots: HIZ_INIT_SLOTS,
@@ -931,162 +1131,166 @@ pub const METAL_ENTRY_ABI: &[MetalAbi] = &[
     MetalAbi {
         program: &metal::HIZ_DOWNSAMPLE,
         slots: &[&[
-            buffer("params", 0),
-            texture("src_hiz", 0),
-            texture("dst_mip", 1),
+            hiz::downsample::PARAMS.binding(),
+            hiz::downsample::SRC_HIZ.binding(),
+            hiz::downsample::DST_MIP.binding(),
         ]],
         argument_ids: &[],
     },
-    // The reflection-probe prefilter, whose three kernels `metal/probe_prefilter.rs`
-    // binds the same way: params, source, destination. The GGX kernel's
+    // The reflection-probe prefilter, whose three kernels its encoder binds the
+    // same way: params, source, destination. The GGX kernel's
     // destination is the one slot D3D and Metal disagree on, so its `u`
     // register moves behind `CN_BACKEND_DIRECTX` and Metal keeps texture(1).
     MetalAbi {
         program: &shared::PROBE_MIP0,
         slots: &[&[
-            buffer("params", 0),
-            texture("src_mip", 0),
-            texture("dst_mip", 1),
+            probe::mip::PARAMS.binding(),
+            probe::mip::SRC_MIP.binding(),
+            probe::mip::DST_MIP.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PROBE_DOWNSAMPLE,
         slots: &[&[
-            buffer("params", 0),
-            texture("src_mip", 0),
-            texture("dst_mip", 1),
+            probe::mip::PARAMS.binding(),
+            probe::mip::SRC_MIP.binding(),
+            probe::mip::DST_MIP.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::PROBE_GGX,
         slots: &[&[
-            buffer("params", 0),
-            texture("src_cube", 0),
-            sampler("src_sampler", 0),
-            texture("dst_mip", 1),
+            probe::ggx::PARAMS.binding(),
+            probe::ggx::SRC_CUBE.binding(),
+            probe::ggx::SRC_SAMPLER.binding(),
+            probe::ggx::DST_MIP.binding(),
         ]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::LINE_VERT,
-        slots: &[&[buffer("view", 0)]],
+        slots: &[&[line::VIEW.binding()]],
         argument_ids: &[],
     },
     MetalAbi {
         program: &shared::LINE_FRAG,
-        slots: &[&[buffer("view", 0), texture("scene_depth", 0)]],
+        slots: &[&[line::VIEW.binding(), line::SCENE_DEPTH.binding()]],
         argument_ids: &[],
     },
 ];
 
 // Both Hi-Z init variants: the params, the depth they read and the first mip.
 const HIZ_INIT_SLOTS: &[&[MetalBinding]] = &[&[
-    buffer("params", 0),
-    texture("src_depth", 0),
-    texture("dst_mip", 1),
+    hiz::init::PARAMS.binding(),
+    hiz::init::SRC_DEPTH.binding(),
+    hiz::init::DST_MIP.binding(),
 ]];
 
 // What every transparent fragment binds for its own draw: the view and
 // surface blocks, the scene depth and the sky prefilter cube.
 const TRANSPARENT_SLOTS: &[MetalBinding] = &[
-    buffer("view", 5),
-    buffer("params", 6),
-    texture("scene_depth", 1),
-    texture("prefilter_cube", 2),
-    sampler("prefilter_cube_sampler", 1),
+    transparent::VIEW.binding(),
+    transparent::PARAMS.binding(),
+    transparent::SCENE_DEPTH.binding(),
+    transparent::PREFILTER_CUBE.binding(),
+    transparent::PREFILTER_CUBE_SAMPLER.binding(),
 ];
 
 // The transparent pass's probe set and the cluster grid that bins it.
 const TRANSPARENT_PROBE_SLOTS: &[MetalBinding] = &[
-    buffer("probe_set", 7),
-    buffer("probe_records", 11),
-    buffer("cluster", 12),
-    buffer("cluster_list", 13),
-    texture("probe_cubes", 6),
-    sampler("probe_cube_sampler", 2),
+    transparent::PROBE_SET.binding(),
+    transparent::PROBE_RECORDS.binding(),
+    transparent::CLUSTER.binding(),
+    transparent::CLUSTER_LIST.binding(),
+    transparent::PROBE_CUBES.binding(),
+    transparent::PROBE_CUBE_SAMPLER.binding(),
 ];
 
 // The refraction snapshot every see-through transparent fragment reads.
-const SCENE_COLOR_SLOTS: &[MetalBinding] =
-    &[texture("scene_color", 0), sampler("scene_color_sampler", 0)];
+const SCENE_COLOR_SLOTS: &[MetalBinding] = &[
+    transparent::SCENE_COLOR.binding(),
+    transparent::SCENE_COLOR_SAMPLER.binding(),
+];
 
 // The planar mirror resolve.
 const PLANAR_SLOTS: &[MetalBinding] = &[
-    texture("planar_reflection", 3),
-    sampler("planar_reflection_sampler", 3),
+    transparent::PLANAR_REFLECTION.binding(),
+    transparent::PLANAR_REFLECTION_SAMPLER.binding(),
 ];
 
 // The ray-traced transparent fragments' trace inputs.
 const TRANSPARENT_TRACE_SLOTS: &[MetalBinding] = &[
-    buffer("rt_params", 0),
-    buffer("verts", 1),
-    buffer("indices", 2),
-    buffer("geom", 3),
-    buffer("scene_tlas", 4),
-    buffer("sverts", 8),
-    buffer("sidx", 9),
+    transparent::RT_PARAMS.binding(),
+    transparent::VERTICES.binding(),
+    transparent::INDICES.binding(),
+    transparent::GEOMETRY.binding(),
+    transparent::SCENE_TLAS.binding(),
+    transparent::SKINNED_VERTICES.binding(),
+    transparent::SKINNED_INDICES.binding(),
 ];
 
 // Both reflection layers the reduced pre-pass wrote.
 const REFLECTION_LAYER_SLOTS: &[MetalBinding] = &[
-    texture("glass_reflection", 4),
-    texture("glass_reflection_back", 5),
+    transparent::GLASS_REFLECTION.binding(),
+    transparent::GLASS_REFLECTION_BACK.binding(),
 ];
 
 // The reflection layer a pre-pass entry peels behind.
-const REFLECTION_PEEL_SLOTS: &[MetalBinding] = &[texture("glass_reflection", 4)];
+const REFLECTION_PEEL_SLOTS: &[MetalBinding] = &[transparent::GLASS_REFLECTION.binding()];
 
 // A textured transparent variant's bindless pool argument buffer and sampler.
-const TRANSPARENT_POOL_SLOTS: &[MetalBinding] =
-    &[buffer("spvDescriptorSet6", 10), sampler("pool_sampler", 4)];
+const TRANSPARENT_POOL_SLOTS: &[MetalBinding] = &[
+    transparent::TEXTURES.binding(),
+    transparent::POOL_SAMPLER.binding(),
+];
 
 // Every slot both RT reflection kernels bind, the probe set included, pinned
 // by its register(): the screen sources, the probe fallback, the output and the
 // ray list and arguments.
 const RT_SCREEN_SLOTS: &[MetalBinding] = &[
-    buffer("rt_params", 0),
-    buffer("probe_set", 8),
-    texture("scene_tex", 0),
-    sampler("scene_tex_sampler", 0),
-    texture("gbuffer", 1),
-    sampler("gbuffer_sampler", 1),
-    texture("rough_tex", 2),
-    sampler("rough_tex_sampler", 2),
-    texture("prefilter", 3),
-    sampler("prefilter_sampler", 3),
-    buffer("probe_records", 11),
-    texture("probe_cubes", 4),
-    sampler("probe_cube_sampler", 4),
-    buffer("cluster", 9),
-    buffer("cluster_list", 10),
-    texture("_output", 6),
-    buffer("ray_list", 14),
-    buffer("ray_args", 15),
+    rt::PARAMS.binding(),
+    rt::PROBE_SET.binding(),
+    rt::SCENE.binding(),
+    rt::SCENE_SAMPLER.binding(),
+    rt::GBUFFER.binding(),
+    rt::GBUFFER_SAMPLER.binding(),
+    rt::ROUGHNESS.binding(),
+    rt::ROUGHNESS_SAMPLER.binding(),
+    rt::PREFILTER.binding(),
+    rt::PREFILTER_SAMPLER.binding(),
+    rt::PROBE_RECORDS.binding(),
+    rt::PROBE_CUBES.binding(),
+    rt::PROBE_CUBE_SAMPLER.binding(),
+    rt::CLUSTER.binding(),
+    rt::CLUSTER_LIST.binding(),
+    rt::OUTPUT.binding(),
+    rt::RAY_LIST.binding(),
+    rt::RAY_ARGS.binding(),
 ];
 
 // The classify's own: SSGI's pyramid.
-const RT_CLASSIFY_SLOTS: &[MetalBinding] = &[texture("pyramid", 5)];
+const RT_CLASSIFY_SLOTS: &[MetalBinding] = &[rt::PYRAMID.binding()];
 
 // The trace's own: the acceleration structure and the geometry it fetches hits
 // from.
 const RT_REFLECTIONS_SLOTS: &[MetalBinding] = &[
-    buffer("verts", 1),
-    buffer("indices", 2),
-    buffer("geom", 3),
-    buffer("scene_tlas", 4),
-    buffer("sverts", 5),
-    buffer("sidx", 6),
+    rt::VERTICES.binding(),
+    rt::INDICES.binding(),
+    rt::GEOMETRY.binding(),
+    rt::SCENE_TLAS.binding(),
+    rt::SKINNED_VERTICES.binding(),
+    rt::SKINNED_INDICES.binding(),
 ];
 
 // The textured RT resolve's bindless pool (the main pass's texture block, bound
 // at the pool's offset) and the canopy block its grass-covered hits shade from.
 const RT_REFLECTIONS_POOL_SLOTS: &[MetalBinding] = &[
-    buffer("spvDescriptorSet3", 7),
-    sampler("pool_sampler", 5),
-    buffer("canopy_cb", 12),
-    buffer("canopy_tables_sb", 13),
+    rt::TEXTURES.binding(),
+    rt::POOL_SAMPLER.binding(),
+    rt::CANOPY.binding(),
+    rt::CANOPY_TABLES.binding(),
 ];
 
 const GLASS_SLOTS: &[&[MetalBinding]] = &[
@@ -1126,18 +1330,18 @@ const GLASS_REFLECTION_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
 // The light the water body is lit by: the cascaded shadow and the sky
 // irradiance cube.
 const WATER_BODY_LIGHT_SLOTS: &[MetalBinding] = &[
-    buffer("shadow_cb", 14),
-    texture("shadow_map", 7),
-    texture("irradiance_cube", 8),
-    texture("cloud_shadow", 12),
-    sampler("shadow_sampler", 5),
+    transparent::SHADOW.binding(),
+    transparent::SHADOW_MAP.binding(),
+    transparent::IRRADIANCE_CUBE.binding(),
+    transparent::CLOUD_SHADOW.binding(),
+    transparent::SHADOW_SAMPLER.binding(),
 ];
 // The simulated oceans' cascades, whose slopes and foam every water fragment
 // shades from.
 const WATER_OCEAN_SLOTS: &[MetalBinding] = &[
-    texture("ocean_displacement", 9),
-    texture("ocean_slopes", 10),
-    sampler("ocean_sampler", 6),
+    transparent::OCEAN_DISPLACEMENT.binding(),
+    transparent::OCEAN_SLOPES.binding(),
+    transparent::OCEAN_SAMPLER.binding(),
 ];
 const WATER_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
@@ -1167,7 +1371,7 @@ const WATER_RT_TEXTURED_SLOTS: &[&[MetalBinding]] = &[
     WATER_OCEAN_SLOTS,
 ];
 // A planet sea's wake field, which its fragments shade from too.
-const WATER_WAKE_SLOTS: &[MetalBinding] = &[texture("wake_field", 11)];
+const WATER_WAKE_SLOTS: &[MetalBinding] = &[transparent::WAKE_FIELD.binding()];
 const WATER_SEA_SLOTS: &[&[MetalBinding]] = &[
     TRANSPARENT_SLOTS,
     TRANSPARENT_PROBE_SLOTS,

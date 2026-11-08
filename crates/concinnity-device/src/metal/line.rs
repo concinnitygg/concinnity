@@ -14,6 +14,7 @@
 
 use concinnity_engine::gfx::render_types::LineVertex;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::render::shader::programs::abi::line::metal as line;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;
@@ -146,11 +147,14 @@ impl MtlContext {
             ns_string!("lines"),
         );
         enc.set_pipeline(pipeline);
-        enc.set_vertex_value(&view, 0);
-        enc.set_fragment_value(&view, 0);
+        enc.set_vertex_value(&view, line::VIEW.index);
+        enc.set_fragment_value(&view, line::VIEW.index);
         enc.set_vertex_buffer(vbuf, 0, VERTEX_BUFFER_INDEX);
         // Resolved scene depth at texture(0) for the manual depth test.
-        enc.set_fragment_texture(self.targets.hdr.depth_resolve.as_ref(), 0);
+        enc.set_fragment_texture(
+            self.targets.hdr.depth_resolve.as_ref(),
+            line::SCENE_DEPTH.index,
+        );
         // SAFETY: the draw covers exactly the vertices uploaded into `vbuf`.
         unsafe {
             enc.drawPrimitives_vertexStart_vertexCount(
