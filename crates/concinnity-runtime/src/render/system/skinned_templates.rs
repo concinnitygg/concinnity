@@ -45,7 +45,7 @@ impl GraphicsSystem {
         if templates.is_empty() {
             return Ok(());
         }
-        if let Some(backend) = self.backend.as_deref_mut() {
+        if let Some(backend) = super::reach(&mut self.backend) {
             upload_skinned_geometry(backend, upload)?;
         }
         let count = templates.len();

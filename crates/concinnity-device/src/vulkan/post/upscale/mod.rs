@@ -70,7 +70,7 @@ pub(in crate::vulkan) struct UpscaleInputs<'a> {
 // One temporal-upscaling backend. `encode_upscale` transitions the inputs and
 // the output, then calls `dispatch`; each backend records its vendor upscale
 // onto the supplied command buffer.
-pub(in crate::vulkan) trait UpscaleBackend: Send {
+pub(in crate::vulkan) trait UpscaleBackend {
     // The vendor upscaler this is.
     fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.

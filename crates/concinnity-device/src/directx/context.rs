@@ -19,11 +19,9 @@ use concinnity_engine::render::{
 };
 use concinnity_engine::{components, profile};
 use std::cell::{Cell, RefCell};
-use std::sync::OnceLock;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::System::Threading::GetCurrentThreadId;
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledTexture};
 use super::auto_exposure::AutoExposureState;
@@ -899,39 +897,6 @@ pub(crate) struct DxContext {
     // Device, queue, allocator and window. Declared last so every resource
     // above releases before the device and the window go.
     pub(super) hw: DxHardware,
-}
-
-// uniforms.view_ubo_ptrs are host-mapped and only touched on the render thread.
-// text_upload's RefCells + map pointers are single-threaded.
-// SAFETY: `DxContext` owns COM objects and host-mapped pointers that are only ever touched from the
-// thread that built it, which `RenderBackend::assert_owner_thread` checks each time the runtime
-// takes it.
-// Moving the whole context to another thread is therefore safe as long as it stays main-thread-only
-// there, and nothing in it is shared across threads (hence `Send` without `Sync`).
-unsafe impl Send for DxContext {}
-
-// Win32 thread id of the thread that built the context. `DxContext::new` runs
-// on the main thread and records it here; `on_owner_thread` checks against it.
-static MAIN_THREAD_ID: OnceLock<u32> = OnceLock::new();
-
-// Record the calling thread as the main (render) thread. Called once from
-// `DxContext::new`, which always runs on the main thread.
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "the main thread is the same for every context a process makes"
-)]
-pub(super) fn record_main_thread() {
-    // SAFETY: a read of the calling thread's own id; it borrows nothing.
-    let _ = MAIN_THREAD_ID.set(unsafe { GetCurrentThreadId() });
-}
-
-// Whether the caller is on the thread `record_main_thread` recorded, or no
-// context has been built yet.
-pub(super) fn on_owner_thread() -> bool {
-    MAIN_THREAD_ID
-        .get()
-        // SAFETY: a read of the calling thread's own id; it borrows nothing.
-        .is_none_or(|&main| unsafe { GetCurrentThreadId() } == main)
 }
 
 impl DxContext {

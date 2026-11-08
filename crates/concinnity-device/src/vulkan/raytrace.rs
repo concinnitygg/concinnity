@@ -578,11 +578,6 @@ pub(super) struct RtAccelData {
     blas_pool: BlasPool<AccelBuffer>,
 }
 
-// SAFETY: Raw pointers in `HostBuffer` are host-mapped and only touched on the render
-// thread; the acceleration-structure loader holds plain fn pointers. The whole
-// struct lives inside `VkContext`, which is already `unsafe impl Send`.
-unsafe impl Send for RtAccelData {}
-
 impl RtAccelData {
     // The live TLAS handle (bound through the RT pass's descriptor set).
     pub(super) fn tlas(&self) -> vk::AccelerationStructureKHR {

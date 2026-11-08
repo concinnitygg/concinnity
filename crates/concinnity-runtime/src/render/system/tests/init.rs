@@ -130,11 +130,11 @@ fn take_backend_yields_the_backend_once() {
     let mut world = scene_builder().build();
     let _gs = init_graphics(&mut world, hooks);
     assert!(
-        concinnity_engine::ecs::ActiveRenderBackend::take(world.context().resources).is_some(),
+        crate::ActiveRenderBackend::take(world.context().resources).is_some(),
         "the built backend is taken"
     );
     assert!(
-        concinnity_engine::ecs::ActiveRenderBackend::take(world.context().resources).is_none(),
+        crate::ActiveRenderBackend::take(world.context().resources).is_none(),
         "and only once"
     );
 }
@@ -149,13 +149,15 @@ fn pending_backend_reuses_instance_and_ends_with_new_world() {
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = titled_scene("world A").build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a = concinnity_engine::ecs::ActiveRenderBackend::take(world_a.context().resources)
+    let backend_a = crate::ActiveRenderBackend::take(world_a.context().resources)
         .expect("world A built a backend");
 
     // Transplant it into world B (a different world, same swapchain config).
     let (state_b, hooks_b) = recording_hooks();
     let mut world_b = titled_scene("world B").build();
-    world_b.insert_resource(crate::live_edit::PendingBackend(backend_a));
+    world_b.insert_resource(crate::live_edit::PendingBackend::new(
+        backend_a.into_inner().expect("on the thread that built it"),
+    ));
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(!gs_b.failed);
@@ -193,7 +195,7 @@ fn pending_backend_swapchain_change_forces_full_rebuild() {
     );
     let (state_b, hooks_b) = recording_hooks();
     let mut world = scene_builder().build();
-    world.insert_resource(crate::live_edit::PendingBackend(Box::new(transplant)));
+    world.insert_resource(crate::live_edit::PendingBackend::new(Box::new(transplant)));
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
@@ -232,7 +234,7 @@ fn pending_backend_hdr_change_forces_full_rebuild() {
     );
     let (state_b, hooks_b) = recording_hooks();
     let mut world = scene_builder().build();
-    world.insert_resource(crate::live_edit::PendingBackend(Box::new(transplant)));
+    world.insert_resource(crate::live_edit::PendingBackend::new(Box::new(transplant)));
     let gs = init_graphics(&mut world, hooks_b);
 
     assert!(!gs.failed);
@@ -256,8 +258,7 @@ fn reload_world_failure_marks_graphics_failed() {
     let (state_a, hooks_a) = recording_hooks();
     let mut world_a = scene_builder().build();
     let _gs_a = init_graphics(&mut world_a, hooks_a);
-    let backend_a =
-        concinnity_engine::ecs::ActiveRenderBackend::take(world_a.context().resources).unwrap();
+    let backend_a = crate::ActiveRenderBackend::take(world_a.context().resources).unwrap();
     state_a.lock().fail_reload = Some(error::RenderError::DeviceLost {
         reason: error::DeviceLostReason::Removed,
         detail: "boom".to_string(),
@@ -265,7 +266,9 @@ fn reload_world_failure_marks_graphics_failed() {
 
     let (_state_b, hooks_b) = recording_hooks();
     let mut world_b = scene_builder().build();
-    world_b.insert_resource(crate::live_edit::PendingBackend(backend_a));
+    world_b.insert_resource(crate::live_edit::PendingBackend::new(
+        backend_a.into_inner().expect("on the thread that built it"),
+    ));
     let gs_b = init_graphics(&mut world_b, hooks_b);
 
     assert!(gs_b.failed, "a failed reload marks the system failed");

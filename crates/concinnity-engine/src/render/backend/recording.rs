@@ -421,8 +421,6 @@ impl RenderBackend for RecordingBackend {
         self.record(Call::UpdateFogSettings(settings));
     }
 
-    fn assert_owner_thread(&self) {}
-
     fn set_material_params(&mut self, row: u32, params: [f32; render_types::MATERIAL_PARAM_COUNT]) {
         self.record(Call::SetMaterialParams { row, params });
     }

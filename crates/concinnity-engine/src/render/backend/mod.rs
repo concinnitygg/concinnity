@@ -214,15 +214,7 @@ pub trait RenderBackend:
     + WindowControl
     + WorldReload
     + WorldShaders
-    + Send
 {
-    /// Debug-assert that the caller is on the thread that owns this backend's
-    /// window and queues. A backend's graphics API and window are
-    /// thread-affine, so the runtime calls this each time it takes the backend
-    /// to drive it, and a schedule that moved the driver off that thread fails
-    /// loudly instead of racing the platform. Compiles to nothing in release.
-    #[track_caller]
-    fn assert_owner_thread(&self);
     /// Block until the GPU has drained every submitted frame.
     fn wait_idle(&self);
 

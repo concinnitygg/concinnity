@@ -5,10 +5,11 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use concinnity_engine::ecs::{ActiveRenderBackend, World};
+use concinnity_engine::ecs::World;
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::environment::volumetric_fog::PushedFogSettings;
 use concinnity_engine::render::world_load::source_maps::TextureNameSlots;
+use concinnity_runtime::ActiveRenderBackend;
 
 /// Disjoint borrows of the parked render backend and the init-captured state
 /// beside it. Each is `None` when init did not park it; the backend also while
@@ -25,10 +26,10 @@ pub(crate) fn render_handoff(world: &mut World) -> RenderHandoff<'_> {
     let (_, resources) = world.systems_and_resources();
     let (backend, fog, texture_slots) =
         resources.get_disjoint_mut::<ActiveRenderBackend, PushedFogSettings, TextureNameSlots>();
-    let backend = backend.and_then(|slot| slot.0.as_deref_mut());
-    if let Some(backend) = &backend {
-        backend.assert_owner_thread();
-    }
+    let backend = backend
+        .and_then(|slot| slot.0.as_mut())
+        .and_then(concinnity_host::thread::ThreadBound::get_mut)
+        .map(Box::as_mut);
     RenderHandoff {
         backend,
         fog,
@@ -43,6 +44,7 @@ pub(crate) fn shader_reload_flag(world: &World) -> Option<Arc<AtomicBool>> {
     world
         .resource::<ActiveRenderBackend>()
         .and_then(|slot| slot.0.as_ref())
+        .and_then(concinnity_host::thread::ThreadBound::get)
         .and_then(|backend| backend.shader_reload_flag())
 }
 

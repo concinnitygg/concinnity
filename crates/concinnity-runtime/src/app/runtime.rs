@@ -13,13 +13,13 @@ use concinnity_host::thread::jobs::{self, configure, pool};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::ActiveRenderBackend;
 use crate::app::blob;
 use crate::app::render_mode;
 use crate::app::startup_error::StartupError;
 use crate::lend::SYSTEMS;
 use crate::render::system::RenderInitFailure;
 use concinnity_core::platform::Platform;
-use concinnity_engine::ecs::ActiveRenderBackend;
 use concinnity_engine::input::mailbox::InputMailbox;
 use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
 use concinnity_engine::render::backend::RenderBackend;
@@ -444,11 +444,13 @@ impl Runtime {
     /// the world backend-less. A host hands it to a rebuilt world as a
     /// [`PendingBackend`](crate::live_edit::PendingBackend), so the rebuild
     /// keeps the OS window and GPU device. `None` when the world never built a
-    /// backend (or it was already taken).
+    /// backend (or it was already taken), or when called off the thread that
+    /// built it.
     pub fn take_render_backend(&mut self) -> Option<Box<dyn RenderBackend>> {
         self.world
             .resource_mut::<ActiveRenderBackend>()
             .and_then(|slot| slot.0.take())
+            .and_then(concinnity_host::thread::ThreadBound::into_inner)
     }
 
     /// Replace the current world and reset to Created so `start()` can be called again.

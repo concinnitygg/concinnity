@@ -39,12 +39,6 @@ pub(super) struct FsrUpscaler {
     output: UpscaleOutput,
 }
 
-// SAFETY: `FsrUpscaler` owns its FFX context and the DLL its entry points come from, neither shared:
-// every entry point runs on the render thread that built them, under the same main-thread guard as
-// the rest of `DxContext`. Moving the whole upscaler hands over exclusive ownership, so it is `Send`
-// without being `Sync`.
-unsafe impl Send for FsrUpscaler {}
-
 impl FsrUpscaler {
     // `Ok(None)` when FFX is unavailable: the DLL or one of its entry points
     // is missing, or the context could not be created.

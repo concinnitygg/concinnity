@@ -441,16 +441,6 @@ pub(super) fn upload_static_records<T: Copy>(
 }
 
 impl RenderBackend for DxContext {
-    // The Win32 message pump and D3D12 command-queue submission are both
-    // thread-affine, which is what the `unsafe impl Send for DxContext` rests on.
-    fn assert_owner_thread(&self) {
-        debug_assert!(
-            super::context::on_owner_thread(),
-            "DxContext is main-thread-only (see `unsafe impl Send for DxContext`); \
-             driving it off the main thread races the Win32 window + D3D12 command submission",
-        );
-    }
-
     fn wait_idle(&self) {
         // Staged geometry writes count as submitted work, so an idle GPU has
         // applied them.

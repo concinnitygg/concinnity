@@ -227,12 +227,6 @@ pub(super) struct XessUpscaler {
     jitter: Cell<[f32; 2]>,
 }
 
-// SAFETY: `XessUpscaler` owns its XeSS context and the library its entry points come from, neither
-// shared: the upscale pass is recorded by exactly one parallel-encoder worker per frame, under the
-// same main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands over exclusive
-// ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for XessUpscaler {}
-
 impl XessUpscaler {
     // `Ok(None)` when XeSS is unavailable: the library or one of its entry
     // points is missing, or the context could not be created or initialized

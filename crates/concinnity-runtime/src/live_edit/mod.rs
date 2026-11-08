@@ -24,4 +24,17 @@ pub mod shader_overrides;
 /// freshly built world so its graphics init reuses the live GPU device and
 /// window. Init calls `WorldReload::reload_world` on it when the swapchain
 /// config is unchanged, and otherwise idles and drops it and builds a new one.
-pub struct PendingBackend(pub Box<dyn RenderBackend>);
+pub struct PendingBackend(crate::OwnedBackend);
+
+impl PendingBackend {
+    /// Hand `backend` to the next world, bound to the calling thread, which
+    /// must be the one that built it.
+    pub fn new(backend: Box<dyn RenderBackend>) -> Self {
+        Self(concinnity_host::thread::ThreadBound::new(backend))
+    }
+
+    // The backend, or `None` off the thread that holds it.
+    pub(crate) fn into_backend(self) -> Option<Box<dyn RenderBackend>> {
+        self.0.into_inner()
+    }
+}

@@ -188,7 +188,7 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
     );
     let resources = world.context().resources;
     let (backend, fog, slots) = resources.get_disjoint_mut::<
-        concinnity_engine::ecs::ActiveRenderBackend,
+        crate::ActiveRenderBackend,
         concinnity_engine::render::environment::volumetric_fog::PushedFogSettings,
         concinnity_engine::render::world_load::source_maps::TextureNameSlots,
     >();
@@ -201,7 +201,7 @@ fn hot_reload_seams_park_the_fog_beside_the_backend() {
         "the texture-name map is captured only under concinnity run -f"
     );
     backend
-        .and_then(|slot| slot.0.as_deref_mut())
+        .and_then(|slot| crate::render::system::reach(&mut slot.0))
         .expect("init parks the backend")
         .wait_idle();
     assert!(

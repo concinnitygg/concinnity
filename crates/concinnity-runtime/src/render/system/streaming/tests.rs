@@ -15,7 +15,7 @@ const MIB: u64 = 1024 * 1024;
 fn system_with_backend() -> (SharedRecording, GraphicsSystem) {
     let (recorded, backend) = recording_backend();
     let mut gs = GraphicsSystem::new(None);
-    gs.backend = Some(Box::new(backend));
+    gs.backend = Some(concinnity_host::thread::ThreadBound::new(Box::new(backend)));
     (recorded, gs)
 }
 

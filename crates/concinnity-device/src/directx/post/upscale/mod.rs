@@ -58,7 +58,7 @@ pub(in crate::directx) struct UpscaleState {
 // One temporal-upscaling backend. `encode_upscale` transitions the scene /
 // depth / motion inputs and the output texture, then calls `dispatch`; each
 // backend records its vendor upscale onto the supplied command list.
-pub(in crate::directx) trait UpscaleBackend: Send {
+pub(in crate::directx) trait UpscaleBackend {
     // The vendor upscaler this is.
     fn vendor(&self) -> VendorUpscaler;
     // The render and output sizes the backend was created for.

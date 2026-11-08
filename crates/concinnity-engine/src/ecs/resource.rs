@@ -3,9 +3,8 @@
 // the profiler) that would otherwise be faked as one-element collections.
 //
 // Values are required to be `Send` so the world that owns the store can move
-// to a simulation thread. Thread-affine state (a GPU backend) may still be
-// stored behind a `Send` handle, but its owner must keep it on the thread its
-// invariants require.
+// to a simulation thread. Thread-affine state (a GPU backend) is stored behind
+// a handle that only lets its own thread reach it.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;

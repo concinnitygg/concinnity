@@ -199,7 +199,7 @@ impl GraphicsSystem {
         else {
             return;
         };
-        let Some(backend) = self.backend.as_deref_mut() else {
+        let Some(backend) = super::reach(&mut self.backend) else {
             return;
         };
         let source =
@@ -262,7 +262,7 @@ impl GraphicsSystem {
         if payloads.is_empty() {
             return;
         }
-        let Some(backend) = self.backend.as_deref_mut() else {
+        let Some(backend) = super::reach(&mut self.backend) else {
             return;
         };
         let source: Arc<dyn MeshPayloadSource> = if disk_backed {
@@ -336,7 +336,7 @@ impl GraphicsSystem {
         block_types: &HashMap<AssetId, BlockType>,
         material_map: &HashMap<MaterialHandle, MaterialEntry>,
     ) {
-        let Some(backend) = self.backend.as_deref_mut() else {
+        let Some(backend) = super::reach(&mut self.backend) else {
             return;
         };
         let VoxelStream {
@@ -393,7 +393,7 @@ impl GraphicsSystem {
     ) {
         let plan = PlanetStream::plan(planet, far_field.as_ref(), material_map);
         let (vertex_bytes, index_bytes) = plan.headroom;
-        let Some(backend) = self.backend.as_deref_mut() else {
+        let Some(backend) = super::reach(&mut self.backend) else {
             return;
         };
         let Some(worker) = started("Planet terrain", tile_workers::spawn_workers()) else {

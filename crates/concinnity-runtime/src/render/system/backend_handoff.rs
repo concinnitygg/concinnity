@@ -52,7 +52,7 @@ impl GraphicsSystem {
         let reuse_backend = match ctx
             .resources
             .remove::<crate::live_edit::PendingBackend>()
-            .map(|p| p.0)
+            .and_then(crate::live_edit::PendingBackend::into_backend)
         {
             Some(backend) if backend_init.reloads_into(backend.as_ref()) => Some(backend),
             Some(backend) => {
@@ -62,7 +62,6 @@ impl GraphicsSystem {
             None => None,
         };
         if let Some(mut backend) = reuse_backend {
-            backend.assert_owner_thread();
             backend.reload_world(backend_init)?;
             tracing::info!(
                 "GraphicsSystem: reused live backend (world reloaded in place, window kept)"
@@ -95,10 +94,7 @@ impl GraphicsSystem {
     ) {
         // Seed the frame extraction's viewport from the live backend;
         // FrameInput refreshes it once InputSystem starts publishing.
-        let viewport = self
-            .backend
-            .as_ref()
-            .map_or((0.0, 0.0), |b| b.logical_size());
+        let viewport = super::reach(&mut self.backend).map_or((0.0, 0.0), |b| b.logical_size());
         self.extractor.set_viewport(viewport);
         // OverlaySystem shapes the overlay draw list from these each frame.
         ctx.insert_resource(OverlayAssets {

@@ -152,10 +152,6 @@ pub(in crate::vulkan) struct RtReflectionsResources {
     wired_pyramid: WireCache<vk::ImageView>,
 }
 
-// SAFETY: The params UBOs' mapped pointers are host-mapped, render-thread-only; the
-// whole struct lives inside `VkContext`, which is already `unsafe impl Send`.
-unsafe impl Send for RtReflectionsResources {}
-
 // Set 0 of the RT kernels: the RtParams UBO (0), TLAS (1), geometry table (2),
 // static verts and indices (3, 4), scene, G-buffer and roughness (5-7), the
 // deformed skinned verts and skinned indices (9, 10), for skinned hits, the

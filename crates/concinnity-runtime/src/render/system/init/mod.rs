@@ -199,7 +199,7 @@ impl GraphicsSystem {
         ctx: &mut PipelineContext<'_>,
         settings: &mut SettingsState,
     ) {
-        let reported = self.backend.as_deref_mut().map(|backend| {
+        let reported = crate::render::system::reach(&mut self.backend).map(|backend| {
             // No-op in embedded mode (the backend owns no window there).
             if let Some(mode) = settings.startup_window_mode() {
                 backend.set_window_mode(mode);
@@ -233,7 +233,7 @@ impl GraphicsSystem {
         let cursor = cursor_policy(ctx);
         self.extractor.set_menu_mode(cursor.menu_mode);
         let mut device_caps = backend::DeviceCapabilities::ALL;
-        if let Some(backend) = self.backend.as_deref_mut() {
+        if let Some(backend) = crate::render::system::reach(&mut self.backend) {
             // Capability flags drive the settings-menu gating below.
             device_caps = backend.capabilities();
             // Detected GPU performance profile, logged once at init so the
@@ -541,7 +541,7 @@ impl GraphicsSystem {
         };
         backend_init.resolve_requirements();
         match self.build_backend(ctx, backend_init) {
-            Ok(backend) => self.backend = Some(backend),
+            Ok(backend) => self.backend = Some(concinnity_host::thread::ThreadBound::new(backend)),
             Err(e) => {
                 tracing::error!("GraphicsSystem: backend build failed: {e}");
                 // The run already resolved to a windowed one, so this machine
@@ -556,7 +556,7 @@ impl GraphicsSystem {
         self.finalize_display_modes(ctx, &mut settings);
 
         // The backend bakes a cube per placement.
-        if let Some(backend) = self.backend.as_deref_mut() {
+        if let Some(backend) = crate::render::system::reach(&mut self.backend) {
             backend.set_reflection_probes(&probe_placements, self.extractor.prop_probe().is_some());
         }
 
@@ -592,7 +592,7 @@ impl GraphicsSystem {
         self.scene_flow = flow::start_flow(
             ctx,
             self.extractor.scene_visibility_mut(),
-            self.backend.as_deref_mut(),
+            crate::render::system::reach(&mut self.backend),
         );
 
         self.park_runtime_state(

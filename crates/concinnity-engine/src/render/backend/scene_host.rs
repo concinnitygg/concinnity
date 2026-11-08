@@ -144,7 +144,6 @@ mod tests {
     }
 
     impl RenderBackend for Hosted {
-        fn assert_owner_thread(&self) {}
         fn wait_idle(&self) {}
         fn draw_frame(&mut self, _: FrameParams<'_>) -> RenderResult<()> {
             Ok(())

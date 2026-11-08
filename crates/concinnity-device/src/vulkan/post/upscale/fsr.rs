@@ -54,12 +54,6 @@ pub(super) struct FsrUpscaler {
     jitter: Cell<[f32; 2]>,
 }
 
-// SAFETY: `FsrUpscaler` owns its FFX context and the library its entry points come from, neither
-// shared: the upscale pass is recorded by exactly one parallel-encoder worker per frame, under the
-// same main-thread guard as the rest of `VkContext`. Moving the whole upscaler hands over exclusive
-// ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for FsrUpscaler {}
-
 impl FsrUpscaler {
     // `Ok(None)` when FFX is unavailable: the library or one of its entry
     // points is missing, or the context could not be created.

@@ -157,10 +157,6 @@ fn planar_pool_sizes(ring_sets: u32, has_hiz: u32) -> PoolSizes {
         .add(vk::DescriptorType::SAMPLED_IMAGE, has_hiz)
 }
 
-// SAFETY: The mapped view-ring pointers are POD raw pointers; the upload buffers stay
-// alive through the struct fields and the pointers are written on the render
-// thread only. Mirrors GlassResources.
-unsafe impl Send for PlanarReflectionSet {}
 // SAFETY: as for `Send` above.
 unsafe impl Sync for PlanarReflectionSet {}
 

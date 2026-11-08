@@ -39,17 +39,6 @@ use super::context::MtlContext;
 use super::graph_exec::GraphFrameParams;
 
 impl RenderBackend for MtlContext {
-    // AppKit and Metal command submission are both main-thread-affine, which
-    // is what the `unsafe impl Send for MtlContext` rests on.
-    #[track_caller]
-    fn assert_owner_thread(&self) {
-        debug_assert!(
-            objc2::MainThreadMarker::new().is_some(),
-            "MtlContext is main-thread-only (see `unsafe impl Send for MtlContext`); \
-             driving it off the main thread races AppKit/Metal",
-        );
-    }
-
     // Block until the GPU has finished all in-flight work.
     fn wait_idle(&self) {
         if let Some(cmd_buf) = self.hw.command_queue.commandBuffer() {

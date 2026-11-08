@@ -302,7 +302,7 @@ fn init_graphics(world: &mut World, hooks: TestHooks) -> GraphicsSystem {
 // Whether the world's parked backend slot currently holds a backend.
 fn backend_parked(world: &World) -> bool {
     world
-        .resource::<concinnity_engine::ecs::ActiveRenderBackend>()
+        .resource::<crate::ActiveRenderBackend>()
         .is_some_and(|slot| slot.0.is_some())
 }
 

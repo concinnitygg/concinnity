@@ -96,7 +96,7 @@ pub use event_store::EventStore;
 pub use ext_columns::ExtColumns;
 pub use join::JoinIndex;
 pub use mask::{ComponentId, ComponentMask};
-pub use parked::{ActiveRenderBackend, Parked};
+pub use parked::Parked;
 pub use resource::Resources;
 pub use tick::{AtomicTick, MAX_CHANGE_AGE, Tick};
 pub use tick_accumulator::TickAccumulator;

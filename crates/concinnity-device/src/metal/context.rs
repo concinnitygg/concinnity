@@ -739,13 +739,6 @@ pub(crate) struct MtlContext {
     pub(super) hw: MtlHardware,
 }
 
-// SAFETY: MtlContext is only ever accessed from the main thread (as documented
-// on the struct), which `RenderBackend::assert_owner_thread` checks each time
-// the runtime takes it. The Retained<ProtocolObject<...>> Metal handles aren't
-// Send by default, but `RenderBackend: Send` requires it so GraphicsSystem can
-// box the backend behind a trait object. Mirrors DxContext / VkContext.
-unsafe impl Send for MtlContext {}
-
 // The cull-record set one GPU-driven encode covers: `total` command slots, of
 // which the folded skinned tail starts at `skinned_base`. Cull dispatches and
 // indirect-draw ranges take this instead of reading the live draw list, so an

@@ -29,7 +29,6 @@ impl SceneHost for NullBackend {
 }
 
 impl RenderBackend for NullBackend {
-    fn assert_owner_thread(&self) {}
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _params: FrameParams<'_>) -> RenderResult<()> {
         Ok(())

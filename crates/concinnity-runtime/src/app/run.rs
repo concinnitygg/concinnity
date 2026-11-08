@@ -212,10 +212,9 @@ fn report_render_failure(cause: &RenderError) {
 fn finish_frame_captures(runtime: &mut Runtime) {
     if let Some(backend) = runtime
         .world_mut()
-        .resource_mut::<concinnity_engine::ecs::ActiveRenderBackend>()
-        .and_then(|slot| slot.0.as_mut())
+        .resource_mut::<crate::ActiveRenderBackend>()
+        .and_then(|slot| crate::render::system::reach(&mut slot.0))
     {
-        backend.assert_owner_thread();
         backend.finish_captures();
     }
 }

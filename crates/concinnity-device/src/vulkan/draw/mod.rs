@@ -804,17 +804,6 @@ pub(super) fn upload_static_records<T: Copy>(
 }
 
 impl RenderBackend for VkContext {
-    // The GLFW window and event pump are thread-affine, and the host-mapped
-    // uniform pointers and the device allocator's RefCell are single-threaded,
-    // which is what the `unsafe impl Send for VkContext` rests on.
-    fn assert_owner_thread(&self) {
-        debug_assert!(
-            super::context::on_owner_thread(),
-            "VkContext is main-thread-only (see `unsafe impl Send for VkContext`); \
-             driving it off the main thread races the window + Vulkan queue submission",
-        );
-    }
-
     fn wait_idle(&self) {
         // Staged geometry writes count as submitted work, so an idle device has
         // applied them.

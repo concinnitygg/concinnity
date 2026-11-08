@@ -3,11 +3,12 @@
 // `submit`), or its hand-off to the render thread. Asset streaming and the
 // camera-relative view rebase run in the engine's StreamingSystem just before it.
 
+use super::ActiveRenderBackend;
 use crate::app::pipeline::PipelinedFrames;
-use concinnity_engine::ecs::ActiveRenderBackend;
 use concinnity_engine::ecs::{Clock, PipelineContext, StepResult};
 use concinnity_engine::input::mailbox::InputMailbox;
 use concinnity_engine::input::snapshot::InputPacket;
+use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::frame::outcome::{self, Submitted};
 use concinnity_engine::render::frame::snapshot::RenderSnapshot;
 use concinnity_host::clock::micros_since;
@@ -34,17 +35,30 @@ impl GraphicsSystem {
         }
         // Take the parked backend for this step (see `ActiveRenderBackend`);
         // it is a plain local from here on, so `ctx` stays freely borrowable.
-        let Some(mut backend) = ActiveRenderBackend::take(ctx.resources) else {
+        let Some(mut owned) = ActiveRenderBackend::take(ctx.resources) else {
             return StepResult::Done;
         };
-        backend.assert_owner_thread();
+        let result = match owned.get_mut() {
+            Some(backend) => self.submit_frame(ctx, backend.as_mut()),
+            // A schedule that moved this step off the backend's thread.
+            None => StepResult::Stop,
+        };
+        ActiveRenderBackend::put(ctx.resources, owned);
+        result
+    }
 
+    // Extract this step's frame and submit it to `backend`.
+    fn submit_frame(
+        &mut self,
+        ctx: &mut PipelineContext<'_>,
+        backend: &mut dyn RenderBackend,
+    ) -> StepResult {
         // Fill the frame snapshot from world state, then submit it. The
         // snapshot's buffers ride along and keep their capacity.
         let mut snapshot = std::mem::take(&mut self.snapshot);
         self.extract(ctx, &mut snapshot);
         let submitted = Instant::now();
-        let outcome = submit::submit(&mut self.frame_policy, &mut snapshot, backend.as_mut());
+        let outcome = submit::submit(&mut self.frame_policy, &mut snapshot, backend);
         ctx.profile
             .record_render_handoff(snapshot.extract_us.saturating_add(micros_since(submitted)));
         outcome::settle(
@@ -69,10 +83,9 @@ impl GraphicsSystem {
         // deposit it for the next tick's InputSystem, which runs before
         // anything else reads input.
         if result == StepResult::Continue {
-            deposit_input(ctx, InputPacket::sample(backend.as_mut()));
+            deposit_input(ctx, InputPacket::sample(backend));
         }
 
-        ActiveRenderBackend::put(ctx.resources, backend);
         result
     }
 

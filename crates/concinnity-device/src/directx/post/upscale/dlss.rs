@@ -135,12 +135,6 @@ pub(super) struct DlssUpscaler {
     preset: DlssPreset,
 }
 
-// SAFETY: `DlssUpscaler` owns an NGX feature, its parameter bag and a COM device reference, none of
-// which are shared: every entry point runs on the render thread that built them, under the same
-// main-thread guard as the rest of `DxContext`. Moving the whole upscaler hands over exclusive
-// ownership, so it is `Send` without being `Sync`.
-unsafe impl Send for DlssUpscaler {}
-
 impl DlssUpscaler {
     // `Ok(None)` when DLSS is unavailable: NGX failed to initialize, the GPU
     // or driver lacks DLSS, or the feature could not be created. A feature

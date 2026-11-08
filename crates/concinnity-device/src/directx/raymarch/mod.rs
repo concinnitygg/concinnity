@@ -1105,11 +1105,6 @@ impl RaymarchResources {
 // Pointer drops in the resources struct are POD-style raw pointers; the
 // underlying mapped upload buffers stay alive through the `Vec<ID3D12Resource>`
 // fields, and the pointers are read on the render thread only.
-// SAFETY: the raw pointers `RaymarchResources` holds are the mappings of upload buffers the struct
-// also owns, so they stay valid for as long as it does. They are only values here: every
-// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
-// on the render thread.
-unsafe impl Send for RaymarchResources {}
 // SAFETY: sharing `&RaymarchResources` hands out the pointer values but no way to dereference them;
 // every write goes through a `&mut self` method on the context.
 unsafe impl Sync for RaymarchResources {}

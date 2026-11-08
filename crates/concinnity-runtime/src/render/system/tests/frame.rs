@@ -332,8 +332,7 @@ fn a_step_without_a_parked_backend_finishes_the_system() {
     let (_state, hooks) = recording_hooks();
     let mut world = scene_builder().build();
     let mut gs = init_graphics(&mut world, hooks);
-    concinnity_engine::ecs::ActiveRenderBackend::take(world.context().resources)
-        .expect("backend was parked");
+    crate::ActiveRenderBackend::take(world.context().resources).expect("backend was parked");
 
     assert_eq!(step(&mut gs, &mut world), StepResult::Done);
 }

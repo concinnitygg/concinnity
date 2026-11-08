@@ -383,11 +383,6 @@ pub(in crate::directx) struct TransparentResources {
 // The mapped ring pointers are POD raw pointers; the upload buffers stay alive
 // through the `Vec<PooledBuffer>` fields and the pointers are written on the
 // render thread only. Mirrors `RaymarchResources`.
-// SAFETY: the raw pointers `TransparentResources` holds are the mappings of upload buffers the
-// struct also owns, so they stay valid for as long as it does. They are only values here: every
-// dereference goes through a `&mut self` method on the context, which the main-thread guard keeps
-// on the render thread.
-unsafe impl Send for TransparentResources {}
 // SAFETY: sharing `&TransparentResources` hands out the pointer values but no way to dereference
 // them; every write goes through a `&mut self` method on the context.
 unsafe impl Sync for TransparentResources {}

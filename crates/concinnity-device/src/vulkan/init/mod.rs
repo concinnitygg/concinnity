@@ -50,7 +50,7 @@ use std::sync::atomic::AtomicBool;
 use super::context::{
     CompositeState, CullState, Descriptors, Geometry, HDR_FORMAT, InstancedState, ProbeState,
     SceneAssets, ShadowState, SkinnedState, StreamState, SwapchainState, Targets, TextState,
-    VkContext, VkHardware, record_main_thread,
+    VkContext, VkHardware,
 };
 use super::geometry_upload::GeometryUploads;
 use super::texture::GpuUploadContext;
@@ -205,10 +205,6 @@ impl VkContext {
         } = world_shaders
             .first()
             .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
-        // Record this (main) thread for `RenderBackend::assert_owner_thread`;
-        // the Send invariant rests on the context being touched from this
-        // thread alone.
-        record_main_thread();
         let frames = graphics.frames_in_flight();
         // The material parameter table, one copy per frame in flight.
         let material_params =

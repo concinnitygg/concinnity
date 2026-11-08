@@ -47,10 +47,8 @@
 //! targets then refills the ranges the old ones held instead of opening blocks
 //! beside them and stranding the old ranges as holes.
 //!
-//! The `Rc` behind the leases is main-thread state, on the same invariant as
-//! `unsafe impl Send for VkContext`: the context migrates between threads but is
-//! only ever used from one at a time, and workers given `&VkContext` only read
-//! handles, never drop or allocate.
+//! The `Rc` behind the leases is state of the thread that owns the context;
+//! workers given `&VkContext` only read handles, never drop or allocate.
 
 use ash::{Device, vk};
 use concinnity_core::math::SaturatingFrom;

@@ -1018,7 +1018,9 @@ impl EditorHook {
         let Some(backend) = runtime.take_render_backend() else {
             return;
         };
-        staged.world_mut().insert_resource(PendingBackend(backend));
+        staged
+            .world_mut()
+            .insert_resource(PendingBackend::new(backend));
         let new_world = std::mem::replace(staged.world_mut(), World::new());
         runtime.load_world(new_world);
         if let Err(e) = runtime.start() {

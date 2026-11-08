@@ -1297,36 +1297,6 @@ pub(crate) struct VkContext {
     pub(super) hw: VkHardware,
 }
 
-// SAFETY: The host-mapped uniform pointers and the RefCell device allocator behind
-// every pooled resource are used only on the thread that built the context,
-// which `RenderBackend::assert_owner_thread` checks each time the runtime takes
-// it.
-unsafe impl Send for VkContext {}
-
-// Thread id of the thread that built the context. `VkContext::new` runs on the
-// main thread and records it here; `RenderBackend::assert_owner_thread` checks
-// against it. Portable across platforms (unlike the Win32
-// `GetCurrentThreadId` the DirectX backend uses) since Vulkan also targets Linux.
-static MAIN_THREAD_ID: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
-
-// Record the calling thread as the main (render) thread. Called once from
-// `VkContext::new`, which always runs on the main thread.
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "the main thread is the same for every context a process makes"
-)]
-pub(super) fn record_main_thread() {
-    let _ = MAIN_THREAD_ID.set(std::thread::current().id());
-}
-
-// Whether the caller is on the thread `record_main_thread` recorded, or no
-// context has been built yet.
-pub(super) fn on_owner_thread() -> bool {
-    MAIN_THREAD_ID
-        .get()
-        .is_none_or(|main| *main == std::thread::current().id())
-}
-
 impl VkContext {
     // The live platform window. Present for every constructed context; `None`
     // only on the outgoing context of a `reload_world` (its window was moved

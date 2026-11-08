@@ -38,9 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use self::heap_layout::{RtvHeapLayout, SrvHeapParams};
-use super::context::{
-    DxContext, DxHardware, InstancedState, ProbeState, StreamState, record_main_thread,
-};
+use super::context::{DxContext, DxHardware, InstancedState, ProbeState, StreamState};
 use super::geometry_upload::GeometryUploads;
 use super::particle::ParticleState;
 use super::resources::skinning::SkinnedState;
@@ -192,10 +190,6 @@ impl DxContext {
             .first()
             .ok_or_else(|| RenderError::Other("BackendInit carried no shaders".to_string()))?;
         let output = (window.width, window.height);
-        // Record this (main) thread for `RenderBackend::assert_owner_thread`;
-        // the Send invariant rests on the context being touched from this
-        // thread alone.
-        record_main_thread();
 
         let (hw, swapchain) = open_hardware(reuse, window, &graphics, validation)?;
         // Persisted pipeline library: seeded from disk when a blob for this

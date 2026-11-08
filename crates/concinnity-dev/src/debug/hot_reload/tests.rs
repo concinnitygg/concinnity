@@ -738,7 +738,6 @@ impl backend::RenderBackend for RecordingBackend {
         self.fog_updates += 1;
     }
 
-    fn assert_owner_thread(&self) {}
     fn wait_idle(&self) {}
     fn draw_frame(&mut self, _: backend::FrameParams<'_>) -> error::RenderResult<()> {
         Ok(())

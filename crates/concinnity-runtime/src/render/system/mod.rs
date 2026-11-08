@@ -4,6 +4,7 @@
 
 use crate::render::streaming::loaders::StreamWorkers;
 use concinnity_engine::components::Background;
+use concinnity_engine::ecs::Parked;
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{PipelineContext, StepResult, System, World};
 use concinnity_engine::render::backend::RenderBackend;
@@ -18,6 +19,24 @@ use concinnity_engine::render::{
     backend, frame::snapshot, overlay::maps, overlay::text, scene::flow,
 };
 use concinnity_host::store::paths::StateTree;
+use concinnity_host::thread::ThreadBound;
+
+/// The world's render backend, bound to the thread that built it: a graphics
+/// API and its window are thread-affine, so only that thread may drive it.
+pub type OwnedBackend = ThreadBound<Box<dyn RenderBackend>>;
+
+/// The world's live render backend, parked between system steps. The graphics
+/// driver's init builds and parks it; its frame step takes it out and puts it
+/// back. `None` while a step has it taken, or once a live edit transplanted it
+/// out.
+pub type ActiveRenderBackend = Parked<OwnedBackend>;
+
+// The backend `slot` holds, when it holds one and the calling thread owns it.
+pub(crate) fn reach(slot: &mut Option<OwnedBackend>) -> Option<&mut (dyn RenderBackend + 'static)> {
+    slot.as_mut()
+        .and_then(ThreadBound::get_mut)
+        .map(Box::as_mut)
+}
 
 /// Why the renderer could not be built, left by `GraphicsSystem`'s init for
 /// `Runtime::start` to pick up and report.
@@ -42,11 +61,12 @@ pub(crate) struct GraphicsSystem {
     extractor: FrameExtractor,
     // The render backend while init constructs and wires it. Boxed
     // `dyn RenderBackend` so the setup logic in init.rs and streaming.rs runs
-    // as one cfg-free path across Metal, DirectX, and Vulkan.
+    // as one cfg-free path across Metal, DirectX, and Vulkan, and bound to the
+    // thread that built it.
     // At the end of a successful init it is parked in the world's
     // `ActiveRenderBackend` resource, where this system's frame step takes and
     // returns it; `None` from then on.
-    backend: Option<Box<dyn RenderBackend>>,
+    backend: Option<OwnedBackend>,
     // active scene-flow bookkeeping while init builds it; handed to the shared
     // `ActiveSceneFlow` resource at the end of init (SettingsSystem jumps it,
     // this system ticks it). None when no Scene assets were declared.
