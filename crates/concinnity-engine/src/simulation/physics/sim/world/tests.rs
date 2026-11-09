@@ -1333,7 +1333,7 @@ fn config_round_trips_and_takes_effect() {
     }
     assert_eq!(sim.body_pose(ball).expect("live").0[1], 5.0);
     sim.set_config(SimConfig::default());
-    assert_eq!(sim.config().gravity, crate::simulation::physics::GRAVITY);
+    assert_eq!(sim.config().gravity, crate::environment::GRAVITY);
     sim.step(TICK);
     assert!(sim.body_pose(ball).expect("live").0[1] < 5.0);
 }

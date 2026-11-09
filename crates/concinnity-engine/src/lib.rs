@@ -44,7 +44,7 @@ extern crate std;
 /// - changing what a `build` payload serializer writes
 ///
 /// Adding or removing a serialized field needs no bump: a blob frame is
-/// length-delimited and `blob::decode_exact` rejects one that does not decode
+/// length-delimited and `codec::decode_exact` rejects one that does not decode
 /// exactly, so a stale record fails the load on its own.
 pub const SCHEMA_VERSION: u32 = 3;
 
@@ -55,6 +55,7 @@ pub mod bake;
 pub mod benchmark;
 pub mod blob;
 pub mod budget;
+pub mod codec;
 pub mod components;
 pub mod defaults;
 pub mod ecs;

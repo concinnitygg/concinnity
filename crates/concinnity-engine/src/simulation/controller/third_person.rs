@@ -234,7 +234,7 @@ impl ThirdPersonSystem {
             };
             if input.jump && self.jump_height > 0.0 {
                 rig.jump_velocity =
-                    math::sqrt(2.0 * crate::simulation::physics::GRAVITY * self.jump_height);
+                    math::sqrt(2.0 * crate::environment::GRAVITY * self.jump_height);
             }
         }
         if let Some(index) = self.speed_param_index
@@ -644,8 +644,7 @@ mod tests {
         let rig = world.query::<CharacterRig>().next().unwrap();
         // v = sqrt(2 g h) with g = 20, h = 1.
         assert!(
-            (rig.jump_velocity - math::sqrt(2.0 * crate::simulation::physics::GRAVITY)).abs()
-                < 1e-4,
+            (rig.jump_velocity - math::sqrt(2.0 * crate::environment::GRAVITY)).abs() < 1e-4,
             "{}",
             rig.jump_velocity
         );

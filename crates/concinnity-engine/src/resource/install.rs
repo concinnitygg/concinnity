@@ -12,9 +12,9 @@ use crate::ecs::asset_id::AssetId;
 use crate::ecs::{EnvironmentMapHandle, FontHandle, MaterialHandle, MeshHandle, PipelineContext};
 
 use super::{
-    EnvironmentMapRecord, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry,
-    RuntimeMeshPayloads,
+    EnvironmentMapTable, FontTable, MaterialTable, MeshTable, ResourceEntry, RuntimeMeshPayloads,
 };
+use crate::bake::environment_map::EnvironmentMapRecord;
 
 /// Record `payload` as `id`'s geometry and return the handle it lands on.
 ///

@@ -17,10 +17,10 @@ use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
 use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
-use crate::settings::UserGraphicsSettings;
 use crate::settings::system::EventCursor;
 use crate::settings::system::RenderOps;
 use crate::settings::system::Window;
+use crate::settings::{DisabledSettingRows, UserGraphicsSettings};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -1547,7 +1547,7 @@ fn disabled_rows_publish_alongside_the_gray_out() {
     let rows = f
         .world
         .context()
-        .resource::<crate::protocol::DisabledSettingRows>()
+        .resource::<DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
     assert!(rows.is_empty(), "every row is live in fullscreen");
@@ -1558,7 +1558,7 @@ fn disabled_rows_publish_alongside_the_gray_out() {
     let rows = f
         .world
         .context()
-        .resource::<crate::protocol::DisabledSettingRows>()
+        .resource::<DisabledSettingRows>()
         .map(|r| r.0.clone())
         .unwrap();
     assert!(rows.contains(&SettingKey::ShowFps));

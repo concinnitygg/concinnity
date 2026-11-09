@@ -17,7 +17,7 @@ pub mod burst;
 pub(crate) mod emitter;
 mod emitter_gpu;
 mod system;
-pub use burst::{EmitterBursts, ParticleBurst, ParticleBursts};
+pub use burst::EmitterBursts;
 pub use emitter_gpu::EmitterGpu;
 pub use system::{ActiveEmitter, ParticleFrame, ParticleSystem};
 
@@ -40,7 +40,8 @@ const MIN_LIFETIME: f32 = 0.001;
 /// drives its compute + render passes from these fields each frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ParticleEmitterRecord {
-    /// The emitter's asset id, which a [`ParticleBurst`] names it by; `None`
+    /// The emitter's asset id, which a
+    /// [`ParticleBurst`](crate::protocol::ParticleBurst) names it by; `None`
     /// for one with no asset behind it.
     pub id: Option<AssetId>,
     /// Index of the albedo texture in the renderer's bindless / per-frame

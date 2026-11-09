@@ -879,7 +879,7 @@ mod tests {
             tile.morph = crate::environment::planet::tile_morph_row(
                 Some(crate::gfx::render_types::PlanetTileDraw {
                     level: id.level,
-                    seams: crate::environment::planet::TileSeams::default(),
+                    seams: crate::gfx::render_types::TileSeams::default(),
                 }),
                 0,
             );

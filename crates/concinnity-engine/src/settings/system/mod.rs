@@ -524,7 +524,7 @@ impl SettingsState {
             if !is_fullscreen {
                 disabled_rows.insert(SettingKey::Resolution);
             }
-            ctx.insert_resource(crate::protocol::DisabledSettingRows(disabled_rows));
+            ctx.insert_resource(crate::settings::DisabledSettingRows(disabled_rows));
             self.published_disabled_inputs = Some(inputs);
         }
     }

@@ -17,12 +17,12 @@
 //!     `byte_len` bytes of level data
 //!
 //! RGBA8 sources (PNG / JPEG / procedural generators) carry a single mip; the
-//! backend upload generates the minification chain (`crate::render::mipmap`).
+//! backend upload generates the minification chain (`crate::gfx::mipmap`).
 //! Block-compressed sources (KTX2 / DDS) carry the container's full mip chain and
 //! upload it verbatim, since no runtime `BCn` encoder exists.
 
 // Magic tagging every compiled 2D texture payload.
-use crate::bake::decode::{ByteReader, DecodeError, checked_product};
+use crate::codec::{ByteReader, DecodeError, checked_product};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
@@ -146,7 +146,7 @@ impl TextureImage {
     }
 
     /// A single-level RGBA8 image with its full box-filtered mip chain
-    /// ([`generate_mip_chain`](crate::render::mipmap::generate_mip_chain)) appended.
+    /// ([`generate_mip_chain`](crate::gfx::mipmap::generate_mip_chain)) appended.
     /// Every other image, already chained or block compressed, is returned as is.
     #[must_use]
     pub fn with_mip_chain(self) -> Self {
@@ -157,7 +157,7 @@ impl TextureImage {
         if base.data.len() < base.width as usize * base.height as usize * 4 {
             return self;
         }
-        let mips = crate::render::mipmap::generate_mip_chain(base.width, base.height, &base.data)
+        let mips = crate::gfx::mipmap::generate_mip_chain(base.width, base.height, &base.data)
             .into_iter()
             .map(|level| TextureMip {
                 width: level.width,
@@ -432,7 +432,7 @@ mod tests {
         let (w, h) = (13u32, 6u32);
         let pixels: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 251) as u8).collect();
         let image = TextureImage::rgba8(w, h, pixels.clone()).with_mip_chain();
-        let reference = crate::render::mipmap::generate_mip_chain(w, h, &pixels);
+        let reference = crate::gfx::mipmap::generate_mip_chain(w, h, &pixels);
         assert_eq!(image.mips.len(), reference.len());
         for (mip, level) in image.mips.iter().zip(&reference) {
             assert_eq!((mip.width, mip.height), (level.width, level.height));

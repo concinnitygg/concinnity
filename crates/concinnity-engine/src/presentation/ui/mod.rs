@@ -46,7 +46,7 @@ use screen::{ScreenMeta, ScreenRegistry};
 use scroll_layout::RowSpec;
 
 use crate::settings;
-use crate::settings::SettingKey;
+use crate::settings::{DisabledSettingRows, SettingKey};
 
 // How many reference-space pixels one unit of scroll-wheel delta moves a panel.
 const WHEEL_SCROLL_SPEED: f32 = 2.0;
@@ -339,8 +339,8 @@ impl System for UiInputSystem {
             .writes_components(crate::component_mask![TextLabel, Sprite, TextInput])
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
-                crate::protocol::DisabledSettingRows,
-                crate::protocol::DisplayModes,
+                DisabledSettingRows,
+                super::window::display_mode::DisplayModes,
                 CompiledPlatforms,
             ])
             .writes_resources(crate::resource_mask![
@@ -727,7 +727,7 @@ impl UiInputSystem {
                 .collect()
         } else if settings::is_dynamic_dropdown(req.setting) {
             // `resolution`'s modes, which the renderer publishes at init.
-            let modes = ctx.resource::<crate::protocol::DisplayModes>()?;
+            let modes = ctx.resource::<super::window::display_mode::DisplayModes>()?;
             if modes.0.is_empty() {
                 return None;
             }
@@ -1820,7 +1820,7 @@ mod tests {
             fit: SpriteFit::Fit,
         });
         start(&mut world);
-        world.insert_resource(crate::protocol::DisplayModes(modes));
+        world.insert_resource(display_mode::DisplayModes(modes));
         world
     }
 
@@ -2562,7 +2562,7 @@ mod tests {
 
         // Master off: the show_fps row is in the runtime-disabled set, so a click
         // over it fires nothing.
-        world.insert_resource(crate::protocol::DisabledSettingRows(
+        world.insert_resource(DisabledSettingRows(
             [SettingKey::ShowFps].into_iter().collect(),
         ));
         world.add_component(make_frame_input(50.0, 50.0, true));

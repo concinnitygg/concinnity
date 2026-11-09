@@ -1,4 +1,5 @@
 use super::*;
+use crate::ecs::World;
 use crate::input::pad::{PadAxis, PadEvent};
 use crate::input::snapshot::{InputPacket, InputSnapshot};
 
@@ -175,15 +176,4 @@ fn a_live_key_rebind_moves_the_action() {
     );
     system.step(&mut world.context());
     assert!(published(&world).forward, "Up walks forward once rebound");
-}
-
-// A sampled packet carries whatever chrome the backend reports over the top of
-// its frame; a backend reporting none leaves it at zero.
-#[test]
-fn a_sampled_packet_carries_the_backends_top_content_inset() {
-    use crate::render::backend::recording::recording_backend;
-    let (state, mut backend) = recording_backend();
-    assert_eq!(InputPacket::sample(&mut backend).top_inset, 0.0);
-    state.lock().top_inset = 28.0;
-    assert_eq!(InputPacket::sample(&mut backend).top_inset, 28.0);
 }

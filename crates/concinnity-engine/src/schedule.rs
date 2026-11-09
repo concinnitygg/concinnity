@@ -25,6 +25,7 @@ use crate::presentation::hud::loading_overlay::LoadingOverlaySystem;
 use crate::presentation::hud::stat_hud::StatHudSystem;
 use crate::presentation::screenshot::ScreenshotSystem;
 use crate::presentation::ui::UiInputSystem;
+use crate::render::backend::render_mode::RenderMode;
 use crate::render::overlay::OverlaySystem;
 use crate::render::streaming::pools::StreamingSystem;
 use crate::settings::system::{SettingsStore, SettingsSystem};
@@ -108,7 +109,7 @@ impl<H: SystemHost> CoreSystems<H> {
         present_when: "the world runs with a window",
         phase: Phase::Early,
         gate: |world| {
-            let system = InputSystem::for_world(world)?;
+            let system = RenderMode::renders_in(world).then(InputSystem::new)?;
             boxed(Some(match H::pads() {
                 Some(pads) => system.with_pads(pads),
                 None => system,

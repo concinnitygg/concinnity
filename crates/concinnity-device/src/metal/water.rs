@@ -37,6 +37,7 @@ use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::render::backend::PlanetReshape;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::water::frame::WaterMotion;
+use concinnity_engine::render::environment::water::sea::sky_split;
 use concinnity_engine::render::planar_reflection::PlanarFramePlan;
 use concinnity_engine::render::shader::programs::abi::transparent::metal as slots;
 use concinnity_engine::render::transparent;
@@ -280,7 +281,7 @@ impl MtlContext {
                 .body()
                 .sea
                 .as_ref()
-                .map(|sea| sea.sky_split(&view.daylight))
+                .map(|sea| sky_split(sea, &view.daylight))
         };
         let cam = view.camera_pos;
         let planar_set = self.planar_reflection.as_ref();

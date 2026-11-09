@@ -509,7 +509,7 @@ impl SceneState {
             index_count: idxs.len(),
             planet_tile: planet_tile.map(|t| PlanetTileDraw {
                 level: t.tile.level,
-                seams: crate::environment::planet::TileSeams::default(),
+                seams: crate::gfx::render_types::TileSeams::default(),
             }),
             base_vertex: i32::saturating_from(vertex_base(v_off)),
             geometry_generation,
@@ -1090,7 +1090,7 @@ mod tests {
             scene.draw.objects[0].planet_tile,
             Some(PlanetTileDraw {
                 level: 7,
-                seams: crate::environment::planet::TileSeams::default(),
+                seams: crate::gfx::render_types::TileSeams::default(),
             })
         );
         assert_eq!(scene.draw.objects[1].planet_tile, None);

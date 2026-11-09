@@ -62,7 +62,7 @@ fn payload_joint_to_def(
 }
 
 /// Convert a payload-joint vec to the args-form vec the runtime
-/// `build_skeleton_from_joint_defs` consumes. Public so the client runtime
+/// `Skeleton::from_joint_defs` consumes. Public so the client runtime
 /// init path can call it without re-implementing the field mapping.
 pub fn payload_joints_to_defs(
     joints: Vec<crate::gfx::mesh_payload::PayloadJoint>,

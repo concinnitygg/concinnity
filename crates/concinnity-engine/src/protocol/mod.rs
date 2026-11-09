@@ -8,6 +8,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 pub use concinnity_core::fanout::ScheduleMode;
 
+mod particle_bursts;
+
+pub use particle_bursts::{BURST_MERGE_REACH, MAX_FRAME_BURSTS, ParticleBurst, ParticleBursts};
+
 use crate::blob::PhysicsBudgetRecord;
 use crate::ecs::FontHandle;
 use crate::ecs::asset_id::AssetId;
@@ -500,19 +504,6 @@ pub struct FrameCaptureRequest {
 /// schedules the burst.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenshotRequest(pub u32);
-
-/// Setting rows disabled at runtime (e.g. `show_fps` while "Display
-/// performance stats" is off), published each frame by the graphics system.
-/// The UI input system makes a matching row inert (no hover, no click) while
-/// its labels are grayed independently.
-#[derive(Debug, Clone, Default)]
-pub struct DisabledSettingRows(pub hashbrown::HashSet<crate::settings::SettingKey>);
-
-/// The display modes the "Resolution" settings row offers, published once by
-/// the graphics system at init and read by the UI input system to seed the
-/// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
-#[derive(Debug, Clone, Default)]
-pub struct DisplayModes(pub Vec<crate::presentation::window::display_mode::DisplayMode>);
 
 #[cfg(test)]
 mod tests {

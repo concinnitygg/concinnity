@@ -25,9 +25,9 @@ use super::{LoadPool, Mailbox};
 use crate::environment::planet::{
     DVec3, EditArea, HORIZON_SHADOW_REACH, Horizon, HorizonOccluder, LocalFrame,
     MAX_RESIDENT_TILES, PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh,
-    TileMorphFrame, TileSeams, TileView, tile_mesh,
+    TileMorphFrame, TileView, tile_mesh,
 };
-use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms};
+use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms, TileSeams};
 use crate::render::backend::{ChunkMesh, PlanetChunk};
 use crate::render::environment::grass::CanopyRange;
 use crate::render::frame::ops::{OpFailure, RenderOps};

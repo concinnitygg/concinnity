@@ -21,6 +21,8 @@ pub mod jitter;
 pub mod lines;
 pub mod lod;
 pub mod mesh_payload;
+pub mod mipmap;
+pub mod morph_targets;
 pub mod overlay;
 pub mod pick;
 pub mod projection;

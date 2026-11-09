@@ -72,8 +72,12 @@ fn a_world_without_ground_reads_none() {
 fn a_payload_that_holds_no_page_refuses_the_world() {
     let mut world = world_with(b"not a page".to_vec());
     let err = load_edits(&mut world.context()).unwrap_err();
-    assert!(
-        matches!(err, WorldError::PlanetGround(PagePayloadError::Compressed)),
-        "{err:?}"
+    let WorldError::Decode { asset, source } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(*asset, PlanetGround::NAME);
+    assert_eq!(
+        source.downcast_ref::<PagePayloadError>(),
+        Some(&PagePayloadError::Compressed)
     );
 }

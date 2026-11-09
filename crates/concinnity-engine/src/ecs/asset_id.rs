@@ -14,14 +14,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::ecs::resolver::resolve_name;
-
-/// A world has minted every asset id its reserved range holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "this world has minted all {} asset ids it reserves",
-    AssetId::MINTED_CAPACITY
-)]
-pub struct AssetIdsExhausted;
+use crate::error::AssetIdsExhausted;
 
 /// A dense integer handle for one asset, assigned at build time in world
 /// declaration order. Equality and hashing are integer ops.
@@ -65,7 +58,9 @@ impl MintedIds {
     /// declared asset instead.
     pub(crate) fn next_id(&mut self) -> Result<AssetId, AssetIdsExhausted> {
         if self.next >= AssetId::MINTED_CAPACITY {
-            return Err(AssetIdsExhausted);
+            return Err(AssetIdsExhausted {
+                capacity: AssetId::MINTED_CAPACITY,
+            });
         }
         let id = AssetId(AssetId::MINTED_BASE + self.next);
         self.next += 1;
@@ -215,8 +210,11 @@ mod tests {
         let mut ids = MintedIds {
             next: AssetId::MINTED_CAPACITY,
         };
-        assert_eq!(ids.next_id(), Err(AssetIdsExhausted));
-        assert_eq!(ids.next_id(), Err(AssetIdsExhausted));
+        let exhausted = AssetIdsExhausted {
+            capacity: AssetId::MINTED_CAPACITY,
+        };
+        assert_eq!(ids.next_id(), Err(exhausted));
+        assert_eq!(ids.next_id(), Err(exhausted));
     }
 
     #[test]

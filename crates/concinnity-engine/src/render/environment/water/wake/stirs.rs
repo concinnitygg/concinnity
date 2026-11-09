@@ -130,7 +130,7 @@ fn lane(p: &StirPiece) -> [f32; 4] {
 mod tests {
     use super::*;
     use crate::ecs::Entity;
-    use crate::simulation::physics::MAX_FLUID_PIECES;
+    use crate::environment::water::stir::MAX_STIR_PIECES;
 
     fn piece(x: f32, volume: f32) -> StirPiece {
         StirPiece {
@@ -142,7 +142,7 @@ mod tests {
     }
 
     fn stir(id: u32, pieces: &[StirPiece]) -> WaterStir {
-        let mut all = [StirPiece::default(); MAX_FLUID_PIECES];
+        let mut all = [StirPiece::default(); MAX_STIR_PIECES];
         all[..pieces.len()].copy_from_slice(pieces);
         WaterStir {
             entity: Entity::from_bits((u64::from(id) << 32) | 1).unwrap_or_else(Entity::dangling),

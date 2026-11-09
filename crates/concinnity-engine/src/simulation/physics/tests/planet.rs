@@ -3,8 +3,9 @@
 //! grid swapped for another under the bodies resting on it.
 
 use super::fixtures::{TICK, add_floor, awake, drop_ball, position, step_for};
+use crate::environment::GRAVITY;
 use crate::simulation::physics::SimConfig;
-use crate::simulation::physics::{BodyHandle, DynamicParams, GRAVITY, LayerMask, Simulation};
+use crate::simulation::physics::{BodyHandle, DynamicParams, LayerMask, Simulation};
 use alloc::vec;
 use concinnity_core::approx::close;
 use concinnity_core::math::{quat_from_axis_angle, quat_rotate};

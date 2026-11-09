@@ -28,7 +28,8 @@ mod physics;
 
 use crate::components::{EngineDefaults, Window};
 use crate::ecs::PipelineContext;
-use crate::ecs::asset_id::{AssetId, AssetIdsExhausted, MintedIds};
+use crate::ecs::asset_id::{AssetId, MintedIds};
+use crate::error::AssetIdsExhausted;
 use crate::error::WorldError;
 
 pub use font::{HUD_FONT_SIZE_PX, HudFont, hud_font};

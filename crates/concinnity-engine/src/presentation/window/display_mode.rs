@@ -16,6 +16,12 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use concinnity_core::math::{SaturatingFrom, round};
 
+/// The display modes the "Resolution" settings row offers, published once by
+/// the settings system at init and read by the UI input system to seed the
+/// row's dropdown list. Ordered as displayed; a pick's `SetIndex` indexes it.
+#[derive(Debug, Clone, Default)]
+pub struct DisplayModes(pub Vec<DisplayMode>);
+
 /// One display mode the hardware supports: pixel dimensions plus refresh rate.
 /// `refresh_hz` of 0 means unknown (some built-in panels report none); the label
 /// then omits the rate and a fullscreen apply keeps the display's current rate.

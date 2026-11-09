@@ -118,8 +118,9 @@ pub(crate) fn environment_map_payload_key_args(
 
 // The runtime fields the record carries beside the payload.
 pub(crate) fn compile_environment_map_data(args: &serde_json::Value) -> Result<Vec<u8>, String> {
-    resolve_args(args)
-        .map(|map| concinnity_engine::resource::EnvironmentMapRecord::from(&map).to_bytes())
+    resolve_args(args).map(|map| {
+        concinnity_engine::bake::environment_map::EnvironmentMapRecord::from(&map).to_bytes()
+    })
 }
 
 // Source containers an equirectangular panorama can arrive in.

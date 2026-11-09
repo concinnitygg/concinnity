@@ -18,12 +18,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::protocol::ParticleBurst;
 use concinnity_engine::render::backend::EmitterPass;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::particles::burst::PARTICLE_FRAME_ROWS;
-use concinnity_engine::render::particles::{
-    EmitterGpu, ParticleBurst, ParticleEmitterRecord, ParticleFrame,
-};
+use concinnity_engine::render::particles::{EmitterGpu, ParticleEmitterRecord, ParticleFrame};
 use concinnity_engine::render::shader::programs::abi::particle::SIMULATE_GROUP;
 use concinnity_engine::render::shader::programs::abi::particle::metal::{draw, simulate};
 use concinnity_engine::render::temporal::reactive_mask::ReactiveWrite;

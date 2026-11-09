@@ -11,8 +11,9 @@ mod json;
 mod source;
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::components::{SkeletonJoint, build_skeleton_from_joint_defs};
+use concinnity_engine::components::SkeletonJoint;
 use concinnity_engine::gfx::mesh_payload::MorphDelta;
+use concinnity_engine::simulation::animation::skeleton::Skeleton;
 use concinnity_engine::transform::{Mat4, mat4_affine_inverse};
 pub(crate) use source::export_world_mesh;
 
@@ -102,7 +103,7 @@ impl ExportMesh {
 // One inverse bind matrix per joint: the inverse of the joint's world-space
 // bind transform, which glTF skins require alongside the node hierarchy.
 fn inverse_bind_matrices(skeleton: &[SkeletonJoint]) -> Vec<Mat4> {
-    let s = build_skeleton_from_joint_defs(skeleton);
+    let s = Skeleton::from_joint_defs(skeleton);
     let mut world = Vec::new();
     s.world_matrices_into(s.bind_locals(), &mut world);
     world.iter().map(|m| mat4_affine_inverse(*m)).collect()

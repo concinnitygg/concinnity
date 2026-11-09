@@ -12,9 +12,11 @@ use concinnity_core::math::SaturatingFrom;
 use hashbrown::HashMap;
 
 mod lines;
+mod load;
 mod runs;
 
 use lines::laid_out;
+pub use load::{FontAtlas, load_face};
 use runs::RunColors;
 
 /// One face's per-glyph metrics, keyed by Unicode code point.

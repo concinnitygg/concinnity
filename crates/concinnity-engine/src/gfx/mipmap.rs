@@ -9,10 +9,19 @@
 //! convention `max(1, base >> level)`. That keeps the CPU chain in lockstep with
 //! the image's allocated mip levels on all three backends.
 
-use crate::render::render_graph::full_mip_levels;
 use alloc::vec;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
+
+// Levels in a full mip chain for a target of `width` x `height`:
+// `floor(log2(max(w, h))) + 1`. Power-of-two sources end exactly at 1x1;
+// non-power-of-two sources stop one level short of 1x1 on the smaller axis,
+// which is what each backend's Hi-Z build already does.
+pub(crate) const fn full_mip_levels(width: u32, height: u32) -> u32 {
+    let m = if width > height { width } else { height };
+    let m = if m < 1 { 1 } else { m };
+    32 - m.leading_zeros()
+}
 
 /// One level of a mip chain: dimensions plus tightly packed RGBA8 pixels
 /// (`width * height * 4` bytes, no row padding).
@@ -90,6 +99,17 @@ fn downsample_box(src: &MipLevel, dw: u32, dh: u32, dst: &mut [u8]) {
 mod tests {
     use super::*;
     use concinnity_core::math::SaturatingFrom;
+
+    #[test]
+    fn full_mip_levels_matches_the_backends_hiz_chain() {
+        // Mirrors each backend's `hiz_mip_count`: floor(log2(max)) + 1.
+        assert_eq!(full_mip_levels(1, 1), 1);
+        assert_eq!(full_mip_levels(2, 1), 2);
+        assert_eq!(full_mip_levels(1920, 1080), 11);
+        assert_eq!(full_mip_levels(1024, 1024), 11);
+        // Zero on either axis still yields a one-level chain.
+        assert_eq!(full_mip_levels(0, 0), 1);
+    }
 
     #[test]
     fn level_count_matches_floor_log2_plus_one() {

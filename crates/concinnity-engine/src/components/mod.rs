@@ -108,7 +108,6 @@ pub use crate::resource::material::Material;
 pub use crate::resource::mesh::{Mesh, VertexData};
 pub use crate::resource::skinned_mesh::{
     CharacterCapsule, MorphDelta, SkeletonJoint, SkinnedMesh, SkinnedVertexData,
-    build_skeleton_from_joint_defs,
 };
 pub use crate::resource::texture::Texture;
 pub use crate::settings::command::{SettingCommand, SettingOp};

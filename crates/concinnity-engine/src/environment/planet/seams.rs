@@ -6,17 +6,7 @@ use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use super::tile::{TileId, TileSide};
-
-/// The sides of a drawn tile that meet a drawn tile a level coarser, and the
-/// sides that meet drawn tiles a level finer, each a mask of
-/// [`TileSide::bit`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TileSeams {
-    /// Sides beside a coarser tile.
-    pub coarser: u8,
-    /// Sides beside finer tiles.
-    pub finer: u8,
-}
+use crate::gfx::render_types::TileSeams;
 
 /// A tile to draw and its seams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

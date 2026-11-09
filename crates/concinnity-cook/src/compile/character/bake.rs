@@ -7,9 +7,9 @@
 use concinnity_core::math::vec3;
 use concinnity_engine::components::{
     CharacterCapsule, CharacterShape, MorphDelta, SkeletonJoint, SkinnedMesh,
-    build_skeleton_from_joint_defs,
 };
 use concinnity_engine::simulation::animation::proportions::ProportionLayer;
+use concinnity_engine::simulation::animation::skeleton::Skeleton;
 use concinnity_engine::transform::{self, Mat4, mat4_transform_point};
 
 use crate::authoring::registry::RegisteredType;
@@ -92,7 +92,7 @@ struct ProportionedBind {
 }
 
 fn proportioned_bind(joints: &[SkeletonJoint], shape: &CharacterShape) -> ProportionedBind {
-    let skeleton = build_skeleton_from_joint_defs(joints);
+    let skeleton = Skeleton::from_joint_defs(joints);
     let layer = ProportionLayer::resolve(&skeleton, &shape.proportions);
     let mut locals: Vec<Mat4> = skeleton.bind_locals().to_vec();
     layer.apply(&mut locals);

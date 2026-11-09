@@ -23,7 +23,7 @@ pub(crate) struct BuiltinFont {
 // `None` means the embedded payload did not parse, which leaves the caller no
 // way to draw text with it.
 pub(crate) fn load(handle: FontHandle) -> Option<BuiltinFont> {
-    match concinnity_engine::bake::font::load_face(handle.0 as usize, BAKED_ATLAS) {
+    match concinnity_engine::render::overlay::text::load_face(handle.0 as usize, BAKED_ATLAS) {
         Ok((loaded, atlas)) => Some(BuiltinFont { loaded, atlas }),
         Err(e) => {
             tracing::error!("built-in font atlas failed to decode: {e}");

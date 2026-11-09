@@ -17,6 +17,7 @@ use crate::environment::sky::SkyOrientation;
 use crate::environment::water::stir::WaterStirs;
 use crate::gfx::frustum;
 use crate::gfx::render_types::{DrawIndex, SkinnedIndex};
+use crate::protocol::ParticleBursts;
 use crate::protocol::{
     FlyCam, FrameCaptureRequest, FrameTime, HiddenAssets, InputSampledAt, MenuOverride, PickEntry,
     PickIndex, SimTiming, ViewOverrides,
@@ -26,7 +27,6 @@ use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
 use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
-use crate::render::particles::ParticleBursts;
 use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
 use crate::render::temporal::history_reset::{

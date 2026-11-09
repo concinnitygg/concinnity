@@ -5,7 +5,7 @@
 //! cursor state the UI drives, and the system clipboard. Every method here is
 //! about the surface and its input, never about the scene drawn on it.
 
-use crate::input::snapshot::InputSnapshot;
+use crate::input::snapshot::{InputPacket, InputSnapshot};
 use crate::presentation::window::clipboard::Clipboard;
 use alloc::vec::Vec;
 
@@ -25,6 +25,19 @@ pub trait WindowControl {
     fn take_input(&mut self) -> InputSnapshot;
     /// Ask the window to capture the cursor; a backend may defer until the first content click.
     fn request_cursor_capture(&mut self);
+
+    /// Sample the input accumulated since the last call, with the cursor's
+    /// containment and the window's logical size, into one packet. Called
+    /// right after the draw so the frame's event pump is reflected.
+    fn sample_input(&mut self) -> InputPacket {
+        InputPacket {
+            raw: self.take_input(),
+            cursor_outside_window: self.cursor_outside_window(),
+            viewport: self.logical_size(),
+            top_inset: self.top_content_inset(),
+            window_minimized: self.window_minimized(),
+        }
+    }
 
     /// The overlay coordinate space: the window's content size in logical,
     /// DPI-independent units (points on macOS, client pixels on Windows, window
@@ -153,5 +166,21 @@ pub trait WindowControl {
     /// clipboard of its own.
     fn clipboard(&mut self) -> Option<&mut dyn Clipboard> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::backend::recording::recording_backend;
+
+    // A sampled packet carries whatever chrome the backend reports over the
+    // top of its frame; a backend reporting none leaves it at zero.
+    #[test]
+    fn a_sampled_packet_carries_the_backends_top_content_inset() {
+        let (state, mut backend) = recording_backend();
+        assert_eq!(backend.sample_input().top_inset, 0.0);
+        state.lock().top_inset = 28.0;
+        assert_eq!(backend.sample_input().top_inset, 28.0);
     }
 }

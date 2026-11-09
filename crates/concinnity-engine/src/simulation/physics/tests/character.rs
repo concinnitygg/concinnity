@@ -11,9 +11,10 @@
 //! zeroes the fall on landing.
 
 use super::fixtures::{TICK, add_floor};
+use crate::environment::GRAVITY;
 use crate::simulation::physics::{
-    BodyHandle, CharacterCapsule, CharacterMove, CharacterMoveInput, ColliderShape, GRAVITY,
-    LayerMask, Simulation,
+    BodyHandle, CharacterCapsule, CharacterMove, CharacterMoveInput, ColliderShape, LayerMask,
+    Simulation,
 };
 use concinnity_core::math::vec3::length;
 

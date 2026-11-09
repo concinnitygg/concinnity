@@ -21,7 +21,6 @@
 
 use concinnity_engine::ecs::Parked;
 use concinnity_engine::ecs::StepResult;
-use concinnity_engine::input::snapshot::InputPacket;
 use concinnity_engine::render::backend::RenderBackend;
 use concinnity_engine::render::frame::feedback::FrameFeedback;
 use concinnity_engine::render::frame::snapshot::RenderSnapshot;
@@ -211,7 +210,7 @@ fn render_half(
 // the simulation step on it. False once the simulation is gone.
 fn let_step_go(go: &FrameGo, backend: &mut dyn RenderBackend) -> bool {
     backend.pump_events();
-    let input = InputPacket::sample(backend);
+    let input = backend.sample_input();
     go.send(input, concinnity_host::clock::monotonic_micros())
 }
 

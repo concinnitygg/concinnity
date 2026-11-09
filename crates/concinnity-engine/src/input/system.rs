@@ -15,7 +15,7 @@
 use alloc::boxed::Box;
 
 use crate::components::{ControlsCommand, FrameInput, GamepadButton};
-use crate::ecs::{Access, EventCursor, PipelineContext, StepResult, System, World};
+use crate::ecs::{Access, EventCursor, PipelineContext, StepResult, System};
 use crate::input::compose::{Bindings, compose_frame_input, nav_dt};
 use crate::input::mailbox::InputMailbox;
 use crate::input::nav::NavRepeat;
@@ -23,7 +23,6 @@ use crate::input::pad::PadState;
 use crate::protocol::{
     CursorState, FlyCam, FrameTime, InputSampledAt, MenuActive, ScreenStack, WindowMinimized,
 };
-use crate::render::backend::render_mode::RenderMode;
 use crate::settings::StoredSettings;
 use crate::settings::registry::DEFAULT_GAMEPAD_DEADZONE;
 
@@ -49,11 +48,6 @@ pub struct InputSystem {
 }
 
 impl InputSystem {
-    /// The window and gamepad input, for a world that runs with a window.
-    pub fn for_world(world: &World) -> Option<Self> {
-        RenderMode::renders_in(world).then(Self::new)
-    }
-
     /// The system with no gamepads.
     pub fn new() -> Self {
         Self {

@@ -6,8 +6,9 @@
 
 use crate::simulation::physics::sim::math::{Quat, Vec3};
 
-/// The most pieces one body's water load is split into.
-pub const MAX_FLUID_PIECES: usize = 8;
+/// The most pieces one body's water load is split into, each of which stirs
+/// the water as one [`StirPiece`](crate::environment::water::stir::StirPiece).
+pub const MAX_FLUID_PIECES: usize = crate::environment::water::stir::MAX_STIR_PIECES;
 
 /// The shape of one piece the water acts on, in the body's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]

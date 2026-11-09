@@ -11,13 +11,14 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::components::SkeletonJoint;
 use crate::gfx::render_types::MAX_JOINTS;
 use crate::simulation::animation::root_motion::RootTrack;
 use crate::transform::{
     IDENTITY, Mat4, compose, mat4_affine_inverse, mat4_mul, quat_from_mat3, quat_slerp,
     quat_to_mat3, rotation_mat3, trs_matrix,
 };
-use concinnity_core::math::rem_euclid;
+use concinnity_core::math::{SaturatingFrom, rem_euclid};
 
 /// A joint's local transform: translation, YXZ Euler rotation in degrees, and
 /// per-axis scale. Used both for the bind pose and for animation keyframes.
@@ -109,6 +110,27 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
+    /// Build a skeleton from authored joint definitions: each
+    /// `SkeletonJoint.parent` becomes `Some(usize)` for valid indices
+    /// (negative values mark roots), and each joint's translation, rotation
+    /// and scale become its bind [`JointPose`]. Used at world load, by the
+    /// cook, and by the asset hot-reload's skeleton-shape change path.
+    pub fn from_joint_defs(defs: &[SkeletonJoint]) -> Self {
+        let joints = defs
+            .iter()
+            .map(|jd| Joint {
+                name: jd.name.clone(),
+                parent: (jd.parent >= 0).then_some(usize::saturating_from(jd.parent)),
+                bind: JointPose {
+                    translation: jd.translation,
+                    rotation_deg: jd.rotation_deg,
+                    scale: jd.scale,
+                },
+            })
+            .collect();
+        Self::new(joints)
+    }
+
     /// Build a skeleton, resolving world bind matrices and inverting them.
     /// Joints referencing a parent that does not precede them are treated as
     /// roots (a forward pass cannot resolve them otherwise).
@@ -358,6 +380,55 @@ mod tests {
     use alloc::vec;
     use concinnity_core::approx::close;
     use concinnity_core::math::atan2;
+
+    #[test]
+    fn from_joint_defs_preserves_count_and_parent_links() {
+        let defs = vec![
+            SkeletonJoint {
+                name: "root".into(),
+                parent: -1,
+                translation: [0.0, 0.0, 0.0],
+                rotation_deg: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            SkeletonJoint {
+                name: "tip".into(),
+                parent: 0,
+                translation: [0.0, 1.0, 0.0],
+                rotation_deg: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            SkeletonJoint {
+                name: "tail".into(),
+                parent: 1,
+                translation: [0.0, 1.0, 0.0],
+                rotation_deg: [0.0, 0.0, 0.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+        ];
+        let skel = Skeleton::from_joint_defs(&defs);
+        assert_eq!(skel.len(), 3);
+        let joints = skel.joints();
+        assert_eq!(joints[0].parent, None);
+        assert_eq!(joints[1].parent, Some(0));
+        assert_eq!(joints[2].parent, Some(1));
+    }
+
+    #[test]
+    fn from_joint_defs_treats_negative_parent_as_root() {
+        // Any negative parent (not just -1) collapses to None; mirrors the
+        // init-time semantics so a hot-reload from the same SkeletonJoint shape
+        // produces the same Skeleton.
+        let defs = vec![SkeletonJoint {
+            name: "root".into(),
+            parent: -42,
+            translation: [1.0, 2.0, 3.0],
+            rotation_deg: [0.0, 0.0, 0.0],
+            scale: [1.0, 1.0, 1.0],
+        }];
+        let skel = Skeleton::from_joint_defs(&defs);
+        assert_eq!(skel.joints()[0].parent, None);
+    }
 
     const TOL: f32 = 1e-4;
 

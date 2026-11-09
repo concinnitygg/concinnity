@@ -2,7 +2,7 @@
 // shader / texture / streaming wiring performed on the first tick.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::bake::{font, texture};
+use concinnity_engine::bake::texture;
 use concinnity_engine::components::{
     BlockType, GraphicsConfig, Model, Planet, Shader, ShaderPrograms, StreamingConfig, SubMeshRef,
     VoxelWorld, Window,

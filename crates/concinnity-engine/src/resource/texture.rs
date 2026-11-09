@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use super::TextureTable;
 use super::ground_look::{DirtLook, GroundMap, SandLook};
-use crate::blob::{FrameError, decode_exact};
+use crate::codec::{FrameError, decode_exact};
 use crate::ecs::PayloadLocator;
 use alloc::string::String;
 

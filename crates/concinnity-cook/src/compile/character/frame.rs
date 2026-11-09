@@ -32,7 +32,8 @@ impl BoneFrame {
 
 // Model-space joint origins from the bind pose.
 fn joint_origins(skeleton: &[SkeletonJoint]) -> Vec<[f32; 3]> {
-    let sk = concinnity_engine::components::build_skeleton_from_joint_defs(skeleton);
+    let sk =
+        concinnity_engine::simulation::animation::skeleton::Skeleton::from_joint_defs(skeleton);
     let mut world: Vec<Mat4> = Vec::new();
     sk.world_matrices_into(sk.bind_locals(), &mut world);
     world.iter().map(|m| [m[3][0], m[3][1], m[3][2]]).collect()

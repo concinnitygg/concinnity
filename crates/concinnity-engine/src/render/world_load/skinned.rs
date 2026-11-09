@@ -12,7 +12,6 @@ use hashbrown::HashMap;
 
 use crate::components::{
     CharacterCapsule, CharacterRig, GlobalTransform, SkeletonJoint, SkinnedMesh, Transform,
-    build_skeleton_from_joint_defs,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{MaterialHandle, PipelineContext, SkinnedMeshHandle};
@@ -237,7 +236,7 @@ pub fn assemble_skinned(
                 mat.index()
             )
         })?;
-        let skeleton = build_skeleton_from_joint_defs(&g.joint_defs);
+        let skeleton = Skeleton::from_joint_defs(&g.joint_defs);
         let joint_count = skeleton.len().min(MAX_JOINTS);
         let bounds = bind_pose_bounds(&g.vertices);
         let morphs = (!g.morphs.is_empty()).then(|| Arc::new(g.morphs.clone()));

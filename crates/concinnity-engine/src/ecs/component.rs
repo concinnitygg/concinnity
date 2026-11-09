@@ -87,7 +87,7 @@ pub(crate) fn decode_baked<'a, C>(bytes: &'a [u8]) -> Result<C, AssetError>
 where
     C: Component + serde::Deserialize<'a>,
 {
-    crate::blob::decode_exact(bytes).map_err(|source| AssetError::Decode {
+    crate::codec::decode_exact(bytes).map_err(|source| AssetError::Decode {
         asset: C::NAME,
         source,
     })

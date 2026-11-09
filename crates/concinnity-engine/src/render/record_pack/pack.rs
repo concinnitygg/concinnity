@@ -478,7 +478,7 @@ mod tests {
         let mut objs = objects(2);
         objs[0].planet_tile = Some(PlanetTileDraw {
             level: 4,
-            seams: crate::environment::planet::TileSeams {
+            seams: crate::gfx::render_types::TileSeams {
                 coarser: 1,
                 finer: 2,
             },

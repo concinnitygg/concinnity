@@ -12,7 +12,6 @@ pub mod flat_blend;
 pub(crate) mod graph;
 pub(crate) mod ground_probes;
 pub mod ik;
-pub mod morph_targets;
 pub mod morph_weights;
 pub(crate) mod params;
 pub mod pose_blend;

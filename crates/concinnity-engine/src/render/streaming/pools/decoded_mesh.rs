@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use concinnity_core::math::SaturatingFrom;
 
-use crate::bake::decode::{ByteReader, DecodeError};
+use crate::codec::{ByteReader, DecodeError};
 use crate::gfx::mesh_payload::{self, Vertex};
 
 /// A mesh payload decoded to GPU-ready vertex and index data.

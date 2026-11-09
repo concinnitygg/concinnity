@@ -38,6 +38,13 @@ pub use resolve::{
 pub use stored::{SettingsRevision, StoredSettings};
 pub use user::{GraphicsApiTrial, UserGraphicsSettings};
 
+/// Setting rows disabled at runtime (e.g. `show_fps` while "Display
+/// performance stats" is off), published by the settings system whenever
+/// what disables them changes. The UI input system makes a matching row inert
+/// (no hover, no click) while its labels are grayed independently.
+#[derive(Debug, Clone, Default)]
+pub struct DisabledSettingRows(pub hashbrown::HashSet<SettingKey>);
+
 /// Shared Off/On labels for the boolean rows. Index 0 is off, 1 on, so
 /// `bool as usize` indexes directly.
 const OFF_ON_OPTIONS: [&str; 2] = ["Off", "On"];

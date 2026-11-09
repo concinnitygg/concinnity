@@ -7,10 +7,11 @@
 use crate::environment::planet::Rebase;
 use crate::gfx::frustum::Frustum;
 use crate::gfx::render_types::ParticleParams;
+use crate::protocol::ParticleBurst;
 use crate::render::particles::burst::{FrameRows, MAX_EMITTER_BURSTS};
 use crate::render::particles::{
-    EmitterBursts, MAX_EMITTERS, ParticleBurst, ParticleEmitterRecord, ParticleSpawnState,
-    ParticleSpawns, spawn_seed,
+    EmitterBursts, MAX_EMITTERS, ParticleEmitterRecord, ParticleSpawnState, ParticleSpawns,
+    spawn_seed,
 };
 use crate::render::slots::table::{AtCapacity, RemoveError, SlotTable};
 use concinnity_core::math::SaturatingFrom;
@@ -160,7 +161,7 @@ impl ParticleSystem {
     /// Advance the frame clock to `elapsed` seconds and take every live
     /// emitter's spawn run for this frame, with the `bursts` asked of it:
     /// at most [`MAX_EMITTER_BURSTS`] an emitter and
-    /// [`MAX_FRAME_BURSTS`](super::burst::MAX_FRAME_BURSTS) a frame, as far
+    /// [`MAX_FRAME_BURSTS`](crate::protocol::MAX_FRAME_BURSTS) a frame, as far
     /// as its pool has dead slots, the rest dropped. Run exactly once per
     /// frame, before either pass encodes, so the simulation and the draw see
     /// one frame. `None` until an emitter has ever been inserted; the clock
@@ -217,7 +218,7 @@ impl ParticleSystem {
                 tracing::warn!(
                     "particle bursts dropped: an emitter takes {MAX_EMITTER_BURSTS} a frame and \
                      the frame {}",
-                    super::burst::MAX_FRAME_BURSTS
+                    crate::protocol::MAX_FRAME_BURSTS
                 );
             }
             if let Some(pool) = crowded {

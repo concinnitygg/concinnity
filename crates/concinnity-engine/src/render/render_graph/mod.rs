@@ -59,7 +59,7 @@ pub use types::{
     BarrierOp, BufferUsage, ClearValue, GraphResourceClass, PassKind, PixelFormat, ReadStages,
     ResourceId, ResourceState, TextureDesc, TextureHandle, TextureUsage,
 };
-pub(crate) use types::{BufferDesc, TextureSize, full_mip_levels};
+pub(crate) use types::{BufferDesc, TextureSize};
 pub use validate::{
     SyncGap, SyncGapKind, assert_serial_order_honors_schedule, barrier_coverage_gaps_for_driven,
     sync_point_gaps,

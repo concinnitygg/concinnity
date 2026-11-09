@@ -44,7 +44,7 @@ impl WaterBody {
     /// The grid the body is drawn on, relative to its anchor: the surface's
     /// own tessellation for a summed body, the camera-centered grid for a
     /// simulated one, in rings out from the anchor for a planet's sea (see
-    /// [`SeaBody::sky_split`](crate::environment::water::sea::SeaBody::sky_split)).
+    /// [`sky_split`](sea::sky_split)).
     ///
     /// # Errors
     ///

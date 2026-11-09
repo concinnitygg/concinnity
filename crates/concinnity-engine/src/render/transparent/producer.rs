@@ -137,7 +137,8 @@ impl<P, R> TransparentProducer<P, R> {
         let sea = self.water.get(i).and_then(|w| w.body().sea.as_ref());
         match (&self.sea, sea) {
             (Some([lean, daylight]), Some(body)) => {
-                let [inner, outer] = body.sky_split(frame.daylight);
+                let [inner, outer] =
+                    crate::render::environment::water::sea::sky_split(body, frame.daylight);
                 [(daylight, outer), (lean, inner)].map(|(shape, indices)| {
                     (!indices.is_empty()).then(|| RecordDraw {
                         pipeline: shape.pick(frame.rt_live, frame.textured),

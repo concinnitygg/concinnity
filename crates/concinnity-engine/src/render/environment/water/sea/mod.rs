@@ -8,6 +8,9 @@
 mod mirror;
 #[cfg(test)]
 mod shore_mirror;
+mod sky;
+
+pub use sky::{rings_without_sky, sky_split};
 
 use super::motion::BodyMotion;
 use crate::environment::planet::LocalFrame;

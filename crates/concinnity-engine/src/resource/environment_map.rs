@@ -1,51 +1,11 @@
-//! The `EnvironmentMap` component, and what the renderer reads of an
-//! environment map beside its baked lighting.
-
-use alloc::vec::Vec;
+//! The `EnvironmentMap` component, and its table's lookup of the record
+//! the renderer reads beside its baked lighting.
 
 use super::EnvironmentMapTable;
-use crate::blob::{FrameError, decode_exact};
+use crate::bake::environment_map::EnvironmentMapRecord;
+use crate::codec::FrameError;
 use crate::ecs::PayloadLocator;
 use alloc::string::String;
-
-/// The runtime fields an environment map's resource record carries beside its
-/// baked payload. Only what the renderer reads: the authored source and bake
-/// settings stay with the cook.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct EnvironmentMapRecord {
-    /// Draw the map as the background (see [`EnvironmentMap::background`]).
-    pub background: bool,
-}
-
-impl Default for EnvironmentMapRecord {
-    fn default() -> Self {
-        Self::from(&EnvironmentMap::default())
-    }
-}
-
-impl From<&EnvironmentMap> for EnvironmentMapRecord {
-    fn from(map: &EnvironmentMap) -> Self {
-        Self {
-            background: map.background,
-        }
-    }
-}
-
-impl EnvironmentMapRecord {
-    /// The record's bytes, as a resource record's `data_bytes` carries them.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        postcard::to_allocvec(self).unwrap_or_default()
-    }
-
-    /// Decode a resource record's `data_bytes`. A record with no runtime
-    /// fields holds the defaults.
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, FrameError> {
-        match bytes {
-            [] => Ok(Self::default()),
-            _ => decode_exact(bytes),
-        }
-    }
-}
 
 impl EnvironmentMapTable {
     /// The runtime fields of the map at `handle`; the defaults when there is
@@ -167,6 +127,7 @@ mod tests {
     use super::*;
     use crate::resource::ResourceEntry;
     use alloc::vec;
+    use alloc::vec::Vec;
 
     fn table(data_bytes: Vec<u8>) -> EnvironmentMapTable {
         EnvironmentMapTable(vec![ResourceEntry {

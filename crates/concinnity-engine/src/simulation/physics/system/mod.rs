@@ -7,8 +7,9 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
+use crate::environment::GRAVITY;
 use crate::simulation::physics::{
-    AirFalloff, BodyHandle, CharacterCapsule, ColliderShape, ContactHit, GRAVITY, PhysicsBudget,
+    AirFalloff, BodyHandle, CharacterCapsule, ColliderShape, ContactHit, PhysicsBudget,
     SensorCrossing, SimConfig, Simulation,
 };
 

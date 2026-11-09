@@ -386,11 +386,11 @@ fn narrow(v: f64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::water::stir::MAX_STIR_PIECES;
     use crate::environment::water::stir::StirPiece;
-    use crate::simulation::physics::MAX_FLUID_PIECES;
 
     fn bob(x: f32, volume: f32) -> WaterStir {
-        let mut pieces = [StirPiece::default(); MAX_FLUID_PIECES];
+        let mut pieces = [StirPiece::default(); MAX_STIR_PIECES];
         pieces[0] = StirPiece {
             at: [x, 0.0, 0.0],
             radius: 0.6,

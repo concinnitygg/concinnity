@@ -4,8 +4,8 @@
 
 use crate::blob::HEADER_SIZE;
 use crate::blob::error::BlobError;
-use crate::blob::frame::{FrameError, decode_exact};
 use crate::blob::kind::BlobKind;
+use crate::codec::{FrameError, decode_exact};
 use concinnity_core::math::SaturatingFrom;
 
 /// Parse a blob image's header and metadata block. Returns the metadata and the

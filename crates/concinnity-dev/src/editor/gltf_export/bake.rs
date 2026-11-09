@@ -5,10 +5,9 @@
 //! export form so a baked file needs no shape work in the target tool.
 
 use concinnity_core::math::vec3;
-use concinnity_engine::components::{
-    CharacterShape, SkeletonJoint, build_skeleton_from_joint_defs,
-};
+use concinnity_engine::components::{CharacterShape, SkeletonJoint};
 use concinnity_engine::simulation::animation::proportions::ProportionLayer;
+use concinnity_engine::simulation::animation::skeleton::Skeleton;
 use concinnity_engine::transform::{Mat4, decompose, euler_yxz_from_quat, mat4_transform_point};
 
 use super::ExportMesh;
@@ -48,7 +47,7 @@ pub(crate) fn bake_shape(mesh: &mut ExportMesh, shape: &CharacterShape) {
     mesh.morph_target_names = Vec::new();
     mesh.morph_deltas = Vec::new();
 
-    let skeleton = build_skeleton_from_joint_defs(&mesh.skeleton);
+    let skeleton = Skeleton::from_joint_defs(&mesh.skeleton);
     let layer = ProportionLayer::resolve(&skeleton, &shape.proportions);
     if layer.is_empty() {
         return;

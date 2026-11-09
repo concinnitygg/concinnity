@@ -493,16 +493,6 @@ impl TextureSize {
     }
 }
 
-// Levels in a full mip chain for a target of `width` x `height`:
-// `floor(log2(max(w, h))) + 1`. Power-of-two sources end exactly at 1x1;
-// non-power-of-two sources stop one level short of 1x1 on the smaller axis,
-// which is what each backend's Hi-Z build already does.
-pub(crate) const fn full_mip_levels(width: u32, height: u32) -> u32 {
-    let m = if width > height { width } else { height };
-    let m = if m < 1 { 1 } else { m };
-    32 - m.leading_zeros()
-}
-
 impl TextureDesc {
     /// A single-sample, single-mip, single-layer 2D texture: the shape almost
     /// every graph target has. The axes that differ are added by the `with_*`
@@ -817,17 +807,6 @@ mod tests {
         );
         assert_eq!(v.extent(0, 0), (2, 3, 5));
         assert_eq!(v.array_layers, 1, "a volume is not an array");
-    }
-
-    #[test]
-    fn full_mip_levels_matches_the_backends_hiz_chain() {
-        // Mirrors each backend's `hiz_mip_count`: floor(log2(max)) + 1.
-        assert_eq!(full_mip_levels(1, 1), 1);
-        assert_eq!(full_mip_levels(2, 1), 2);
-        assert_eq!(full_mip_levels(1920, 1080), 11);
-        assert_eq!(full_mip_levels(1024, 1024), 11);
-        // Zero on either axis still yields a one-level chain.
-        assert_eq!(full_mip_levels(0, 0), 1);
     }
 
     #[test]

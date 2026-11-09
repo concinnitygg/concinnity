@@ -15,8 +15,15 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use thiserror::Error;
 
-use crate::blob::FrameError;
-use crate::ecs::asset_id::AssetIdsExhausted;
+use crate::codec::FrameError;
+
+/// A world has minted every asset id its reserved range holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("this world has minted all {capacity} asset ids it reserves")]
+pub struct AssetIdsExhausted {
+    /// How many ids the reserved range holds.
+    pub capacity: u32,
+}
 
 /// Why a baked blob record could not be turned back into its asset.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -152,9 +159,17 @@ pub enum WorldError {
     #[error(transparent)]
     Payload(#[from] PayloadError),
 
-    /// A planet's compiled ground page did not read as a page.
-    #[error("the planet's sculpted ground does not read: {0}")]
-    PlanetGround(#[from] crate::environment::planet::PagePayloadError),
+    /// A compiled payload read, but its bytes do not decode as the asset it
+    /// belongs to. Boxed because the payload's format, and so its decode
+    /// failure, belongs to the asset.
+    #[error("a {asset}'s compiled payload does not decode")]
+    Decode {
+        /// The asset type whose payload it is.
+        asset: &'static str,
+        /// What the decode reported.
+        #[source]
+        source: Box<dyn core::error::Error + Send + Sync>,
+    },
 
     /// The world is meant to be seen and the machine has a GPU, but the
     /// renderer could not be built on it. Distinct from a machine with no GPU
@@ -173,7 +188,7 @@ mod tests {
     // still reach it.
     #[test]
     fn a_decode_failure_keeps_the_frame_error_as_its_source() {
-        let source = crate::blob::decode_exact::<String>(&[0xff]).unwrap_err();
+        let source = crate::codec::decode_exact::<String>(&[0xff]).unwrap_err();
         let error = AssetError::Decode {
             asset: "Prop",
             source: source.clone(),
@@ -189,7 +204,7 @@ mod tests {
     // reaches the frame error in a single hop.
     #[test]
     fn a_world_failure_chains_through_to_the_decode_cause() {
-        let source = crate::blob::decode_exact::<u8>(&[1, 2]).unwrap_err();
+        let source = crate::codec::decode_exact::<u8>(&[1, 2]).unwrap_err();
         let error = WorldError::from(AssetError::Decode {
             asset: "Prop",
             source,
@@ -218,7 +233,12 @@ mod tests {
     // reports it verbatim.
     #[test]
     fn an_exhausted_minter_reads_the_same_either_way() {
-        let error = WorldError::from(AssetIdsExhausted);
-        assert_eq!(error.to_string(), AssetIdsExhausted.to_string());
+        let exhausted = AssetIdsExhausted { capacity: 4 };
+        let error = WorldError::from(exhausted);
+        assert_eq!(error.to_string(), exhausted.to_string());
+        assert_eq!(
+            exhausted.to_string(),
+            "this world has minted all 4 asset ids it reserves"
+        );
     }
 }

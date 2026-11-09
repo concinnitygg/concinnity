@@ -12,6 +12,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::bake::environment_map::EnvironmentMapRecord;
 use crate::bake::environment_map::source::{HdrImage, bake_payload, generate_sky_equirect};
 use crate::bake::environment_map::stars::generate_stars_equirect;
 use crate::bake::mesh::{finish_mesh_payload, vertices_from_data};
@@ -20,7 +21,6 @@ use crate::geometry::{
     Vert, build_box, build_cylinder, build_extrude, build_plane, build_room_geometry, build_sphere,
     water_grid,
 };
-use crate::resource::EnvironmentMapRecord;
 use concinnity_core::fanout::FanOut;
 
 /// Why a value could not be baked: usually one that needs the cook module's

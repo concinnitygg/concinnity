@@ -26,7 +26,6 @@ pub(crate) mod texture;
 mod world_add;
 
 use concinnity_core::math::SaturatingFrom;
-pub use environment_map::EnvironmentMapRecord;
 pub use handles::{MeshBlock, ResourceHandles};
 pub use install::{append_environment_map, append_font, append_material, append_mesh};
 pub use runtime::RuntimeMeshPayloads;
@@ -214,7 +213,7 @@ impl SkinnedMeshTable {
     /// world needs a `PhysicsSystem`.
     pub fn has_capsule(&self) -> bool {
         self.0.iter().any(|e| {
-            crate::blob::decode_exact::<(u32, crate::components::SkinnedMesh)>(&e.data_bytes)
+            crate::codec::decode_exact::<(u32, crate::components::SkinnedMesh)>(&e.data_bytes)
                 .is_ok_and(|(_, sm)| sm.capsule.is_some())
         })
     }

@@ -77,19 +77,6 @@ pub struct InputPacket {
 }
 
 impl InputPacket {
-    /// Sample the backend's accumulated input, cursor containment, and
-    /// logical size into one packet. Called right after the draw so the
-    /// frame's event pump is reflected.
-    pub fn sample(backend: &mut dyn crate::render::backend::RenderBackend) -> Self {
-        Self {
-            raw: backend.take_input(),
-            cursor_outside_window: backend.cursor_outside_window(),
-            viewport: backend.logical_size(),
-            top_inset: backend.top_content_inset(),
-            window_minimized: backend.window_minimized(),
-        }
-    }
-
     /// Fold a newer packet onto this one without losing edges: one-frame
     /// pulses OR together, deltas accumulate, key events queue after the older
     /// ones, and positions and held states take the newer value. Only needed when a consumer misses a frame (startup,

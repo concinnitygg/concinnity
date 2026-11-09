@@ -295,7 +295,18 @@ pub struct PlanetTileDraw {
     /// The tile's quadtree level.
     pub level: u8,
     /// Where it meets coarser or finer tiles.
-    pub seams: crate::environment::planet::TileSeams,
+    pub seams: TileSeams,
+}
+
+/// The sides of a drawn planet tile that meet a drawn tile a level coarser,
+/// and the sides that meet drawn tiles a level finer, each a mask of
+/// [`TileSide::bit`](crate::environment::planet::TileSide::bit).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TileSeams {
+    /// Sides beside a coarser tile.
+    pub coarser: u8,
+    /// Sides beside finer tiles.
+    pub finer: u8,
 }
 
 /// How a planet tile's vertices morph toward its parent's mesh, as its

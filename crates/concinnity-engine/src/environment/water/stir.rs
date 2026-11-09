@@ -4,9 +4,12 @@
 //! only reports where each piece is and how much water it holds back.
 
 use crate::ecs::Entity;
-use crate::simulation::physics::MAX_FLUID_PIECES;
 use alloc::vec::Vec;
 use concinnity_core::math::exp;
+
+/// The most pieces one floating body stirs the water with: as many as the
+/// physics splits a body's water load into.
+pub const MAX_STIR_PIECES: usize = 8;
 
 /// One piece of a floating body as it stirs the water.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -49,7 +52,7 @@ pub struct WaterStir {
     /// The body's velocity, in meters per second.
     pub velocity: [f32; 3],
     /// Its pieces; the first `count` are used.
-    pub pieces: [StirPiece; MAX_FLUID_PIECES],
+    pub pieces: [StirPiece; MAX_STIR_PIECES],
     /// How many pieces it has.
     pub count: usize,
 }
@@ -57,7 +60,7 @@ pub struct WaterStir {
 impl WaterStir {
     /// The pieces in use.
     pub fn pieces(&self) -> &[StirPiece] {
-        &self.pieces[..self.count.min(MAX_FLUID_PIECES)]
+        &self.pieces[..self.count.min(MAX_STIR_PIECES)]
     }
 }
 

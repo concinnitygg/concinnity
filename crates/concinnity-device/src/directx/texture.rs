@@ -3,9 +3,9 @@
 // default heap (GPU-local) via CopyTextureRegion on a one-shot command list.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::mipmap;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
-use concinnity_engine::render::mipmap;
 use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::*;

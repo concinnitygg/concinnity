@@ -45,8 +45,8 @@ use super::types::BufferHandle;
 use super::{
     BufferDesc, BufferUsage, CompiledGraph, GraphBuilder, GraphError, PassId, PassKind,
     PixelFormat, ReadStages, TextureDesc, TextureHandle, TextureSize, TextureUsage,
-    full_mip_levels,
 };
+use crate::gfx::mipmap::full_mip_levels;
 
 /// Per-frame inputs that gate conditional passes. The frame planner builds
 /// them from what a backend has built and what the world holds this frame,

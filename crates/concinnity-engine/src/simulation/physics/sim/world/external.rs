@@ -315,7 +315,7 @@ mod tests {
         );
         assert_eq!(
             sim.gravity_at([0.0; 3]),
-            [0.0, -crate::simulation::physics::GRAVITY, 0.0]
+            [0.0, -crate::environment::GRAVITY, 0.0]
         );
     }
 }

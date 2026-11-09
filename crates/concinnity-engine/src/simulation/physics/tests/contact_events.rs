@@ -17,7 +17,7 @@ use crate::simulation::physics::{ColliderShape, ContactHit, DynamicParams, Layer
 use alloc::vec;
 use alloc::vec::Vec;
 
-const GRAVITY: f32 = crate::simulation::physics::GRAVITY;
+const GRAVITY: f32 = crate::environment::GRAVITY;
 const BALL: ColliderShape = ColliderShape::Ball { radius: 0.5 };
 
 /// Step `ticks` times, collecting every hit recorded along the way.

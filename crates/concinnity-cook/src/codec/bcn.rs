@@ -7,8 +7,8 @@
 // back in [0, 1] encoding, matching the RGB normal maps the shader already reads.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::bake::decode::checked_product;
 use concinnity_engine::bake::texture::TextureFormat;
+use concinnity_engine::codec::checked_product;
 
 // Expand a 16-bit 565 color to RGB888.
 fn rgb565(c: u16) -> [u8; 3] {

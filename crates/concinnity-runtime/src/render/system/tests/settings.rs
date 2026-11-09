@@ -264,7 +264,7 @@ fn persisted_display_and_system_overrides_reach_the_backend() {
     // rather than publishing an empty dropdown.
     assert!(
         !world
-            .resource::<concinnity_engine::protocol::DisplayModes>()
+            .resource::<concinnity_engine::presentation::window::display_mode::DisplayModes>()
             .expect("mode list published for the dropdown")
             .0
             .is_empty()

@@ -6,7 +6,7 @@ use super::{
     MaterialTable, Model, OverlayImages, PayloadLocator, PipelineContext, Shader, ShaderPrograms,
     ShaderSourceMap, SkinnedAssembly, SkinnedMeshSourceMap, SubMeshRef, TexturePayloads,
     TexturePool, TextureSlotSkips, TextureSourceMap, TextureTable, blobs_to_release,
-    decode_texture_payloads, draw_list, font, font_less_text, media, procedural_mesh_snapshot,
+    decode_texture_payloads, draw_list, font_less_text, media, procedural_mesh_snapshot,
     retained_blobs, skinned, skinned_mesh_source_map, tables, texture, texture_catalog,
 };
 use crate::live_edit::shader_overrides::ShaderOverrides;
@@ -15,6 +15,7 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderError;
 use concinnity_engine::render::environment::terrain::LoadedTerrain;
 use concinnity_engine::render::overlay::maps::{Atlas, AtlasPool};
+use concinnity_engine::render::overlay::text::load_face;
 use concinnity_engine::render::world_load::scene_deferral::ShaderDeferral;
 
 // One world Shader as decoded at init: its compiled programs, or nothing for
@@ -327,7 +328,7 @@ impl GraphicsSystem {
                     return None;
                 }
             };
-            match font::load_face(slot, &bytes) {
+            match load_face(slot, &bytes) {
                 Ok((face, atlas)) => {
                     let handle = pool.push_font(atlas);
                     self.loaded_fonts.insert(handle, face);

@@ -136,7 +136,7 @@ mod tests {
                     draw: slots.allocate_draw().slot(),
                     origin: [0.0; 3],
                     visible: true,
-                    seams: crate::environment::planet::TileSeams::default(),
+                    seams: crate::gfx::render_types::TileSeams::default(),
                     touch: Touch::new(id),
                 },
             );

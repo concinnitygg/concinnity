@@ -293,7 +293,7 @@ fn rolling_resistance_stops_a_rolling_ball() {
         rolling_resistance: 0.05,
         ..Default::default()
     };
-    let stop = 2.0 * 1.4 / (0.05 * crate::simulation::physics::GRAVITY);
+    let stop = 2.0 * 1.4 / (0.05 * crate::environment::GRAVITY);
     let after = rolled_with(2.0, stop * 1.5, resisted);
     assert!(after < 0.02, "still rolling at {after:.3} m/s");
     let midway = rolled_with(2.0, stop * 0.5, resisted);

@@ -16,7 +16,7 @@
 // six cube faces using bilinear interpolation in HDR space.
 
 #[cfg(test)]
-use concinnity_engine::bake::decode::{ByteReader, checked_product};
+use concinnity_engine::codec::{ByteReader, checked_product};
 
 pub(crate) const CUBE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"CUBE");
 pub(crate) const CUBE_FORMAT_RGBA32F: u32 = 0;

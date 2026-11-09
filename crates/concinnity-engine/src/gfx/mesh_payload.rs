@@ -25,7 +25,7 @@
 //! readers keep working unchanged. `deserialize_with_lods` reads the trailer
 //! when present and returns the additional LODs alongside LOD0.
 
-use crate::bake::decode::{ByteReader, DecodeError, checked_product};
+use crate::codec::{ByteReader, DecodeError, checked_product};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -214,9 +214,7 @@ const SKINNED_MAGIC: &[u8; 4] = b"SKMV";
 // Magic for the optional sparse morph-target block after the joint block.
 const MORPH_MAGIC: &[u8; 4] = b"MRPS";
 
-pub use crate::simulation::animation::morph_targets::{
-    MORPH_DELTA_EPSILON, MorphDelta, MorphEntry, PayloadMorphs,
-};
+pub use crate::gfx::morph_targets::{MORPH_DELTA_EPSILON, MorphDelta, MorphEntry, PayloadMorphs};
 
 /// One joint of a skinned mesh's bind-pose skeleton, as stored in the
 /// compiled payload. Mirrors `assets::skinned_mesh::SkeletonJoint` but lives in

@@ -7,7 +7,6 @@
 use crate::ecs::{MaterialHandle, PayloadLocator};
 use alloc::string::String;
 use alloc::vec::Vec;
-use concinnity_core::math::SaturatingFrom;
 
 fn white() -> [f32; 3] {
     [1.0, 1.0, 1.0]
@@ -223,97 +222,17 @@ mod tests {
     }
 }
 
-/// Build a runtime `Skeleton` from authored joint definitions. Mirrors the
-/// conversion graphics init does at world load time: each
-/// `SkeletonJoint.parent` becomes `Some(usize)` for valid indices (negative values
-/// mark roots), and each `SkeletonJoint`'s translation / rotation / scale becomes the
-/// joint's bind `JointPose`. Used at init and by the asset hot-reload's
-/// skeleton-shape change path.
-pub fn build_skeleton_from_joint_defs(
-    defs: &[SkeletonJoint],
-) -> crate::simulation::animation::skeleton::Skeleton {
-    use crate::simulation::animation::skeleton as skinning;
-    let joints = defs
-        .iter()
-        .map(|jd| skinning::Joint {
-            name: jd.name.clone(),
-            parent: (jd.parent >= 0).then_some(usize::saturating_from(jd.parent)),
-            bind: skinning::JointPose {
-                translation: jd.translation,
-                rotation_deg: jd.rotation_deg,
-                scale: jd.scale,
-            },
-        })
-        .collect();
-    skinning::Skeleton::new(joints)
-}
-
 impl SkinnedMesh {
     /// Column-major world matrix built from the mesh's transform, in the same
     /// construction order (scale, YXZ rotation, translate) as `Prop::model_matrix`.
     pub fn model_matrix(&self) -> [[f32; 4]; 4] {
-        crate::simulation::animation::skeleton::JointPose {
-            translation: self.position,
-            rotation_deg: self.rotation_deg,
-            scale: self.scale,
-        }
-        .to_matrix()
+        crate::transform::trs_matrix(self.position, self.rotation_deg, self.scale)
     }
 }
 
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
-    use alloc::vec;
-
-    #[test]
-    fn build_skeleton_from_joint_defs_preserves_count_and_parent_links() {
-        let defs = vec![
-            SkeletonJoint {
-                name: "root".into(),
-                parent: -1,
-                translation: [0.0, 0.0, 0.0],
-                rotation_deg: [0.0, 0.0, 0.0],
-                scale: [1.0, 1.0, 1.0],
-            },
-            SkeletonJoint {
-                name: "tip".into(),
-                parent: 0,
-                translation: [0.0, 1.0, 0.0],
-                rotation_deg: [0.0, 0.0, 0.0],
-                scale: [1.0, 1.0, 1.0],
-            },
-            SkeletonJoint {
-                name: "tail".into(),
-                parent: 1,
-                translation: [0.0, 1.0, 0.0],
-                rotation_deg: [0.0, 0.0, 0.0],
-                scale: [1.0, 1.0, 1.0],
-            },
-        ];
-        let skel = build_skeleton_from_joint_defs(&defs);
-        assert_eq!(skel.len(), 3);
-        let joints = skel.joints();
-        assert_eq!(joints[0].parent, None);
-        assert_eq!(joints[1].parent, Some(0));
-        assert_eq!(joints[2].parent, Some(1));
-    }
-
-    #[test]
-    fn build_skeleton_from_joint_defs_treats_negative_parent_as_root() {
-        // Any negative parent (not just -1) collapses to None; mirrors the
-        // init-time semantics so a hot-reload from the same SkeletonJoint shape
-        // produces the same Skeleton.
-        let defs = vec![SkeletonJoint {
-            name: "root".into(),
-            parent: -42,
-            translation: [1.0, 2.0, 3.0],
-            rotation_deg: [0.0, 0.0, 0.0],
-            scale: [1.0, 1.0, 1.0],
-        }];
-        let skel = build_skeleton_from_joint_defs(&defs);
-        assert_eq!(skel.joints()[0].parent, None);
-    }
 
     #[test]
     fn model_matrix_places_translation_in_last_column() {

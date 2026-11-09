@@ -33,7 +33,6 @@ pub mod light;
 pub mod live_preview;
 pub mod material_entry;
 pub mod material_params;
-pub mod mipmap;
 pub mod output;
 pub mod overlay;
 pub mod particles;

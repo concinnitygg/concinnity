@@ -4,10 +4,10 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::mipmap;
 use concinnity_engine::gfx::render_types;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::depth::DEPTH_CLEAR;
-use concinnity_engine::render::mipmap;
 use concinnity_engine::render::output::color_lut::{IDENTITY_LUT, IDENTITY_LUT_SIZE};
 
 use super::allocator::{DeviceAllocator, PooledBuffer, PooledImage};
@@ -438,7 +438,7 @@ impl StreamedUploadRetire {
 // ONLY, fragment-stage scope) orders every later submission on the same queue
 // after the copy, so the image is safe to sample from any subsequently
 // submitted frame; only freeing the returned in-flight resources needs GPU
-// retirement. The chain is box-filtered on the CPU (`concinnity_engine::render::mipmap`), for
+// retirement. The chain is box-filtered on the CPU (`concinnity_engine::gfx::mipmap`), for
 // the backend's own init-time textures (fallbacks, text atlases); scene textures
 // arrive with their chain cooked and go through `upload_texture_image_deferred`.
 pub(super) fn upload_texture_deferred(

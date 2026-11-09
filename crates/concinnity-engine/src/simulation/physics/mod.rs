@@ -95,7 +95,3 @@ pub use sim::{
 };
 pub use system::PhysicsSystem;
 pub use types::{BodyState, ColliderShape, DynamicParams};
-
-/// Acceleration due to gravity in world units per second squared. Shared with
-/// the third-person controller so its jump takeoff matches the rig's fall.
-pub const GRAVITY: f32 = 20.0;

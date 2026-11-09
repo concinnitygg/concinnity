@@ -43,7 +43,8 @@ mod system;
 mod tile;
 
 use crate::components::TerrainLayer;
-use crate::ecs::{MaterialHandle, PipelineContext};
+use crate::ecs::{Component, MaterialHandle, PipelineContext};
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 pub use carry::carry_world;
@@ -73,7 +74,7 @@ pub use planet_ground::{PlanetGround, PlanetGroundArgs, PlanetGroundError};
 pub use ray::{GroundHit, GroundPick};
 pub use rebase::{FrameRebases, Rebase, RebaseCursor, needs_rebase};
 pub use sea::PlanetSea;
-pub use seams::{DrawnTile, TileSeams};
+pub use seams::DrawnTile;
 pub use shape::{CubeFace, MAX_OCTAVES, MIN_OCTAVES, PlanetShape};
 pub(crate) use shape::{OCTAVE_TURN, fbm, octave_cells, octave_weight_sum};
 pub use system::{
@@ -280,7 +281,7 @@ pub struct Planet {
     /// most 4; later ones are dropped.
     pub covers: Vec<GroundCover>,
     /// Pull toward the center, in meters per second squared.
-    #[asset(default = crate::simulation::physics::GRAVITY)]
+    #[asset(default = crate::environment::GRAVITY)]
     pub gravity: f32,
     /// How quickly the air thins with height, in meters: the height over
     /// `radius` it thins by a factor of `e` over. It is as thick as at
@@ -358,7 +359,12 @@ pub fn load_edits(ctx: &mut PipelineContext<'_>) -> Result<(), crate::error::Wor
         let (Some(tile), Some(locator)) = (ground.tile_id(), ground.locator) else {
             continue;
         };
-        let page = decode_page(ctx.read_payload(&locator)?)?;
+        let page = decode_page(ctx.read_payload(&locator)?).map_err(|e| {
+            crate::error::WorldError::Decode {
+                asset: PlanetGround::NAME,
+                source: Box::new(e),
+            }
+        })?;
         pages.insert(tile, Arc::new(page));
     }
     let pages = Arc::new(pages);

@@ -129,7 +129,7 @@ impl SceneState {
     pub fn set_planet_tile_seams(
         &mut self,
         draw: DrawIndex,
-        seams: crate::environment::planet::TileSeams,
+        seams: crate::gfx::render_types::TileSeams,
     ) {
         if let Some(tile) = self
             .draw

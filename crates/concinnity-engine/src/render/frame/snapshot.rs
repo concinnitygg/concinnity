@@ -208,7 +208,7 @@ pub struct RenderSnapshot {
     /// What the floating bodies push aside, for the water's wake.
     pub water_stirs: Vec<crate::environment::water::stir::WaterStir>,
     /// The particle bursts systems asked for this frame.
-    pub particle_bursts: Vec<crate::render::particles::ParticleBurst>,
+    pub particle_bursts: Vec<crate::protocol::ParticleBurst>,
     /// Save the frame to this PNG path once it is presented.
     pub capture: Option<String>,
     /// Draw the frame without its overlay, for a screenshot without its HUD.

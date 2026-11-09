@@ -4,13 +4,13 @@
 
 use std::collections::HashSet;
 
-use concinnity_engine::components::build_skeleton_from_joint_defs;
 use concinnity_engine::gfx::render_types::{self, TextureSlot};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::{
     DrawGeometryUpdate, GeometryRebuild, RenderBackend, SkinnedDrawGeometryUpdate, TextureUploads,
 };
 use concinnity_engine::render::world_load::source_maps::MeshSourceEntry;
+use concinnity_engine::simulation::animation::skeleton::Skeleton;
 
 use super::decode::apply_skinned_layouts_to_entries;
 use super::state::{
@@ -223,7 +223,7 @@ fn rewrite_skinned(
         plan.joint_counts.push((mesh.entry_idx, new_joint_count));
         state.pending_skeleton_updates.push(PendingSkeletonUpdate {
             skinned_index: entry.skinned_index,
-            new_skeleton: build_skeleton_from_joint_defs(&mesh.skeleton),
+            new_skeleton: Skeleton::from_joint_defs(&mesh.skeleton),
         });
         tracing::info!(
             "asset hot-reload: SkinnedMesh '{}' joint count changed ({} → {}), \

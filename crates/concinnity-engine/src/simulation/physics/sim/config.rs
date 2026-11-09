@@ -5,7 +5,7 @@
 // than as a bias factor: a frequency keeps its meaning when the tick rate or
 // the substep count changes, where a raw bias factor does not.
 
-use crate::simulation::physics::GRAVITY;
+use crate::environment::GRAVITY;
 use crate::simulation::physics::sim::math::{Vec3, vec3};
 
 /// Tuning for one simulation.

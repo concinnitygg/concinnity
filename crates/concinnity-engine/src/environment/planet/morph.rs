@@ -8,9 +8,8 @@
 // grid, across the parent cell's diagonal where both of its coordinates are
 // odd, so a fully morphed tile is its parent's mesh.
 
-use super::seams::TileSeams;
 use super::tile::{TILE_CELLS, TileSide};
-use crate::gfx::render_types::{GpuTileMorph, PlanetTileDraw, TileMorphView};
+use crate::gfx::render_types::{GpuTileMorph, PlanetTileDraw, TileMorphView, TileSeams};
 use concinnity_core::math::narrow_f32;
 
 /// The camera a planet's tiles morph by, this frame and the last, in

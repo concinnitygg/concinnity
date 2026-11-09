@@ -93,8 +93,8 @@ impl RenderError {
 }
 
 /// A payload the backend was handed did not decode.
-impl From<crate::bake::decode::DecodeError> for RenderError {
-    fn from(error: crate::bake::decode::DecodeError) -> Self {
+impl From<crate::codec::DecodeError> for RenderError {
+    fn from(error: crate::codec::DecodeError) -> Self {
         Self::Other(alloc::string::ToString::to_string(&error))
     }
 }

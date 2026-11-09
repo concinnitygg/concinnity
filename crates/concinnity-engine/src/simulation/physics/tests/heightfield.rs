@@ -7,9 +7,9 @@
 //! animation or a camera fires at it.
 
 use super::fixtures::{TICK, awake, drop_ball, position, step_for};
+use crate::environment::GRAVITY;
 use crate::simulation::physics::{
-    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, GRAVITY, LayerMask, ShapeCast,
-    Simulation,
+    BodyHandle, CharacterMoveInput, ColliderShape, DynamicParams, LayerMask, ShapeCast, Simulation,
 };
 use alloc::vec;
 use alloc::vec::Vec;

@@ -9,7 +9,7 @@ use crate::ecs::{Entity, PipelineContext, StepResult, System, World};
 use crate::environment::water::WaterSurface;
 use crate::environment::water::stir::{WaterStir, WaterStirs};
 use crate::protocol::SimTiming;
-use crate::render::particles::{ParticleBurst, ParticleBursts};
+use crate::protocol::{ParticleBurst, ParticleBursts};
 use alloc::vec::Vec;
 use concinnity_core::math::vec3::{cross, dot, length, normalize_or, scale, sub};
 use concinnity_core::math::{SaturatingFrom, floor};
@@ -256,11 +256,11 @@ fn spray_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::water::stir::MAX_STIR_PIECES;
     use crate::environment::water::stir::StirPiece;
-    use crate::simulation::physics::MAX_FLUID_PIECES;
 
     fn ball(volume: f32, velocity: [f32; 3]) -> WaterStir {
-        let mut pieces = [StirPiece::default(); MAX_FLUID_PIECES];
+        let mut pieces = [StirPiece::default(); MAX_STIR_PIECES];
         pieces[0] = StirPiece {
             at: [0.0, -0.1, 0.0],
             level: [0.0, 0.2, 0.0],

@@ -160,7 +160,7 @@ pub struct FrameParams<'a> {
     /// wake turns into waves near the camera.
     pub water_stirs: &'a [crate::environment::water::stir::WaterStir],
     /// The particle bursts systems asked for this frame, by emitter.
-    pub particle_bursts: &'a [crate::render::particles::ParticleBurst],
+    pub particle_bursts: &'a [crate::protocol::ParticleBurst],
     /// Where the camera and the sun are about the planet, in a world with an
     /// `Atmosphere`; the backend draws the sky and the haze from it.
     pub atmosphere: Option<crate::render::environment::atmosphere::AtmosphereFrame>,
@@ -278,7 +278,7 @@ pub trait RenderBackend:
     fn set_planet_tile_seams(
         &mut self,
         draw: DrawIndex,
-        seams: crate::environment::planet::TileSeams,
+        seams: crate::gfx::render_types::TileSeams,
     ) {
         if let Some(scene) = self.scene_mut() {
             scene.set_planet_tile_seams(draw, seams);

@@ -261,7 +261,7 @@ mod tests {
         ));
         step(&mut world, &mut held, &balls, &back);
         assert!(!held.is_held(balls[0]));
-        let fall = (2.0 * 2.5 / crate::simulation::physics::GRAVITY).sqrt();
+        let fall = (2.0 * 2.5 / crate::environment::GRAVITY).sqrt();
         let ticks = usize::saturating_from(fall / TICK) + 60;
         for _ in 0..ticks {
             step(&mut world, &mut held, &balls, &back);

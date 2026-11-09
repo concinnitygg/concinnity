@@ -1376,7 +1376,7 @@ mod tests {
         assert_eq!((image.width(), image.height()), (2, 1));
         assert_eq!(image.mips[0].data, data);
         // The stored chain is the one the backends used to box-filter at upload.
-        let reference = concinnity_engine::render::mipmap::generate_mip_chain(2, 1, &data);
+        let reference = concinnity_engine::gfx::mipmap::generate_mip_chain(2, 1, &data);
         assert_eq!(image.mips.len(), reference.len());
         for (mip, level) in image.mips.iter().zip(&reference) {
             assert_eq!((mip.width, mip.height), (level.width, level.height));

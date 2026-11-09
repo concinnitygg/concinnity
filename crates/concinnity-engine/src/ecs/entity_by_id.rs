@@ -11,11 +11,12 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use crate::components::Identity;
-use crate::ecs::asset_id::{AssetId, AssetIdsExhausted, MintedIds};
+use crate::ecs::asset_id::{AssetId, MintedIds};
 use crate::ecs::{
     ComponentId, ComponentMask, ComponentSlot, ComponentStorage, Entity, PipelineContext,
     Resources, World,
 };
+use crate::error::AssetIdsExhausted;
 
 /// Maps every identified entity's asset id to the entity. Written only by
 /// [`PipelineContext::identify`] / [`World::identify`], which insert the

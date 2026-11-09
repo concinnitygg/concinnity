@@ -37,10 +37,11 @@
 //! Face order matches `CubemapTexture`: +X, -X, +Y, -Y, +Z, -Z.
 
 pub mod bake;
+mod record;
 pub mod source;
 pub mod stars;
 
-use crate::bake::decode::{ByteReader, DecodeError, checked_product};
+use crate::codec::{ByteReader, DecodeError, checked_product};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -50,6 +51,7 @@ pub use bake::{
     CubeBake, DEFAULT_IRRADIANCE_PHI_SAMPLES, DEFAULT_IRRADIANCE_THETA_SAMPLES, FaceRow,
     compute_irradiance, compute_prefilter, face_rows, prefilter_mip0, prefilter_roughness,
 };
+pub use record::EnvironmentMapRecord;
 
 pub(crate) const ENVMAP_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ENVM");
 pub(crate) const ENVMAP_FORMAT_RGBA32F: u32 = 0;

@@ -15,11 +15,11 @@
 //! the graph has to move the top octave between those, which is why the chain
 //! is also encodable in three pieces.
 
+use crate::gfx::mipmap::full_mip_levels;
 use crate::gfx::render_types::PostProcessParams;
 use crate::render::backend::error::RenderResult;
 use crate::render::render_graph::{
     ClearValue, PassId, PixelFormat, TextureDesc, TextureSize, TextureUsage, bloom_top_desc,
-    full_mip_levels,
 };
 
 use super::device::{

@@ -9,8 +9,9 @@
 //! in.
 
 use super::fixtures::{TICK, awake, position, step_for};
+use crate::environment::GRAVITY;
 use crate::simulation::physics::{
-    BodyHandle, ColliderShape, DynamicParams, GRAVITY, JointMotor, JointSpec, LayerMask, Simulation,
+    BodyHandle, ColliderShape, DynamicParams, JointMotor, JointSpec, LayerMask, Simulation,
 };
 
 const ARM: ColliderShape = ColliderShape::Cuboid {
