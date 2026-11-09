@@ -15,8 +15,6 @@
 //!
 //! Mirrors src/metal/clouds.rs and src/directx/clouds.rs.
 
-use std::cell::Cell;
-
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderResult;
@@ -24,8 +22,7 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
-    cloud_target_size,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
 };
 
 use super::allocator::{PooledBuffer, PooledImage};
@@ -230,21 +227,15 @@ pub(in crate::vulkan) struct CloudInputs<'a> {
 pub(in crate::vulkan) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Option<CloudParams>,
+    schedule: CloudSchedule,
     noise: Image,
-    // Whether an atmosphere pass has built the noise volume yet.
-    noise_built: Cell<bool>,
     shadow: Image,
     panorama: Image,
     // The march's texels, one of each 2x2 block of the target's.
     marched: Image,
-    // This frame's target and the previous frame's, swapping each frame.
+    // This frame's target and the previous frame's, as `schedule` swaps them.
     targets: [Image; 2],
-    // Which of `targets` this frame writes.
-    write: usize,
-    target_size: [u32; 2],
-    history: CloudHistory,
     ubos: Vec<PooledBuffer>,
-    frames: u64,
     _pool: OwnedDescriptorPool,
     sampler: OwnedSampler,
     _noise_set_layout: OwnedSetLayout,
@@ -285,8 +276,9 @@ impl CloudState {
         let device = gpu.device;
         let frames = inputs.atmo_ubos.len();
         let noise = create_image(gpu, [NOISE_SIZE; 3], NOISE_FORMAT, "cloud noise volume")?;
-        let target_size = cloud_target_size(inputs.extent.width, inputs.extent.height);
-        let marched = create_target(gpu, cloud_march_size(target_size))?;
+        let schedule = CloudSchedule::new([inputs.extent.width, inputs.extent.height]);
+        let target_size = schedule.target_size();
+        let marched = create_target(gpu, schedule.march_size())?;
         let targets = [
             create_target(gpu, target_size)?,
             create_target(gpu, target_size)?,
@@ -410,17 +402,13 @@ impl CloudState {
 
         let clouds = Self {
             params: None,
+            schedule,
             noise,
-            noise_built: Cell::new(false),
             shadow,
             panorama,
             marched,
             targets,
-            write: 0,
-            target_size,
-            history: CloudHistory::default(),
             ubos,
-            frames: 0,
             _pool: pool,
             sampler,
             _noise_set_layout: noise_set_layout,
@@ -510,11 +498,10 @@ impl CloudState {
         gpu: &GpuUploadContext<'_>,
         inputs: &CloudInputs<'_>,
     ) -> RenderResult<()> {
-        let size = cloud_target_size(inputs.extent.width, inputs.extent.height);
-        if size != self.target_size {
-            self.marched = create_target(gpu, cloud_march_size(size))?;
+        let scene = [inputs.extent.width, inputs.extent.height];
+        if let Some(size) = self.schedule.resize(scene) {
+            self.marched = create_target(gpu, self.schedule.march_size())?;
             self.targets = [create_target(gpu, size)?, create_target(gpu, size)?];
-            self.target_size = size;
         }
         self.write_sets(gpu.device, inputs);
         Ok(())
@@ -558,7 +545,7 @@ impl CloudState {
         self.shadow_kernel = shadow_kernel;
         self.panorama_kernel = panorama_kernel;
         self.composite_pipeline = composite_pipeline;
-        self.noise_built.set(false);
+        self.schedule.rebuild_noise();
         Ok(())
     }
 
@@ -588,9 +575,7 @@ impl CloudState {
         view: &AtmosphereView,
         frame_idx: usize,
     ) {
-        self.write = 1 - self.write;
-        self.params = self.history.params(settings, frame, view, self.frames);
-        self.frames = self.frames.wrapping_add(1);
+        self.params = self.schedule.advance(settings, frame, view);
         if let (Some(params), Some(ubo)) = (self.params, self.ubos.get(frame_idx)) {
             ubo.write_val(0, &params);
         }
@@ -612,7 +597,8 @@ impl CloudState {
         if self.params.is_none() {
             return;
         }
-        if !self.noise_built.get() {
+        let threads = self.schedule.dispatch();
+        if self.schedule.take_noise_build() {
             rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, &self.noise_kernel);
             rec.bind_descriptor_sets(
                 vk::PipelineBindPoint::COMPUTE,
@@ -621,8 +607,8 @@ impl CloudState {
                 std::slice::from_ref(&self.noise_set),
                 &[],
             );
-            let groups = NOISE_SIZE.div_ceil(NOISE_GROUP);
-            rec.dispatch(groups, groups, groups);
+            let [x, y, z] = threads.noise.map(|t| t.div_ceil(NOISE_GROUP));
+            rec.dispatch(x, y, z);
             rec.pipeline_barrier(
                 vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -632,9 +618,7 @@ impl CloudState {
                 &[],
                 &[],
             );
-            self.noise_built.set(true);
         }
-        let groups = SHADOW_SIZE.div_ceil(MARCH_GROUP);
         let shadow = |from, to| {
             vk::ImageMemoryBarrier::default()
                 .old_layout(from)
@@ -672,7 +656,7 @@ impl CloudState {
                 vk::ImageLayout::GENERAL,
             )],
         );
-        self.dispatch(rec, &self.shadow_kernel, sets[0], [groups, groups]);
+        self.dispatch(rec, &self.shadow_kernel, sets[0], threads.shadow);
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             readers,
@@ -683,12 +667,7 @@ impl CloudState {
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             )],
         );
-        self.dispatch(
-            rec,
-            &self.panorama_kernel,
-            sets[1],
-            cloud_march_size(PANORAMA_SIZE).map(|s| s.div_ceil(MARCH_GROUP)),
-        );
+        self.dispatch(rec, &self.panorama_kernel, sets[1], threads.panorama);
     }
 
     fn dispatch(
@@ -696,7 +675,7 @@ impl CloudState {
         rec: &Recorder<'_>,
         kernel: &OwnedPipeline,
         set: vk::DescriptorSet,
-        groups: [u32; 2],
+        threads: [u32; 3],
     ) {
         rec.bind_pipeline(vk::PipelineBindPoint::COMPUTE, kernel);
         rec.bind_descriptor_sets(
@@ -706,7 +685,8 @@ impl CloudState {
             std::slice::from_ref(&set),
             &[],
         );
-        rec.dispatch(groups[0], groups[1], 1);
+        let [x, y, z] = threads.map(|t| t.div_ceil(MARCH_GROUP));
+        rec.dispatch(x, y, z);
     }
 
     // The shadow map's and the panorama's views.
@@ -747,8 +727,9 @@ impl CloudState {
             std::slice::from_ref(set),
             &[],
         );
-        let [mw, mh] = cloud_march_size(self.target_size);
-        rec.dispatch(mw.div_ceil(MARCH_GROUP), mh.div_ceil(MARCH_GROUP), 1);
+        let threads = self.schedule.dispatch();
+        let [x, y, z] = threads.march.map(|t| t.div_ceil(MARCH_GROUP));
+        rec.dispatch(x, y, z);
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -761,8 +742,8 @@ impl CloudState {
         self.dispatch(
             rec,
             &self.reconstruct_kernel,
-            rebuilt[self.write],
-            self.target_size.map(|s| s.div_ceil(MARCH_GROUP)),
+            rebuilt[self.schedule.write()],
+            threads.reconstruct,
         );
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -822,7 +803,7 @@ impl CloudState {
         ) else {
             return;
         };
-        let set = &sets[self.write];
+        let set = &sets[self.schedule.write()];
         if self.params.is_none() {
             return;
         }

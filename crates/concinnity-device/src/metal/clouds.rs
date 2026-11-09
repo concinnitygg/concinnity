@@ -6,16 +6,13 @@
 //! turn; and the composite that blends it over the scene behind the haze.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::cell::Cell;
-
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
-    cloud_target_size,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
 };
 use concinnity_engine::render::shader::programs::abi::clouds::metal::{composite, march, noise};
 use objc2::rc::Retained;
@@ -47,19 +44,14 @@ type Kernel = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 pub(super) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Option<CloudParams>,
+    schedule: CloudSchedule,
     noise: Texture,
-    // Whether an atmosphere pass has built the noise volume yet.
-    noise_built: Cell<bool>,
     pub(super) shadow: Texture,
     pub(super) panorama: Texture,
     // The march's texels, one of each 2x2 block of the target's.
     marched: Texture,
-    // This frame's target and the previous frame's, swapping each frame.
+    // This frame's target and the previous frame's, as `schedule` swaps them.
     targets: [Texture; 2],
-    // Which of `targets` this frame writes.
-    write: usize,
-    target_size: [u32; 2],
-    history: CloudHistory,
     noise_kernel: Kernel,
     shadow_kernel: Kernel,
     panorama_kernel: Kernel,
@@ -67,7 +59,6 @@ pub(super) struct CloudState {
     reconstruct_kernel: Kernel,
     composite: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
     noise_sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
-    frames: u64,
 }
 
 impl CloudState {
@@ -94,8 +85,8 @@ impl CloudState {
         )?;
         Ok(Self {
             params: None,
+            schedule: CloudSchedule::new([1, 1]),
             noise,
-            noise_built: Cell::new(false),
             shadow: texture(
                 device,
                 MTLTextureType::Type2D,
@@ -112,9 +103,6 @@ impl CloudState {
             )?,
             marched: target(device, [1, 1])?,
             targets: [target(device, [1, 1])?, target(device, [1, 1])?],
-            write: 0,
-            target_size: [1, 1],
-            history: CloudHistory::default(),
             noise_kernel: compute_pipeline(device, &CLOUD_NOISE, hot_reload)?,
             shadow_kernel: compute_pipeline(device, &CLOUD_SHADOW, hot_reload)?,
             panorama_kernel: compute_pipeline(device, &CLOUD_PANORAMA, hot_reload)?,
@@ -122,7 +110,6 @@ impl CloudState {
             reconstruct_kernel: compute_pipeline(device, &CLOUD_RECONSTRUCT, hot_reload)?,
             composite,
             noise_sampler: repeat_sampler(device)?,
-            frames: 0,
         })
     }
 
@@ -143,21 +130,17 @@ impl CloudState {
             reason = "a pixel count"
         )]
         let scene = view.viewport.map(|v| v.max(1.0) as u32);
-        let size = cloud_target_size(scene[0], scene[1]);
-        if size != self.target_size {
-            self.marched = target(device, cloud_march_size(size))?;
+        if let Some(size) = self.schedule.resize(scene) {
+            self.marched = target(device, self.schedule.march_size())?;
             self.targets = [target(device, size)?, target(device, size)?];
-            self.target_size = size;
         }
-        self.write = 1 - self.write;
-        self.params = self.history.params(settings, frame, view, self.frames);
-        self.frames = self.frames.wrapping_add(1);
+        self.params = self.schedule.advance(settings, frame, view);
         Ok(())
     }
 
     // The target this frame's composite reads.
     fn target(&self) -> &Texture {
-        &self.targets[self.write]
+        &self.targets[self.schedule.write()]
     }
 
     // Whether this frame has the clouds' constants.
@@ -178,11 +161,11 @@ impl CloudState {
         let Some(params) = self.params.as_ref() else {
             return;
         };
-        if !self.noise_built.get() {
+        let threads = self.schedule.dispatch();
+        if self.schedule.take_noise_build() {
             enc.set_pipeline(&self.noise_kernel);
             enc.set_texture(&self.noise, noise::NOISE_OUT.index);
-            dispatch(enc, [NOISE_SIZE; 3], [4, 4, 4]);
-            self.noise_built.set(true);
+            dispatch(enc, threads.noise, [4, 4, 4]);
         }
         enc.set_value(atmo_params, march::ATMOSPHERE.index);
         enc.set_value(params, march::CLOUDS.index);
@@ -191,11 +174,10 @@ impl CloudState {
         enc.set_sampler(&self.noise_sampler, march::NOISE_SAMPLER.index);
         enc.set_pipeline(&self.shadow_kernel);
         enc.set_texture(&self.shadow, march::OUTPUT.index);
-        dispatch(enc, [SHADOW_SIZE, SHADOW_SIZE, 1], [8, 8, 1]);
+        dispatch(enc, threads.shadow, [8, 8, 1]);
         enc.set_pipeline(&self.panorama_kernel);
         enc.set_texture(&self.panorama, march::OUTPUT.index);
-        let [bw, bh] = cloud_march_size(PANORAMA_SIZE);
-        dispatch(enc, [bw, bh, 1], [8, 8, 1]);
+        dispatch(enc, threads.panorama, [8, 8, 1]);
     }
 }
 
@@ -300,14 +282,14 @@ impl MtlContext {
         enc.set_texture(&clouds.marched, march::OUTPUT.index);
         enc.set_sampler(&self.composite.sampler, march::LUT_SAMPLER.index);
         enc.set_sampler(&clouds.noise_sampler, march::NOISE_SAMPLER.index);
-        let [mw, mh] = cloud_march_size(clouds.target_size);
-        dispatch(&enc, [mw, mh, 1], [8, 8, 1]);
+        let threads = clouds.schedule.dispatch();
+        dispatch(&enc, threads.march, [8, 8, 1]);
         enc.set_pipeline(&clouds.reconstruct_kernel);
         enc.set_texture(clouds.target(), march::OUTPUT.index);
         enc.set_texture(&clouds.marched, march::MARCHED.index);
-        enc.set_texture(&clouds.targets[1 - clouds.write], march::PREVIOUS.index);
-        let [w, h] = clouds.target_size;
-        dispatch(&enc, [w, h, 1], [8, 8, 1]);
+        let previous = &clouds.targets[clouds.schedule.previous()];
+        enc.set_texture(previous, march::PREVIOUS.index);
+        dispatch(&enc, threads.reconstruct, [8, 8, 1]);
         Ok(0)
     }
 

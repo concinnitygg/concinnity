@@ -21,8 +21,7 @@ use concinnity_engine::render::environment::atmosphere::{
     AtmosphereFrame, AtmosphereSettings, AtmosphereView,
 };
 use concinnity_engine::render::environment::clouds::{
-    CloudHistory, CloudParams, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE, cloud_march_size,
-    cloud_target_size,
+    CloudParams, CloudSchedule, NOISE_SIZE, PANORAMA_SIZE, SHADOW_SIZE,
 };
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -73,23 +72,17 @@ pub(in crate::directx) struct CloudSlots {
 pub(in crate::directx) struct CloudState {
     // This frame's constants, `None` until a frame carries the clouds' inputs.
     params: Cell<Option<CloudParams>>,
+    schedule: CloudSchedule,
     noise: ID3D12Resource,
-    // Whether an atmosphere pass has built the noise volume yet.
-    noise_built: Cell<bool>,
     shadow: ID3D12Resource,
     panorama: ID3D12Resource,
     // The march's texels, one of each 2x2 block of the target's.
     marched: ID3D12Resource,
-    // This frame's target and the previous frame's, swapping each frame.
+    // This frame's target and the previous frame's, as `schedule` swaps them.
     targets: [ID3D12Resource; 2],
-    // Which of `targets` this frame writes.
-    write: Cell<usize>,
-    target_size: [u32; 2],
-    history: Cell<CloudHistory>,
     slots: CloudSlots,
     params_buffers: Vec<PooledBuffer>,
     params_ptrs: Vec<*mut u8>,
-    frames: Cell<u64>,
     noise_root_sig: ID3D12RootSignature,
     noise_pso: ID3D12PipelineState,
     march_root_sig: ID3D12RootSignature,
@@ -242,15 +235,16 @@ fn create_target(
     Ok(target)
 }
 
-// The march's texels and both targets for a target `size` texels across.
+// The march's texels and both targets at the sizes `schedule` keeps.
 fn create_targets(
     device: &ID3D12Device,
-    size: [u32; 2],
+    schedule: &CloudSchedule,
     slots: &CloudSlots,
 ) -> RenderResult<(ID3D12Resource, [ID3D12Resource; 2])> {
+    let size = schedule.target_size();
     let marched = create_target(
         device,
-        cloud_march_size(size),
+        schedule.march_size(),
         slots,
         MARCHED_SRV,
         MARCHED_UAV,
@@ -395,8 +389,8 @@ impl CloudState {
             slots.cpu[NOISE_SRV],
             slots.cpu[NOISE_UAV],
         );
-        let target_size = cloud_target_size(scene[0], scene[1]);
-        let (marched, targets) = create_targets(device, target_size, &slots)?;
+        let schedule = CloudSchedule::new(scene);
+        let (marched, targets) = create_targets(device, &schedule, &slots)?;
         let map = |size: [u32; 2], srv: usize, uav: usize, label: &str| {
             let map = create_texture(
                 device,
@@ -462,19 +456,15 @@ impl CloudState {
         let composite_pso = composite_pso(device, &composite_root_sig, msaa_samples, hot_reload)?;
         Ok(Self {
             params: Cell::new(None),
+            schedule,
             noise,
-            noise_built: Cell::new(false),
             shadow,
             panorama,
             marched,
             targets,
-            write: Cell::new(0),
-            target_size,
-            history: Cell::new(CloudHistory::default()),
             slots,
             params_buffers,
             params_ptrs,
-            frames: Cell::new(0),
             noise_root_sig,
             noise_pso,
             march_root_sig,
@@ -494,10 +484,8 @@ impl CloudState {
         device: &ID3D12Device,
         scene: [u32; 2],
     ) -> RenderResult<()> {
-        let size = cloud_target_size(scene[0], scene[1]);
-        if size != self.target_size {
-            (self.marched, self.targets) = create_targets(device, size, &self.slots)?;
-            self.target_size = size;
+        if self.schedule.resize(scene).is_some() {
+            (self.marched, self.targets) = create_targets(device, &self.schedule, &self.slots)?;
         }
         Ok(())
     }
@@ -537,7 +525,7 @@ impl CloudState {
         self.shadow_pso = shadow_pso;
         self.panorama_pso = panorama_pso;
         self.composite_pso = composite_pso;
-        self.noise_built.set(false);
+        self.schedule.rebuild_noise();
         Ok(())
     }
 
@@ -551,13 +539,8 @@ impl CloudState {
         view: &AtmosphereView,
         frame_idx: usize,
     ) {
-        let index = self.frames.get();
-        self.write.set(1 - self.write.get());
-        let mut history = self.history.get();
-        let params = history.params(settings, frame, view, index);
-        self.history.set(history);
+        let params = self.schedule.advance(settings, frame, view);
         self.params.set(params);
-        self.frames.set(index.wrapping_add(1));
         if let (Some(params), Some(&ptr)) = (params, self.params_ptrs.get(frame_idx)) {
             // SAFETY: the destination is the persistent mapping of an UPLOAD-heap constant buffer
             // sized for this block, and the source is a separate live value.
@@ -601,7 +584,8 @@ impl CloudState {
         let close = |r: &ID3D12Resource| {
             transition_barrier(r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, RESTING)
         };
-        if !self.noise_built.get() {
+        let threads = self.schedule.dispatch();
+        if self.schedule.take_noise_build() {
             // SAFETY: the command list is recording and the noise volume rests in `RESTING`.
             unsafe { cmd.ResourceBarrier(&[open(&self.noise)]) };
             // SAFETY: the noise root signature is owned by `clouds`.
@@ -611,20 +595,19 @@ impl CloudState {
             // SAFETY: table 0 of the noise root signature takes the volume's UAV, which lives in
             // the heap set above.
             unsafe { cmd.set_compute_srv_table(0, self.slots.gpu[NOISE_UAV]) };
-            let groups = NOISE_SIZE.div_ceil(NOISE_GROUP);
+            let [x, y, z] = threads.noise.map(|t| t.div_ceil(NOISE_GROUP));
             // SAFETY: the pipeline, root signature and table the dispatch writes are bound above.
-            unsafe { cmd.Dispatch(groups, groups, groups) };
+            unsafe { cmd.Dispatch(x, y, z) };
             // SAFETY: the volume was opened for unordered access above.
             unsafe { cmd.ResourceBarrier(&[close(&self.noise)]) };
-            self.noise_built.set(true);
         }
         let maps = [
-            (&self.shadow, &self.shadow_pso, SHADOW_UAV, [SHADOW_SIZE; 2]),
+            (&self.shadow, &self.shadow_pso, SHADOW_UAV, threads.shadow),
             (
                 &self.panorama,
                 &self.panorama_pso,
                 PANORAMA_UAV,
-                cloud_march_size(PANORAMA_SIZE),
+                threads.panorama,
             ),
         ];
         bind_march(cmd, self, inputs, params_gva);
@@ -636,9 +619,9 @@ impl CloudState {
             unsafe { cmd.SetPipelineState(pso) };
             // SAFETY: table 6 of the march root signature takes the map's UAV in the bound heap.
             unsafe { cmd.set_compute_srv_table(6, self.slots.gpu[uav]) };
-            let groups = grid.map(|s| s.div_ceil(MARCH_GROUP));
+            let [x, y, z] = grid.map(|t| t.div_ceil(MARCH_GROUP));
             // SAFETY: the pipeline, root signature, constants and tables are bound.
-            unsafe { cmd.Dispatch(groups[0], groups[1], 1) };
+            unsafe { cmd.Dispatch(x, y, z) };
             // SAFETY: the map was opened for unordered access above.
             unsafe { cmd.ResourceBarrier(&[close(map)]) };
         }
@@ -691,7 +674,9 @@ impl DxContext {
         };
         // SAFETY: the descriptor heap is owned by `self.descriptors` and outlives the frame.
         unsafe { cmd.SetDescriptorHeaps(&[Some(self.descriptors.srv_heap.clone())]) };
-        let write = clouds.write.get();
+        let write = clouds.schedule.write();
+        let previous = clouds.schedule.previous();
+        let threads = clouds.schedule.dispatch();
         let target = &clouds.targets[write];
         // SAFETY: the command list is recording and the march rests in `RESTING`.
         unsafe { cmd.ResourceBarrier(&[open(&clouds.marched)]) };
@@ -700,9 +685,9 @@ impl DxContext {
         unsafe { cmd.SetPipelineState(&clouds.march_pso) };
         // SAFETY: table 6 takes the march's UAV in the heap set above.
         unsafe { cmd.set_compute_srv_table(6, clouds.slots.gpu[MARCHED_UAV]) };
-        let [mw, mh] = cloud_march_size(clouds.target_size);
+        let [x, y, z] = threads.march.map(|t| t.div_ceil(MARCH_GROUP));
         // SAFETY: the pipeline, root signature, constants and tables are bound above.
-        unsafe { cmd.Dispatch(mw.div_ceil(MARCH_GROUP), mh.div_ceil(MARCH_GROUP), 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
         // SAFETY: the march was opened for unordered access above, and this frame's target rests
         // in `RESTING`.
         unsafe { cmd.ResourceBarrier(&[close(&clouds.marched), open(target)]) };
@@ -712,10 +697,10 @@ impl DxContext {
         unsafe { cmd.set_compute_srv_table(6, clouds.slots.gpu[TARGET_UAV[write]]) };
         // SAFETY: table 8 takes the previous frame's target's SRV in the bound heap; it rests
         // readable.
-        unsafe { cmd.set_compute_srv_table(8, clouds.slots.gpu[TARGET_SRV[1 - write]]) };
-        let [w, h] = clouds.target_size;
+        unsafe { cmd.set_compute_srv_table(8, clouds.slots.gpu[TARGET_SRV[previous]]) };
+        let [x, y, z] = threads.reconstruct.map(|t| t.div_ceil(MARCH_GROUP));
         // SAFETY: the pipeline, root signature, constants and tables are bound above.
-        unsafe { cmd.Dispatch(w.div_ceil(MARCH_GROUP), h.div_ceil(MARCH_GROUP), 1) };
+        unsafe { cmd.Dispatch(x, y, z) };
         // SAFETY: this frame's target was opened for unordered access above.
         unsafe { cmd.ResourceBarrier(&[close(target)]) };
     }
@@ -775,9 +760,10 @@ impl DxContext {
         // SAFETY: table 1 takes the depth's slot in the heap set above; the executor has put the
         // depth in a shader-resource state.
         unsafe { cmd.set_graphics_srv_table(1, depth_srv) };
+        let target = clouds.slots.gpu[TARGET_SRV[clouds.schedule.write()]];
         // SAFETY: table 2 takes the target's SRV in the heap set above; the march left the target
         // readable.
-        unsafe { cmd.set_graphics_srv_table(2, clouds.slots.gpu[TARGET_SRV[clouds.write.get()]]) };
+        unsafe { cmd.set_graphics_srv_table(2, target) };
         // SAFETY: the target, pipeline, root signature and every table the draw reads are bound
         // above.
         unsafe { cmd.DrawInstanced(3, 1, 0, 0) };

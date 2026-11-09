@@ -27,6 +27,7 @@ mod frame;
 mod history;
 mod noise;
 mod params;
+mod schedule;
 mod settings;
 mod shadow;
 mod shape;
@@ -35,6 +36,7 @@ pub use frame::{CloudFrame, CloudHorizon, CloudLayerFrame, CloudView};
 pub use history::{CloudHistory, CloudProjection};
 pub use noise::NOISE_SIZE;
 pub use params::{CloudLayerBlock, CloudMarch, CloudParams, cloud_march_size, march_texel};
+pub use schedule::{CloudDispatch, CloudSchedule};
 pub use settings::{CloudLayer, CloudSettings, MAX_CLOUD_LAYERS};
 pub use shadow::{CloudShadowSquare, SHADOW_SIZE};
 pub use shape::{

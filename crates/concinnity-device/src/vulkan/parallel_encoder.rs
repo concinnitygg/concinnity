@@ -52,6 +52,11 @@
 //!      by the draw-args record build that `record_frame` (before the fan-out)
 //!      and the probe bake share; `upload_skinned` uses `get_mut`. A worker
 //!      must never borrow it.
+//!   8. The clouds' `CloudSchedule` `Cell`s - stepped by `prepare_atmosphere`
+//!      before the fan-out and resized or reset only by a rebuild; during the
+//!      fan-out the cloud passes only read them (`write`, `previous`,
+//!      `dispatch`), and `take_noise_build` is written by the atmosphere pass
+//!      alone.
 //!
 //! Re-audit this list whenever a new pass migrates onto the fan-out.
 
@@ -67,7 +72,8 @@ pub(super) type ParallelCtxRef<'a> = parallel_ctx::ParallelCtxRef<'a, VkContext>
 // state reachable during `encode_pass_into` (atomic draw-call accumulator,
 // atomic deformed-primed priming gate, particle Cell state hoisted before the
 // fan-out, the RefCell device allocator and the RefCell text-upload ring
-// touched only by the main-thread Composite pass). Vulkan handles are safe for
+// touched only by the main-thread Composite pass, the cloud schedule stepped
+// before the fan-out and written there by the atmosphere pass alone). Vulkan handles are safe for
 // concurrent shared read, and
 // each worker records into a distinct command buffer from a distinct command
 // pool.
