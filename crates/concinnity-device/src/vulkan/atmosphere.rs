@@ -21,8 +21,8 @@ use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
-    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
-    TRANSMITTANCE_WIDTH, TableReadiness,
+    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, TRANSMITTANCE_HEIGHT, TRANSMITTANCE_WIDTH,
+    TableReadiness,
 };
 use concinnity_engine::render::shader::programs::ShaderProgram;
 use concinnity_engine::render::shader::programs::abi::atmosphere::{
@@ -137,14 +137,14 @@ pub(in crate::vulkan) struct AtmosphereState {
 }
 
 // The sky drawn into a capture cube and convolved by the reflection-probe
-// kernels into the environment's prefiltered cube, a few steps a frame.
+// kernels into the environment's prefiltered cube, whenever the sky moves.
 struct SkyCube {
     image: vk::Image,
     prefilter: ProbePrefilterPipelines,
     gpu: PrefilterGpu,
     schedule: SkyCubeSchedule,
-    // This frame's steps, planned when its constants are.
-    work: SkyCubeWork,
+    // Whether this frame redraws the cube, planned when its constants are.
+    redraw: bool,
 }
 
 // The kernels' shared set: the constants, the three tables they may read, the
@@ -737,8 +737,8 @@ impl AtmosphereState {
                 image: sky_image,
                 prefilter,
                 gpu: sky_gpu,
-                schedule: SkyCubeSchedule::new(SKY_CUBE_PLAN.mips()),
-                work: SkyCubeWork::default(),
+                schedule: SkyCubeSchedule::default(),
+                redraw: false,
             },
             params_ubos,
             _pool: pool,
@@ -969,14 +969,11 @@ impl VkContext {
             atmo.params = atmo
                 .frame
                 .map(|f| AtmosphereParams::new(&atmo.settings, &f, &view));
-            atmo.sky_cube.work = match atmo.frame {
-                Some(f) => {
-                    atmo.sky_cube
-                        .schedule
-                        .plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
-                }
-                None => SkyCubeWork::default(),
-            };
+            atmo.sky_cube.redraw = atmo.frame.is_some_and(|f| {
+                atmo.sky_cube
+                    .schedule
+                    .plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
+            });
             if let (Some(params), Some(ubo)) = (atmo.params, atmo.params_ubos.get(frame_idx)) {
                 ubo.write_val(0, &params);
             }
@@ -1059,7 +1056,6 @@ impl VkContext {
         );
         dispatch(IRRADIANCE, [1, 1, 1]);
         let cube = &atmo.sky_cube;
-        let work = cube.work;
         let sky_range = probe_set::range(0, SKY_CUBE_PLAN.mips(), 0, 6);
         let open = |image| {
             image_barrier(
@@ -1069,7 +1065,7 @@ impl VkContext {
                 vk::ImageLayout::GENERAL,
             )
         };
-        if work.capture {
+        if cube.redraw {
             // The sky is drawn into the capture's top mip, then copied and
             // reduced; last frame's samplers of the cube and the capture
             // finish first.
@@ -1098,17 +1094,9 @@ impl VkContext {
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 )],
             );
-        } else if !work.is_empty() {
-            rec.pipeline_barrier(
-                CUBE_READERS,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                &[],
-                &[],
-                &[open(cube.image)],
-            );
-        }
-        for mip in work.ggx_mips() {
-            Self::record_prefilter_ggx(rec, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN, mip)?;
+            for mip in 1..SKY_CUBE_PLAN.mips() {
+                Self::record_prefilter_ggx(rec, &cube.prefilter, &cube.gpu, &SKY_CUBE_PLAN, mip)?;
+            }
         }
         // Every table is read by fragment shaders from here on: the sky, the
         // haze, and the surfaces' ambient light and reflections through the
@@ -1125,7 +1113,7 @@ impl VkContext {
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         );
         let closing = [irradiance, sky];
-        let closed = if work.is_empty() { 1 } else { 2 };
+        let closed = if cube.redraw { 2 } else { 1 };
         rec.pipeline_barrier(
             vk::PipelineStageFlags::COMPUTE_SHADER,
             CUBE_READERS,

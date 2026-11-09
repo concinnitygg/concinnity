@@ -23,8 +23,8 @@ use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::environment::atmosphere::{
     AERIAL_SIZE, AirTables, AtmosphereFrame, AtmosphereParams, AtmosphereSettings, AtmosphereView,
     IRRADIANCE_FACE, MULTISCATTER_SIZE, SKY_CUBE_FACE, SKY_CUBE_PLAN, SKY_VIEW_HEIGHT,
-    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, SkyCubeWork, TRANSMITTANCE_HEIGHT,
-    TRANSMITTANCE_WIDTH, TableReadiness,
+    SKY_VIEW_WIDTH, SkyCubeKey, SkyCubeSchedule, TRANSMITTANCE_HEIGHT, TRANSMITTANCE_WIDTH,
+    TableReadiness,
 };
 use concinnity_engine::render::shader::programs::ShaderProgram;
 use windows::Win32::Foundation::RECT;
@@ -115,8 +115,8 @@ pub(in crate::directx) struct AtmosphereState {
 }
 
 /// The sky drawn into a capture cube and convolved by the reflection-probe
-/// kernels into the cube whose SRV takes the environment's prefilter slot, a
-/// few steps a frame. Both cubes rest readable by any shader stage.
+/// kernels into the cube whose SRV takes the environment's prefilter slot,
+/// whenever the sky moves. Both cubes rest readable by any shader stage.
 pub(in crate::directx) struct SkyCube {
     kernel: ID3D12PipelineState,
     prefilter: ProbePrefilterPipelines,
@@ -125,8 +125,8 @@ pub(in crate::directx) struct SkyCube {
     slots: PrefilterSlots,
     prefilter_srv_cpu: D3D12_CPU_DESCRIPTOR_HANDLE,
     schedule: Cell<SkyCubeSchedule>,
-    // This frame's steps, planned when its constants are.
-    work: Cell<SkyCubeWork>,
+    // Whether this frame redraws the cube, planned when its constants are.
+    redraw: Cell<bool>,
 }
 
 impl SkyCube {
@@ -171,8 +171,8 @@ impl SkyCube {
             cube,
             slots,
             prefilter_srv_cpu,
-            schedule: Cell::new(SkyCubeSchedule::new(mips)),
-            work: Cell::new(SkyCubeWork::default()),
+            schedule: Cell::new(SkyCubeSchedule::default()),
+            redraw: Cell::new(false),
         }))
     }
 }
@@ -603,7 +603,7 @@ impl AtmosphereState {
         let kernels = kernels(device, &self.kernel_root_sig, true)?;
         if let Some(c) = self.sky_cube.as_mut() {
             c.kernel = kernel(device, &self.kernel_root_sig, &ATMOSPHERE_SKY_CUBE, true)?;
-            c.schedule.set(SkyCubeSchedule::new(SKY_CUBE_PLAN.mips()));
+            c.schedule.get_mut().reset();
         }
         let sky_pso = super::sky::build_sky_pso(
             device,
@@ -652,10 +652,9 @@ impl DxContext {
         atmo.params.set(params);
         if let Some(cube) = &atmo.sky_cube {
             let mut schedule = cube.schedule.get();
-            cube.work.set(match atmo.frame {
-                Some(f) => schedule.plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot)),
-                None => SkyCubeWork::default(),
-            });
+            cube.redraw.set(atmo.frame.is_some_and(|f| {
+                schedule.plan(SkyCubeKey::new(&atmo.settings, &f, &view.sky_rot))
+            }));
             cube.schedule.set(schedule);
         }
         if let (Some(params), Some(&ptr)) = (params, atmo.params_ptrs.get(frame_idx)) {
@@ -796,13 +795,11 @@ impl DxContext {
         }
     }
 
-    // This frame's steps of the sky cube: the sky drawn into the capture's top
-    // mip, the mirror copy and the pyramid, then the GGX mips. The capture is
-    // open for unordered access only while the sky and the pyramid are
-    // written, the cube while any of its mips are.
+    // This frame's redraw of the sky cube, if any: the sky drawn into the
+    // capture's top mip, the mirror copy and the pyramid, then every GGX mip.
+    // Both are open for unordered access only while they are written.
     fn encode_sky_cube(&self, cmd: &ID3D12GraphicsCommandList, cube: &SkyCube) {
-        let work = cube.work.get();
-        if work.is_empty() {
+        if !cube.redraw.get() {
             return;
         }
         let open = |r: &ID3D12Resource| {
@@ -811,37 +808,32 @@ impl DxContext {
         let close = |r: &ID3D12Resource| {
             transition_barrier(r, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, RESTING)
         };
-        if work.capture {
-            let [x, y, z] = SKY_CUBE_GROUP.groups([SKY_CUBE_FACE, SKY_CUBE_FACE, 6]);
-            // SAFETY: the command list is recording, and the capture and cube rest in `RESTING`.
-            unsafe { cmd.ResourceBarrier(&[open(&cube.capture), open(&cube.cube)]) };
-            // SAFETY: the sky-cube kernel is owned by `cube`, which outlives the recording.
-            unsafe { cmd.SetPipelineState(&cube.kernel) };
-            let capture_uav = self.descriptors.slot_gpu(cube.slots.capture_uav_base);
-            // SAFETY: the atmosphere's kernel root signature is still bound and declares table 2;
-            // the capture UAV slot is live in the shader-visible heap.
-            unsafe { cmd.set_compute_srv_table(2, capture_uav) };
-            // SAFETY: the constants and table inputs are still bound from the atmosphere's kernels,
-            // and the capture UAV table was set just above.
-            unsafe { cmd.Dispatch(x, y, z) };
-            uav_barrier(cmd, &cube.capture);
-            self.record_prefilter_pyramid(
-                cmd,
-                &cube.prefilter,
-                cube.slots,
-                &cube.capture,
-                &SKY_CUBE_PLAN,
-            );
-            // SAFETY: the capture was opened for unordered access by the barrier above.
-            unsafe { cmd.ResourceBarrier(&[close(&cube.capture)]) };
-        } else {
-            // SAFETY: the command list is recording, and the cube rests in `RESTING`.
-            unsafe { cmd.ResourceBarrier(&[open(&cube.cube)]) };
-        }
-        for mip in work.ggx_mips() {
+        let [x, y, z] = SKY_CUBE_GROUP.groups([SKY_CUBE_FACE, SKY_CUBE_FACE, 6]);
+        // SAFETY: the command list is recording, and the capture and cube rest in `RESTING`.
+        unsafe { cmd.ResourceBarrier(&[open(&cube.capture), open(&cube.cube)]) };
+        // SAFETY: the sky-cube kernel is owned by `cube`, which outlives the recording.
+        unsafe { cmd.SetPipelineState(&cube.kernel) };
+        let capture_uav = self.descriptors.slot_gpu(cube.slots.capture_uav_base);
+        // SAFETY: the atmosphere's kernel root signature is still bound and declares table 2;
+        // the capture UAV slot is live in the shader-visible heap.
+        unsafe { cmd.set_compute_srv_table(2, capture_uav) };
+        // SAFETY: the constants and table inputs are still bound from the atmosphere's kernels,
+        // and the capture UAV table was set just above.
+        unsafe { cmd.Dispatch(x, y, z) };
+        uav_barrier(cmd, &cube.capture);
+        self.record_prefilter_pyramid(
+            cmd,
+            &cube.prefilter,
+            cube.slots,
+            &cube.capture,
+            &SKY_CUBE_PLAN,
+        );
+        // SAFETY: the capture was opened for unordered access by the barrier above.
+        unsafe { cmd.ResourceBarrier(&[close(&cube.capture)]) };
+        for mip in 1..SKY_CUBE_PLAN.mips() {
             self.record_prefilter_ggx(cmd, &cube.prefilter, cube.slots, &SKY_CUBE_PLAN, mip);
         }
-        // SAFETY: both branches above left the cube open for unordered access.
+        // SAFETY: the cube was opened for unordered access by the barrier above.
         unsafe { cmd.ResourceBarrier(&[close(&cube.cube)]) };
     }
 
