@@ -47,11 +47,14 @@ impl VkContext {
         let mut variants = self.cull.variants;
         variants.set_view(
             self.grass_lod.map_or(0.0, |l| l.fade_start()),
-            &self.state.view.daylight,
+            &self.state.view.daylight.variant_sky(),
         );
         if let Some(live) = self.cull.live_buckets.get(frame_idx) {
             live.store(
-                variants.live_buckets(self.shader_bucket_count(), &self.state.view.daylight),
+                variants.live_buckets(
+                    self.shader_bucket_count(),
+                    &self.state.view.daylight.variant_sky(),
+                ),
                 std::sync::atomic::Ordering::Relaxed,
             );
         }

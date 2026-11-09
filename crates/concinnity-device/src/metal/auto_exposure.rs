@@ -21,10 +21,11 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::gfx::auto_exposure::ExposureAdaptation;
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::shader::programs::abi::exposure::metal::{average, build};
 use concinnity_engine::render::shader::programs::abi::exposure::{AVERAGE_GROUP, BUILD_GROUP};
-use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
+use concinnity_engine::render::uniforms::AutoExposureParams;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::ns_string;

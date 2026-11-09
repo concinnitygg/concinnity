@@ -27,6 +27,7 @@
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::CaptureTiles;
 use concinnity_engine::gfx::render_types::TileMorphView;
 use concinnity_engine::gfx::render_types::{self, GpuCompactParams, StreamLayout};
 use concinnity_engine::render::backend::RenderBackend;
@@ -35,7 +36,6 @@ use concinnity_engine::render::probe::bake::{self as bake, CAPTURE_FACES, ProbeB
 use concinnity_engine::render::probe::book::ProbeBook;
 use concinnity_engine::render::probe::capture::{self, PrefilterPlan, ProbePlacement};
 use concinnity_engine::render::probe::radiance::{FaceBackground, FaceStorage};
-use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
 
 use super::allocator::PooledBuffer;

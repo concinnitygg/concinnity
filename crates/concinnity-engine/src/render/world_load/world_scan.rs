@@ -85,15 +85,12 @@ pub fn color_lut_strength(ctx: &mut PipelineContext<'_>) -> Option<f32> {
     crate::bake::color_lut::strength(bytes).ok()
 }
 
-/// Whether the world saves frames as it goes, from the run's screenshots or
-/// from a `screenshot` action, which needs the presented frame readable just as an
-/// exit screenshot does.
+/// Whether the world saves frames as it goes from a `screenshot` action,
+/// which needs the presented frame readable just as an exit screenshot does.
 pub fn declares_frame_captures(ctx: &PipelineContext<'_>) -> bool {
     let screenshot = |action: Option<&UiAction>| matches!(action, Some(UiAction::Screenshot(_)));
-    crate::presentation::screenshot::takes_screenshots(ctx)
-        || ctx
-            .query::<KeyBinding>()
-            .any(|kb| screenshot(kb.action.as_ref()))
+    ctx.query::<KeyBinding>()
+        .any(|kb| screenshot(kb.action.as_ref()))
         || ctx
             .query::<HitRegion>()
             .any(|r| screenshot(r.action.as_ref()))

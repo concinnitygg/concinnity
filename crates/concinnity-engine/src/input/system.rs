@@ -23,8 +23,10 @@ use crate::input::pad::PadState;
 use crate::protocol::{
     CursorState, FlyCam, FrameTime, InputSampledAt, MenuActive, ScreenStack, WindowMinimized,
 };
-use crate::settings::StoredSettings;
-use crate::settings::registry::DEFAULT_GAMEPAD_DEADZONE;
+
+/// The gamepad stick deadzone (a deflection fraction) when the user has never
+/// chosen one.
+pub const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
 
 /// Where a host's gamepads come from: it drains pending OS gamepad events
 /// into the fold each frame. A host with none lends no source.
@@ -85,17 +87,6 @@ impl System for InputSystem {
     }
 
     fn init(&mut self, ctx: &mut PipelineContext<'_>) {
-        // Stored settings-menu choices override the engine defaults.
-        if let Some(stored) = ctx.resource::<StoredSettings>() {
-            let controls = stored.controls_command();
-            self.bindings = Bindings {
-                keys: controls.keymap.unwrap_or_default(),
-                pad: controls.gamepad_map.unwrap_or_default(),
-            };
-            if let Some(dz) = controls.gamepad_deadzone {
-                self.deadzone = dz;
-            }
-        }
         // Seed the one FrameInput row here so `step` only ever overwrites it
         // in place: minting the row is a structural change, which the step's
         // declared (non-exclusive) access cannot perform. Consumers treat the
@@ -106,6 +97,22 @@ impl System for InputSystem {
     }
 
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
+        // Controls changes (the stored choices the settings system sends at
+        // start, then each rebind or deadzone change), taken whether or not a
+        // packet arrived so none ages out of the queue unread.
+        if let Some(events) = ctx.events::<ControlsCommand>() {
+            for cmd in events.read(&mut self.controls_cursor) {
+                if let Some(keys) = cmd.keymap {
+                    self.bindings.keys = keys;
+                }
+                if let Some(map) = cmd.gamepad_map {
+                    self.bindings.pad = map;
+                }
+                if let Some(dz) = cmd.gamepad_deadzone {
+                    self.deadzone = dz;
+                }
+            }
+        }
         // No deposited packet (graphics failed, the editor transplanted the
         // backend away, or the frame stopped before sampling): nothing to
         // consume; consumers keep the last snapshot.
@@ -134,21 +141,6 @@ impl System for InputSystem {
         });
         ctx.insert_resource(WindowMinimized(packet.window_minimized));
 
-        // Live controls changes (a key or gamepad rebind, or the deadzone
-        // slider) sent by SettingsSystem earlier this tick.
-        if let Some(events) = ctx.events::<ControlsCommand>() {
-            for cmd in events.read(&mut self.controls_cursor) {
-                if let Some(keys) = cmd.keymap {
-                    self.bindings.keys = keys;
-                }
-                if let Some(map) = cmd.gamepad_map {
-                    self.bindings.pad = map;
-                }
-                if let Some(dz) = cmd.gamepad_deadzone {
-                    self.deadzone = dz;
-                }
-            }
-        }
         if let Some(pads) = &mut self.pads {
             pads.poll(&mut self.pad);
         }

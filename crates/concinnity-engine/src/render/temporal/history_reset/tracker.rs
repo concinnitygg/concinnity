@@ -1,10 +1,10 @@
 // One reset decision per frame from the view, the frame's clock and the
 // causes reported since the last frame.
 
-use super::HistoryResetCauses;
 use super::motion::{MotionReference, ViewStep};
 use crate::ecs::Entity;
 use crate::ecs::asset_id::AssetId;
+use crate::protocol::HistoryResetCauses;
 use crate::transform::Mat4;
 
 /// How many simulation ticks past the frame it was raised for a camera cut

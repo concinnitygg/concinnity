@@ -35,8 +35,8 @@ pub(in crate::pipeline) fn build_pool() -> std::io::Result<rayon::ThreadPool> {
 mod tests {
     use super::*;
     use crate::authoring::registry::RegisteredType;
-    use concinnity_engine::blob::ResourceKind;
     use concinnity_engine::components::Material;
+    use concinnity_engine::ecs::ResourceKind;
     use concinnity_engine::ecs::TextureHandle;
     use concinnity_engine::resource::ResourceHandles;
 

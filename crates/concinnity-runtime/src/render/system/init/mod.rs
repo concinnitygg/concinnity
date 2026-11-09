@@ -13,13 +13,13 @@ use concinnity_engine::gfx::mesh_payload::Vertex;
 use concinnity_engine::gfx::render_types::{DrawIndex, DrawObject, FarFieldTint, InstancedCluster};
 use concinnity_engine::protocol::OverlayImages;
 use concinnity_engine::render::backend::init::EmbeddedSurface;
+use concinnity_engine::render::config::apply::{ApplyPlan, LiveChanges, apply_plan};
 use concinnity_engine::render::frame::queues::ActiveDeviceCaps;
 use concinnity_engine::render::world_load::stream_seed::{
     StreamGeometry, StreamSeed, plan_stream_seed,
 };
 use concinnity_engine::render::{backend, backend::init, draw_list};
 use concinnity_engine::resource::{FontTable, MaterialTable, TextureTable};
-use concinnity_engine::settings::apply::{ApplyPlan, LiveChanges, apply_plan};
 
 use super::backend_handoff::RuntimeHandoff;
 use super::skinned_templates::SkinnedUpload;
@@ -418,7 +418,7 @@ impl GraphicsSystem {
             world.texture_count,
             &world.terrains,
             planet_surface,
-            &quality_ceiling,
+            quality_ceiling.effects(),
         );
         let planet_far_field = fx
             .canopy
@@ -440,7 +440,9 @@ impl GraphicsSystem {
         // Metal is unaffected by `validation`: its layer is enabled by the CLI
         // re-execing with `MTL_DEBUG_LAYER`.
         let validation = launch.resolve_validation();
-        let capture = launch.frame_capture() || declares_frame_captures(ctx);
+        let capture = launch.frame_capture()
+            || concinnity_engine::launch::takes_screenshots(ctx)
+            || declares_frame_captures(ctx);
         let embedded_surface = ctx.resource::<EmbeddedSurface>().copied();
 
         let probe_placements = probe_placements(

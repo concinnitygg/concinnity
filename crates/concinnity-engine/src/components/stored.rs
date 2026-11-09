@@ -39,7 +39,27 @@ pub use crate::presentation::ui::scroll_panel::{ScrollGroup, ScrollPanel, Scroll
 pub use crate::presentation::ui::sprite::{Sprite, SpriteFit};
 pub use crate::presentation::ui::text_input::TextInput;
 pub use crate::presentation::ui::text_label::{TextAlign, TextLabel};
-pub use crate::presentation::window::{Window, WindowMode};
+pub use crate::render::config::ambient_occlusion::{AmbientOcclusion, AmbientOcclusionOverrides};
+pub use crate::render::config::anti_aliasing::{
+    AaMode, AntiAliasing, AntiAliasingOverrides, UpscaleQuality, UpscalerBackend,
+};
+pub use crate::render::config::background::{Background, BackgroundOverrides};
+pub use crate::render::config::bloom::{Bloom, BloomOverrides};
+pub use crate::render::config::culling::{Culling, CullingOverrides};
+pub use crate::render::config::display::{Display, DisplayOverrides};
+pub use crate::render::config::exposure::{Exposure, ExposureOverrides};
+pub use crate::render::config::frame_pacing::{FramePacing, FramePacingOverrides};
+pub use crate::render::config::graphics_config::GraphicsConfig;
+pub use crate::render::config::indirect_lighting::{
+    IndirectLighting, IndirectLightingOverrides, IndirectTechnique,
+};
+pub use crate::render::config::pass_resolution::PassResolution;
+pub use crate::render::config::planet_detail::{PlanetDetail, PlanetDetailOverrides};
+pub use crate::render::config::reflections::{Reflections, ReflectionsOverrides};
+pub use crate::render::config::shadows::{ShadowUpdate, Shadows, ShadowsOverrides};
+pub use crate::render::config::streaming::StreamingConfig;
+pub use crate::render::config::texture_filtering::{TextureFiltering, TextureFilteringOverrides};
+pub use crate::render::config::vignette::{Vignette, VignetteOverrides};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::clouds::Cloud;
@@ -60,31 +80,6 @@ pub use crate::render::sdf::volume::SdfVolume;
 pub use crate::render::shader::world_shader::{Shader, ShaderPrograms, ShaderStage};
 pub use crate::render::transparent::glass_panel::GlassPanel;
 pub use crate::resource::file::FileKind;
-pub use crate::settings::graphics::ambient_occlusion::{
-    AmbientOcclusion, AmbientOcclusionOverrides,
-};
-pub use crate::settings::graphics::anti_aliasing::{
-    AaMode, AntiAliasing, AntiAliasingOverrides, UpscaleQuality, UpscalerBackend,
-};
-pub use crate::settings::graphics::background::{Background, BackgroundOverrides};
-pub use crate::settings::graphics::bloom::{Bloom, BloomOverrides};
-pub use crate::settings::graphics::config::GraphicsConfig;
-pub use crate::settings::graphics::culling::{Culling, CullingOverrides};
-pub use crate::settings::graphics::display::{Display, DisplayOverrides};
-pub use crate::settings::graphics::exposure::{Exposure, ExposureOverrides};
-pub use crate::settings::graphics::frame_pacing::{FramePacing, FramePacingOverrides};
-pub use crate::settings::graphics::indirect_lighting::{
-    IndirectLighting, IndirectLightingOverrides, IndirectTechnique,
-};
-pub use crate::settings::graphics::pass_resolution::PassResolution;
-pub use crate::settings::graphics::planet_detail::{PlanetDetail, PlanetDetailOverrides};
-pub use crate::settings::graphics::reflections::{Reflections, ReflectionsOverrides};
-pub use crate::settings::graphics::shadows::{ShadowUpdate, Shadows, ShadowsOverrides};
-pub use crate::settings::graphics::streaming::StreamingConfig;
-pub use crate::settings::graphics::texture_filtering::{
-    TextureFiltering, TextureFilteringOverrides,
-};
-pub use crate::settings::graphics::vignette::{Vignette, VignetteOverrides};
 pub use crate::simulation::animation::character_shape::{
     CharacterShape, JointProportion, ResolvedSliders, ShapeSlider,
 };
@@ -111,6 +106,7 @@ pub use crate::story::definition::{
     Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
+pub use crate::window::{Window, WindowMode};
 
 pub use super::{
     Animation, AnimationBlend, AnimationBlendPoint, AnimationCondition, AnimationGraph,

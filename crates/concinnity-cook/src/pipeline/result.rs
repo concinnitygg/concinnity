@@ -1,8 +1,9 @@
 //! What a pipeline run hands back: the compiled defs and packed blobs, plus the
 //! dev-only source catalogs a `cn run -f` build reads back by handle.
 
-use concinnity_engine::blob::{MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, SceneGroup};
-use concinnity_engine::ecs::{BlobAssetDef, ResourceRecord};
+use concinnity_engine::blob::{BlobAssetDef, ResourceRecord};
+use concinnity_engine::blob::{MeshBoundsRecord, PhysicsBudgetRecord, SceneGroup};
+use concinnity_engine::ecs::ResourceKind;
 
 /// A texture's identity + on-disk source, in `TextureHandle` order. Now that
 /// Texture is a resource (no `source` on a component the renderer drains),

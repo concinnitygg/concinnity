@@ -4,7 +4,7 @@
 
 use concinnity_core::math::SaturatingFrom;
 use concinnity_core::platform::PlatformSet;
-use concinnity_engine::ecs::BlobAssetDef;
+use concinnity_engine::blob::BlobAssetDef;
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_host::thread::asset_id;
 use std::path::Path;

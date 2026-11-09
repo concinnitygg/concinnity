@@ -15,6 +15,7 @@
 
 use crate::render::environment::clouds::CloudMarch;
 use crate::render::environment::grass::GrassThinning;
+use crate::render::world_load::world_fx::EffectQuality;
 use alloc::format;
 use alloc::string::{String, ToString};
 
@@ -163,6 +164,15 @@ const SHADOW_CASCADES_MAX: u32 = crate::gfx::render_types::NUM_SHADOW_CASCADES a
 const PLANAR_PLANES_MAX: u32 = planar_reflection::MAX_PLANAR_PLANES as u32;
 
 impl QualityCeiling {
+    /// What the ceiling caps the world's effects at.
+    pub fn effects(&self) -> EffectQuality {
+        EffectQuality {
+            ocean: self.ocean,
+            clouds: self.clouds,
+            grass: self.grass,
+        }
+    }
+
     /// No ceiling: everything permitted, no forced upscaling. What `Custom`
     /// resolves to when it was entered from no other preset.
     pub const NONE: Self = Self {

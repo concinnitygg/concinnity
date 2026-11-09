@@ -1434,7 +1434,7 @@ impl VkContext {
     // count, so only its scalar intensity / distance are updated.
     pub(crate) fn update_quality_params(
         &mut self,
-        g: &concinnity_engine::settings::ResolvedGraphics,
+        g: &concinnity_engine::render::config::ResolvedGraphics,
     ) {
         if let (Some(live), Some(cur)) = (g.ssao(), self.ssao.as_mut().map(|s| &mut s.settings)) {
             *cur = live;

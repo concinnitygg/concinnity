@@ -99,8 +99,8 @@ pub use world_shaders::{PipelineSwap, SdfVolumeShaders, WorldShaders};
 
 use crate::gfx::render_types::{LineVertex, MATERIAL_PARAM_COUNT, MaterialUniforms, TextDrawCall};
 use crate::render::backend::error::{RenderError, RenderResult};
+use crate::render::config::apply::SettingsTarget;
 use crate::render::scene::flow::SceneControl;
-use crate::settings::apply::SettingsTarget;
 
 /// Per-frame inputs for [`RenderBackend::draw_frame`]. `world_hidden` is set when
 /// an opaque menu backdrop covers the scene: the backend skips every world pass
@@ -642,7 +642,7 @@ mod tests {
         backend.set_vsync(true);
         backend.set_window_mode(crate::components::WindowMode::Fullscreen);
         backend.set_window_size(1280, 720);
-        backend.set_display_mode(crate::presentation::window::display_mode::DisplayMode {
+        backend.set_display_mode(crate::window::display_mode::DisplayMode {
             width: 1920,
             height: 1080,
             refresh_hz: 60,

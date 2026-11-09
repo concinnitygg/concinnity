@@ -18,15 +18,15 @@ use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
+use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::config::apply::{
+    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
+};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::ssao::SsaoPass;
 use concinnity_engine::render::post::ssgi::SsgiPass;
 use concinnity_engine::render::post::ssr::SsrPass;
 use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
-use concinnity_engine::settings::ResolvedGraphics;
-use concinnity_engine::settings::apply::{
-    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
-};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTexture;

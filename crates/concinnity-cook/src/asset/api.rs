@@ -3,7 +3,8 @@
 //! This module is the single place where "type name + JSON args → `BlobAssetDef`"
 //! is implemented.
 use crate::authoring::AuthoringError;
-use concinnity_engine::ecs::{AssetOrigin, BlobAssetDef};
+use concinnity_engine::blob::BlobAssetDef;
+use concinnity_engine::ecs::AssetOrigin;
 
 use crate::authoring::registry::{RegisteredType, Registration};
 

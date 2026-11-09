@@ -280,45 +280,11 @@ pub fn build_light_uniforms(
     }
 }
 
-/// Whether the clustered forward path should bin this frame.
-///
-/// The binning kernel bins both the local lights and the reflection probes'
-/// influence boxes, so it runs whenever either is live: `local_light_count` is
-/// the live light count the forward pass would iterate, `probe_count` the live
-/// probe records. It dispatches one thread per cluster over the whole grid
-/// regardless of what it finds, so a world with neither skips it.
-///
-/// This single-sources two things that must agree: `ClusterParams::use_clusters`
-/// and `FrameGraphInputs::clustering_enabled`. When it is false the
-/// forward pass iterates `num_local_lights` directly (zero iterations) and every
-/// probe reader walks the whole (empty) probe set, instead of reading a cluster
-/// list the dropped pass never wrote, so a stale list from an earlier frame is
-/// never sampled.
-pub fn clustering_active(local_light_count: i32, probe_count: usize) -> bool {
-    local_light_count > 0 || probe_count > 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn clustered_binning_needs_a_light_or_a_probe() {
-        assert!(clustering_active(1, 0));
-        assert!(clustering_active(0, 1));
-        assert!(clustering_active(4, 12));
-        // Every local light despawned and no probe baked: nothing to bin.
-        assert!(!clustering_active(0, 0));
-    }
-
-    #[test]
-    fn clustered_binning_ignores_a_negative_count() {
-        // `num_local_lights` is a signed i32 in the uniform block.
-        assert!(!clustering_active(-1, 0));
-        assert!(clustering_active(-1, 2));
-    }
-
     use alloc::vec;
+
     fn dir(direction: [f32; 3], color: [f32; 3], intensity: f32) -> DirectionalLight {
         DirectionalLight {
             direction,

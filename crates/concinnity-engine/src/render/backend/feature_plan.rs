@@ -3,8 +3,8 @@
 //! live quality toggle both resolve the same plan, so a toggle produces the
 //! features a launch with the same settings would.
 
+use crate::render::config::ResolvedGraphics;
 use crate::render::post::rt_reflections::RtReflectionSettings;
-use crate::settings::ResolvedGraphics;
 
 /// What the backend reports about itself when resolving a [`FeaturePlan`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

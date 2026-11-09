@@ -5,7 +5,7 @@ use ash::vk;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
 use concinnity_engine::render::buffers::retire_pool::RetirePool;
-use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::render::config::ResolvedGraphics;
 
 use super::InitGpu;
 use super::effects::shared_post_device;

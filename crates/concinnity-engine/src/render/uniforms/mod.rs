@@ -31,7 +31,7 @@ pub use daylight::{DaylightBlock, DaylightBody, DaylightView};
 pub use geometry::{
     DecalParams, DecalView, GpuParticle, LineView, ModelHistoryParams, ParticleView, SkinParams,
 };
-pub use post::{AutoExposureParams, ExposureMeasurement, HizParams, HizSpdParams, TaaParams};
+pub use post::{AutoExposureParams, HizParams, HizSpdParams, TaaParams};
 pub use probe::{
     DEFAULT_PROBE_RECORD_CAPACITY, ProbePrefilterParams, ProbeSet, ProbeUniforms,
     grown_probe_capacity,

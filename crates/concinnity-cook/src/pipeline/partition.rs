@@ -2,7 +2,7 @@
 //! and resource assets, each queued for the resource stream.
 
 use concinnity_core::math::SaturatingFrom;
-use concinnity_engine::ecs::BlobAssetDef;
+use concinnity_engine::blob::BlobAssetDef;
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::resource::ResourceHandles;
 
@@ -64,7 +64,7 @@ pub(super) fn partition_components(
 mod tests {
     use super::*;
     use crate::pipeline::fixtures::wja;
-    use concinnity_engine::blob::ResourceKind;
+    use concinnity_engine::ecs::ResourceKind;
     use concinnity_host::thread::asset_id;
 
     fn handles_for(assets: &[WorldJsonlAsset]) -> ResourceHandles {

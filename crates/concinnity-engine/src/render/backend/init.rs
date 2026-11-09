@@ -15,11 +15,11 @@ use crate::gfx::render_types::{
     SpotShadowData, clone_reserve,
 };
 use crate::render::backend::RenderBackend;
+use crate::render::config::ResolvedGraphics;
 use crate::render::decal::DecalRecord;
 use crate::render::environment::volumetric_fog::FogSettings;
 use crate::render::particles::ParticleEmitterRecord;
 use crate::render::rt_accel::geom::RtDynamicMode;
-use crate::settings::ResolvedGraphics;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;

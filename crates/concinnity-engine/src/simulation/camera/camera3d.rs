@@ -309,7 +309,7 @@ impl Camera3D {
     ///
     /// A pose the camera did not travel to is a cut, and needs one raised on
     /// the same tick
-    /// ([`raise_camera_cut`](crate::render::temporal::history_reset::raise_camera_cut)
+    /// ([`raise_camera_cut`](crate::protocol::raise_camera_cut)
     /// from an application's system). Otherwise a jump too small to recognize on its
     /// own blends the old view into the new one.
     pub fn set_pose(&mut self, position: [f32; 3], yaw: f32, pitch: f32) {

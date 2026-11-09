@@ -43,7 +43,7 @@
 //! `ComponentMask` ceiling); the list is far shorter, so position keeps it there.
 
 use crate::define_components;
-use crate::ecs::{BlobAssetDef, Component, PayloadLocator};
+use crate::ecs::{Component, PayloadLocator};
 use crate::error::AssetError;
 
 /// The one component list. `$cb` is a macro that receives the `Variant => Type`
@@ -557,9 +557,9 @@ mod tests {
             ..Prop::default()
         };
         let bytes = postcard::to_allocvec(&prop).expect("a prop encodes");
-        let asset =
-            ComponentAsset::from_baked(&baked(ComponentTag::Prop as u8, bytes, Some(AssetId(7))))
-                .expect("the record loads");
+        let asset = baked(ComponentTag::Prop as u8, bytes, Some(AssetId(7)))
+            .component()
+            .expect("the record loads");
         let ComponentAsset::Prop(loaded) = asset else {
             panic!("expected a prop");
         };
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn a_record_no_tag_claims_is_rejected() {
         assert_eq!(
-            ComponentAsset::from_baked(&baked(u8::MAX, Vec::new(), None)).err(),
+            baked(u8::MAX, Vec::new(), None).component().err(),
             Some(AssetError::UnknownComponent {
                 discriminant: u8::MAX
             })

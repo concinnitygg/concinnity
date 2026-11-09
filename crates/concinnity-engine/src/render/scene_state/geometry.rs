@@ -7,6 +7,7 @@
 //! vertex region); a chunk keeps mesh-relative ones and draws through
 //! `base_vertex`, since it can land past the `u16` index range.
 
+use crate::gfx::render_types::CaptureTiles;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -83,20 +84,6 @@ pub struct GeometryPlacement {
     /// The coarse grid a capture draws planet tiles with, written beside
     /// [`Self::planet_tile_indices`] when those are a tile's full grid.
     pub capture_tiles: Option<CaptureTiles>,
-}
-
-/// The index range a capture draws each planet tile through in place of its
-/// full grid, at the tile's own `base_vertex`: the same corners stepped
-/// [`crate::environment::planet::CAPTURE_TILE_STRIDE`] at a time, far fewer triangles for a
-/// view that cannot resolve them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CaptureTiles {
-    /// First index, in `u32` elements.
-    pub offset: u32,
-    /// Indices in the coarse grid.
-    pub count: u32,
-    /// Indices in the full grid a draw must hold to be drawn coarse.
-    pub full_count: u32,
 }
 
 /// An index range in the chunk pool that many chunks draw.

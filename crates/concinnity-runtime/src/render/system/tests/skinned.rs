@@ -1,6 +1,7 @@
 use super::*;
+use concinnity_engine::blob::ResourceRecord;
 use concinnity_engine::components::{CharacterCapsule, SkinnedMesh};
-use concinnity_engine::ecs::{ResourceKind, ResourceRecord};
+use concinnity_engine::ecs::ResourceKind;
 use concinnity_engine::render::frame::queues::ActiveRenderQueues;
 use concinnity_engine::simulation::animation::skinned_mesh_map::SkinnedMeshNameIndex;
 

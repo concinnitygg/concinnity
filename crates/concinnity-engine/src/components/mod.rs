@@ -75,7 +75,28 @@ pub use crate::presentation::ui::text_label::{
     ColorRun, ColorRunError, TextAlign, TextLabel, color_run_error,
 };
 pub use crate::presentation::ui::ui_action::{SettingVerb, UiAction};
-pub use crate::presentation::window::{Window, WindowMode};
+pub use crate::render::config::ambient_occlusion::{AmbientOcclusion, AmbientOcclusionOverrides};
+pub use crate::render::config::anti_aliasing::{
+    AaMode, AntiAliasing, AntiAliasingOverrides, HDR_MULTISAMPLE_COUNT, UpscaleQuality,
+    UpscalerBackend, hdr_sample_count,
+};
+pub use crate::render::config::background::{Background, BackgroundOverrides};
+pub use crate::render::config::bloom::{Bloom, BloomOverrides};
+pub use crate::render::config::culling::{Culling, CullingOverrides};
+pub use crate::render::config::display::{Display, DisplayOverrides};
+pub use crate::render::config::exposure::{Exposure, ExposureOverrides};
+pub use crate::render::config::frame_pacing::{FramePacing, FramePacingOverrides};
+pub use crate::render::config::graphics_config::{GRAPHICS_SECTIONS, GraphicsConfig};
+pub use crate::render::config::indirect_lighting::{
+    IndirectLighting, IndirectLightingOverrides, IndirectTechnique,
+};
+pub use crate::render::config::pass_resolution::PassResolution;
+pub use crate::render::config::planet_detail::{PlanetDetail, PlanetDetailOverrides};
+pub use crate::render::config::reflections::{Reflections, ReflectionsOverrides};
+pub use crate::render::config::shadows::{ShadowUpdate, Shadows, ShadowsOverrides};
+pub use crate::render::config::streaming::StreamingConfig;
+pub use crate::render::config::texture_filtering::{TextureFiltering, TextureFilteringOverrides};
+pub use crate::render::config::vignette::{Vignette, VignetteOverrides};
 pub use crate::render::decal::Decal;
 pub use crate::render::environment::atmosphere::Atmosphere;
 pub use crate::render::environment::clouds::Cloud;
@@ -111,32 +132,6 @@ pub use crate::resource::skinned_mesh::{
 };
 pub use crate::resource::texture::Texture;
 pub use crate::settings::command::{SettingCommand, SettingOp};
-pub use crate::settings::graphics::ambient_occlusion::{
-    AmbientOcclusion, AmbientOcclusionOverrides,
-};
-pub use crate::settings::graphics::anti_aliasing::{
-    AaMode, AntiAliasing, AntiAliasingOverrides, HDR_MULTISAMPLE_COUNT, UpscaleQuality,
-    UpscalerBackend, hdr_sample_count,
-};
-pub use crate::settings::graphics::background::{Background, BackgroundOverrides};
-pub use crate::settings::graphics::bloom::{Bloom, BloomOverrides};
-pub use crate::settings::graphics::config::{GRAPHICS_SECTIONS, GraphicsConfig};
-pub use crate::settings::graphics::culling::{Culling, CullingOverrides};
-pub use crate::settings::graphics::display::{Display, DisplayOverrides};
-pub use crate::settings::graphics::exposure::{Exposure, ExposureOverrides};
-pub use crate::settings::graphics::frame_pacing::{FramePacing, FramePacingOverrides};
-pub use crate::settings::graphics::indirect_lighting::{
-    IndirectLighting, IndirectLightingOverrides, IndirectTechnique,
-};
-pub use crate::settings::graphics::pass_resolution::PassResolution;
-pub use crate::settings::graphics::planet_detail::{PlanetDetail, PlanetDetailOverrides};
-pub use crate::settings::graphics::reflections::{Reflections, ReflectionsOverrides};
-pub use crate::settings::graphics::shadows::{ShadowUpdate, Shadows, ShadowsOverrides};
-pub use crate::settings::graphics::streaming::StreamingConfig;
-pub use crate::settings::graphics::texture_filtering::{
-    TextureFiltering, TextureFilteringOverrides,
-};
-pub use crate::settings::graphics::vignette::{Vignette, VignetteOverrides};
 pub use crate::simulation::animation::character_rig::CharacterRig;
 pub use crate::simulation::animation::character_shape::{
     CharacterShape, JointProportion, ResolvedSliders, ShapeSlider,
@@ -189,6 +184,7 @@ pub use crate::story::definition::{
     Story, StoryChoice, StoryCompareOp, StoryCondition, StoryGate, StoryImage, StoryNode, StoryOp,
     StoryPage, StoryPlayback, StoryReload, StoryScaffold, StorySpeaker, StoryStage,
 };
+pub use crate::window::{Window, WindowMode};
 pub use concinnity_derive::Vocabulary;
 pub use vocabulary::Vocabulary;
 pub(crate) use vocabulary::vocabulary_synonyms;
@@ -222,4 +218,4 @@ pub use crate::presentation::hud::stat_hud::StatHud;
 
 // Bounds and capacities the engine reads off the schema. Not vocabulary: they
 // declare nothing, so they stay out of both namespaces.
-pub use crate::settings::graphics::indirect_lighting::DEFAULT_SSGI_RAYS;
+pub use crate::render::config::indirect_lighting::DEFAULT_SSGI_RAYS;

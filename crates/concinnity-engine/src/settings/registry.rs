@@ -11,6 +11,7 @@
 //!
 //! [`options`]: crate::settings::options
 
+use crate::input::system::DEFAULT_GAMEPAD_DEADZONE;
 use alloc::format;
 use alloc::string::{String, ToString};
 use concinnity_core::math::{SaturatingFrom, round};
@@ -18,10 +19,10 @@ use concinnity_core::math::{SaturatingFrom, round};
 use crate::components::{ControlsCommand, SettingOp, UpscalerBackend};
 use crate::gfx::auto_exposure::EV_LIMIT;
 use crate::render::backend::{DeviceCapabilities, GpuVendor};
+use crate::render::config::ResolvedGraphics;
 use crate::settings::rows::{GRAPHICS_SLIDERS, GraphicsSlider, Lens};
 use crate::settings::{
-    DEFAULT_GAMEPAD_LOOK_SENSITIVITY, GraphicsApiTrial, ResolvedGraphics, SettingKey,
-    StoredSettings,
+    DEFAULT_GAMEPAD_LOOK_SENSITIVITY, GraphicsApiTrial, SettingKey, StoredSettings,
 };
 use concinnity_core::platform::Platform;
 
@@ -127,10 +128,6 @@ pub const DEFAULT_VOLUME: f32 = 1.0;
 /// Effective mouse sensitivity (radians per pixel) when the user has never
 /// chosen one. Matches `CameraController`'s authored default.
 const DEFAULT_MOUSE_SENSITIVITY: f32 = 0.0015;
-
-/// Effective gamepad stick deadzone (deflection fraction) when the user has
-/// never chosen one.
-pub const DEFAULT_GAMEPAD_DEADZONE: f32 = 0.15;
 
 /// Effective vertical FOV in degrees when the user has never chosen one.
 /// Matches `Camera3D`'s authored default.

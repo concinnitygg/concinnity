@@ -7,8 +7,8 @@ use ash::vk;
 use concinnity_engine::gfx::auto_exposure;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{PlanarBudget, WorldFx};
+use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
-use concinnity_engine::settings::ResolvedGraphics;
 
 use super::ray_tracing::RtResources;
 use super::{Features, InitGpu};

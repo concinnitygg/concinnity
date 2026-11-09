@@ -107,9 +107,10 @@ mod tests {
     use super::*;
     use crate::blob::cache::CacheMeta;
     use crate::blob::encode::encode_cnb;
-    use crate::blob::schema::{BlobAssetDef, BlobMeta, ResourceKind, ResourceRecord};
+    use crate::blob::schema::{BlobAssetDef, BlobMeta, ResourceRecord};
     use crate::blob::{BLOB_MAGIC, kind::BlobKind};
     use crate::ecs::PayloadLocator;
+    use crate::ecs::ResourceKind;
     use alloc::vec;
     use alloc::vec::Vec;
 

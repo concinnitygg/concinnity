@@ -2,13 +2,13 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use super::super::test_support::Fixture;
 use super::*;
 use crate::components::{
     AaMode, AmbientOcclusion, AmbientOcclusionOverrides, ExposureOverrides,
     IndirectLightingOverrides, PlanetDetailOverrides, ShadowsOverrides,
 };
 use crate::render::backend::recording::Call;
+use crate::render::live_preview::test_support::Fixture;
 use crate::settings::QualityPreset;
 
 fn fixture() -> Fixture {

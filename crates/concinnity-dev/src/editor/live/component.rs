@@ -84,7 +84,7 @@ pub(super) fn bake(
         args_bytes,
         payload: None,
     };
-    Ok(ComponentAsset::from_baked(&def)?)
+    Ok(def.component()?)
 }
 
 #[cfg(test)]

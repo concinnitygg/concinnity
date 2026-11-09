@@ -12,16 +12,16 @@ use crate::budget::drift::{DriftTracker, DriftVerdict, MemoryDrift};
 use crate::budget::{MemoryBudget, ResidentMemory};
 use crate::components::{Camera3D, FrameInput};
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Clock, PipelineContext, StepResult, System, World};
+use crate::ecs::{Clock, PipelineContext, Resources, StepResult, System, World};
 use crate::environment::planet::{PlanetEdited, PlanetFrame, points_per_radian};
 use crate::render::backend::render_mode::RenderMode;
+use crate::render::config::planet_detail::PlanetDetail;
 use crate::render::frame::extract::CameraRelativeView;
 use crate::render::frame::ops::OpFailure;
 use crate::render::frame::queues::{ActiveRenderQueues, RenderQueues};
 use crate::render::overlay::OverlayFrame;
 use crate::render::scene::flow::{ActiveSceneFlow, SceneFlow, ScenePins};
 use crate::render::streaming::scene_residency::{SceneLoadState, SceneResidencyStatus};
-use crate::settings::system::planet_finest_cell_size;
 use crate::transform::IDENTITY;
 
 /// Where a host's load threads meet the pools.
@@ -128,17 +128,33 @@ impl StreamingRuntime {
 
 /// Drives texture, mesh, chunk, planet-tile and shader residency against the
 /// streaming budgets, and publishes the camera-relative view the draw takes.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamingSystem {
     // Compared against the published `SceneResidencyStatus` before
     // republishing.
     scene_status_scratch: Vec<(AssetId, SceneLoadState, f32)>,
+    // How wide a planet's finest terrain cells get, in meters, as the world's
+    // resources settle it each frame.
+    finest_cell_size: fn(&Resources) -> u32,
+}
+
+impl Default for StreamingSystem {
+    fn default() -> Self {
+        Self {
+            scene_status_scratch: Vec::new(),
+            finest_cell_size: |_| PlanetDetail::default().finest_cell_size,
+        }
+    }
 }
 
 impl StreamingSystem {
-    /// The system for a world that runs with a window.
-    pub fn for_world(world: &World) -> Option<Self> {
-        RenderMode::renders_in(world).then(Self::default)
+    /// The system for a world that runs with a window, reading a planet's
+    /// finest terrain cell size through `finest_cell_size`.
+    pub fn for_world(world: &World, finest_cell_size: fn(&Resources) -> u32) -> Option<Self> {
+        RenderMode::renders_in(world).then(|| Self {
+            finest_cell_size,
+            ..Self::default()
+        })
     }
 
     // The throttled (~2x/sec) RAM back-off and drift sample, skipped when no
@@ -213,7 +229,7 @@ impl System for StreamingSystem {
                         fov_y_degrees,
                         ctx.resource::<FrameInput>().map_or(0.0, |i| i.viewport[1]),
                     ),
-                    finest_cell_size: f64::from(planet_finest_cell_size(ctx.resources)),
+                    finest_cell_size: f64::from((self.finest_cell_size)(ctx.resources)),
                 },
             });
         // Peek (not take) the overlay's world-hidden flag: the frame submit

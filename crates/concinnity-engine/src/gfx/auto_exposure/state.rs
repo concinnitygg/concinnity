@@ -4,8 +4,8 @@
 // only the reduction and the EMA live here, so both can be unit-tested
 // without a GPU.
 
+use super::ExposureMeasurement;
 use super::{AutoExposureSettings, night_vision_weight};
-use crate::render::uniforms::ExposureMeasurement;
 use concinnity_core::math::{exp, exp2};
 
 // How much faster the exposure adapts when the scene brightens than when it

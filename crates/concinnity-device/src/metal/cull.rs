@@ -6,9 +6,9 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::frustum::Frustum;
+use concinnity_engine::gfx::render_types::CaptureTiles;
 use concinnity_engine::gfx::{lod, render_types};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::shader::programs::abi::cull::metal as cull;
 use concinnity_engine::render::shader::programs::abi::cull::{
     CULL_GROUP, SCAN_GROUP, SCATTER_GROUP,
@@ -762,7 +762,10 @@ impl MtlContext {
         daylight: &DaylightBlock,
     ) -> render_types::GpuCullVariants {
         let mut variants = *base;
-        variants.set_view(self.grass_lod.map_or(0.0, |l| l.fade_start()), daylight);
+        variants.set_view(
+            self.grass_lod.map_or(0.0, |l| l.fade_start()),
+            &daylight.variant_sky(),
+        );
         variants
     }
 
@@ -774,7 +777,7 @@ impl MtlContext {
     ) -> BucketRegions<'a> {
         let live = variants.live_buckets(
             self.cull.world_pipelines.bucket_count(),
-            &DaylightBlock::OFF,
+            &DaylightBlock::OFF.variant_sky(),
         );
         BucketRegions {
             variants,
@@ -788,7 +791,7 @@ impl MtlContext {
     pub(in crate::metal) fn main_regions(&self) -> BucketRegions<'_> {
         let live = self.cull.variants.live_buckets(
             self.cull.world_pipelines.bucket_count(),
-            &self.state.view.daylight,
+            &self.state.view.daylight.variant_sky(),
         );
         BucketRegions {
             variants: &self.cull.variants,

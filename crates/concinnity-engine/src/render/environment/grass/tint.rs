@@ -11,7 +11,8 @@
 use alloc::vec::Vec;
 
 use super::GrassTerrain;
-use super::canopy::{CanopyField, CanopyRange};
+use super::canopy::CanopyField;
+use crate::gfx::render_types::CanopyRange;
 
 /// A terrain's far field: the density each of its far-field layers grows at
 /// each grid corner, and the run of the canopy block's layers it shades with.

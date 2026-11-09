@@ -22,13 +22,14 @@ use concinnity_engine::launch::{LaunchArgs, LaunchRequest};
 use concinnity_engine::protocol::{FrameRateCap, MenuActive, MenuOverride, ScreenStack};
 use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::{GpuProfile, GpuTier, GpuVendor};
+use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::shader::compiled::CompiledProgram;
 use concinnity_engine::render::{backend, backend::error, overlay::text};
 use concinnity_engine::resource::{
     ColorLutTable, EnvironmentMapTable, FontTable, MaterialTable, MeshTable, SkinnedMeshTable,
     TextureTable,
 };
-use concinnity_engine::settings::{ResolvedGraphics, SettingKey};
+use concinnity_engine::settings::SettingKey;
 use concinnity_host::store::blob::BlobData;
 use std::sync::{Arc, Mutex};
 
@@ -66,20 +67,20 @@ type PendingAdd = Box<dyn FnOnce(&mut World)>;
 struct WorldBuilder {
     pending: Vec<PendingAdd>,
     section: Vec<u8>,
-    texture_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    texture_records: Vec<concinnity_engine::blob::ResourceRecord>,
     // Material data-resource records; each `push_textured_quad` bakes one Material
     // into `data_bytes` at the next handle, mirroring cook.
-    material_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    material_records: Vec<concinnity_engine::blob::ResourceRecord>,
     // Mesh resource records; each `push_textured_quad` Mesh takes the next
     // handle in declaration order, matching the runtime's mesh-source table.
-    mesh_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    mesh_records: Vec<concinnity_engine::blob::ResourceRecord>,
     // The singleton / pooled media kinds `push_resource` fills: font atlases,
     // the color-grading LUT, the IBL environment, and skinned geometry. Each
     // stays empty unless a test authors one.
-    font_records: Vec<concinnity_engine::ecs::ResourceRecord>,
-    color_lut_records: Vec<concinnity_engine::ecs::ResourceRecord>,
-    env_map_records: Vec<concinnity_engine::ecs::ResourceRecord>,
-    skinned_records: Vec<concinnity_engine::ecs::ResourceRecord>,
+    font_records: Vec<concinnity_engine::blob::ResourceRecord>,
+    color_lut_records: Vec<concinnity_engine::blob::ResourceRecord>,
+    env_map_records: Vec<concinnity_engine::blob::ResourceRecord>,
+    skinned_records: Vec<concinnity_engine::blob::ResourceRecord>,
 }
 
 impl WorldBuilder {
@@ -159,7 +160,7 @@ impl WorldBuilder {
         let _ = mesh;
         let mesh_handle = MeshHandle::new(u32::saturating_from(self.mesh_records.len()));
         self.mesh_records
-            .push(concinnity_engine::ecs::ResourceRecord {
+            .push(concinnity_engine::blob::ResourceRecord {
                 resource_kind: concinnity_engine::ecs::ResourceKind::Mesh,
                 handle: mesh_handle.0,
                 payload: Some(mesh_loc),
@@ -171,7 +172,7 @@ impl WorldBuilder {
         // first texture) regardless of any texture's asset id.
         let handle = u32::saturating_from(self.texture_records.len());
         self.texture_records
-            .push(concinnity_engine::ecs::ResourceRecord {
+            .push(concinnity_engine::blob::ResourceRecord {
                 resource_kind: concinnity_engine::ecs::ResourceKind::Texture,
                 handle,
                 payload: Some(tex_loc),
@@ -188,7 +189,7 @@ impl WorldBuilder {
         })
         .unwrap();
         self.material_records
-            .push(concinnity_engine::ecs::ResourceRecord {
+            .push(concinnity_engine::blob::ResourceRecord {
                 resource_kind: concinnity_engine::ecs::ResourceKind::Material,
                 handle: mat_handle,
                 payload: None,
@@ -320,7 +321,7 @@ fn step(gs: &mut GraphicsSystem, world: &mut World) -> StepResult {
     use concinnity_engine::ecs::System;
     let mut ctx = world.context();
     concinnity_engine::render::overlay::OverlaySystem::new().step(&mut ctx);
-    concinnity_engine::simulation::spawn::SpawnSystem::new().step(&mut ctx);
+    concinnity_engine::render::spawn::SpawnSystem::new().step(&mut ctx);
     concinnity_engine::settings::system::SettingsSystem::new().step(&mut ctx);
     concinnity_engine::render::streaming::pools::StreamingSystem::default().step(&mut ctx);
     let result = gs.run_step(&mut ctx);
@@ -431,7 +432,7 @@ fn push_skinned_payload(b: &mut WorldBuilder, name: AssetId, sm: SkinnedMesh, pa
     let handle = u32::saturating_from(b.skinned_records.len());
     let data = postcard::to_allocvec(&(name.0, sm)).unwrap();
     b.skinned_records
-        .push(concinnity_engine::ecs::ResourceRecord {
+        .push(concinnity_engine::blob::ResourceRecord {
             resource_kind: concinnity_engine::ecs::ResourceKind::SkinnedMesh,
             handle,
             payload: Some(locator),

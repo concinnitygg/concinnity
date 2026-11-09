@@ -5,7 +5,7 @@
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::init::{RenderLaunch, SceneData};
-use concinnity_engine::settings::ResolvedGraphics;
+use concinnity_engine::render::config::ResolvedGraphics;
 
 use super::InitGpu;
 use crate::directx::context::{RtState, SceneAssets, Targets};

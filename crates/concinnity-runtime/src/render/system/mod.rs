@@ -202,7 +202,7 @@ impl GraphicsSystem {
     fn detect_display(
         &self,
         ctx: &PipelineContext<'_>,
-    ) -> Option<concinnity_engine::presentation::window::display_mode::DisplayProbe> {
+    ) -> Option<concinnity_engine::window::display_mode::DisplayProbe> {
         #[cfg(test)]
         if self.test_hooks.is_some() {
             return None;

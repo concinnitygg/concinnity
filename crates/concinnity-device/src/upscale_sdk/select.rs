@@ -3,11 +3,11 @@
 
 use concinnity_engine::components::UpscalerBackend;
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::output::dlss::DlssPreset;
 use concinnity_engine::render::output::upscaler::{
     UpscalerAvailability, VendorUpscaler, requested_upscaler, upscaler_order,
 };
-use concinnity_engine::settings::ResolvedGraphics;
 
 /// What temporal upscaling was asked for: the upscaler, and the render preset
 /// DLSS runs if it is the one built. Kept by a backend so a resize rebuilds

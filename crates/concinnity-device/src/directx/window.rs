@@ -3,9 +3,9 @@
 
 use concinnity_engine::components;
 use concinnity_engine::input::snapshot::InputSnapshot;
-use concinnity_engine::presentation::window::clipboard::Clipboard;
-use concinnity_engine::presentation::window::display_mode;
 use concinnity_engine::render::backend::WindowControl;
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode;
 
 use super::context::DxContext;
 use crate::win32::window;

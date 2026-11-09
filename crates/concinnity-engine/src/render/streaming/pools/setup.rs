@@ -20,7 +20,7 @@ use crate::ecs::asset_id::AssetId;
 use crate::environment::planet::{LocalFrame, PlanetFrame};
 use crate::geometry::ChunkBlockType;
 use crate::geometry::chunk_coord::ChunkCoord;
-use crate::render::environment::grass::CanopyRange;
+use crate::gfx::render_types::CanopyRange;
 use crate::render::material_entry::MaterialEntry;
 
 /// The chunk content a world streams: a `VoxelWorld` or a Planet, never both.

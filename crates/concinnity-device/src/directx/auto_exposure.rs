@@ -8,10 +8,11 @@
 //! invisible at human-scale eye-adaptation rates. Mirrors `metal/auto_exposure.rs`.
 
 use concinnity_engine::gfx::auto_exposure;
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::abi::exposure::BUILD_GROUP;
-use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
+use concinnity_engine::render::uniforms::AutoExposureParams;
 use windows::Win32::Graphics::Direct3D12::*;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};

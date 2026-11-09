@@ -8,8 +8,10 @@ use alloc::string::String;
 use alloc::vec::Vec;
 pub use concinnity_core::fanout::ScheduleMode;
 
+mod history_reset;
 mod particle_bursts;
 
+pub use history_reset::{HistoryResetCauses, PendingHistoryReset, raise_camera_cut};
 pub use particle_bursts::{BURST_MERGE_REACH, MAX_FRAME_BURSTS, ParticleBurst, ParticleBursts};
 
 use crate::blob::PhysicsBudgetRecord;

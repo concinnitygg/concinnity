@@ -22,14 +22,10 @@
 //! device cannot run.
 
 mod diff;
-mod graphics;
 #[cfg(test)]
 mod tests;
-mod tunables;
 
 pub use diff::SettingsDiff;
-pub use graphics::ResolvedGraphics;
-pub use tunables::post_process_tunables;
 
 use alloc::borrow::Cow;
 
@@ -37,6 +33,7 @@ use crate::components::{GraphicsConfig, StreamingConfig, UpscalerBackend};
 use crate::gfx::render_types::PostProcessTunables;
 use crate::render::backend::DeviceCapabilities;
 use crate::render::backend::init::ShadowCadence;
+use crate::render::config::ResolvedGraphics;
 use crate::render::output::upscaler::{VendorUpscaler, preferred_upscaler};
 use crate::settings::quality::{QualityCeiling, clamp_shadow_update, more_aggressive_upscale};
 use crate::settings::rows::{GRAPHICS_SLIDERS, QUALITY_CYCLES, QUALITY_TOGGLES};

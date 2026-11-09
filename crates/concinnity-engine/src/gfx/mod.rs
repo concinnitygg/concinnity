@@ -15,6 +15,7 @@ pub mod auto_exposure;
 pub mod camera;
 pub mod cubemap;
 pub mod cull_status;
+pub mod dropdown;
 pub mod frustum;
 pub mod image_decode;
 pub mod jitter;

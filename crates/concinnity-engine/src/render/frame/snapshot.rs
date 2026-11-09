@@ -48,7 +48,7 @@ pub struct FrameScalars {
     /// is every frame of a world whose sky does not turn.
     pub directional: Option<crate::render::light::lights::DirectionalLightSet>,
     /// Why the temporal history is invalid this frame, if it is.
-    pub history_reset: crate::render::temporal::history_reset::HistoryResetCauses,
+    pub history_reset: crate::protocol::HistoryResetCauses,
     /// The move of the simulated frame since the last drawn frame, if it
     /// moved: what the temporal history is carried through.
     pub rebase: Option<crate::environment::planet::Rebase>,
@@ -84,7 +84,7 @@ impl Default for FrameScalars {
             menu_active: false,
             sky_rot: crate::environment::sky::SkyOrientation::IDENTITY_ROWS,
             directional: None,
-            history_reset: crate::render::temporal::history_reset::HistoryResetCauses::NONE,
+            history_reset: crate::protocol::HistoryResetCauses::NONE,
             rebase: None,
             atmosphere: None,
             daylight: crate::render::uniforms::DaylightBlock::OFF,

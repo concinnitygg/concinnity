@@ -1128,7 +1128,7 @@ impl DxContext {
     // optional `resolve` half), so a SSGI-only build with no resolve is skipped.
     pub(crate) fn update_quality_params(
         &mut self,
-        g: &concinnity_engine::settings::ResolvedGraphics,
+        g: &concinnity_engine::render::config::ResolvedGraphics,
     ) {
         if let (Some(live), Some(res)) = (g.ssao(), self.ssao.resources.as_mut()) {
             res.settings = live;

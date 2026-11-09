@@ -17,9 +17,9 @@ mod binding;
 pub(crate) mod command;
 #[cfg(test)]
 mod equivalence_tests;
-pub(crate) mod graphics;
 mod key;
 pub mod levels;
+pub mod live_lighting;
 pub mod quality;
 pub mod registry;
 pub mod resolve;
@@ -32,8 +32,7 @@ pub use binding::{SettingField, SettingGroup};
 pub use key::{SettingKey, SettingKind};
 pub use quality::{QualityCeiling, QualityPreset};
 pub use resolve::{
-    ResolvedGraphics, ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets,
-    WorldSettings,
+    ResolvedSettings, SceneOverride, SettingsDiff, SettingsLayers, WorldAssets, WorldSettings,
 };
 pub use stored::{SettingsRevision, StoredSettings};
 pub use user::{GraphicsApiTrial, UserGraphicsSettings};

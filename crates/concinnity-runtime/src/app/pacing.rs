@@ -6,8 +6,9 @@
 
 use concinnity_engine::ecs::World;
 
+use concinnity_engine::launch::frame_cap;
 use concinnity_engine::protocol::WindowMinimized;
-use concinnity_engine::render::frame::submit::{FramePace, PaceWait, frame_cap};
+use concinnity_engine::render::frame::submit::{FramePace, PaceWait};
 use std::time::Instant;
 
 // Holds each frame's start to the deadline the engine's `FramePace` plans: sleeps to

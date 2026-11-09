@@ -4,7 +4,6 @@
 //! keeps the world's own copy of the edited state in step.
 
 pub mod draw;
-pub mod lighting;
 pub mod material;
 pub mod planet;
 pub mod shape;
@@ -19,15 +18,15 @@ fn with_ops<R>(world: &mut World, f: impl FnOnce(&mut RenderOps) -> R) -> Option
     ActiveRenderQueues::with(world.context().resources, |queues| f(&mut queues.ops))
 }
 
-// Whether the world has an op queue to record into.
-fn has_queue(world: &World) -> bool {
+/// Whether the world has an op queue to record into.
+pub(crate) fn has_queue(world: &World) -> bool {
     world
         .resource::<ActiveRenderQueues>()
         .is_some_and(|slot| slot.0.is_some())
 }
 
 #[cfg(test)]
-mod test_support {
+pub(crate) mod test_support {
     use alloc::vec::Vec;
 
     use crate::ecs::World;
@@ -46,14 +45,14 @@ mod test_support {
     }
 
     /// A world with an empty op queue, and a backend to replay it into.
-    pub(super) struct Fixture {
-        pub(super) world: World,
-        pub(super) backend: RecordingBackend,
-        pub(super) calls: SharedRecording,
+    pub(crate) struct Fixture {
+        pub(crate) world: World,
+        pub(crate) backend: RecordingBackend,
+        pub(crate) calls: SharedRecording,
     }
 
     impl Fixture {
-        pub(super) fn new(mut world: World) -> Self {
+        pub(crate) fn new(mut world: World) -> Self {
             with_queue(&mut world);
             let (calls, backend) = recording_backend();
             Self {
@@ -65,7 +64,7 @@ mod test_support {
 
         /// Replay what the queue recorded, park the queue again, and report
         /// every call the backend has seen.
-        pub(super) fn replay(&mut self) -> Vec<Call> {
+        pub(crate) fn replay(&mut self) -> Vec<Call> {
             let backend = &mut self.backend;
             ActiveRenderQueues::with(self.world.context().resources, |queues| {
                 queues.ops.replay(backend)
@@ -75,7 +74,7 @@ mod test_support {
         }
 
         /// Forget the calls replayed so far.
-        pub(super) fn clear(&self) {
+        pub(crate) fn clear(&self) {
             self.calls.lock().calls.clear();
         }
     }

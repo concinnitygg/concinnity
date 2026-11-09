@@ -1,7 +1,7 @@
 //! `SettingsSystem`: applies the runtime command batches `UiInputSystem` produces
 //! (`SettingCommand` for settings-menu changes, `SceneCommand` for imperative scene
 //! jumps), recording their backend effects into the frame's op queue, edits
-//! the [`StoredSettings`](crate::settings::StoredSettings) resource the host
+//! the [`StoredSettings`] resource the host
 //! persists, and publishes the per-frame HUD-preference state:
 //!   mod.rs      system + state + scene jumps + HUD-state publish
 //!   init.rs     the state graphics init resolves, and its init-time captures
@@ -24,20 +24,23 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::components::{
-    GamepadAction, GamepadMap, PlanetDetail, SceneCommand, StreamingConfig, Window, WindowMode,
+    ControlsCommand, GamepadAction, GamepadMap, PlanetDetail, SceneCommand, StreamingConfig,
+    Window, WindowMode,
 };
 use crate::ecs::asset_id::AssetId;
 use crate::input::keymap;
-use crate::presentation::window::display_mode;
+use crate::render::config::ResolvedGraphics;
+use crate::render::config::apply::ApplyPlan;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::{backend, frame::snapshot, scene::flow};
-use crate::settings::apply::{ApplyPlan, plan_apply};
+use crate::settings::apply::plan_apply;
 use crate::settings::quality::{ceiling_preset, resolve_ceiling};
 use crate::settings::{
-    GraphicsApiTrial, QualityCeiling, QualityPreset, ResolvedGraphics, ResolvedSettings,
-    SettingKey, SettingsLayers, SettingsRevision, UserGraphicsSettings, WorldSettings,
+    GraphicsApiTrial, QualityCeiling, QualityPreset, ResolvedSettings, SettingKey, SettingsLayers,
+    SettingsRevision, StoredSettings, UserGraphicsSettings, WorldSettings,
 };
+use crate::window::display_mode;
 use concinnity_core::platform::GraphicsApiStatus;
 
 mod apply;
@@ -221,6 +224,21 @@ impl core::fmt::Debug for SettingsState {
 }
 
 impl System for SettingsSystem {
+    // Hand the input system the controls the user stored, which it applies
+    // before reading its first packet.
+    fn init(&mut self, ctx: &mut PipelineContext<'_>) {
+        let Some(stored) = ctx.resource::<StoredSettings>() else {
+            return;
+        };
+        let controls = stored.controls_command();
+        ctx.events_mut::<ControlsCommand>().send(ControlsCommand {
+            keymap: controls.keymap,
+            gamepad_map: controls.gamepad_map,
+            gamepad_deadzone: controls.gamepad_deadzone,
+            ..ControlsCommand::default()
+        });
+    }
+
     fn step(&mut self, ctx: &mut PipelineContext<'_>) -> StepResult {
         Self::apply(ctx);
         // Written in the same step that made the change, so a tick that stops
@@ -248,7 +266,7 @@ pub(crate) fn record_plan(ops: &mut RenderOps, graphics: &ResolvedGraphics, plan
     }
     let graphics = graphics.clone();
     ops.record_with(move |backend, out| {
-        if let Err(e) = crate::settings::apply::apply_plan(backend, &graphics, &plan) {
+        if let Err(e) = crate::render::config::apply::apply_plan(backend, &graphics, &plan) {
             tracing::error!("SettingsSystem: settings apply failed: {e}");
             out.note(&e);
         }

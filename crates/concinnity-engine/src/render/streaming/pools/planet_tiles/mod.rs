@@ -27,9 +27,9 @@ use crate::environment::planet::{
     MAX_RESIDENT_TILES, PlanetFrame, PlanetShape, TileBoundsCache, TileId, TileLod, TileMesh,
     TileMorphFrame, TileView, tile_mesh,
 };
+use crate::gfx::render_types::CanopyRange;
 use crate::gfx::render_types::{self, DrawIndex, MaterialUniforms, TileSeams};
 use crate::render::backend::{ChunkMesh, PlanetChunk};
-use crate::render::environment::grass::CanopyRange;
 use crate::render::frame::ops::{OpFailure, RenderOps};
 use crate::render::material_entry::MaterialEntry;
 use crate::render::slots::render_slots::RenderSlots;

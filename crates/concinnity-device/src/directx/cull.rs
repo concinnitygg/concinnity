@@ -20,11 +20,11 @@ use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::gfx::cull_status::CullStatus;
 use concinnity_engine::gfx::frustum::{Frustum, Plane};
 use concinnity_engine::gfx::lod;
+use concinnity_engine::gfx::render_types::CaptureTiles;
 use concinnity_engine::gfx::render_types::{
     GpuCompactParams, MAX_SHADOWED_SPOTS, StreamLayout, culled_records,
 };
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
-use concinnity_engine::render::scene_state::CaptureTiles;
 use concinnity_engine::render::shader::programs::abi::cull::CULL_GROUP;
 use concinnity_engine::render::temporal::model_history::HistoryMode;
 use concinnity_engine::render::uniforms::cull::{CullHiz, CullParams, CullView};
@@ -325,11 +325,14 @@ impl DxContext {
         let mut variants = self.cull.variants;
         variants.set_view(
             self.grass_lod.get().map_or(0.0, |l| l.fade_start()),
-            &self.state.view.daylight,
+            &self.state.view.daylight.variant_sky(),
         );
         if let Some(live) = self.cull.live_buckets.get(slot) {
             live.store(
-                variants.live_buckets(self.shader_bucket_count(), &self.state.view.daylight),
+                variants.live_buckets(
+                    self.shader_bucket_count(),
+                    &self.state.view.daylight.variant_sky(),
+                ),
                 std::sync::atomic::Ordering::Relaxed,
             );
         }

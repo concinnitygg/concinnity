@@ -1,9 +1,10 @@
 use super::*;
 use crate::components::{AaMode, PassResolution};
 use crate::render::backend::{GpuProfile, GpuTier};
+use crate::render::config::ResolvedGraphics;
 use crate::settings::options;
 use crate::settings::quality::{QualityPreset, resolve_ceiling};
-use crate::settings::resolve::{ResolvedGraphics, overlay_quality_overrides};
+use crate::settings::resolve::overlay_quality_overrides;
 use alloc::vec::Vec;
 
 fn low_ceiling() -> QualityCeiling {

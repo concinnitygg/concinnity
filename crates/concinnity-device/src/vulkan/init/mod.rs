@@ -34,6 +34,7 @@ use concinnity_engine::render::backend::init::{
     BackendInit, MediaPayloads, ShadowCadence, WorldShader,
 };
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::decal::{DecalRecord, DecalSet};
 use concinnity_engine::render::environment::atmosphere::AtmosphereSettings;
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
@@ -42,7 +43,6 @@ use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::particles::ParticleEmitterRecord;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
-use concinnity_engine::settings::ResolvedGraphics;
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;

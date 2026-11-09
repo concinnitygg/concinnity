@@ -25,6 +25,7 @@ use super::planet::tiles::{DrawnPlanetTile, ground_reference, planet_center};
 use super::{GrassBladeLook, GrassLodView, GrassTerrain, grown_layers};
 use crate::environment::planet::{CONTINENT_OCTAVES, OCTAVE_TURN, PlanetShape, octave_weight_sum};
 use crate::environment::water::sea::shore::ShoreWaves;
+use crate::gfx::render_types::CanopyRange;
 use crate::render::environment::ground::GroundCovers;
 use crate::render::uniforms::canopy::{
     CanopyLayerGpu, CanopyParams, MAX_CANOPY_LAYERS, ShoreSwashGpu,
@@ -305,36 +306,6 @@ impl CanopyLayerGpu {
             litter_color: look.litter_color,
             clumping: look.clumping,
             rule: GroundRuleGpu::EVERYWHERE,
-        }
-    }
-}
-
-/// Which run of the canopy block's layers a far field shades with, and how it
-/// finds their density.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CanopyRange {
-    /// The run's first layer.
-    pub first: u32,
-    /// Layers in the run.
-    pub count: u32,
-    /// A planet's ground (density from the meadow) rather than a terrain's
-    /// (density from its vertex colors).
-    pub planet: bool,
-}
-
-impl CanopyRange {
-    /// The range as the object record carries it: first layer in the low
-    /// byte, count in the next, the planet flag above them.
-    pub fn packed(self) -> u32 {
-        (self.first & 0xff) | ((self.count & 0xff) << 8) | (u32::from(self.planet) << 16)
-    }
-
-    /// The range an object record's `packed` word carries.
-    pub fn unpacked(packed: u32) -> Self {
-        Self {
-            first: packed & 0xff,
-            count: (packed >> 8) & 0xff,
-            planet: (packed >> 16) & 1 != 0,
         }
     }
 }

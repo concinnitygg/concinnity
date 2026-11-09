@@ -276,7 +276,7 @@ fn the_kernel_routes_every_record_as_the_spec_does() {
             ..GpuCullVariants::default()
         };
         variants.routes[0] = GpuVariantRoute::new([4, 5, 6, 7], VARIANT_FAR | VARIANT_DAYLIGHT);
-        variants.set_view(far_start, &daylight);
+        variants.set_view(far_start, &daylight.variant_sky());
         let culled = run(&device, &records, &variants, eye);
         let layout = StreamLayout {
             regions: &variants.regions,

@@ -20,7 +20,7 @@
 //! On top of that sit the pieces the engine reaches for: the [`Component`]
 //! metadata trait, the plain data types the registry and blob format are built
 //! from ([`AssetOrigin`], [`AssetPayload`], [`PayloadLocator`],
-//! [`BlobAssetDef`]), the [`System`] behavior trait, and the
+//! [`ResourceKind`]), the [`System`] behavior trait, and the
 //! [`World`]: the components, resources, events, payloads, profile, and frame
 //! scratch a tick reads and writes, plus the systems that run over them and
 //! their schedule. A [`SystemTable`] lists a host's systems; the engine's own
@@ -44,6 +44,7 @@ pub mod name_ref;
 pub mod param_meta;
 pub mod reference;
 pub mod resolver;
+mod resource_kind;
 #[cfg(feature = "schema")]
 pub mod schema;
 
@@ -161,12 +162,4 @@ pub use handle::{
     SkinnedMeshHandle, TextureHandle,
 };
 pub use resolver::{ReferenceResolver, install_reference_resolver};
-
-// The blob record schema (the component defs stream + the resource stream) is
-// owned by the `blob` format module; re-exported here so the runtime, cook, and
-// the registry macros keep naming `ecs::{BlobAssetDef, ResourceKind, ...}`
-// unchanged.
-pub use crate::blob::{
-    BlobAssetDef, BlobMeta, MeshBoundsRecord, PhysicsBudgetRecord, ResourceKind, ResourceRecord,
-    SceneGroup,
-};
+pub use resource_kind::ResourceKind;

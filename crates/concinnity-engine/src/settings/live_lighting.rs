@@ -17,13 +17,14 @@ use crate::components::{
     PlanetDetail, Reflections, Shadows, Vignette, VolumetricFog,
 };
 use crate::ecs::{AssetFields, World};
+use crate::render::config::ResolvedGraphics;
 use crate::render::environment::volumetric_fog;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::settings::system::{SettingsSlot, SettingsState};
-use crate::settings::{ResolvedGraphics, WorldAssets, WorldSettings};
+use crate::settings::{WorldAssets, WorldSettings};
 
-use super::has_queue;
+use crate::render::live_preview::has_queue;
 
 /// The `GraphicsConfig` sections this module can apply to a running world, each
 /// with the fields it applies live: the shadow cadence the per-frame cascade

@@ -143,8 +143,9 @@ impl ShaderDeferral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob::{MeshBoundsRecord, SceneGroup};
     use crate::components::Scene;
-    use crate::ecs::{MeshBoundsRecord, SceneGroup, World};
+    use crate::ecs::World;
     use alloc::vec;
 
     // The declared Scenes of a deferral test, in declaration order, so the

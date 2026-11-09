@@ -6,10 +6,10 @@
 
 use crate::components::IndirectTechnique;
 use crate::gfx::auto_exposure::EV_LIMIT;
+use crate::render::config::ResolvedGraphics;
 use crate::settings::SettingKey;
 use crate::settings::levels::{AA_MODE, PASS_RESOLUTION, SSGI_RAYS};
 use crate::settings::quality::{QualityCeiling, clamp_aa_mode};
-use crate::settings::resolve::ResolvedGraphics;
 use crate::settings::user::UserGraphicsSettings;
 
 /// A shared and a mutable accessor for the same field of `T`.

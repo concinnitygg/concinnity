@@ -162,7 +162,7 @@ mod tests {
     use crate::components::TerrainLayer;
     use crate::ecs::Ref;
     use crate::environment::terrain::{DensityMask, TERRAIN_CHUNK_CELLS, TerrainGrid};
-    use crate::render::environment::grass::CanopyRange;
+    use crate::gfx::render_types::CanopyRange;
     use alloc::vec;
 
     fn loaded(resolution: u32, layers: Vec<TerrainLayer>) -> LoadedTerrain {

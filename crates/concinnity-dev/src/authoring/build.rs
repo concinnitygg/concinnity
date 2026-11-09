@@ -7,7 +7,7 @@ use concinnity_cook::WorldSource;
 use concinnity_cook::authoring::registry::RegisteredType;
 pub(crate) use concinnity_cook::build_compiled;
 use concinnity_cook::build_only::LoadedWorld;
-use concinnity_engine::ecs::{ComponentAsset, World};
+use concinnity_engine::ecs::World;
 use concinnity_engine::protocol::{BlobMeshBounds, BlobSceneGroups};
 use concinnity_engine::resource::{
     ColorLutSources, EnvironmentMapSourceInfo, EnvironmentMapSources, MaterialNames, MeshSource,
@@ -102,14 +102,14 @@ fn world_from_loaded(loaded: LoadedWorld) -> std::io::Result<World> {
 
     // The material name catalog, read before the result is taken apart below.
     let material_names =
-        MaterialNames(result.resource_names(concinnity_engine::blob::ResourceKind::Material));
+        MaterialNames(result.resource_names(concinnity_engine::ecs::ResourceKind::Material));
 
     let payload_sections: Vec<Option<Vec<u8>>> = result.payloads.into_iter().map(Some).collect();
     let mut world = concinnity_runtime::world_from(BlobData::new(payload_sections));
     // Identify every entity as it is minted, matching the shipped runtime's
     // `load_blob`, so any asset id resolves to its entity.
     for def in &result.defs {
-        let mut component = ComponentAsset::from_baked(def).map_err(|e| {
+        let mut component = def.component().map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Asset construction failed: {e}"),

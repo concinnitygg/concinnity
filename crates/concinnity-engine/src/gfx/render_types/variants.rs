@@ -11,7 +11,6 @@ use concinnity_core::math::{SaturatingFrom, sqrt};
 
 use super::draw::DrawArgsFlags;
 use super::{GpuDrawArgs, MAX_SHADER_BUCKETS};
-use crate::render::uniforms::DaylightBlock;
 
 /// Upper bound on the variant routes a world's records pick their buckets by:
 /// one per Shader with grass variants, each taking at least two buckets.
@@ -111,6 +110,28 @@ impl GpuVariantRoute {
     }
 }
 
+/// What the variant tests read of a view's planet sky, as its daylight block
+/// carries it: the planet's center, the camera's up and the sky's reach.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct VariantSky {
+    /// xyz: the planet's center; w: 1 when the curves light the view.
+    pub center: [f32; 4],
+    /// xyz: up where the camera is; w: the camera's reach, positive once the
+    /// planet's own sky reaches everything it draws.
+    pub camera_up: [f32; 4],
+    /// xy: the cosines between a point's up and the camera's at which the
+    /// point's own sky starts to take over and has; z, w: the ground's radius
+    /// and height.
+    pub reach: [f32; 4],
+}
+
+impl VariantSky {
+    /// Whether the curves light the view.
+    pub fn is_on(&self) -> bool {
+        self.center[3] > 0.5
+    }
+}
+
 /// Matches `CullVariants` in cull.hlsl: the frame's view for the variant tests,
 /// the routes and the bucket regions. One per cull view.
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -119,11 +140,11 @@ pub struct GpuCullVariants {
     /// x: distance from the eye, in meters, where the grass hands over to the
     /// canopy; 0 sends every draw growing grass to its canopy variant.
     pub far: [f32; 4],
-    /// [`DaylightBlock::center`] of the view.
+    /// [`VariantSky::center`] of the view.
     pub day_center: [f32; 4],
-    /// [`DaylightBlock::camera_up`] of the view.
+    /// [`VariantSky::camera_up`] of the view.
     pub day_camera_up: [f32; 4],
-    /// [`DaylightBlock::reach`] of the view.
+    /// [`VariantSky::reach`] of the view.
     pub day_reach: [f32; 4],
     /// Indexed by route.
     pub routes: [GpuVariantRoute; MAX_VARIANT_ROUTES],
@@ -147,7 +168,7 @@ impl Default for GpuCullVariants {
 impl GpuCullVariants {
     /// Set the view the variants are picked for: the eye's grass hand-over
     /// distance and its planet sky.
-    pub fn set_view(&mut self, far_start: f32, daylight: &DaylightBlock) {
+    pub fn set_view(&mut self, far_start: f32, daylight: &VariantSky) {
         self.far = [far_start, 0.0, 0.0, 0.0];
         self.day_center = daylight.center;
         self.day_camera_up = daylight.camera_up;
@@ -184,7 +205,7 @@ impl GpuCullVariants {
     /// a route's, those its features can reach. Aloft every routed record
     /// takes the planet's sky and without one none does, so the others draw
     /// nothing and need not execute.
-    pub fn live_buckets(&self, buckets: usize, daylight: &DaylightBlock) -> u64 {
+    pub fn live_buckets(&self, buckets: usize, daylight: &VariantSky) -> u64 {
         let days: &[u32] = if !daylight.is_on() {
             &[0]
         } else if daylight.camera_up[3] > 0.0 {

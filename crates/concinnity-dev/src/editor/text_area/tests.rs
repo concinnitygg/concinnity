@@ -2,7 +2,7 @@
 //! through `handle_events`, pointer presses through `press`.
 
 use concinnity_engine::components::{InputKey, KeyEvent, KeyMods, KeyPress};
-use concinnity_engine::presentation::window::clipboard::Clipboard;
+use concinnity_engine::window::clipboard::Clipboard;
 
 use super::clipboard::InternalClipboard;
 use super::editing::Response;

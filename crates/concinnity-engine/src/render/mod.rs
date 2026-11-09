@@ -22,6 +22,7 @@
 
 pub mod backend;
 pub mod buffers;
+pub mod config;
 pub mod decal;
 pub mod depth;
 pub mod draw_list;
@@ -48,6 +49,7 @@ pub mod sdf;
 pub mod shader;
 pub mod shadow;
 pub mod slots;
+pub mod spawn;
 pub mod streaming;
 pub mod temporal;
 pub mod transparent;

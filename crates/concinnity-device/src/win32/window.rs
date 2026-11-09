@@ -735,7 +735,7 @@ pub(crate) fn create_window(
     height: u32,
     title_bar: bool,
 ) -> Result<(HWND, Box<WindowState>), String> {
-    concinnity_engine::presentation::window::policy::assert_windows_allowed("the Win32 window");
+    concinnity_engine::window::policy::assert_windows_allowed("the Win32 window");
 
     // Reuse a window parked by a prior backend's drop (editor live-swap) rather
     // than popping a new one, so a world reload keeps the same OS window.

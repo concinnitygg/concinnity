@@ -79,6 +79,7 @@ pub mod story;
 #[cfg(test)]
 mod test_support;
 pub mod transform;
+pub mod window;
 
 // The headless driver over a world and the trait any loop that runs one
 // implements, named at the crate root because they are the counterpart to

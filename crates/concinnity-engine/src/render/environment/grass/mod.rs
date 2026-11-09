@@ -33,7 +33,7 @@ pub mod tint;
 pub mod variation;
 
 pub use bend::{BendHistory, GrassBender};
-pub use canopy::{CanopyField, CanopyRange};
+pub use canopy::CanopyField;
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 pub use ground::{GrassGround, GrassGroundBuffers, GrassMask, GroundSample};
 pub use lod::{GrassCapacity, GrassLodView, GrassSizing, GrassThinning};

@@ -6,7 +6,7 @@
 
 use concinnity_engine::components::Camera3D;
 use concinnity_engine::ecs::World;
-use concinnity_engine::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use concinnity_engine::protocol::{HistoryResetCauses, PendingHistoryReset};
 use concinnity_engine::simulation::behavior::camera_driver;
 use concinnity_engine::simulation::controller::camera::Camera3DSystem;
 use serde_json::json;

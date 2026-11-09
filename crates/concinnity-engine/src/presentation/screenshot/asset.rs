@@ -1,7 +1,7 @@
 // The authored screenshot: when in the run, what file, and whether the HUD
 // shows in it.
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 
 /// Saves the frame drawn at a moment of the run as a PNG image, in a run
 /// that takes screenshots.
@@ -72,9 +72,50 @@ pub fn normal_file(file: &str) -> String {
     normal
 }
 
+/// The file a capture at `path` is written to for a run whose screenshots go
+/// under `dir`: `path` itself when it is absolute, else `path` under `dir`.
+pub fn screenshot_path(dir: &str, path: &str) -> String {
+    if is_absolute(path) {
+        return path.to_string();
+    }
+    let dir = dir.trim_end_matches(['/', '\\']);
+    if dir.is_empty() {
+        return path.to_string();
+    }
+    alloc::format!("{dir}/{path}")
+}
+
+// Whether `path` is absolute on any host a run writes on: rooted (`/`, `\\`)
+// or led by a drive letter (`C:`).
+fn is_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    matches!(bytes.first(), Some(b'/' | b'\\'))
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A relative capture lands under the directory; an absolute one, on any
+    // host's form, stays where it says.
+    #[test]
+    fn a_capture_path_resolves_under_the_screenshot_directory() {
+        assert_eq!(
+            screenshot_path("screenshots", "benchmark/orbit.png"),
+            "screenshots/benchmark/orbit.png"
+        );
+        assert_eq!(screenshot_path("shots/vk/", "a.png"), "shots/vk/a.png");
+        assert_eq!(screenshot_path("", "a.png"), "a.png");
+        for absolute in [
+            "/tmp/a.png",
+            "C:\\out\\a.png",
+            "d:/a.png",
+            "\\\\host\\a.png",
+        ] {
+            assert_eq!(screenshot_path("screenshots", absolute), absolute);
+        }
+    }
 
     #[test]
     fn a_file_stays_inside_the_screenshot_directory() {

@@ -94,7 +94,7 @@ impl FarFieldTint {
 
     /// Whether the surface grows grass, and so has a far field past it.
     pub fn grows_grass(&self) -> bool {
-        crate::render::environment::grass::CanopyRange::unpacked(self.canopy).count != 0
+        CanopyRange::unpacked(self.canopy).count != 0
     }
 }
 
@@ -177,5 +177,35 @@ pub fn normal_pool_index(normal_map_slot: usize, texture_count: u32) -> u32 {
         texture_count
     } else {
         u32::saturating_from(normal_map_slot).min(texture_count.saturating_sub(1))
+    }
+}
+
+/// Which run of the canopy block's layers a far field shades with, and how it
+/// finds their density.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CanopyRange {
+    /// The run's first layer.
+    pub first: u32,
+    /// Layers in the run.
+    pub count: u32,
+    /// A planet's ground (density from the meadow) rather than a terrain's
+    /// (density from its vertex colors).
+    pub planet: bool,
+}
+
+impl CanopyRange {
+    /// The range as the object record carries it: first layer in the low
+    /// byte, count in the next, the planet flag above them.
+    pub fn packed(self) -> u32 {
+        (self.first & 0xff) | ((self.count & 0xff) << 8) | (u32::from(self.planet) << 16)
+    }
+
+    /// The range an object record's `packed` word carries.
+    pub fn unpacked(packed: u32) -> Self {
+        Self {
+            first: packed & 0xff,
+            count: (packed >> 8) & 0xff,
+            planet: (packed >> 16) & 1 != 0,
+        }
     }
 }

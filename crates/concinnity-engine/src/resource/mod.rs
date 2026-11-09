@@ -39,7 +39,8 @@ use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::ecs::{PayloadLocator, ResourceKind, ResourceRecord, World};
+use crate::blob::ResourceRecord;
+use crate::ecs::{PayloadLocator, ResourceKind, World};
 
 /// One loaded resource's runtime form. A payload resource (audio clip, mesh,
 /// texture) carries a `PayloadLocator` into the blob payload section, or the

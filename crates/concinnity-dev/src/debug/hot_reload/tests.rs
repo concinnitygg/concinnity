@@ -10,11 +10,11 @@ use concinnity_engine::gfx::render_types::TextureSlot;
 use concinnity_engine::gfx::render_types::{DrawIndex, SkinnedIndex};
 use concinnity_engine::gfx::{mesh_payload, render_types};
 use concinnity_engine::input::snapshot::InputSnapshot;
+use concinnity_engine::render::config::apply::SettingsTarget;
 use concinnity_engine::render::world_load::source_maps::*;
 use concinnity_engine::render::{
     backend, backend::error, environment::volumetric_fog, scene_state, slots::draw_slot,
 };
-use concinnity_engine::settings::apply::SettingsTarget;
 use concinnity_engine::simulation::animation::skeleton;
 use concinnity_runtime::live_edit::hot_reload_sources::HotReloadSources;
 use notify::{Event, EventKind};

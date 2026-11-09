@@ -120,8 +120,8 @@ handle_spaces! {
 impl HandleKind {
     /// The resource kind whose table this space indexes, or `None` for a space
     /// a component owns (shaders).
-    pub fn resource_kind(self) -> Option<crate::blob::ResourceKind> {
-        crate::blob::ResourceKind::parse(self.name())
+    pub fn resource_kind(self) -> Option<super::ResourceKind> {
+        super::ResourceKind::parse(self.name())
     }
 }
 

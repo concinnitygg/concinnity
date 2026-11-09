@@ -10,8 +10,8 @@
 use concinnity_core::math::narrow_f32;
 use concinnity_engine::components::{KeyEvent, KeyPress, WindowMode};
 use concinnity_engine::input::snapshot::InputSnapshot;
-use concinnity_engine::presentation::window::clipboard::Clipboard;
-use concinnity_engine::presentation::window::display_mode::{DisplayMode, DisplayRefresh};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSScreen,

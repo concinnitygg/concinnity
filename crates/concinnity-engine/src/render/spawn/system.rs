@@ -4,7 +4,7 @@
 //! allocator; the backend effects are recorded into the frame's op queue and
 //! replayed at submission. Subtree removal and draw-slot retirement live in
 //! `despawn.rs`, show/hide in `visibility.rs`, and copying a placement in
-//! `template.rs`.
+//! the world's [`spawn`](crate::simulation::spawn).
 //!
 //! Scheduled before the renderer so a despawned entity is
 //! already gone from the `GlobalTransform` x `RenderHandle` join when transforms
@@ -13,7 +13,7 @@
 //! list. The world clock (Lifetime + Spawner) freezes while a menu is open
 //! (`MenuActive`, published by `OverlaySystem` earlier this tick).
 
-use super::{despawn, template, visibility};
+use super::{despawn, visibility};
 use crate::components::{
     DespawnRequest, EntityTarget, ReparentRequest, SkeletonPose, SpawnRequest, VisibilityRequest,
 };
@@ -24,6 +24,7 @@ use crate::render::backend::render_mode::RenderMode;
 use crate::render::frame::ops::RenderOps;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::slots::render_slots::RenderSlots;
+use crate::simulation::spawn;
 use crate::transform::propagation;
 
 // Resolve a request target to a live entity. A named target goes through the
@@ -37,7 +38,7 @@ fn resolve_target(ctx: &PipelineContext<'_>, target: EntityTarget) -> Option<Ent
 }
 
 // Allocate a destination draw slot and record the backend clone for it: the
-// `clone_slot` seam `template::spawn_from_template` drives. The slot index is
+// `clone_slot` seam `spawn::spawn_from_template` drives. The slot index is
 // known immediately (`RenderSlots` owns allocation); the GPU copy applies when
 // the frame's ops replay. A clone that fails at replay leaves a hidden slot,
 // logged there.
@@ -57,7 +58,7 @@ fn record_clone_static(
 }
 
 // Claim a pre-reserved skinned instance and record its reveal: the
-// `acquire_slot` seam `template::spawn_skinned_from_template` drives. `None`
+// `acquire_slot` seam `spawn::spawn_skinned_from_template` drives. `None`
 // when the template's reserve is exhausted.
 fn record_skinned_claim(
     ops: &mut RenderOps,
@@ -139,7 +140,7 @@ impl SpawnSystem {
         // to recycle. Frozen while a menu is open so the world clock
         // (timed despawns + cadence spawns below) truly pauses.
         if !menu_active {
-            let expired = template::tick_lifetimes(ctx, dt);
+            let expired = spawn::tick_lifetimes(ctx, dt);
             for &entity in &expired {
                 despawn::despawn_subtree(ctx, ops, slots, entity);
             }
@@ -216,7 +217,7 @@ impl SpawnSystem {
             // pre-reserved instance slot; a static one clones a draw
             // slot. Dispatch on which the template carries.
             if ctx.get::<SkeletonPose>(template).is_some() {
-                template::spawn_skinned_from_template(
+                spawn::spawn_skinned_from_template(
                     ctx,
                     template,
                     req.name,
@@ -225,7 +226,7 @@ impl SpawnSystem {
                     |tmpl, model| record_skinned_claim(ops, slots, tmpl, model),
                 );
             } else {
-                template::spawn_from_template(
+                spawn::spawn_from_template(
                     ctx,
                     template,
                     req.name,
@@ -246,14 +247,14 @@ impl SpawnSystem {
         let due_spawns = if menu_active {
             frame.collect([])
         } else {
-            template::tick_spawners(ctx, dt)
+            spawn::tick_spawners(ctx, dt)
         };
         for &due in &due_spawns {
             let Some(template) = ctx.entity_of(due.template) else {
                 continue;
             };
             if ctx.get::<SkeletonPose>(template).is_some() {
-                template::spawn_skinned_from_template(
+                spawn::spawn_skinned_from_template(
                     ctx,
                     template,
                     None,
@@ -262,7 +263,7 @@ impl SpawnSystem {
                     |tmpl, model| record_skinned_claim(ops, slots, tmpl, model),
                 );
             } else {
-                template::spawn_from_template(
+                spawn::spawn_from_template(
                     ctx,
                     template,
                     None,

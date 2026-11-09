@@ -2,13 +2,14 @@
 //! params blocks carry no host-shape gate, so each is checked against all three
 //! targets.
 
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::render_types::{
     CompositeParams, PostProcessParams, SsaoParams, SsgiParams, SsrParams,
 };
 use concinnity_engine::render::environment::atmosphere::AtmosphereParams;
 use concinnity_engine::render::environment::clouds::{CloudLayerBlock, CloudParams};
 use concinnity_engine::render::uniforms::{
-    AutoExposureParams, DaylightBlock, ExposureMeasurement, HizParams, TaaParams,
+    AutoExposureParams, DaylightBlock, HizParams, TaaParams,
 };
 
 use crate::shader_layout::mirror::{Case, everywhere, mirror};

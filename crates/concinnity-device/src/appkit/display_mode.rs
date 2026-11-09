@@ -9,9 +9,7 @@
 //! windowed resize path is unaffected.
 
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
-use concinnity_engine::presentation::window::display_mode::{
-    DisplayMode, DisplayProbe, DisplayRefresh,
-};
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayProbe, DisplayRefresh};
 use objc2_app_kit::{NSScreen, NSWindow};
 use objc2_core_foundation::{CFDictionary, CFRetained, Type, kCFBooleanTrue};
 use objc2_core_graphics::{

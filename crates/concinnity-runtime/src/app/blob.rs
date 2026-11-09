@@ -54,9 +54,9 @@ type NamedComponent = (Option<AssetId>, ComponentAsset);
 pub(crate) struct LoadedBlob {
     pub(crate) components: Vec<NamedComponent>,
     pub(crate) resources: Vec<ResourceRecord>,
-    pub(crate) scene_groups: Vec<concinnity_engine::ecs::SceneGroup>,
-    pub(crate) mesh_bounds: Vec<concinnity_engine::ecs::MeshBoundsRecord>,
-    pub(crate) physics_budget: Option<concinnity_engine::ecs::PhysicsBudgetRecord>,
+    pub(crate) scene_groups: Vec<concinnity_engine::blob::SceneGroup>,
+    pub(crate) mesh_bounds: Vec<concinnity_engine::blob::MeshBoundsRecord>,
+    pub(crate) physics_budget: Option<concinnity_engine::blob::PhysicsBudgetRecord>,
     pub(crate) manifest: WorldManifest,
     pub(crate) blob: BlobData,
 }
@@ -74,7 +74,7 @@ fn resolve((meta, blob_data): (BlobMeta, BlobData)) -> Result<LoadedBlob, WorldL
         .map(|def| {
             // Every record is baked: the bytes are the serialized runtime
             // component (cook already ran the asset -> component translation).
-            let mut component = ComponentAsset::from_baked(def)?;
+            let mut component = def.component()?;
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }

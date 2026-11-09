@@ -50,9 +50,9 @@ mod tests {
     use super::*;
     use crate::authoring::world::WorldJsonlAsset;
     use concinnity_core::math::SaturatingFrom;
-    use concinnity_engine::blob::ResourceKind;
     use concinnity_engine::components::Material;
     use concinnity_engine::components::{AudioCue, AudioEmitter, Decal, Prop};
+    use concinnity_engine::ecs::ResourceKind;
     use concinnity_engine::ecs::{AudioClipHandle, MaterialHandle, ShaderHandle, TextureHandle};
 
     // The classification tests (which types are resources, mesh-source blocks)

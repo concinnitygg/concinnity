@@ -11,7 +11,7 @@ use super::{
 };
 use crate::gfx::render_types::TextureSlot;
 use crate::input::snapshot::InputSnapshot;
-use crate::settings::apply::SettingsTarget;
+use crate::render::config::apply::SettingsTarget;
 
 /// A `RenderBackend` that accepts every call and draws nothing.
 pub struct NullBackend;

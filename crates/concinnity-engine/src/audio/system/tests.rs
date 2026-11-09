@@ -11,14 +11,13 @@ use concinnity_core::math::SaturatingFrom;
 use super::{AudioSystem, EmitterBinding, EmitterId};
 use crate::audio::occlusion::OcclusionSmoother;
 use crate::audio::out::AudioOut;
+use crate::blob::ResourceRecord;
 use crate::components::{
     AudioBus, AudioCommand, AudioCue, AudioEmitter, AudioOcclusionProbe, AudioTarget, BodyDynamics,
     Camera3D, ContactEvent, CueKind, PlayCue, ScreenShown, Story, Transform,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{
-    AudioClipHandle, PayloadLocator, ResourceKind, ResourceRecord, StepResult, System, World,
-};
+use crate::ecs::{AudioClipHandle, PayloadLocator, ResourceKind, StepResult, System, World};
 use crate::ecs::{PayloadStore, Ref};
 use crate::error::PayloadError;
 use crate::resource::AudioClipTable;

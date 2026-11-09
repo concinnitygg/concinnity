@@ -314,7 +314,7 @@ fn a_pack_draws_planet_tiles_coarse_only_when_given_a_grid() {
         ..GpuCompactParams::default()
     };
     assert_eq!(plain.with_capture_tiles(None), plain);
-    let tiles = crate::render::scene_state::CaptureTiles {
+    let tiles = CaptureTiles {
         offset: 1536,
         count: 96,
         full_count: 1536,

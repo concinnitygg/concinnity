@@ -48,9 +48,9 @@ mod tests {
         RenderBackend, SdfVolumeShaders, SkinnedDraws, SkinnedFrame, TextureUploads, WindowControl,
         WorldReload, WorldShaders,
     };
+    use crate::render::config::apply::SettingsTarget;
     use crate::render::scene_state::{DrawList, GeometryBuffer};
     use crate::render::slots::draw_slot::SlotAlloc;
-    use crate::settings::apply::SettingsTarget;
     use crate::test_support::draw_object;
     use alloc::vec;
     use alloc::vec::Vec;

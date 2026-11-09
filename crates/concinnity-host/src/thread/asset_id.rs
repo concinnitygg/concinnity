@@ -468,7 +468,7 @@ mod tests {
     // name the map declares no resource for has none in that space.
     #[test]
     fn a_resource_reference_resolves_through_the_builds_handles() {
-        use concinnity_engine::blob::ResourceKind;
+        use concinnity_engine::ecs::ResourceKind;
         use concinnity_engine::ecs::TextureHandle;
 
         begin_build();

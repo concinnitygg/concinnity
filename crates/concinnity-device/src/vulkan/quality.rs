@@ -30,12 +30,12 @@ use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
-use concinnity_engine::render::post::rt_reflections;
-use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
-use concinnity_engine::settings::ResolvedGraphics;
-use concinnity_engine::settings::apply::{
+use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::config::apply::{
     RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
 };
+use concinnity_engine::render::post::rt_reflections;
+use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
 
 use super::context::VkContext;
 use super::post::SsaoResources;

@@ -11,16 +11,16 @@ use crate::components::{
 use crate::ecs::asset_id::AssetId;
 use crate::ecs::{StepResult, System, World};
 use crate::input::keymap::{Bindable, KeyMap};
-use crate::presentation::window::display_mode::DisplayMode;
 use crate::protocol::{FrameRateCap, HudPrefs};
+use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
 use crate::render::backend::init::ShadowCadence;
 use crate::render::backend::{GpuProfile, GpuVendor};
 use crate::render::output::dlss::DlssPreset;
-use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
 use crate::settings::system::EventCursor;
 use crate::settings::system::RenderOps;
 use crate::settings::system::Window;
 use crate::settings::{DisabledSettingRows, UserGraphicsSettings};
+use crate::window::display_mode::DisplayMode;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -952,9 +952,14 @@ fn quality_rebuild_out_of_memory_raises_memory_pressure() {
         let (calls, mut backend) = recording_backend();
         calls.lock().fail_quality = Some(error);
         let mut queue = RenderOps::default();
-        let mut plan = settings::apply::ApplyPlan::default();
-        plan.rebuild.insert(settings::apply::RebuildFeature::Ssao);
-        super::record_plan(&mut queue, &settings::ResolvedGraphics::default(), plan);
+        let mut plan = crate::render::config::apply::ApplyPlan::default();
+        plan.rebuild
+            .insert(crate::render::config::apply::RebuildFeature::Ssao);
+        super::record_plan(
+            &mut queue,
+            &crate::render::config::ResolvedGraphics::default(),
+            plan,
+        );
 
         let outcome = queue.replay(&mut backend);
         assert_eq!(outcome.memory_pressure, pressure);
@@ -1714,4 +1719,32 @@ fn resolved_texture_limits_win_over_the_authored_streaming_config() {
     };
     state.apply_to_streaming(&mut config);
     assert_eq!((config.texture_cap, config.texture_budget), (512, 8));
+}
+
+// The controls the user stored reach the input system as one command at
+// start: the maps and the deadzone, leaving the camera's own choices out.
+#[test]
+fn init_sends_the_stored_input_controls() {
+    let mut keys = KeyMap::DEFAULT;
+    keys.rebind(Bindable::Jump, InputKey::J);
+    let mut stored = StoredSettings::default();
+    stored.controls.keymap = Some(keys);
+    stored.controls.gamepad_deadzone = Some(0.4);
+    stored.controls.mouse_sensitivity = Some(0.01);
+    let mut world = World::new();
+    world.insert_resource(stored);
+    super::SettingsSystem::new().init(&mut world.context());
+    let sent: Vec<ControlsCommand> = world
+        .context()
+        .events::<ControlsCommand>()
+        .map(|e| e.read(&mut EventCursor::default()).copied().collect())
+        .unwrap_or_default();
+    assert_eq!(
+        sent,
+        [ControlsCommand {
+            keymap: Some(keys),
+            gamepad_deadzone: Some(0.4),
+            ..ControlsCommand::default()
+        }]
+    );
 }

@@ -1,6 +1,7 @@
 //! A planet's per-point sky as the view blocks carry it: the daylight curves
 //! and the lights that ride them.
 
+use crate::gfx::render_types::VariantSky;
 use crate::render::environment::atmosphere::{DAYLIGHT_KNOTS, knot_coord};
 use concinnity_core::math::{SaturatingFrom, acos, cos};
 
@@ -131,6 +132,15 @@ impl DaylightBlock {
     /// Whether the curves light the view.
     pub fn is_on(&self) -> bool {
         self.center[3] > 0.5
+    }
+
+    /// What the cull's variant tests read of the block.
+    pub fn variant_sky(&self) -> VariantSky {
+        VariantSky {
+            center: self.center,
+            camera_up: self.camera_up,
+            reach: self.reach,
+        }
     }
 
     /// The sky's light on a level surface on the ground under the camera,

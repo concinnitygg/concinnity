@@ -12,10 +12,10 @@ use core::fmt::{self, Write};
 
 use crate::benchmark::BenchmarkRun;
 use crate::environment::planet::FrameRebases;
-use crate::presentation::window::display_mode::DisplayRefresh;
 use crate::profile::RenderStats;
 use crate::simulation::camera::track::CameraTrackStatus;
 use crate::simulation::camera::track::status::TrackPickup;
+use crate::window::display_mode::DisplayRefresh;
 
 use crate::frame_report::hidden::HiddenFrames;
 use crate::frame_report::reduce::{ReduceOptions, Report};

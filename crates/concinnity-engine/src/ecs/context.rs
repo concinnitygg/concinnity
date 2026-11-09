@@ -334,7 +334,8 @@ impl PipelineContext<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ecs::{BlobAssetDef, ComponentAsset, ComponentTag, EventCursor, World};
+    use crate::blob::BlobAssetDef;
+    use crate::ecs::{ComponentAsset, ComponentTag, EventCursor, World};
     use alloc::vec;
 
     #[test]
@@ -387,7 +388,7 @@ mod tests {
             args_bytes: postcard::to_allocvec(&light).unwrap(),
             payload: None,
         };
-        let from_baked = ComponentAsset::from_baked(&baked).unwrap();
+        let from_baked = baked.component().unwrap();
         let ComponentAsset::PointLight(b) = &from_baked else {
             panic!("expected PointLight");
         };
@@ -397,7 +398,7 @@ mod tests {
         let mut bad = baked;
         bad.discriminant = 255;
         assert_eq!(
-            ComponentAsset::from_baked(&bad).unwrap_err(),
+            bad.component().unwrap_err(),
             crate::error::AssetError::UnknownComponent { discriminant: 255 }
         );
     }

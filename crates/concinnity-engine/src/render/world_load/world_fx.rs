@@ -11,18 +11,20 @@ use crate::components::{
 use crate::ecs::PipelineContext;
 use crate::ecs::asset_id::AssetId;
 use crate::environment::planet::PlanetShape;
+use crate::environment::water::ocean::OceanQuality;
 use crate::environment::water::sea::shore::ShoreWaves;
 use crate::environment::water::{WaterBody, split_water};
 use crate::environment::wind::WindField;
 use crate::render::backend::init::{SdfVolumeSource, WorldFx};
 use crate::render::environment::atmosphere::{AtmosphereSettings, SeaLook, SurfacePalette};
+use crate::render::environment::clouds::CloudMarch;
 use crate::render::environment::clouds::CloudSettings;
+use crate::render::environment::grass::GrassThinning;
 use crate::render::environment::grass::{CanopyField, GrassField, GrassTerrain, PlanetGrass};
 use crate::render::environment::ground::GroundCovers;
 use crate::render::environment::night_sky::NightSkySettings;
 use crate::render::environment::terrain::{LoadedTerrain, grass_terrains};
 use crate::render::{decal, environment::volumetric_fog, particles};
-use crate::settings::QualityCeiling;
 
 /// What a planet's ground is laid with: the tint of its material, the grass
 /// its layers grow and the covers over it.
@@ -38,6 +40,26 @@ pub struct PlanetSurface {
     pub covers: GroundCovers,
 }
 
+/// How finely the world's effects run, as the quality ceiling caps them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EffectQuality {
+    /// How finely large water's simulated ocean runs.
+    pub ocean: OceanQuality,
+    /// How finely clouds are marched.
+    pub clouds: CloudMarch,
+    /// How densely far grass may cover the screen.
+    pub grass: GrassThinning,
+}
+
+impl EffectQuality {
+    /// Every effect at its finest.
+    pub const FULL: Self = Self {
+        ocean: OceanQuality::FULL,
+        clouds: CloudMarch::FULL,
+        grass: GrassThinning::Full,
+    };
+}
+
 /// Drain every effect component into the backend's effect inputs. Each record
 /// is resolved once here (texture slots, inverted decal matrices, clamped
 /// emitter tunables): the runtime keeps no per-frame update path for them.
@@ -49,7 +71,7 @@ pub fn drain_world_fx(
     texture_count: usize,
     terrains: &[LoadedTerrain],
     planet: Option<(&Planet, PlanetSurface)>,
-    quality: &QualityCeiling,
+    quality: EffectQuality,
 ) -> WorldFx {
     let decals: Vec<Decal> = ctx.drain::<Decal>();
     let decals = decal::build_decal_records(&decals.iter().collect::<Vec<_>>(), texture_count);
@@ -327,7 +349,7 @@ mod tests {
             1,
             &[grassy_terrain()],
             None,
-            &QualityCeiling::NONE,
+            EffectQuality::FULL,
         );
         assert!(
             fx.grass.is_some(),

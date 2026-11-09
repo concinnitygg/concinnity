@@ -23,10 +23,10 @@ pub use light::{
     AreaLightData, CLUSTER_COUNT, CLUSTER_LIST_LEN, ClusterCamera, ClusterParams,
     DirectionalLightData, GpuLight, LIGHT_KIND_AREA, LIGHT_KIND_POINT, LIGHT_KIND_SPOT,
     LightUniforms, MAX_AREA_LIGHTS, MAX_DIRECTIONAL_LIGHTS, MAX_LOCAL_LIGHTS, MAX_POINT_LIGHTS,
-    MAX_SKY_OCCLUDERS, PointLightData,
+    MAX_SKY_OCCLUDERS, PointLightData, clustering_active,
 };
 pub use material::{
-    FALLBACK_TEXTURE_COUNT, FarFieldTint, GpuMaterialParams, MATERIAL_PARAM_COUNT,
+    CanopyRange, FALLBACK_TEXTURE_COUNT, FarFieldTint, GpuMaterialParams, MATERIAL_PARAM_COUNT,
     MaterialUniforms, NO_ALBEDO_SLOT, NO_NORMAL_MAP_SLOT, albedo_pool_index, normal_pool_index,
 };
 pub use overlay::{LineVertex, TextDrawCall, TextUniforms, TextVertex};
@@ -39,14 +39,14 @@ pub use shadow::{
     ShadowUniforms, SpotShadowData, shadow_array_extent, spot_shadow_slice_size,
 };
 pub use streams::{
-    COUNT_SLOT_ALIGN, COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, DRAW_STREAMS, GpuCompactParams,
-    GpuExecutionRange, SKINNED_STREAM, StreamLayout, StreamSlots, compact, count_slot_offset,
-    cull_groups, culled_records, group_count_index, group_count_words, group_counts,
-    scan_group_counts,
+    COUNT_SLOT_ALIGN, COUNT_SLOT_BYTES, CULL_GROUP_RECORDS, CaptureTiles, DRAW_STREAMS,
+    GpuCompactParams, GpuExecutionRange, SKINNED_STREAM, StreamLayout, StreamSlots, compact,
+    count_slot_offset, cull_groups, culled_records, group_count_index, group_count_words,
+    group_counts, scan_group_counts,
 };
 pub use variants::{
     BucketSpans, DAYLIGHT_COS_MARGIN, GpuBucketRegion, GpuCullVariants, GpuVariantRoute,
-    MAX_VARIANT_ROUTES, VARIANT_DAYLIGHT, VARIANT_FAR, VARIANT_FEATURE_COMBINATIONS,
+    MAX_VARIANT_ROUTES, VARIANT_DAYLIGHT, VARIANT_FAR, VARIANT_FEATURE_COMBINATIONS, VariantSky,
     bucket_regions, region_commands,
 };
 

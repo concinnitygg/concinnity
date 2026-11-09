@@ -12,9 +12,9 @@ use concinnity_engine::components::{BlockType, Planet, StreamingConfig, VoxelWor
 use concinnity_engine::ecs::asset_id::AssetId;
 use concinnity_engine::ecs::{MaterialHandle, PayloadLocator, PipelineContext};
 use concinnity_engine::environment::planet::MAX_RESIDENT_TILES;
+use concinnity_engine::gfx::render_types::CanopyRange;
 use concinnity_engine::gfx::render_types::DrawIndex;
 use concinnity_engine::render::draw_list::DeferredMeshSeed;
-use concinnity_engine::render::environment::grass::CanopyRange;
 use concinnity_engine::render::material_entry::MaterialEntry;
 use concinnity_engine::render::streaming::mesh_seed;
 use concinnity_engine::render::streaming::pools::{

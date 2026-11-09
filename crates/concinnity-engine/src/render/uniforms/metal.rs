@@ -41,10 +41,7 @@ impl ScatterParams {
     /// This scatter drawing planet tiles through `tiles`, a capture's
     /// coarse grid, or through their own when `None`.
     #[must_use]
-    pub fn with_capture_tiles(
-        self,
-        tiles: Option<crate::render::scene_state::CaptureTiles>,
-    ) -> Self {
+    pub fn with_capture_tiles(self, tiles: Option<crate::gfx::render_types::CaptureTiles>) -> Self {
         let Some(t) = tiles else {
             return self;
         };
@@ -89,7 +86,7 @@ mod tests {
             _pad: 0,
         };
         assert_eq!(plain.with_capture_tiles(None).coarse_count, 0);
-        let tiles = crate::render::scene_state::CaptureTiles {
+        let tiles = crate::gfx::render_types::CaptureTiles {
             offset: 1536,
             count: 96,
             full_count: 1536,

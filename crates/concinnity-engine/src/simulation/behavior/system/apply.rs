@@ -11,7 +11,7 @@ use crate::components::{
     StoryCommand, StoryPlayback, VisibilityRequest, WakeRequest,
 };
 use crate::ecs::{Entity, PipelineContext};
-use crate::render::temporal::history_reset::{HistoryResetCauses, PendingHistoryReset};
+use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
 use crate::simulation::behavior::{Effect, Val, position};
 use concinnity_core::math::SaturatingFrom;
 

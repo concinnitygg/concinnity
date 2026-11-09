@@ -27,13 +27,13 @@ use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeaturePlan
 use concinnity_engine::render::backend::init::SwapchainConfig;
 use concinnity_engine::render::backend::init::{BackendInit, PlanarBudget, WorldShader};
 use concinnity_engine::render::backend::{RenderBackend, WorldReload};
+use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::environment::volumetric_fog::SceneFog;
 use concinnity_engine::render::light::state::LightState;
 use concinnity_engine::render::material_params::MaterialParamTable;
 use concinnity_engine::render::planar_reflection::PlanarReflectors;
 use concinnity_engine::render::scene_state::{DrawList, SceneState};
 use concinnity_engine::render::shader::reload::ShaderReload;
-use concinnity_engine::settings::ResolvedGraphics;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 

@@ -216,7 +216,7 @@ pub fn fallback_modes() -> Vec<DisplayMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::window::{Window, WindowMode};
+    use crate::window::{Window, WindowMode};
 
     use alloc::vec;
     fn mode(width: u32, height: u32, refresh_hz: u32) -> DisplayMode {

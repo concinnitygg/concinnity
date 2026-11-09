@@ -8,9 +8,11 @@
 
 mod error;
 mod flags;
+mod frame_cap;
 mod parse;
 mod pipeline;
 mod request;
+mod screenshots;
 
 pub use error::LaunchArgsError;
 pub use flags::{
@@ -18,18 +20,21 @@ pub use flags::{
     LaunchCommand, LaunchFlag, QUALITY_PRESET_VALUES, RT_DYNAMIC_VALUES, WINDOW_MODE_VALUES, flag,
     short_flag, usage,
 };
+pub use frame_cap::frame_cap;
 pub use pipeline::PipelineMode;
-pub use request::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest, screenshot_path};
+pub use request::{DEFAULT_SCREENSHOTS_DIR, LaunchRequest};
+pub(crate) use screenshots::screenshot_system;
+pub use screenshots::takes_screenshots;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
 
 use crate::gfx::view_modes::ShowFlags;
-use crate::presentation::window::WindowMode;
 use crate::render::output::dlss::DlssPreset;
 use crate::render::rt_accel::geom::RtDynamicMode;
 use crate::settings::QualityPreset;
+use crate::window::WindowMode;
 use concinnity_core::math::{SaturatingFrom, round};
 use concinnity_core::platform::Platform;
 

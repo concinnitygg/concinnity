@@ -7,7 +7,7 @@ use core::fmt::{self, Write};
 use crate::frame_report::reduce::{
     FanOutCost, FrameCost, PhaseReport, RENDER_SUBMIT, Report, SlowFrame,
 };
-use crate::presentation::window::display_mode::DisplayRefresh;
+use crate::window::display_mode::DisplayRefresh;
 
 const MICROS_PER_MILLI: f32 = 1_000.0;
 const BYTES_PER_MIB: f32 = (1 << 20) as f32;

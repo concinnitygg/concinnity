@@ -23,19 +23,18 @@ use crate::presentation::hud::debug_hud::DebugHudSystem;
 use crate::presentation::hud::fps_counter::FpsCounterSystem;
 use crate::presentation::hud::loading_overlay::LoadingOverlaySystem;
 use crate::presentation::hud::stat_hud::StatHudSystem;
-use crate::presentation::screenshot::ScreenshotSystem;
 use crate::presentation::ui::UiInputSystem;
 use crate::render::backend::render_mode::RenderMode;
 use crate::render::overlay::OverlaySystem;
+use crate::render::spawn::SpawnSystem;
 use crate::render::streaming::pools::StreamingSystem;
-use crate::settings::system::{SettingsStore, SettingsSystem};
+use crate::settings::system::{SettingsStore, SettingsSystem, planet_finest_cell_size};
 use crate::simulation::animation::AnimationSystem;
 use crate::simulation::behavior::{BehaviorStore, BehaviorSystem};
 use crate::simulation::camera::track::CameraTrackSystem;
 use crate::simulation::controller::camera::Camera3DSystem;
 use crate::simulation::controller::third_person::ThirdPersonSystem;
 use crate::simulation::physics::PhysicsSystem;
-use crate::simulation::spawn::SpawnSystem;
 use crate::story::{StoryStore, StorySystem};
 use concinnity_core::fanout::{FanOut, Inline, Lent};
 
@@ -327,7 +326,7 @@ impl<H: SystemHost> CoreSystems<H> {
         name: "StreamingSystem",
         present_when: "the world runs with a window",
         phase: Phase::PreRender,
-        gate: |world| boxed(StreamingSystem::for_world(world)),
+        gate: |world| boxed(StreamingSystem::for_world(world, planet_finest_cell_size)),
         after: &["Camera3DSystem", "ThirdPersonSystem", "CameraTrackSystem"],
         before: &["LoadingOverlaySystem"],
     };
@@ -357,7 +356,7 @@ impl<H: SystemHost> CoreSystems<H> {
         name: "ScreenshotSystem",
         present_when: "the run is benchmarked or launched with --screenshot-at, and has screenshots to take",
         phase: Phase::Late,
-        gate: |world| boxed(ScreenshotSystem::for_world(world)),
+        gate: |world| boxed(crate::launch::screenshot_system(world)),
         after: &["Camera3DSystem", "ThirdPersonSystem", "CameraTrackSystem"],
         before: &[],
     };

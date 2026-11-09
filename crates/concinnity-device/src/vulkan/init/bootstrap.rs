@@ -6,8 +6,8 @@ use ash::vk;
 use concinnity_core::math::SaturatingFrom;
 use concinnity_engine::components;
 use concinnity_engine::render::backend::error::RenderResult;
+use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::{backend::init, backend::pass_timing, output::hdr};
-use concinnity_engine::settings::ResolvedGraphics;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};

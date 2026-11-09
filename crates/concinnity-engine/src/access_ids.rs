@@ -38,7 +38,7 @@ crate::define_access_ids! {
         crate::environment::planet::PlanetFrame,
         crate::simulation::camera::track::CameraTrackStatus,
         crate::settings::DisabledSettingRows,
-        crate::presentation::window::display_mode::DisplayModes,
+        crate::window::display_mode::DisplayModes,
         crate::protocol::InputSampledAt,
         crate::protocol::ScreenshotRequest,
         crate::protocol::FrameCaptureRequest,

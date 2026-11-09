@@ -21,11 +21,12 @@ use crate::components::{
 };
 use crate::launch::LaunchRequest;
 use crate::render::backend::{GpuProfile, GpuTier};
+use crate::render::config::ResolvedGraphics;
 use crate::render::output::dlss::DlssPreset;
 use crate::settings::quality::{more_aggressive_upscale, resolve_ceiling};
 use crate::settings::{
-    QualityPreset, ResolvedGraphics, ResolvedSettings, SettingsLayers, UserGraphicsSettings,
-    WorldAssets, WorldSettings,
+    QualityPreset, ResolvedSettings, SettingsLayers, UserGraphicsSettings, WorldAssets,
+    WorldSettings,
 };
 use concinnity_core::fnv::Fnv1a;
 

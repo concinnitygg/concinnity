@@ -6,10 +6,11 @@
 //! the writes themselves.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::{BlobAssetDef, BlobMeta, ResourceRecord};
 use concinnity_engine::blob::{
     MeshBoundsRecord, PhysicsBudgetRecord, SceneGroup, WorldManifest, encode_cnb, payload_section,
 };
-use concinnity_engine::ecs::{BlobAssetDef, BlobMeta, PayloadLocator, ResourceRecord};
+use concinnity_engine::ecs::PayloadLocator;
 #[cfg(test)]
 pub(crate) use concinnity_host::store::blob::read_cnb;
 use serde::{Deserialize, Serialize};
@@ -490,7 +491,7 @@ mod tests {
             component_def(4, None),
         ];
         let resources = vec![ResourceRecord {
-            resource_kind: concinnity_engine::blob::ResourceKind::Material,
+            resource_kind: concinnity_engine::ecs::ResourceKind::Material,
             handle: 0,
             payload: Some(locator(1, 0, 4)),
             data_bytes: vec![9, 9],

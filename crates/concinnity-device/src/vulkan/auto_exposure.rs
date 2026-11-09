@@ -12,10 +12,11 @@
 
 use ash::vk;
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::gfx::auto_exposure::ExposureMeasurement;
 use concinnity_engine::gfx::auto_exposure::{HISTOGRAM_BINS, histogram_build_threads};
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::shader::programs::abi::exposure::BUILD_GROUP;
-use concinnity_engine::render::uniforms::{AutoExposureParams, ExposureMeasurement};
+use concinnity_engine::render::uniforms::AutoExposureParams;
 
 use super::allocator::{DeviceAllocator, PooledBuffer};
 use super::context::VkContext;

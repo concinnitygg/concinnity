@@ -2,9 +2,9 @@
 //! pass that turns the resolved defs into blob sections.
 
 use concinnity_core::math::SaturatingFrom;
+use concinnity_engine::blob::{BlobAssetDef, ResourceRecord};
 use concinnity_engine::blob::{MeshBoundsRecord, SceneGroup};
 use concinnity_engine::components::FileKind;
-use concinnity_engine::ecs::{BlobAssetDef, ResourceRecord};
 use concinnity_host::thread::asset_id;
 use rayon::prelude::*;
 use std::path::Path;
@@ -22,7 +22,7 @@ const PAYLOAD: crate::cache::CacheEntryKind = crate::cache::CacheEntryKind::Payl
 
 // The resource kind of a job selected by `collect_resource_jobs`. Every entry
 // there was chosen by having one, so the lookup cannot fail.
-fn job_resource_kind(rt: RegisteredType) -> concinnity_engine::blob::ResourceKind {
+fn job_resource_kind(rt: RegisteredType) -> concinnity_engine::ecs::ResourceKind {
     rt.resource_kind()
         .expect("a resource job carries a resource type")
 }
@@ -124,7 +124,7 @@ const RESOURCE_CACHE_DISC_BASE: u8 = 128;
 // (SkinnedMesh) carries alongside its payload (empty for everything else; it
 // bakes from the authored args, so it sits outside the payload cache).
 struct PendingResource {
-    kind: concinnity_engine::blob::ResourceKind,
+    kind: concinnity_engine::ecs::ResourceKind,
     handle: u32,
     bytes: Vec<u8>,
     is_data: bool,
@@ -306,7 +306,7 @@ pub(in crate::pipeline) fn compile_and_pack_payloads(
         }
         let id = asset_id::intern(&asset.id);
         if let Some(handle) =
-            mesh_source_handles.get(concinnity_engine::blob::ResourceKind::Mesh, id)
+            mesh_source_handles.get(concinnity_engine::ecs::ResourceKind::Mesh, id)
         {
             // Handle -> asset name for mesh payloads riding component defs,
             // so a consumer can find any sub-mesh payload by unified handle
@@ -658,7 +658,7 @@ mod tests {
         assert!(probed.contains_key("m"));
     }
 
-    use concinnity_engine::blob::ResourceKind;
+    use concinnity_engine::ecs::ResourceKind;
 
     fn procedural_mesh_def() -> BlobAssetDef {
         asset_api::create_asset_def(&AssetRequest {

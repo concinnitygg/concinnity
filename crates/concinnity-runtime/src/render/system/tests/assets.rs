@@ -37,7 +37,7 @@ impl WorldBuilder {
         let locator = self.payload(bytes);
         let handle = u32::saturating_from(self.kind_records(kind).len());
         self.kind_records(kind)
-            .push(concinnity_engine::ecs::ResourceRecord {
+            .push(concinnity_engine::blob::ResourceRecord {
                 resource_kind: kind,
                 handle,
                 payload: Some(locator),
@@ -51,7 +51,7 @@ impl WorldBuilder {
     fn kind_records(
         &mut self,
         kind: ResourceKind,
-    ) -> &mut Vec<concinnity_engine::ecs::ResourceRecord> {
+    ) -> &mut Vec<concinnity_engine::blob::ResourceRecord> {
         use concinnity_engine::ecs::ResourceKind;
         match kind {
             ResourceKind::Texture => &mut self.texture_records,
@@ -299,7 +299,7 @@ fn an_unreadable_environment_map_payload_fails_init() {
     let mut b = scene_builder();
     // A locator past the end of the blob's only section.
     b.env_map_records
-        .push(concinnity_engine::ecs::ResourceRecord {
+        .push(concinnity_engine::blob::ResourceRecord {
             resource_kind: ResourceKind::EnvironmentMap,
             handle: 0,
             payload: Some(PayloadLocator {
@@ -514,7 +514,7 @@ impl WorldBuilder {
     fn push_material(&mut self, mat: &Material) -> MaterialHandle {
         let handle = u32::saturating_from(self.material_records.len());
         self.material_records
-            .push(concinnity_engine::ecs::ResourceRecord {
+            .push(concinnity_engine::blob::ResourceRecord {
                 resource_kind: ResourceKind::Material,
                 handle,
                 payload: None,
@@ -546,7 +546,7 @@ fn an_undecodable_material_record_fails_init() {
     let (_state, hooks) = recording_hooks();
     let mut b = scene_builder();
     b.material_records
-        .push(concinnity_engine::ecs::ResourceRecord {
+        .push(concinnity_engine::blob::ResourceRecord {
             resource_kind: ResourceKind::Material,
             handle: 1,
             payload: None,

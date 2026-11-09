@@ -6,5 +6,6 @@ mod asset;
 mod schedule;
 mod system;
 
-pub use asset::{Screenshot, is_contained_file, normal_file};
-pub(crate) use system::{ScreenshotSystem, takes_screenshots};
+pub use asset::{Screenshot, is_contained_file, normal_file, screenshot_path};
+pub(crate) use schedule::Shot;
+pub(crate) use system::ScreenshotSystem;

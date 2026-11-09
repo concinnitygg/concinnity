@@ -24,14 +24,14 @@ use concinnity_engine::render::backend::WindowControl;
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
 use concinnity_engine::render::backend::feature_plan::{BackendFacts, FeatureChange, FeaturePlan};
 use concinnity_engine::render::backend::init;
+use concinnity_engine::render::config::ResolvedGraphics;
+use concinnity_engine::render::config::apply::{
+    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
+};
 use concinnity_engine::render::post::device::PostExtent;
 use concinnity_engine::render::post::reflection_path::ReflectionPath;
 use concinnity_engine::render::post::rt_reflections;
 use concinnity_engine::render::render_graph::{BackendTraits, BuildStatus, FeatureGates};
-use concinnity_engine::settings::ResolvedGraphics;
-use concinnity_engine::settings::apply::{
-    RebuildFeature, RebuildSet, SettingsTarget, rebuild_each,
-};
 
 use super::auto_exposure::AutoExposureResources;
 use super::context::DxContext;

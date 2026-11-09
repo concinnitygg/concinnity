@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 
 /// One shot to take: when, into what file, and whether the HUD shows.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct Shot {
-    pub(super) seconds: f32,
-    pub(super) file: String,
-    pub(super) hud: bool,
+pub(crate) struct Shot {
+    pub(crate) seconds: f32,
+    pub(crate) file: String,
+    pub(crate) hud: bool,
 }
 
 #[derive(Debug, Default)]

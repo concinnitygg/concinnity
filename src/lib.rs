@@ -336,7 +336,7 @@ pub mod system {
         Access, ComponentId, ComponentMask, ComponentSlot, Entity, Phase, PipelineContext,
         StepResult, System,
     };
-    pub use concinnity_engine::render::temporal::history_reset::raise_camera_cut;
+    pub use concinnity_engine::protocol::raise_camera_cut;
 }
 
 pub mod bake {

@@ -70,10 +70,7 @@ impl GpuCompactParams {
     /// These params packing planet tiles through `tiles`, a capture's coarse
     /// grid, or through their own when `None`.
     #[must_use]
-    pub fn with_capture_tiles(
-        self,
-        tiles: Option<crate::render::scene_state::CaptureTiles>,
-    ) -> Self {
+    pub fn with_capture_tiles(self, tiles: Option<CaptureTiles>) -> Self {
         let Some(t) = tiles else {
             return self;
         };
@@ -258,6 +255,20 @@ pub fn scan_group_counts(counts: &mut [u32], layout: &StreamLayout<'_>) -> [u32;
         }
     }
     totals
+}
+
+/// The index range a capture draws each planet tile through in place of its
+/// full grid, at the tile's own `base_vertex`: the same corners stepped
+/// [`crate::environment::planet::CAPTURE_TILE_STRIDE`] at a time, far fewer triangles for a
+/// view that cannot resolve them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureTiles {
+    /// First index, in `u32` elements.
+    pub offset: u32,
+    /// Indices in the coarse grid.
+    pub count: u32,
+    /// Indices in the full grid a draw must hold to be drawn coarse.
+    pub full_count: u32,
 }
 
 #[cfg(test)]

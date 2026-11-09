@@ -8,9 +8,9 @@
 //! what the world holds this frame ([`FrameFacts`]).
 
 use crate::components::IndirectTechnique;
+use crate::render::config::ResolvedGraphics;
 use crate::render::planar_reflection::planar_pass_needed;
 use crate::render::post::reflection_path::ReflectionPath;
-use crate::settings::ResolvedGraphics;
 
 use super::FrameGraphInputs;
 

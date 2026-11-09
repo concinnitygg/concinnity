@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use concinnity_core::platform::PlatformSet;
-use concinnity_engine::ecs::{ComponentAsset, ResourceRecord, World};
+use concinnity_engine::blob::ResourceRecord;
+use concinnity_engine::ecs::World;
 use concinnity_host::store::blob::BlobData;
 
 use crate::authoring::registry::{Authored, RegisteredType, asset_entry, set_reference};
@@ -243,7 +244,7 @@ impl WorldBuilder {
         let mut world = World::from_payloads(Box::new(BlobData::new(payload_sections)));
 
         for def in &result.defs {
-            let mut component = ComponentAsset::from_baked(def)?;
+            let mut component = def.component()?;
             if let Some(locator) = &def.payload {
                 component.inject_locator(locator.clone());
             }

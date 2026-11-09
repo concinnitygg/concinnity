@@ -19,6 +19,7 @@ pub use temporal::TemporalState;
 
 use crate::environment::planet::Rebase;
 use crate::gfx::auto_exposure::{ExposureAdaptation, PreExposure};
+use crate::gfx::render_types::clustering_active;
 use crate::gfx::render_types::{
     ClusterCamera, ClusterParams, FogFroxelParams, FogParams, RtParams, SsaoParams, SsgiParams,
     SsrParams,
@@ -28,7 +29,6 @@ use crate::render::backend::error::{RenderError, RenderResult};
 use crate::render::backend::init::ShadowCadence;
 use crate::render::environment::atmosphere::AtmosphereView;
 use crate::render::environment::volumetric_fog::FogSettings;
-use crate::render::light::lights::clustering_active;
 use crate::render::light::state::LightState;
 use crate::render::post::reflection_path::ReflectionPath;
 use crate::render::post::rt_reflections::{RtParamsInputs, RtReflectionSettings};
@@ -176,7 +176,7 @@ pub struct FramePlanner {
 impl Default for FramePlanner {
     /// Shadows scheduled as the default graphics settings schedule them.
     fn default() -> Self {
-        Self::new(crate::settings::ResolvedGraphics::default().shadow_cadence())
+        Self::new(crate::render::config::ResolvedGraphics::default().shadow_cadence())
     }
 }
 

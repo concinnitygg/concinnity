@@ -5,7 +5,6 @@
 
 pub(crate) mod authored_action;
 mod capture;
-pub(crate) mod dropdown;
 mod focus;
 pub(crate) mod hit_region;
 mod intent;
@@ -38,6 +37,7 @@ use crate::components::{
     StoryCommand, TextInput, TextLabel, UiAction,
 };
 use crate::ecs::asset_id::AssetId;
+use crate::gfx::dropdown;
 use crate::gfx::overlay::{OverlayTransform, UI_REFERENCE_SIZE};
 use concinnity_core::platform::CompiledPlatforms;
 use hashbrown::HashMap;
@@ -340,7 +340,7 @@ impl System for UiInputSystem {
             .reads_resources(crate::resource_mask![
                 crate::ecs::EntityById,
                 DisabledSettingRows,
-                super::window::display_mode::DisplayModes,
+                crate::window::display_mode::DisplayModes,
                 CompiledPlatforms,
             ])
             .writes_resources(crate::resource_mask![
@@ -727,14 +727,14 @@ impl UiInputSystem {
                 .collect()
         } else if settings::is_dynamic_dropdown(req.setting) {
             // `resolution`'s modes, which the renderer publishes at init.
-            let modes = ctx.resource::<super::window::display_mode::DisplayModes>()?;
+            let modes = ctx.resource::<crate::window::display_mode::DisplayModes>()?;
             if modes.0.is_empty() {
                 return None;
             }
             modes
                 .0
                 .iter()
-                .map(super::window::display_mode::DisplayMode::label)
+                .map(crate::window::display_mode::DisplayMode::label)
                 .collect()
         } else {
             settings::options(req.setting)?
@@ -1441,7 +1441,7 @@ mod tests {
     };
     use crate::ecs::{Phase, World};
     use crate::input::keymap::Bindable;
-    use crate::presentation::window::display_mode;
+    use crate::window::display_mode;
     use alloc::vec;
 
     fn start(world: &mut World) {

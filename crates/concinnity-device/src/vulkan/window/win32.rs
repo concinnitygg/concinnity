@@ -9,9 +9,9 @@
 use ash::vk;
 use concinnity_engine::components::WindowMode;
 use concinnity_engine::input::snapshot::InputSnapshot;
-use concinnity_engine::presentation::window::clipboard::Clipboard;
-use concinnity_engine::presentation::window::display_mode::{DisplayMode, DisplayRefresh};
 use concinnity_engine::render::backend::error::{RenderError, RenderResult};
+use concinnity_engine::window::clipboard::Clipboard;
+use concinnity_engine::window::display_mode::{DisplayMode, DisplayRefresh};
 
 use crate::win32::display_mode::{self, FullscreenDisplayMode};
 use crate::win32::window;

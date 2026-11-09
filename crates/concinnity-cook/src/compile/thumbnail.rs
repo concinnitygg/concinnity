@@ -13,8 +13,9 @@
 use concinnity_core::math::{SaturatingFrom, narrow_f32};
 use concinnity_engine::bake::texture as texture_payload;
 use concinnity_engine::bake::texture::{TextureFormat, downscale_rgba};
-use concinnity_engine::blob::{BlobAssetDef, PayloadLocator, ResourceKind, ResourceRecord};
+use concinnity_engine::blob::{BlobAssetDef, PayloadLocator, ResourceRecord};
 use concinnity_engine::components::{Material, Model};
+use concinnity_engine::ecs::ResourceKind;
 use concinnity_engine::gfx::raster;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};

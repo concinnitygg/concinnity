@@ -289,15 +289,12 @@ impl ClusterParams {
     };
 
     /// The main camera's params for this frame. `use_clusters` is set while
-    /// [`clustering_active`](crate::render::light::lights::clustering_active) holds for
-    /// the counts; a negative `num_local_lights` bins none.
+    /// [`clustering_active`] holds for the counts; a negative
+    /// `num_local_lights` bins none.
     pub fn for_camera(camera: &ClusterCamera, num_local_lights: i32, num_probes: u32) -> Self {
         Self {
             num_lights: u32::saturating_from(num_local_lights),
-            use_clusters: u32::from(crate::render::light::lights::clustering_active(
-                num_local_lights,
-                num_probes as usize,
-            )),
+            use_clusters: u32::from(clustering_active(num_local_lights, num_probes as usize)),
             num_probes,
             ..Self::ZERO
         }
@@ -373,4 +370,43 @@ impl AreaLightData {
         up: [0.0; 3],
         _pad: 0.0,
     };
+}
+
+/// Whether the clustered forward path should bin this frame.
+///
+/// The binning kernel bins both the local lights and the reflection probes'
+/// influence boxes, so it runs whenever either is live: `local_light_count` is
+/// the live light count the forward pass would iterate, `probe_count` the live
+/// probe records. It dispatches one thread per cluster over the whole grid
+/// regardless of what it finds, so a world with neither skips it.
+///
+/// This single-sources two things that must agree: `ClusterParams::use_clusters`
+/// and `FrameGraphInputs::clustering_enabled`. When it is false the
+/// forward pass iterates `num_local_lights` directly (zero iterations) and every
+/// probe reader walks the whole (empty) probe set, instead of reading a cluster
+/// list the dropped pass never wrote, so a stale list from an earlier frame is
+/// never sampled.
+pub fn clustering_active(local_light_count: i32, probe_count: usize) -> bool {
+    local_light_count > 0 || probe_count > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clustered_binning_needs_a_light_or_a_probe() {
+        assert!(clustering_active(1, 0));
+        assert!(clustering_active(0, 1));
+        assert!(clustering_active(4, 12));
+        // Every local light despawned and no probe baked: nothing to bin.
+        assert!(!clustering_active(0, 0));
+    }
+
+    #[test]
+    fn clustered_binning_ignores_a_negative_count() {
+        // `num_local_lights` is a signed i32 in the uniform block.
+        assert!(!clustering_active(-1, 0));
+        assert!(clustering_active(-1, 2));
+    }
 }

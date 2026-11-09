@@ -1,3 +1,4 @@
+use crate::render::uniforms::DaylightBlock;
 use alloc::vec::Vec;
 use core::mem::offset_of;
 
@@ -44,7 +45,7 @@ fn sky(camera_reach: f32) -> DaylightBlock {
 fn block() -> GpuCullVariants {
     let mut block = GpuCullVariants::default();
     block.routes[0] = planet_route();
-    block.set_view(60.0, &sky(0.0));
+    block.set_view(60.0, &sky(0.0).variant_sky());
     block
 }
 
@@ -118,7 +119,7 @@ fn routing_follows_the_frames_hand_over() {
 // A planet's ground growing no grass has no band: the ground, wherever it lies.
 #[test]
 fn a_grassless_planet_ground_takes_the_ground() {
-    use crate::render::environment::grass::CanopyRange;
+    use crate::gfx::render_types::CanopyRange;
     let bare = FarFieldTint::of(
         CanopyRange {
             first: 0,
@@ -213,11 +214,11 @@ fn the_sky_picks_the_variant_with_it_only_where_it_reaches() {
     assert_eq!(b.bucket(&grass(), tile(500.0), EYE), CANOPY_SKY);
     // A high camera: the sky reaches everything.
     let mut high = block();
-    high.set_view(60.0, &sky(0.01));
+    high.set_view(60.0, &sky(0.01).variant_sky());
     assert_eq!(high.bucket(&grass(), tile(10.0), EYE), GROUND_SKY);
     // No planet sky in this view (a probe face, a world without one).
     let mut off = block();
-    off.set_view(60.0, &DaylightBlock::OFF);
+    off.set_view(60.0, &DaylightBlock::OFF.variant_sky());
     assert_eq!(off.bucket(&grass(), tile(500.0), EYE), CANOPY);
 }
 
@@ -263,12 +264,12 @@ fn the_live_buckets_hold_every_pick_of_the_view() {
     b.routes[1] = GpuVariantRoute::new([6, 6, 6, 6], 0);
     let plain =
         !((1 << CANOPY) | (1 << CANOPY_SKY) | (1 << GROUND) | (1 << GROUND_SKY)) & all_eight;
-    assert_eq!(b.live_buckets(8, &sky(0.0)), all_eight);
+    assert_eq!(b.live_buckets(8, &sky(0.0).variant_sky()), all_eight);
     assert_eq!(
-        b.live_buckets(8, &sky(0.2)),
+        b.live_buckets(8, &sky(0.2).variant_sky()),
         plain | (1 << CANOPY_SKY) | (1 << GROUND_SKY)
     );
-    let off = &DaylightBlock::OFF;
+    let off = &DaylightBlock::OFF.variant_sky();
     assert_eq!(
         b.live_buckets(8, off),
         plain | (1 << CANOPY) | (1 << GROUND)
@@ -276,8 +277,8 @@ fn the_live_buckets_hold_every_pick_of_the_view() {
     assert_eq!(b.live_buckets(3, off), 0b111, "within the world's buckets");
     // Every pick of every view lies in its live set.
     for view in [sky(0.0), sky(0.2), DaylightBlock::OFF] {
-        b.set_view(60.0, &view);
-        let live = b.live_buckets(8, &view);
+        b.set_view(60.0, &view.variant_sky());
+        let live = b.live_buckets(8, &view.variant_sky());
         for half in [5.0, 50.0, 300.0, 600.0] {
             for args in [grass(), args(FarFieldTint::NONE)] {
                 let bucket = b.bucket(&args, tile(half), EYE);

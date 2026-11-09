@@ -4,17 +4,14 @@ use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::Screenshot;
-use super::asset::{is_contained_file, normal_file};
+use super::asset::{is_contained_file, normal_file, screenshot_path};
 use super::schedule::{Shot, ShotSchedule};
 use crate::benchmark::BenchmarkRun;
-use crate::ecs::{PipelineContext, StepResult, System, World};
-use crate::launch::{LaunchRequest, screenshot_path};
+use crate::ecs::{PipelineContext, StepResult, System};
 use crate::protocol::{FrameCaptureRequest, SimTiming, WindowMinimized};
 use concinnity_core::math::narrow_f32;
 
-/// Takes a run's screenshots: the launch's `--screenshot-at` shots, and the
-/// world's [`Screenshot`]s in a run that asks for them.
+/// Takes a run's screenshots as the simulation clock reaches each one.
 #[derive(Debug)]
 pub(crate) struct ScreenshotSystem {
     schedule: ShotSchedule,
@@ -24,52 +21,31 @@ pub(crate) struct ScreenshotSystem {
 }
 
 impl ScreenshotSystem {
-    /// The system for a run with screenshots to take.
-    pub(crate) fn for_world(world: &World) -> Option<Self> {
-        let launch = world.resource::<LaunchRequest>()?;
-        let shots = shots(world, launch);
+    /// The system taking `shots` into `dir`, or `None` when none of them can
+    /// be taken. A shot whose file leaves the directory, or writes the file an
+    /// earlier one writes, is dropped with a warning.
+    pub(crate) fn new(dir: &str, shots: impl IntoIterator<Item = Shot>) -> Option<Self> {
+        let shots = takeable(shots);
         (!shots.is_empty()).then(|| Self {
             schedule: ShotSchedule::new(shots),
-            dir: String::from(launch.screenshots_dir()),
+            dir: String::from(dir),
             reached: 0.0,
         })
     }
+
+    /// The files of the shots not yet taken, earliest first.
+    #[cfg(test)]
+    pub(crate) fn waiting_files(&self) -> Vec<&str> {
+        self.schedule.waiting().map(|s| s.file.as_str()).collect()
+    }
 }
 
-/// Whether the run will take screenshots: the launch asks for some, or takes
-/// the world's and the world has some.
-pub(crate) fn takes_screenshots(ctx: &PipelineContext<'_>) -> bool {
-    ctx.resource::<LaunchRequest>().is_some_and(|launch| {
-        !launch.args.screenshot_at.is_empty()
-            || (takes_authored(launch) && ctx.query::<Screenshot>().next().is_some())
-    })
-}
-
-// Whether a launch takes the world's own screenshots.
-fn takes_authored(launch: &LaunchRequest) -> bool {
-    launch.args.benchmarks()
-}
-
-// The world's screenshots when the launch takes them, then the launch's, each
-// with a file inside the screenshot directory and none writing a file an
-// earlier one writes.
-fn shots(world: &World, launch: &LaunchRequest) -> Vec<Shot> {
-    let authored = world
-        .query::<Screenshot>()
-        .filter(|_| takes_authored(launch))
-        .map(|s| Shot {
-            seconds: s.seconds,
-            file: s.file.clone(),
-            hud: s.hud,
-        });
-    let asked = launch.args.screenshot_at.iter().map(|s| Shot {
-        seconds: s.seconds(),
-        file: s.file.clone(),
-        hud: true,
-    });
+// The shots that can be taken, each with a file inside the screenshot
+// directory and none writing a file an earlier one writes.
+fn takeable(shots: impl IntoIterator<Item = Shot>) -> Vec<Shot> {
     let mut files = BTreeSet::new();
-    authored
-        .chain(asked)
+    shots
+        .into_iter()
         .filter(|shot| {
             if !is_contained_file(&shot.file) {
                 tracing::warn!(
@@ -158,24 +134,15 @@ fn untaken<'a>(ended: f32, waiting: impl Iterator<Item = &'a Shot>) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launch::{LaunchArgs, LaunchCommand, ScreenshotAt};
+    use crate::ecs::World;
     use alloc::string::ToString;
-    use alloc::vec;
 
-    fn world(args: LaunchArgs, shots: &[(f32, &str, bool)]) -> World {
-        let mut world = World::new();
-        world.insert_resource(LaunchRequest {
-            args,
-            ..Default::default()
-        });
-        for &(seconds, file, hud) in shots {
-            world.add_component(Screenshot {
-                seconds,
-                file: file.to_string(),
-                hud,
-            });
+    fn shot(seconds: f32, file: &str, hud: bool) -> Shot {
+        Shot {
+            seconds,
+            file: file.to_string(),
+            hud,
         }
-        world
     }
 
     fn at(
@@ -194,68 +161,38 @@ mod tests {
     // The shots a run ends before name themselves on one line.
     #[test]
     fn the_untaken_shots_share_one_line() {
-        let shot = |file: &str| Shot {
-            seconds: 70.0,
-            file: file.to_string(),
-            hud: true,
-        };
         assert_eq!(untaken(62.06, [].iter()), None);
         assert_eq!(
-            untaken(62.06, [shot("a.png")].iter()).as_deref(),
+            untaken(62.06, [shot(70.0, "a.png", true)].iter()).as_deref(),
             Some("screenshot: the run ended at 62.1 s; 1 shot not taken: a.png")
         );
         assert_eq!(
-            untaken(62.06, [shot("a.png"), shot("b.png")].iter()).as_deref(),
+            untaken(
+                62.06,
+                [shot(70.0, "a.png", true), shot(70.0, "b.png", true)].iter()
+            )
+            .as_deref(),
             Some("screenshot: the run ended at 62.1 s; 2 shots not taken: a.png, b.png")
         );
     }
 
-    // Plain play takes none of the world's shots; a benchmark takes them, and
-    // `--screenshot-at` takes its own alone.
-    #[test]
-    fn only_a_run_that_asks_takes_screenshots() {
-        let shots = [(1.0, "a.png", true)];
-        assert!(ScreenshotSystem::for_world(&world(LaunchArgs::NONE, &shots)).is_none());
-        assert!(ScreenshotSystem::for_world(&World::new()).is_none());
-        let benchmark = LaunchArgs {
-            command: LaunchCommand::Bench,
-            ..LaunchArgs::NONE
-        };
-        assert!(ScreenshotSystem::for_world(&world(benchmark.clone(), &shots)).is_some());
-        assert!(
-            ScreenshotSystem::for_world(&world(benchmark, &[])).is_none(),
-            "nothing to take"
-        );
-        let asked = LaunchArgs {
-            screenshot_at: vec![ScreenshotAt::new(2.0, "b.png")],
-            ..LaunchArgs::NONE
-        };
-        let system = ScreenshotSystem::for_world(&world(asked, &shots)).expect("asked for one");
-        let files: Vec<&str> = system.schedule.waiting().map(|s| s.file.as_str()).collect();
-        assert_eq!(files, ["b.png"]);
-    }
-
     // A shot fires on the first frame the simulation clock reaches its moment,
-    // under the launch's directory, with its HUD choice; the launch's own
-    // shots join the world's, and one leaving the directory or writing a file
-    // another writes is dropped.
+    // under the directory, with its HUD choice; one leaving the directory or
+    // writing a file another writes is dropped, and none left takes nothing.
     #[test]
     fn shots_fire_on_the_simulation_clock() {
-        let args = LaunchArgs {
-            command: LaunchCommand::Bench,
-            screenshots_dir: Some("shots".to_string()),
-            screenshot_at: vec![ScreenshotAt::new(2.5, "asked.png")],
-            ..LaunchArgs::NONE
-        };
-        let mut world = world(
-            args,
-            &[
-                (1.0, "clean.png", false),
-                (1.5, "../out.png", true),
-                (1.8, "./Clean.png", true),
+        assert!(ScreenshotSystem::new("shots", [shot(1.0, "../out.png", true)]).is_none());
+        let mut world = World::new();
+        let mut system = ScreenshotSystem::new(
+            "shots",
+            [
+                shot(1.0, "clean.png", false),
+                shot(1.5, "../out.png", true),
+                shot(1.8, "./Clean.png", true),
+                shot(2.5, "later.png", true),
             ],
-        );
-        let mut system = ScreenshotSystem::for_world(&world).expect("armed");
+        )
+        .expect("armed");
         system.init(&mut world.context());
         assert_eq!(at(&mut world, &mut system, 0.9), None);
         assert_eq!(
@@ -270,20 +207,16 @@ mod tests {
             None,
             "the escaping one and the second clean.png are dropped"
         );
-        let asked = at(&mut world, &mut system, 3.0).expect("the launch's shot");
-        assert_eq!((asked.path.as_str(), asked.hud), ("shots/asked.png", true));
-        assert_eq!(system.schedule.waiting().count(), 0);
+        let later = at(&mut world, &mut system, 3.0).expect("the later shot");
+        assert_eq!((later.path.as_str(), later.hud), ("shots/later.png", true));
+        assert!(system.waiting_files().is_empty());
     }
 
     // A shot waits for the moment the frame shows, not the end of its ticks.
     #[test]
     fn a_shot_fires_on_the_drawn_moment() {
-        let args = LaunchArgs {
-            command: LaunchCommand::Bench,
-            ..LaunchArgs::NONE
-        };
-        let mut world = world(args, &[(1.0, "a.png", true)]);
-        let mut system = ScreenshotSystem::for_world(&world).expect("armed");
+        let mut world = World::new();
+        let mut system = ScreenshotSystem::new("", [shot(1.0, "a.png", true)]).expect("armed");
         let mut drawn = |alpha| {
             world.insert_resource(SimTiming {
                 time: 1.01,
@@ -300,12 +233,8 @@ mod tests {
     // A shot due while the window is hidden is skipped rather than taken late.
     #[test]
     fn a_hidden_window_skips_its_shot() {
-        let args = LaunchArgs {
-            command: LaunchCommand::Bench,
-            ..LaunchArgs::NONE
-        };
-        let mut world = world(args, &[(1.0, "a.png", true)]);
-        let mut system = ScreenshotSystem::for_world(&world).expect("armed");
+        let mut world = World::new();
+        let mut system = ScreenshotSystem::new("", [shot(1.0, "a.png", true)]).expect("armed");
         world.insert_resource(WindowMinimized(true));
         assert_eq!(at(&mut world, &mut system, 1.0), None);
         world.insert_resource(WindowMinimized(false));

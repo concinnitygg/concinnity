@@ -120,21 +120,27 @@ fn lent_pads_reach_the_move_axis_through_the_live_deadzone() {
     assert_eq!(published(&world).move_axis, [0.0, 0.0]);
 }
 
-// Stored controls replace the defaults at init, the rebound keys among them.
+// Controls sent before the first packet (the stored choices the settings
+// system hands over at start) take effect though no packet has arrived.
 #[test]
-fn stored_controls_seed_the_maps_and_deadzone() {
+fn controls_apply_before_the_first_packet() {
     use crate::components::InputKey;
     use crate::input::keymap::{Bindable, KeyMap};
 
     let mut keys = KeyMap::DEFAULT;
     keys.rebind(Bindable::Jump, InputKey::J);
-    let mut stored = StoredSettings::default();
-    stored.controls.gamepad_deadzone = Some(0.4);
-    stored.controls.keymap = Some(keys);
     let mut world = World::new();
-    world.insert_resource(stored);
     let mut system = InputSystem::new();
     started(&mut system, &mut world);
+    world
+        .context()
+        .events_mut::<ControlsCommand>()
+        .send(ControlsCommand {
+            keymap: Some(keys),
+            gamepad_deadzone: Some(0.4),
+            ..Default::default()
+        });
+    system.step(&mut world.context());
     assert_eq!(system.deadzone, 0.4);
     assert_eq!(
         system.bindings,

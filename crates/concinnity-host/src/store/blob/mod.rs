@@ -18,7 +18,7 @@ mod error;
 pub use error::BlobLoadError;
 
 pub use concinnity_engine::SCHEMA_VERSION;
-pub use concinnity_engine::ecs::{BlobAssetDef, BlobMeta, ResourceRecord};
+pub use concinnity_engine::blob::{BlobAssetDef, BlobMeta, ResourceRecord};
 pub use data::BlobData;
 
 // The primary blob this process reads, named by whatever anchored it. Process

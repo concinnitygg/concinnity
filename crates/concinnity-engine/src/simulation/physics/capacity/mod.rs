@@ -21,11 +21,12 @@ use crate::simulation::physics::{BodyHandle, ContactHit, SensorCrossing, Simulat
 use concinnity_core::memory::{Ledger, MemTag, Realm};
 use core::num::NonZeroU64;
 
+use crate::blob::PhysicsBudgetRecord;
 use crate::components::{
     BodyDynamics, Camera3D, CharacterRig, Collider, PhysicsJoint, Prop, Transform, TriggerVolume,
 };
 use crate::ecs::asset_id::AssetId;
-use crate::ecs::{Entity, PhysicsBudgetRecord, PipelineContext, Ref};
+use crate::ecs::{Entity, PipelineContext, Ref};
 
 use super::props::{PropCollSnap, PropPhysics};
 use super::rig::RigPhysics;

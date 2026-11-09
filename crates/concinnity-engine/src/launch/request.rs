@@ -1,5 +1,3 @@
-use alloc::string::{String, ToString};
-
 use super::LaunchArgs;
 use crate::ecs::{Resources, World};
 use crate::gfx::view_modes::{ShowFlags, ViewMode};
@@ -9,27 +7,6 @@ use crate::settings::{QualityPreset, SettingKey, StoredSettings, UserGraphicsSet
 
 /// Where screenshots land unless the launch names another directory: relative to the working directory the run started in.
 pub const DEFAULT_SCREENSHOTS_DIR: &str = "screenshots";
-
-/// The file a capture at `path` is written to for a run whose screenshots go
-/// under `dir`: `path` itself when it is absolute, else `path` under `dir`.
-pub fn screenshot_path(dir: &str, path: &str) -> String {
-    if is_absolute(path) {
-        return path.to_string();
-    }
-    let dir = dir.trim_end_matches(['/', '\\']);
-    if dir.is_empty() {
-        return path.to_string();
-    }
-    alloc::format!("{dir}/{path}")
-}
-
-// Whether `path` is absolute on any host a run writes on: rooted (`/`, `\\`)
-// or led by a drive letter (`C:`).
-fn is_absolute(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    matches!(bytes.first(), Some(b'/' | b'\\'))
-        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
-}
 
 /// What the launch asked the host to arm, published as a world resource before
 /// the world starts. A run without one runs the shipping behavior. Each `None`
@@ -219,26 +196,6 @@ mod tests {
         assert_eq!(request.screenshots_dir(), DEFAULT_SCREENSHOTS_DIR);
         request.args.screenshots_dir = Some("shots/dx12".into());
         assert_eq!(request.screenshots_dir(), "shots/dx12");
-    }
-
-    // A relative capture lands under the directory; an absolute one, on any
-    // host's form, stays where it says.
-    #[test]
-    fn a_capture_path_resolves_under_the_screenshot_directory() {
-        assert_eq!(
-            screenshot_path("screenshots", "benchmark/orbit.png"),
-            "screenshots/benchmark/orbit.png"
-        );
-        assert_eq!(screenshot_path("shots/vk/", "a.png"), "shots/vk/a.png");
-        assert_eq!(screenshot_path("", "a.png"), "a.png");
-        for absolute in [
-            "/tmp/a.png",
-            "C:\\out\\a.png",
-            "d:/a.png",
-            "\\\\host\\a.png",
-        ] {
-            assert_eq!(screenshot_path("screenshots", absolute), absolute);
-        }
     }
 
     #[test]

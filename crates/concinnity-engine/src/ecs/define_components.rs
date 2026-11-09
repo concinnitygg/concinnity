@@ -206,25 +206,22 @@ macro_rules! define_components {
         }
 
         impl ComponentAsset {
-            /// Reconstruct a component from a blob def: dispatch on the tag and
-            /// deserialize the runtime component via `Component::from_baked`
-            /// (every record is baked -- cook already ran the asset -> component
-            /// translation).
+            /// Reconstruct the component registered under `discriminant` from
+            /// its baked bytes via `Component::from_baked` (every record is
+            /// baked -- cook already ran the asset -> component translation).
             ///
             /// # Errors
             ///
             /// Returns an error if the tag names no component or its bytes do
             /// not decode.
-            pub fn from_baked(def: &BlobAssetDef) -> Result<Self, AssetError> {
+            pub fn from_baked(discriminant: u8, args_bytes: &[u8]) -> Result<Self, AssetError> {
                 $(
-                    if def.discriminant == ComponentTag::$variant as u8 {
-                        let c = <$ty as Component>::from_baked(&def.args_bytes)?;
+                    if discriminant == ComponentTag::$variant as u8 {
+                        let c = <$ty as Component>::from_baked(args_bytes)?;
                         return Ok(ComponentAsset::$variant(c));
                     }
                 )+
-                Err(AssetError::UnknownComponent {
-                    discriminant: def.discriminant,
-                })
+                Err(AssetError::UnknownComponent { discriminant })
             }
 
             /// Inject a payload locator into the component after construction.

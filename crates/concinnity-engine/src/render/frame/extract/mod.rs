@@ -22,6 +22,7 @@ use crate::protocol::{
     FlyCam, FrameCaptureRequest, FrameTime, HiddenAssets, InputSampledAt, MenuOverride, PickEntry,
     PickIndex, SimTiming, ViewOverrides,
 };
+use crate::protocol::{HistoryResetCauses, PendingHistoryReset};
 use crate::render::environment::atmosphere::AtmosphereSettings;
 use crate::render::frame::queues::ActiveRenderQueues;
 use crate::render::frame::snapshot::{FrameScalars, RenderSnapshot, SceneOpRecorder};
@@ -29,9 +30,7 @@ use crate::render::light::sky_occluders::SkyOccluders;
 use crate::render::overlay::{OverlayFrame, OverlayRecycle};
 use crate::render::probe::prop::PropProbeTarget;
 use crate::render::scene::flow::{self, ActiveSceneFlow, SceneVisibilityScratch};
-use crate::render::temporal::history_reset::{
-    FrameClock, HistoryResetCauses, HistoryResetTracker, HistoryView, PendingHistoryReset,
-};
+use crate::render::temporal::history_reset::{FrameClock, HistoryResetTracker, HistoryView};
 use crate::transform::propagation::{self, TransformCache};
 use concinnity_core::fanout::FanOut;
 use concinnity_core::math::vec3;
