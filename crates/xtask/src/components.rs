@@ -27,8 +27,6 @@ pub(crate) struct Component {
     /// Whether the payload is a tool that reports its own version, and that a
     /// build falls back to finding on PATH when nothing is vendored.
     pub(crate) tool: bool,
-    /// Whether a bare `vendor` leaves it out unless named or given `--all`.
-    pub(crate) optional: bool,
 }
 
 /// Where a host gets a component from.
@@ -96,7 +94,7 @@ impl Component {
     }
 
     // Whether `dir` is `<name>-<version>-<slug>` with a dotted numeric version,
-    // which keeps `fidelityfx` from claiming `fidelityfx-vk` releases.
+    // which keeps a name from claiming the releases of a longer one it prefixes.
     fn is_release_dir(&self, dir: &str, host: Host) -> bool {
         dir.strip_prefix(self.name)
             .and_then(|rest| rest.strip_prefix('-'))
@@ -112,21 +110,13 @@ impl Component {
 }
 
 /// Every component, in the order a bare verb visits them.
-pub(crate) const COMPONENTS: [&Component; 6] = [
-    &DXC,
-    &AGILITY,
-    &FIDELITYFX,
-    &FIDELITYFX_VK,
-    &XESS,
-    &STREAMLINE,
-];
+pub(crate) const COMPONENTS: [&Component; 5] = [&DXC, &AGILITY, &FIDELITYFX, &XESS, &STREAMLINE];
 
 /// Every component's name, for the command line to offer.
-pub(crate) const NAMES: [&str; 6] = [
+pub(crate) const NAMES: [&str; 5] = [
     DXC.name,
     AGILITY.name,
     FIDELITYFX.name,
-    FIDELITYFX_VK.name,
     XESS.name,
     STREAMLINE.name,
 ];
@@ -191,7 +181,6 @@ pub(crate) const DXC: Component = Component {
     ]),
     watchers: &["crates/concinnity-shader/build.rs"],
     tool: true,
-    optional: false,
 };
 
 /// The commit `DXC.release` tags, which a source build checks it cloned.
@@ -250,56 +239,38 @@ pub(crate) const AGILITY: Component = Component {
     sha256: None,
     watchers: SDK_WATCHERS,
     tool: false,
-    optional: false,
 };
 
+/// AMD's FidelityFX SDK, for FSR on DirectX and Vulkan.
+///
+/// The SDK publishes no release asset, only the tagged source archive, which
+/// carries AMD's signed runtimes. It is cut to the loader and upscaler DLL of
+/// each API and the license. The loader is what the engine opens; it finds the
+/// upscaler DLL beside the executable.
 pub(crate) const FIDELITYFX: Component = Component {
     name: "fidelityfx",
-    release: "1.1.4",
-    summary: "AMD FidelityFX, for FSR 3 on DirectX",
+    release: "2.4.0",
+    summary: "AMD FidelityFX, for FSR on DirectX and Vulkan",
     hosts: WINDOWS,
     source: |_| {
         let release = FIDELITYFX.release;
-        download(format!(
-            "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/releases/download/v{release}/FidelityFX-SDK-v{release}.zip"
-        ))
+        Source::Download {
+            url: format!(
+                "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/archive/refs/tags/v{release}.zip"
+            ),
+            keep: Some(&[
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll",
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_dx12.dll",
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_vk.dll",
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_vk.dll",
+                "Kits/FidelityFX/docs/license.md",
+            ]),
+        }
     },
-    payload: |_| "bin/amd_fidelityfx_dx12.dll",
+    payload: |_| "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll",
     sha256: None,
     watchers: SDK_WATCHERS,
     tool: false,
-    optional: false,
-};
-
-/// AMD's Vulkan FSR runtime, rebuilt from the vendored SDK with one fix.
-///
-/// v1.1.4 declares the FSR3 upscaler's `rw_luma_history` storage image `rgba8`
-/// in its GLSL callback while the C++ creates the resource as
-/// `R16G16B16A16_FLOAT`, so every Vulkan FSR dispatch trips a validation-layer
-/// format mismatch and the reads and stores are undefined
-/// (<https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/161>).
-/// Declaring `rgba16f` matches the view, which is what
-/// `patches/fsr3upscaler_luma_history_rgba16f.patch` records and what
-/// `source_build::fidelityfx_vk` applies. Only the shader changes, so the
-/// rebuilt DLL is ABI-identical to the stock one.
-///
-/// Its release is not `FIDELITYFX.release` but the last one with this Vulkan
-/// backend, which is a different fact that happens to agree today: SDK v2
-/// dropped Vulkan and deleted the GLSL callbacks this patches. The build
-/// refuses once the two part.
-pub(crate) const FIDELITYFX_VK: Component = Component {
-    name: "fidelityfx-vk",
-    release: "1.1.4",
-    summary: "AMD FidelityFX Vulkan runtime, rebuilt with the FSR3 luma_history fix",
-    hosts: WINDOWS,
-    source: |_| Source::Build(source_build::fidelityfx_vk),
-    payload: |_| "bin/amd_fidelityfx_vk.dll",
-    sha256: None,
-    watchers: SDK_WATCHERS,
-    tool: false,
-    // The build needs CMake, Visual Studio and the Vulkan SDK, and the stock
-    // DLL works without it.
-    optional: true,
 };
 
 pub(crate) const XESS: Component = Component {
@@ -317,7 +288,6 @@ pub(crate) const XESS: Component = Component {
     sha256: None,
     watchers: SDK_WATCHERS,
     tool: false,
-    optional: false,
 };
 
 pub(crate) const STREAMLINE: Component = Component {
@@ -338,7 +308,6 @@ pub(crate) const STREAMLINE: Component = Component {
     )]),
     watchers: SDK_WATCHERS,
     tool: false,
-    optional: false,
 };
 
 #[cfg(test)]
@@ -379,7 +348,7 @@ mod tests {
             (&DXC, Host::LinuxX64, false),
             (&DXC, Host::MacosArm64, true),
             (&AGILITY, Host::WindowsX64, false),
-            (&FIDELITYFX_VK, Host::WindowsX64, true),
+            (&FIDELITYFX, Host::WindowsX64, false),
             (&STREAMLINE, Host::WindowsX64, false),
         ];
         for (component, host, built) in cases {
@@ -394,8 +363,43 @@ mod tests {
     }
 
     #[test]
-    fn the_vulkan_runtime_tracks_the_sdk_it_is_built_from() {
-        assert_eq!(FIDELITYFX_VK.release, FIDELITYFX.release);
+    fn the_fidelityfx_archive_is_cut_to_the_runtimes() {
+        let Source::Download { keep, .. } = (FIDELITYFX.source)(Host::WindowsX64) else {
+            panic!("fidelityfx is downloaded");
+        };
+        let root = "FidelityFX-SDK-2.4.0/";
+        let members = [
+            (
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_dx12.dll",
+                true,
+            ),
+            (
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_upscaler_vk.dll",
+                true,
+            ),
+            ("Kits/FidelityFX/docs/license.md", true),
+            (
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_loader_vk.lib",
+                false,
+            ),
+            (
+                "Kits/FidelityFX/signedbin/amd_fidelityfx_framegeneration_vk.dll",
+                false,
+            ),
+            (
+                "Kits/FidelityFX/upscalers/fsr3/internal/ffx_fsr3upscaler.cpp",
+                false,
+            ),
+        ];
+        for (member, want) in members {
+            assert_eq!(
+                crate::unpack::wanted(keep, &format!("{root}{member}")),
+                want,
+                "{member}"
+            );
+        }
+        let payload = (FIDELITYFX.payload)(Host::WindowsX64);
+        assert!(crate::unpack::wanted(keep, &format!("{root}{payload}")));
     }
 
     #[test]
@@ -415,12 +419,11 @@ mod tests {
     #[test]
     fn release_dirs_match_by_name_version_and_slug() {
         let host = Host::WindowsX64;
-        assert!(FIDELITYFX.is_release_dir("fidelityfx-1.1.4-windows-x86_64", host));
-        assert!(!FIDELITYFX.is_release_dir("fidelityfx-vk-1.1.4-windows-x86_64", host));
-        assert!(FIDELITYFX_VK.is_release_dir("fidelityfx-vk-1.1.4-windows-x86_64", host));
-        assert!(!FIDELITYFX.is_release_dir("fidelityfx-1.1.4-linux-x86_64", host));
+        assert!(FIDELITYFX.is_release_dir("fidelityfx-2.4.0-windows-x86_64", host));
+        assert!(!FIDELITYFX.is_release_dir("fidelityfx-vk-2.4.0-windows-x86_64", host));
+        assert!(!FIDELITYFX.is_release_dir("fidelityfx-2.4.0-linux-x86_64", host));
         assert!(!FIDELITYFX.is_release_dir("fidelityfx--windows-x86_64", host));
-        assert!(!FIDELITYFX.is_release_dir(".fidelityfx-1.1.4-windows-x86_64.incoming", host));
+        assert!(!FIDELITYFX.is_release_dir(".fidelityfx-2.4.0-windows-x86_64.incoming", host));
     }
 
     #[test]

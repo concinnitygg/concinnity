@@ -215,7 +215,7 @@ fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
     let src = tmp.path().join("src");
     fs::create_dir_all(src.join("D3D12")).unwrap();
     fs::write(src.join("concinnity-run.exe"), b"exe").unwrap();
-    fs::write(src.join("amd_fidelityfx_dx12.dll"), b"x").unwrap();
+    fs::write(src.join("amd_fidelityfx_loader_dx12.dll"), b"x").unwrap();
     fs::write(src.join("libconcinnity_ffi.dll"), b"x").unwrap();
     fs::write(src.join("notes.txt"), b"x").unwrap();
     fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
@@ -230,7 +230,7 @@ fn copy_runtime_sidecars_copies_dlls_and_the_d3d12_dir() {
     )
     .unwrap();
 
-    assert!(dest.join("amd_fidelityfx_dx12.dll").exists());
+    assert!(dest.join("amd_fidelityfx_loader_dx12.dll").exists());
     assert!(dest.join("libconcinnity_ffi.dll").exists());
     assert!(dest.join("D3D12").join("D3D12Core.dll").exists());
     // Non-DLL siblings and the exe itself are not carried along.
@@ -247,7 +247,7 @@ fn copy_runtime_sidecars_skips_d3d12_for_a_non_dx_runtime() {
     let src = tmp.path().join("src");
     fs::create_dir_all(src.join("D3D12")).unwrap();
     fs::write(src.join("concinnity-run.exe"), b"exe").unwrap();
-    fs::write(src.join("amd_fidelityfx_vk.dll"), b"x").unwrap();
+    fs::write(src.join("amd_fidelityfx_loader_vk.dll"), b"x").unwrap();
     fs::write(src.join("D3D12").join("D3D12Core.dll"), b"x").unwrap();
 
     let dest = tmp.path().join("dest");
@@ -259,7 +259,7 @@ fn copy_runtime_sidecars_skips_d3d12_for_a_non_dx_runtime() {
     )
     .unwrap();
 
-    assert!(dest.join("amd_fidelityfx_vk.dll").exists());
+    assert!(dest.join("amd_fidelityfx_loader_vk.dll").exists());
     assert!(!dest.join("D3D12").exists());
 }
 

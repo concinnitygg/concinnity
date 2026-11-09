@@ -162,6 +162,8 @@ pub(in crate::vulkan) struct DeviceCaps {
     pub(in crate::vulkan) depth_bias_clamp: bool,
     // `independentBlend` was enabled.
     pub(in crate::vulkan) independent_blend: bool,
+    // `VK_KHR_compute_shader_derivatives` was enabled with `computeDerivativeGroupLinear`.
+    pub(in crate::vulkan) compute_derivatives: bool,
 }
 
 // The validation messenger, and the budget its callback reads.
@@ -300,6 +302,11 @@ impl VkDevice {
         } else {
             0.0
         }
+    }
+
+    // Whether compute shaders may take derivatives, which FSR's shaders need.
+    pub(in crate::vulkan) fn compute_derivatives(&self) -> bool {
+        self.inner.caps.compute_derivatives
     }
 
     // The messenger callback's benign-error budget, for the two callers that

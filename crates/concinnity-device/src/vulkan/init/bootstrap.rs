@@ -8,6 +8,7 @@ use concinnity_engine::components;
 use concinnity_engine::render::backend::error::RenderResult;
 use concinnity_engine::render::config::ResolvedGraphics;
 use concinnity_engine::render::{backend::init, backend::pass_timing, output::hdr};
+use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char};
 
 use crate::vulkan::context::{SwapchainState, VkHardware};
@@ -541,6 +542,47 @@ fn drop_benign_dlss_layout_error(message_id: &[u8], budget: &std::sync::atomic::
         .is_ok()
 }
 
+// FidelityFX 2.4.0's prebuilt FSR 3.1.6 Vulkan shaders declare several of FFX's
+// own storage images as 32-bit formats while FFX creates their views as 16-bit
+// ones. The shaders ship inside AMD's signed upscaler DLL, so only an SDK release
+// can fix them; until then the mismatch is dropped while FFX records its dispatch.
+thread_local! {
+    static RECORDING_FFX: Cell<bool> = const { Cell::new(false) };
+}
+
+const STORAGE_FORMAT_MISMATCH: &[u8] = b"Undefined-Value-StorageImage-FormatMismatch-ImageView";
+
+// The output image the engine hands FFX, whose mismatch would be the engine's.
+const ENGINE_FFX_OUTPUT: &str = "variable \"rw_upscaled_output\"";
+
+// Restores the recording flag when FFX's recording ends, unwinding included.
+struct FfxRecording {
+    previous: bool,
+}
+
+impl Drop for FfxRecording {
+    fn drop(&mut self) {
+        RECORDING_FFX.with(|flag| flag.set(self.previous));
+    }
+}
+
+/// Run `record`, FFX's recording of its upscale dispatch, with the storage-image
+/// format mismatches its own shaders raise dropped from validation.
+pub(in crate::vulkan) fn recording_ffx<R>(record: impl FnOnce() -> R) -> R {
+    let _recording = FfxRecording {
+        previous: RECORDING_FFX.with(|flag| flag.replace(true)),
+    };
+    record()
+}
+
+// Whether to drop the message `message_id` names: a storage format mismatch on
+// one of FFX's own images, raised while FFX records.
+fn is_ffx_format_mismatch(message_id: &[u8], message: &str) -> bool {
+    RECORDING_FFX.with(Cell::get)
+        && message_id == STORAGE_FORMAT_MISMATCH
+        && !message.contains(ENGINE_FFX_OUTPUT)
+}
+
 // Validation messages route through here (installed only when validation is on).
 // `user` is a `*const AtomicU32`: a budget of benign DLSS first-frame layout
 // errors to drop, set after `build_upscaler` resolves to DLSS (and reset on
@@ -557,17 +599,21 @@ unsafe extern "system" fn debug_callback(
     // SAFETY: the null check above passed, and Vulkan guarantees the callback data outlives the
     // callback.
     let data = unsafe { &*data };
+    let message_id = if data.p_message_id_name.is_null() {
+        &[][..]
+    } else {
+        // SAFETY: Vulkan fills `p_message_id_name` with a NUL-terminated string that lives for the
+        // duration of the callback.
+        unsafe { CStr::from_ptr(data.p_message_id_name) }.to_bytes()
+    };
 
     // Drop the benign DLSS first-frame layout errors (see the helper); any other
     // VUID, or an exhausted budget, still logs.
-    if !user.is_null() && !data.p_message_id_name.is_null() {
-        // SAFETY: Vulkan fills `extension_name` with a NUL-terminated string, and the borrow does
-        // not outlive the properties entry it points into.
-        let vuid = unsafe { CStr::from_ptr(data.p_message_id_name) };
+    if !user.is_null() {
         // SAFETY: `user` is the `AtomicU32` budget pointer this messenger was registered with; it
         // is non-null per the check above and outlives the messenger.
         let budget = unsafe { &*(user as *const std::sync::atomic::AtomicU32) };
-        if drop_benign_dlss_layout_error(vuid.to_bytes(), budget) {
+        if drop_benign_dlss_layout_error(message_id, budget) {
             return vk::FALSE;
         }
     }
@@ -575,6 +621,9 @@ unsafe extern "system" fn debug_callback(
     // SAFETY: Vulkan fills `p_message` with a NUL-terminated string that lives for the duration of
     // the callback.
     let msg = unsafe { CStr::from_ptr(data.p_message) }.to_string_lossy();
+    if is_ffx_format_mismatch(message_id, &msg) {
+        return vk::FALSE;
+    }
     if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
         tracing::error!("[Vulkan] {}", msg);
     } else {
@@ -585,7 +634,10 @@ unsafe extern "system" fn debug_callback(
 
 #[cfg(test)]
 mod tests {
-    use super::{DLSS_FIRST_FRAME_LAYOUT_SUPPRESS, drop_benign_dlss_layout_error};
+    use super::{
+        DLSS_FIRST_FRAME_LAYOUT_SUPPRESS, STORAGE_FORMAT_MISMATCH, drop_benign_dlss_layout_error,
+        is_ffx_format_mismatch, recording_ffx,
+    };
     use std::sync::atomic::{AtomicU32, Ordering};
 
     const LAYOUT_VUID: &[u8] = b"VUID-vkCmdDraw-None-09600";
@@ -619,5 +671,60 @@ mod tests {
     fn drops_nothing_when_budget_is_zero() {
         let budget = AtomicU32::new(0);
         assert!(!drop_benign_dlss_layout_error(LAYOUT_VUID, &budget));
+    }
+
+    fn mismatch(variable: &str) -> String {
+        format!(
+            "vkCmdDispatch(): the storage image descriptor [VkDescriptorSet 0x1, Set 0, \
+             Binding 136, Index 0, variable \"{variable}\"] is accessed by a OpTypeImage that \
+             has a Format operand R32f (equivalent to VK_FORMAT_R32_SFLOAT) which doesn't \
+             match the VkImageView 0x2 format (VK_FORMAT_R16_SFLOAT)."
+        )
+    }
+
+    #[test]
+    fn format_mismatches_drop_only_while_ffx_records() {
+        let message = mismatch("rw_spd_mip5");
+        assert!(!is_ffx_format_mismatch(STORAGE_FORMAT_MISMATCH, &message));
+        assert!(recording_ffx(|| is_ffx_format_mismatch(
+            STORAGE_FORMAT_MISMATCH,
+            &message
+        )));
+        assert!(!is_ffx_format_mismatch(STORAGE_FORMAT_MISMATCH, &message));
+    }
+
+    #[test]
+    fn ffx_recording_keeps_every_other_message() {
+        recording_ffx(|| {
+            assert!(!is_ffx_format_mismatch(
+                b"VUID-RuntimeSpirv-OpCapability-06281",
+                &mismatch("rw_spd_mip5")
+            ));
+            assert!(!is_ffx_format_mismatch(b"", ""));
+        });
+    }
+
+    #[test]
+    fn a_mismatch_on_the_engines_output_still_logs() {
+        let message = mismatch("rw_upscaled_output");
+        assert!(!recording_ffx(|| is_ffx_format_mismatch(
+            STORAGE_FORMAT_MISMATCH,
+            &message
+        )));
+    }
+
+    #[test]
+    fn nested_and_unwound_recordings_restore_the_flag() {
+        let message = mismatch("rw_spd_mip5");
+        let dropped = || is_ffx_format_mismatch(STORAGE_FORMAT_MISMATCH, &message);
+        recording_ffx(|| {
+            recording_ffx(|| assert!(dropped()));
+            assert!(dropped());
+        });
+        assert!(!dropped());
+
+        let unwound = std::panic::catch_unwind(|| recording_ffx(|| panic!("FFX failed")));
+        assert!(unwound.is_err());
+        assert!(!dropped());
     }
 }

@@ -4,8 +4,9 @@
 //! dispatched onto a command list. A backend contributes the backend-create
 //! description that heads the chain and the raw handles of its resources.
 //!
-//! Layouts match `ffx-api/include/ffx_api/{ffx_api.h,ffx_api_types.h,ffx_upscale.h}`
-//! of FidelityFX SDK v1.1.4; the tests pin every size and field offset.
+//! Layouts match `Kits/FidelityFX/api/include/{ffx_api.h,ffx_api_types.h}` and
+//! `Kits/FidelityFX/upscalers/include/ffx_upscale.h` of FidelityFX SDK v2.4.0;
+//! the tests pin every size and field offset.
 #![expect(
     non_camel_case_types,
     reason = "the FFX bindings keep the SDK's own C type names"
@@ -26,12 +27,17 @@ type ffxReturnCode_t = u32;
 
 const FFX_API_RETURN_OK: ffxReturnCode_t = 0;
 
+const FFX_API_EFFECT_ID_UPSCALE: u64 = 0x0001_0000;
 const FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE: u64 = 0x0001_0000;
 const FFX_API_DISPATCH_DESC_TYPE_UPSCALE: u64 = 0x0001_0001;
 const FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT: u64 = 0x0001_0004;
 const FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET: u64 = 0x0001_0005;
-const FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1: u64 = 0x000_0001;
+const FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION: u64 = 0x0001_000b;
+const FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG: u64 = 7;
 const FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE: u32 = 0xfff_ffff;
+
+// `FFX_UPSCALER_VERSION`, the upscale API version these declarations follow.
+const FFX_UPSCALER_VERSION: u32 = (4 << 22) | (1 << 12) | 2;
 
 // FfxApiCreateContextUpscaleFlags.
 const FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE: u32 = 1 << 0;
@@ -172,6 +178,12 @@ struct ffxCreateContextDescUpscale {
 }
 
 #[repr(C)]
+struct ffxCreateContextDescUpscaleVersion {
+    header: ffxApiHeader,
+    version: u32,
+}
+
+#[repr(C)]
 struct ffxDispatchDescUpscale {
     header: ffxApiHeader,
     command_list: *mut c_void,
@@ -216,8 +228,9 @@ struct ffxQueryDescUpscaleGetJitterOffset {
 }
 
 #[repr(C)]
-struct ffxConfigureDescGlobalDebug1 {
+struct ffxConfigureDescGlobalDebug {
     header: ffxApiHeader,
+    effect_id: u64,
     fp_message: FfxApiMessage,
     debug_level: u32,
 }
@@ -396,12 +409,19 @@ impl<L: SdkLibrary> FfxContext<L> {
             tracing::warn!("{label}: the runtime library lacks an ffx_api entry point");
             return None;
         };
+        let mut version = ffxCreateContextDescUpscaleVersion {
+            header: ffxApiHeader {
+                ty: FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE_VERSION,
+                p_next: backend,
+            },
+            version: FFX_UPSCALER_VERSION,
+        };
         // The context is recreated whenever either size changes, so the render
         // size is the exact maximum.
         let mut desc = ffxCreateContextDescUpscale {
             header: ffxApiHeader {
                 ty: FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
-                p_next: backend,
+                p_next: &raw mut version.header,
             },
             flags: ffx_create_flags(CAMERA_DEPTH),
             max_render_size: extent.render.into(),
@@ -409,9 +429,9 @@ impl<L: SdkLibrary> FfxContext<L> {
             fp_message: message_callback(),
         };
         let mut handle: ffxContext = ptr::null_mut();
-        // SAFETY: the entry point came from the loaded library with the header's prototype, `desc`
-        // and `handle` are live locals, and the caller guarantees the backend description `desc`
-        // chains to.
+        // SAFETY: the entry point came from the loaded library with the header's prototype, `desc`,
+        // `version` and `handle` are live locals, and the caller guarantees the backend description
+        // the chain ends with.
         let rc =
             unsafe { (api.create_context)(&raw mut handle, &raw mut desc.header, ptr::null()) };
         if rc != FFX_API_RETURN_OK || handle.is_null() {
@@ -433,12 +453,11 @@ impl<L: SdkLibrary> FfxContext<L> {
         Some(context)
     }
 
-    // `ffxConfigure` dereferences the context's provider, so this runs only
-    // once the context exists. The message sink itself is installed by the
-    // create description.
+    // The message sink itself is installed by the create description.
     fn raise_debug_level(&mut self, label: &str) {
-        let desc = ffxConfigureDescGlobalDebug1 {
-            header: ffxApiHeader::new(FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG1),
+        let desc = ffxConfigureDescGlobalDebug {
+            header: ffxApiHeader::new(FFX_API_CONFIGURE_DESC_TYPE_GLOBALDEBUG),
+            effect_id: FFX_API_EFFECT_ID_UPSCALE,
             fp_message: message_callback(),
             debug_level: FFX_API_CONFIGURE_GLOBALDEBUG_LEVEL_VERBOSE,
         };
@@ -630,7 +649,7 @@ mod tests {
     use std::mem::{offset_of, size_of};
 
     #[test]
-    fn ffx_layouts_match_sdk_v114() {
+    fn ffx_layouts_match_the_sdk() {
         assert_eq!(size_of::<ffxApiHeader>(), 16);
         assert_eq!(offset_of!(ffxApiHeader, ty), 0);
         assert_eq!(offset_of!(ffxApiHeader, p_next), 8);
@@ -667,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn ffx_description_layouts_match_sdk_v114() {
+    fn ffx_description_layouts_match_the_sdk() {
         assert_eq!(size_of::<ffxCreateContextDescUpscale>(), 48);
         assert_eq!(offset_of!(ffxCreateContextDescUpscale, header), 0);
         assert_eq!(offset_of!(ffxCreateContextDescUpscale, flags), 16);
@@ -677,6 +696,11 @@ mod tests {
             28
         );
         assert_eq!(offset_of!(ffxCreateContextDescUpscale, fp_message), 40);
+
+        type V = ffxCreateContextDescUpscaleVersion;
+        assert_eq!(size_of::<V>(), 24);
+        assert_eq!(offset_of!(V, header), 0);
+        assert_eq!(offset_of!(V, version), 16);
 
         type D = ffxDispatchDescUpscale;
         assert_eq!(size_of::<D>(), 432);
@@ -704,6 +728,8 @@ mod tests {
         assert_eq!(offset_of!(D, view_space_to_meters_factor), 424);
         assert_eq!(offset_of!(D, flags), 428);
 
+        assert_eq!(FFX_UPSCALER_VERSION, 0x0100_1002);
+
         type P = ffxQueryDescUpscaleGetJitterPhaseCount;
         assert_eq!(size_of::<P>(), 32);
         assert_eq!(offset_of!(P, header), 0);
@@ -719,11 +745,12 @@ mod tests {
         assert_eq!(offset_of!(J, out_x), 24);
         assert_eq!(offset_of!(J, out_y), 32);
 
-        type G = ffxConfigureDescGlobalDebug1;
-        assert_eq!(size_of::<G>(), 32);
+        type G = ffxConfigureDescGlobalDebug;
+        assert_eq!(size_of::<G>(), 40);
         assert_eq!(offset_of!(G, header), 0);
-        assert_eq!(offset_of!(G, fp_message), 16);
-        assert_eq!(offset_of!(G, debug_level), 24);
+        assert_eq!(offset_of!(G, effect_id), 16);
+        assert_eq!(offset_of!(G, fp_message), 24);
+        assert_eq!(offset_of!(G, debug_level), 32);
     }
 
     #[test]
